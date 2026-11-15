@@ -144,14 +144,19 @@ export function resolveThreadTodoModelSettings(params: {
   pick?: ThreadTodoModelSettings;
 }): { settings: ThreadTodoModelSettings; source: "pick" | "memory" | "suggestion" | "thread" } {
   if (params.pick) return { settings: params.pick, source: "pick" };
-  if (params.lastDispatch) return { settings: params.lastDispatch, source: "memory" };
   const action = params.action;
-  if (action?.type === "start_thread" && (action.model || action.reasoningEffort)) {
+  // A provider explicitly proposed for this card outranks the source's
+  // dispatch history. Older cards retain their remembered defaults.
+  if (params.lastDispatch && !(action?.type === "start_thread" && action.backend)) {
+    return { settings: params.lastDispatch, source: "memory" };
+  }
+  if (action?.type === "start_thread" && (action.backend || action.model || action.reasoningEffort)) {
+    const sameBackend = !action.backend || action.backend === params.thread.backend;
     return {
       settings: {
-        backend: params.thread.backend,
-        model: action.model ?? params.thread.model,
-        reasoningEffort: action.reasoningEffort ?? params.thread.reasoningEffort,
+        backend: action.backend ?? params.thread.backend,
+        model: action.model ?? (sameBackend ? params.thread.model : undefined),
+        reasoningEffort: action.reasoningEffort ?? (sameBackend ? params.thread.reasoningEffort : undefined),
       },
       source: "suggestion",
     };
@@ -175,9 +180,11 @@ export type ThreadTodoAction =
       type: "start_thread";
       prompt: string;
       title?: string;
+      /** Destination provider. Absent inherits the raising thread's provider. */
+      backend?: AppServerBackendKind;
       model?: string;
       reasoningEffort?: string;
-      /** The new thread's permissions. Absent starts it in Default Access. */
+      /** The new thread's permissions. Absent inherits the source's mode. */
       executionMode?: ThreadExecutionMode;
       workMode?: ThreadTodoWorkMode;
     };

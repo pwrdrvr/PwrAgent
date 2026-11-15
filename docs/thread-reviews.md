@@ -41,6 +41,26 @@ The operator can change the destination and inspect the prompt before
 clicking **Send request**. Existing start-thread cards also offer
 **Send to thread…** in their action menu; selecting a destination never sends.
 
+A deferred `start_thread` card may propose a different coding provider through
+`action.backend`. Discover registered backend ids and model options with
+`list_instance_projects`; pair the backend with its model id or display name
+and `reasoningEffort`. The owner validates the destination catalog and stores
+the canonical model id in the action JSON. `update_todo` accepts `backend`,
+`model`, and `reasoningEffort` at the top level to change that proposal. When
+switching providers, set a valid model and effort together, or pass empty
+strings for those fields to choose destination defaults. Empty `backend`
+restores the source provider. Invalid updates leave the existing card intact.
+
+An explicit provider proposal overrides the source thread's remembered
+dispatch settings. The card displays the proposed provider, model and effort,
+and an operator pick still takes precedence. Cards without `backend` retain
+their existing inheritance. `workMode: "local"` shares the source checkout,
+including an assigned worktree; `executionMode: "auto"` proposes Auto access
+through the existing operator dispatch gate. The destination is revalidated
+before launch. `handoff_task` and `create_instance_thread` already accept
+provider overrides, but create threads immediately rather than configure a
+card for later operator dispatch.
+
 `update_review_item` also accepts other names. `dismissed` is the older name
 for declined. Claude Code's code review reports `fixed`, `no_change_needed`,
 and `skipped`, and treats all three as settled. `fixed` means addressed. The

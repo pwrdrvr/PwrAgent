@@ -386,24 +386,29 @@ export function installThreadTodoRuntime(params: {
   // card is written. See resolveThreadTodoModel.
   const settleModel = async (
     thread: { backend: AppServerBackendKind; threadId: string },
-    requested: { model?: string; reasoningEffort?: string },
+    requested: { backend?: AppServerBackendKind; model?: string; reasoningEffort?: string },
   ): Promise<{ model?: string; reasoningEffort?: string }> => {
-    if (!requested.model && !requested.reasoningEffort) return {};
-    const options = await registry.readBackendModelOptions(thread.backend).catch((error: unknown) => {
-      threadTodoLog.warn("could not read models for a to-do", {
-        error: error instanceof Error ? error.message : String(error),
+    if (!requested.backend && !requested.model && !requested.reasoningEffort) return {};
+    const backend = requested.backend ?? thread.backend;
+    const options = requested.backend
+      ? await readThreadTodoDestinationCatalog(registry, backend)
+      : await registry.readBackendModelOptions(backend).catch((error: unknown) => {
+        threadTodoLog.warn("could not read models for a to-do", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
       });
-      return undefined;
-    });
-    // An effort with no model runs on the thread's model, which the
-    // handoff inherits; check it there.
-    const threadModel = requested.model
+    // Only same-provider handoffs inherit the source model and effort.
+    const threadModel = requested.model || backend !== thread.backend
       ? undefined
       : (await registry.readThreadHandoffSettings({
         backend: thread.backend,
         threadId: thread.threadId,
       }).catch(() => undefined))?.model;
-    const resolved = resolveThreadTodoModel(options, requested, threadModel);
+    const model = requested.model ?? (backend !== thread.backend
+      ? options?.models?.find((model) => model.current)?.id ?? options?.models?.[0]?.id
+      : undefined);
+    const resolved = resolveThreadTodoModel(options, { ...requested, model }, threadModel, { requireCatalog: requested.backend !== undefined });
     if (!resolved.ok) {
       throw new ThreadTodoError("invalid_arguments", resolved.message);
     }
@@ -501,7 +506,7 @@ export function installThreadTodoRuntime(params: {
       const current = todos.findForThread({ ...context, ...target });
       let action: ThreadTodoActionPatch | undefined = input.action;
       const touchesModel = action
-        && (action.model !== undefined || action.reasoningEffort !== undefined);
+        && (action.backend !== undefined || action.model !== undefined || action.reasoningEffort !== undefined);
       if (action && touchesModel && current.action?.type === "start_thread") {
         // Check the pair the card will hold, not just the changed half: a
         // new model may not offer the effort the card already names.
@@ -511,7 +516,8 @@ export function installThreadTodoRuntime(params: {
         const reasoningEffort = action.reasoningEffort === undefined
           ? current.action.reasoningEffort
           : action.reasoningEffort ?? undefined;
-        const settled = await settleModel(current, { model, reasoningEffort });
+        const backend = action.backend === undefined ? current.action.backend : action.backend ?? undefined;
+        const settled = await settleModel(current, { backend, model, reasoningEffort });
         action = {
           ...action,
           model: settled.model ?? null,
@@ -568,6 +574,21 @@ export type ThreadTodoRunnerRegistry = Pick<
   | "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn"
   | "sendThreadTodoMessage" | "buildThreadTodoMessageOrigin"
 >;
+
+/** An explicit card destination must be registered and have a usable catalog. */
+async function readThreadTodoDestinationCatalog(
+  registry: Pick<ThreadTodoRunnerRegistry, "listBackends" | "readBackendModelOptions">,
+  backend: AppServerBackendKind,
+) {
+  const destination = (await registry.listBackends({ includeUnavailable: true })).backends
+    .find((entry) => entry.kind === backend);
+  if (!destination) throw new ThreadTodoError("invalid_arguments", `No registered backend named "${backend}".`);
+  const catalog = await registry.readBackendModelOptions(backend);
+  if (!catalog?.models?.length) {
+    throw new ThreadTodoError("invalid_arguments", `Cannot validate models for ${destination.label}: its model catalog is unavailable.`);
+  }
+  return catalog;
+}
 
 /**
  * The main-process actions behind a card's buttons: merging through gh, and
@@ -652,8 +673,10 @@ export function createThreadTodoRunners(params: {
         backend: sourceBackend, model: source.model, reasoningEffort: source.reasoningEffort,
       };
       const selected = resolveThreadTodoModelSettings({ thread: sourceSettings, action, pick: modelSettings }).settings;
-      const catalog = await registry.readBackendModelOptions(selected.backend);
-      const validated = resolveThreadTodoModel(catalog, selected);
+      const catalog = action.backend
+        ? await readThreadTodoDestinationCatalog(registry, selected.backend)
+        : await registry.readBackendModelOptions(selected.backend);
+      const validated = resolveThreadTodoModel(catalog, selected, undefined, { requireCatalog: action.backend !== undefined });
       if (!validated.ok) throw new ThreadTodoError("invalid_arguments", validated.message);
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
@@ -778,9 +801,9 @@ export function createThreadTodoRunners(params: {
             if (!project) {
               throw new Error("This to-do has no project to find on the other PwrAgent.");
             }
-            // The access mode carries over. The model goes only when the
-            // operator picked it for this peer: the card's own was checked
-            // against this machine's catalog, not the peer's.
+            // Older cards leave peer model defaults alone. An explicit
+            // provider proposal travels with its model; the peer validates
+            // it against its own catalog before creating the thread.
             if (speed === "ultrafast") {
               throw new ThreadTodoError("invalid_arguments", "Ultrafast cannot be requested on another PwrAgent. Choose Standard or Fast.");
             }
@@ -788,6 +811,11 @@ export function createThreadTodoRunners(params: {
               backend: sourceBackend,
               threadId: sourceThreadId,
             });
+            const destinationSettings = modelSettings ?? (action.backend
+              ? resolveThreadTodoModelSettings({
+                  thread: { backend: sourceBackend, model: source.model, reasoningEffort: source.reasoningEffort }, action,
+                }).settings
+              : undefined);
             const context: PwrAgentFederationContext = {
               backend: sourceBackend,
               threadId: sourceThreadId,
@@ -850,11 +878,11 @@ export function createThreadTodoRunners(params: {
                 projectKey: counterpart.key,
                 input: plannable ? withThreadTodoPlanNote(action.prompt) : action.prompt,
                 executionMode: action.executionMode ?? source.executionMode,
-                ...(modelSettings
+                ...(destinationSettings
                   ? {
-                      backend: modelSettings.backend,
-                      ...optional("model", modelSettings.model),
-                      ...optional("reasoningEffort", modelSettings.reasoningEffort),
+                      backend: destinationSettings.backend,
+                      ...optional("model", destinationSettings.model),
+                      ...optional("reasoningEffort", destinationSettings.reasoningEffort),
                     }
                   : {}),
                 ...(speed ? { fastMode: speed === "fast" } : {}),

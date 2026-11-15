@@ -16,15 +16,18 @@ export type ThreadTodoModelResolution =
  * which a handoff inherits), else the backend default.
  *
  * An empty catalog (discovery has not answered, or the agent lists none)
- * cannot refute anything, so the values pass through as given.
+ * preserves legacy inheritance unless requireCatalog is set for an explicit
+ * provider proposal, which must be verifiable before an operator starts it.
  */
 export function resolveThreadTodoModel(
   options: BackendLaunchpadOptions | undefined,
   requested: { model?: string; reasoningEffort?: string },
   threadModel?: string,
+  validation: { requireCatalog?: boolean } = {},
 ): ThreadTodoModelResolution {
   const models = options?.models ?? [];
   if (models.length === 0) {
+    if (validation.requireCatalog) return { ok: false, message: "Cannot validate settings: the model catalog is unavailable." };
     return { ok: true, ...requested };
   }
   let selected: BackendModelOption | undefined;
@@ -54,6 +57,9 @@ export function resolveThreadTodoModel(
     };
   }
   const efforts = effective.reasoningEfforts ?? options?.reasoningEfforts ?? [];
+  if (validation.requireCatalog && efforts.length === 0) {
+    return { ok: false, message: `Cannot validate reasoning effort for ${describeModel(effective)}: no efforts were reported.` };
+  }
   const effort = efforts.find(
     (entry) => entry.toLowerCase() === requested.reasoningEffort!.toLowerCase(),
   );

@@ -574,7 +574,7 @@ describe("operator dispatch choices", () => {
     expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ fastMode: false }));
   });
 
-  it("sends a peer the operator's model, speed, Where and environment", async () => {
+  it.each(["pick", "proposal"])("sends a peer the %s model, speed, Where and environment", async (selection) => {
     const registry = {
       readThreadHandoffSettings: vi.fn(async () => FULL_ACCESS_SOL),
       startThread: vi.fn(), renameThread: vi.fn(), startTurn: vi.fn(),
@@ -596,8 +596,10 @@ describe("operator dispatch choices", () => {
       instanceId: "win", sourceBackend: "claude", sourceThreadId: "source",
       project: { key: "local-repo", label: "repo", path: "/repo" }, crossProject: false,
       todo: CARD,
-      action: { type: "start_thread", prompt: "Reproduce it", workMode: "worktree" },
-      modelSettings: { backend: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
+      action: { type: "start_thread", prompt: "Reproduce it", workMode: "worktree",
+        ...(selection === "proposal" ? { backend: "codex" as const, model: "gpt-6.1-sol", reasoningEffort: "high" } : {}),
+      },
+      ...(selection === "pick" ? { modelSettings: { backend: "codex" as const, model: "gpt-6.1-sol", reasoningEffort: "high" } } : {}),
       speed: "fast", workMode: "local", environment: "windows-ci",
     });
     const created = federation.mock.calls
