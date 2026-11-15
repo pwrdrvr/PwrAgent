@@ -437,7 +437,7 @@ import {
 import { resolvePrAutomationConfig } from "../settings/config-store/config-domains";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
-import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { ProviderTranscriptThreadSearchAdapter, registryTranscriptReader } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { bundledSkillRootAliases } from "../agent-tools/bundled-skill-root";
 import {
@@ -1738,12 +1738,7 @@ class DesktopAppServerService {
           return await hydrateRetainedThreadOverlayData(this.getOverlayStore(), threads);
         },
         new ProviderTranscriptThreadSearchAdapter(
-          async ({ backend, threadId, limit }) =>
-            await getDesktopBackendRegistry().readThread({
-              backend,
-              threadId,
-              limit,
-            }),
+          registryTranscriptReader(async (request) => await getDesktopBackendRegistry().readThread(request)),
         ),
       );
     }

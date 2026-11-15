@@ -70,7 +70,7 @@ import { compareBindingsByCreation } from "../messaging/core/messaging-binding-t
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
 import { createThreadSearchStorage, type MessagingStoreLike } from "../storage/desktop-runtime-storage";
-import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { ProviderTranscriptThreadSearchAdapter, registryTranscriptReader } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import { readRecord } from "./backend-registry-notification-values";
@@ -2038,12 +2038,7 @@ export class ThreadInspectionTools {
           enrichDirectories: false,
         }),
       new ProviderTranscriptThreadSearchAdapter(
-        async ({ backend, threadId, limit }) =>
-          await this.host().readThread({
-            backend,
-            threadId,
-            limit,
-          }),
+        registryTranscriptReader(async (request) => await this.host().readThread(request)),
       ),
     );
     return this.threadInspectionSearchService;
