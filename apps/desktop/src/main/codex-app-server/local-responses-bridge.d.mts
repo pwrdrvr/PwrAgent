@@ -39,6 +39,6 @@ export function startBridge(upstream: string, apiKey?: string, options?: {
 }): Promise<Server>;
 export function translateRequest(request: Record<string, unknown>): {
   body: Record<string, unknown>;
-  names: Map<string, { name: string; namespace?: string }>;
+  names: Map<string, { name: string; namespace?: string; nativeSearch?: boolean }>;
 };
-export function translateResponse(value: unknown, names: Map<string, { name: string; namespace?: string }>): unknown;
+export function translateResponse(value: unknown, names: Map<string, { name: string; namespace?: string; nativeSearch?: boolean }>): unknown;

@@ -34,9 +34,9 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
     }
     const model = catalog.models[0];
     if (model.context_window !== 65536 || model.apply_patch_tool_type !== null
-      || model.supports_search_tool === true || model.supports_reasoning_summaries === true
+      || model.supports_reasoning_summaries === true
       || !Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length !== 0) {
-      throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no search or reasoning support.");
+      throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no reasoning support.");
     }
     return catalog;
   }
@@ -65,7 +65,7 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
     context_window: 65536,
     experimental_supported_tools: [],
     input_modalities: ["text"],
-    supports_search_tool: false,
+    supports_search_tool: true,
   }] };
 }
 

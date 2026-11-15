@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime, readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
@@ -41,7 +42,7 @@ describe("isolated Bonsai launch resources", () => {
       expect(catalog.models[0]).toMatchObject({
         slug: model, context_window: 65536, apply_patch_tool_type: null,
         display_name: model === "bonsai2-27b" ? "PrismML Bonsai 2 27B" : "PrismML Bonsai",
-        supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: false,
+        supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: true,
       });
       if (process.platform !== "win32") {
         expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
@@ -79,5 +80,17 @@ describe("isolated Bonsai launch resources", () => {
     template.models[0].context_window = 131072;
     await writeFile(catalogPath, JSON.stringify(template));
     await expect(readBonsaiCatalog({ ...selectedProvider, catalogPath })).rejects.toThrow("65536-token context");
+  });
+
+  it("preserves an explicit catalog's search opt-in or opt-out independently of its instructions", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-search-catalog-"));
+    directories.push(directory);
+    const catalogPath = path.join(directory, "models.json");
+    const template = await readBonsaiCatalog(provider);
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.string(), async (enabled, instructions) => {
+      const catalog = { models: [{ ...template.models[0], supports_search_tool: enabled, base_instructions: instructions }] };
+      await writeFile(catalogPath, JSON.stringify(catalog));
+      expect(await readBonsaiCatalog({ ...provider, catalogPath })).toEqual(catalog);
+    }), { numRuns: 20 });
   });
 });
