@@ -1,6 +1,60 @@
 # macOS Desktop E2E timing study
 
-Measurements use GitHub-hosted `macos-26` VMs. The job retains its 15-minute limit, one Playwright worker, existing retry policy, four lanes, `9:12:12:14` shard weights, software rendering, and shutdown circuit.
+Measurements use GitHub-hosted `macos-26` VMs. The studies below retain the 15-minute limit, one Playwright worker, existing retry policy, four lanes, software rendering, and shutdown circuit. The older Spotlight study used `9:12:12:14` shard weights; the November investigation used `83:82:67:88`.
+
+## November 15: lane 2 deadline investigation
+
+[PR #3736](https://github.com/pwrdrvr/PwrAgent/pull/3736), head `26f16e99b62f16fd1eb1a879dc2328285735582e`, changed owner-boundary static analysis and its unit tests. It did not change the Electron build, E2E fixture, or product runtime. The first macOS unit reports completed on all four lanes with zero failed tests and zero unhandled errors, including all seven owner-boundary tests. The E2E deadline is a separate failure.
+
+[Lane 2, attempt 1](https://github.com/pwrdrvr/PwrAgent/actions/runs/43689945294/job/132738430807) exceeded the job's 15-minute maximum. It started at 07:27:06 UTC and completed cancellation at 07:42:15. The test step began at 07:28:57. [Desktop E2E gate job 132741795948](https://github.com/pwrdrvr/PwrAgent/actions/runs/43689945294/job/132741795948) failed because the macOS matrix was cancelled.
+
+The suite was progressing near cancellation. Test 96, `mcp-ipc-settings.spec.ts`, completed at 07:42:01.051; test 97 was a platform skip. SIGINT arrived at 07:42:06.294. Test 98, `navigation-resume.spec.ts`, has no completed result in that attempt. The final report was 94 passed, 3 skipped, and 1 did not run. There was no retry slice before the deadline.
+
+`main-process-timing.spec.ts:13` intentionally calls `test.fail()` and fails an assertion to exercise timing attachments. Its following attachment test passed. Both attempts have this expected negative control; it is not the deadline's cause.
+
+### Same-head comparison
+
+The existing [second attempt](https://github.com/pwrdrvr/PwrAgent/actions/runs/43689945294/job/132745376540) passed on another free hosted `macos-26` VM at the same head. This investigation did not request that rerun. Both attempts collected 98 tests with one worker, shard 2 of 4, and `--retries=0` for the first slice.
+
+| Phase | Cancelled attempt 1 | Successful attempt 2 |
+| --- | ---: | ---: |
+| Job elapsed | 15:09 | 12:25 |
+| Job start to test step | 1:51 | 1:18 |
+| Build script invocation to boundary check passing | 17.99s | 14.78s |
+| Main / preload / renderer reported build time | 9.04s / 0.225s / 4.72s | 7.83s / 0.120s / 3.52s |
+| Playwright invocation to `Running 98 tests` | 32.36s | 22.92s |
+| Sum of 94 comparable displayed test durations | 724.9s | 604.6s |
+| Playwright's reported suite elapsed | 12.8m | 10.7m |
+
+Build time is bounded by console timestamps, rather than inferred from the whole test step. The boundary check passed for 22 main files and two preloads in each attempt. Playwright's pre-test interval includes configuration, discovery and the Electron canary; attempt 1 has no artifact that separates those costs. Attempt 2's global-setup timeline spans 8.27 seconds from setup start through canary process cleanup. These intervals and Playwright step durations overlap and must not be added as independent totals.
+
+The 120.3-second difference across comparable results was distributed: 69 of 94 tests were slower in attempt 1, with a median duration ratio of 1.20. The sums for test positions 1–32, 33–64 and 65–96 were respectively 248.5/204.8, 209.0/198.6 and 267.4/201.2 seconds (attempt 1/2). There is no single long blocked test accounting for the deadline.
+
+| Largest attempt 1 spec totals | Attempt 1 seconds | Attempt 2 seconds |
+| --- | ---: | ---: |
+| `federation-remote-window.spec.ts` | 117.5 | 94.9 |
+| `directory-launchpad-workspace.spec.ts` | 97.5 | 89.4 |
+| `directory-launchpad-skills.spec.ts` | 91.5 | 87.1 |
+| `composer-markdown-paste.spec.ts` | 81.3 | 69.3 |
+| `composer-image-thread-switch.spec.ts` | 42.7 | 25.3 |
+
+The slowest individual completed test in attempt 1 was `macos-window-activation.spec.ts:40` at 30.8 seconds. Its completion is not evidence of a timeout or ownership failure.
+
+### Process ownership and teardown evidence
+
+Neither console log contains an abnormal `[pwragent-e2e-shutdown]` summary, a `[pwragent-e2e-teardown]` deadline, or wrapper SIGKILL/SIGTERM escalation. On cancellation, the wrapper forwarded SIGINT and Playwright produced its result summary about 1.2 seconds later. This does not prove that every descendant exited: attempt 1's artifact upload was skipped by `if: !cancelled()`, and its process timeline is unavailable.
+
+The [attempt 2 artifact](https://github.com/pwrdrvr/PwrAgent/actions/runs/43689945294/artifacts/14153320957), created at 08:10 UTC, must not be mistaken for cancelled-attempt evidence. It contains 105 close summaries, all `healthy`, with no force-kill needed. Close elapsed time totals 70.392 seconds: median 585 ms, 95th-percentile observation 1,245 ms, maximum 1,872 ms. The worker timeline records 104 launches, 104 process exits, 104 process closes and a successful worker end; the global-setup timeline separately records its canary exit and close.
+
+The successful HTML report attributes 116.34 seconds to 104 `Launch electron` steps, 85.07 seconds to 114 window waits, 54.16 seconds to 104 context closes, 120.91 seconds to 939 evaluations, and 101.75 seconds to 406 clicks. These are step aggregates, not exclusive phase totals. They establish repeated startup, interaction and close costs; they do not establish what caused attempt 1's extra time.
+
+Static inspection preserves the existing ownership sequence: the fixture memoizes application close, captures its diagnostics before quitting, awaits bounded graceful/forced close, sweeps profile processes under the fixture home, and then removes that home. The cancellation wrapper owns the command's process group and waits for it after SIGINT; its main-first kill escalation was not logged here. No evidence in this run justifies removing cleanup, readiness, or canary coverage.
+
+### Outcome and verification limits
+
+No safe runtime correction for the deadline was identified. A successful rerun demonstrates variability at the same head, not that the deadline is fixed. The evidence supports accumulated per-test cost, but does not distinguish host contention from application startup, renderer work, or fixture overhead in the cancelled attempt. Incremental, bounded console phase measurements are follow-up work so another deadline cannot discard all phase evidence.
+
+This investigation used existing CI logs/artifacts and static source inspection. No local tests, lint, typecheck, E2E or builds were run. No timeouts, retry policy, workers, lane scheduling, environments, application processes, releases or tags were changed. There is no new implementation to validate in CI; future implementation changes require repository CI on free hosted `macos-26`.
 
 ## Same-run Spotlight A/B
 
