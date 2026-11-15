@@ -2084,13 +2084,17 @@ export function Sidebar(props: SidebarProps) {
     void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
   };
 
-  const removeRemotePinFromContextMenu = (
-    thread: NavigationThreadSummary,
+  const removeRemotePinsFromContextMenu = (
+    threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
     // Viewer-side delete only: works while the owner is unreachable and
     // never archives the owner's thread.
-    void revealHoverStableSnapshot(() => props.onRemoveRemoteThreadPin?.(thread));
+    void revealHoverStableSnapshot(async () => {
+      for (const thread of threads) {
+        await props.onRemoveRemoteThreadPin?.(thread);
+      }
+    });
   };
 
   const openDirectoryContextMenu = (
@@ -2751,10 +2755,14 @@ export function Sidebar(props: SidebarProps) {
       contextMenu.thread.federation &&
       !federationTarget,
   );
-  const contextMenuCanRemoveRemotePin = Boolean(
-    contextMenuIsMainWindowRemoteRow
-    && !contextMenu?.thread.federation?.derivedFromMountedParent
+  const canRemoveRemotePin = (thread: NavigationThreadSummary): boolean => Boolean(
+    thread.federation
+    && !federationTarget
+    && !thread.federation.derivedFromMountedParent
     && props.onRemoveRemoteThreadPin,
+  );
+  const contextMenuCanRemoveRemotePin = Boolean(
+    contextMenu && !contextMenuIsBulk && canRemoveRemotePin(contextMenu.thread),
   );
   const contextMenuCanRouteRemoteCapability = (
     capability: "environment_actions" | "launchpad_metadata" |
@@ -3228,6 +3236,7 @@ export function Sidebar(props: SidebarProps) {
       props.onUnbindMessagingBinding,
   );
 
+  const bulkRemovableRemotePins = contextMenuThreads.filter(canRemoveRemotePin);
   const bulkPinnableThreads = contextMenuThreads.filter(
     (thread) => !thread.parentThreadId,
   );
@@ -3852,6 +3861,25 @@ export function Sidebar(props: SidebarProps) {
         >
           {contextMenuIsBulk ? (
             <>
+              {bulkRemovableRemotePins.length > 0 ? (
+                <>
+                  <div className="thread-context-menu__section">
+                    <button
+                      aria-label={`Remove ${formatThreadCount(bulkRemovableRemotePins.length)} from My List. Threads on their owning instances are untouched.`}
+                      className="thread-context-menu__button--stacked"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => removeRemotePinsFromContextMenu(bulkRemovableRemotePins)}
+                    >
+                      <span>Remove {formatThreadCount(bulkRemovableRemotePins.length)} from My List</span>
+                      <span className="thread-context-menu__item-detail">
+                        Keeps {bulkRemovableRemotePins.length === 1 ? "the thread on its instance" : "threads on their owning instances"}
+                      </span>
+                    </button>
+                  </div>
+                  <div className="thread-context-menu__separator" role="separator" />
+                </>
+              ) : null}
               {bulkHasPinActions ? (
                 <div className="thread-context-menu__section">
                   {bulkPinnedThreads.length > 0 ? (
@@ -3953,7 +3981,7 @@ export function Sidebar(props: SidebarProps) {
                     role="menuitem"
                     type="button"
                     onClick={() =>
-                      removeRemotePinFromContextMenu(contextMenu.thread)
+                      removeRemotePinsFromContextMenu([contextMenu.thread])
                     }
                   >
                     <span>Remove from My List</span>
