@@ -38,7 +38,10 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
       || !Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length !== 0) {
       throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no reasoning support.");
     }
-    return catalog;
+    // The compatibility bridge supplies Codex's search protocol through
+    // ordinary function calls. Its capability supersedes stale model metadata;
+    // preserve the caller's catalog and materialize the effective copy privately.
+    return { ...catalog, models: [{ ...model, supports_search_tool: true }] };
   }
   return { models: [{
     slug,

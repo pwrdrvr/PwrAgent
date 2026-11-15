@@ -1,7 +1,6 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime, readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
@@ -82,15 +81,24 @@ describe("isolated Bonsai launch resources", () => {
     await expect(readBonsaiCatalog({ ...selectedProvider, catalogPath })).rejects.toThrow("65536-token context");
   });
 
-  it("preserves an explicit catalog's search opt-in or opt-out independently of its instructions", async () => {
+  it("materializes discovery for a legacy catalog without rewriting the source file", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-search-catalog-"));
     directories.push(directory);
     const catalogPath = path.join(directory, "models.json");
     const template = await readBonsaiCatalog(provider);
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.string(), async (enabled, instructions) => {
-      const catalog = { models: [{ ...template.models[0], supports_search_tool: enabled, base_instructions: instructions }] };
-      await writeFile(catalogPath, JSON.stringify(catalog));
-      expect(await readBonsaiCatalog({ ...provider, catalogPath })).toEqual(catalog);
-    }), { numRuns: 20 });
+    template.models[0].supports_search_tool = false;
+    template.models[0].base_instructions = "User-authored coding instructions";
+    const original = JSON.stringify(template);
+    await writeFile(catalogPath, original);
+    const runtime = await prepareBonsaiRuntime({ ...provider, catalogPath });
+    try {
+      const catalogArg = runtime.overrides.find((value) => value.startsWith("model_catalog_json="))!;
+      const runtimePath = JSON.parse(catalogArg.slice("model_catalog_json=".length)) as string;
+      expect(runtimePath).not.toBe(catalogPath);
+      expect(JSON.parse(await readFile(runtimePath, "utf8"))).toEqual({
+        models: [{ ...template.models[0], supports_search_tool: true }],
+      });
+      expect(await readFile(catalogPath, "utf8")).toBe(original);
+    } finally { await runtime.close(); }
   });
 });
