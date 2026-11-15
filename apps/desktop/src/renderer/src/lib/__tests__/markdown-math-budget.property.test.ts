@@ -3,8 +3,9 @@ import { fromMarkdown, type Options } from "mdast-util-from-markdown";
 import remarkMath from "remark-math";
 import { describe, expect, it } from "vitest";
 import { remarkBoundedMath } from "../remark-bounded-math";
+import { remarkSingleDollarMath } from "../remark-single-dollar-math";
 
-function parser(bounded = true, singleDollarTextMath = false) {
+function parser(bounded = true, singleDollarTextMath = false, restrictSingleDollar = false) {
   const data: {
     micromarkExtensions?: Options["extensions"];
     fromMarkdownExtensions?: Options["mdastExtensions"];
@@ -13,6 +14,9 @@ function parser(bounded = true, singleDollarTextMath = false) {
   // Obtain both extensions from the installed remark-math, just as unified does.
   remarkMath.call(processor as never, { singleDollarTextMath });
   if (bounded) remarkBoundedMath.call(processor);
+  // Match the runtime order: the single-dollar policy wraps the bounded
+  // upstream tokenizer, so its scratch eligibility checks are not indexed.
+  if (restrictSingleDollar) remarkSingleDollarMath.call(processor);
   let work = 0;
   const seen = new WeakSet<object>();
   for (const extension of data.micromarkExtensions ?? []) {
@@ -57,12 +61,19 @@ describe("Markdown math parser work", () => {
     expect(work).toBeLessThanOrEqual(4 * source.length);
   });
 
-  it("bounds generated unmatched run orders", () => {
+  it.each([128, 256, 512])("bounds the merged single-dollar pipeline at k=%i", (k) => {
+    const source = malformed(k);
+    const { tree, work } = parser(true, true, true).parse(source);
+    expect(tree).toEqual(fromMarkdown(source));
+    expect(work).toBeLessThanOrEqual(4 * source.length);
+  });
+
+  it.each([false, true])("bounds generated unmatched run orders (single-dollar policy=%s)", (restricted) => {
     fc.assert(fc.property(
       fc.uniqueArray(fc.integer({ min: 2, max: 160 }), { minLength: 32, maxLength: 64, size: "max" }),
       (runs) => {
         const source = "prefix " + runs.map((n) => "$".repeat(n) + "x").join(" ");
-        const { tree, work } = parser().parse(source);
+        const { tree, work } = parser(true, restricted, restricted).parse(source);
         expect(tree).toEqual(fromMarkdown(source));
         expect(work).toBeLessThanOrEqual(4 * source.length);
       },
@@ -71,9 +82,9 @@ describe("Markdown math parser work", () => {
 
   // The installed parser is the syntax oracle, including every source position.
   // Keep code, escaping, container boundaries and math content in that oracle.
-  it.each([false, true])("preserves container continuation positions (singleDollarTextMath=%s)", (single) => {
-    const bounded = parser(true, single);
-    const upstream = parser(false, single);
+  it.each([[false, false], [true, false], [true, true]])("preserves container continuation positions (singleDollarTextMath=%s, policy=%s)", (single, restricted) => {
+    const bounded = parser(true, single, restricted);
+    const upstream = parser(false, single, restricted);
     fc.assert(fc.property(
       fc.constantFrom("> ", "- ", "> > ", "> - "),
       fc.constantFrom("$", "$$", "$$x$$"),
@@ -86,9 +97,9 @@ describe("Markdown math parser work", () => {
     ));
   });
 
-  it.each([false, true])("matches upstream syntax (singleDollarTextMath=%s)", (single) => {
-    const bounded = parser(true, single);
-    const upstream = parser(false, single);
+  it.each([[false, false], [true, false], [true, true]])("matches upstream syntax (singleDollarTextMath=%s, policy=%s)", (single, restricted) => {
+    const bounded = parser(true, single, restricted);
+    const upstream = parser(false, single, restricted);
     fc.assert(fc.property(fc.array(fc.constantFrom(
       "$$", "$$$", "$$$$", "$", "x", " y ", "\\$", "\\\\$",
       "`", "``", "```txt\n", "~~~\n", "\n", "\r\n", "\t", "    ",
@@ -100,6 +111,8 @@ describe("Markdown math parser work", () => {
   });
 
   it.each([
+    "prefix $A$ and $(x,y)$",
+    "Parts $5-$10. Formula **$-x$** beside $$y$$",
     "prefix \n> $\n> `$$`$$",
     "prefix $$ x $$$ y $$ suffix",
     "prefix $$$x\ny$$$ tail",
@@ -112,14 +125,16 @@ describe("Markdown math parser work", () => {
   ])("matches the oracle at every streaming prefix: %s", (source) => {
     // Reuse one plugin instance across reparses: a cache from an incomplete
     // source must never reject its later closing delimiter or a replacement.
-    const bounded = parser();
-    const upstream = parser(false);
-    for (let end = 0; end <= source.length; end += 1) {
-      const prefix = source.slice(0, end);
-      expect(bounded.parse(prefix).tree).toEqual(upstream.parse(prefix).tree);
+    for (const restricted of [false, true]) {
+      const bounded = parser(true, restricted, restricted);
+      const upstream = parser(false, restricted, restricted);
+      for (let end = 0; end <= source.length; end += 1) {
+        const prefix = source.slice(0, end);
+        expect(bounded.parse(prefix).tree).toEqual(upstream.parse(prefix).tree);
+      }
+      expect(bounded.parse("prefix $$$replacement$$$").tree)
+        .toEqual(upstream.parse("prefix $$$replacement$$$").tree);
     }
-    expect(bounded.parse("prefix $$$replacement$$$").tree)
-      .toEqual(upstream.parse("prefix $$$replacement$$$").tree);
   });
 
   it("preserves valid math following the malformed increasing runs", () => {

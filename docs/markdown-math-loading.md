@@ -61,7 +61,10 @@ an equal-length closing dollar run. Distinct unmatched lengths repeatedly scan
 overlapping suffixes, including with `singleDollarTextMath: false`. This path
 predates the single-dollar work in PR #3739.
 
-The lazy runtime installs `remarkBoundedMath` after remark-math. It observes
+The lazy runtime installs `remarkBoundedMath` after remark-math and before
+`remarkSingleDollarMath`. The single-dollar policy wraps the bounded tokenizer,
+so the index observes upstream math consumption rather than the policy's
+scratch eligibility checks. The guard observes
 consumption during upstream attempts and caches the last offset of each
 dollar-run length when the first attempt fails at EOF. Later opening runs with
 no equal-length closer immediately fail; otherwise the original tokenizer and
@@ -91,7 +94,9 @@ confirmed to fail against the unmodified installed tokenizer before the fix.
 This bounds the malformed math retry path; it is not a complexity claim about
 all CommonMark parsing or KaTeX rendering. Full-tree differential properties
 use the installed upstream extensions as the syntax/position oracle, with
-single-dollar parsing both disabled and enabled. Streaming-prefix comparisons
+single-dollar parsing disabled, enabled, and enabled with the merged currency
+and boundary policy from PR #3739. That combined pipeline also has deterministic
+and generated work-budget coverage. Streaming-prefix comparisons
 cover multi-dollar math, code, containers, escapes, CRLF, tabs and Unicode.
 
 ```sh
