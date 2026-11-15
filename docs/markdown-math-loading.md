@@ -54,6 +54,55 @@ rendering math. Ordinary Markdown, ordinary code fences without those hints,
 currency such as `$5 and $10` do not request it. Harmless source false
 positives preserve the existing context-sensitive code/escaping behavior.
 
+## Malformed multi-dollar parser budget
+
+The installed remark-math text tokenizer scans the remaining inline source for
+an equal-length closing dollar run. Distinct unmatched lengths repeatedly scan
+overlapping suffixes, including with `singleDollarTextMath: false`. This path
+predates the single-dollar work in PR #3739.
+
+The lazy runtime installs `remarkBoundedMath` after remark-math and before
+`remarkSingleDollarMath`. The single-dollar policy wraps the bounded tokenizer,
+so the index observes upstream math consumption rather than the policy's
+scratch eligibility checks. The guard observes
+consumption during upstream attempts and caches the last offset of each
+dollar-run length when the first attempt fails at EOF. Later opening runs with
+no equal-length closer immediately fail; otherwise the original tokenizer and
+resolver still own the syntax. The index deliberately
+counts raw runs, including escaped and code-looking content, because upstream
+math treats those as raw content while searching for its closer. CommonMark
+still decides where math can start. Reading ahead of upstream would install
+future container-column skips earlier, which micromark checks do not roll back.
+Observing the existing EOF failure preserves that traversal order. Subsequent
+checks inspect only the opening dollar run, preserving tokens and source
+offsets. A new streaming parse gets a fresh context/index, and the WeakMap
+permits completed contexts to be collected.
+
+For `"prefix " + Array.from({length:k}, (_,i) => "$".repeat(i+2) + "x").join(" ")`,
+the regression counts actual `effects.consume` calls, including speculative
+consumption rolled back by checks and failed attempts:
+
+| k | Source bytes | Original work | Bounded work |
+| ---: | ---: | ---: | ---: |
+| 128 | 8,646 | 740,544 | 25,661 |
+| 256 | 33,670 | 5,757,312 | 100,477 |
+| 512 | 132,870 | 45,396,736 | 397,565 |
+
+The deterministic budget is at most four consumptions per source character
+for these unmatched-run workloads, including generated permutations. It was
+confirmed to fail against the unmodified installed tokenizer before the fix.
+This bounds the malformed math retry path; it is not a complexity claim about
+all CommonMark parsing or KaTeX rendering. Full-tree differential properties
+use the installed upstream extensions as the syntax/position oracle, with
+single-dollar parsing disabled, enabled, and enabled with the merged currency
+and boundary policy from PR #3739. That combined pipeline also has deterministic
+and generated work-budget coverage. Streaming-prefix comparisons
+cover multi-dollar math, code, containers, escapes, CRLF, tabs and Unicode.
+
+```sh
+pnpm test apps/desktop/src/renderer/src/lib/__tests__/markdown-math-budget.property.test.ts
+```
+
 ## Validation and measurements
 
 With math enabled and ordinary Markdown, **309,513 B of math JavaScript and

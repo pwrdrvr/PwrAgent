@@ -4,6 +4,7 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import "../styles/markdown-math.css";
 import { normalizeLatexMathDelimiters } from "./markdown-math";
+import { remarkBoundedMath } from "./remark-bounded-math";
 import { remarkSingleDollarMath } from "./remark-single-dollar-math";
 
 export type MarkdownMathRuntime = {
@@ -23,6 +24,7 @@ export const markdownMathRuntime: MarkdownMathRuntime = {
   ],
   remarkPlugins: [
     remarkMath,
+    remarkBoundedMath,
     remarkSingleDollarMath,
   ],
 };
