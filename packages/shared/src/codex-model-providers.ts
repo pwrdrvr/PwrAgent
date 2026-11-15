@@ -15,7 +15,9 @@
  * prefix before a request and adds it back to what Codex reports.
  */
 
-import type { ThreadUsageLineRecord } from "./token-usage-pricing";
+import type { ThreadPricingSnapshot, ThreadUsageLineRecord } from "./token-usage-pricing";
+import { estimateTokenUsageCost } from "./token-usage-pricing";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "./openrouter-assumed-pricing";
 
 // This package compiles without DOM or Node types. Every runtime it ships to
 // (Electron main, renderer, Node tests) has the WHATWG URL global.
@@ -412,13 +414,35 @@ export function findCodexModelProviderRate(
 
 export const CODEX_MODEL_PROVIDER_PRICING_CATALOG = "codex-model-provider";
 
+/** Attach only the owning instance's explicit rates, including for historical groups. */
+export function withCodexProviderSnapshotRates(
+  snapshot: ThreadPricingSnapshot,
+  providers: readonly CodexModelProviderSettings[],
+): ThreadPricingSnapshot {
+  const settings = (model: string | undefined) => {
+    if (!model) return {};
+    const parsed = parseCodexProviderModelId(model);
+    const provider = providers.find((entry) => entry.id === parsed.providerId);
+    if (!provider) return {};
+    if (provider.local) return { localModel: true };
+    const rate = findCodexModelProviderRate(provider, parsed.model);
+    return rate ? { rate } : {};
+  };
+  return {
+    ...snapshot,
+    ...settings(snapshot.model),
+    ...(snapshot.groups ? { groups: snapshot.groups.map((group) => ({ ...group, ...settings(group.model) })) } : {}),
+  };
+}
+
 /**
  * Re-attribute one Codex usage line to the provider its thread ran on.
  *
  * The Codex adapter writes every line as OpenAI's and prices it from the
  * OpenAI catalog by model id. A provider's line must instead carry the
- * provider, its own account and its own rates. Without a rate it is unpriced,
- * never priced at an OpenAI rate that happens to share the model id.
+ * provider, its own account and its own rates. Selected models without direct
+ * rates use labeled OpenRouter reference prices; other models stay unpriced.
+ * Never borrow an OpenAI rate that happens to share the model id.
  */
 export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>(
   line: T,
@@ -436,7 +460,18 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
     pricingCatalogId: CODEX_MODEL_PROVIDER_PRICING_CATALOG,
     pricingCatalogVersion: "1",
   };
-  const rate = upstreamModel ? findCodexModelProviderRate(provider, upstreamModel) : undefined;
+  const directRate = upstreamModel ? findCodexModelProviderRate(provider, upstreamModel) : undefined;
+  const reference = !provider.local && !directRate ? estimateTokenUsageCost({
+    model: upstreamModel,
+    uncachedInputTokens: line.uncachedInputTokens, cachedInputTokens: line.cachedInputTokens,
+    outputTokens: line.outputTokens, reasoningOutputTokens: line.reasoningOutputTokens,
+    serviceTier: line.serviceTier, inputTokenScope: "aggregate",
+  }) : undefined;
+  const assumed = reference?.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID ? reference : undefined;
+  const rate = directRate ?? (assumed ? {
+    model: upstreamModel!, inputPerMillion: assumed.inputUsdPerMillion,
+    outputPerMillion: assumed.outputUsdPerMillion, cachedInputPerMillion: assumed.cachedInputUsdPerMillion,
+  } : undefined);
   // Only OpenAI's own API is billed at OpenAI catalog rates, so only there
   // can the adapter's catalog price stand when no rate was entered.
   if (!provider.local && !rate && isOpenAiApiBaseUrl(provider.baseUrl) && line.priceStatus === "priced") {
@@ -465,11 +500,15 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
     } as T;
   }
   // USD per 1M tokens is exactly micro-USD per token.
+  // Reference rates use the catalog's fixed-point rounding, including halves.
+  const tokenCost = (tokens: number, value: number): number => assumed
+    ? Math.round(tokens * Math.round(value * 1_000_000) / 1_000_000)
+    : Math.round(tokens * value);
   const cost = (uncached: number, cached: number, output: number): number =>
-    Math.round(uncached * uncachedRate) + Math.round(cached * cachedRate) + Math.round(output * outputRate);
-  const uncachedInputCostMicros = Math.round(line.uncachedInputTokens * uncachedRate);
-  const cachedInputCostMicros = Math.round(line.cachedInputTokens * cachedRate);
-  const outputCostMicros = Math.round((line.outputTokens + line.reasoningOutputTokens) * outputRate);
+    tokenCost(uncached, uncachedRate) + tokenCost(cached, cachedRate) + tokenCost(output, outputRate);
+  const uncachedInputCostMicros = tokenCost(line.uncachedInputTokens, uncachedRate);
+  const cachedInputCostMicros = tokenCost(line.cachedInputTokens, cachedRate);
+  const outputCostMicros = tokenCost(line.outputTokens + line.reasoningOutputTokens, outputRate);
   const totalCostMicros = uncachedInputCostMicros + cachedInputCostMicros + outputCostMicros;
   const { cumulativeTotalCostMicros: _cumulative, ...priced } = base;
   const cumulativeTotalCostMicros =
@@ -485,7 +524,8 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
   return {
     ...priced,
     priceStatus: "priced",
-    pricingRateId: provider.local ? `${provider.id}:local` : `${provider.id}:${upstreamModel}`,
+    ...(assumed ? { pricingCatalogId: assumed.catalogId, pricingCatalogVersion: assumed.catalogVersion } : {}),
+    pricingRateId: assumed?.rateId ?? (provider.local ? `${provider.id}:local` : `${provider.id}:${upstreamModel}`),
     cacheWriteInputCostMicros: 0,
     cachedInputCostMicros,
     uncachedInputCostMicros,

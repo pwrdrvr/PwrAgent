@@ -142,6 +142,7 @@ import {
   changedProviderModelDefaultBackends,
   forgetLegacyDefaultLaunchpadExecutionModes,
   estimateTokenUsageCost,
+  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
   isAcpBackendId,
   isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
@@ -3310,21 +3311,29 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /**
-   * Stored running totals only: no usage rows, no repricing repair. A thread
-   * family's card adds these up, so it must stay a cheap read-only pass.
+   * Stored running totals and a reference-price provenance flag. No usage
+   * rows are materialized and no repricing repair runs on this read.
    */
   async readThreadPricingSummaries(threads: ReadonlyArray<{
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }>): Promise<ThreadPricingSummary[]> {
     const statement = this.stateDb.raw.prepare(
-      `SELECT * FROM thread_pricing_summaries
-       WHERE backend = ? AND thread_id = ?
+      `SELECT summary.*, EXISTS (
+         SELECT 1 FROM thread_usage_lines AS line
+         WHERE line.backend = summary.backend
+           AND (line.thread_id = summary.thread_id OR line.parent_thread_id = summary.thread_id)
+           AND line.provider = summary.provider AND line.currency = summary.currency
+           AND line.status != 'superseded' AND line.price_status = 'priced'
+           AND line.pricing_catalog_id = ?
+       ) AS has_assumed_pricing
+       FROM thread_pricing_summaries AS summary
+       WHERE summary.backend = ? AND summary.thread_id = ?
        ORDER BY provider ASC, currency ASC`,
     );
     return threads.flatMap((thread) =>
-      (statement.all(thread.backend, thread.threadId) as ThreadPricingSummaryRow[])
-        .map(threadPricingSummaryFromRow));
+      (statement.all(OPENROUTER_ASSUMED_PRICING_CATALOG_ID, thread.backend, thread.threadId) as Array<ThreadPricingSummaryRow & { has_assumed_pricing: number }>)
+        .map((row) => ({ ...threadPricingSummaryFromRow(row), ...(row.has_assumed_pricing ? { hasAssumedPricing: true as const } : {}) })));
   }
 
   private persistThreadUsagePricingRepairsSync(
@@ -11985,11 +11994,15 @@ function applyUsageTurnMetadata(
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
+  const nativeProvider = line.provider === "openai" || line.provider === "qwen" || line.provider === "xai" || line.provider === "anthropic";
+  const reference = !nativeProvider && line.priceStatus !== "priced" ? estimateTokenUsageCost({
+    model: line.model, uncachedInputTokens: line.uncachedInputTokens,
+    cachedInputTokens: line.cachedInputTokens, outputTokens: line.outputTokens,
+    reasoningOutputTokens: line.reasoningOutputTokens, serviceTier: line.serviceTier,
+  }) : undefined;
   if (
-    line.provider !== "openai"
-    && line.provider !== "qwen"
-    && line.provider !== "xai"
-    && line.provider !== "anthropic"
+    !nativeProvider
+    && reference?.catalogId !== OPENROUTER_ASSUMED_PRICING_CATALOG_ID
   ) {
     return line;
   }
@@ -12070,7 +12083,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
     currency: cost?.currency ?? line.currency,
     outputCostMicros: cost?.outputCostMicros ?? 0,
     priceStatus: cost ? "priced" : "unpriced",
-    provider: cost?.provider ?? line.provider,
+    provider: cost?.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID ? line.provider : cost?.provider ?? line.provider,
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),

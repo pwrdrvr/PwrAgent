@@ -101,6 +101,7 @@ export * from "./text-graphemes";
 export * from "./tool-activity-burst";
 export * from "./turn-output";
 export * from "./token-usage-pricing";
+export * from "./openrouter-assumed-pricing";
 export * from "./thread-family-pricing";
 export * from "./thread-pricing-projection";
 export * from "./worktree-paths";

@@ -2,6 +2,7 @@ import type {
   ThreadPricingSummary,
   ThreadUsageLineRecord,
 } from "./token-usage-pricing";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "./openrouter-assumed-pricing";
 
 /**
  * A usage row as the Pricing rail sees it: the stored record, plus the flag the
@@ -128,7 +129,7 @@ export function buildPricingSpendByModel(params: {
       group.models.set(modelKey, bucket);
     }
     bucket.summary = addUsageLineToSummary(bucket.summary, line);
-    if (line.estimatedUsageGap) {
+    if (line.estimatedUsageGap || line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) {
       bucket.hasEstimatedRows = true;
     }
     if (line.scope === "monitor") {
@@ -228,6 +229,8 @@ export function addUsageLineToSummary(
 ): ThreadPricingSummary {
   return {
     backend: summary.backend,
+    ...(summary.hasAssumedPricing || (line.priceStatus === "priced" && line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID)
+      ? { hasAssumedPricing: true as const } : {}),
     cachedInputTokens: summary.cachedInputTokens + line.cachedInputTokens,
     currency: summary.currency,
     inputTokens: summary.inputTokens + line.inputTokens,

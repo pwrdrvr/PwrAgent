@@ -96,6 +96,7 @@ import { joinConcurrent } from "../../shared/concurrent-work";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import {
   attributeCodexProviderUsageLine,
+  withCodexProviderSnapshotRates,
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
@@ -7363,7 +7364,10 @@ export class DesktopBackendRegistry {
       if (snapshot) {
         const modelLabel = this.codexBackendSummary?.launchpadOptions?.models?.find((model) => model.id === snapshot.model)?.label;
         const localModel = Boolean(snapshot.model && this.resolveCodexLocalModelIdsFn().includes(snapshot.model));
-        pricing.snapshot = { ...snapshot, ...(modelLabel ? { modelLabel } : {}), localModel };
+        pricing.snapshot = withCodexProviderSnapshotRates(
+          { ...snapshot, ...(modelLabel ? { modelLabel } : {}), localModel },
+          this.resolveCodexModelProvidersFn(),
+        );
       }
     }
     const stored = await this.overlayStore.readThreadToolAccounting({

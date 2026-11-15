@@ -1,5 +1,6 @@
 import type { ThreadUsageLineRecord } from "@pwragent/shared";
-import { buildLegacyEncodedThreadIdentityKey, usageActivityCoverage } from "@pwragent/shared";
+import { attributeCodexProviderUsageLine, buildLegacyEncodedThreadIdentityKey, summarizeThreadFamilyPricing, usageActivityCoverage } from "@pwragent/shared";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -2726,6 +2727,49 @@ async function seedUnpricedGrokUsageLines(params: {
 }
 
 describe("SqliteOverlayStore thread pricing summaries", () => {
+  it("preserves the reference-price source through stored totals and family aggregation without read-time commits", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    let run = 0;
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 5 }), async (assumptions) => {
+      const threadId = `reference-family-${run++}`;
+      for (const [index, assumed] of assumptions.entries()) {
+        const provider = { id: "mathos", name: "MathOS", baseUrl: "https://os.openmathmodel.org/v1",
+          ...(!assumed ? { rates: [{ model: "glm-5.3", inputPerMillion: 2, outputPerMillion: 3 }] } : {}),
+        };
+        const line = attributeCodexProviderUsageLine(buildUsageLine({
+          usageLineId: `${threadId}-${index}`, threadId: `${threadId}-worker-${index}`, parentThreadId: threadId,
+          model: "@mathos/glm-5.3", provider: "mathos",
+        }), provider, undefined);
+        await store.upsertThreadUsageLine({ line });
+      }
+      const { result: summaries, writes } = await measureSqliteWrites(() => store.readThreadPricingSummaries([{ backend: "codex", threadId }]));
+      const family = summarizeThreadFamilyPricing({
+        members: [{ backend: "codex", threadId, title: "Invented fixture" }], summaries, readAt: 1,
+      });
+      expect(Boolean(summaries[0]?.hasAssumedPricing)).toBe(assumptions.some(Boolean));
+      expect(Boolean(family.members[0]?.hasAssumedPricing)).toBe(assumptions.some(Boolean));
+      expect(writes.commits).toBe(0);
+    }), { numRuns: 25 });
+  });
+
+  it("prices an existing unpriced MathOS row from the reference catalog without changing its provider", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      model: "unknown-model", provider: "mathos", priceStatus: "unpriced", totalCostMicros: 0,
+      pricingCatalogId: "codex-model-provider", priceUnavailableReason: "missing-rate",
+    }) });
+    // Model enrichment stands in for a row recorded before this catalog existed.
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET model = ? WHERE usage_line_id = ?").run("@mathos/glm-5.3", "line-1");
+    const { result: pricing, writes } = await measureSqliteWrites(() => store.readThreadPricing({ backend: "codex", threadId: "thread-1" }));
+    expect(pricing.lines[0]).toMatchObject({ provider: "mathos", priceStatus: "priced", pricingCatalogId: "openrouter-assumed" });
+    expectSqliteWriteBudget({ scenario: "mathos-reference-price-first-read", writes,
+      note: "One legacy row repair: 1 commit and 32960 WAL bytes observed (~0.033 MB/day at one repair/day); repeated reads and idle add 0 MB/day",
+    });
+    const repeated = await measureSqliteWrites(() => store.readThreadPricing({ backend: "codex", threadId: "thread-1" }));
+    expect(repeated.writes.commits).toBe(0);
+  });
+
   it("reads each thread's stored totals, with sub-agent spend already inside its parent", async () => {
     await store.upsertThreadUsageLine({ line: buildUsageLine({ usageLineId: "parent-turn" }) });
     await store.upsertThreadUsageLine({ line: buildUsageLine({

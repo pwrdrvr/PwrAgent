@@ -72,10 +72,32 @@ it("shows the known Astra subtotal even when a MathOS group has no price or coun
   expect(card.querySelector(".rail-summary-card__primary")).toHaveTextContent("$0.016+ estimated");
   expect(card).toHaveTextContent("gpt-6-astra · Fast");
   expect(card).toHaveTextContent("1 model/speed group could not be priced");
-  expect(card).toHaveTextContent("only known prices; unpriced usage is excluded");
+  expect(card).toHaveTextContent("priced usage only; unpriced usage is excluded");
   expect(card).toHaveTextContent("each recorded model and speed");
   expect(card).not.toHaveTextContent("all tokens used the current model");
   expect(card).not.toHaveTextContent("$0.000");
+});
+
+it("labels reference-priced historical MathOS usage as assumed OpenRouter pricing", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: {
+    pricingSource: "provider", model: "@mathos/glm-5.3", groups: [
+      { model: "@mathos/glm-5.3", tokens: { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 } },
+    ],
+  } }} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card).toHaveTextContent("$3.69 estimated");
+  expect(card).toHaveTextContent("$3.69 assumed");
+  expect(card).toHaveTextContent("Assumed OpenRouter prices (2026-11-15)");
+  expect(card).toHaveTextContent("Actual provider charges may differ");
+});
+
+it("labels live reference prices and their summary as assumed estimates", () => {
+  const view = render(<PricingPanel pricing={{ lines: [buildMonitorLine({
+    model: "@mathos/glm-5.3", pricingCatalogId: "openrouter-assumed", totalCostMicros: 3_684_000,
+  })], summaries: [] }} />);
+  expect(view.container.querySelector(".pricing-summary-card")).toHaveTextContent("Includes assumed OpenRouter prices");
+  expect(view.container.querySelector(".pricing-summary-card .rail-summary-card__primary")).toHaveTextContent("estimated");
+  expect(view.container.querySelector(".pricing-usage-row")).toHaveTextContent("assumed OpenRouter price");
 });
 
 it("replaces the fallback card when normal pricing is available", () => {

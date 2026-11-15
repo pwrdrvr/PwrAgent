@@ -49,6 +49,14 @@ function card(): HTMLElement | null {
 }
 
 describe("ThreadFamilyPricingCard", () => {
+  it("keeps the assumption label on a family total returned by its owner", async () => {
+    const readThreadFamilyPricing = vi.fn(async () => ({ ...family, members: family.members.map((entry, index) =>
+      index === 1 ? { ...entry, hasAssumedPricing: true as const } : entry),
+    }));
+    render(<ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing }} backend="codex" threadId="parent" subThreadCount={4} />);
+    expect(await screen.findByText(/Includes assumed OpenRouter prices/)).toBeInTheDocument();
+  });
+
   it("reads nothing and renders nothing for a thread without sub-threads", () => {
     const readThreadFamilyPricing = vi.fn();
     render(<ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing }} backend="codex" threadId="parent" subThreadCount={0} />);

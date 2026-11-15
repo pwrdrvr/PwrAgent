@@ -1,6 +1,12 @@
+import {
+  OPENROUTER_ASSUMED_MODEL_RATES,
+  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
+  OPENROUTER_ASSUMED_PRICING_VERSION,
+} from "./openrouter-assumed-pricing";
+
 export type TokenUsagePricingServiceTier = "standard" | "priority";
 
-export type TokenUsagePricingProvider = "anthropic" | "openai" | "qwen" | "xai";
+export type TokenUsagePricingProvider = "anthropic" | "openai" | "openrouter" | "qwen" | "xai";
 
 export type TokenUsagePricingInputScope = "aggregate" | "request";
 
@@ -36,9 +42,17 @@ export type ThreadPricingSnapshot = {
   tokens?: ThreadUsageTokenBreakdown;
   /** Recorded model/speed groups, retained when the provider cannot price the whole set. */
   groups?: ThreadPricingSnapshotGroup[];
+  /** The owner's explicit provider rates override reference prices. */
+  rate?: ThreadPricingSnapshotRate;
 };
 
-export type ThreadPricingSnapshotGroup = {
+export type ThreadPricingSnapshotRate = {
+  inputPerMillion?: number;
+  outputPerMillion?: number;
+  cachedInputPerMillion?: number;
+};
+
+export type ThreadPricingSnapshotGroup = Pick<ThreadPricingSnapshot, "rate" | "localModel"> & {
   model?: string;
   serviceTier?: string;
   tokens: ThreadUsageTokenBreakdown;
@@ -155,6 +169,8 @@ export type ThreadUsageLineRecord = {
 };
 
 export type ThreadPricingSummary = {
+  /** Read-time provenance; not a new persisted counter. */
+  hasAssumedPricing?: true;
   backend: string;
   cachedInputTokens: number;
   currency: string;
@@ -1012,6 +1028,16 @@ const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...OPENAI_PRICING_CATALOG,
   ...XAI_PRICING_CATALOG,
   ...QWEN_PRICING_CATALOG,
+  ...OPENROUTER_ASSUMED_MODEL_RATES.map((rate): PricingCatalogEntry => ({
+    ...rate,
+    catalogId: OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
+    catalogVersion: OPENROUTER_ASSUMED_PRICING_VERSION,
+    displayTier: "Assumed OpenRouter reference price",
+    // Reference rates are today's proxy, not a claim about historical billing.
+    effectiveFrom: 0,
+    provider: "openrouter",
+    serviceTier: "standard",
+  })),
 ];
 
 function buildCodexCreditsCatalogEntries(params: {
@@ -1251,7 +1277,7 @@ function estimateTokenUsageCostFromCatalog(
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai" || provider === "qwen" || provider === "anthropic"
+    provider === "xai" || provider === "qwen" || provider === "anthropic" || provider === "openrouter"
       ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,
@@ -1486,7 +1512,7 @@ export function resolveTokenUsagePriceUnavailableReason(params: {
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai" || provider === "qwen" || provider === "anthropic"
+    provider === "xai" || provider === "qwen" || provider === "anthropic" || provider === "openrouter"
       ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,
@@ -1630,6 +1656,10 @@ function pricingEntryMatchesModel(
   entry: PricingCatalogEntry,
   model: string,
 ): boolean {
+  if (entry.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) {
+    const reference = model.replace(/^@[^/]+\//, "").toLowerCase();
+    return entry.model === reference || entry.aliases?.some((alias) => alias.toLowerCase() === reference) === true;
+  }
   return entry.model === model || entry.aliases?.includes(model) === true;
 }
 

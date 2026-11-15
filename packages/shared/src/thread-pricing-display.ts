@@ -5,6 +5,7 @@ import { estimateOpenAiCodexCreditUsage, estimateTokenUsageCost } from "./token-
 import { estimateHistoricalThreadUsageGapLines } from "./thread-pricing-projection";
 import { addUsageLineToSummary, buildPricingSpendByModel, emptyPricingSummary } from "./pricing-spend-by-model";
 import { buildTokenMiserSavingsSummary, type TokenMiserGateAccountingTotals } from "./token-miser-savings-summary";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "./openrouter-assumed-pricing";
 
 function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
   return ["success", "failure", "cancelled"].includes(subAgent.status) || subAgent.completedAt !== undefined || subAgent.outcome !== undefined || subAgent.completionSource !== undefined;
@@ -442,18 +443,21 @@ export type PricingRunningLineTotals = {
 export function buildPricingRunningTotals(lines: PricingUsageLine[]): {
   byLineId: Map<string, PricingRunningLineTotals>;
   hasEstimatedRows: boolean;
+  hasAssumedPricing?: true;
   totalCreditMicros: number;
 } {
   const sortedLines = [...lines].sort(compareUsageLinesAscending);
   const byLineId = new Map<string, PricingRunningLineTotals>();
   let hasEstimatedRows = false;
+  let hasAssumedPricing = false;
   let runningCostMicros = 0;
   let runningCreditMicros = 0;
   for (const line of sortedLines) {
     const estimate = estimateCodexCreditsForLine(line);
-    if (isEstimatedUsageGap(line)) {
+    if (isEstimatedUsageGap(line) || line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) {
       hasEstimatedRows = true;
     }
+    if (line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) hasAssumedPricing = true;
     if (line.priceStatus === "priced") {
       runningCostMicros += Math.max(0, line.totalCostMicros);
     }
@@ -470,6 +474,7 @@ export function buildPricingRunningTotals(lines: PricingUsageLine[]): {
   return {
     byLineId,
     hasEstimatedRows,
+    ...(hasAssumedPricing ? { hasAssumedPricing: true as const } : {}),
     totalCreditMicros: runningCreditMicros,
   };
 }
@@ -587,7 +592,9 @@ export function buildThreadPricingDisplay(params: {
     }),
     // The savings comparison must start from the same estimate as the headline.
     observedCostMicros: summary?.totalCostMicros ?? 0,
-    totals: { hasEstimatedRows: totals.hasEstimatedRows, totalCreditMicros: totals.totalCreditMicros },
+    totals: { hasEstimatedRows: totals.hasEstimatedRows, totalCreditMicros: totals.totalCreditMicros,
+      ...(totals.hasAssumedPricing ? { hasAssumedPricing: true as const } : {}),
+    },
     rows: pageLines.slice(offset, params.limit === undefined ? undefined : offset + params.limit).map((line) => buildRow(line, params.gateSelection !== undefined)),
     totalRows: pageLines.length,
   };
@@ -602,8 +609,11 @@ export type ThreadPricingSnapshotEstimate = ThreadPricingSnapshot & {
     inputUsdPerMillion: number;
     cachedInputUsdPerMillion: number;
     outputUsdPerMillion: number;
+    assumedPricing?: string;
   };
-  groupEstimates?: Array<NonNullable<ThreadPricingSnapshot["groups"]>[number] & { totalCostMicros?: number }>;
+  /** Date of the OpenRouter reference snapshot, when any priced group uses it. */
+  assumedPricing?: string;
+  groupEstimates?: Array<NonNullable<ThreadPricingSnapshot["groups"]>[number] & { totalCostMicros?: number; assumedPricing?: string }>;
   unpricedGroupCount?: number;
 };
 
@@ -611,6 +621,15 @@ export type ThreadPricingSnapshotEstimate = ThreadPricingSnapshot & {
 export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapshot, at = Date.now()): ThreadPricingSnapshotEstimate {
   const estimate = estimateThreadPricingSnapshot(snapshot, at);
   if (estimate.totalCostMicros !== undefined || snapshot.localModel) return estimate;
+  if (snapshot.rate) {
+    const { inputPerMillion, outputPerMillion, cachedInputPerMillion = inputPerMillion } = snapshot.rate;
+    return inputPerMillion !== undefined && outputPerMillion !== undefined && cachedInputPerMillion !== undefined
+      ? { ...estimate, currentModelRate: {
+          displayName: "Configured provider rates", inputUsdPerMillion: inputPerMillion,
+          cachedInputUsdPerMillion: cachedInputPerMillion, outputUsdPerMillion: outputPerMillion,
+        } }
+      : estimate;
+  }
   // A rate is known even when no token totals were supplied. Zero counts here
   // select a list-rate band only; they must never become a usage estimate.
   const rate = estimateTokenUsageCost({
@@ -622,6 +641,7 @@ export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapsh
     inputUsdPerMillion: rate.inputUsdPerMillion,
     cachedInputUsdPerMillion: rate.cachedInputUsdPerMillion,
     outputUsdPerMillion: rate.outputUsdPerMillion,
+    ...(rate.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID ? { assumedPricing: rate.catalogVersion } : {}),
   } } : estimate;
 }
 
@@ -632,15 +652,19 @@ function estimateThreadPricingSnapshot(snapshot: ThreadPricingSnapshot, at: numb
   // A missing whole-set price must not erase the groups we can price. Each
   // group uses its recorded model and speed, never the thread's current model.
   if (snapshot.groups?.length) {
-    const groupEstimates = snapshot.groups.map((group) => ({
-      ...group,
-      totalCostMicros: buildThreadPricingSnapshotEstimate(group, at).totalCostMicros,
-    }));
+    const groupEstimates = snapshot.groups.map((group) => {
+      const estimate = buildThreadPricingSnapshotEstimate(group, at);
+      return { ...group, totalCostMicros: estimate.totalCostMicros,
+        ...(estimate.assumedPricing ? { assumedPricing: estimate.assumedPricing } : {}),
+      };
+    });
     const priced = groupEstimates.filter((group) => group.totalCostMicros !== undefined);
     return {
       ...snapshot,
       groupEstimates,
       unpricedGroupCount: groupEstimates.length - priced.length,
+      ...(priced.some((group) => group.assumedPricing)
+        ? { assumedPricing: priced.find((group) => group.assumedPricing)!.assumedPricing } : {}),
       totalCostMicros: priced.length ? priced.reduce((sum, group) => sum + group.totalCostMicros!, 0) : undefined,
     };
   }
@@ -652,6 +676,15 @@ function estimateThreadPricingSnapshot(snapshot: ThreadPricingSnapshot, at: numb
   const input = tokens?.inputTokens;
   const cached = tokens?.cachedInputTokens;
   const output = tokens?.outputTokens;
+  if (snapshot.rate) {
+    const { inputPerMillion, outputPerMillion, cachedInputPerMillion = inputPerMillion } = snapshot.rate;
+    return { ...snapshot, totalCostMicros:
+      validCount(input) && validCount(cached) && cached <= input && validCount(output)
+        && inputPerMillion !== undefined && outputPerMillion !== undefined && cachedInputPerMillion !== undefined
+        ? Math.round((input - cached) * inputPerMillion) + Math.round(cached * cachedInputPerMillion) + Math.round(output * outputPerMillion)
+        : undefined,
+    };
+  }
   const cost = validCount(input) && validCount(cached) && cached <= input && validCount(output)
     ? estimateTokenUsageCost({
         at, model, serviceTier: snapshot.serviceTier, inputTokenScope: "aggregate",
@@ -664,5 +697,7 @@ function estimateThreadPricingSnapshot(snapshot: ThreadPricingSnapshot, at: numb
         reasoningOutputTokens: tokens?.reasoningOutputTokens ?? 0,
       })
     : undefined;
-  return { ...snapshot, totalCostMicros: cost?.totalCostMicros };
+  return { ...snapshot, totalCostMicros: cost?.totalCostMicros,
+    ...(cost?.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID ? { assumedPricing: cost.catalogVersion } : {}),
+  };
 }

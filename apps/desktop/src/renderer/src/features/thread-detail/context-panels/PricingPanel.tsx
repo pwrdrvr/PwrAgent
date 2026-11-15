@@ -1,4 +1,4 @@
-import { codexProviderIdOfModel, formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG, OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared";
 import { buildThreadPricingDisplay, type ThreadPricingDisplay } from "@pwragent/shared";
 import {
   type PricingUsageLine,
@@ -252,6 +252,11 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
               {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
               {formatTimestamp(summary.updatedAt)}
             </div>
+            {pricingTotals.hasAssumedPricing ? (
+              <p className="context-empty context-empty--warning">
+                Includes assumed OpenRouter prices for models without direct provider rates. Actual provider charges may differ.
+              </p>
+            ) : null}
             {spendByModel.length > 0 ? (
               <div className="rail-summary-card__section">
                 <span className="rail-summary-card__section-title">
@@ -424,13 +429,18 @@ function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay
         <RailSummaryRow
           key={index}
           label={`${group.model ? formatPricingModelLabel(group.model) : "Unknown model"}${group.serviceTier === "priority" ? " · Fast" : ""}`}
-          value={group.totalCostMicros === undefined ? "Price unavailable" : formatTokenUsageMicrosAsUsd(group.totalCostMicros)}
+          value={group.totalCostMicros === undefined ? "Price unavailable" : `${formatTokenUsageMicrosAsUsd(group.totalCostMicros)}${group.assumedPricing ? " assumed" : ""}`}
         />
       ))}
       {unpricedGroups > 0 ? (
         <p className="context-empty context-empty--warning">
           {unpricedGroups.toLocaleString()} model/speed group{unpricedGroups === 1 ? "" : "s"} could not be priced.
-          {totalCostMicros !== undefined ? " The estimate includes only known prices; unpriced usage is excluded." : ""}
+          {totalCostMicros !== undefined ? " The estimate includes priced usage only; unpriced usage is excluded." : ""}
+        </p>
+      ) : null}
+      {props.estimate.assumedPricing || rate?.assumedPricing ? (
+        <p className="context-empty context-empty--warning">
+          Assumed OpenRouter prices ({props.estimate.assumedPricing ?? rate?.assumedPricing}). Actual provider charges may differ.
         </p>
       ) : null}
       <RailSummaryRow label="Current model" value={model ? formatPricingModelLabel(model, props.estimate.modelLabel) : "Unavailable"} />
@@ -1411,6 +1421,7 @@ function formatPricingProviderLabel(provider: string): string {
 }
 
 function formatUsageLineCostSuffix(line: PricingUsageLine): string {
+  if (line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) return "assumed OpenRouter price";
   if (line.pricingBasis === "provider-reported") return "provider estimate this turn";
   if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "local inference";
   if (isEstimatedUsageGap(line)) {

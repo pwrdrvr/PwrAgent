@@ -34,6 +34,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
   formatCodexProviderModelId,
+  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
   isLegacyPwrSnapMediaUrl,
   pwrSnapResourceLinkImageParts,
   pwrSnapToolImageParts,
@@ -3932,7 +3933,7 @@ function summarizeTokenUsageActivity(
     reasoningOutputTokens > 0
       ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
       : `${formatTokenCount(outputTokens)} out`,
-    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} ${cost.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID ? "assumed OpenRouter price" : "list price"}` : undefined,
   ];
   const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
   const totalTokens = Math.max(

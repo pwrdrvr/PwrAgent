@@ -1,0 +1,125 @@
+{
+  "source": "https://openrouter.ai/api/v1/models",
+  "retrievedAt": "2026-11-15T00:26:44Z",
+  "models": [
+    {
+      "id": "z-ai/glm-5.3",
+      "name": "Z.ai: GLM 5.3",
+      "hugging_face_id": "zai-org/GLM-5.3",
+      "pricing": {
+        "prompt": "0.000000084",
+        "completion": "0.0000036",
+        "input_cache_read": "0.000000079"
+      }
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "name": "Z.ai: GLM 5.3 Flash",
+      "hugging_face_id": "zai-org/GLM-5.3-Flash",
+      "pricing": {
+        "prompt": "0.0000000399",
+        "completion": "0.0000000784",
+        "input_cache_read": "0.00000003"
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k3.1-pro",
+      "name": "MoonshotAI: Kimi K3.1 Pro",
+      "hugging_face_id": "moonshotai/Kimi-K3.1-Pro",
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "input_cache_read": "0.0000002"
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "name": "MoonshotAI: Kimi K3",
+      "hugging_face_id": "moonshotai/Kimi-K3",
+      "pricing": {
+        "prompt": "0.000000192",
+        "completion": "0.000016",
+        "input_cache_read": "0.000000182"
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
+      "hugging_face_id": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "pricing": {
+        "prompt": "0.0000000507",
+        "completion": "0.0000002028",
+        "input_cache_read": "0.000000001014"
+      }
+    },
+    {
+      "id": "meta/muse-spark-open",
+      "name": "Meta: Muse Spark Open",
+      "hugging_face_id": "meta-models/Muse-Spark-Open-816B-A42B",
+      "pricing": {
+        "prompt": "0.00000125",
+        "completion": "0.00000425",
+        "input_cache_read": "0.00000015"
+      }
+    },
+    {
+      "id": "mistralai/mistral-large-4-0",
+      "name": "Mistral: Mistral Large 4",
+      "hugging_face_id": "mistralai/Mistral-Large-4-1T-A52B",
+      "pricing": {
+        "prompt": "0.0000007",
+        "completion": "0.0000021",
+        "input_cache_read": "0.00000007"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "name": "NVIDIA: Nemotron 3 Ultra",
+      "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+      "pricing": {
+        "prompt": "0.0000006",
+        "completion": "0.0000024",
+        "input_cache_read": "0.00000012"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "name": "NVIDIA: Nemotron 3 Super",
+      "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8",
+      "pricing": {
+        "prompt": "0.000000075",
+        "completion": "0.0000004"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "name": "NVIDIA: Nemotron 3 Nano 30B A3B",
+      "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "pricing": {
+        "prompt": "0.00000006",
+        "completion": "0.00000024",
+        "input_cache_read": "0.000000012"
+      }
+    },
+    {
+      "id": "thinkingmachines/inkling",
+      "name": "Thinking Machines: Inkling",
+      "hugging_face_id": "thinkingmachines/Inkling",
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.00000405",
+        "input_cache_read": "0.00000017"
+      }
+    },
+    {
+      "id": "thinkingmachines/inkling-small",
+      "name": "Thinking Machines: Inkling Small",
+      "hugging_face_id": "thinkingmachines/Inkling-Small",
+      "pricing": {
+        "prompt": "0.00000045",
+        "completion": "0.0000012",
+        "input_cache_read": "0.0000001"
+      }
+    }
+  ]
+}
