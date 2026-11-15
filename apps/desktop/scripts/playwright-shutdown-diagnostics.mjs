@@ -80,6 +80,15 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
   let captures = 0;
   let observing = false;
   let treeStarted = false;
+  let resourceCount = 0;
+  let resourceInitMs = 0;
+
+  const logObserverCost = (boundary) => {
+    writeSync(2, `[worker-observer-cost] ${JSON.stringify({
+      scope, workerPid: process.pid, boundary, resourceCount,
+      resourceInitMs: Math.round(resourceInitMs), droppedResources,
+    })}\n`);
+  };
 
   const safe = (fn) => (...args) => {
     try { return fn(...args); } catch (error) {
@@ -107,7 +116,10 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
     init(id, type, triggerId, resource) {
       if (observing || !trackedTypes.has(type)) return;
       if (resources.size >= 512) { droppedResources++; return; }
+      const startedAt = performance.now();
       resources.set(id, { type, triggerId, owner: testOwner(), stack: stack(), resource: new WeakRef(resource) });
+      resourceCount++;
+      resourceInitMs += performance.now() - startedAt;
     },
     destroy(id) { resources.delete(id); },
   });
@@ -233,6 +245,7 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
       if (failed) capture("worker-cleanup-failed");
       event({ kind: "worker-end", failed });
       hook.disable();
+      logObserverCost("worker-end");
     }),
     launched: safe((child, close) => {
       const launchId = process.platform === "win32" ? observeWindowsLauncher(child, {
@@ -256,6 +269,7 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
         details.stage = next;
         if (next === "cleaned") details.cleanupComplete = true;
         event({ kind: "process-stage", launchId, pid: child.pid, stage: next });
+        if (next === "cleaned") logObserverCost("process-cleaned");
       }) };
     }),
   };
