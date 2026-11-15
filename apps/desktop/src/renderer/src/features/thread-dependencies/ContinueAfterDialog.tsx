@@ -742,10 +742,14 @@ function DeliveryReview(props: {
   // Kept out rather than chosen, so a newly arriving group starts chosen.
   const [kept, setKept] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [confirming, setConfirming] = useState(false);
+  // The claims the operator was shown when confirming. A refresh can bring a
+  // new claim into a chosen group; it is never dismissed unseen.
+  const [confirmed, setConfirmed] = useState<readonly string[]>();
   const id = useId();
   const total = props.groups.reduce((count, group) => count + group.items.length, 0);
   const chosen = props.groups.filter((group) => !kept.has(group.error)).flatMap((group) => group.items.map((item) => item.id));
+  const present = new Set(props.groups.flatMap((group) => group.items.map((item) => item.id)));
+  const confirming = confirmed?.filter((claim) => present.has(claim)) ?? [];
   const plural = (count: number) => count === 1 ? "1 delivery" : `${count} deliveries`;
   const toggle = (set: ReadonlySet<string>, value: string) => {
     const next = new Set(set);
@@ -753,7 +757,7 @@ function DeliveryReview(props: {
     return next;
   };
   const dismiss = async () => {
-    if (await props.onDismiss(chosen)) setConfirming(false);
+    if (await props.onDismiss(confirming)) setConfirmed(undefined);
   };
   return (
     <section aria-labelledby={`${id}-title`} className="continue-after-review">
@@ -776,7 +780,7 @@ function DeliveryReview(props: {
                 checked={!kept.has(group.error)}
                 disabled={props.busy}
                 type="checkbox"
-                onChange={() => { setKept(toggle(kept, group.error)); setConfirming(false); }}
+                onChange={() => { setKept(toggle(kept, group.error)); setConfirmed(undefined); }}
               />
               <span>
                 <strong>{plural(group.items.length)}</strong>
@@ -815,9 +819,9 @@ function DeliveryReview(props: {
           </div>
         );
       })}
-      {confirming && chosen.length ? (
+      {confirming.length ? (
         <div aria-labelledby={`${id}-confirm`} className="continue-after-review__confirm" role="group">
-          <strong id={`${id}-confirm`}>{`Dismiss ${plural(chosen.length)} after review?`}</strong>
+          <strong id={`${id}-confirm`}>{`Dismiss ${plural(confirming.length)} after review?`}</strong>
           <ul>
             <li>They leave the active list and move to History as Dismissed after review.</li>
             <li>A continuation that did start keeps running. Nothing is cancelled or sent again.</li>
@@ -825,9 +829,9 @@ function DeliveryReview(props: {
           </ul>
           <div className="context-list__actions rail-card__actions">
             <button className="button button--primary" disabled={props.busy} type="button" onClick={() => void dismiss()}>
-              {`Dismiss ${chosen.length}`}
+              {`Dismiss ${confirming.length}`}
             </button>
-            <button autoFocus className="button button--secondary" disabled={props.busy} type="button" onClick={() => setConfirming(false)}>
+            <button autoFocus className="button button--secondary" disabled={props.busy} type="button" onClick={() => setConfirmed(undefined)}>
               Keep for Review
             </button>
           </div>
@@ -838,7 +842,7 @@ function DeliveryReview(props: {
             className="context-list__action"
             disabled={props.busy || chosen.length === 0}
             type="button"
-            onClick={() => { props.onReview(); setConfirming(true); }}
+            onClick={() => { props.onReview(); setConfirmed(chosen); }}
           >
             {chosen.length ? `Dismiss ${chosen.length} Reviewed…` : "Choose deliveries to dismiss"}
           </button>

@@ -530,6 +530,26 @@ describe("Continue After dialog", () => {
     expect(screen.getByRole("status")).toHaveTextContent("30 deliveries dismissed after review. They are in History.");
   });
 
+  it("dismisses only the claims shown when the operator confirmed, even after a refresh adds one", async () => {
+    let current: ThreadDependency[] = ["one", "two"].map((id): ThreadDependency => ({ ...dependency, id, status: "dispatching", error: "Delivery was interrupted" }));
+    let notify: ((event: { notification: { method: string } }) => void) | undefined;
+    const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => {
+      if (request.action === "dismiss") current = current.map((item) => request.dependencyIds?.includes(item.id) ? { ...item, status: "dismissed" as const } : item);
+      return { dependencies: current };
+    });
+    const api = { manageThreadDependencies: manage, onAgentEvent: (listener: typeof notify) => { notify = listener; return () => {}; } } as unknown as DesktopApi;
+    renderDialog(api);
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss 2 Reviewed…" }));
+    // A new claim with another error arrives while the confirmation is open.
+    current = [...current, { ...dependency, id: "late", status: "dispatching", error: "request timed out" }];
+    await act(async () => { notify!({ notification: { method: "thread/dependencies/updated" } }); });
+    expect(await screen.findByText("request timed out")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("group", { name: "Dismiss 2 deliveries after review?" })).getByRole("button", { name: "Dismiss 2" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith(expect.objectContaining({ action: "dismiss" })));
+    expect(manage.mock.calls.find(([call]) => call.action === "dismiss")![0]).toEqual({ action: "dismiss", backend: "codex", threadId: "waiting", dependencyIds: ["one", "two"] });
+    expect(current.find((item) => item.id === "late")?.status).toBe("dispatching");
+  });
+
   it("keeps the review when the owner refuses the cleanup", async () => {
     const claims = ["one", "two"].map((id): ThreadDependency => ({ ...dependency, id, status: "dispatching", error: "Delivery was interrupted" }));
     const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => {
