@@ -54,6 +54,46 @@ rendering math. Ordinary Markdown, ordinary code fences without those hints,
 currency such as `$5 and $10` do not request it. Harmless source false
 positives preserve the existing context-sensitive code/escaping behavior.
 
+## Malformed multi-dollar parser budget
+
+The installed remark-math text tokenizer scans the remaining inline source for
+an equal-length closing dollar run. Distinct unmatched lengths repeatedly scan
+overlapping suffixes, including with `singleDollarTextMath: false`. This path
+predates the single-dollar work in PR #3739.
+
+The lazy runtime installs `remarkBoundedMath` after remark-math. A micromark
+check indexes the last offset of each dollar-run length once per text context.
+An opening run with no later equal-length run immediately fails; otherwise the
+original tokenizer and resolver still own the syntax. The index deliberately
+counts raw runs, including escaped and code-looking content, because upstream
+math treats those as raw content while searching for its closer. CommonMark
+still decides where math can start. Scratch checks roll back without changing
+tokens or source offsets, and a new streaming parse gets a fresh context/index.
+The WeakMap permits completed contexts to be collected.
+
+For `"prefix " + Array.from({length:k}, (_,i) => "$".repeat(i+2) + "x").join(" ")`,
+the regression counts actual `effects.consume` calls, including speculative
+consumption rolled back by checks and failed attempts:
+
+| k | Source bytes | Original work | Bounded work |
+| ---: | ---: | ---: | ---: |
+| 128 | 8,646 | 740,544 | 25,663 |
+| 256 | 33,670 | 5,757,312 | 100,479 |
+| 512 | 132,870 | 45,396,736 | 397,567 |
+
+The deterministic budget is at most four consumptions per source character
+for these unmatched-run workloads, including generated permutations. It was
+confirmed to fail against the unmodified installed tokenizer before the fix.
+This bounds the malformed math retry path; it is not a complexity claim about
+all CommonMark parsing or KaTeX rendering. Full-tree differential properties
+use the installed upstream extensions as the syntax/position oracle, with
+single-dollar parsing both disabled and enabled. Streaming-prefix comparisons
+cover multi-dollar math, code, containers, escapes, CRLF, tabs and Unicode.
+
+```sh
+pnpm test apps/desktop/src/renderer/src/lib/__tests__/markdown-math-budget.property.test.ts
+```
+
 ## Validation and measurements
 
 With math enabled and ordinary Markdown, **309,513 B of math JavaScript and
