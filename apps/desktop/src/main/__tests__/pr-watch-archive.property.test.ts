@@ -339,9 +339,9 @@ describe("Auto-fix ends at archive", () => {
 });
 
 describe("PR prerequisite subscriptions end at archive", () => {
-  it("models registration, archive, restore and prerequisite events without replay", async () => {
+  it("models registration, archive, restore, prerequisite events and consumer turns without replay", async () => {
     await fc.assert(fc.asyncProperty(fc.array(
-      fc.constantFrom("register" as const, "archive" as const, "restore" as const, "event" as const),
+      fc.constantFrom("register" as const, "archive" as const, "restore" as const, "event" as const, "settle" as const),
       { minLength: 1, maxLength: 12 },
     ), async (commands) => {
       const db = openInMemoryStateDb();
@@ -352,26 +352,41 @@ describe("PR prerequisite subscriptions end at archive", () => {
         store, submit, readThread: async () => ({ turns: [], prs: [{ pr, fetchedAt: 1 }] }), changed: async () => {}, now: () => 1,
       });
       let archived = false;
-      let subscribed = false;
+      // An undelivered wait. Registering an identical one returns it, and the
+      // prerequisite is already merged, so any evaluation makes it ready.
+      let pending = false;
+      // A started continuation holds its consumer until that turn ends; a
+      // wait registered meanwhile stays ready behind it.
+      let busy = false;
+      const wake = () => {
+        if (busy || !pending) return 0;
+        pending = false;
+        busy = true;
+        return 1;
+      };
       try {
         for (const [index, command] of commands.entries()) {
+          submit.mockClear();
           if (command === "register") {
             if (archived) expect(() => store.register(dependency(`dependency-${index}`))).toThrow(/archived/i);
-            else { store.register(dependency(`dependency-${index}`)); subscribed = true; }
+            else { store.register(dependency(`dependency-${index}`)); pending = true; }
           } else if (command === "archive") {
             await overlays.observeArchivedThreads([identity], index);
             archived = true;
-            subscribed = false;
+            pending = false;
           } else if (command === "restore") {
             await overlays.setThreadArchiveTombstone({ ...identity, restoredAt: index });
             archived = false;
-          } else {
-            submit.mockClear();
+          } else if (command === "event") {
             await coordinator.handlePrEvent(pr.url);
-            expect(submit).toHaveBeenCalledTimes(subscribed ? 1 : 0);
-            subscribed = false;
+            expect(submit).toHaveBeenCalledTimes(wake());
+          } else {
+            // The consumer's wake turn ends, which releases it for the next ready wait.
+            await coordinator.handleThreadEvent(identity, { id: "wake", status: "completed" });
+            busy = false;
+            expect(submit).toHaveBeenCalledTimes(wake());
           }
-          expect(store.active().length > 0).toBe(subscribed);
+          expect(store.active().length > 0).toBe(pending);
         }
       } finally { db.close(); }
     }), { numRuns: 25 });
