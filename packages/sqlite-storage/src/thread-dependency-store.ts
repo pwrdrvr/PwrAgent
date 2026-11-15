@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ThreadDependency } from "@pwragent/shared";
-import { buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey } from "@pwragent/shared";
 
 export { THREAD_DEPENDENCY_SCHEMA } from "./state-schema";
 
@@ -14,6 +14,7 @@ function signature(dependency: ThreadDependency): string {
     dependency.onFailure, dependency.continuation ?? "",
     dependency.deliver ?? "agent", dependency.handoff ?? false,
     dependency.steps ?? [], dependency.holdMerge ?? false,
+    dependency.repeat ?? false,
     dependency.conditions.map((condition) => JSON.stringify([
       condition.backend, condition.threadId, condition.when,
       condition.turnId ?? "", condition.prUrl ?? "", condition.headSha ?? "",
@@ -24,7 +25,10 @@ function signature(dependency: ThreadDependency): string {
 
 /** A prerequisite thread on this machine; one on a peer or a subject is no edge here. */
 function localThreadKey(condition: ThreadDependency["conditions"][number]): string | undefined {
-  return isThreadDependencyLocalThreadCondition(condition) ? key(condition.backend, condition.threadId) : undefined;
+  // A compaction subscription observes the consumer itself; it never waits
+  // for another thread to make progress and contributes no wait-cycle edge.
+  return condition.when !== "compaction_completed" && isThreadDependencyLocalThreadCondition(condition)
+    ? key(condition.backend, condition.threadId) : undefined;
 }
 
 export class ThreadDependencyStore {
@@ -71,7 +75,7 @@ export class ThreadDependencyStore {
   hasDeliveryReceipt(item: ThreadDependency): boolean {
     return Boolean(this.db.prepare(
       "SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND json_extract(payload, '$.dependencyId') = ? LIMIT 1",
-    ).get(item.backend, item.threadId, item.id));
+    ).get(item.backend, item.threadId, threadDependencyDeliveryKey(item)));
   }
 
   register(candidate: ThreadDependency): ThreadDependency {

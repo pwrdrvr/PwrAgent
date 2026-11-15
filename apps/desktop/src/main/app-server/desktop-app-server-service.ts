@@ -25,7 +25,7 @@ import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_PR_WATCH_HISTORY_MAX_LIMIT, type ThreadPrAutoFixState, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse, type WatchThreadPullRequestReason } from "@pwragent/shared";
-import { isThreadDependencyLocalThreadCondition, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
+import { isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { type ThreadPendingWakesList, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
 import { findRemoteHomeDirectoryIndex } from "@pwragent/shared";
 import {
@@ -10081,6 +10081,18 @@ class DesktopAppServerService {
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
         submit: async (request) => await this.submitDependencyWakeup(request),
+        recoverCompaction: async (dependency, prompt, canSubmit) => {
+          const registry = getDesktopBackendRegistry();
+          return await registry.steerCompactionRecovery({
+            backend: dependency.backend, threadId: dependency.threadId,
+            expectedTurnId: dependency.compaction!.turnId,
+            requestId: threadDependencyDeliveryKey(dependency),
+            input: [{ type: "text", text: prompt }],
+          }, { kind: "pwragent", systemReason: "compaction-recovery",
+            dependencyId: threadDependencyDeliveryKey(dependency),
+            causalMessagingSource: dependency.causalMessagingSource, causalMessagingAmbiguous: dependency.causalMessagingAmbiguous },
+          () => canSubmit() && !this.resolveThreadForgeProject(dependency)?.automation.paused);
+        },
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
         // PR conditions also wait while the consumer's project holds PR
         // watches. A paused project's turn-only wake is held or discarded
@@ -10089,7 +10101,7 @@ class DesktopAppServerService {
         // reconciles again (see `startAppServerOwnerNavigation`).
         canDispatch: (dependency) => this.ownerNavigationActive
           && !getDesktopBackendRegistry().isRestartGateClosed?.()
-          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done")
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed" || condition.when === "marked_done" || condition.when === "compaction_completed")
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
@@ -10204,7 +10216,7 @@ class DesktopAppServerService {
     }
     if (Object.keys(request).some((key) => ![
       "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
-      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "pullRequest", "federationTarget",
+      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "pullRequest", "federationTarget", "repeat",
     ].includes(key))) throw new Error("Unknown dependency request field.");
     const { federationTarget, ...owned } = request;
     const runtime = getDesktopFederationRuntime();
@@ -10401,7 +10413,9 @@ class DesktopAppServerService {
     if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
     const notification = event.notification as AppServerNotification;
     let task: Promise<void> | undefined;
-    if (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled") {
+    if (event.backend === "codex" && (notification.method === "item/started" || notification.method === "item/completed")) {
+      task = this.getThreadDependencyCoordinator().handleCompactionNotification(notification);
+    } else if (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled") {
       // Codex also completes interrupted turns through this method. Missing
       // terminal metadata must reconcile through provider history, not imply success.
       const turn = notification.params.turn;
@@ -10590,5 +10604,5 @@ export async function startAppServerOwnerNavigation(): Promise<void> {
 
 /** A prerequisite that waits on a PR, so it needs background PR polling. */
 function isPrDependencyCondition(condition: Pick<ThreadDependencyCondition, "when">): boolean {
-  return condition.when !== "turn_completed" && condition.when !== "marked_done";
+  return condition.when === "pr_attached" || condition.when === "ci_passed" || condition.when === "pr_merged";
 }

@@ -432,7 +432,9 @@ function endedDependency(dependency: ThreadDependency): ThreadPendingWakeEnded[]
     return [];
   }
   const summary = dependency.status === "delivered"
-    ? dependency.deliver === "operator" ? "Continue after reminded you" : "Continue after woke the thread"
+    ? dependency.compaction
+      ? dependency.error ? "Compaction recovery skipped" : "Compaction recovery steered the turn"
+      : dependency.deliver === "operator" ? "Continue after reminded you" : "Continue after woke the thread"
     : dependency.status === "cancelled" ? "Continue after cancelled" : "Continue after dismissed";
   const condition = dependency.conditions[0];
   const detail = dependency.conditions.length > 1

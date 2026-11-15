@@ -25,7 +25,7 @@ describe("PwrAgent thread agent tools", () => {
       .buildMcpTools().some((tool) => tool.name === "rename_current_thread")).toBe(false);
   });
 
-  it("exposes durable dependencies through the unified dynamic and MCP contracts only", async () => {
+  it.each(["ci_passed", "compaction_completed"])("exposes %s registrations through the unified dynamic and MCP contracts only", async (when) => {
     const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
     const router = buildPwrAgentThreadToolRouter(handler);
     const namespace = router.buildDynamicToolSpecs()[0];
@@ -33,7 +33,9 @@ describe("PwrAgent thread agent tools", () => {
     const dynamic = namespace.tools.find((tool) => tool.name === "manage_thread_dependencies");
     const mcp = router.buildMcpTools().find((tool) => tool.name === "manage_thread_dependencies");
     expect(mcp?.inputSchema).toEqual(dynamic?.inputSchema);
-    const args = { action: "create", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] };
+    const args = { action: "create", conditions: [{ backend: "codex", threadId: when === "compaction_completed" ? "waiting" : "foundation", when }],
+      ...(when === "compaction_completed" ? { repeat: true, continuation: "Read /workspace/AGENTS.md; preserve the current assignment." } : {}),
+    };
     await router.handleMcpToolCall({ backend: "codex", threadId: "waiting", tool: "manage_thread_dependencies", args });
     expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "manage_thread_dependencies", context: { backend: "codex", threadId: "waiting" }, args });
     expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" }).buildMcpTools().some((tool) => tool.name === "manage_thread_dependencies")).toBe(false);

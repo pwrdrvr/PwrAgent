@@ -57,6 +57,7 @@ const DEPENDENT_PHRASES: Record<When, string> = {
   ci_passed: "until it passes CI",
   pr_merged: "until it is merged",
   marked_done: "until it is marked done",
+  compaction_completed: "after its compaction finishes",
 };
 const MAX_CONDITIONS = 16;
 const MAX_TITLE_LENGTH = 200;
@@ -125,6 +126,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   const [continuation, setContinuation] = useState("");
   const [deliver, setDeliver] = useState<ThreadDependencyDeliveryTarget>("agent");
   const [handoff, setHandoff] = useState(false);
+  const [repeat, setRepeat] = useState(false);
   // Absent until the operator chooses; the default follows the rows.
   const [holdMergeChoice, setHoldMergeChoice] = useState<boolean>();
   const [marking, setMarking] = useState<Marking>();
@@ -166,7 +168,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
     let disposed = false;
     setDependencies([]); setDependents([]); setPeerDependents([]); setView(available ? "loading" : "list"); setHistoryOpen(false);
     setRows([]); setMode("all"); setOnFailure("wait"); setError(undefined); setBusy(false); setContinuation("");
-    setDeliver("agent"); setHandoff(false); setHoldMergeChoice(undefined); setMarking(undefined); setNote("");
+    setDeliver("agent"); setHandoff(false); setRepeat(false); setHoldMergeChoice(undefined); setMarking(undefined); setNote("");
     // Updates arrive in bursts; apply only the newest list response.
     let latestRefresh = 0;
     const refresh = async () => {
@@ -213,12 +215,13 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   const hasRegistrations = dependencies.length > 0 || dependents.length > 0 || peerDependents.length > 0;
   const waitsOnCi = rows.some((row) => row.when === "ci_passed");
   const waitsForDone = rows.some((row) => row.when === "marked_done");
+  const recoversCompaction = rows[0]?.when === "compaction_completed";
   const holdMerge = holdMergeChoice ?? waitsForDone;
   const reminds = deliver === "operator";
   const steps = reminds ? parseReminderSteps(continuation) : [];
   const stepsTooLong = steps.length > THREAD_DEPENDENCY_MAX_STEPS
     || steps.some((step) => step.length > THREAD_DEPENDENCY_STEP_MAX_LENGTH);
-  const needsPrChoice = rows.some((row) => row.when !== "turn_completed" && row.when !== "marked_done" && row.prs.length > 1 && !row.prUrl);
+  const needsPrChoice = rows.some((row) => row.when !== "turn_completed" && row.when !== "marked_done" && row.when !== "compaction_completed" && row.prs.length > 1 && !row.prUrl);
   const blankSubject = rows.some((row) => row.subject !== undefined && !row.subject.trim());
   const canAdd = !busy && rows.length > 0 && !needsPrChoice && !blankSubject && !stepsTooLong && continuation.trim().length > 0;
   const remindsOnly = active.length > 0 && active.every((dependency) => threadDependencyDeliveryTarget(dependency) === "operator");
@@ -242,12 +245,17 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
       when: "marked_done", prUrl: "", prs: [], subject: "",
     }]);
   };
+  const addCompactionRecovery = () => {
+    setRows([{ key: "compaction", backend: thread.source, threadId: thread.id,
+      title: threadTitle, when: "compaction_completed", prUrl: "", prs: [] }]);
+    setDeliver("agent"); setHandoff(false); setHoldMergeChoice(false); setRepeat(false);
+  };
   const updateRow = (index: number, patch: Partial<DraftCondition>) => {
     setRows(rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   };
   const resetForm = () => {
     setRows([]); setContinuation(""); setMode("all"); setOnFailure("wait");
-    setDeliver("agent"); setHandoff(false); setHoldMergeChoice(undefined);
+    setDeliver("agent"); setHandoff(false); setRepeat(false); setHoldMergeChoice(undefined);
   };
   const leaveForm = () => {
     if (!hasRegistrations) {
@@ -280,6 +288,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
           ...(reminds && handoff ? { handoff: true } : {}),
           ...(steps.length ? { steps } : {}),
           ...(holdMerge ? { holdMerge: true } : {}),
+          ...(recoversCompaction && repeat ? { repeat: true } : {}),
         } : { dependencyId }),
       });
       if (currentKey.current !== key) return;
@@ -336,6 +345,8 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
         <p className="continue-after-dialog__lede" id={descriptionId}>
           {adding
             ? `Choose what “${threadTitle}” waits for, and what it does next.`
+            : active.some((dependency) => dependency.conditions[0]?.when === "compaction_completed")
+              ? `“${threadTitle}” has recovery subscriptions. Recovery steers only the compacted active turn.`
             : remindsOnly
               ? `“${threadTitle}” reminds you when its prerequisites are met.`
               : `“${threadTitle}” starts a turn when its prerequisites are met.`}
@@ -353,7 +364,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                     toCandidates={toCandidates}
                     fieldLabel="Find a thread to wait for"
                     listLabel="Threads"
-                    disabled={busy || rows.length >= MAX_CONDITIONS}
+                    disabled={busy || recoversCompaction || rows.length >= MAX_CONDITIONS}
                     api={searchApi}
                     threads={links?.readLoadedThreads?.() ?? NO_THREADS}
                     focusOnOpen
@@ -363,12 +374,18 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                 ) : <p className="thread-dependencies__hint">Thread search is unavailable in this window.</p>}
                 <button
                   className="button button--secondary continue-after-dialog__something-else"
-                  disabled={busy || rows.length >= MAX_CONDITIONS}
+                  disabled={busy || recoversCompaction || rows.length >= MAX_CONDITIONS}
                   type="button"
                   onClick={addSomethingElse}
                 >
                   Add Something Else
                 </button>
+                {thread.source === "codex" ? (
+                  <button className="button button--secondary continue-after-dialog__something-else"
+                    disabled={busy || rows.length > 0} type="button" onClick={addCompactionRecovery}>
+                    Add Compaction Recovery
+                  </button>
+                ) : null}
               </div>
               <div className="continue-after-dialog__setup">
                 {rows.length === 0 ? <p className="thread-dependencies__hint">Choose one or more threads to wait for, or something else that is not a thread.</p> : null}
@@ -397,7 +414,9 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                         ×
                       </button>
                     </div>
-                    {row.subject !== undefined || row.target ? (
+                    {row.when === "compaction_completed" ? (
+                      <p className="thread-dependencies__hint">After a future compaction finishes on this thread.</p>
+                    ) : row.subject !== undefined || row.target ? (
                       <p className="thread-dependencies__hint">
                         {row.subject !== undefined
                           ? "Waits until you, or an agent, mark it done."
@@ -412,7 +431,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                         onChange={(when) => updateRow(index, { when })}
                       />
                     )}
-                    {row.subject !== undefined || row.target ? null : row.when === "turn_completed" ? (
+                    {row.subject !== undefined || row.target || row.when === "compaction_completed" ? null : row.when === "turn_completed" ? (
                       <p className="thread-dependencies__hint">Watches its current or latest turn.</p>
                     ) : row.when === "marked_done" ? (
                       <p className="thread-dependencies__hint">Waits until that thread, you, or an agent mark it done.</p>
@@ -459,6 +478,12 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                         : "Continues once to report the failure, then stays blocked."}
                   </p>
                 ) : null}
+                {recoversCompaction ? (
+                  <label className="composer__checkbox thread-dependencies__handoff">
+                    <input checked={repeat} disabled={busy} type="checkbox" onChange={(event) => setRepeat(event.currentTarget.checked)} />
+                    <span>Repeat after each future compaction</span>
+                  </label>
+                ) : <>
                 <div className="thread-dependencies__choice">
                   <span id={`${labelId}-deliver`}>When met</span>
                   <div aria-labelledby={`${labelId}-deliver`} className="thread-dependencies__segments" role="group">
@@ -479,6 +504,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                 <p className="thread-dependencies__hint" id={`${labelId}-hold`}>
                   Merge cards and agent merges of this thread wait. Replies, rebase and CI repair continue.
                 </p>
+                </>}
               </div>
             </div>
             <label className="thread-dependencies__field">
@@ -501,7 +527,9 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
               />
             </label>
             <p className="thread-dependencies__hint" id={`${labelId}-instructions`}>
-              {reminds
+              {recoversCompaction
+                ? "Name the authorized instruction files to re-read and recovery tools to check. Steers the compacted turn if it is still active; skips ended assignments. No new task starts, and delivery cannot be guaranteed before the next action."
+                : reminds
                 ? stepsTooLong
                   ? `Use at most ${THREAD_DEPENDENCY_MAX_STEPS} steps of ${THREAD_DEPENDENCY_STEP_MAX_LENGTH} characters.`
                   : "Required. One step per line. They become a checklist on a to-do card on this thread. No turn starts."
@@ -670,7 +698,7 @@ function DependencyCard(props: {
   const status = describeStatus(dependency);
   const met = dependency.conditions.filter((_, index) => evidenceFor(dependency, index)?.state === "satisfied").length;
   const label = dependency.status === "waiting"
-    ? dependency.conditions.length > 1
+    ? dependency.repeat ? "Waiting for future compaction" : dependency.conditions.length > 1
       ? dependency.mode === "all" ? `Waiting · ${met} of ${dependency.conditions.length} met` : `Waiting for any of ${dependency.conditions.length}`
       : "Waiting"
     : status.label;
@@ -682,7 +710,7 @@ function DependencyCard(props: {
     <li className={`rail-card thread-dependencies__card${status.alert ? " thread-dependencies__card--alert" : ""}`}>
       <p className="rail-card__status-line">
         <RailStatusChip alert={status.alert} blink={status.blink} tone={status.tone}>{label}</RailStatusChip>
-        <span className="thread-dependencies__target">{reminds ? "Reminds you" : "Resumes this thread"}</span>
+        <span className="thread-dependencies__target">{dependency.conditions[0]?.when === "compaction_completed" ? "Steers current turn" : reminds ? "Reminds you" : "Resumes this thread"}</span>
       </p>
       <ul className="thread-dependencies__conditions">
         {dependency.conditions.map((condition, index) => {

@@ -54,7 +54,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
   watch_thread_pull_request: "wake notify stop cancel list watches watching",
-  manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion CI PR remind reminder operator todo mark done blocked hold merge do not merge until finishes follow up checklist peer",
+  manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion compaction compact recovery instruction reread subscription hook CI PR remind reminder operator todo mark done blocked hold merge do not merge until finishes follow up checklist peer",
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
   rename_current_thread: "rename name title this thread conversation self",
   mark_project_read: "bulk batch clear dismiss unread read project folder directory repository all",

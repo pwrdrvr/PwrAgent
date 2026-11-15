@@ -7,7 +7,7 @@ export const THREAD_DEPENDENCIES_CHANNEL = "thread:dependencies";
  * only when the prerequisite thread, the operator, or an agent marks it done.
  */
 export const THREAD_DEPENDENCY_CONDITIONS = [
-  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done",
+  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed",
 ] as const;
 
 /** Advertised by owners that serve `backend.manageThreadDependencies` to peers. */
@@ -27,6 +27,7 @@ export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD
   ci_passed: "passes CI",
   pr_merged: "is merged",
   marked_done: "is marked done",
+  compaction_completed: "finishes compaction",
 };
 
 /**
@@ -95,6 +96,10 @@ export type ThreadDependency = {
   mode: "all" | "any";
   onFailure: "notify" | "wait";
   continuation?: string;
+  /** Compaction only: keep this one subscription for future live completions. */
+  repeat?: boolean;
+  /** Last live completion, retained after delivery to reject redelivery. No transcript data. */
+  compaction?: { itemId: string; turnId: string; completedItemIds: string[] };
   /** Absent on registrations made before operator delivery: `agent`. */
   deliver?: ThreadDependencyDeliveryTarget;
   /** Operator delivery only: the card offers Start thread with the continuation. */
@@ -122,6 +127,13 @@ export function threadDependencyDeliveryTarget(dependency: Pick<ThreadDependency
 /** The stable to-do key for a dependency's operator card. */
 export function threadDependencyTodoKey(dependencyId: string): string {
   return `dependency:${dependencyId}`;
+}
+
+/** A recurring hook's receipt belongs to one actual completed protocol item. */
+export function threadDependencyDeliveryKey(dependency: Pick<ThreadDependency, "id" | "compaction">): string {
+  return dependency.compaction
+    ? JSON.stringify([dependency.id, dependency.compaction.turnId, dependency.compaction.itemId])
+    : dependency.id;
 }
 
 /** Evidence reasons a repair can clear while the PR stays open. */
@@ -153,6 +165,8 @@ export type ManageThreadDependenciesRequest = {
   /** Notify once on failure, or wait through CI repair. Closed PRs remain terminal. */
   onFailure?: "notify" | "wait";
   continuation?: string;
+  /** Compaction only. Default false: the next future completion, without history catch-up. */
+  repeat?: boolean;
   /** Resume the waiting thread (`agent`, the default) or remind the operator. */
   deliver?: ThreadDependencyDeliveryTarget;
   /** With `deliver: "operator"`, offer Start thread on the card. */

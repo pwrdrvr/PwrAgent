@@ -22,6 +22,12 @@ const catalog: DynamicToolSpec[] = [{
 }];
 
 describe("PwrAgent tool discovery", () => {
+  it("finds the recovery subscription by compaction and instruction-read language", () => {
+    for (const query of ["compaction recovery hook", "reread instructions after compact"]) {
+      expect(searchPwrAgentTools(catalog, query, 3).map((tool) => tool.name)).toContain("manage_thread_dependencies");
+    }
+  });
+
   it("gives Codex discovery and Claude MCP the same explicit image reply guidance", () => {
     expect(new AgentToolRouter([buildPwrAgentToolSearchDefinition(catalog)]).buildDynamicToolSpecs()[0])
       .toMatchObject({ description: expect.stringContaining(PWRAGENT_IMAGE_REPLY_GUIDANCE) });
