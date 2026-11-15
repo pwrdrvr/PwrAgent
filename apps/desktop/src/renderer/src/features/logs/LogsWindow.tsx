@@ -31,6 +31,7 @@ import {
 } from "../../icons";
 import { copyText, copyTextAsCodeBlock } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { describeOpenPathFailure, type OpenPathOutcome } from "../../lib/open-path-failure";
 import {
   buildInstanceReferenceMarkdown,
   listInstanceReferences,
@@ -829,18 +830,24 @@ export function LogsWindow() {
     }
     // Success needs no word: the file manager comes forward. A rotated or
     // deleted file, or a refusal, would otherwise look like a dead button.
+    // Clear the last message now, so a retry does not leave an old failure up
+    // and a success that settles late cannot wipe a newer copy confirmation.
+    setStatusMessage(undefined);
     void reveal({ path: logFilePath }).then(
-      (response) => response.opened
-        ? undefined
-        : response.missing
-          ? "The log file was not found. It may have been rotated or deleted."
-          : response.error ?? "The log file could not be shown.",
-      (revealError: unknown) => {
+      (response): OpenPathOutcome => ({ response }),
+      (revealError: unknown): OpenPathOutcome => {
         console.error("Failed to reveal log file", revealError);
-        return revealError instanceof Error ? revealError.message : String(revealError);
+        return { error: revealError };
       },
-    ).then((failure) => {
-      setStatusMessage(failure ? { text: failure, tone: "error" } : undefined);
+    ).then((outcome) => {
+      const failure = describeOpenPathFailure(outcome, "The log file could not be shown.");
+      if (!failure) return;
+      setStatusMessage({
+        text: failure.kind === "missing"
+          ? "The log file was not found. It may have been rotated or deleted."
+          : failure.message,
+        tone: "error",
+      });
     });
   }, [desktopApi, logFilePath]);
 
@@ -1258,11 +1265,15 @@ export function LogsWindow() {
             <span className="log-window__status-spacer" />
             <span aria-live="polite" className="log-window__status-live" role="status">
               {statusMessage ? (
-                <span className="log-window__status-message" data-tone={statusMessage.tone}>
+                <span
+                  className="log-window__status-message tooltip-target"
+                  data-tone={statusMessage.tone}
+                  data-tooltip={statusMessage.text}
+                >
                   {statusMessage.tone === "success" ? (
                     <CheckIcon aria-hidden="true" size={12} />
                   ) : null}
-                  {statusMessage.text}
+                  <span className="log-window__status-message-text">{statusMessage.text}</span>
                 </span>
               ) : null}
             </span>

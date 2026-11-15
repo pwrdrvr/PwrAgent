@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ipcErrorMessage } from "../../lib/open-path-failure";
 
 /** Wait before each retry of a failed read; the last delay then repeats. */
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
@@ -8,8 +9,7 @@ const UNREACHABLE_AFTER_FAILURES = 2;
 
 /** An action's failure without the "Error invoking remote method …" wrapper Electron adds. */
 export function connectionActionError(cause: unknown): string {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "");
+  return ipcErrorMessage(cause);
 }
 
 /**

@@ -145,6 +145,28 @@ describe("LogsWindow", () => {
     expect(status.querySelector(".log-window__status-message")).toHaveAttribute("data-tone", "error");
   });
 
+  it("clears a failed Reveal's message when a retry succeeds", async () => {
+    const revealPath = vi.fn()
+      .mockResolvedValueOnce({ opened: false, missing: true })
+      .mockResolvedValueOnce({ opened: true });
+    installApi({
+      revealPath,
+      readAppLogSnapshot: vi.fn(async () =>
+        snapshot(MCP_ENTRIES, { logFilePath: "/Users/example/Library/Logs/PwrAgent/main.log" })),
+    });
+
+    render(<LogsWindow />);
+    const revealButton = await screen.findByRole("button", { name: "Reveal log file in file manager" });
+    fireEvent.click(revealButton);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("The log file was not found"));
+    await act(async () => {
+      fireEvent.click(revealButton);
+    });
+
+    expect(revealPath).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
   it("says nothing in the status bar when Reveal succeeds", async () => {
     const revealPath = vi.fn(async () => ({ opened: true }));
     installApi({

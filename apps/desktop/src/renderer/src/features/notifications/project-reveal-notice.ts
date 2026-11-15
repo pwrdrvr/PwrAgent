@@ -1,9 +1,5 @@
-import type { OpenPathResponse } from "@pwragent/shared";
+import { describeOpenPathFailure, type OpenPathOutcome } from "../../lib/open-path-failure";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
-
-export type ProjectRevealOutcome =
-  | { response: OpenPathResponse }
-  | { error: unknown };
 
 /**
  * A project's "Show in Finder" that showed nothing, as a toast. The click
@@ -13,35 +9,25 @@ export type ProjectRevealOutcome =
  */
 export function resolveProjectRevealNotice(
   project: { label: string; path: string },
-  outcome: ProjectRevealOutcome,
+  outcome: OpenPathOutcome,
 ): AppNoticeToastNotice | undefined {
+  const failure = describeOpenPathFailure(outcome, "The folder could not be shown.");
+  if (!failure) return undefined;
   const base = {
     id: `project-reveal:${project.path}`,
     facts: [{ label: "Path", value: project.path }],
   };
-  if ("response" in outcome) {
-    const { response } = outcome;
-    if (response.opened) return undefined;
-    if (response.missing) {
-      return {
+  return failure.kind === "missing"
+    ? {
         ...base,
         title: "Folder not found",
         message: `${project.label}'s folder was not found. It may have been moved or deleted.`,
         tone: "warning",
+      }
+    : {
+        ...base,
+        title: `Couldn't show ${project.label}`,
+        message: failure.message,
+        tone: "error",
       };
-    }
-    return {
-      ...base,
-      title: `Couldn't show ${project.label}`,
-      message: response.error ?? "The folder could not be shown.",
-      tone: "error",
-    };
-  }
-  const { error } = outcome;
-  return {
-    ...base,
-    title: `Couldn't show ${project.label}`,
-    message: error instanceof Error ? error.message : String(error),
-    tone: "error",
-  };
 }
