@@ -10106,6 +10106,26 @@ describe("Sidebar directory pinning", () => {
       expect(within(card).getByText(projectBDirectory.path!)).toBeInTheDocument();
     });
 
+    it("names the open card as the header's description", async () => {
+      renderSidebar([projectADirectory]);
+      const header = getDirectorySummary(/ProjectA/i);
+      const card = await openCard(header);
+      expect(header).toHaveAttribute("aria-describedby", card.id);
+      act(() => {
+        fireEvent.pointerDown(header);
+      });
+      await waitFor(() => expect(header).not.toHaveAttribute("aria-describedby"));
+    });
+
+    it("keeps the plain tooltip for a remote-only project when no machine can be started on", async () => {
+      renderSidebar([remoteOnlyDirectory], { newThreadFederationTargets: peers });
+      fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+      expect(await screen.findByText(
+        "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here.",
+      )).toBeInTheDocument();
+      expect(screen.queryByText("New thread on")).not.toBeInTheDocument();
+    });
+
     it("adds Show in Finder and Copy Path to the project's menu", async () => {
       const onRevealPath = vi.fn();
       renderSidebar([projectADirectory], {

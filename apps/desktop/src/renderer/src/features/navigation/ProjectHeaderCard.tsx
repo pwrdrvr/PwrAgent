@@ -9,7 +9,12 @@ import {
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { CopyIcon, FolderIcon, NewThreadIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
-import { type BridgedHoverCard, sidebarPrCardBridge } from "../../lib/hover-card-bridge";
+import {
+  type BridgedHoverCard,
+  cardIsBesideSidebar,
+  sidebarAnchorRect,
+  sidebarPrCardBridge,
+} from "../../lib/hover-card-bridge";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import { tildifyPath } from "../../lib/tildify-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -53,19 +58,6 @@ export type ProjectHeaderCardHandle = {
  */
 export const PROJECT_CARD_HOVER_DELAY_MS = 600;
 
-/** The sidebar, so the card opens past its edge rather than over the rows. */
-function sidebarAnchorRect(target: HTMLElement): DOMRect {
-  return (target.closest(".sidebar") ?? target).getBoundingClientRect();
-}
-
-function cardIsBesideSidebar(card: HTMLElement | null, target: HTMLElement): boolean {
-  const sidebar = target.closest(".sidebar");
-  if (!card || !sidebar) return false;
-  const box = card.getBoundingClientRect();
-  const edges = sidebar.getBoundingClientRect();
-  return box.width > 0 && (box.left >= edges.right || box.right <= edges.left);
-}
-
 /**
  * One hover card for every project header in a list. It lives in its own
  * component so showing and hiding it re-renders only this host, never the
@@ -96,6 +88,18 @@ export const ProjectHeaderCardHost = forwardRef<
   const getElement = tooltip.getElement;
   const show = tooltip.show;
   const showAfterDelay = tooltip.showAfterDelay;
+  const tooltipId = tooltip.tooltipId;
+  // The trigger the card is (or will be) about. Its path and machines are
+  // worth hearing, so the trigger names the card as its description while
+  // it is up. Set here, not by each list, because only this host knows when
+  // the card is visible and the lists must not re-render for it.
+  const triggerRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    if (!visible || !trigger) return;
+    trigger.setAttribute("aria-describedby", tooltipId);
+    return () => trigger.removeAttribute("aria-describedby");
+  }, [tooltipId, visible]);
 
   useEffect(() => {
     const card = bridgeCardRef.current;
@@ -110,6 +114,7 @@ export const ProjectHeaderCardHost = forwardRef<
   useImperativeHandle(ref, () => ({
     applies: (directory) => projectHeaderCardApplies(directory, optionsRef.current),
     enter: (target, directory) => {
+      triggerRef.current = target;
       const content = () => (
         <ProjectHeaderCard
           directory={directory}
@@ -139,11 +144,14 @@ export const ProjectHeaderCardHost = forwardRef<
 /** Whether a row gets a card at all. */
 export function projectHeaderCardApplies(
   directory: Pick<NavigationDirectoryView, "kind" | "path" | "localAvailability">,
-  options: Pick<ProjectHeaderCardOptions, "peers">,
+  options: Pick<ProjectHeaderCardOptions, "peers" | "onStartOnPeer">,
 ): boolean {
   if (directory.kind === "unlinked") return false;
   if (directory.localAvailability === "unconfigured") {
-    return options.peers.some((peer) => peer.availability === "available");
+    // Its only rows are other machines; with none to start on, the card
+    // would be a heading over nothing.
+    return options.onStartOnPeer !== undefined
+      && options.peers.some((peer) => peer.availability === "available");
   }
   return Boolean(directory.path);
 }

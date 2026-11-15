@@ -2245,6 +2245,10 @@ export function Sidebar(props: SidebarProps) {
   // One card for the project headers and the project index lane, so only
   // one is ever up and moving between them swaps it.
   const projectCardRef = useRef<ProjectHeaderCardHandle | null>(null);
+  const projectCardOptions = useMemo(
+    () => ({ ...projectCard, threads: renderedThreads }),
+    [projectCard, renderedThreads],
+  );
   const directoryForProjectCard = useEventCallback((key: string) =>
     renderedDirectories.find((directory) => directory.key === key));
   const projectIndexCard = useMemo(() => ({
@@ -4481,7 +4485,7 @@ export function Sidebar(props: SidebarProps) {
 
       <ProjectHeaderCardHost
         ref={projectCardRef}
-        options={{ ...projectCard, threads: renderedThreads }}
+        options={projectCardOptions}
       />
 
       {directoryTargetMenu && listedFederationThreadTargets.length > 0 ? (
