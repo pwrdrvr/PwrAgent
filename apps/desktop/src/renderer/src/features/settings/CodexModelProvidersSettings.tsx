@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
   isValidCodexModelProviderId,
   parseCodexProviderModelId,
   suggestCodexModelProviderId,
+  validateCodexBaseUrl,
   validateCodexModelProviders,
   type BackendSummary,
   type CodexModelProviderCatalogState,
@@ -18,6 +19,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
+import { formatRelativeTime } from "../navigation/thread-time";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -58,6 +60,8 @@ type ProviderTest = {
 
 /** A saved provider's models as the owner last read them, with that read's state. */
 type ProviderCatalog = {
+  /** The saved base URL the owner read. */
+  baseUrl: string;
   state?: CodexModelProviderCatalogState;
   models: CodexProviderCatalogModel[];
 };
@@ -116,6 +120,11 @@ export function CodexModelProvidersSettings(props: {
     ? props.providers.find((provider) => provider.id === draft.existingId)
     : undefined;
   const dirty = draft ? isDraftDirty(draft, editing) : false;
+  // Rebuilt when the owner's summaries change, not on every keystroke.
+  const editingCatalog = useMemo(
+    () => editing ? savedProviderCatalog(props.backends, editing) : undefined,
+    [editing, props.backends],
+  );
 
   const close = () => {
     setDraft(undefined);
@@ -203,15 +212,17 @@ export function CodexModelProvidersSettings(props: {
       setTest({ running: false, error: describeError(problem) });
       return;
     }
-    setTest({ running: true, baseUrl: provider.baseUrl });
+    // The URL as the form holds it, so the table can tell when it changes.
+    const testedUrl = draft.baseUrl.trim();
+    setTest({ running: true, baseUrl: testedUrl });
     try {
       const result = await props.desktopApi.testCodexModelProvider({
         provider,
         ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
       });
-      setTest({ running: false, result, baseUrl: provider.baseUrl });
+      setTest({ running: false, result, baseUrl: testedUrl });
     } catch (problem) {
-      setTest({ running: false, error: describeError(problem), baseUrl: provider.baseUrl });
+      setTest({ running: false, error: describeError(problem), baseUrl: testedUrl });
     }
   };
 
@@ -338,7 +349,7 @@ export function CodexModelProvidersSettings(props: {
         <ProviderEditor
           draft={draft}
           editing={editing}
-          catalog={editing ? savedProviderCatalog(props.backends, editing.id) : undefined}
+          catalog={editingCatalog}
           disabled={disabled}
           canTest={Boolean(props.desktopApi?.testCodexModelProvider)}
           test={test}
@@ -562,6 +573,8 @@ function ProviderEditor(props: {
 
 /** Rows the model table shows at once; the filter narrows a longer list. */
 export const PROVIDER_MODEL_TABLE_ROWS = 50;
+/** The filter appears past this many rows, as the composer's Model menu would scroll. */
+export const PROVIDER_MODEL_FILTER_MIN_ROWS = 10;
 
 /**
  * Every model the provider offers: the ones its `GET /models` listed, with
@@ -579,9 +592,18 @@ function ProviderModels(props: {
   const draft = props.draft;
   const [query, setQuery] = useState("");
   const [newModel, setNewModel] = useState("");
-  const source = providerModelSource(draft, props.catalog, props.test);
-  const rows = providerModelRows(source.models, draft.listed);
-  const visible = filterProviderModelRows(rows, query);
+  const source = useMemo(
+    () => providerModelSource(draft, props.catalog, props.test),
+    [draft, props.catalog, props.test],
+  );
+  const rows = useMemo(() => providerModelRows(source.models, draft.listed), [source.models, draft.listed]);
+  // The query applies only while its field is shown, so a list that shrinks
+  // below the field's threshold never stays filtered by a hidden query.
+  const filtering = rows.length > PROVIDER_MODEL_FILTER_MIN_ROWS;
+  const visible = useMemo(
+    () => filtering ? filterProviderModelRows(rows, query) : rows,
+    [filtering, query, rows],
+  );
   const shown = visible.slice(0, PROVIDER_MODEL_TABLE_ROWS);
   const addModel = (): void => {
     const model = newModel.trim();
@@ -616,13 +638,13 @@ function ProviderModels(props: {
         ) : null}
       </div>
       {props.refresh?.error ? <p className="settings-error" role="alert">{props.refresh.error}</p> : null}
-      {rows.length > PROVIDER_MODEL_TABLE_ROWS / 5 ? (
+      {filtering ? (
         <input
           aria-label="Find a model"
           className="settings-input"
           placeholder="Find a model"
           spellCheck={false}
-          type="search"
+          type="text"
           value={query}
           onChange={(event) => setQuery(event.currentTarget.value)}
         />
@@ -715,7 +737,15 @@ function ProviderModels(props: {
                           className="button button--ghost"
                           disabled={props.disabled}
                           type="button"
-                          onClick={() => props.onChange({ listed: draft.listed.filter((model) => model !== row.id) })}
+                          onClick={() => {
+                            // A model the endpoint does not list leaves the table, so
+                            // its rate goes with it rather than staying out of sight.
+                            const { [row.id]: _removed, ...rates } = draft.rates;
+                            props.onChange({
+                              listed: draft.listed.filter((model) => model !== row.id),
+                              ...(row.discovered ? {} : { rates }),
+                            });
+                          }}
                         >
                           Remove
                         </button>
@@ -989,10 +1019,12 @@ function stripKeyState(provider: DesktopCodexModelProvider): CodexModelProviderS
 /** A saved provider's models from the owner's Codex summary. */
 function savedProviderCatalog(
   backends: readonly BackendSummary[] | undefined,
-  providerId: string,
+  provider: Pick<DesktopCodexModelProvider, "id" | "baseUrl">,
 ): ProviderCatalog {
+  const providerId = provider.id;
   const codex = backends?.find((backend) => backend.kind === "codex");
   return {
+    baseUrl: provider.baseUrl,
     state: codex?.codexModelProviders?.find((state) => state.id === providerId),
     models: (codex?.launchpadOptions?.models ?? []).flatMap((model): CodexProviderCatalogModel[] => {
       const parsed = parseCodexProviderModelId(model.id);
@@ -1017,20 +1049,20 @@ export function providerModelSource(
   draft: Pick<ProviderDraft, "existingId" | "baseUrl" | "discoverModels">,
   catalog: ProviderCatalog | undefined,
   test: ProviderTest | undefined,
-  now = Date.now(),
 ): { models: CodexProviderCatalogModel[]; line: string; refreshable: boolean } {
   if (!draft.discoverModels) {
     return { models: [], line: "Only the models added here are offered.", refreshable: false };
   }
   const tested = test?.result?.models;
-  if (tested?.ok && tested.items && test?.baseUrl === draft.baseUrl.trim()) {
+  if (tested?.ok && tested.items && sameBaseUrl(test?.baseUrl, draft.baseUrl)) {
     return {
       models: tested.items,
       line: `${countModels(tested.items.length)} from GET /models · from this test${tested.truncated ? " (more not loaded)" : ""}`,
       refreshable: false,
     };
   }
-  const saved = Boolean(draft.existingId && catalog);
+  // The owner's read is of the saved URL; an edited URL is another endpoint.
+  const saved = Boolean(draft.existingId && catalog && sameBaseUrl(catalog.baseUrl, draft.baseUrl));
   const state = catalog?.state;
   if (!saved || !state) {
     return {
@@ -1038,6 +1070,10 @@ export function providerModelSource(
       line: "Test the connection to read the endpoint's models.",
       refreshable: false,
     };
+  }
+  if (state.status === "off") {
+    // Saved with the list off, so the owner has not read it.
+    return { models: [], line: "Save, or test the connection, to read the endpoint's models.", refreshable: false };
   }
   if (state.status === "unavailable") {
     return {
@@ -1050,7 +1086,11 @@ export function providerModelSource(
     return { models: catalog?.models ?? [], line: "Reading the endpoint's models…", refreshable: true };
   }
   const discovered = state.discoveredCount ?? 0;
-  const read = state.readAt === undefined ? "" : ` · read ${formatReadAge(now - state.readAt)}`;
+  const age = state.readAt === undefined ? undefined : formatRelativeTime(state.readAt);
+  // `formatRelativeTime` prints "now", "42m", "8h", "6d", then a date.
+  const read = age === undefined
+    ? ""
+    : age === "now" ? " · read just now" : /^\d+[mhd]$/u.test(age) ? ` · read ${age} ago` : ` · read ${age}`;
   return {
     models: catalog?.models ?? [],
     line: `${countModels(discovered)} from GET /models${state.truncated ? " (more not loaded)" : ""}${read}`,
@@ -1099,12 +1139,17 @@ function countModels(count: number): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? "model" : "models"}`;
 }
 
-function formatReadAge(ms: number): string {
-  const minutes = Math.floor(Math.max(0, ms) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} h ago`;
+/** Two base URLs name one endpoint when they validate to the same URL. */
+function sameBaseUrl(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  const normalize = (value: string): string => {
+    try {
+      return validateCodexBaseUrl(value);
+    } catch {
+      return value.trim();
+    }
+  };
+  return normalize(left) === normalize(right);
 }
 
 function parseRate(value: string, label: string): number | undefined {

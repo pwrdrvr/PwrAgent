@@ -18173,6 +18173,9 @@ export class DesktopBackendRegistry {
     this.modelCatalog.invalidate("codex");
     const models = await this.modelCatalog.readModels("codex", "provider-catalog-retry");
     const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
+    // A refresh from Settings that finds a provider down arms the automatic
+    // retry. The retry's own refresh is ignored here; it observes on return.
+    this.codexProviderCatalogRetry.observe(states);
     if (generation !== this.codexBackendGeneration || !this.codexBackendSummary) return states;
     const { codexModelProviders: previousStates, ...summary } = this.codexBackendSummary;
     const launchpadOptions = buildLaunchpadOptions("codex", models);

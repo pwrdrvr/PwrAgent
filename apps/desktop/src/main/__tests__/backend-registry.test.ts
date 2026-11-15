@@ -30125,6 +30125,39 @@ command = "pnpm dev"
     }
   });
 
+  it("arms the automatic retry when a Settings Refresh finds a provider down", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let down = false;
+    const providerFetch = vi.fn(async () => down
+      ? new Response(JSON.stringify({ error: { message: "maintenance" } }), { status: 503 })
+      : new Response(JSON.stringify({ data: [{ id: "kimi-k3.1-pro" }] })));
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ models: [{ id: "gpt-5.4", label: "GPT-5.4", supportsReasoning: true }] }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+      resolveCodexModelProviders: () => [{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1" }],
+      resolveCodexModelProviderKeys: async () => ({}),
+      codexModelProviderFetch: providerFetch,
+    });
+    try {
+      await registry.listBackends(
+        { includeUnavailable: true, refreshModels: "codex" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      down = true;
+      await registry.constructionPorts().refreshCodexProviderCatalogs({ rereadProviders: true });
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+      // Nothing else reads the summary, yet the retry reads it again.
+      down = false;
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(providerFetch).toHaveBeenCalledTimes(3);
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("reads unknown Codex provider ownership before admitting a matching model override", async () => {
     let provider: string | undefined;
     const model = "@fixture-provider/custom";

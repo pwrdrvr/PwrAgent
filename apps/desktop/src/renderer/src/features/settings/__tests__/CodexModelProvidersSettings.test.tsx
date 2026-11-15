@@ -300,7 +300,7 @@ describe("CodexModelProvidersSettings", () => {
       mathosModel("mistral-large-4-0", { label: "Mistral Large 4.0" }),
     ])]);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByText("2 models from GET /models · read 3 min ago")).toBeInTheDocument();
+    expect(screen.getByText("2 models from GET /models · read 3m ago")).toBeInTheDocument();
     const table = screen.getByRole("table", { name: "Provider models" });
     expect(within(table).getByText("DeepSeek V4.1 Flash")).toBeInTheDocument();
     expect(within(table).getByLabelText("Effort levels: low, high, max, ultramath; default high")).toBeInTheDocument();
@@ -317,12 +317,12 @@ describe("CodexModelProvidersSettings", () => {
     const table = screen.getByRole("table", { name: "Provider models" });
     expect(within(table).getAllByRole("row")).toHaveLength(51);
     expect(screen.getByText(/Showing 50 of 2,000\. Type to narrow the list\./u)).toBeInTheDocument();
-    expect(screen.getByText("2,000 models from GET /models (more not loaded) · read 3 min ago")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("searchbox", { name: "Find a model" }), { target: { value: "5.3 glm" } });
+    expect(screen.getByText("2,000 models from GET /models (more not loaded) · read 3m ago")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Find a model" }), { target: { value: "5.3 glm" } });
     const narrowed = screen.getByRole("table", { name: "Provider models" });
     expect(within(narrowed).getAllByRole("row")).toHaveLength(2);
     fireEvent.change(within(narrowed).getByRole("textbox", { name: "zai-org/glm-5.3 input rate" }), { target: { value: "0.6" } });
-    fireEvent.change(screen.getByRole("searchbox", { name: "Find a model" }), { target: { value: "no such model" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Find a model" }), { target: { value: "no such model" } });
     expect(screen.getByText("No models match “no such model”.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
@@ -345,7 +345,8 @@ describe("CodexModelProvidersSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
     expect(screen.getByText("Test the connection to read the endpoint's models.")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Provider name" }), { target: { value: "MathOS" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://mathos.example/v1" } });
+    // Typed with a trailing slash, which the test's request drops.
+    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://mathos.example/v1/" } });
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     const table = await screen.findByRole("table", { name: "Provider models" });
     expect(within(table).getByText("Kimi K3.1 Pro")).toBeInTheDocument();
@@ -366,6 +367,47 @@ describe("CodexModelProvidersSettings", () => {
     expect(within(table).getByText("prover-large")).toBeInTheDocument();
     expect(within(table).getByText("Added")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+  });
+
+  it("never keeps rows hidden behind a filter that is no longer shown", () => {
+    const models = Array.from({ length: 12 }, (_, index) => mathosModel(`model-${index}`));
+    renderSettings([{ ...mathos, models: ["prover-large"] }], undefined, [codexSummary(models)]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Find a model" }), { target: { value: "model-3" } });
+    expect(within(screen.getByRole("table", { name: "Provider models" })).getAllByRole("row")).toHaveLength(2);
+    // The list goes off: one added model is left, and the filter field goes.
+    fireEvent.click(screen.getByRole("switch", { name: "List the endpoint's models" }));
+    expect(screen.queryByRole("textbox", { name: "Find a model" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Provider models" })).getByText("prover-large")).toBeInTheDocument();
+  });
+
+  it("does not show the saved URL's models for an edited, untested URL", () => {
+    renderSettings([mathos], undefined, [codexSummary([mathosModel("kimi-k3.1-pro")])]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    // The same endpoint, spelled with a trailing slash, keeps its read.
+    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://mathos.example/v1/" } });
+    expect(screen.getByRole("table", { name: "Provider models" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://other.example/v1" } });
+    expect(screen.queryByRole("table", { name: "Provider models" })).not.toBeInTheDocument();
+    expect(screen.getByText("Test the connection to read the endpoint's models.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+  });
+
+  it("says a provider saved with its list off has not been read when the list is turned on", () => {
+    renderSettings([{ ...mathos, discoverModels: false }], undefined, [codexSummary([], { status: "off" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("switch", { name: "List the endpoint's models" }));
+    expect(screen.getByText("Save, or test the connection, to read the endpoint's models.")).toBeInTheDocument();
+    expect(screen.queryByText(/0 models from GET \/models/u)).not.toBeInTheDocument();
+  });
+
+  it("drops the rate of an added model when it is removed", async () => {
+    const { onSave } = renderSettings([refuseless]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove glm-5.3-abliterated" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith([{ id: "refuseless", name: "Refuseless", baseUrl: "https://api.refuseless.example/v1" }]);
   });
 
   it("derives an id from a name", () => {
