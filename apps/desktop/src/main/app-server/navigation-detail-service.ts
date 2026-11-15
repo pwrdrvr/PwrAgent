@@ -83,6 +83,7 @@ export type NavigationDetailRegistry = Pick<
   | "getQueuedExecutionModeForThread"
   | "hydrateThreadGitWorkingStates"
   | "iterateQueuedTurnSummaries"
+  | "listThreads"
   | "listLiveTokenMiserSubAgents"
   | "mergeLiveTokenMiserSubAgents"
   | "readCheckoutHibernation"
@@ -179,13 +180,22 @@ export class NavigationDetailService {
         `Navigation query protocol ${NAVIGATION_QUERY_PROTOCOL_VERSION} is required.`,
       );
     }
-    const summary = this.registry.getCachedThreadSummary({
+    let summary = this.registry.getCachedThreadSummary({
       backend: request.ref.backend,
       threadId: request.ref.threadId,
     }) ?? await this.registry.resolveThread({
       backend: request.ref.backend,
       threadId: request.ref.threadId,
     });
+    // An explicit link can name an archived thread that active navigation
+    // has never loaded. Keep this fallback on the read-only detail path:
+    // resolveThread also admits message destinations and must stay active-only.
+    if (!summary) {
+      summary = (await this.registry.listThreads({
+        backend: request.ref.backend, archived: true, enrichDirectories: false,
+        callerReason: "thread-id-lookup",
+      })).find((thread) => thread.id === request.ref.threadId);
+    }
     if (!summary) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
