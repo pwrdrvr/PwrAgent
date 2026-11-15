@@ -283,6 +283,7 @@ import {
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
+import { resolveProjectRevealNotice } from "./features/notifications/project-reveal-notice";
 import {
   AUTO_ACCESS_UPGRADE_NOTICE_ID,
   buildAutoAccessUpgradeNotice,
@@ -3387,16 +3388,23 @@ function DesktopAppShell(props: {
       setRevealSelectedThreadRequest((current) => current + 1);
     }
   };
-  // A project's "Show in Finder". A missing folder or a refusal is the
-  // file manager's to report; the sidebar has nowhere to show it.
+  // A project's "Show in Finder". The hover card or menu that asked has
+  // closed by the time the reveal settles, so a missing checkout or a failed
+  // reveal is reported as a toast.
   const revealPath = desktopApi?.revealPath;
   const revealProjectPath = useMemo(
     () => revealPath
-      ? (path: string): void => {
-          void revealPath({ path }).catch(() => undefined);
+      ? (path: string, label: string): void => {
+          const project = { label, path };
+          void revealPath({ path }).then(
+            (response) => resolveProjectRevealNotice(project, { response }),
+            (error: unknown) => resolveProjectRevealNotice(project, { error }),
+          ).then((notice) => {
+            if (notice) showAppNotice(notice);
+          });
         }
       : undefined,
-    [revealPath],
+    [revealPath, showAppNotice],
   );
 
   const createThreadOnFederationTarget = async (

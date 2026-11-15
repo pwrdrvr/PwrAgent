@@ -10025,7 +10025,7 @@ describe("Sidebar directory pinning", () => {
       expect(within(card).getByText("ProjectA", { selector: ".project-card__path-tail" })).toBeInTheDocument();
 
       fireEvent.click(within(card).getByText("Show in Finder"));
-      expect(onRevealPath).toHaveBeenCalledWith("/Users/fixture-user/pwrdrvr/ProjectA");
+      expect(onRevealPath).toHaveBeenCalledWith("/Users/fixture-user/pwrdrvr/ProjectA", "ProjectA");
 
       const again = await openCard(getDirectorySummary(/ProjectA/i));
       await act(async () => {
@@ -10136,7 +10136,7 @@ describe("Sidebar directory pinning", () => {
       fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
       const menu = await screen.findByRole("menu");
       fireEvent.click(within(menu).getByRole("menuitem", { name: "Show in Finder" }));
-      expect(onRevealPath).toHaveBeenCalledWith(projectADirectory.path);
+      expect(onRevealPath).toHaveBeenCalledWith(projectADirectory.path, "ProjectA");
 
       fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
       expect(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy Path" }))

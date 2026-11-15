@@ -384,7 +384,7 @@ type SidebarProps = {
   /** `process.platform`, for "Show in Finder" and "This Mac". */
   platform?: string;
   /** Shows a folder in the OS file manager. Absent where it cannot. */
-  onRevealPath?: (path: string) => void;
+  onRevealPath?: (path: string, label: string) => void;
   onAddProjectDirectory?: () => Promise<void>;
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
@@ -2207,8 +2207,8 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     void hoverReleasedListHandlers.openLaunchpad(directory, directory.launchpad?.backend);
   });
-  const revealProjectPath = useEventCallback((path: string): void => {
-    props.onRevealPath?.(path);
+  const revealProjectPath = useEventCallback((path: string, label: string): void => {
+    props.onRevealPath?.(path, label);
   });
   const federationViewer = federationTarget !== undefined;
   const canRevealPath = Boolean(props.onRevealPath) && !federationViewer;
@@ -4671,7 +4671,7 @@ export function Sidebar(props: SidebarProps) {
                   type="button"
                   onClick={() => {
                     setDirectoryContextMenu(undefined);
-                    revealProjectPath(directoryMenuPath);
+                    revealProjectPath(directoryMenuPath, directoryContextMenu.directory.label);
                   }}
                 >
                   {revealInFileManagerLabel(props.platform)}
