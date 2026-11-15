@@ -78,6 +78,11 @@ export class ThreadDependencyStore {
     return this.db.transaction(() => {
       if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
       const active = this.active();
+      const unresolved = active.find((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
+        && item.status === "dispatching" && item.error);
+      if ((candidate.deliver ?? "agent") === "agent" && unresolved) {
+        throw new Error(`Continuation delivery needs review (${unresolved.id}). List this thread's dependencies and ask the operator to inspect the delivery before creating another agent continuation. Dismiss only after operator review; dismissal does not cancel a turn.`);
+      }
       const duplicate = active.find((item) => signature(item) === signature(candidate));
       if (duplicate) return duplicate;
       if (active.length >= 512) throw new Error("There are already 512 active dependencies. Cancel an existing dependency first.");

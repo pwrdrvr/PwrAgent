@@ -436,6 +436,7 @@ import {
   type AcpSessionMetadata,
 } from "./acp-backend-adapter";
 import {
+  CodexThreadBusyBeforeStartError,
   extractRateLimitSummaries,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
@@ -10265,7 +10266,7 @@ export class DesktopBackendRegistry {
       // Turn preparation yields after the queue's idle check. If a backend
       // notification claimed the thread meanwhile, preserve the busy result
       // so automations wait without spending their attempt reservations.
-      if (error instanceof ThreadAlreadyActiveError) return { status: "busy" };
+      if (error instanceof ThreadAlreadyActiveError || error instanceof CodexThreadBusyBeforeStartError) return { status: "busy" };
       throw error;
     }
   }

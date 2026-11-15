@@ -4339,6 +4339,18 @@ describe("DesktopBackendRegistry", () => {
     expect(startTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a provider-confirmed busy resume pending for immediate admission", async () => {
+    const { CodexThreadBusyBeforeStartError } = await import("../codex-app-server/desktop-client");
+    const codexClient = new MockBackendClient({});
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    vi.spyOn(codexClient, "startTurn").mockRejectedValueOnce(new CodexThreadBusyBeforeStartError(new Error("Provider rejected resume")));
+    const params = { backend: "codex" as const, threadId: "busy-resume", input: [{ type: "text" as const, text: "Continue" }] };
+    await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
+    expect(registry.getQueuedTurnsForThread(params)).toEqual([]);
+    await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+  });
+
   it("preserves backend submission errors from immediate admission", async () => {
     const error = new Error("Backend disconnected before turn start");
     const registry = createDesktopBackendRegistry({

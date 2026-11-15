@@ -98,8 +98,11 @@ and every change notifies the waiting thread and each prerequisite thread.
 
 A sidebar row with active registrations carries a chip: progress such as
 `1 of 2` for one registration, a count for several, and a red
-**Check delivery** label when a delivery needs review. Its tooltip names each
-prerequisite and its state, and clicking it opens the dialog. The chip reads
+**Check delivery** label when a delivery needs review, with a count when several
+deliveries need review. This means admission could not be confirmed; it is not
+ordinary waiting. Its tooltip previews at most two registrations and three
+prerequisites each, prioritizes delivery reviews, and reports omitted counts.
+Clicking it opens the full list and errors in the dialog. The chip reads
 `action: "active"` from the desktop window's IPC channel, which lists every
 active registration without its continuation text; agents cannot call it. A
 continuation turn is labeled **Continue after** in the transcript.
@@ -206,11 +209,22 @@ active registrations per consumer, and 512 per profile. Completed edges no
 longer constrain the graph. Only local thread conditions join the graph;
 a peer's thread or a subject cannot form a cycle here.
 
+Deduplication includes pinned turns and continuation text, but excludes display
+titles and condition order. Changing worker turns or the saved plan creates a
+distinct registration even when its tooltip looks similar. Reuse a waiting or
+ready registration instead of adding it again on each update. Each registration
+fires once, including `mode: "any"`; later worker turns require a new wait after
+the previous delivery completes.
+
 The coordinator serializes local events and uses a SQLite compare-and-swap
 to claim delivery across instances sharing a profile. Busy consumers retain
 readiness; their terminal turn event retries admission after rechecking the
 prerequisites. Dependencies schedule a continuation; they do not interrupt
 an active turn or hold unrelated manual messages.
+The specific Codex resume refusal about changing Token Miser activation during
+an active turn is a confirmed busy result, before `turn/start`. It retains the
+wait for an idle event. Transport errors and errors after sending `turn/start`
+remain uncertain and are never automatically retried.
 
 Watching/ready registrations survive restart and reconcile through the
 provider protocol. Runtime code never reads Codex storage. An admitted turn
@@ -221,12 +235,17 @@ PID is not trusted beyond that, because the OS reuses PIDs.
 
 Backend turn admission has no idempotency key. If a crash or transport error
 leaves admission uncertain and no receipt exists, PwrAgent retains a visible
-delivery-review state and does **not** replay the continuation. Inspect the
-consumer before registering another dependency. `action: "dismiss"` (or
+delivery-review state and does **not** replay the continuation. New agent waits
+and admission of other pending agent waits on that consumer are blocked until
+review resolves the claim. Operator reminders can still be registered and
+delivered. Inspect the consumer before registering another dependency.
+`action: "dismiss"` (or
 **Dismiss after review** in the UI) retires an uncertain claim after that
 inspection; it does not cancel a potentially admitted turn. This provides at-most-once
 automatic admission rather than claiming exactly-once delivery across an
 unacknowledged backend request.
+The refusal to register a replacement while review is pending makes zero
+SQLite commits (0 MB/day), covered by its checked-in write budget.
 
 ## SQLite write budget
 

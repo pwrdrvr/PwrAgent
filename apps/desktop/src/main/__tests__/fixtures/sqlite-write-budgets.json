@@ -1,4 +1,5 @@
 {
+  "thread-dependencies-review-refusal": {"commits": 0, "note": "Refusing a replacement agent wake while delivery needs review: zero commits and 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archive-candidates-cold-200": {"commits": 0, "note": "Complete active and archived candidate discovery; read-only batches, 0 commits and 0 MB/day at any sweep cadence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archive-candidates-double-400": {"commits": 0, "note": "Complete active and archived candidate discovery; read-only batches, 0 commits and 0 MB/day at any sweep cadence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archive-candidates-unchanged-200": {"commits": 0, "note": "Complete active and archived candidate discovery; read-only batches, 0 commits and 0 MB/day at any sweep cadence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},

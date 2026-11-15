@@ -436,6 +436,14 @@ export class CodexBootstrapDeferredError extends Error {
   }
 }
 
+/** The provider rejected resume as busy before this client sent turn/start. */
+export class CodexThreadBusyBeforeStartError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "CodexThreadBusyBeforeStartError";
+  }
+}
+
 type InitializeResult = Partial<CodexInitializeResponse>;
 
 export type CodexServerCapabilities = {
@@ -11214,6 +11222,16 @@ export class CodexAppServerClient {
           this.getProtocolCompatibility(),
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      }).catch((error: unknown) => {
+        // This exact provider refusal proves that no turn was admitted by
+        // this start. Keep the stage in a typed error; a turn/start failure
+        // or transport timeout must never be mistaken for safe non-admission.
+        const message = error instanceof Error ? error.message : String(error);
+        const refusal = `cannot change PwrAgent Token Miser activation while thread ${params.threadId} has an active turn`;
+        if (message === `json-rpc error (-32600): ${refusal}`) {
+          throw new CodexThreadBusyBeforeStartError(error);
+        }
+        throw error;
       });
       // Environment overrides are applied by resume; continuing after a
       // failure would silently run the turn with the previous toolchain.
@@ -11226,7 +11244,8 @@ export class CodexAppServerClient {
             // app-server holds its writer. turn/start cannot claim that
             // thread and would mask the conflict with "thread not found".
             const message = error instanceof Error ? error.message : String(error);
-            if (message.toLowerCase().includes("already has an active writer")) {
+            if (error instanceof CodexThreadBusyBeforeStartError
+              || message.toLowerCase().includes("already has an active writer")) {
               throw error;
             }
             this.host.logger.warn("thread/resume failed before turn/start", {

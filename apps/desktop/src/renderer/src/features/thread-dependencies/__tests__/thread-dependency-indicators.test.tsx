@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import fc from "fast-check";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
@@ -102,6 +103,26 @@ describe("summarizeThreadDependencies", () => {
     expect(indicators.get("codex:consumer")!.tooltip).toContain("Delivery needs review.");
     expect(indicators.has("codex:finished")).toBe(false);
     expect(indicators.has("codex:cancelled")).toBe(false);
+  });
+
+  it("bounds the preview independently of registration count, prerequisite count, and title length", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 3, max: 32 }), fc.integer({ min: 4, max: 16 }), fc.string({ minLength: 100, maxLength: 200 }),
+      (count, prerequisiteCount, title) => {
+        const registrations = Array.from({ length: count }, (_, index): ThreadDependency => ({
+          ...waiting, id: `wait-${index}`, status: "dispatching", error: "Provider error".repeat(100),
+          conditions: Array.from({ length: prerequisiteCount }, () => ({ ...waiting.conditions[0]!, title })),
+        }));
+        const indicator = summarizeThreadDependencies(registrations).get("codex:consumer")!;
+        expect(indicator.label).toBe(`Check delivery · ${count}`);
+        expect(indicator.tooltip).toContain(`${count} active waits · ${count} need delivery review`);
+        expect(indicator.tooltip).toContain(`+${count - 2} more registrations`);
+        expect(indicator.tooltip).toContain(`+${prerequisiteCount - 3} more prerequisites`);
+        expect(indicator.tooltip.length).toBeLessThan(1800);
+        expect(indicator.tooltip).not.toContain("Provider error");
+        expect(indicator.count).toBe(count);
+      },
+    ));
   });
 });
 

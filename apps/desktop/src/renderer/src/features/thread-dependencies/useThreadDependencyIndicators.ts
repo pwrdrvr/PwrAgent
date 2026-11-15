@@ -19,7 +19,7 @@ export type ThreadDependencyIndicator = {
   label: string;
   /** A delivery needs the operator's review before anything else happens. */
   alert: boolean;
-  /** Every prerequisite with its state, one per line. */
+  /** Bounded preview; Continue After contains the full registrations. */
   tooltip: string;
   /** A waiting registration holds this thread's merges. */
   mergeHeld: boolean;
@@ -37,6 +37,8 @@ const EMPTY: ReadonlyMap<string, ThreadDependencyIndicator> = new Map();
 // Evaluation publishes one update per changed registration; a PR poll can
 // change several at once, so a burst becomes one list request.
 const REFRESH_DEBOUNCE_MS = 150;
+const MAX_TOOLTIP_REGISTRATIONS = 2;
+const MAX_TOOLTIP_CONDITIONS = 3;
 
 /**
  * The key a thread's indicator is filed under: its owner as this window
@@ -136,14 +138,15 @@ export function summarizeThreadDependencies(
   const indicators = new Map<string, ThreadDependencyIndicator>();
   for (const [key, items] of byThread) {
     items.sort((left, right) => left.createdAt - right.createdAt);
-    const alert = items.some(needsDeliveryReview);
+    const reviewCount = items.filter(needsDeliveryReview).length;
+    const alert = reviewCount > 0;
     const mergeHeld = items.some(holdsMerge);
     indicators.set(key, {
       count: items.length,
       alert,
       mergeHeld,
-      label: alert ? "Check delivery" : mergeHeld ? "Merge held" : items.length > 1 ? `${items.length} waiting` : progressLabel(items[0]!),
-      tooltip: items.map(describeRegistration).join("\n\n"),
+      label: alert ? `Check delivery${reviewCount > 1 ? ` · ${reviewCount}` : ""}` : mergeHeld ? "Merge held" : items.length > 1 ? `${items.length} waiting` : progressLabel(items[0]!),
+      tooltip: describeRegistrations(items, reviewCount),
     });
   }
   return indicators;
@@ -177,17 +180,32 @@ function progressLabel(dependency: ThreadDependency): string {
   return `${met} of ${total}`;
 }
 
-function describeRegistration(dependency: ThreadDependency): string {
+function describeRegistrations(items: ThreadDependency[], reviewCount: number): string {
+  // Uncertain deliveries need attention before ordinary waits. Keep their
+  // full errors in the dialog, where they can be inspected and dismissed.
+  const preview = [...items].sort((a, b) => Number(needsDeliveryReview(b)) - Number(needsDeliveryReview(a)))
+    .slice(0, MAX_TOOLTIP_REGISTRATIONS);
+  const lines: string[] = [];
+  if (items.length > 1) lines.push(`${items.length} active waits${reviewCount ? ` · ${reviewCount} need delivery review` : ""}.`);
+  if (reviewCount) lines.push("A continuation may have started, but delivery was not confirmed. Open Continue After to inspect errors and dismiss reviewed deliveries.");
+  lines.push(...preview.map((item) => describeRegistration(item, items.length > 1)));
+  if (items.length > preview.length) lines.push(`+${items.length - preview.length} more registrations. Open Continue After for the full list.`);
+  return lines.join("\n\n");
+}
+
+function describeRegistration(dependency: ThreadDependency, identify: boolean): string {
   const heading = dependency.conditions.length > 1
     ? `Continue after ${dependency.mode === "any" ? "any" : "all"} of:`
     : "Continue after:";
-  const lines = dependency.conditions.map((condition, index) => {
+  const lines = dependency.conditions.slice(0, MAX_TOOLTIP_CONDITIONS).map((condition, index) => {
     const state = evidenceFor(dependency, index)?.state;
     const mark = state === "satisfied" ? "✓" : state === "failed" ? "✗" : "○";
-    return `${mark} ${condition.subject?.trim() || condition.title || condition.threadId} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
+    const name = condition.subject?.trim() || condition.title || condition.threadId;
+    return `${mark} ${name.length > 80 ? `${name.slice(0, 79)}…` : name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
   });
+  if (dependency.conditions.length > MAX_TOOLTIP_CONDITIONS) lines.push(`+${dependency.conditions.length - MAX_TOOLTIP_CONDITIONS} more prerequisites. Open Continue After for details.`);
   if (holdsMerge(dependency)) lines.push("Merging waits.");
   if (threadDependencyDeliveryTarget(dependency) === "operator") lines.push("Then reminds you.");
   if (needsDeliveryReview(dependency)) lines.push("Delivery needs review.");
-  return [heading, ...lines].join("\n");
+  return [identify ? `Registration ${dependency.id.slice(0, 8)}` : undefined, heading, ...lines].filter(Boolean).join("\n");
 }

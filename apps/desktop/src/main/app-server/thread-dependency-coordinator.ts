@@ -356,6 +356,10 @@ export class ThreadDependencyCoordinator {
     // A card needs no idle consumer: it starts no turn.
     if (threadDependencyDeliveryTarget(current) === "operator") return this.remind(current);
     if (this.options.isConsumerBusy?.(current) || this.busyConsumers.has(identity(current))) return;
+    // A sibling claim may already have started this consumer. Do not admit
+    // another saved plan until that uncertain delivery has been reviewed.
+    if (this.options.store.active().some((other) => identity(other) === identity(current)
+      && other.status === "dispatching" && other.error)) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);

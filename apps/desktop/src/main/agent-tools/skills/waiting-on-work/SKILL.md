@@ -115,6 +115,29 @@ thread and spends no model turns while waiting, whether the wait takes minutes
 or days. After registration succeeds, end the turn. This schedules the follow-up;
 it does not merge any prerequisite PR or enforce their merge order.
 
+## Registration lifecycle and delivery review
+
+A registration is one-shot. `mode: "any"` resumes once when any pinned
+prerequisite finishes; it does not resume once per prerequisite. A confirmed
+delivery becomes `delivered` and leaves the active list automatically.
+`turn_completed` pins the current/latest turn when `turnId` is omitted; later
+turns need a new registration after the previous wake has been delivered.
+
+Inspect the create response before relying on the wait. Identical active
+registrations are reused, but changed turn IDs or continuation text are distinct
+waits even when their display titles match. Reuse a `waiting` or `ready` wait;
+do not add a replacement on every worker update. The limits are 32 active waits
+per thread and 512 per profile, including claims awaiting delivery review.
+
+`dispatching` with an `error` means admission is uncertain. The sidebar says
+**Check delivery**. Do not create replacement agent waits, retry the continuation,
+or dismiss it yourself to free capacity. List the dependencies and tell the
+operator which delivery needs review. After the operator inspects the thread,
+`dismiss` retires that claim without cancelling any turn. `cancel` stops a
+`waiting` or `ready` wait when the operator stops waiting; it cannot undo an
+admitted continuation. A confirmed busy refusal stays pending for the idle
+event and needs no replacement registration.
+
 ## Other long jobs
 
 Delegate a monitor with a concrete target, check, interval, success and failure
