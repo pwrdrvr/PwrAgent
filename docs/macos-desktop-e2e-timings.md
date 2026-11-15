@@ -54,7 +54,17 @@ Static inspection preserves the existing ownership sequence: the fixture memoize
 
 No safe runtime correction for the deadline was identified. A successful rerun demonstrates variability at the same head, not that the deadline is fixed. The evidence supports accumulated per-test cost, but does not distinguish host contention from application startup, renderer work, or fixture overhead in the cancelled attempt. Incremental, bounded console phase measurements are follow-up work so another deadline cannot discard all phase evidence.
 
-This investigation used existing CI logs/artifacts and static source inspection. No local tests, lint, typecheck, E2E or builds were run. No timeouts, retry policy, workers, lane scheduling, environments, application processes, releases or tags were changed. There is no new implementation to validate in CI; future implementation changes require repository CI on free hosted `macos-26`.
+The initial investigation used existing CI logs/artifacts and static source inspection. No local tests, lint, typecheck, E2E or builds were run. No timeouts, retry policy, workers, lane scheduling, environments, application processes, releases or tags were changed. Subsequent implementation verification uses repository CI on free hosted `macos-26`.
+
+### Follow-up: measured shutdown observer overhead
+
+[Pre-fix CI run 43753861824](https://github.com/pwrdrvr/PwrAgent/actions/runs/43753861824), at checkpoint `f141fd36a47f3c2cb9aa1254fc6ac82279d6537a`, added cumulative cost measurements to the existing observer without changing its eager stack formatting. All four macOS E2E lanes passed. [Lane 2](https://github.com/pwrdrvr/PwrAgent/actions/runs/43753861824/job/132933665516) took 10:16 overall; its worker recorded 58,127 resource-init calls taking 8,788 ms, with zero dropped resources.
+
+The observer previously read `new Error().stack` for every tracked async resource, including healthy filesystem requests and timers. Node's source-map support can add latency when a stack is accessed. The correction retains an unformatted `Error` at resource creation and reads its stack only when collecting failure evidence for a still-live, referenced resource. The resource bound, creation site, ownership and process cleanup are preserved.
+
+An oracle test counts stack formatting across three resource types and checks that failure snapshots retain their creation function. On the pre-fix CI checkpoint, macOS, Linux and Windows all reported three stack formats before any snapshot, violating the required zero; the snapshot total remained three. This establishes the regression against pre-fix code. Post-fix validation must confirm both deferred formatting and retained creation sites.
+
+The measured 8.8 seconds covers resource initialization in this observer only. It is avoidable harness overhead, but is too small by itself to explain the original 120.3-second difference. A passing E2E run or reduced observer cost must not be reported as proof that the whole deadline problem is solved.
 
 ## Same-run Spotlight A/B
 
