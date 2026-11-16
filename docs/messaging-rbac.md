@@ -28,7 +28,7 @@ code side).
 
 | Permission ID | Group | What it gates |
 |---|---|---|
-| `message.reply` | conversation | Send a plain message turn to a bound thread. The baseline floor. Also gates the agent `send_messaging_file` tool and Claude's "Continue in a new session" recovery (`/continue`). |
+| `message.reply` | conversation | Send a plain message turn to a bound thread. The baseline floor. Also gates `send_messaging_file`, listing/exporting the actor's received originals in that thread, and Claude's "Continue in a new session" recovery (`/continue`). |
 | `elicitation.answer` | conversation | Respond to the agent's elicitation prompts (questionnaire buttons + freeform fallback). |
 | `thread.status.view` | session | Read the binding status card and transcript. |
 | `thread.resume` | session | Attach the conversation to an existing thread (`/resume`, `/agent`, and the agent-driven `attach_thread_here`). |

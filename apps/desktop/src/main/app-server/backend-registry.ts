@@ -1273,9 +1273,15 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    const origin = await this.readTurnCausalMessagingOrigin(request.context);
     return await this.messagingAgentToolService.handlePwrAgentMessagingRequest({
       ...request,
-      context: { ...request.context, ...await this.readCausalMessagingContext(request.context) },
+      context: { ...request.context,
+        ...(origin?.causalMessagingSource ? { causalMessagingSource: origin.causalMessagingSource } : {}),
+        ...(origin?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
+        ...(["list_messaging_attachments", "export_messaging_attachment"].includes(request.operation)
+          && (origin?.kind === "messaging" || origin?.messaging) ? { messagingTurn: true } : {}),
+      },
     });
   }
 

@@ -163,6 +163,72 @@ shares only the pure async-questionnaire predicate.
 
 ## Data flow
 
+### Received originals and previews
+
+The controller's attachment processor retains each admitted download before
+text extraction, image normalization or PDF rendering. The original-file store
+is independent of the turn-scoped, in-memory PDF preview store. In particular,
+rendering a one-page PDF does not discard its original. Telegram documents are
+downloadable regardless of whether their MIME type supports a content preview;
+other providers' existing available-file descriptors use the same core path.
+Unsupported audio/video descriptors remain unsupported.
+
+`list_messaging_attachments` returns bounded metadata (25 records per page).
+`export_messaging_attachment` accepts only a scoped attachment ID and returns
+a verified local copy plus filename, MIME, exact size, SHA-256 and expiry. It
+does not return bytes to the model or inspect PDF contents. The agent then
+copies that file to the user-selected destination with its backend's normal
+filesystem tools, sandbox and approval policy. The export tool accepts no
+destination path, cannot overwrite user files, and does not grant arbitrary
+host writes. Guidance requires copying, safe destination filenames, rejecting
+symlink destinations, and explicit user authorization for replacement.
+
+Original IDs are deterministic hashes of the profile-local thread/provider
+scope, actor/conversation scope, inbound event and provider attachment key.
+Provider keys, tokens, URLs and original cache paths are not tool arguments or
+manifest fields. Original names are bounded untrusted display data, never
+filesystem paths. PDF preview IDs reuse the original ID where applicable, and
+the original manifest remains in the normal text input/history alongside
+previews, including single-page renders. Duplicate names have distinct IDs.
+The shared messaging catalog advertises both tools through Codex dynamic tools,
+Claude/ACP MCP and tool search. They are also on the dedicated PDF MCP surface
+for existing Codex threads with catalog version 2; older threads without that
+surface may need a new thread to receive newly advertised tools.
+
+The production runtime injects one store under the active profile's
+`state/messaging-original-attachments/`. Atomic record publication and an
+exclusive, verified export retain the original separately. Records survive
+owner restart for seven days, with earlier FIFO eviction at 256 originals or
+256 MiB of original bytes per profile. At most one export (up to another
+256 MiB total) is kept per original. Expired records and abandoned intake
+directories are removed on cache access/intake; no polling or new SQLite
+commits are introduced. The existing intake limit remains four files and
+10 MiB per file. Old preview-only history cannot recover an original that was
+never retained; missing, expired, oversized or evicted files require reattachment.
+
+Tool scope comes from the authenticated host context, not tool arguments.
+Local desktop turns can access their own thread's originals; messaging turns
+are further restricted to their initiating actor and conversation and require
+`message.reply`. Live actor provenance is preserved for ordinary Claude/ACP
+threads as well as Codex. Retained messaging sources are reauthorized after
+restart. When a provider cannot reauthorize a restarted messaging turn, access
+fails closed and asks for a new message or a local desktop save request.
+Cross-thread, cross-provider and cross-owner IDs cannot select a record.
+Remote executions receive an explicit unsupported-route error: the existing
+messaging-file route sends files **to** the provider owner and does not provide
+an authenticated reverse export receipt. Reattach to a local thread on the
+messaging owner, save there, then transfer the saved copy through an authorized
+file-transfer workflow.
+Owner-local paths are never returned as usable remote paths.
+
+Telegram's adapter uses `getFile` followed by an authenticated download. The
+[hosted Bot API](https://core.telegram.org/bots/api#getfile) permits downloads
+up to 20 MB and guarantees the generated download link for at least an hour;
+the application retains its tighter 10 MiB intake limit. Neither the Bot API
+download URL nor the bot token is exposed to agents. `pdfAnalysisEnabled`
+controls PDF preview/input handling; it was never an original-file saving
+switch, and exporting a retained original needs no new setting.
+
 ### Inbound (user message arrives at the bot)
 
 ```mermaid
