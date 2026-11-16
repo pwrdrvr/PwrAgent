@@ -1837,6 +1837,108 @@ describe("PluginsSettings GitHub connection", () => {
     } as unknown as DesktopApi;
   }
 
+  function status(overrides: Partial<McpConnectionStatus> = {}): McpConnectionStatus {
+    return {
+      id: "datadog",
+      displayName: "Datadog",
+      serverUrl: "https://mcp.example.com/mcp",
+      kind: "remote",
+      authMode: "oauth",
+      enabled: true,
+      configured: true,
+      state: "ready",
+      createdAt: 0,
+      updatedAt: 0,
+      ...overrides,
+    };
+  }
+
+  function githubConnection(): McpConnectionStatus {
+    return status({
+      id: "github",
+      displayName: "GitHub",
+      serverUrl: "github:github",
+      kind: "github",
+      authMode: "none",
+      github: {
+        account: "gh_cli",
+        server: "hosted",
+        toolsets: ["context", "repos", "issues", "users"],
+        readOnly: false,
+        skills: true,
+      },
+    });
+  }
+
+  function rowNames() {
+    return screen.getAllByRole("article")
+      .map((row) => row.querySelector(".settings-mcp-row__name")?.textContent);
+  }
+
+  it("lists GitHub as a built-in after PwrSnap and PwrGit, not as a server type", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none" }),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+          status(),
+        ],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    const setUp = await screen.findByRole("button", { name: "Set up GitHub" });
+    expect(rowNames()).toEqual(["PwrSnap", "PwrGit", "GitHub", "Datadog"]);
+    const types = within(screen.getByRole("radiogroup", { name: "Server type" })).getAllByRole("radio");
+    expect(types.map((radio) => radio.textContent)).toEqual([
+      expect.stringMatching(/^Server URL/),
+      expect.stringMatching(/^Local command/),
+    ]);
+    // Nothing runs gh until setup opens.
+    expect(desktopApi.inspectGithubMcpSetup).not.toHaveBeenCalled();
+
+    fireEvent.click(setUp);
+    const setup = screen.getByRole("form", { name: "Set up GitHub" });
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
+    expect(await within(setup).findByText("Signed in as @octo-dev")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set up GitHub" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(setup).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form", { name: "Set up GitHub" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up GitHub" })).toBeInTheDocument();
+  });
+
+  it("adds another GitHub connection under the ones already listed", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status(),
+          githubConnection(),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+        ],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    const another = await screen.findByRole("button", { name: "Add another GitHub connection" });
+    expect(rowNames()).toEqual(["PwrGit", "GitHub", "Datadog"]);
+    expect(screen.queryByRole("button", { name: "Set up GitHub" })).not.toBeInTheDocument();
+
+    fireEvent.click(another);
+    const setup = screen.getByRole("form", { name: "New GitHub connection" });
+    expect(rowNames()).toEqual(["PwrGit", "GitHub", "Datadog"]);
+    expect(setup.compareDocumentPosition(screen.getByText("Datadog")) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    fireEvent.change(within(setup).getByPlaceholderText("GitHub"), { target: { value: "GitHub (bot)" } });
+    fireEvent.click(await within(setup).findByRole("button", { name: "Test" }));
+    expect(await within(setup).findByText(/Read 52 tools and 14 skills/)).toBeInTheDocument();
+    fireEvent.click(within(setup).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(desktopApi.createMcpConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ displayName: "GitHub (bot)" }),
+    ));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "New GitHub connection" })).not.toBeInTheDocument());
+  });
+
   it("offers GitHub for its hosted URL, then tests and adds it with the defaults", async () => {
     const desktopApi = githubApi();
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
@@ -1845,12 +1947,17 @@ describe("PluginsSettings GitHub connection", () => {
       target: { value: "https://api.githubcopilot.com/mcp/" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
-    expect(await screen.findByText("This is GitHub's MCP server. Set it up with your GitHub sign-in instead."))
-      .toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Set up GitHub" }));
+    expect(await screen.findByText(
+      "This is GitHub's MCP server. PwrAgent has it built in: set it up with your GitHub sign-in.",
+    )).toBeInTheDocument();
+    const addForm = screen.getByRole("form", { name: "Add an MCP server" });
+    fireEvent.click(within(addForm).getByRole("button", { name: "Set up GitHub" }));
 
-    expect(within(screen.getByRole("radiogroup", { name: "Server type" })).getByRole("radio", { name: /GitHub/ }))
-      .toHaveAttribute("aria-checked", "true");
+    // The GitHub row's own setup opens; the add form is left empty.
+    const setup = screen.getByRole("form", { name: "Set up GitHub" });
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
+    expect(screen.getByPlaceholderText("https://mcp.example.com/mcp")).toHaveValue("");
+    expect(within(addForm).queryByText(/GitHub/)).not.toBeInTheDocument();
     expect(await screen.findByText("Signed in as @octo-dev")).toBeInTheDocument();
     expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(1);
     const account = screen.getByRole("radio", { name: /GitHub CLI sign-in/ });
@@ -1902,8 +2009,7 @@ describe("PluginsSettings GitHub connection", () => {
       }),
     });
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
-    fireEvent.click(within(await screen.findByRole("radiogroup", { name: "Server type" }))
-      .getByRole("radio", { name: /GitHub/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up GitHub" }));
 
     expect(await screen.findByText("Not signed in")).toBeInTheDocument();
     expect(screen.getByText(/gh is installed but not signed in to github\.com/)).toBeInTheDocument();

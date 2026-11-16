@@ -478,3 +478,38 @@ export function GithubConnectionTestResult(props: {
     </div>
   );
 }
+
+/**
+ * GitHub before anyone sets it up: one line in the connection list, as
+ * Sandboxer's is. GitHub is a known server PwrAgent signs in to with the
+ * GitHub CLI, not a kind of transport, so it is listed with the built-ins
+ * instead of offered as a server type in the add form.
+ */
+export function GithubCompactRow(props: {
+  disabled?: boolean;
+  onSetUp: () => void;
+}) {
+  return (
+    <article className="settings-mcp-row settings-mcp-row--managed settings-mcp-row--compact">
+      <div className="settings-mcp-row__main">
+        <span className="settings-mcp-row__toggle settings-mcp-row__toggle--static">
+          <span className="settings-mcp-row__name">GitHub</span>
+          <span className="settings-mcp-row__meta">
+            Issues, repositories and more &middot; signs in with your GitHub CLI
+          </span>
+        </span>
+        <div className="settings-mcp-row__actions">
+          <button
+            aria-label="Set up GitHub"
+            className="button button--secondary"
+            disabled={props.disabled}
+            type="button"
+            onClick={props.onSetUp}
+          >
+            Set up
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}

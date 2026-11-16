@@ -19160,6 +19160,30 @@ a.button {
   cursor: default;
 }
 
+/*
+ * GitHub is a built-in, so its setup opens inside its own row of the list
+ * rather than as a type in the dashed add form. The form sits under the
+ * row's line behind the same hairline as the policy block.
+ */
+.settings-mcp-row--setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-mcp-row__setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-mcp-list__add {
+  display: flex;
+}
+
 .settings-sandboxer-about {
   display: flex;
   flex-direction: column;
