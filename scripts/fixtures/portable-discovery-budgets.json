@@ -1,0 +1,8 @@
+{
+  "maxExecDefinitionBytes": 16384,
+  "maxSearchResultBytes": 32768,
+  "maxInitialPortableTools": 3,
+  "searchLimitUsedByOracle": 5,
+  "inventories": [100, 500, 1000],
+  "maxLargeFixtureToolBytesRatio": 0.1
+}
