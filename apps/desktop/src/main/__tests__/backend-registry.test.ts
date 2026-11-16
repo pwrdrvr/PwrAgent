@@ -6184,7 +6184,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const internals = registry as unknown as {
       activeTurnKeys: Set<string>;
-      maybeRestartCodexForManagedRuntimeChange(): Promise<boolean>;
     };
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
 
@@ -6195,7 +6194,7 @@ describe("DesktopBackendRegistry", () => {
 
     internals.activeTurnKeys.delete("codex:thread-1:turn-1");
     await expect(
-      internals.maybeRestartCodexForManagedRuntimeChange(),
+      registryModules(registry).codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange(),
     ).resolves.toBe(true);
     expect(codexClient.closeCallCount).toBe(1);
     expect(markSwitchComplete).toHaveBeenCalledOnce();
@@ -6221,13 +6220,15 @@ describe("DesktopBackendRegistry", () => {
     });
     const internals = registry as unknown as {
       activeTurnKeys: Set<string>;
+    };
+    const runtime = registryModules(registry).codexRuntimeSupervisor as unknown as {
       codexBackgroundTerminals: Map<string, unknown[]>;
     };
 
     // A turn makes the owner's answer "not quiescent", so the client records
     // a busy check instead of recycling.
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
-    await registry.checkCodexAppServerRecycle();
+    await registryModules(registry).codexRuntimeSupervisor.checkCodexAppServerRecycle();
     expect(recycle).toHaveBeenCalledOnce();
     const { settings: passed, isQuiescent } = recycle.mock.calls[0]![0];
     expect(passed).toEqual(settings);
@@ -6236,12 +6237,12 @@ describe("DesktopBackendRegistry", () => {
     internals.activeTurnKeys.delete("codex:thread-1:turn-1");
     expect(isQuiescent()).toBe(true);
     // A command still running after its turn ended keeps the server.
-    internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
+    runtime.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
     expect(isQuiescent()).toBe(false);
-    internals.codexBackgroundTerminals.clear();
+    runtime.codexBackgroundTerminals.clear();
 
     settings = { ...settings, enabled: false };
-    await registry.checkCodexAppServerRecycle();
+    await registryModules(registry).codexRuntimeSupervisor.checkCodexAppServerRecycle();
     expect(recycle).toHaveBeenCalledOnce();
 
     settings = { ...settings, enabled: true };
@@ -6256,9 +6257,9 @@ describe("DesktopBackendRegistry", () => {
       vi.useRealTimers();
     }
     await registry.close();
-    expect((registry as unknown as { codexAppServerRecycleTimer?: unknown })
+    expect((registryModules(registry).codexRuntimeSupervisor as unknown as { codexAppServerRecycleTimer?: unknown })
       .codexAppServerRecycleTimer).toBeUndefined();
-    await registry.checkCodexAppServerRecycle();
+    await registryModules(registry).codexRuntimeSupervisor.checkCodexAppServerRecycle();
     expect(recycle).toHaveBeenCalledTimes(2);
   });
 
@@ -6276,6 +6277,8 @@ describe("DesktopBackendRegistry", () => {
     });
     const internals = registry as unknown as {
       activeTurnKeys: Set<string>;
+    };
+    const runtime = registryModules(registry).codexRuntimeSupervisor as unknown as {
       codexBackgroundTerminals: Map<string, unknown[]>;
       liveCodexToolItemsByThread: Map<string, Map<string, unknown>>;
     };
@@ -6283,7 +6286,7 @@ describe("DesktopBackendRegistry", () => {
       liveCodexNativeSubAgentUsage: Map<string, Map<string, unknown>>;
     };
 
-    await registry.unsubscribeIdleCodexThreads();
+    await registryModules(registry).codexRuntimeSupervisor.unsubscribeIdleCodexThreads();
     expect(unsubscribe).toHaveBeenCalledOnce();
     const { idleMs, isThreadBusy } = unsubscribe.mock.calls[0]![0];
     expect(idleMs).toBe(123_000);
@@ -6295,12 +6298,12 @@ describe("DesktopBackendRegistry", () => {
     internals.activeTurnKeys.delete("codex:thread-1:turn-1");
 
     // A command still running after its turn ended dies with an unload.
-    internals.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
+    runtime.codexBackgroundTerminals.set("thread-1", [{ processId: "p-1" }]);
     expect(isThreadBusy("thread-1")).toBe(true);
-    internals.codexBackgroundTerminals.clear();
-    internals.liveCodexToolItemsByThread.set("thread-1", new Map());
+    runtime.codexBackgroundTerminals.clear();
+    runtime.liveCodexToolItemsByThread.set("thread-1", new Map());
     expect(isThreadBusy("thread-1")).toBe(true);
-    internals.liveCodexToolItemsByThread.clear();
+    runtime.liveCodexToolItemsByThread.clear();
     // A parent whose turn ended while its sub-agent workers still run.
     subAgents.liveCodexNativeSubAgentUsage.set("thread-1", new Map([["worker-1", {}]]));
     expect(isThreadBusy("thread-1")).toBe(true);
@@ -6309,7 +6312,7 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.close();
     expect(isThreadBusy("thread-1")).toBe(true);
-    await registry.unsubscribeIdleCodexThreads();
+    await registryModules(registry).codexRuntimeSupervisor.unsubscribeIdleCodexThreads();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
@@ -12804,7 +12807,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const internals = registry as unknown as {
       activeTurnKeys: Set<string>;
-      maybeRestartCodexForManagedRuntimeChange(): Promise<boolean>;
     };
     const bonsai = {
       id: "bonsai",
@@ -12823,7 +12825,7 @@ describe("DesktopBackendRegistry", () => {
         expect((await registry.listBackends({ includeUnavailable: true })).backends
           .find((backend) => backend.kind === "codex")).toMatchObject({ available: true });
         internals.activeTurnKeys.clear();
-        await expect(internals.maybeRestartCodexForManagedRuntimeChange()).resolves.toBe(true);
+        await expect(registryModules(registry).codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange()).resolves.toBe(true);
         expect(codexClient.closeCallCount).toBe(closesBefore + 1);
         expect((await registry.listBackends({ includeUnavailable: true })).backends
           .find((backend) => backend.kind === "codex")).toMatchObject({ available: true });
@@ -12862,7 +12864,6 @@ describe("DesktopBackendRegistry", () => {
     const invalidate = vi.spyOn(registry, "invalidateProviderRuntimeSelections");
     const internals = registry as unknown as {
       activeTurnKeys: Set<string>;
-      maybeRestartCodexForManagedRuntimeChange(): Promise<boolean>;
     };
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
 
@@ -12884,7 +12885,7 @@ describe("DesktopBackendRegistry", () => {
       expect(invalidate).toHaveBeenCalledTimes(1);
       expect(codexClient.closeCallCount).toBe(0);
       internals.activeTurnKeys.delete("codex:thread-1:turn-1");
-      await expect(internals.maybeRestartCodexForManagedRuntimeChange()).resolves.toBe(true);
+      await expect(registryModules(registry).codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange()).resolves.toBe(true);
       expect(codexClient.closeCallCount).toBe(1);
     } finally {
       await registry.close();

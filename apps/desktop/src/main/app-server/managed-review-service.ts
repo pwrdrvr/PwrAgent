@@ -109,6 +109,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "startAcpSession"
   | "startAcpTurn" | "submitTurn" | "threadHasActiveTurn"
   | "withArchiveWorkspaceWrite" | "withCodexThreadClient"
+  | "prepareTokenMiserRuntime"
 > {
   readonly activeCodexReviewInterruptTurnIds: Map<string, string>;
   readonly activeCodexReviewTurnKeys: Set<string>;
@@ -150,7 +151,6 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
     backend: AppServerBackendKind;
     threadId: string;
   }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined;
-  prepareTokenMiserRuntime(): Promise<void>;
   resolveTokenMiserEnabledForOverride(threadOverride: boolean | undefined): boolean;
   scheduleQueuedAgentChange(threadId: string): void;
 }

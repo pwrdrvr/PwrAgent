@@ -1,3 +1,4 @@
+import { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
 import type { RegistryContext } from "./registry-context";
 import { getMainLogger } from "../log";
@@ -133,6 +134,7 @@ export interface RegistryModules {
   readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
   readonly threadWorkspaceService: ThreadWorkspaceService;
   readonly threadDirectoryService: ThreadDirectoryService;
+  readonly codexRuntimeSupervisor: CodexRuntimeSupervisor;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -1357,6 +1359,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // it, as the registry did; a getter keeps a missing method missing.
         get updateSubthreadOrder() { return overlayStore.updateSubthreadOrder?.bind(overlayStore); },
         setThreadScheduledStart: (...args) => overlayStore.setThreadScheduledStart(...args),
+        setTurnFailureCodexInvalidIdRecovery: (...args) => overlayStore.setTurnFailureCodexInvalidIdRecovery(...args),
       },
       usage: {
         // The store requires upsertThreadUsageLine and readThreadPricing, but
@@ -1509,6 +1512,15 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     codexEnvironmentHydrationStore,
   }, () => ports);
 
+  const codexRuntimeSupervisor = new CodexRuntimeSupervisor(context, {
+    threadUsageLedger,
+    threadArchiveCoordinator,
+    threadWorkspaceService,
+    resolveCodexAppServerRecycleSettingsFn,
+    codexThreadIdleUnsubscribeMs,
+    markManagedCodexRuntimeSwitchCompleteFn,
+  }, () => ports);
+
   const registry = new DesktopBackendRegistry({
     context,
     forgeToolBridge,
@@ -1520,6 +1532,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadArchiveCoordinator,
     threadWorkspaceService,
     threadDirectoryService,
+    codexRuntimeSupervisor,
     handlers,
     ownerAdmission,
     configStore,
@@ -1551,13 +1564,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveCodexFastAllowedFn,
     resolvePdfAnalysisEnabledFn,
     acpSessionIdleCloseMs,
-    codexThreadIdleUnsubscribeMs,
     resolveTokenMiserEnabledFn,
-    resolveCodexAppServerRecycleSettingsFn,
     resolveTokenMiserDefaultEnabledFn,
     resolveTokenMiserPollingReviewsEnabledFn,
     resolveManagedTokenMiserActivationRequiredFn,
-    markManagedCodexRuntimeSwitchCompleteFn,
     resolveCodexDiscoveryPendingFn,
     resolveToolOutputAlertPolicyFn,
     resolveSpendAlertPolicyFn,
@@ -1620,6 +1630,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadArchiveCoordinator,
     threadWorkspaceService,
     threadDirectoryService,
+    codexRuntimeSupervisor,
   });
   return registry;
 }

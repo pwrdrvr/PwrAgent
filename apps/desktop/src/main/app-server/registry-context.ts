@@ -7,6 +7,7 @@ export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
   | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
   | "setThreadForkOrigin" | "setThreadHandoffOrigin" | "setThreadScheduledStart"
+  | "setTurnFailureCodexInvalidIdRecovery"
 > & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent" | "updateSubthreadOrder">>;
 
 // The overlay store requires upsertThreadUsageLine and readThreadPricing, but
