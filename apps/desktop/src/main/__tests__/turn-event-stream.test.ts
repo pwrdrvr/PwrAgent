@@ -85,16 +85,22 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "clearCodexReviewInterruptMappingForTurn",
     "scheduleQueuedAgentChange",
     "flushQueuedExecutionModeIfPresent",
-    "maybeRestartCodexForManagedRuntimeChange",
     "usesSlashControlledAcpExecutionModes",
     "flushQueuedAcpRuntimeOptionIfPresent",
     "appendTurnFailure",
     "threadHasActiveCodexReviewTurn",
-    "refreshCodexBackgroundTerminalsAfterTurn",
     "notifyForAttentionRequired",
     "notifyForTerminalOutcome",
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
+  // Moved to the Codex runtime supervisor (PWR-146).
+  ...[
+    "maybeRestartCodexForManagedRuntimeChange",
+    "refreshCodexBackgroundTerminalsAfterTurn",
+  ].map((name) => ({
+    name,
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).codexRuntimeSupervisor as unknown as Members,
+  })),
   // Moved to the forge tool bridge (PWR-146).
   {
     name: "raiseWithdrawnForgeApprovalTodo",

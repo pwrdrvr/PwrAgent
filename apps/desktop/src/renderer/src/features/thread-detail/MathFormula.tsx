@@ -1,0 +1,164 @@
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { CheckIcon, CopyIcon } from "../../icons";
+import { copyText, copyTextWithHtml } from "../../lib/copy-text";
+import { copyImage } from "../../lib/copy-image";
+import { MathClipboardApiContext } from "../../lib/math-clipboard-context";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import {
+  DEFAULT_MATH_EXPORT_OPTIONS, MATH_EXPORT_COLOR_LABELS,
+  readMathExportOptions, writeMathExportOptions, type MathExportOptions,
+} from "../../lib/math-export-options";
+
+type CopyFormat = "png" | "latex" | "html";
+
+export function MathFormula({ children, node }: {
+  children?: ReactNode;
+  node?: { properties?: Record<string, unknown> };
+}) {
+  const latex = typeof node?.properties?.dataLatex === "string" ? node.properties.dataLatex : "";
+  const display = node?.properties?.dataDisplay === true;
+  return <MathFormulaContent key={`${display}:${latex}`} latex={latex} display={display}>{children}</MathFormulaContent>;
+}
+
+function MathFormulaContent({ latex, display, children }: {
+  latex: string;
+  display: boolean;
+  children?: ReactNode;
+}) {
+  const api = useContext(MathClipboardApiContext);
+  const root = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number }>();
+  const [options, setOptions] = useState(DEFAULT_MATH_EXPORT_OPTIONS);
+  const [showOptions, setShowOptions] = useState(false);
+  const [status, setStatus] = useState<"idle" | "pending" | "copied" | "failed">("idle");
+  const timer = useRef<number | undefined>(undefined);
+  const mounted = useRef(true);
+  useMenuNavigation({ open: Boolean(position), menuRef: menu, triggerRef: trigger, onClose: () => setPosition(undefined) });
+
+  useLayoutEffect(() => {
+    if (!position || !menu.current) return;
+    const rect = menu.current.getBoundingClientRect();
+    const anchor = trigger.current?.getBoundingClientRect();
+    const left = Math.max(8, Math.min(anchor?.left ?? position.left, window.innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(anchor ? anchor.bottom + 4 : position.top, window.innerHeight - rect.height - 8));
+    if (left !== position.left || top !== position.top) setPosition({ left, top });
+  }, [position, showOptions]);
+
+  useEffect(() => {
+    menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [showOptions]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; window.clearTimeout(timer.current); };
+  }, []);
+
+  useEffect(() => {
+    if (!position) return;
+    const dismiss = (event: PointerEvent): void => {
+      if (!menu.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) {
+        setPosition(undefined);
+      }
+    };
+    const close = (event: Event): void => {
+      if (event.target instanceof Node && menu.current?.contains(event.target)) return;
+      setPosition(undefined);
+    };
+    document.addEventListener("pointerdown", dismiss);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [position]);
+
+  const copy = async (format: CopyFormat): Promise<void> => {
+    setPosition(undefined);
+    window.clearTimeout(timer.current);
+    setStatus("pending");
+    try {
+      if (format === "latex") {
+        await copyText(latex, api);
+      } else {
+        const formula = root.current?.querySelector<HTMLElement>(".katex");
+        if (!formula) throw new Error("Formula is unavailable");
+        const exporter = await import("../../lib/math-clipboard-export");
+        if (format === "png") {
+          await copyImage(await exporter.formulaToPng(formula, options));
+        } else {
+          await copyTextWithHtml(latex, await exporter.formulaToHtml(formula, options), api);
+        }
+      }
+      if (!mounted.current) return;
+      setStatus("copied");
+      timer.current = window.setTimeout(() => setStatus("idle"), 1400);
+    } catch (error) {
+      console.error("Failed to copy formula", error);
+      if (mounted.current) setStatus("failed");
+    }
+  };
+
+  const chooseOptions = (patch: Partial<MathExportOptions>): void => {
+    const next = { ...options, ...patch };
+    if (next.color === options.color && next.scale === options.scale) return;
+    writeMathExportOptions(next);
+    setOptions(next);
+  };
+
+  return <span ref={root} className={`math-formula${display ? " math-formula--display" : ""}`}>
+    {children}
+    <button ref={trigger} type="button" className="math-formula__copy"
+      aria-label="Copy formula" title="Copy formula" aria-haspopup="menu" aria-expanded={Boolean(position)}
+      data-status={status} aria-disabled={status === "pending"} aria-busy={status === "pending"}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (status === "pending") return;
+        if (position) { setPosition(undefined); return; }
+        setOptions(readMathExportOptions());
+        setShowOptions(false);
+        const rect = event.currentTarget.getBoundingClientRect();
+        setPosition({
+          left: rect.left,
+          top: rect.bottom + 4,
+        });
+      }}>
+      {status === "copied" ? <CheckIcon size={12} aria-hidden="true" /> : <CopyIcon size={12} aria-hidden="true" />}
+    </button>
+    {status === "failed" || status === "copied" ? createPortal(
+      <span className="math-formula__status" role={status === "failed" ? "alert" : "status"}>
+        {status === "failed" ? "Could not copy formula" : "Formula copied"}
+      </span>, document.body,
+    ) : null}
+    {position ? createPortal(<div ref={menu} className="thread-context-menu math-formula__menu"
+      role="menu" aria-label={showOptions ? "Formula export options" : "Copy formula"} style={position} onClick={(event) => event.stopPropagation()}>
+      {showOptions ? <>
+        <button type="button" role="menuitem" onClick={() => setShowOptions(false)}>Back to copy</button>
+        <div role="group" aria-label="Text color">
+          <div className="math-formula__option-label">Text color</div>
+          {(["dark", "light", "theme"] as const).map((color) => <button key={color} type="button"
+            role="menuitemradio" aria-checked={options.color === color} onClick={() => chooseOptions({ color })}>
+            {MATH_EXPORT_COLOR_LABELS[color]}{options.color === color ? <CheckIcon size={12} aria-hidden="true" /> : null}
+          </button>)}
+        </div>
+        <div role="group" aria-label="PNG scale">
+          <div className="math-formula__option-label">PNG scale</div>
+          {([1, 2, 4] as const).map((scale) => <button key={scale} type="button"
+            role="menuitemradio" aria-checked={options.scale === scale} onClick={() => chooseOptions({ scale })}>
+            {scale}×{options.scale === scale ? <CheckIcon size={12} aria-hidden="true" /> : null}
+          </button>)}
+        </div>
+      </> : <>
+        <button type="button" role="menuitem" onClick={() => { void copy("png"); }}>Copy PNG · {options.scale}× · {MATH_EXPORT_COLOR_LABELS[options.color]}</button>
+        <button type="button" role="menuitem" onClick={() => { void copy("latex"); }}>Copy LaTeX</button>
+        <button type="button" role="menuitem" onClick={() => { void copy("html"); }}>Copy formatted HTML · {MATH_EXPORT_COLOR_LABELS[options.color]}</button>
+        <button type="button" role="menuitem" onClick={() => setShowOptions(true)}>Export options…</button>
+      </>}
+    </div>, document.body) : null}
+  </span>;
+}

@@ -6,6 +6,7 @@ import type { ComposerDraftStore } from "../features/composer/useComposerDraftSt
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { readScheduledActionProjection } from "./read-scheduled-action-projection";
+import type { NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
 import { navigationScheduledProjectionBudget } from "./navigation-metadata-budget";
 import { resolveComposerScopeOwner } from "../features/composer/useOwnedComposerDraftStore";
 
@@ -20,7 +21,7 @@ export function useScheduledThreadActionProjection(params: {
   composerDraftStore: ComposerDraftStore;
   desktopApi?: DesktopApi;
   federationTarget?: FederationTarget;
-  onThreadLifecycleChanged?: () => void;
+  onThreadLifecycleChanged?: (caller: NavigationRefreshCaller) => void;
   sources?: readonly ScheduledThreadActionProjectionSource[];
   /**
    * True while the federation peer behind `federationTarget` is
@@ -91,7 +92,7 @@ function startScheduledThreadActionProjection(params: {
   desktopApi: DesktopApi;
   federationTarget?: FederationTarget;
   listScheduledThreadActions: NonNullable<DesktopApi["listScheduledThreadActions"]>;
-  onThreadLifecycleChanged?: () => void;
+  onThreadLifecycleChanged?: (caller: NavigationRefreshCaller) => void;
 }): () => void {
   let refreshSequence = 0;
   let projectedScopeKeys: Set<string> | undefined;
@@ -219,7 +220,7 @@ function startScheduledThreadActionProjection(params: {
         || action.status === "cancelled"
         || action.status === "failed"
       ) {
-        params.onThreadLifecycleChanged?.();
+        params.onThreadLifecycleChanged?.("scheduled/thread-lifecycle");
       }
       refreshSequence += 1;
       schedule();

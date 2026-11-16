@@ -12,6 +12,11 @@ interface ImportMeta {
 
 declare module "*.css";
 
+declare module "katex/LICENSE?raw" {
+  const notice: string;
+  export default notice;
+}
+
 declare module "*.svg" {
   const url: string;
   export default url;

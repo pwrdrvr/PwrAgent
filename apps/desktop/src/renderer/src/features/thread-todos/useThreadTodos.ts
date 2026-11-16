@@ -17,6 +17,7 @@ import type {
   TodoUnavailableInstance,
 } from "@pwragent/shared";
 import { applyThreadTodoFeedDelta, compareThreadTodosNewestFirst, ThreadTodoFeedFollower, threadTodoThreadKey } from "@pwragent/shared";
+import { useThreadItemGroups } from "../../lib/thread-item-groups";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadTodoResolveOptions } from "./thread-todos-view";
 
@@ -257,17 +258,7 @@ export function useThreadTodos(
     [api],
   );
 
-  const openByThreadKey = useMemo(() => {
-    if (openTodos.length === 0) return EMPTY_MAP;
-    const map = new Map<string, ThreadTodo[]>();
-    for (const todo of openTodos) {
-      const key = threadTodoThreadKey(todo);
-      const list = map.get(key);
-      if (list) list.push(todo);
-      else map.set(key, [todo]);
-    }
-    return map;
-  }, [openTodos]);
+  const openByThreadKey = useThreadItemGroups(openTodos, threadTodoThreadKey, Object.is);
 
   return useMemo(
     () => ({

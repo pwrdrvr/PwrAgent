@@ -1,6 +1,11 @@
 import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
 import type { AgentEvent, NavigationQueryRequest } from "@pwragent/shared";
 export type NavigationDiagnosticCause = NonNullable<NavigationQueryRequest["diagnostic"]>["cause"];
+const REFRESH_CALLERS = [
+  "navigation/refresh", "scheduled/thread-lifecycle", "action/pr-detach", "action/messaging-unbind",
+  "action/remote-pin-add", "action/remote-pin-remove", "action/reply-refresh", "action/automation-refresh",
+] as const;
+export type NavigationRefreshCaller = typeof REFRESH_CALLERS[number];
 
 /** Classify protocol method names only. Never retain notification payloads. */
 export function navigationDiagnosticCause(event?: AgentEvent): NavigationDiagnosticCause {
@@ -19,6 +24,7 @@ export function navigationDiagnosticCause(event?: AgentEvent): NavigationDiagnos
 /** Only known row-change methods survive; arbitrary approval method prefixes do not. */
 export function safeNavigationDiagnosticTrigger(method: unknown): string | undefined {
   if (typeof method !== "string" || method.length > 100) return undefined;
+  if (REFRESH_CALLERS.some((caller) => caller === method)) return method;
   if (method === "action/create-thread" || method === "action/materialize-launchpad"
     || method === "action/show-thread" || method === "action/select-subthread-parent"
     || method === "action/pull-request-refresh") return method;

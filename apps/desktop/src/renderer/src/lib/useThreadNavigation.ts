@@ -3,7 +3,7 @@ import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS }
 import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thread";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
-import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
+import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
 import type { LaunchpadCreationStatus } from "@pwragent/shared";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
@@ -3077,7 +3077,7 @@ export function useThreadNavigation(
   loaded: boolean;
   providerRefresh?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
   refreshing: boolean;
-  refresh: () => Promise<void>;
+  refresh: (caller?: NavigationRefreshCaller) => Promise<void>;
   refreshThreadMetadata: (thread: NavigationThreadSummary) => Promise<void>;
   materializeDirectoryLaunchpad: (
     directoryKey: string,
@@ -4125,8 +4125,8 @@ export function useThreadNavigation(
     },
     [performRefresh]
   );
-  const refreshNavigation = useCallback(async (): Promise<void> => {
-    await refresh();
+  const refreshNavigation = useCallback(async (caller: NavigationRefreshCaller = "navigation/refresh"): Promise<void> => {
+    await refresh(undefined, undefined, false, { diagnosticTrigger: caller });
     await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
   }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
   const refreshThreadMetadata = useCallback(async (thread: NavigationThreadSummary): Promise<void> => {
