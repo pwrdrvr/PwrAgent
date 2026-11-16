@@ -123,6 +123,7 @@ type TranscriptListProps = {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "openPath"
     | "readMarkdownFile"
     | "onAgentEvent"
     | "readThread"
