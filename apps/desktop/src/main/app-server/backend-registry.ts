@@ -1072,6 +1072,11 @@ export class DesktopBackendRegistry {
     (event: AgentEvent) => void | Promise<void>
   >();
   private latestCodexConfigWarning?: AgentEvent;
+  /** Error-boundary ownership, indexed by raw thread/turn identity for token delivery. */
+  private readonly streamNoticeOwners = new Map<
+    string,
+    Map<string, NonNullable<AgentEvent["errorNoticeContext"]>>
+  >();
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   private readonly fileChangeApprovalContexts = new Map<
@@ -15294,6 +15299,7 @@ export class DesktopBackendRegistry {
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
+    this.streamNoticeOwners.clear();
     this.planLimits.close();
 
     for (const [key, pending] of this.pendingServerRequests) {
@@ -21218,6 +21224,7 @@ export class DesktopBackendRegistry {
         }
       }
     }
+    event = this.withStreamNoticeRecoveryContext(event);
     this.threadUsageLedger.trackRecentThreadUsageTurn(event);
     const isLiveThreadUsage =
       event.notification.method === "thread/tokenUsage/updated";
@@ -21253,6 +21260,50 @@ export class DesktopBackendRegistry {
           this.threadUsageLedger.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
         })
       : emitted;
+  }
+
+  private withStreamNoticeRecoveryContext(event: AgentEvent): AgentEvent {
+    const { method, params } = event.notification;
+    const progress = method === "item/agentMessage/delta"
+      || method === "item/reasoning/textDelta"
+      || method === "item/reasoning/summaryTextDelta"
+      || method === "item/plan/delta";
+    const terminal = method === "turn/completed"
+      || method === "turn/failed"
+      || method === "turn/cancelled";
+    if (!progress && !terminal && method !== "error" && method !== "thread/deleted") return event;
+    const threadId = readNonEmptyString(params.threadId);
+    if (!threadId) return event;
+    const threadKey = JSON.stringify([
+      event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : null,
+      event.backend, threadId,
+    ]);
+    if (method === "thread/deleted") {
+      this.streamNoticeOwners.delete(threadKey);
+      return event;
+    }
+    const turnId = readNonEmptyString(readRecord(params)?.turnId) ?? "";
+    let turns = this.streamNoticeOwners.get(threadKey);
+    if (method === "error" && event.errorNoticeContext) {
+      if (!turns) {
+        turns = new Map();
+        this.streamNoticeOwners.set(threadKey, turns);
+      }
+      turns.set(turnId, event.errorNoticeContext);
+    } else if (progress && readNonEmptyString(readRecord(params)?.delta)) {
+      // Sparse parent viewers must see recovery on the first model delta.
+      // Resolve ownership only at the error boundary, never per streamed token.
+      const owner = turns?.get(turnId);
+      if (owner && turns) {
+        turns.delete(turnId);
+        if (turns.size === 0) this.streamNoticeOwners.delete(threadKey);
+        return { ...event, errorNoticeContext: owner };
+      }
+    } else if (terminal && turns) {
+      turns.delete(turnId);
+      if (turns.size === 0) this.streamNoticeOwners.delete(threadKey);
+    }
+    return event;
   }
 
   private async observeTurnMessageContext(delivery: TurnEventDelivery): Promise<void> {
