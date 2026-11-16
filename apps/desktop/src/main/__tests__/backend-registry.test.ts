@@ -1,4 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
@@ -5798,6 +5799,21 @@ describe("DesktopBackendRegistry", () => {
   });
 
   describe("research handoff admission", () => {
+    it("research catalogs follow the live experiment and discovery gates", () => {
+      let enabled = false;
+      let discovery = true;
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), resolveCodexToolDiscovery: () => discovery });
+      onTestFinished(() => registry.close());
+      registry.setResearchHandler(async () => ({}), undefined, () => enabled);
+      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => DynamicToolSpec[] };
+      for (const [feature, discover] of [[false, true], [true, true], [true, false], [false, true]]) {
+        enabled = feature; discovery = discover;
+        const tools = catalog.buildCodexParentDynamicTools(false).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+        expect(tools).toHaveLength(feature && discover ? 5 : 0);
+        expect(tools.every((tool) => tool.deferLoading === true)).toBe(true);
+      }
+    });
+
     async function readyResearchRegistry() {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },

@@ -1262,6 +1262,10 @@ export class DesktopSettingsService {
           config.experimental?.codexToolDiscovery,
           true,
         ),
+        researchEnabled: this.resolveConfigBoolean(
+          config.experimental?.researchEnabled,
+          false,
+        ),
         codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
           config.experimental?.codexDefaultModeRequestUserInput,
           false,
@@ -2345,6 +2349,10 @@ export class DesktopSettingsService {
 
   resolveCodexToolDiscovery(): boolean {
     return this.readExperimentalConfig().codexToolDiscovery ?? true;
+  }
+
+  resolveResearchEnabled(): boolean {
+    return this.readExperimentalConfig().researchEnabled === true && this.resolveCodexToolDiscovery();
   }
 
   resolveManagedReviewEnabled(): boolean {

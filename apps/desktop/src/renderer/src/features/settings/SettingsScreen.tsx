@@ -1198,6 +1198,9 @@ function SettingsSectionBody(props: {
             experimental: { codexToolDiscovery: enabled },
           });
         }}
+        onResearchEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({ experimental: { researchEnabled: enabled } });
+        }}
       />
     );
   }

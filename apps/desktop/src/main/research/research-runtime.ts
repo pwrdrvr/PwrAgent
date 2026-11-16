@@ -22,8 +22,9 @@ export function closeResearchRuntime(): void {
   current?.close();
 }
 
-export function createResearchAgentHandler(current: ResearchService, isLive: (context: AgentToolCallContext) => boolean): ResearchAgentHandler {
+export function createResearchAgentHandler(current: ResearchService, isLive: (context: AgentToolCallContext) => boolean, enabled: () => boolean = () => false): ResearchAgentHandler {
   return async (name, args, context) => {
+    if (!enabled()) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental with Codex Tool Discovery.");
     if (!isLive(context) || !context.turnId || !context.callId) throw new Error("Research tools require a live Codex turn on the owning instance");
     const actor: ResearchActor & { kind: "agent"; turnId: string; callId: string } = { backend: context.backend, threadId: context.threadId, kind: "agent", turnId: context.turnId, callId: context.callId };
     if (name === "research_start") return toolView(await current.start(args as unknown as StartResearchRequest, actor));

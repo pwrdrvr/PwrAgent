@@ -1,6 +1,12 @@
 import type { ResearchActor, ResearchEvent, ResearchEventData } from "@pwragent/shared";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { StateDb } from "../../src/main/state/state-db";
+import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
+import { configTomlPathForHomeRoot } from "./readme-state-seeding";
+
+export function enableResearchFixture(homeRoot: string): void {
+  applyDesktopSettingsPatch(configTomlPathForHomeRoot(homeRoot), { experimental: { researchEnabled: true } });
+}
 
 export const RESEARCH_FIXTURE_OBJECTIVE = "Why does the queue occasionally reorder messages?";
 

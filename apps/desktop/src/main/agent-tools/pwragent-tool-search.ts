@@ -275,7 +275,7 @@ export function withPwrAgentToolDiscovery(
       tools: [
         ...bootstrap.tools,
         ...spec.tools.filter((tool) => tool.name !== "tool_search")
-          .map((tool) => ({ ...tool, deferLoading: !eagerTools.has(tool.name) && !tool.name.startsWith("research_") })),
+          .map((tool) => ({ ...tool, deferLoading: !eagerTools.has(tool.name) })),
       ],
     };
   });

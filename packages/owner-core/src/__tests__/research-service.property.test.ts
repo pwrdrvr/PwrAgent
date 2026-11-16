@@ -43,6 +43,46 @@ function fixture(overrides: Partial<ResearchPorts> = {}, storage = new MemoryRes
 }
 
 describe("research lifecycle model", () => {
+  it("disabling research fences new admissions and stops owned work without deleting evidence", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 6 }), async (states) => {
+      let enabled = false;
+      const { service, ports, storage } = fixture({ enabled: () => enabled });
+      for (const [index, state] of states.entries()) {
+        enabled = state;
+        const call = { ...context, callId: `request-${index}` };
+        const starts = vi.mocked(ports.spawn).mock.calls.length;
+        if (state) await service.start(request, call);
+        else {
+          await expect(service.start(request, call)).rejects.toThrow("disabled");
+          expect(ports.spawn).toHaveBeenCalledTimes(starts);
+          await service.stopOwnedRuns("Research disabled");
+          expect(storage.list().every((run) => run.status === "stopped")).toBe(true);
+        }
+      }
+      service.close();
+    }), { numRuns: 15 });
+  });
+
+  it("disabling research during a handoff prevents its first model admission", async () => {
+    let enabled = true;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let admitted = false;
+    const { service, storage } = fixture({ enabled: () => enabled, spawn: async (_c, _task, _title, _mode, created) => {
+      await gate; created({ backend: "codex", threadId: "not-admitted" }); admitted = true;
+      return { backend: "codex", threadId: "not-admitted", turnId: "must-not-start" };
+    } });
+    const starting = service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    enabled = false;
+    await service.stopOwnedRuns("Research disabled");
+    release();
+    const stopped = await starting;
+    expect(admitted).toBe(false);
+    expect(stopped.status).toBe("stopped");
+    expect(storage.get(stopped.id)?.objective).toBe(request.objective);
+    service.close();
+  });
+
   it("synthetic pending notifications never own a worker or its cancellation", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), async (cancelAtDeadline) => {
       let deadline!: () => void;

@@ -183,6 +183,7 @@ export type DesktopSettingsConfig = {
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
+    researchEnabled?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;
@@ -949,6 +950,9 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "codex_tool_discovery"],
       patch.experimental.codexToolDiscovery,
     );
+  }
+  if (patch.experimental?.researchEnabled !== undefined) {
+    set(["experimental", "research_enabled"], patch.experimental.researchEnabled);
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
     set(
@@ -2412,6 +2416,7 @@ function normalizeDesktopConfig(
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
+      researchEnabled: readBoolean(experimental?.research_enabled),
       threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,

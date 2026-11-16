@@ -5,6 +5,7 @@ import { getResearchService } from "../../research/research-runtime";
 import { resolveResearchEvidencePath } from "../../research/research-evidence-path";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { isLocalMainWindowWebContents } from "../window-channels";
+import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
 export function registerResearchIpcHandlers(): void {
@@ -64,5 +65,6 @@ export function disposeResearchIpcHandlers(): void {
   for (const channel of [RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL]) ipcMain.removeHandler(channel);
 }
 function validateThread(request: ResearchThread): void {
+  if (getDesktopSettingsService().resolveResearchEnabled?.() !== true) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental with Codex Tool Discovery.");
   if (!request || request.backend !== "codex" || typeof request.threadId !== "string" || !request.threadId.trim()) throw new Error("Choose a local Codex thread");
 }

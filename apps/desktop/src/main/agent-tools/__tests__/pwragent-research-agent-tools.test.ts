@@ -1,13 +1,39 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { ResearchService } from "@pwragent/owner-core/research-service";
 import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
 import { projectResearchRun, sameResearchThread, searchResearchItems, type ResearchEvent, type ResearchSearchPage, type ResearchItemContext } from "@pwragent/shared";
 import type { ResearchAssignmentReceipt } from "@pwragent/owner-core/research-service";
 import { createResearchAgentHandler } from "../../research/research-runtime";
 import { resolveAgentToolCatalogs } from "../agent-tool-catalog-registry";
-import { withPwrAgentToolDiscovery } from "../pwragent-tool-search";
+import { withPwrAgentToolDiscovery, searchPwrAgentTools } from "../pwragent-tool-search";
 
 describe("ordinary research tools", () => {
+  it("never adds research schemas to the eager working set", () => {
+    const catalog = resolveAgentToolCatalogs({ researchHandler: async () => ({}) }).flatMap((entry) => entry.dynamicTools);
+    const specs = withPwrAgentToolDiscovery(catalog, true);
+    const tools = specs.flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]);
+    expect(tools.filter((tool) => tool.name.startsWith("research_"))).toHaveLength(5);
+    expect(tools.filter((tool) => tool.name.startsWith("research_")).every((tool) => tool.deferLoading === true)).toBe(true);
+    expect(searchPwrAgentTools(specs, "research_start", 1)[0]?.name).toBe("research_start");
+    expect(resolveAgentToolCatalogs({}).flatMap((entry) => entry.dynamicTools).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).some((tool) => tool.name.startsWith("research_"))).toBe(false);
+  });
+
+  it("the current feature gate rejects stale research calls after any enable/disable sequence", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 8 }), async (states) => {
+      let enabled = false;
+      const summaries = vi.fn(() => []);
+      const handler = createResearchAgentHandler({ summaries } as unknown as ResearchService, () => true, () => enabled);
+      const context = { backend: "codex", threadId: "parent", turnId: "turn", callId: "call", transport: "codex_dynamic_tool" } as const;
+      for (const state of states) {
+        enabled = state;
+        const calls = summaries.mock.calls.length;
+        if (enabled) { expect(await handler("research_read", {}, context)).toEqual([]); expect(summaries).toHaveBeenCalledTimes(calls + 1); }
+        else { await expect(handler("research_read", {}, context)).rejects.toThrow("Research runs are disabled"); expect(summaries).toHaveBeenCalledTimes(calls); }
+      }
+    }), { numRuns: 12 });
+  });
+
   it("runs three approaches through the native tool contract without native tool search", async () => {
     // Tool contracts depend on the storage port. The real SQLite implementation
     // and write budgets are exercised in main/__tests__/research-store.test.ts.
@@ -43,11 +69,11 @@ describe("ordinary research tools", () => {
       stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
     });
     try {
-      const handler = createResearchAgentHandler(service, (context) => context.backend === "codex" && Boolean(context.turnId));
+      const handler = createResearchAgentHandler(service, (context) => context.backend === "codex" && Boolean(context.turnId), () => true);
       const catalog = resolveAgentToolCatalogs({ researchHandler: handler }).find((c) => c.id === "thread_orchestration")!;
-      const eager = withPwrAgentToolDiscovery(catalog.dynamicTools, true).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
-      expect(eager).toHaveLength(5);
-      expect(eager.every((tool) => tool.deferLoading === false)).toBe(true);
+      const deferred = withPwrAgentToolDiscovery(catalog.dynamicTools, true).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+      expect(deferred).toHaveLength(5);
+      expect(deferred.every((tool) => tool.deferLoading === true)).toBe(true);
       const result = await catalog.router.handleDynamicToolCall({ backend: "codex", call: { namespace: "pwragent", tool: "research_start", threadId: "coordinator", turnId: "parent", callId: "start",
         arguments: { objective: "Investigate event ordering", minutes: 10, workspaceMode: "none", approaches: [
           { title: "Ordering", task: "Inspect event order" }, { title: "Lifetime", task: "Inspect owners" }, { title: "Persistence", task: "Inspect commits" },

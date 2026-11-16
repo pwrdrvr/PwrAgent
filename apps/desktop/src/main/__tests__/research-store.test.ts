@@ -42,6 +42,17 @@ function createService(overrides: Partial<ResearchPorts> = {}, storage = new Res
 }
 
 describe("research journal storage", () => {
+  it("budgets disabling the experiment as one existing stop lifecycle with no new idle writes", async () => {
+    let enabled = true;
+    const service = createService({ enabled: () => enabled });
+    const run = await service.start(mutableRequest(), actor);
+    const stopped = await measureSqliteWrites(async () => { enabled = false; await service.stopOwnedRuns("Research disabled"); });
+    expectSqliteWriteBudget({ scenario: "research-experiment-disable", note: "Explicitly disabling research stops three workers through the existing stop lifecycle. No setting polling or idle writes.", writes: stopped.writes });
+    expect(new ResearchStore(db).get(run.id)?.status).toBe("stopped");
+    const idle = await measureSqliteWrites(async () => { for (let i = 0; i < 20; i++) await service.stopOwnedRuns("Still disabled"); });
+    expect(idle.writes.commits).toBe(0);
+  });
+
   it("matches indexed filters and cursor pages to an independent journal projection", async () => {
     const service = createService();
     const run = await service.start(mutableRequest(), actor);

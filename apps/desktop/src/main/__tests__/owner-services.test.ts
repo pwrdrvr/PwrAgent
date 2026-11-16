@@ -66,6 +66,18 @@ it.each(["Lost response after admission", "Transport closed during start"])("doe
   } finally { handoff.mockRestore(); }
 });
 
+it("a live Experimental settings transition disables admissions and stops owned research", async () => {
+  const stop = vi.spyOn(researchRuntime.getResearchService(), "stopOwnedRuns").mockResolvedValue();
+  try {
+    expect(researchPorts.enabled?.()).toBe(false);
+    await getDesktopSettingsService().writeConfigPatchTargeted({ experimental: { researchEnabled: true } });
+    expect(researchPorts.enabled?.()).toBe(true);
+    await getDesktopSettingsService().writeConfigPatchTargeted({ experimental: { researchEnabled: false } });
+    expect(researchPorts.enabled?.()).toBe(false);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledExactlyOnceWith("Research runs were disabled in Experimental settings"));
+  } finally { stop.mockRestore(); }
+});
+
 afterAll(async () => {
   const context = getDesktopBackendRegistry().context;
   prepareOwnerShutdown();

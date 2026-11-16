@@ -944,7 +944,8 @@ describe("bootstrapApp", () => {
     };
     const originalStarts = legacyOwnerBoot.events.flatMap((name) => starts[name.replace(/\s+/g, "")] ?? []);
     expect(events.filter((name) => name.endsWith(".start"))).toEqual(originalStarts);
-    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe"]);
+    // Research observes its experiment gate in addition to the existing config owners.
+    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe", "config.subscribe"]);
     expect(events.filter((name) => name.startsWith("federation.on"))).toEqual(["federation.onRemoteBackendEvent"]);
     expect(events.filter((name) => name.startsWith("registry.on"))).toEqual([
       "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",

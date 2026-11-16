@@ -1277,6 +1277,7 @@ export class DesktopBackendRegistry {
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   private researchHandler?: ResearchAgentHandler;
+  private researchEnabled: () => boolean = () => false;
   private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
@@ -2183,7 +2184,7 @@ export class DesktopBackendRegistry {
       get threadStarts() { return current().threadStarts; },
       get threadTodoHandler() { return current().threadTodoHandler; },
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
-      get researchHandler() { return current().researchHandler; },
+      get researchHandler() { return current().advertisedResearchHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       get tokenMiserDiagnostics() { return current().tokenMiserDiagnostics; },
@@ -2663,13 +2664,18 @@ export class DesktopBackendRegistry {
     this.openAIDecisionsHandler = handler ?? undefined;
   }
 
-  setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean): void {
+  setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean, enabled: () => boolean = () => false): void {
     this.researchHandler = handler;
     this.researchWorkerCheck = workerCheck;
+    this.researchEnabled = enabled;
+  }
+
+  private get advertisedResearchHandler(): ResearchAgentHandler | undefined {
+    return this.researchEnabled() && this.resolveCodexToolDiscoveryFn() ? this.researchHandler : undefined;
   }
 
   researchContextIsLive(context: AgentToolCallContext): boolean {
-    return context.backend === "codex" && this.isLiveDynamicToolCall(context.backend, context);
+    return this.researchEnabled() && context.backend === "codex" && this.isLiveDynamicToolCall(context.backend, context);
   }
 
   async handoffResearchWorker(
@@ -8592,7 +8598,7 @@ export class DesktopBackendRegistry {
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
-      researchHandler: this.researchHandler,
+      researchHandler: this.advertisedResearchHandler,
     });
     const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -16110,7 +16116,7 @@ export class DesktopBackendRegistry {
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
-        researchHandler: this.researchHandler,
+        researchHandler: this.advertisedResearchHandler,
       }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
@@ -19750,7 +19756,7 @@ export class DesktopBackendRegistry {
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
-        researchHandler: this.researchHandler,
+        researchHandler: this.advertisedResearchHandler,
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and

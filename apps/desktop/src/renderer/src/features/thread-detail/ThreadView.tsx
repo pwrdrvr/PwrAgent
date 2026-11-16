@@ -853,6 +853,7 @@ export type ThreadViewProps = {
   };
   toolAccounting?: ThreadToolAccounting;
   threadToolAccountingEnabled?: boolean;
+  researchEnabled?: boolean;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -1354,9 +1355,11 @@ export function ThreadView(props: ThreadViewProps) {
   const contextRailPinned = props.contextRailPinned ?? true;
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
+  const researchEnabled = props.researchEnabled ?? false;
   const activeContextTab =
     (!threadPricingSummaryEnabled && props.activeContextTab === "pricing")
     || (!threadToolAccountingEnabled && props.activeContextTab === "tool-calls")
+    || (!researchEnabled && props.activeContextTab === "research")
       ? DEFAULT_CONTEXT_TAB
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
@@ -3912,6 +3915,7 @@ export function ThreadView(props: ThreadViewProps) {
           pricingDisplayOptions: props.pricingDisplayOptions,
           threadPricingSummaryEnabled,
           threadToolAccountingEnabled,
+          researchEnabled,
           worktreeArchiveError: props.worktreeArchiveError,
           onRestoreWorktree: props.onRestoreWorktree,
           initialLoadDurationMs: props.initialLoadDurationMs,

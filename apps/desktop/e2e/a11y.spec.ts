@@ -58,7 +58,7 @@ import {
 } from "./fixtures/sub-agent-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
-import { seedResearchState } from "./fixtures/research-state-seeding";
+import { seedResearchState, enableResearchFixture } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -778,7 +778,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       const app = await launchAuditApp({
         ...appearance,
         fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
-        preLaunchHook: async (homeRoot) => { seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
+        preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
       });
       try {
         await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
