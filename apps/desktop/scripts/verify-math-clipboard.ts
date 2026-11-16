@@ -149,6 +149,105 @@ try {
   const evidence = { latex, pngBytes: Buffer.from(png.split(",")[1], "base64").length, ...pixels, errors };
   await writeFile(resolve(output, "evidence.json"), JSON.stringify(evidence, null, 2));
   console.log(JSON.stringify(evidence));
+
+  // Oracle: exported HTML must lay out every visible equation label inside
+  // its own bounds without the application's CSS. Check PNG against the same
+  // complete, tight layout rather than just accepting a decodable image.
+  const equations = [
+    String.raw`\begin{equation}p=q\end{equation}`,
+    String.raw`\begin{equation}a=b\end{equation}`,
+    String.raw`\begin{align}a&=b\\c&=d\notag\\e&=f\end{align}`,
+    String.raw`a=b\tag{7}`,
+    String.raw`\begin{align}a&=b\tag{A}\\c&=d\tag{B}\end{align}`,
+    String.raw`a=b\tag*{custom}`,
+    String.raw`a=b\tag{$\dfrac{1}{2}$}`,
+  ];
+  const equationUrl = new URL(server.resolvedUrls!.local[0]);
+  equationUrl.searchParams.set("source", equations.map((tex) => `\\[\n${tex}\n\\]`).join("\n\n"));
+  await page.goto(equationUrl.href);
+  await page.locator(".katex").nth(equations.length - 1).waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  const failures: string[] = [];
+  for (let index = 1; index < equations.length; index++) {
+    const formula = page.locator(".math-formula--display").nth(index);
+    await page.evaluate(() => { window.formulaClipboard = {}; });
+    await formula.hover();
+    await formula.getByRole("button", { name: "Copy formula" }).click();
+    await page.getByRole("menuitem", { name: "Copy formatted HTML" }).click();
+    await page.waitForFunction(() => Boolean(window.formulaClipboard.html));
+    const exported = await page.evaluate(() => window.formulaClipboard.html!);
+    const isolated = await browser.newPage();
+    try {
+      await isolated.setContent(exported);
+      await isolated.evaluate(() => document.fonts.ready);
+      const layout = await isolated.locator(".katex").evaluate((root) => {
+        const rect = root.getBoundingClientRect();
+        return {
+          width: rect.width, height: rect.height,
+          labels: root.querySelector(".katex-html > .katex-tag")?.textContent?.match(/\(\d+\)/g) ?? [],
+          mathmlLabels: root.querySelector(".katex-mathml")?.textContent?.match(/\(\d+\)/g) ?? [],
+          tags: Array.from(root.querySelectorAll<HTMLElement>(".katex-html > .katex-tag")).map((tag) => {
+            const bounds = tag.getBoundingClientRect();
+            return { left: bounds.left - rect.left, right: bounds.right - rect.left,
+              top: bounds.top - rect.top, bottom: bounds.bottom - rect.top };
+          }),
+        };
+      });
+      try {
+        if (index === 1) assert.deepEqual(layout.labels, ["(2)"], "Generated number must preserve the page counter");
+        if (index === 2) assert.deepEqual(layout.labels, ["(3)", "(4)"], "Unnumbered rows must not increment the counter");
+        if (index < 3) assert.deepEqual(layout.mathmlLabels, layout.labels, "Accessible MathML must keep the same generated numbers");
+        for (const tag of layout.tags) {
+          assert(tag.left >= -0.5 && tag.right <= layout.width + 0.5
+            && tag.top >= -0.5 && tag.bottom <= layout.height + 0.5,
+          `Export must contain the entire tag: ${JSON.stringify({ tag, layout })}`);
+        }
+      } catch (error) { failures.push(String(error)); }
+      await page.evaluate(() => { window.formulaClipboard = {}; });
+      await formula.hover();
+      await formula.getByRole("button", { name: "Copy formula" }).click();
+      await page.getByRole("menuitem", { name: "Copy transparent PNG" }).click();
+      await page.waitForFunction(() => Boolean(window.formulaClipboard.png));
+      const imagePixels = await page.evaluate(async (tags) => {
+        const image = new Image();
+        image.src = window.formulaClipboard.png!;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(image, 0, 0);
+        const rgba = context.getImageData(0, 0, image.width, image.height).data;
+        let borderInk = 0;
+        for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+          if (x === 0 || y === 0 || x === image.width - 1 || y === image.height - 1) {
+            if (rgba[(y * image.width + x) * 4 + 3]) borderInk++;
+          }
+        }
+        const tagInk = tags.map((tag) => {
+          let ink = 0;
+          for (let y = Math.max(0, Math.floor((tag.top + 4) * 2)); y < Math.min(image.height, Math.ceil((tag.bottom + 4) * 2)); y++) {
+            for (let x = Math.max(0, Math.floor((tag.left + 4) * 2)); x < Math.min(image.width, Math.ceil((tag.right + 4) * 2)); x++) {
+              if (rgba[(y * image.width + x) * 4 + 3]) ink++;
+            }
+          }
+          return ink;
+        });
+        return { width: image.width, height: image.height, borderInk, tagInk };
+      }, layout.tags);
+      try {
+        assert.equal(imagePixels.width, (Math.ceil(layout.width) + 8) * 2, "PNG must include the complete HTML layout");
+        assert.equal(imagePixels.borderInk, 0, "PNG ink must not reach the crop boundary");
+        assert(imagePixels.tagInk.every((ink) => ink > 30), "Every equation tag must appear in the PNG");
+      } catch (error) { failures.push(String(error)); }
+      if (index === 1 || index === 3) {
+        await writeFile(resolve(output, `tag-${index}.png`), Buffer.from((await page.evaluate(() => window.formulaClipboard.png!)).split(",")[1], "base64"));
+      }
+    } finally { await isolated.close(); }
+  }
+  assert.deepEqual(failures, []);
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ equationExportsChecked: equations.length - 1, failures }));
 } finally {
   await browser.close();
   await new Promise<void>((resolve, reject) => server.httpServer.close((error) => error ? reject(error) : resolve()));

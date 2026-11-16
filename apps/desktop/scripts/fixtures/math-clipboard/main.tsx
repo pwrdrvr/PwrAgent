@@ -5,7 +5,7 @@ import "../../../src/renderer/src/styles/app.css";
 import type {} from "./types";
 
 window.formulaClipboard = {};
-const source = String.raw`## A bound on the sum
+const source = new URLSearchParams(location.search).get("source") ?? String.raw`## A bound on the sum
 
 The correction is $q^{-4}$ for each pair. Summing over the edges gives
 

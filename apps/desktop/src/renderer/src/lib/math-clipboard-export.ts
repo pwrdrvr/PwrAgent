@@ -93,6 +93,23 @@ async function embeddedFonts(wanted: Set<string>): Promise<string> {
   return `/* KaTeX fonts: Copyright (c) 2018 Khan Academy.\n${katexLicense}\n*/\n${declarations}`;
 }
 
+function equationNumbers(formula: HTMLElement): Map<Element, string> {
+  const numbers = new Map<Element, string>();
+  if (!formula.querySelector(".eqn-num, .mml-eqn-num")) return numbers;
+  // KaTeX's shipped CSS resets two independent counters on body, not on
+  // each formula. Count rendered labels in document order so copying a later
+  // equation preserves its current number. This is one scan per export;
+  // unnumbered rows and explicit tags have no counter element.
+  let html = 0;
+  let mathml = 0;
+  for (const label of document.querySelectorAll(".katex .eqn-num, .katex .mml-eqn-num")) {
+    if (label.getClientRects().length === 0) continue;
+    const number = label.classList.contains("eqn-num") ? ++html : ++mathml;
+    if (formula.contains(label)) numbers.set(label, `(${number})`);
+  }
+  return numbers;
+}
+
 async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fonts: string }> {
   await document.fonts.ready;
   if (!formula.isConnected) throw new Error("Formula changed before export");
@@ -103,6 +120,7 @@ async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fon
   const ink = getComputedStyle(formula).color;
   const fonts = new Set<string>();
   const explicitlyColored = new Set<Element>();
+  const numbers = equationNumbers(formula);
   for (let index = 0; index < originals.length; index++) {
     const original = originals[index];
     const style = getComputedStyle(original);
@@ -118,6 +136,17 @@ async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fon
       copy.style.setProperty(property, themeInk ? "black" : value);
     }
     if (family(style.fontFamily).startsWith("KaTeX_")) fonts.add(fontKey(style));
+    const number = numbers.get(original);
+    if (number) {
+      // Materialize generated content and remove its counter class to avoid
+      // counting or drawing it twice when measured inside the live document.
+      copy.classList.remove("eqn-num", "mml-eqn-num");
+      if (original.namespaceURI === "http://www.w3.org/1998/Math/MathML") {
+        const text = document.createElementNS(original.namespaceURI, "mtext");
+        text.textContent = number;
+        copy.append(text);
+      } else { copy.textContent = number; }
+    }
   }
   clone.style.display = "inline-block";
   clone.style.position = "relative";
@@ -130,9 +159,21 @@ async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fon
   clone.style.background = "transparent";
   const visual = clone.querySelector<HTMLElement>(".katex-html");
   if (visual) {
+    visual.style.display = "inline-block";
     visual.style.width = "max-content";
     visual.style.maxWidth = "none";
     visual.style.textAlign = "left";
+    // Tags are positioned against the full display width in the transcript.
+    // Put their existing vertical layout into the tight export's normal flow
+    // instead of freezing an offset hundreds of pixels beyond the formula.
+    for (const tag of visual.querySelectorAll<HTMLElement>(":scope > .katex-tag")) {
+      clone.style.height = "auto";
+      visual.style.height = "auto";
+      tag.style.display = "inline-block";
+      tag.style.position = "static";
+      tag.style.inset = "auto";
+      tag.style.marginLeft = "1em";
+    }
   }
   return { clone, fonts: await embeddedFonts(fonts) };
 }
