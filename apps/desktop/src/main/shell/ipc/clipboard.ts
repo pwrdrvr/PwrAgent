@@ -1,4 +1,8 @@
-import { clipboard, ClipboardItem, ipcMain } from "electron";
+import { clipboard, ClipboardItem, ipcMain, webContents } from "electron";
+import {
+  PASTE_WITHOUT_FORMATTING_CHANNEL,
+  PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL,
+} from "../../../shared/plain-text-paste";
 import {
   CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
   CLIPBOARD_WRITE_TEXT_CHANNEL,
@@ -49,6 +53,12 @@ async function writeRichText(
 }
 
 export function registerClipboardIpcHandlers(): void {
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL);
+  ipcMain.on(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL, (event) => {
+    if (event.sender === webContents.getFocusedWebContents()) {
+      event.sender.pasteAndMatchStyle();
+    }
+  });
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);
   ipcMain.removeHandler(TRANSCRIPT_IMAGE_READ_CHANNEL);
@@ -83,7 +93,17 @@ export function registerClipboardIpcHandlers(): void {
 }
 
 export function disposeClipboardIpcHandlers(): void {
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);
   ipcMain.removeHandler(TRANSCRIPT_IMAGE_READ_CHANNEL);
+}
+
+export function requestPasteWithoutFormatting(): void {
+  const target = webContents.getFocusedWebContents();
+  if (!target) return;
+  const text = process.env.PWRAGENT_E2E === "1" && globalThis.__PWRAGENT_E2E_CLIPBOARD__
+    ? globalThis.__PWRAGENT_E2E_CLIPBOARD__.text
+    : clipboard.readText();
+  target.send(PASTE_WITHOUT_FORMATTING_CHANNEL, text);
 }

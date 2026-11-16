@@ -56,6 +56,7 @@ export type ApplicationMenuActions = {
   /** The Search All screen (⇧⌘F) in the focused main window. */
   openThreadSearch: () => void;
   openWebsite: () => void | Promise<void>;
+  pasteWithoutFormatting: () => void;
   quit: () => void | Promise<void>;
   replayOnboarding: () => void;
   /** Settings → About, on every platform. */
@@ -116,12 +117,41 @@ export function buildApplicationMenuTemplate(
   return [
     ...(options.isMac ? [buildMacAppMenu(options)] : []),
     buildFileMenu(options),
-    { role: "editMenu" },
+    buildEditMenu(options),
     buildViewMenu(options),
     buildProfilesMenu(options),
     buildWindowMenu(options),
     buildHelpMenu(options),
   ];
+}
+
+function buildEditMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+  return {
+    role: "editMenu",
+    submenu: [
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      {
+        label: "Paste Without Formatting",
+        accelerator: "CmdOrCtrl+Shift+V",
+        click: options.actions.pasteWithoutFormatting,
+      },
+      { role: "delete" },
+      { type: "separator" },
+      { role: "selectAll" },
+      ...(options.isMac ? [
+        { type: "separator" as const },
+        { label: "Speech", submenu: [
+          { role: "startSpeaking" as const },
+          { role: "stopSpeaking" as const },
+        ] },
+      ] : []),
+    ],
+  };
 }
 
 function buildMacAppMenu(

@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const writeMock = vi.fn(async (_items: unknown[]) => {});
 const writeTextMock = vi.fn(async (_text: string) => {});
+const readTextMock = vi.fn(() => "Clipboard text");
+const focusedWebContentsMock = vi.fn();
+const listeners = new Map<string, (event: unknown) => void>();
 
 class ClipboardItemMock {
   readonly items: Record<string, string>;
@@ -16,9 +19,13 @@ vi.mock("electron", () => ({
   clipboard: {
     write: writeMock,
     writeText: writeTextMock,
+    readText: readTextMock,
   },
+  webContents: { getFocusedWebContents: focusedWebContentsMock },
   ClipboardItem: ClipboardItemMock,
   ipcMain: {
+    on: vi.fn((channel: string, listener: (event: unknown) => void) => { listeners.set(channel, listener); }),
+    removeAllListeners: vi.fn((channel: string) => { listeners.delete(channel); }),
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
       handlers.set(channel, handler);
     }),
@@ -33,12 +40,29 @@ describe("clipboard ipc", () => {
   const originalE2e = process.env.PWRAGENT_E2E;
 
   beforeEach(() => {
+    listeners.clear();
+    focusedWebContentsMock.mockReset();
     handlers.clear();
     writeMock.mockReset();
     writeTextMock.mockReset();
     delete globalThis.__PWRAGENT_E2E_CLIPBOARD__;
     delete process.env.CI;
     delete process.env.PWRAGENT_E2E;
+  });
+
+  it("sends plain clipboard text only to the focused web contents and restricts native fallback to that focus", async () => {
+    const { registerClipboardIpcHandlers, requestPasteWithoutFormatting } = await import("../shell/ipc/clipboard");
+    const { PASTE_WITHOUT_FORMATTING_CHANNEL, PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL } = await import("../../shared/plain-text-paste");
+    const focused = { send: vi.fn(), pasteAndMatchStyle: vi.fn() };
+    const inactive = { pasteAndMatchStyle: vi.fn() };
+    focusedWebContentsMock.mockReturnValue(focused);
+    registerClipboardIpcHandlers();
+    requestPasteWithoutFormatting();
+    expect(focused.send).toHaveBeenCalledExactlyOnceWith(PASTE_WITHOUT_FORMATTING_CHANNEL, "Clipboard text");
+    listeners.get(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL)?.({ sender: inactive });
+    expect(inactive.pasteAndMatchStyle).not.toHaveBeenCalled();
+    listeners.get(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL)?.({ sender: focused });
+    expect(focused.pasteAndMatchStyle).toHaveBeenCalledOnce();
   });
 
   afterEach(() => {

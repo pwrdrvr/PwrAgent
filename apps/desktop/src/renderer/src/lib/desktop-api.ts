@@ -2086,6 +2086,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onReplayOnboardingRequested?: (callback: () => void) => () => void;
   /** Main → renderer push from Help → Copy Diagnostics Info. */
   onCopyLocalDiagnosticsInfoRequested?: (callback: () => void) => () => void;
+  /** The focused composer claims literal paste; other fields use native paste. */
+  onPasteWithoutFormattingRequested?: (callback: (text: string) => boolean) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   /**
    * Windows custom title-bar menu bar (win32 only). `getAppMenuModel`

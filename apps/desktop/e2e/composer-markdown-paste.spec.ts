@@ -187,6 +187,47 @@ const CODE_HTML = `<pre><code class="language-swift">${CODE_LINES.join("\n")}</c
 const EXPECTED_PROSE_VALUE = PROSE_LINES.join("\n\n");
 const EXPECTED_CODE_VALUE = ["```swift", ...CODE_LINES, "```"].join("\n");
 
+test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter exits pasted marks", async (_fixtures, testInfo) => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  try {
+    await openExistingThread(app);
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await pasteIntoReply(app.window, {
+      html: "<h2><strong>Copied heading</strong></h2>", text: "Copied heading",
+    });
+    await expect(textbox.locator("h2 strong")).toHaveText("Copied heading");
+    await textbox.screenshot({ path: testInfo.outputPath("styled-paste.png") });
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("Plain continuation");
+    await expect(textbox.locator("p").filter({ hasText: "Plain continuation" })).toHaveText("Plain continuation");
+    await expect(textbox.locator("p strong, p em, p code")).toHaveCount(0);
+    await textbox.screenshot({ path: testInfo.outputPath("plain-continuation.png") });
+
+    const literal = "# Heading\n**literal bold**";
+    await app.electronApp.evaluate((_electron, text) => {
+      globalThis.__PWRAGENT_E2E_CLIPBOARD__ = { text, html: "<h1>Heading</h1><strong>literal bold</strong>" };
+    }, literal);
+    await textbox.fill("");
+    await app.electronApp.evaluate(({ Menu }) => {
+      const paste = Menu.getApplicationMenu()?.items.flatMap((item) => item.submenu?.items ?? [])
+        .find((item) => item.label === "Paste Without Formatting");
+      if (!paste) throw new Error("Paste Without Formatting menu item missing");
+      paste.click();
+    });
+    await expect(textbox).toHaveText(literal);
+    await expect(textbox.locator("h1, strong")).toHaveCount(0);
+    await textbox.fill("");
+    await app.window.keyboard.press(process.platform === "darwin" ? "Meta+Shift+V" : "Control+Shift+V");
+    await expect(textbox).toHaveText(literal);
+    await expect(textbox.locator("h1, strong")).toHaveCount(0);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("pasting prose without a code block preserves paragraph separators", async () => {
   const fixture = await createPasteFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
