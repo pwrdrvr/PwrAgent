@@ -6,6 +6,7 @@ import {
   type AgentEvent,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
+  type ProjectForgeAutomation,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -171,6 +172,49 @@ it("shares the physical owner scan with viewers while retaining separate invento
     expect(f.provider).toHaveBeenCalledTimes(1);
     expect(f.resolve).toHaveBeenCalledTimes(1);
   } finally { f.close(); }
+});
+
+it("uses the complete pin and watched membership for an exact selection's project controls without repeating pin resolution", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom(2, 4, 8), fc.boolean(), fc.boolean(), async (n, otherPeer, otherProject) => {
+    const f = await fixture(n);
+    const paused: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,
+      autoFixCiFailures: true, prWatches: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
+    const row = (id: string, owner: string, project: string, automation?: ProjectForgeAutomation): NavigationThreadSummary => ({
+      ...thread(id, 0), linkedDirectories: [{ id: project, kind: "local", label: "repo", path: project.slice("directory:".length) }],
+      homeProject: { directoryKey: project, ...(automation ? { forgeAutomation: automation } : {}) },
+      federation: { ref: buildFederatedThreadRef({ backend: "codex", instanceId: owner, threadId: id }), instanceLabel: owner },
+    });
+    f.provider.mockResolvedValue([]);
+    f.resolve.mockResolvedValue({ threads: Array.from({ length: n }, (_, i) => row(`remote-${i}`, "peer", "directory:/owner/repo", paused)),
+      refreshed: [], archived: [] });
+    const owner = otherPeer ? "other" : "peer";
+    const project = otherProject ? "directory:/elsewhere/repo" : "directory:/owner/repo";
+    vi.spyOn(f.cache, "resolveWatchedThreads").mockReturnValue([row("watched", owner, project,
+      otherPeer || otherProject ? undefined : paused)]);
+    const index: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "directory-index" } };
+    const exact: NavigationQueryRequest = { ...index, query: { kind: "exact", resolveFromOwners: true,
+      identities: [{ backend: "codex", threadId: "watched", ownerInstanceId: owner }], includeAncestry: true, ancestryScope: "directory" } };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        const pinned = await f.read(index);
+        expect(pinned.directories?.[0]?.forgeAutomation).toEqual(paused);
+        for (let i = 0; i < 3; i++) {
+          const selected = await f.read(exact);
+          expect(selected.entries[0]?.row.ref.ownerInstanceId).toBe(owner);
+          expect(selected.selectionDirectory?.peerProject).toEqual(otherPeer || otherProject ? undefined
+            : { target: { scope: "remote", instanceId: "peer" }, directoryKey: "directory:/owner/repo" });
+          expect(selected.selectionDirectory?.forgeAutomation).toEqual(otherPeer || otherProject ? undefined : paused);
+        }
+        const unchanged = await f.read(index);
+        expect(unchanged.directories?.[0]?.peerProject).toEqual({ target: { scope: "remote", instanceId: "peer" }, directoryKey: "directory:/owner/repo" });
+        expect(unchanged.directories?.[0]?.forgeAutomation).toEqual(paused);
+      });
+      expect(writes.commits).toBe(0);
+      expect(f.resolve).toHaveBeenCalledTimes(1);
+      expect(f.snapshots).toHaveBeenCalledTimes(1);
+      expect(f.provider).toHaveBeenCalledTimes(1);
+    } finally { f.close(); }
+  }), { numRuns: 25, examples: [[2, true, false], [2, false, true], [2, false, false]] });
 });
 
 it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i directories, children, pins and relationship rows", async (n) => {
