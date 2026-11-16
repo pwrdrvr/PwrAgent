@@ -87,6 +87,20 @@ describe("inline file links", () => {
     expect(readMarkdownFile).not.toHaveBeenCalled();
   });
 
+  it.each(["main.ts", "repaired.app", "unknown.custom"])("opens resolved %s with the OS default", async (name) => {
+    const path = `/owner/project/${name}`;
+    const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: name, path, previewable: false }] }));
+    const openPath = vi.fn(async () => ({ opened: true as const }));
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    render(<ThreadMarkdown applications={applications} fileViewerContext={context}
+      desktopApi={{ resolveTranscriptFiles, openPath, openApplication }} text={`Open \`${name}\`.`} />);
+    fireEvent.click(await screen.findByRole("link", { name }));
+    expect(openPath).toHaveBeenCalledExactlyOnceWith({ path });
+    expect(openApplication).not.toHaveBeenCalled();
+    expect(Boolean(screen.queryByRole("button", { name: `Open file in VS Code: ${name}` })))
+      .toBe(name === "main.ts");
+  });
+
   it("sends stat, preview and editor requests to the remote owner", async () => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: "notes.md", path: "/remote/notes.md", previewable: true }] }));
