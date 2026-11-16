@@ -29,16 +29,11 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
-  type AppServerCollaborationModeRequest,
-  type BackendAcpSessionRuntimeState,
-  type CodexThreadEnvironmentRuntime,
   type CreatedThreadEnvironmentReport,
-  type BackendLaunchpadOptions,
   type ForkThreadResponse,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type LinkedDirectorySummary,
-  type NavigationLaunchpadDraft,
   type MoveThreadToMainCheckoutRequest,
   type MoveThreadToMainCheckoutResponse,
   type RecreateThreadWorktreeRequest,
@@ -58,8 +53,6 @@ import {
   type HandoffTaskInheritedSettings,
   type HandoffTaskMessagingAttachment,
   type ThreadHandoffOriginWorkspace,
-  type StartThreadRequest,
-  type StartThreadResponse,
   type SubmitServerRequestRequest,
   type ThreadExecutionMode,
   type ThreadOverlayState,
@@ -88,7 +81,6 @@ import {
 } from "./git-directory-service";
 import type {
   GitWorkspaceInspection,
-  WorktreeBaseSource,
 } from "./git-directory-service";
 import {
   ThreadInfoStore,
@@ -99,9 +91,6 @@ import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import { getMainLogger } from "../log";
-import {
-  type BackendModelCatalogCallerReason,
-} from "./backend-model-catalog";
 import {
   listCodexEnvironmentOptions,
   resolveCodexEnvironmentSelector,
@@ -186,6 +175,8 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
   | "renameThread" | "resolveAgentCallerExecutionMode" | "resolveCodexThreadExecutionModeForActiveTurn"
   | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "threadHasActiveTurn"
   | "withCodexThreadClient"
+  | "admitNewThreadModelSettings" | "getBackendLaunchpadOptions" | "recordCodexWorktreeOwnerThread"
+  | "startThread" | "startTurn"
 > {
   readonly acceptedHandoffTaskRequests: Map<string, AcceptedThreadControlRequest>;
   readonly activeCodexTurnModes: ReadonlyMap<string, ThreadExecutionMode>;
@@ -197,10 +188,6 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly worktreeArchiveService: WorktreeArchiveService;
   readonly worktreeRecoveryService: WorktreeRecoveryService;
-  admitNewThreadModelSettings(
-    backend: AppServerBackendKind,
-    settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
-  ): Promise<ModelSettings>;
   assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void;
   clearMissingCodexThread(threadId: string): void;
   dispatchMessagingRequest(
@@ -234,10 +221,6 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
   forkThread(
     request: BackendRegistryForkThreadRequest,
   ): Promise<ForkThreadResponse>;
-  getBackendLaunchpadOptions(
-    backend: AppServerBackendKind,
-    callerReason: BackendModelCatalogCallerReason,
-  ): Promise<BackendLaunchpadOptions | undefined>;
   getTurnInputAttachments(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -250,11 +233,6 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
     input: AppServerTurnInputItem[];
     messageOrigin?: AppServerThreadMessageOrigin;
   }, turnId: string, recipientTitle?: string): Promise<void>;
-  recordCodexWorktreeOwnerThread(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    worktreePath?: string;
-  }): Promise<void>;
   recordMissingCodexThread(threadId: string): void;
   replaceWorkspaceLinkedDirectory(params: {
     resetProjectState?: boolean;
@@ -275,53 +253,6 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
     backend?: AppServerBackendKind;
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined>;
-  startThread(params: {
-    backend: AppServerBackendKind;
-    executionMode?: ThreadExecutionMode;
-    cwd?: string;
-    directoryKey?: string;
-    model?: string;
-    approvalPolicy?: string;
-    sandbox?: string;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    mcpConnectionIds?: string[];
-    mcpProviderServersEnabled?: boolean;
-    agent?: StartThreadRequest["agent"];
-    acpRuntime?: BackendAcpSessionRuntimeState;
-    workMode?: NavigationLaunchpadDraft["workMode"];
-    branchName?: string;
-    /** Base for a new worktree when `branchName` is unset. */
-    worktreeBase?: WorktreeBaseSource;
-    requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
-    parentThreadId?: string;
-    parentThreadBackend?: AppServerBackendKind;
-    parentThreadInstanceId?: string;
-    prAutoDispatchEnabled?: boolean;
-    tokenMiserEnabled?: boolean;
-    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-    /**
-     * Run the environment's setup in the new workspace even when it is not a
-     * new worktree. A named environment has never run there.
-     */
-    rerunCodexEnvironmentSetup?: boolean;
-    linkedDirectories?: LinkedDirectorySummary[];
-  }): Promise<StartThreadResponse>;
-  startTurn(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    executionMode?: ThreadExecutionMode;
-    approvalPolicy?: string;
-    sandbox?: string;
-    model?: string;
-    collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   updateThreadGitBranchMetadata(params: {
     backend: AppServerBackendKind;
     branch?: string;
