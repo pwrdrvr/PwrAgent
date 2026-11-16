@@ -65,6 +65,8 @@ upstream `{id, op: "swarm.records", ...}` / `{id, ok}` envelope. It advertises
 neither execute nor cancel. Labelled/platform links and authorized execution
 require a separately installed bridge; the window API cannot start/stop/judge a
 swarm. The full runtime still requires its Linux/bubblewrap/deployment environment.
+The reference script is supplied in this repository, not installed as a packaged
+runtime. The desktop ships the adapter and loads only an explicitly configured bridge.
 
 ## Normalization and recovery
 
@@ -73,6 +75,8 @@ original sequence/time, member/direction and canonical-record SHA-256. Every
 record has a retained observation, including unknown additive variants. Directions,
 findings, submissions and member execution states also project into native items.
 Source verdicts are observations, preserving independent local review history.
+After local acceptance, the operator can explicitly complete a retained import
+or ended execution. Completing an import does not request source cancellation.
 
 A service page is at most fifty records and 256,000 JSON characters, with a
 16,000-character record bound. The complete page is validated before one atomic

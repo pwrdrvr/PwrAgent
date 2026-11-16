@@ -114,8 +114,8 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
       {run.reason && <p className="research-muted">{run.reason}</p>}
       {!writable && (active || run.status === "interrupted") && <p className="research-muted">This run’s owner is unavailable in this process. Evidence is retained. Inspect the worker threads before requesting a new run.</p>}
       {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
-      {coordinator && writable && active && <div className="research-actions">
-        <button type="button" className="research-button" disabled={busy} onClick={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}>Stop run</button>
+      {coordinator && writable && (active || (run.harness && ["ended", "imported"].includes(run.harness.state))) && run.status !== "completed" && <div className="research-actions">
+        {active && <button type="button" className="research-button" disabled={busy} onClick={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}>Stop run</button>}
         <button type="button" className="research-button" disabled={busy || !run.submissions.some((s) => s.review?.decision === "accepted")} onClick={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}>Finish run</button>
       </div>}
       <div className="research-switch" role="group" aria-label="Research view">{(["graph", "items", "board", "review", "activity"] as const).map((v) => <button type="button" key={v} aria-pressed={view === v} onClick={() => { setView(v); setFilter(""); }}>{label(v)}</button>)}</div>
@@ -145,6 +145,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
       </div>}
       {view === "review" && <div aria-label="Research submissions">
         <p className="research-muted">Acceptance records a reviewer’s judgment. Formal verification has not been performed.</p>
+        {run.harness && <p className="research-muted">Source records retain their original content. PwrAgent records acceptance or rejection; revision feedback requires the source service.</p>}
         {canReview && <label className="research-review-reason">Review reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} rows={2} /></label>}
         {run.submissions.filter((s) => matches(`${s.id} ${s.text} ${titleFor(s.approachId)} ${s.review?.decision ?? "awaiting review"}`)).map((s) => <article className="research-entry" key={s.id}>
           <div className="research-entry__meta">{titleFor(s.approachId)} · {s.review ? label(s.review.decision) : "Awaiting review"}</div><p>{s.text}</p>

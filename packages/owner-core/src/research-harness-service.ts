@@ -133,6 +133,13 @@ export class ResearchHarnessService {
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string): Promise<ResearchRun> {
     const run = this.run(id);
     if (this.closed || run.ownerId !== this.ports.ownerId || !sameResearchThread(run.coordinator, actor)) throw new Error("Harness owner or coordinator unavailable");
+    if (outcome === "completed") {
+      if (!run.submissions.some((submission) => submission.review?.decision === "accepted")) throw new Error("Accept a submission before completing the run");
+      if (["ended", "imported"].includes(run.harness!.state) && ["exhausted", "interrupted"].includes(run.status)) {
+        this.append(id, [{ type: "status", status: "completed", reason: text(reason, 2000) }]);
+        return this.run(id);
+      }
+    }
     if (this.stopping.has(id) || !["running", "stopping"].includes(run.status)) return run;
     this.stopping.add(id);
     this.probes.get(id)?.abort();

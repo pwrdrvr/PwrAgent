@@ -43,6 +43,17 @@ function setup(options: { records?: unknown[]; execute?: () => Promise<unknown>;
 }
 
 describe("Harness lifecycle and real SQLite oracle", () => {
+  it("requires a local acceptance before explicitly finishing retained source execution", async () => {
+    const { service, store, connection } = setup({ records: harnessRecords() });
+    const run = await service.start(request("import"), fixture.tempDir);
+    await expect(service.stop(run.id, actor, "completed", "Finish after review")).rejects.toThrow("Accept a submission");
+    const review = { type: "review", submissionId: "h:7", decision: "accepted", reason: "Local engineering review" } as const;
+    store.append(run.id, run.revision, { seq: run.revision + 1, commandId: "local-review", signature: JSON.stringify(review), at: 2000, actor, data: review });
+    const finished = await measureSqliteWrites(() => service.stop(run.id, actor, "completed", "Finished after local review"));
+    expect(finished.result.status).toBe("completed");
+    expectSqliteWriteBudget({ scenario: "research-harness-finish", note: "Explicit local completion after local acceptance; does not infer or request source cancellation.", writes: finished.writes });
+    expect(vi.mocked(connection.request).mock.calls.filter(([m]) => m === "cancel")).toHaveLength(0);
+  });
   it.each(["import", "execute"] as const)("retains resumed source history without replaying %s work", async (mode) => {
     const records: unknown[] = [...harnessRecords(),
       { event: "resumed", swarm: "fixture-swarm", seq: 12, at_ms: 2000, calls: 12, members: ["m1"], deadline_at_ms: 2_000_000 },
