@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -140,6 +140,57 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
+  it.each(["codex", "claude", "acp:gemini"] as const)("retains and exports general files through the production %s owner wiring", async (backend) => {
+    await prepareRuntimeStore();
+    const data = Buffer.from([0, 1, 2, 3, 255]);
+    const adapter = createAdapter("telegram", {
+      authorizedActorIds: ["user-1", "user-2"],
+      downloadAttachment: async ({ attachment }) => ({ data, fileName: attachment.name,
+        mimeType: "application/zip", sizeBytes: data.length }),
+    });
+    const bridge = createBackendBridge();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = backend;
+    bridge.readNavigationFixturePopulation = vi.fn(async () => navigation);
+    const { getDesktopMessagingStore } = await import("../messaging/desktop-messaging-store");
+    await getDesktopMessagingStore().upsertBinding({ id: "originals-binding", backend, threadId: "thread-1",
+      targetKind: "thread", channel: buildTextEvent("").channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const runtime = trackRuntime(new Runtime({ adapterFactory: () => [adapter], backendBridge: bridge,
+      config: { inputDebounceMs: 0, telegram: { channel: "telegram", botToken: "synthetic-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }, { id: "user-2", displayName: "" }] } } }));
+    await runtime.start();
+    await adapter.listener!({ ...buildTextEvent("Save the archive"), kind: "media", text: "Save the archive",
+      receivedAt: Date.now(),
+      disposition: "available", attachments: [
+        { id: "private-provider-id", name: "archive.zip", mimeType: "application/zip", kind: "file", disposition: "available" },
+      ] });
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    const request = vi.mocked(bridge.startTurn).mock.calls[0]![0];
+    expect(request.input.some((item) => item.type === "text" && item.text.includes("export_messaging_attachment"))).toBe(true);
+    const context = { backend, threadId: "thread-1", turnId: "turn-1" };
+    const listed = await runtime.handlePwrAgentMessagingRequest({ operation: "list_messaging_attachments", context, args: {} });
+    expect(listed).toMatchObject({ ok: true, data: { attachments: [{ name: "archive.zip", sizeBytes: data.length }] } });
+    if (!listed.ok || !("attachments" in listed.data)) throw new Error("Expected originals");
+    const attachmentId = listed.data.attachments[0]!.attachmentId;
+    const exported = await runtime.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment", context, args: { attachmentId } });
+    if (!exported.ok || !("path" in exported.data)) throw new Error("Expected export");
+    expect(await readFile(exported.data.path)).toEqual(data);
+    // Recreate controllers as on restart; another admitted actor must not gain
+    // access to the previous actor's cached originals in this same thread.
+    await runtime.stop();
+    await runtime.start();
+    await adapter.listener!({ ...buildTextEvent("Save a previous attachment"), id: "other-actor-event",
+      actor: { platformUserId: "user-2" }, receivedAt: Date.now() });
+    expect(await runtime.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment", context, args: { attachmentId } }))
+      .toMatchObject({ ok: false, error: { code: "not_found" } });
+    const { getDesktopFederationRuntime } = await import("../federation/federation-runtime");
+    expect(await runtime.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
+      context: { ...context, causalMessagingSource: { ownerId: "remote-profile", requestId: "remote-request",
+        instanceId: `${getDesktopFederationRuntime().messagingSourceInstanceId()}_remote` } }, args: { attachmentId },
+    })).toMatchObject({ ok: false, error: { code: "unsupported_operation", message: expect.stringContaining("messaging owner") } });
+  });
+
   it("evaluates the real federation graph during collection before per-test owner setup", () => {
     expect(federationEvaluatedDuringCollection).toBe(true);
   });

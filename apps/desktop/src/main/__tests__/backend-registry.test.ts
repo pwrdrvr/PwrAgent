@@ -61339,6 +61339,28 @@ script = "printf setup"
     }
   });
 
+  it("marks original-file calls with the persisted messaging origin even without retained actor support", async () => {
+    const codexClient = new MockBackendClient({});
+    const overlayStore = createOverlayStoreMock();
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+    const dispatch = vi.fn(async () => ({ ok: true, data: { attachments: [] } }) as PwrAgentMessagingResponse);
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: dispatch,
+      checkDynamicToolPermission: () => ({ allowed: true }) });
+    try {
+      await overlayStore.upsertThreadMessageOrigin!({ backend: "codex", threadId: "thread-1",
+        messageId: "user:turn-1", origin: { kind: "messaging" } });
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" } } } });
+      await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "thread-1", turnId: "turn-1", callId: "original-list", requestId: "original-list",
+        namespace: "pwragent", tool: "list_messaging_attachments", arguments: {},
+      } } as AppServerPendingRequestNotification);
+      expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ operation: "list_messaging_attachments",
+        context: expect.objectContaining({ backend: "codex", threadId: "thread-1", turnId: "turn-1", messagingTurn: true }),
+      }));
+    } finally { await registry.close(); }
+  });
+
   it("gates a Codex monitor's recovery turn by its messaging origin", async () => {
     const causalMessagingSource = { ownerId: "owner-1", requestId: "request-1" };
     const codexClient = new MockBackendClient({

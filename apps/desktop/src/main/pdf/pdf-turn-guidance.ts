@@ -32,7 +32,7 @@ export function formatPdfAttachmentModelGuidance(
 
   return [
     PDF_TURN_CONTEXT_OPEN,
-    "PwrAgent owns these local PDFs; their source paths and bytes are not available to you:",
+    "These tools provide PDF previews. For a request only to save/copy an original, follow its original-attachment manifest if present and skip PDF analysis; exporting original bytes needs no inspection or rendering. The following rules apply when analyzing PDF contents:",
     ...manifest,
     hasSinglePageAttachment
       ? "For every one-page PDF above, call render_messaging_pdf_pages exactly once with that attachmentId and pageNumbers [1], then analyze the supplied image directly. Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF."
@@ -43,7 +43,7 @@ export function formatPdfAttachmentModelGuidance(
     hasUnknownPageCount
       ? "For only a PDF with unavailable page metadata, call inspect_messaging_pdfs once, then follow the one-page or multi-page rule above."
       : undefined,
-    "Render only a small useful batch; rendered pages are capped at five total per turn. Follow the render tool's transport-specific image instructions exactly and never print its encoded result. Analyze each returned image once. For a requested printed value, transcribe its labeled field instead of inferring it from line-item arithmetic. Do not use web search or other external sources for questions about these PDFs unless the user explicitly requests outside research. Do not use shell, filesystem, OCR, or conversion tools on the source PDFs or rendered pages.",
+    "For content analysis, render only a small useful batch; rendered pages are capped at five total per turn. Follow the render tool's transport-specific image instructions exactly and never print its encoded result. Analyze each returned image once. For a requested printed value, transcribe its labeled field instead of inferring it from line-item arithmetic. Do not use web search or other external sources for questions about these PDFs unless the user explicitly requests outside research. Do not use shell, filesystem, OCR, or conversion tools to analyze the source PDFs or rendered pages. These analysis rules do not prohibit copying an exported original when requested.",
     PDF_TURN_CONTEXT_CLOSE,
   ]
     .filter((line): line is string => Boolean(line))

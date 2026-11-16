@@ -1,7 +1,9 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -100,6 +102,8 @@ import {
   inspectPdfDocument,
   renderPdfPages,
 } from "../pdf/pdf-page-renderer";
+import { MessagingOriginalAttachmentStore } from "../messaging/core/messaging-original-attachment-store";
+import { buildPwrAgentMessagingToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 
 const tempDirs: string[] = [];
 // Teardown drains these before it removes tempDirs. See afterEach.
@@ -17006,6 +17010,90 @@ describe("MessagingController", () => {
     });
   });
 
+  it("budgets no SQLite commits for retaining, rediscovering and repeatedly exporting originals", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir } = createTempStateDb("pwragent-original-write-budget-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const store = new MessagingOriginalAttachmentStore(path.join(tempDir, "cache"));
+      const scope = { backend: "claude", threadId: "original-thread" };
+      const original = { scope, actorKey: MessagingOriginalAttachmentStore.actorKey("dm", "sender"),
+        eventId: "event", attachmentKey: "file", name: "original.pdf", data: Buffer.from("%PDF-1.7\noriginal\n") };
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        const metadata = await store.retain(original);
+        for (let index = 0; index < 10; index += 1) {
+          await store.retain(original);
+          await store.list(scope);
+          await store.export(scope, metadata.attachmentId);
+        }
+      });
+      expectSqliteWriteBudget({ scenario: "messaging-original-files",
+        note: "One original intake plus 10 duplicate/list/export cycles: 0 SQLite commits, 0 MB/day at any call rate; files use the bounded profile cache.", writes });
+    } finally {
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
+  it("exports a single-page original through the real messaging MCP handler after its preview, then after restart", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-original-controller-"));
+    tempDirs.push(root);
+    const data = Buffer.from("%PDF-1.7\noriginal bytes, not page images\n");
+    vi.mocked(inspectPdfDocument).mockResolvedValueOnce({ pageCount: 1,
+      firstPage: { width: 10, height: 10, renderWidth: 10, renderHeight: 10 } });
+    vi.mocked(renderPdfPages).mockResolvedValueOnce([{ pageNumber: 1, base64: "AQID", mimeType: "image/png",
+      encodedBytes: 3, width: 10, height: 10 }]);
+    const cache = path.join(root, "cache");
+    const harness = await createHarness({
+      originalAttachmentStore: new MessagingOriginalAttachmentStore(cache),
+      downloadAttachment: async ({ attachment }) => ({ data, fileName: attachment.name,
+        mimeType: "application/pdf", sizeBytes: data.length }),
+      supportsMessagingPdfTools: async () => true,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent({ ...buildTextEvent("Save this original PDF"), kind: "media",
+      receivedAt: Date.now(),
+      text: "Save this original PDF", disposition: "available", attachments: [
+        { id: "provider-file-id", kind: "file", name: "../report.pdf", mimeType: "application/pdf", disposition: "available" },
+      ] });
+    const started = harness.startTurn.mock.calls[0]![0] as StartTurnRequest;
+    expect(started.input).toContainEqual(expect.objectContaining({ type: "image" }));
+    const prompt = started.input.filter((item) => item.type === "text").map((item) => item.text).join("\n");
+    expect(prompt).toContain("export_messaging_attachment");
+    expect(prompt).not.toContain("provider-file-id");
+    const router = buildPwrAgentMessagingToolRouter((request) => harness.controller.handlePwrAgentMessagingRequest(request));
+    const listed = await router.handleMcpToolCall({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      tool: "list_messaging_attachments", args: {} });
+    const listing = JSON.parse((listed.content[0] as { text: string }).text);
+    const attachmentId = listing.attachments[0].attachmentId as string;
+    expect(prompt).toContain(attachmentId);
+    const response = await router.handleMcpToolCall({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      tool: "export_messaging_attachment", args: { attachmentId } });
+    const exported = JSON.parse((response.content[0] as { text: string }).text);
+    expect(response.isError).toBeUndefined();
+    const destination = path.join(root, "user-picked.pdf");
+    await copyFile(exported.path, destination, constants.COPYFILE_EXCL);
+    expect(createHash("sha256").update(await readFile(destination)).digest("hex")).toBe(exported.attachment.sha256);
+    expect(await readFile(destination)).toEqual(data);
+    const restarted = await createHarness({ originalAttachmentStore: new MessagingOriginalAttachmentStore(cache) });
+    expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
+      context: { backend: "codex", threadId: "thread-1", turnId: "desktop-followup" }, args: { attachmentId },
+    })).toMatchObject({ ok: true, data: { attachment: { attachmentId } } });
+    expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
+      context: { backend: "codex", threadId: "thread-1", turnId: "old-messaging-turn", messagingTurn: true }, args: { attachmentId },
+    })).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
+      context: { backend: "codex", threadId: "unrelated" }, args: { attachmentId },
+    })).toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
+      context: { backend: "codex", threadId: "thread-1", requestingInstanceId: "other-owner" }, args: { attachmentId },
+    })).toMatchObject({ ok: false, error: { code: "unsupported_operation" } });
+  });
+
   it("keeps PDFs local and exposes bounded page tools to model-directed Codex turns", async () => {
     const pdfData = new TextEncoder().encode("%PDF-1.7\n/local PDF\n");
     vi.mocked(renderPdfPages).mockClear();
@@ -29073,6 +29161,7 @@ async function createHarness<
   navigation?: NavigationSnapshot;
   now?: () => number;
   outboundFileAccess?: MessagingOutboundFileAccess;
+  originalAttachmentStore?: MessagingControllerOptions["originalAttachmentStore"];
   pendingIntentTtlMs?: number;
   pdfAnalysisEnabled?: MessagingControllerOptions["pdfAnalysisEnabled"];
   channel?: MessagingChannelKind;
@@ -29738,6 +29827,7 @@ async function createHarness<
     outboundFileAccess: options?.outboundFileAccess
       ? () => options.outboundFileAccess as MessagingOutboundFileAccess
       : undefined,
+    originalAttachmentStore: options?.originalAttachmentStore,
     pendingIntentTtlMs: options?.pendingIntentTtlMs,
     pdfAnalysisEnabled: options?.pdfAnalysisEnabled,
     sleepUntil: options?.sleepUntil,

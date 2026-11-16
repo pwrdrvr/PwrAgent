@@ -23,6 +23,8 @@ export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "attach_thread_here",
   "list_messaging_surfaces",
   "attach_thread_to_surface",
+  "list_messaging_attachments",
+  "export_messaging_attachment",
   "inspect_messaging_pdfs",
   "search_messaging_pdf_text",
   "render_messaging_pdf_pages",
@@ -74,6 +76,8 @@ export type PwrAgentMessagingContext = {
   /** Internal host metadata; never a tool argument or a fabricated inbound message. */
   causalMessagingSource?: MessagingCausalSourceRef;
   causalMessagingAmbiguous?: boolean;
+  /** Host-derived prompt origin, including providers without retained-source support. */
+  messagingTurn?: boolean;
   /** Set from an authenticated federation envelope, never from tool arguments. */
   requestingInstanceId?: FederationInstanceId;
   /** Receiver-derived metadata; never accepted from a remote context. */
@@ -360,6 +364,17 @@ export type PwrAgentMessagingToolImage = {
   pageNumber: number;
 };
 
+/** Original received bytes, separate from rendered pages or extracted text. */
+export type PwrAgentMessagingAttachmentSummary = {
+  attachmentId: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  receivedAt: number;
+  expiresAt: number;
+};
+
 export type PwrAgentMessagingToolArgsByOperation = {
   get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
   get_current_location: GetCurrentMessagingSurfaceToolArgs;
@@ -369,6 +384,8 @@ export type PwrAgentMessagingToolArgsByOperation = {
   attach_thread_here: AttachThreadHereToolArgs;
   list_messaging_surfaces: ListMessagingSurfacesToolArgs;
   attach_thread_to_surface: AttachThreadToSurfaceToolArgs;
+  list_messaging_attachments: { cursor?: string };
+  export_messaging_attachment: { attachmentId: string };
   inspect_messaging_pdfs: InspectMessagingPdfsToolArgs;
   search_messaging_pdf_text: SearchMessagingPdfTextToolArgs;
   render_messaging_pdf_pages: RenderMessagingPdfPagesToolArgs;
@@ -402,6 +419,8 @@ export type PwrAgentMessagingResponse =
         | SendMessagingFileResult
         | AttachThreadHereResult
         | ListMessagingSurfacesResult
+        | { attachments: PwrAgentMessagingAttachmentSummary[]; nextCursor?: string }
+        | { attachment: PwrAgentMessagingAttachmentSummary; path: string; guidance: string }
         | {
             attachments: PwrAgentMessagingPdfAttachmentSummary[];
           }

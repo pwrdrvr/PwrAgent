@@ -78,6 +78,8 @@ describe("PwrAgent messaging agent tools", () => {
       "attach_thread_here",
       "list_messaging_surfaces",
       "attach_thread_to_surface",
+      "list_messaging_attachments",
+      "export_messaging_attachment",
       "inspect_messaging_pdfs",
       "search_messaging_pdf_text",
       "render_messaging_pdf_pages",
@@ -90,6 +92,8 @@ describe("PwrAgent messaging agent tools", () => {
       "attach_thread_here",
       "list_messaging_surfaces",
       "attach_thread_to_surface",
+      "list_messaging_attachments",
+      "export_messaging_attachment",
     ]);
     const privateResponseTool = specs[0]?.type === "namespace"
       ? specs[0].tools.find((tool) => tool.name === "send_private_response")
@@ -331,6 +335,8 @@ describe("PwrAgent messaging agent tools", () => {
     const router = buildPwrAgentMessagingPdfToolRouter(handler);
 
     expect(router.buildMcpTools().map((tool) => tool.name)).toEqual([
+      "list_messaging_attachments",
+      "export_messaging_attachment",
       "inspect_messaging_pdfs",
       "search_messaging_pdf_text",
       "render_messaging_pdf_pages",

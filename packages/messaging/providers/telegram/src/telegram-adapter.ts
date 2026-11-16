@@ -2245,12 +2245,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         id: `telegram:file:${message.document.file_id}`,
         kind: image ? "image" : "file",
         name: message.document.file_name ?? "telegram-document",
-        disposition: this.isDownloadableTelegramMimeType(mimeType) ? "available" : "rejected",
+        // Documents may be saved byte-for-byte even when no content preview is
+        // supported. The controller enforces admission, count and byte limits.
+        disposition: "available",
         height: message.document.height,
         mimeType,
-        reason: this.isDownloadableTelegramMimeType(mimeType)
-          ? undefined
-          : "unsupported attachment type",
         sizeBytes: message.document.file_size,
         state: {
           opaque: {
@@ -2338,24 +2337,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     return attachments;
-  }
-
-  private isDownloadableTelegramMimeType(mimeType: string | undefined): boolean {
-    if (!mimeType) {
-      return true;
-    }
-    return (
-      mimeType.startsWith("text/") ||
-      mimeType.startsWith("image/") ||
-      [
-        "application/json",
-        "application/pdf",
-        "application/toml",
-        "application/x-yaml",
-        "application/yaml",
-        "text/csv",
-      ].includes(mimeType)
-    );
   }
 
   private async buildReplyMarkup(

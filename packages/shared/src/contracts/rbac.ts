@@ -816,7 +816,7 @@ export function permissionForDynamicTool(
       if (tool === "list_messaging_surfaces") {
         return "tools.thread_inspection";
       }
-      if (tool === "send_messaging_file") {
+      if (tool === "send_messaging_file" || tool === "list_messaging_attachments" || tool === "export_messaging_attachment") {
         return "message.reply";
       }
       return undefined;

@@ -80,7 +80,7 @@ describe("AgentToolMcpServer", () => {
         "read_ci_job_log", "get_commit_checks", "list_ci_artifacts", "download_ci_artifact",
         "get_pull_request", "list_pull_requests", "list_pull_request_files", "get_pull_request_diff",
         "list_pull_request_reviews", "list_pull_request_review_threads", "get_issue", "list_issue_comments", "search_issues",
-        "get_current_messaging_surface", "list_messaging_surfaces",
+        "get_current_messaging_surface", "list_messaging_surfaces", "list_messaging_attachments",
         "list_federation_instances", "list_instance_projects", "list_attention_threads", "search_federation_threads",
         "read_star_map_view", "read_operator_focus", "list_todos", "list_reviews",
         "search_mcp_tools", "search_token_miser_output", "read_token_miser_output",
@@ -255,6 +255,8 @@ describe("AgentToolMcpServer", () => {
     try {
       const { tools } = await client.listTools();
       expect(Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations?.readOnlyHint]))).toEqual({
+        list_messaging_attachments: true,
+        export_messaging_attachment: false,
         inspect_messaging_pdfs: true,
         search_messaging_pdf_text: true,
         render_messaging_pdf_pages: false,

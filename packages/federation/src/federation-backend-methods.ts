@@ -502,6 +502,9 @@ export const CONTAINED_OUTPOST_MESSAGING_OPERATIONS = [
   "get_current_location", "get_current_messaging_surface", "send_private_response",
   "rename_current_messaging_conversation", "send_messaging_file", "inspect_messaging_pdfs",
   "search_messaging_pdf_text", "render_messaging_pdf_pages",
+  // Permit the source-actor authorization check. Execution returns an
+  // actionable unsupported-route result without transferring a cache path.
+  "list_messaging_attachments", "export_messaging_attachment",
 ] as const;
 
 export function containedFederationNotificationAllowed(method: string): boolean {

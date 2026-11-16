@@ -94,7 +94,8 @@ import {
   type MessagingResponseModeSnapshot,
 } from "./messaging-response-mode";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
-import { resolvePwragentRoot } from "../profile";
+import { resolveActiveProfilePath, resolvePwragentRoot } from "../profile";
+import { MessagingOriginalAttachmentStore } from "./core/messaging-original-attachment-store";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
@@ -456,6 +457,9 @@ export type CredentialValidationRequest =
   | { channel: "line"; credential: { channelAccessToken: string } };
 
 export class DesktopMessagingRuntime implements MessagingAgentToolService {
+  private readonly originalAttachmentStore = new MessagingOriginalAttachmentStore(
+    resolveActiveProfilePath("state/messaging-original-attachments"),
+  );
   private adapters: DesktopMessagingAdapter[] = [];
   private automationsChangedUnsubscribe?: () => void;
   private previewScopesChangedUnsubscribe?: () => void;
@@ -629,6 +633,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     receivedFile?: Uint8Array,
   ): Promise<PwrAgentMessagingResponse> {
     const sourceOwner = request.context.causalMessagingSource?.instanceId;
+    if (["list_messaging_attachments", "export_messaging_attachment"].includes(request.operation)
+      && sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
+      return { ok: false, error: { code: "unsupported_operation", message:
+        "Original-file access across machines is unavailable. Reattach the file to a local thread on the messaging owner and request the save there, then use an authorized file-transfer tool. Owner-local cache paths cannot be used on this machine." } };
+    }
     if (["list_messaging_surfaces", "attach_thread_to_surface"].includes(request.operation)
       && sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
       try {
@@ -1646,6 +1655,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           resolvePwragentRoot(),
         ],
       }),
+      originalAttachmentStore: this.originalAttachmentStore,
     });
 
     let unsubscribeDiagnostic: (() => void) | undefined;

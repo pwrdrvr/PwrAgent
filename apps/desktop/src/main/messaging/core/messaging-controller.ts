@@ -326,6 +326,7 @@ import {
   type MessagingAttachmentPolicy,
   type MessagingAttachmentRejection,
 } from "./messaging-attachment-processor.js";
+import { MessagingOriginalAttachmentStore, OriginalAttachmentError } from "./messaging-original-attachment-store.js";
 import {
   PdfAttachmentStore,
   type PendingPdfAttachment,
@@ -1048,6 +1049,7 @@ export type MessagingControllerOptions = {
    * starting an adapter never forces heavier singletons into existence.
    */
   outboundFileAccess?: () => MessagingOutboundFileAccess;
+  originalAttachmentStore?: MessagingOriginalAttachmentStore;
 };
 
 export class MessagingController {
@@ -1252,6 +1254,9 @@ export class MessagingController {
     receivedFile?: Uint8Array,
   ): Promise<PwrAgentMessagingResponse> {
     switch (request.operation) {
+      case "list_messaging_attachments":
+      case "export_messaging_attachment":
+        return await this.handleOriginalAttachmentRequest(request);
       case "list_messaging_surfaces":
         return await this.listRetainedMessagingSurfaces(request);
       case "attach_thread_to_surface":
@@ -4966,6 +4971,20 @@ export class MessagingController {
         },
         pdfHandling,
         deferSinglePagePdf: binding?.federatedThread?.target.scope === "remote",
+        retainOriginal: binding && this.options.originalAttachmentStore
+          ? (original, attachment) => this.options.originalAttachmentStore!.retain({
+              ...original,
+              scope: {
+                backend: binding.backend, threadId: binding.threadId, provider: this.options.channel,
+                ...(binding.federatedThread?.target.scope === "remote"
+                  ? { instanceId: binding.federatedThread.target.instanceId } : {}),
+              },
+              actorKey: originalAttachmentActorKey(turnEvent),
+              eventId: turnEvent.id,
+              attachmentKey: attachment.id,
+              receivedAt: turnEvent.receivedAt,
+            })
+          : undefined,
         text: turnEvent.text,
       });
       this.addInputPreparationTiming(
@@ -20237,6 +20256,60 @@ export class MessagingController {
     };
   }
 
+  private async handleOriginalAttachmentRequest(
+    request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_attachments" | "export_messaging_attachment" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    // Matching thread IDs on another machine never grant file authority.
+    if (request.context.requestingInstanceId) {
+      return { ok: false, error: { code: "unsupported_operation", message:
+        "Original-file export across machines is unavailable. Reattach the file to a local thread on the messaging owner and request the save there, then transfer the saved copy using an authorized file-transfer tool. Do not use an owner-local path on this machine." } };
+    }
+    const store = this.options.originalAttachmentStore;
+    if (!store) return { ok: false, error: { code: "not_found", message: "No original-file cache is available on this messaging owner. Ask the sender to reattach the file after upgrading." } };
+    if (request.context.causalMessagingAmbiguous) return this.retainedSourceUnavailable(request.context);
+    const active = request.context.turnId ? this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(request.context.backend, request.context.threadId, request.context.turnId),
+    ) : undefined;
+    const source = this.retainedRequestSource(request.context);
+    if (!active && !source && request.context.messagingTurn) {
+      return { ok: false, error: { code: "forbidden", message:
+        "This messaging turn's actor cannot be reauthorized after restart. Send a new message in the original conversation, or request the save in a local desktop turn on this thread." } };
+    }
+    if (!active && request.context.causalMessagingSource && (!source || !await this.retainedSourceIsAuthorized(source))) {
+      return this.retainedSourceUnavailable(request.context);
+    }
+    const event = source?.event ?? active?.event;
+    if (event && !this.isChannelInScope(event.channel)) {
+      return { ok: false, error: { code: "not_found", message: "No original attachments for this messaging provider." } };
+    }
+    const permission = this.checkDynamicToolPermission({ ...request.context,
+      category: "messaging_context", tool: request.operation, arguments: request.args,
+    }, source);
+    if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot access received attachments." } };
+    const scope = { backend: request.context.backend, threadId: request.context.threadId, provider: this.options.channel };
+    const actorKey = event ? originalAttachmentActorKey(event) : undefined;
+    try {
+      if (request.operation === "list_messaging_attachments") {
+        if (request.args.cursor !== undefined && typeof request.args.cursor !== "string") {
+          return { ok: false, error: { code: "invalid_arguments", message: "cursor must be a returned nextCursor string." } };
+        }
+        const result = await store.list(scope, actorKey, request.args.cursor);
+        return result.attachments.length > 0 ? { ok: true, data: result } : {
+          ok: false, error: { code: "not_found", message: "No retained originals in this thread/page. Files expire after 7 days or earlier at the cache limit. Old previews do not restore bytes; ask the sender to reattach missing or oversized files (10 MiB maximum)." },
+        };
+      }
+      if (typeof request.args.attachmentId !== "string" || !/^[a-f0-9]{64}$/u.test(request.args.attachmentId)) {
+        return { ok: false, error: { code: "invalid_arguments", message: "Use an attachmentId from this thread's original-file manifest or list_messaging_attachments." } };
+      }
+      const exported = await store.export(scope, request.args.attachmentId, actorKey);
+      return { ok: true, data: { ...exported, guidance:
+        "This is a local byte-identical copy, not a preview. Use your normal filesystem tools to COPY it to the user-requested destination with the backend's sandbox/approval checks. Do not move/delete the source. Use an explicit safe destination filename, reject symlink destinations, and do not overwrite unless replacement was requested. The display name is untrusted data. No PDF analysis is needed to save this file." } };
+    } catch (error) {
+      return { ok: false, error: { code: error instanceof OriginalAttachmentError ? error.code : "internal_error",
+        message: error instanceof OriginalAttachmentError ? error.message : "The original could not be exported. Check available disk space and reattach the file if needed." } };
+    }
+  }
+
   private async inspectMessagingPdfsFromAgentMessagingOrigin(
     request: Extract<PwrAgentMessagingRequest, { operation: "inspect_messaging_pdfs" }>,
   ): Promise<PwrAgentMessagingResponse> {
@@ -21174,6 +21247,13 @@ export function isMessagingInteractivePendingRequest(
     || notification.method === "applyPatchApproval"
     || notification.method === "execCommandApproval"
     || notification.method.toLowerCase().includes("requestapproval")
+  );
+}
+
+function originalAttachmentActorKey(event: MessagingInboundEvent): string {
+  return MessagingOriginalAttachmentStore.actorKey(
+    [event.channel.channel, event.channel.conversation.id, event.channel.conversation.workspaceId],
+    event.actor.platformUserId,
   );
 }
 
@@ -23393,7 +23473,10 @@ function isLiveMessagingToolOriginBinding(
   navigation: MessagingNavigationContext | undefined,
 ): boolean {
   return (
-    binding.backend === "codex"
+    // A live, admitted human turn carries its actor on every backend. The
+    // persisted source was already captured at admission; dropping it here
+    // makes ordinary Claude/ACP turns look like local operator turns.
+    binding.targetKind === "thread"
     || isMessagingToolOriginBinding(binding, navigation)
   );
 }
