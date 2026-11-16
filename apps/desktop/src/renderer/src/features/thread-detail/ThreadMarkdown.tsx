@@ -90,6 +90,7 @@ type ThreadMarkdownProps = {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "openPath"
     | "onHtmlPreviewNavigation"
     | "readConfigBootstrap"
     | "readHtmlPreviewAssets"
@@ -919,6 +920,20 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return;
       }
 
+      if (prefersSystemFileOpener(target.path)) {
+        event.preventDefault();
+        void props.desktopApi?.openPath?.({ path: target.path })
+          .then((response) => {
+            if (!response.opened) {
+              console.error("Failed to open transcript file link", response.error);
+            }
+          })
+          .catch((error: unknown) => {
+            console.error("Failed to open transcript file link", error);
+          });
+        return;
+      }
+
       if (openLocalFileInEditor(target)) {
         event.preventDefault();
       }
@@ -1028,6 +1043,7 @@ function MarkdownDocumentModal(props: {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "openPath"
     | "onHtmlPreviewNavigation"
     | "readConfigBootstrap"
     | "readHtmlPreviewAssets"
@@ -1356,6 +1372,20 @@ function skillNameFromPath(filePath: string, label: string): string {
     return segments.at(-2) ?? "skill";
   }
   return label.replace(/^\$/, "") || segments.at(-1) || "skill";
+}
+
+// These artifacts are normally viewed or played in their registered app.
+// Keep source files and unknown extensions on the selected-editor path.
+const SYSTEM_FILE_EXTENSIONS = new Set([
+  "avif", "bmp", "gif", "heic", "heif", "ico", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp",
+  "avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm", "wmv",
+  "aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav",
+  "doc", "docx", "dvi", "epub", "odp", "ods", "odt", "pdf", "ppt", "pptx", "ps", "rtf", "tex", "xls", "xlsx",
+]);
+
+function prefersSystemFileOpener(filePath: string): boolean {
+  const extension = /\.([^./\\]+)$/.exec(filePath)?.[1]?.toLowerCase();
+  return extension !== undefined && SYSTEM_FILE_EXTENSIONS.has(extension);
 }
 
 function localFileTargetFromHref(
