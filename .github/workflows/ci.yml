@@ -232,6 +232,10 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:electron-version
 
+      - name: Renderer function bytecode budget
+        timeout-minutes: 10
+        run: pnpm check:renderer-bytecode
+
       - name: Oxlint
         timeout-minutes: 10
         run: pnpm lint:oxlint
