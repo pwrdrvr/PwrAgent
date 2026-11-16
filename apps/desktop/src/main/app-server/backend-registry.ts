@@ -1,3 +1,4 @@
+import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryContext } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
@@ -67,7 +68,6 @@ import type {
   ListBackgroundTerminalsResponse,
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
-  CodexBackgroundTerminal,
 } from "@pwragent/shared";
 import type { StoredProjectHeldWakeup } from "../storage/desktop-runtime-storage";
 import type { StoredRestartContinuation } from "../storage/desktop-runtime-storage";
@@ -339,7 +339,6 @@ import {
   type NavigationDirectoryGitStatusUpdatedNotification,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
-  type ThreadCodexInvalidIdRecovery,
   type ThreadPermissionTransition,
   type ThreadQuestionnaireActivity,
   type ThreadTurnFailure,
@@ -426,7 +425,6 @@ import {
   type CodexServerCapabilities,
 } from "../codex-app-server/desktop-client";
 import {
-  codexAppServerRecycleCheckIntervalMs,
   type CodexAppServerProcessSample,
   type CodexAppServerRecycleSettings,
   type CodexAppServerRecycleStatus,
@@ -638,7 +636,6 @@ import {
 import {
   ATTENTION_NOTIFICATION_METHODS,
   acpRuntimeHasExecutionModeSelection,
-  backgroundTerminalMembership,
   buildHeadlessAutomationRequestCancelResponse,
   completedAtFromTerminalNotification,
   errorMessageFromTerminalNotification,
@@ -654,7 +651,6 @@ import {
   queuedTurnDisplayText,
   queuedTurnPauseParams,
   readFileChangeApprovalFile,
-  readNotificationItemType,
   readNotificationProjectLabel,
   readStatusType,
   readTurnStatus,
@@ -681,7 +677,6 @@ import {
   type DirectoryGitStatusWriter,
   type ForgeToolRuleWriter,
   type HandoffSourceSettings,
-  type LiveCodexToolItem,
   type LiveThreadUsageEmitWork,
   type LocalPullRequestAuthorityResolver,
   type McpProjectToolApprovalCardOffer,
@@ -689,7 +684,6 @@ import {
   type MessagingArchiveCleanupStore,
   type ModelSettings,
   type ObservedCodexSettings,
-  type PendingCodexInvalidIdRecovery,
   type PendingServerRequest,
   type PendingThreadMessageContext,
   type ProjectForgeAutomationHandler,
@@ -724,7 +718,6 @@ import {
   ActiveTurnControlPreconditionError,
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS,
-  CODEX_THREAD_IDLE_UNSUBSCRIBE_CHECK_INTERVAL_MS,
   FORGE_TOOL_REQUEST_ID_PREFIX,
   INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS,
   MAX_ACCEPTED_THREAD_CONTROL_REQUESTS,
@@ -736,8 +729,6 @@ import {
   THREAD_SEARCH_REUSE_WINDOW_MS,
   ThreadAlreadyActiveError,
   archivedThreadMessageRefusal,
-  buildCodexInvalidIdRecoveryCooldownMessage,
-  isCodexInvalidIdRecoveryCooldownActive,
   readProviderRuntimeFingerprints,
   shouldBackfillCodexDirectoryRelationships,
   shouldEnrichThreadDirectories,
@@ -946,6 +937,7 @@ export class DesktopBackendRegistry {
   private readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
   private readonly threadWorkspaceService: ThreadWorkspaceService;
   private readonly threadDirectoryService: ThreadDirectoryService;
+  private readonly codexRuntimeSupervisor: CodexRuntimeSupervisor;
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
     DesktopConfigStore,
@@ -1113,14 +1105,6 @@ export class DesktopBackendRegistry {
     string,
     CodexRetryableOperation
   >();
-  private readonly pendingCodexInvalidIdRecoveries:
-    PendingCodexInvalidIdRecovery[] = [];
-  private readonly codexInvalidIdRecoveryAttemptedAt = new Map<string, number>();
-  private codexInvalidIdRecoveryDrain?: Promise<void>;
-  // Aborted by close(): a drain waiting for other turns must not hold shutdown.
-  private readonly codexInvalidIdRecoveryAbort = new AbortController();
-  private codexInvalidIdRecoveryBarrier?: Promise<void>;
-  private resolveCodexInvalidIdRecoveryBarrier?: () => void;
   /**
    * Threads Codex answered `thread not found` for during this session. An id
    * stays here once it lands, whatever the audit decides, so a later
@@ -1171,17 +1155,6 @@ export class DesktopBackendRegistry {
    * original `turn/started` notification.
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
-  /** Commands may outlive their turn; other tools belong to that turn only. */
-  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, LiveCodexToolItem>>();
-  private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
-  /**
-   * Latest revision per thread with a list read in flight. An entry lives
-   * only while a read is outstanding, and the counter is shared so a read
-   * started after a prune can never reuse an older read's number.
-   */
-  private readonly backgroundTerminalReadRevisions = new Map<string, number>();
-  private backgroundTerminalReadCounter = 0;
-  private backgroundTerminalGeneration = 0;
   /**
    * Live lifecycle notifications and thread reads can be newer than Codex's
    * cached thread/list status. Preserve that observation until thread/list
@@ -1701,17 +1674,10 @@ export class DesktopBackendRegistry {
   private readonly acpSessionIdleCloseMs: number;
   private acpIdleSessionTimer?: NodeJS.Timeout;
   private acpIdleSessionSweep?: Promise<void>;
-  private readonly resolveCodexAppServerRecycleSettingsFn: () => CodexAppServerRecycleSettings;
-  private codexAppServerRecycleTimer?: NodeJS.Timeout;
-  private codexAppServerRecycleCheck?: Promise<void>;
-  private readonly codexThreadIdleUnsubscribeMs: number;
-  private codexIdleThreadTimer?: NodeJS.Timeout;
-  private codexIdleThreadSweep?: Promise<void>;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
   private readonly resolveTokenMiserPollingReviewsEnabledFn: () => boolean;
   private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
   private readonly resolveCodexDiscoveryPendingFn: () => boolean;
-  private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
@@ -1736,9 +1702,6 @@ export class DesktopBackendRegistry {
   private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
-  private codexRuntimeRestartPending = false;
-  private managedCodexRuntimeSwitchPending = false;
-  private codexRuntimeRestartPromise?: Promise<boolean>;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
@@ -1808,13 +1771,10 @@ export class DesktopBackendRegistry {
     this.resolveCodexFastAllowedFn = dependencies.resolveCodexFastAllowedFn;
     this.resolvePdfAnalysisEnabledFn = dependencies.resolvePdfAnalysisEnabledFn;
     this.acpSessionIdleCloseMs = dependencies.acpSessionIdleCloseMs;
-    this.codexThreadIdleUnsubscribeMs = dependencies.codexThreadIdleUnsubscribeMs;
     this.resolveTokenMiserEnabledFn = dependencies.resolveTokenMiserEnabledFn;
-    this.resolveCodexAppServerRecycleSettingsFn = dependencies.resolveCodexAppServerRecycleSettingsFn;
     this.resolveTokenMiserDefaultEnabledFn = dependencies.resolveTokenMiserDefaultEnabledFn;
     this.resolveTokenMiserPollingReviewsEnabledFn = dependencies.resolveTokenMiserPollingReviewsEnabledFn;
     this.resolveManagedTokenMiserActivationRequiredFn = dependencies.resolveManagedTokenMiserActivationRequiredFn;
-    this.markManagedCodexRuntimeSwitchCompleteFn = dependencies.markManagedCodexRuntimeSwitchCompleteFn;
     this.resolveCodexDiscoveryPendingFn = dependencies.resolveCodexDiscoveryPendingFn;
     this.resolveToolOutputAlertPolicyFn = dependencies.resolveToolOutputAlertPolicyFn;
     this.resolveSpendAlertPolicyFn = dependencies.resolveSpendAlertPolicyFn;
@@ -1861,6 +1821,7 @@ export class DesktopBackendRegistry {
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.threadWorkspaceService = dependencies.threadWorkspaceService;
     this.threadDirectoryService = dependencies.threadDirectoryService;
+    this.codexRuntimeSupervisor = dependencies.codexRuntimeSupervisor;
     this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
     this.codexProviderCatalogRetry = dependencies.codexProviderCatalogRetry;
     this.modelCatalog = dependencies.modelCatalog;
@@ -1970,6 +1931,7 @@ export class DesktopBackendRegistry {
       attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
       authorizeAgentToolMcpCall: (...args: Parameters<typeof this.authorizeAgentToolMcpCall>) => this.authorizeAgentToolMcpCall(...args),
       get automationInspectionHandler() { return current().automationInspectionHandler; },
+      get backendActiveCodexThreadIds() { return current().backendActiveCodexThreadIds; },
       beginStartingTurnOrigin: (...args: Parameters<typeof this.beginStartingTurnOrigin>) => this.beginStartingTurnOrigin(...args),
       bindStartingTurnOrigin: (...args: Parameters<typeof this.bindStartingTurnOrigin>) => this.bindStartingTurnOrigin(...args),
       buildForkedCodexEnvironmentRuntime: (...args: Parameters<ThreadDirectoryService["buildForkedCodexEnvironmentRuntime"]>) => this.threadDirectoryService.buildForkedCodexEnvironmentRuntime(...args),
@@ -1984,14 +1946,16 @@ export class DesktopBackendRegistry {
       clearMissingCodexThread: (...args: Parameters<typeof this.clearMissingCodexThread>) => this.clearMissingCodexThread(...args),
       get closed() { return current().closed; },
       get codexBackendSummary() { return current().codexBackendSummary; },
-      get codexBackgroundTerminals() { return current().codexBackgroundTerminals; },
+      get codexBackgroundTerminals() { return current().codexRuntimeSupervisor.backgroundTerminalRecords; },
       get codexClient() { return current().codexClient; },
       get codexEnvironmentCommandEnv() { return current().codexEnvironmentCommandEnv; },
       get codexModelProviderCatalog() { return current().codexModelProviderCatalog; },
       get codexModelProviderKeysRead() { return current().codexModelProviderKeysRead; },
       set codexModelProviderKeysRead(value) { current().codexModelProviderKeysRead = value; },
-      get codexRuntimeRestartPending() { return current().codexRuntimeRestartPending; },
-      set codexRuntimeRestartPending(value) { current().codexRuntimeRestartPending = value; },
+      get codexRetryableOperations() { return current().codexRetryableOperations; },
+      get codexRuntimeRestartPending() { return current().codexRuntimeSupervisor.runtimeRestartPending; },
+      set codexRuntimeRestartPending(value) { current().codexRuntimeSupervisor.setRuntimeRestartPending(value); },
+      compactThreadNow: (...args: Parameters<typeof this.compactThreadNow>) => this.compactThreadNow(...args),
       get configStore() { return current().configStore; },
       get createScheduledThreadActionFn() { return current().createScheduledThreadActionFn; },
       get createScratchProjectDirectory() { return current().createScratchProjectDirectory; },
@@ -2033,9 +1997,10 @@ export class DesktopBackendRegistry {
       get gitWorkingStateService() { return current().gitWorkingStateService; },
       handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
       handleAgentTaskMonitorRequest: (...args: Parameters<SubAgentMonitorService["handleAgentTaskMonitorRequest"]>) => this.subAgentMonitorService.handleAgentTaskMonitorRequest(...args),
-      handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.handleCodexAppServerUnexpectedExit>) => this.handleCodexAppServerUnexpectedExit(...args),
+      handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit>) => this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
+      hasActiveCodexWork: (...args: Parameters<typeof this.hasActiveCodexWork>) => this.hasActiveCodexWork(...args),
       holdBackendSelfStartedTurn: (...args: Parameters<typeof this.holdBackendSelfStartedTurn>) => this.holdBackendSelfStartedTurn(...args),
       initializeTokenMiserLedger: (...args: Parameters<ThreadUsageLedger["initializeTokenMiserLedger"]>) => this.threadUsageLedger.initializeTokenMiserLedger(...args),
       interruptTurn: (...args: Parameters<typeof this.interruptTurn>) => this.interruptTurn(...args),
@@ -2048,6 +2013,7 @@ export class DesktopBackendRegistry {
       isMcpGatewayFullAccess: (...args: Parameters<ThreadMcpConnections["isMcpGatewayFullAccess"]>) => this.threadMcpConnections.isMcpGatewayFullAccess(...args),
       isQueuedMessageTitleCurrent: (...args: Parameters<typeof this.isQueuedMessageTitleCurrent>) => this.isQueuedMessageTitleCurrent(...args),
       isTaskMonitorThread: (...args: Parameters<SubAgentMonitorService["isTaskMonitorThread"]>) => this.subAgentMonitorService.isTaskMonitorThread(...args),
+      listActiveCodexWorkThreadIds: (...args: Parameters<typeof this.listActiveCodexWorkThreadIds>) => this.listActiveCodexWorkThreadIds(...args),
       listAllInstalledAcpThreads: (...args: Parameters<typeof this.listAllInstalledAcpThreads>) => this.listAllInstalledAcpThreads(...args),
       listBackends: (...args: Parameters<typeof this.listBackends>) => this.listBackends(...args),
       listThreads: (...args: Parameters<typeof this.listThreads>) => this.listThreads(...args),
@@ -2055,14 +2021,15 @@ export class DesktopBackendRegistry {
       liveSubAgentMonitorIds: (...args: Parameters<typeof this.liveSubAgentMonitorIds>) => this.liveSubAgentMonitorIds(...args),
       get liveThreadReplayInputCursor() { return current().threadUsageLedger.liveThreadReplayInputCursorRecords; },
       get localFilePrivateStorageRoots() { return current().localFilePrivateStorageRoots; },
-      get managedCodexRuntimeSwitchPending() { return current().managedCodexRuntimeSwitchPending; },
-      set managedCodexRuntimeSwitchPending(value) { current().managedCodexRuntimeSwitchPending = value; },
-      maybeRestartCodexForManagedRuntimeChange: (...args: Parameters<typeof this.maybeRestartCodexForManagedRuntimeChange>) => this.maybeRestartCodexForManagedRuntimeChange(...args),
+      get managedCodexRuntimeSwitchPending() { return current().codexRuntimeSupervisor.managedRuntimeSwitchPending; },
+      set managedCodexRuntimeSwitchPending(value) { current().codexRuntimeSupervisor.setManagedRuntimeSwitchPending(value); },
+      maybeRestartCodexForManagedRuntimeChange: (...args: Parameters<typeof this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange>) => this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange(...args),
       get mcpConnectionService() { return current().mcpConnectionService; },
       get mcpGatewayTools() { return current().mcpGatewayTools; },
       get messagingHandler() { return current().messagingHandler; },
       get messagingStore() { return current().messagingStore; },
       get modelCatalog() { return current().modelCatalog; },
+      get nativeVoiceLeases() { return current().nativeVoiceLeases; },
       observeLiveThreadContextReplay: (...args: Parameters<ThreadUsageLedger["observeLiveThreadContextReplay"]>) => this.threadUsageLedger.observeLiveThreadContextReplay(...args),
       get overlayStore() { return current().overlayStore; },
       ownerRelativeInstanceId: (...args: Parameters<typeof this.ownerRelativeInstanceId>) => this.ownerRelativeInstanceId(...args),
@@ -2168,6 +2135,7 @@ export class DesktopBackendRegistry {
       taskMonitorForThread: (...args: Parameters<SubAgentMonitorService["taskMonitorForThread"]>) => this.subAgentMonitorService.taskMonitorForThread(...args),
       get threadDependencyToolHandler() { return current().threadDependencyToolHandler; },
       get threadHandoffReservations() { return current().threadWorkspaceService.threadHandoffReservationRecords; },
+      threadHasActiveCodexReviewTurn: (...args: Parameters<typeof this.threadHasActiveCodexReviewTurn>) => this.threadHasActiveCodexReviewTurn(...args),
       threadHasActiveTurn: (...args: Parameters<typeof this.threadHasActiveTurn>) => this.threadHasActiveTurn(...args),
       threadHasBlockingWorkspaceMove: (...args: Parameters<ThreadWorkspaceService["threadHasBlockingWorkspaceMove"]>) => this.threadWorkspaceService.threadHasBlockingWorkspaceMove(...args),
       get threadInfoStore() { return current().threadInfoStore; },
@@ -2182,8 +2150,15 @@ export class DesktopBackendRegistry {
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
+      set tokenMiserCodeModeGroupingVersion(value) { current().tokenMiserCodeModeGroupingVersion = value; },
       get tokenMiserDiagnostics() { return current().tokenMiserDiagnostics; },
       get tokenMiserPostToolUseExactOutputVersion() { return current().tokenMiserPostToolUseExactOutputVersion; },
+      set tokenMiserPostToolUseExactOutputVersion(value) { current().tokenMiserPostToolUseExactOutputVersion = value; },
+      get tokenMiserReducerCapabilityState() { return current().tokenMiserReducerCapabilityState; },
+      set tokenMiserReducerCapabilityState(value) { current().tokenMiserReducerCapabilityState = value; },
+      get tokenMiserRuntimePreparationFailure() { return current().tokenMiserRuntimePreparationFailure; },
+      set tokenMiserRuntimePreparationFailure(value) { current().tokenMiserRuntimePreparationFailure = value; },
+      get tokenMiserServerCapabilities() { return current().tokenMiserServerCapabilities; },
       get tokenMiserService() { return current().tokenMiserService; },
       get tokenMiserStore() { return current().tokenMiserStore; },
       get toolOutputAlertPolicy() { return current().toolOutputAlertPolicy; },
@@ -3443,28 +3418,17 @@ export class DesktopBackendRegistry {
   }
 
   getCodexAppServerRestartStatus(): CodexAppServerRestartStatus {
-    return this.codexClient.getAppServerRestartStatus?.() ?? { stopped: false };
+    return this.codexRuntimeSupervisor.getCodexAppServerRestartStatus();
   }
 
   onCodexAppServerRestartStatusChanged(
     listener: (status: CodexAppServerRestartStatus) => void,
   ): () => void {
-    return this.codexClient.onAppServerRestartStatusChanged?.(listener) ?? (() => undefined);
+    return this.codexRuntimeSupervisor.onCodexAppServerRestartStatusChanged(listener);
   }
 
-  /**
-   * Start Codex again after the client stopped restarting it. A failed start
-   * is returned with the status it leaves, so the notice can say what happened.
-   */
-  async restartCodexAppServer(): Promise<CodexAppServerRestartResult> {
-    try {
-      await this.codexClient.restartAppServer?.();
-      return { status: this.getCodexAppServerRestartStatus() };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      backendRegistryLog.warn("Codex app server restart failed", { error: message });
-      return { status: this.getCodexAppServerRestartStatus(), error: message };
-    }
+  restartCodexAppServer(): Promise<CodexAppServerRestartResult> {
+    return this.codexRuntimeSupervisor.restartCodexAppServer();
   }
 
   async listBackends(
@@ -3535,8 +3499,8 @@ export class DesktopBackendRegistry {
       this.codexRateLimitBroadcastTimer = undefined;
     }
     this.modelCatalog.invalidate("codex");
-    this.codexRuntimeRestartPending = true;
-    await this.maybeRestartCodexForManagedRuntimeChange();
+    this.codexRuntimeSupervisor.setRuntimeRestartPending(true);
+    await this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
   }
 
   async synchronizeProviderRuntimeSelections(): Promise<void> {
@@ -6245,145 +6209,20 @@ export class DesktopBackendRegistry {
     };
   }
 
-  /**
-   * Replace the Codex app server when it has sat idle for a while and has run
-   * too long or started too many processes (`app-server-recycle-policy.ts`).
-   * A leak in any MCP server it starts then lives hours, not days. Started by
-   * the app after startup discovery, like the archive sweeper; tests that
-   * never call this get no timer.
-   */
   startCodexAppServerRecycler(): void {
-    if (this.closed || this.shutdownRequested || this.codexAppServerRecycleTimer) return;
-    this.scheduleCodexAppServerRecycleCheck();
+    return this.codexRuntimeSupervisor.startCodexAppServerRecycler();
   }
 
-  private scheduleCodexAppServerRecycleCheck(): void {
-    if (this.closed || this.shutdownRequested) return;
-    const delayMs = codexAppServerRecycleCheckIntervalMs(
-      this.resolveCodexAppServerRecycleSettingsFn(),
-    );
-    this.codexAppServerRecycleTimer = setTimeout(() => {
-      void this.checkCodexAppServerRecycle()
-        .finally(() => this.scheduleCodexAppServerRecycleCheck());
-    }, delayMs);
-    this.codexAppServerRecycleTimer.unref?.();
-  }
-
-  /**
-   * One recycle check. Never throws; the client logs what it did. Registry
-   * work is passed in as `isQuiescent`, not checked here, so the client
-   * records a busy check in its status as it does any other.
-   */
-  async checkCodexAppServerRecycle(): Promise<void> {
-    if (this.closed || this.shutdownRequested || this.codexAppServerRecycleCheck) return;
-    const settings = this.resolveCodexAppServerRecycleSettingsFn();
-    const recycle = this.codexClient.maybeRecycleIdleAppServer?.bind(this.codexClient);
-    if (!settings.enabled || !recycle) return;
-    const check = (async () => {
-      await recycle({
-        settings,
-        isQuiescent: () => !this.closed
-          && !this.shutdownRequested
-          && !this.hasCodexWorkBlockingRecycle(),
-      });
-    })().catch((error) => {
-      backendRegistryLog.warn("Codex app server recycle check failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }).finally(() => {
-      this.codexAppServerRecycleCheck = undefined;
-    });
-    this.codexAppServerRecycleCheck = check;
-    await check;
-  }
-
-  /**
-   * Work the registry tracks that a Codex stop would interrupt: turns and
-   * their approvals, reserved thread starts, live tool items, background
-   * terminals, voice, accepted compactions, and the other lifecycle owners
-   * that stop or restart Codex themselves.
-   */
-  private hasCodexWorkBlockingRecycle(): boolean {
-    return this.hasActiveCodexRuntimeWork()
-      || this.hasActiveCodexWork()
-      || this.codexRuntimeRestartPending
-      || this.codexRuntimeRestartPromise !== undefined
-      || this.codexInvalidIdRecoveryDrain !== undefined
-      || this.pendingCodexInvalidIdRecoveries.length > 0;
-  }
-
-  /** The Codex app server's process, settings and last recycle, for diagnostics. */
-  async readCodexAppServerDiagnostics(): Promise<{
+  readCodexAppServerDiagnostics(): Promise<{
     process?: CodexAppServerProcessSample;
     recycle: CodexAppServerRecycleStatus;
     settings: CodexAppServerRecycleSettings;
   }> {
-    const process = await this.codexClient.readAppServerProcessSample?.()
-      .catch(() => undefined);
-    return {
-      ...(process ? { process } : {}),
-      recycle: this.codexClient.getAppServerRecycleStatus?.() ?? { recycleCount: 0 },
-      settings: this.resolveCodexAppServerRecycleSettingsFn(),
-    };
+    return this.codexRuntimeSupervisor.readCodexAppServerDiagnostics();
   }
 
-  /**
-   * Release idle Codex threads on a timer (`unsubscribeIdleThreads`). Started
-   * by the app after startup discovery, like the archive sweeper; tests that
-   * never call this get no timer.
-   */
   startCodexIdleThreadUnsubscriber(): void {
-    if (this.closed || this.shutdownRequested || this.codexIdleThreadTimer) return;
-    this.codexIdleThreadTimer = setInterval(() => {
-      void this.unsubscribeIdleCodexThreads();
-    }, CODEX_THREAD_IDLE_UNSUBSCRIBE_CHECK_INTERVAL_MS);
-    this.codexIdleThreadTimer.unref?.();
-  }
-
-  /** One pass over the Codex threads this app keeps loaded. Never throws. */
-  async unsubscribeIdleCodexThreads(): Promise<void> {
-    const unsubscribe = this.codexClient.unsubscribeIdleThreads?.bind(this.codexClient);
-    if (this.closed || this.shutdownRequested || this.codexIdleThreadSweep || !unsubscribe) return;
-    const sweep = (async () => {
-      await unsubscribe({
-        idleMs: this.codexThreadIdleUnsubscribeMs,
-        isThreadBusy: (threadId) => this.closed
-          || this.shutdownRequested
-          || this.codexThreadNeedsLiveEvents(threadId),
-      });
-    })().catch((error) => {
-      backendRegistryLog.warn("idle Codex thread unsubscribe failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }).finally(() => {
-      this.codexIdleThreadSweep = undefined;
-    });
-    this.codexIdleThreadSweep = sweep;
-    await sweep;
-  }
-
-  /**
-   * Work on a Codex thread that needs its live events: a turn, reserved start
-   * or accepted compaction, its review, live sub-agent workers, a lifecycle
-   * change or handoff in flight, a background terminal or live tool item,
-   * queued input, or a history repair waiting to run.
-   */
-  private codexThreadNeedsLiveEvents(threadId: string): boolean {
-    if (this.threadHasActiveTurn(threadId, "codex")) return true;
-    const turnPrefix = `codex:${threadId}:`;
-    for (const key of this.activeTurnKeys) {
-      if (key.startsWith(turnPrefix)) return true;
-    }
-    const identityKey = buildThreadIdentityKey("codex", threadId);
-    return this.liveSubAgentMonitorIds("codex", threadId).length > 0
-      || this.threadArchiveCoordinator.threadLifecycleMutationCountRecords.has(identityKey)
-      || this.threadWorkspaceService.threadHandoffReservationRecords.has(identityKey)
-      || this.threadStarts.hasPending({ backend: "codex", threadId })
-      || this.codexBackgroundTerminals.has(threadId)
-      || this.liveCodexToolItemsByThread.has(threadId)
-      || this.codexRetryableOperations.has(threadId)
-      || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0
-      || this.pendingCodexInvalidIdRecoveries.some((recovery) => recovery.params.threadId === threadId);
+    return this.codexRuntimeSupervisor.startCodexIdleThreadUnsubscriber();
   }
 
   startThreadArchiveSweeper(): void {
@@ -10699,7 +10538,7 @@ export class DesktopBackendRegistry {
     // A Codex terminal never wakes the agent when it exits, so it marks the
     // row with a running command rather than as working.
     const agentCommandOwners = new Set(
-      [...this.codexBackgroundTerminals.keys()].map((threadId) => buildThreadIdentityKey("codex", threadId)),
+      [...this.codexRuntimeSupervisor.backgroundTerminalRecords.keys()].map((threadId) => buildThreadIdentityKey("codex", threadId)),
     );
     return threads.map((thread) => {
       if (thread.federation) return thread;
@@ -10740,10 +10579,10 @@ export class DesktopBackendRegistry {
         return;
       }
       const tools = entry.source === "live-tool-items"
-        ? this.liveCodexToolItemsByThread.get(entry.threadId)
+        ? this.codexRuntimeSupervisor.liveToolItemRecords.get(entry.threadId)
         : undefined;
       const terminals = entry.source === "background-terminals"
-        ? this.codexBackgroundTerminals.get(entry.threadId)
+        ? this.codexRuntimeSupervisor.backgroundTerminalRecords.get(entry.threadId)
         : undefined;
       const detail = {
         threadKey: bounded(entry.threadKey),
@@ -10849,14 +10688,14 @@ export class DesktopBackendRegistry {
     for (const threadId of this.backendActiveCodexThreadIds) {
       addThread("codex", threadId, "backend-active");
     }
-    for (const threadId of this.codexBackgroundTerminals.keys()) {
+    for (const threadId of this.codexRuntimeSupervisor.backgroundTerminalRecords.keys()) {
       addThread("codex", threadId, "background-terminals");
     }
     // A Claude session outlives its turn while background tasks run.
     for (const threadId of this.claudeBackend.liveSessionThreadIds()) {
       addThread("claude", threadId, "live-session");
     }
-    for (const threadId of this.liveCodexToolItemsByThread.keys()) {
+    for (const threadId of this.codexRuntimeSupervisor.liveToolItemRecords.keys()) {
       addThread("codex", threadId, "live-tool-items");
     }
     for (const key of this.activeTurnKeys) {
@@ -11089,7 +10928,7 @@ export class DesktopBackendRegistry {
       throw new Error("Desktop backend registry is closed");
     }
     if (params.backend === "codex" && !params.invalidIdRecoveryAttempted) {
-      await this.codexInvalidIdRecoveryBarrier;
+      await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
       if (this.closed) {
         throw new Error("Desktop backend registry closed before turn start");
       }
@@ -11544,14 +11383,14 @@ export class DesktopBackendRegistry {
       recovery: retryableCodexTurnStart && this.codexClient.recoverInvalidPersistedResponseMessageIds ? {
         accepts: isCodexInvalidResponseMessageIdError,
         run: async (failureMessage) => {
-          const recovery = await this.queueCodexInvalidIdRecovery(
+          const recovery = await this.codexRuntimeSupervisor.queueCodexInvalidIdRecovery(
             retryableCodexTurnStart,
             failureMessage,
           );
-          this.maybeDrainCodexInvalidIdRecoveries();
+          this.codexRuntimeSupervisor.maybeDrainCodexInvalidIdRecoveries();
           return await recovery.completion;
         },
-        failed: (details) => this.emitCodexInvalidIdRecoveryUpdate(details),
+        failed: (details) => this.codexRuntimeSupervisor.emitCodexInvalidIdRecoveryUpdate(details),
       } : undefined,
     });
     if (submitted.kind === "recovered") return submitted.response;
@@ -11584,7 +11423,7 @@ export class DesktopBackendRegistry {
         activateExecutionMode: (mode) => this.activeCodexTurnModes.set(buildActiveTurnModeKey(result.threadId, result.turnId), mode),
         release: () => {
           this.reservedCodexStartThreadIds.delete(params.threadId);
-          this.maybeDrainCodexInvalidIdRecoveries();
+          this.codexRuntimeSupervisor.maybeDrainCodexInvalidIdRecoveries();
         },
       },
       persistModel: () => this.overlayStore.setThreadModelSettings({
@@ -12481,7 +12320,7 @@ export class DesktopBackendRegistry {
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
-    await this.codexInvalidIdRecoveryBarrier;
+    await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
     return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
   }
 
@@ -12555,7 +12394,7 @@ export class DesktopBackendRegistry {
         // reservation. Recheck after that last ownership boundary is released.
         this.threadTurnQueue.scheduleThreadDrain(params);
       }
-      this.maybeDrainCodexInvalidIdRecoveries();
+      this.codexRuntimeSupervisor.maybeDrainCodexInvalidIdRecoveries();
     }
   }
 
@@ -12825,7 +12664,7 @@ export class DesktopBackendRegistry {
       throw new Error("This prompt has no Codex turn to rewind to");
     }
     if (this.closed) throw new Error("Desktop backend registry is closed");
-    await this.codexInvalidIdRecoveryBarrier;
+    await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
     await this.assertThreadNotLocked("codex", params.threadId);
     if (
       this.reservedCodexStartThreadIds.has(params.threadId)
@@ -12863,7 +12702,7 @@ export class DesktopBackendRegistry {
       // The reservation made the thread read as busy, so a reply sent during
       // the revert was queued. No turn ends to release it; drain here.
       this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId: params.threadId });
-      this.maybeDrainCodexInvalidIdRecoveries();
+      this.codexRuntimeSupervisor.maybeDrainCodexInvalidIdRecoveries();
     }
     return { updatedAt: Date.now() };
   }
@@ -15245,129 +15084,12 @@ export class DesktopBackendRegistry {
     return thread.backend === "claude" ? this.claudeBackend.listWaitingTasks(thread.threadId) : [];
   }
 
-  async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
-    // Claude's running tasks live with its session, which counts as work for
-    // quit and auto-archive like a Codex background terminal.
-    if (request.backend === "claude") return this.claudeBackend.listBackgroundTasks(request.threadId);
-    if (request.backend !== "codex") return { supported: false, terminals: [] };
-    return (await this.readCodexBackgroundTerminals(request.threadId)).response;
+  listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
+    return this.codexRuntimeSupervisor.listBackgroundTerminals(request);
   }
 
-  /** `applied` is false when an item or status event raced the read. */
-  private async readCodexBackgroundTerminals(
-    threadId: string,
-  ): Promise<{ response: ListBackgroundTerminalsResponse; applied: boolean }> {
-    const generation = this.backgroundTerminalGeneration;
-    const revision = ++this.backgroundTerminalReadCounter;
-    this.backgroundTerminalReadRevisions.set(threadId, revision);
-    try {
-      const response = await withCodexRequestActivity({ countsAsActivity: false }, () =>
-        this.withCodexThreadClient(threadId, async (client) =>
-          client.listBackgroundTerminals?.(threadId) ?? { supported: false, terminals: [] },
-          undefined, false,
-        ));
-      const applied = !this.closed && response.supported && generation === this.backgroundTerminalGeneration
-        && revision === this.backgroundTerminalReadRevisions.get(threadId);
-      if (applied) {
-        this.publishCodexBackgroundTerminals(threadId, response.terminals);
-        this.pruneUnlistedCodexCommands(threadId, response.terminals);
-      }
-      return { response, applied };
-    } finally {
-      if (this.backgroundTerminalReadRevisions.get(threadId) === revision) {
-        this.backgroundTerminalReadRevisions.delete(threadId);
-      }
-    }
-  }
-
-  /**
-   * The list names every command that outlived its turn, so a command from a
-   * finished turn that it omits is done even if Codex never sent its
-   * `item/completed`. Without this a missed completion holds the thread in
-   * the quit prompt and blocks a runtime restart forever. Commands in a live
-   * turn may not have a session yet, and other tool kinds never appear in the
-   * list, so both are kept. Absence from the active-turn maps alone cannot
-   * establish completion: a new turn's bookkeeping may still be pending.
-   */
-  private pruneUnlistedCodexCommands(threadId: string, terminals: CodexBackgroundTerminal[]): void {
-    const items = this.liveCodexToolItemsByThread.get(threadId);
-    if (!items) return;
-    const listed = new Set(terminals.map((terminal) => terminal.itemId));
-    let pruned = false;
-    for (const [itemId, { itemType, turnEnded }] of items) {
-      if (
-        itemType === "commandexecution"
-        && !listed.has(itemId)
-        && turnEnded
-      ) {
-        items.delete(itemId);
-        pruned = true;
-      }
-    }
-    if (!pruned) return;
-    if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
-    void this.maybeRestartCodexForManagedRuntimeChange();
-  }
-
-  /**
-   * A Codex turn can end with commands still running. Codex announces no
-   * terminal set, so read it once the turn ends, and read again if a
-   * completion raced the read: navigation has no other way to learn of it.
-   */
-  private async refreshCodexBackgroundTerminalsAfterTurn(threadId: string): Promise<void> {
-    try {
-      for (let attempt = 0; attempt < 3 && !this.closed; attempt += 1) {
-        const { response, applied } = await this.readCodexBackgroundTerminals(threadId);
-        if (applied || !response.supported) return;
-      }
-    } catch (error) {
-      backendRegistryLog.debug("background terminal read after turn failed", {
-        threadId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  /**
-   * Codex has no push event for background terminals, so the registry
-   * publishes `thread/backgroundTasks/updated` itself whenever a thread's set
-   * changes: a list read, a command's `item/completed`, or the thread
-   * unloading. Navigation refreshes on that event, so the row mark clears.
-   * Usage figures change on every read and are not a membership change.
-   */
-  private publishCodexBackgroundTerminals(threadId: string, terminals: CodexBackgroundTerminal[]): void {
-    const previous = this.codexBackgroundTerminals.get(threadId) ?? [];
-    if (terminals.length) this.codexBackgroundTerminals.set(threadId, terminals);
-    else this.codexBackgroundTerminals.delete(threadId);
-    if (backgroundTerminalMembership(previous) === backgroundTerminalMembership(terminals) || this.closed) return;
-    void this.emit({
-      backend: "codex",
-      notification: { method: "thread/backgroundTasks/updated", params: { threadId, tasks: terminals } },
-    }).catch((error) => backendRegistryLog.warn("background terminal update emit failed", {
-      threadId,
-      error: error instanceof Error ? error.message : String(error),
-    }));
-  }
-
-  async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
-    if (request.backend === "claude") {
-      return { terminated: await this.claudeBackend.stopBackgroundTask(request.threadId, request.processId) };
-    }
-    if (request.backend !== "codex") throw new Error("Background terminals are only available for Codex and Claude.");
-    const terminated = await this.withCodexThreadClient(request.threadId, async (client) => {
-      if (!client.terminateBackgroundTerminal) throw new Error("This Codex runtime cannot stop background terminals.");
-      return await client.terminateBackgroundTerminal(request.threadId, request.processId);
-    });
-    // The next list is authoritative. A Stop response alone does not claim
-    // that the process tree has exited or manufacture item/completed events.
-    // The stop already happened, so a failed read must not report it failed;
-    // the cache keeps its last list until the next read succeeds.
-    try {
-      await this.listBackgroundTerminals(request);
-    } catch {
-      // The renderer re-reads after Stop and surfaces a failing list itself.
-    }
-    return { terminated };
+  terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
+    return this.codexRuntimeSupervisor.terminateBackgroundTerminal(request);
   }
 
   stopCodexEnvironmentAction(
@@ -15522,14 +15244,12 @@ export class DesktopBackendRegistry {
     for (const key of [...this.threadArchiveCoordinator.archiveCleanupOverflowRecords.keys()]) this.threadArchiveCoordinator.cancelArchiveCleanupOverflow(key);
     await this.threadArchiveCoordinator.closeArchiveCleanupQueue();
     this.threadArchiveCoordinator.tryCheckpointArchiveCleanupsForQuit("after-drain");
-    this.backgroundTerminalGeneration += 1;
-    this.codexBackgroundTerminals.clear();
-    this.backgroundTerminalReadRevisions.clear();
+    this.codexRuntimeSupervisor.clearBackgroundTerminalsForShutdown();
     await this.threadArchiveCoordinator.stopThreadArchiveSweeper();
     this.threadArchiveCoordinator.invalidateArchiveCleanupReads();
     // A recovery drain waiting for other Codex turns gives up now; the final
     // Codex close below still waits for that drain before it runs.
-    this.codexInvalidIdRecoveryAbort.abort();
+    this.codexRuntimeSupervisor.abortInvalidIdRecoveriesForShutdown();
     // `closed` rejects observations that enter from this point forward. The
     // snapshot was registered synchronously at each earlier usage emit's
     // entry, so waiting it cannot miss work still deriving its sqlite row.
@@ -15558,14 +15278,8 @@ export class DesktopBackendRegistry {
       clearInterval(this.acpIdleSessionTimer);
       this.acpIdleSessionTimer = undefined;
     }
-    if (this.codexAppServerRecycleTimer) {
-      clearTimeout(this.codexAppServerRecycleTimer);
-      this.codexAppServerRecycleTimer = undefined;
-    }
-    if (this.codexIdleThreadTimer) {
-      clearInterval(this.codexIdleThreadTimer);
-      this.codexIdleThreadTimer = undefined;
-    }
+    this.codexRuntimeSupervisor.stopAppServerRecycler();
+    this.codexRuntimeSupervisor.stopIdleThreadUnsubscriber();
     if (this.missingCodexThreadEvaluationTimer) {
       clearTimeout(this.missingCodexThreadEvaluationTimer);
       this.missingCodexThreadEvaluationTimer = undefined;
@@ -15601,18 +15315,8 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.delete(key);
     }
 
-    const recoveryCloseError = new Error(
-      "Desktop backend registry closed before Codex history recovery completed",
-    );
-    for (const recovery of this.pendingCodexInvalidIdRecoveries.splice(0)) {
-      recovery.reject(recoveryCloseError);
-    }
-    if (!this.codexInvalidIdRecoveryDrain) {
-      this.resolveCodexInvalidIdRecoveryBarrier?.();
-      this.resolveCodexInvalidIdRecoveryBarrier = undefined;
-      this.codexInvalidIdRecoveryBarrier = undefined;
-    }
-    const recoveryDrain = this.codexInvalidIdRecoveryDrain;
+    this.codexRuntimeSupervisor.rejectPendingInvalidIdRecoveriesForShutdown();
+    const recoveryDrain = this.codexRuntimeSupervisor.invalidIdRecoveryDrain;
     const resources = [
       { name: "acp", close: () => this.acpBackend.close() },
       { name: "claude", close: () => this.claudeBackend.close() },
@@ -16471,513 +16175,6 @@ export class DesktopBackendRegistry {
     return buildLaunchpadOptions(backend, models);
   }
 
-  private async handleCodexTurnTerminalForInvalidIdRecovery(
-    notification: Extract<
-      AppServerNotification,
-      { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
-    >,
-  ): Promise<void> {
-    const threadId = notification.params.threadId;
-    const turnId = turnIdFromTerminalNotification(notification);
-    const candidate = this.codexRetryableOperations.get(threadId);
-    if (
-      candidate
-      && (
-        !candidate.turnId
-        || candidate.turnId.startsWith("pending:")
-        || !turnId
-        || candidate.turnId === turnId
-      )
-    ) {
-      if (turnId && (!candidate.turnId || candidate.turnId.startsWith("pending:"))) {
-        candidate.turnId = turnId;
-      }
-      candidate.terminalObserved = true;
-      this.codexRetryableOperations.delete(threadId);
-      if (
-        notification.method === "turn/failed"
-        && !(candidate.kind === "compact" && candidate.invalidIdRecoveryAttempted)
-        && isCodexInvalidResponseMessageIdError(
-          errorMessageFromTerminalNotification(notification),
-        )
-      ) {
-        if (this.codexClient.recoverInvalidPersistedResponseMessageIds) {
-          try {
-            const recovery = await this.queueCodexInvalidIdRecovery(
-              candidate,
-              errorMessageFromTerminalNotification(notification)!,
-            );
-            void recovery.completion.catch(() => undefined);
-          } catch (error) {
-            await this.emitCodexInvalidIdRecoveryUpdate({
-              failureMessage: errorMessageFromTerminalNotification(notification)!,
-              recoveryError: error instanceof Error ? error.message : String(error),
-              status: "failed",
-              threadId,
-              ...(turnId ? { turnId } : {}),
-            });
-            backendRegistryLog.warn(
-              "Codex invalid-message-ID recovery was not started",
-              {
-                error: error instanceof Error ? error.message : String(error),
-                threadId,
-                turnId: turnId ?? null,
-              },
-            );
-          }
-        } else {
-          backendRegistryLog.warn(
-            "Codex invalid-message-ID recovery is unavailable on this client",
-            { threadId, turnId },
-          );
-        }
-      }
-      if (candidate.kind === "compact") {
-        // emit() already attempted terminal queue dispatch while this
-        // candidate still owned the thread. Wake it after releasing ownership.
-        this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId });
-      }
-    }
-    this.maybeDrainCodexInvalidIdRecoveries();
-  }
-
-  private async queueCodexInvalidIdRecovery(
-    candidate: CodexRetryableOperation,
-    failureMessage: string,
-  ): Promise<PendingCodexInvalidIdRecovery> {
-    if (this.closed) {
-      throw new Error("Desktop backend registry is closed");
-    }
-    const queued = this.pendingCodexInvalidIdRecoveries.find(
-      (entry) => entry.params.threadId === candidate.params.threadId,
-    );
-    if (queued) {
-      return queued;
-    }
-
-    const threadId = candidate.params.threadId;
-    const turnId = candidate.turnId;
-    if (!turnId) {
-      throw new Error(
-        `Codex invalid-message-ID recovery requires the failed turn id for thread ${threadId}`,
-      );
-    }
-    const now = Date.now();
-    const reservedAt = this.codexInvalidIdRecoveryAttemptedAt.get(threadId);
-    if (
-      reservedAt !== undefined
-      && isCodexInvalidIdRecoveryCooldownActive(reservedAt, now)
-    ) {
-      throw new Error(buildCodexInvalidIdRecoveryCooldownMessage(reservedAt));
-    }
-    // Reserve in memory before the first await so concurrent observations of
-    // the same failure cannot both pass the persisted cooldown check.
-    this.codexInvalidIdRecoveryAttemptedAt.set(threadId, now);
-
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId,
-    });
-    const failedTurn = overlay?.turnFailureLog?.find(
-      (entry) => entry.turnId === turnId,
-    );
-    if (!failedTurn) {
-      throw new Error(
-        `Codex invalid-message-ID recovery could not find failed turn ${turnId}`,
-      );
-    }
-    const lastPersistedAttemptAt =
-      overlay?.codexInvalidIdRecoveryLastAttemptedAt;
-    if (
-      lastPersistedAttemptAt !== undefined
-      && isCodexInvalidIdRecoveryCooldownActive(lastPersistedAttemptAt, now)
-    ) {
-      this.codexInvalidIdRecoveryAttemptedAt.set(
-        threadId,
-        lastPersistedAttemptAt,
-      );
-      throw new Error(
-        buildCodexInvalidIdRecoveryCooldownMessage(lastPersistedAttemptAt),
-      );
-    }
-    const recentAttempt = [...(overlay?.turnFailureLog ?? [])]
-      .reverse()
-      .find((entry) =>
-        entry.codexInvalidIdRecovery
-        && isCodexInvalidIdRecoveryCooldownActive(
-          entry.codexInvalidIdRecovery.attemptedAt,
-          now,
-        )
-      )?.codexInvalidIdRecovery;
-    if (recentAttempt) {
-      this.codexInvalidIdRecoveryAttemptedAt.set(
-        threadId,
-        recentAttempt.attemptedAt,
-      );
-      throw new Error(
-        buildCodexInvalidIdRecoveryCooldownMessage(recentAttempt.attemptedAt),
-      );
-    }
-
-    const audit: ThreadCodexInvalidIdRecovery = {
-      attemptId: randomUUID(),
-      attemptedAt: Math.max(now, failedTurn.occurredAt + 1),
-    };
-    // Fail closed: the durable marker is the restart-safe loop guard. Never
-    // touch Codex history or resubmit a request if it cannot be persisted.
-    await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
-      threadId,
-      turnId,
-      recovery: audit,
-    });
-    this.codexInvalidIdRecoveryAttemptedAt.set(threadId, audit.attemptedAt);
-
-    let resolve!: PendingCodexInvalidIdRecovery["resolve"];
-    let reject!: PendingCodexInvalidIdRecovery["reject"];
-    const completion = new Promise<{
-      backend: "codex";
-      threadId: string;
-      turnId: string;
-    }>((promiseResolve, promiseReject) => {
-      resolve = promiseResolve;
-      reject = promiseReject;
-    });
-    // Repair stops the Codex app-server, so it waits for every other Codex
-    // turn to finish first. Say so rather than claiming a repair is underway.
-    const waitingForThreadIds = this.listActiveCodexWorkThreadIds()
-      .filter((activeThreadId) => activeThreadId !== threadId);
-    const recovery: PendingCodexInvalidIdRecovery = {
-      ...candidate,
-      audit,
-      completion,
-      failureMessage,
-      reject,
-      reportedWaiting: waitingForThreadIds.length > 0,
-      resolve,
-    };
-    this.codexRetryableOperations.delete(candidate.params.threadId);
-    this.pendingCodexInvalidIdRecoveries.push(recovery);
-    if (!this.codexInvalidIdRecoveryBarrier) {
-      this.codexInvalidIdRecoveryBarrier = new Promise<void>((barrierResolve) => {
-        this.resolveCodexInvalidIdRecoveryBarrier = barrierResolve;
-      });
-    }
-    backendRegistryLog.warn("queued Codex invalid-message-ID history recovery", {
-      threadId,
-      turnId,
-    });
-    await this.emitCodexInvalidIdRecoveryUpdate({
-      failureMessage,
-      status: recovery.reportedWaiting ? "waiting" : "repairing",
-      threadId,
-      turnId,
-      ...(recovery.reportedWaiting ? { waitingForThreadIds } : {}),
-    });
-    return recovery;
-  }
-
-  private async emitCodexInvalidIdRecoveryUpdate(
-    params: Extract<
-      AppServerNotification,
-      { method: "thread/codexInvalidIdRecovery/updated" }
-    >["params"],
-  ): Promise<void> {
-    try {
-      await this.emit({
-        backend: "codex",
-        notification: {
-          method: "thread/codexInvalidIdRecovery/updated",
-          params,
-        },
-      });
-    } catch (error) {
-      backendRegistryLog.warn("Codex invalid-message-ID status notification failed", {
-        error: error instanceof Error ? error.message : String(error),
-        status: params.status,
-        threadId: params.threadId,
-      });
-    }
-  }
-
-  private maybeDrainCodexInvalidIdRecoveries(): void {
-    if (
-      this.closed
-      || this.codexInvalidIdRecoveryDrain
-      || this.pendingCodexInvalidIdRecoveries.length === 0
-      || this.hasActiveCodexWork()
-    ) {
-      return;
-    }
-
-    this.codexInvalidIdRecoveryDrain = this.drainCodexInvalidIdRecoveries()
-      .catch((error) => {
-        backendRegistryLog.error("Codex invalid-message-ID recovery drain failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        this.codexInvalidIdRecoveryDrain = undefined;
-        if (this.pendingCodexInvalidIdRecoveries.length === 0) {
-          this.resolveCodexInvalidIdRecoveryBarrier?.();
-          this.resolveCodexInvalidIdRecoveryBarrier = undefined;
-          this.codexInvalidIdRecoveryBarrier = undefined;
-          return;
-        }
-        this.maybeDrainCodexInvalidIdRecoveries();
-      });
-  }
-
-  private async drainCodexInvalidIdRecoveries(): Promise<void> {
-    const recover =
-      this.codexClient.recoverInvalidPersistedResponseMessageIds?.bind(
-        this.codexClient,
-      );
-    if (!recover) {
-      return;
-    }
-    while (
-      !this.closed
-      && this.pendingCodexInvalidIdRecoveries.length > 0
-      && !this.hasActiveCodexWork()
-    ) {
-      const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
-      let retrySubmitted = false;
-      try {
-        if (recovery.reportedWaiting) {
-          recovery.reportedWaiting = false;
-          await this.emitCodexInvalidIdRecoveryUpdate({
-            failureMessage: recovery.failureMessage,
-            status: "repairing",
-            threadId: recovery.params.threadId,
-            ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
-          });
-        }
-        const forkLineageThreadIds =
-          await this.resolveCodexInvalidIdRecoveryForkLineage(
-            recovery.params.threadId,
-          );
-        // The registry's idle check above can miss turns the client alone
-        // owns (helper turns) and turns admitted after it ran (reviews, task
-        // monitors). The client re-checks where the stop actually happens and
-        // waits there; relay that wait to the operator.
-        const repaired = await recover({
-          ...(forkLineageThreadIds.length > 0
-            ? { forkLineageThreadIds }
-            : {}),
-          failureMessage: recovery.failureMessage,
-          onWaitingForTurns: async (turns) => {
-            recovery.reportedWaiting = true;
-            await this.emitCodexInvalidIdRecoveryUpdate({
-              failureMessage: recovery.failureMessage,
-              status: "waiting",
-              threadId: recovery.params.threadId,
-              ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
-              waitingForThreadIds: [...new Set(turns.map((turn) => turn.threadId))],
-            });
-          },
-          signal: this.codexInvalidIdRecoveryAbort.signal,
-          threadId: recovery.params.threadId,
-        });
-        if (this.closed) {
-          throw new Error(
-            "Desktop backend registry closed during Codex history recovery; request was not resubmitted",
-          );
-        }
-        recovery.audit = {
-          ...recovery.audit,
-          backupPath: repaired.backupPath,
-          removedMessageIdCount: repaired.removedMessageIdCount,
-          repairedAt: Math.max(Date.now(), recovery.audit.attemptedAt + 1),
-        };
-        await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
-          threadId: repaired.threadId,
-          turnId: recovery.turnId!,
-          recovery: recovery.audit,
-        });
-        if (this.closed) {
-          throw new Error(
-            "Desktop backend registry closed after Codex history repair; request was not resubmitted",
-          );
-        }
-        const statusMessage =
-          `PwrAgent repaired ${repaired.removedMessageIdCount} invalid persisted `
-          + `message ID(s) for thread ${repaired.threadId}. `
-          + `Backup: ${repaired.backupPath}. Retrying the failed `
-          + `${recovery.kind === "compact" ? "compaction" : "turn"} once.`;
-        backendRegistryLog.warn("Codex invalid-message-ID history repaired", {
-          backupPath: repaired.backupPath,
-          removedMessageIdCount: repaired.removedMessageIdCount,
-          rolloutPath: repaired.rolloutPath,
-          threadId: repaired.threadId,
-          turnId: recovery.turnId ?? null,
-        });
-        await this.emit({
-          backend: "codex",
-          notification: {
-            method: "warning",
-            params: {
-              threadId: repaired.threadId,
-              message: statusMessage,
-            },
-          },
-        });
-        recovery.audit = {
-          ...recovery.audit,
-          retrySubmittedAt: Math.max(
-            Date.now(),
-            recovery.audit.repairedAt! + 1,
-          ),
-        };
-        await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
-          threadId: repaired.threadId,
-          turnId: recovery.turnId!,
-          recovery: recovery.audit,
-        });
-        if (this.closed) {
-          throw new Error(
-            "Desktop backend registry closed before the repaired request could be resubmitted",
-          );
-        }
-        retrySubmitted = true;
-        const retried = recovery.kind === "compact"
-          ? await this.compactThreadNow({
-              ...recovery.params,
-              invalidIdRecoveryAttempted: true,
-            })
-          : await this.startTurnNow({
-              ...recovery.params,
-              invalidIdRecoveryAttempted: true,
-              // Keep automation, messaging, dependency and monitor origins so
-              // the retried prompt keeps its card. Only a prompt with no
-              // origin is attributed to PwrAgent's resubmission.
-              messageOrigin:
-                resolveThreadMessageOrigin(recovery.params)
-                ?? { kind: "pwragent" },
-            });
-        recovery.audit = {
-          ...recovery.audit,
-          retryTurnId: retried.turnId,
-        };
-        try {
-          await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
-            threadId: repaired.threadId,
-            turnId: recovery.turnId!,
-            recovery: recovery.audit,
-          });
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to persist Codex invalid-message-ID retry turn id",
-            {
-              error: error instanceof Error ? error.message : String(error),
-              threadId: repaired.threadId,
-              turnId: retried.turnId,
-            },
-          );
-        }
-        await this.emitCodexInvalidIdRecoveryUpdate({
-          backupPath: repaired.backupPath,
-          failureMessage: recovery.failureMessage,
-          removedMessageIdCount: repaired.removedMessageIdCount,
-          status: "succeeded",
-          threadId: repaired.threadId,
-          ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
-        });
-        recovery.resolve({
-          backend: "codex",
-          threadId: retried.threadId,
-          turnId: retried.turnId,
-        });
-      } catch (error) {
-        recovery.audit = {
-          ...recovery.audit,
-          failedAt: Math.max(
-            Date.now(),
-            (recovery.audit.retrySubmittedAt
-              ?? recovery.audit.repairedAt
-              ?? recovery.audit.attemptedAt) + 1,
-          ),
-          failure: error instanceof Error ? error.message : String(error),
-        };
-        try {
-          await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
-            threadId: recovery.params.threadId,
-            turnId: recovery.turnId!,
-            recovery: recovery.audit,
-          });
-        } catch (auditError) {
-          backendRegistryLog.error(
-            "failed to persist Codex invalid-message-ID recovery failure",
-            {
-              auditError:
-                auditError instanceof Error
-                  ? auditError.message
-                  : String(auditError),
-              threadId: recovery.params.threadId,
-              turnId: recovery.turnId ?? null,
-            },
-          );
-        }
-        recovery.reject(error);
-        if (!this.closed) {
-          await this.emitCodexInvalidIdRecoveryUpdate({
-            failureMessage: recovery.failureMessage,
-            recoveryError: error instanceof Error ? error.message : String(error),
-            status: "failed",
-            threadId: recovery.params.threadId,
-            ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
-          });
-        }
-        backendRegistryLog.error("Codex invalid-message-ID history recovery failed", {
-          error: error instanceof Error ? error.message : String(error),
-          phase: retrySubmitted ? "automatic-retry" : "repair",
-          threadId: recovery.params.threadId,
-          turnId: recovery.turnId ?? null,
-        });
-        if (!this.closed) {
-          await this.emit({
-            backend: "codex",
-            notification: {
-              method: "warning",
-              params: {
-                threadId: recovery.params.threadId,
-                message:
-                  `PwrAgent could not repair invalid persisted message IDs for thread `
-                  + `${recovery.params.threadId}: `
-                  + (error instanceof Error ? error.message : String(error)),
-              },
-            },
-          });
-        }
-      }
-    }
-  }
-
-  private async resolveCodexInvalidIdRecoveryForkLineage(
-    threadId: string,
-  ): Promise<string[]> {
-    const lineage: string[] = [];
-    const seen = new Set([threadId]);
-    let currentThreadId = threadId;
-    while (true) {
-      const overlay = await this.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: currentThreadId,
-      });
-      const sourceThreadId = overlay?.forkSourceThreadId?.trim();
-      if (!sourceThreadId) {
-        return lineage;
-      }
-      if (seen.has(sourceThreadId)) {
-        throw new Error(
-          `Codex invalid-message-ID recovery found cyclic fork provenance for thread ${threadId}`,
-        );
-      }
-      seen.add(sourceThreadId);
-      lineage.push(sourceThreadId);
-      currentThreadId = sourceThreadId;
-    }
-  }
-
   private listActiveCodexWorkThreadIds(): string[] {
     const threadIds = new Set(this.reservedCodexStartThreadIds);
     for (const candidate of this.codexRetryableOperations.values()) {
@@ -17133,7 +16330,7 @@ export class DesktopBackendRegistry {
         ) {
           this.tokenMiserDiagnostics?.endTurn(notification.params.threadId);
           await this.tokenMiserStore?.flushThread(notification.params.threadId);
-          await this.handleCodexTurnTerminalForInvalidIdRecovery(
+          await this.codexRuntimeSupervisor.handleCodexTurnTerminalForInvalidIdRecovery(
             notification as Extract<
               AppServerNotification,
               { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
@@ -18412,10 +17609,10 @@ export class DesktopBackendRegistry {
     logRouting = true,
   ): Promise<T> {
     if (
-      this.codexRuntimeRestartPending
-      || this.codexRuntimeRestartPromise
+      this.codexRuntimeSupervisor.runtimeRestartPending
+      || this.codexRuntimeSupervisor.runtimeRestartPromise
     ) {
-      await this.maybeRestartCodexForManagedRuntimeChange();
+      await this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
     }
     // Single-client passthrough. The mode passed to the operation is no
     // longer a routing decision — it's documentation for callers that
@@ -18449,83 +17646,6 @@ export class DesktopBackendRegistry {
       });
     }
     return await operation(this.codexClient, mode);
-  }
-
-  private hasActiveCodexRuntimeWork(): boolean {
-    if (
-      this.nativeVoiceLeases > 0
-      || this.reservedCodexStartThreadIds.size > 0
-      || this.backendActiveCodexThreadIds.size > 0
-      || this.codexBackgroundTerminals.size > 0
-      || this.liveCodexToolItemsByThread.size > 0
-      || this.activeCodexTurnModes.size > 0
-    ) {
-      return true;
-    }
-    for (const key of this.activeTurnKeys) {
-      if (key.startsWith("codex:")) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Switch binaries only at an idle Codex boundary. Enabling, disabling, and
-   * installing an update all close the reconnectable client; its next request
-   * resolves the currently selected command from Settings. Active turns keep
-   * their original process until their terminal notification has settled.
-   */
-  private async maybeRestartCodexForManagedRuntimeChange(): Promise<boolean> {
-    if (
-      this.closed
-      || !this.codexRuntimeRestartPending
-      || this.hasActiveCodexRuntimeWork()
-    ) {
-      return false;
-    }
-    if (this.codexRuntimeRestartPromise) {
-      return await this.codexRuntimeRestartPromise;
-    }
-
-    const completesManagedSwitch = this.managedCodexRuntimeSwitchPending;
-    const restart = (async () => {
-      if (this.hasActiveCodexRuntimeWork()) return false;
-      this.codexRuntimeRestartPending = false;
-      this.managedCodexRuntimeSwitchPending = false;
-      await this.codexClient.close();
-      // Exits counted against the old binary say nothing about the new one.
-      // Clear the breaker; the next request starts the selected Codex.
-      this.codexClient.resetAppServerRestarts?.("Codex runtime changed");
-      this.tokenMiserServerCapabilities.delete(this.codexClient);
-      this.tokenMiserReducerCapabilityState = undefined;
-      this.tokenMiserCodeModeGroupingVersion = undefined;
-      this.tokenMiserPostToolUseExactOutputVersion = undefined;
-      this.tokenMiserRuntimePreparationFailure = undefined;
-      if (this.tokenMiserStore) await this.threadUsageLedger.initializeTokenMiserLedger();
-      if (this.resolveTokenMiserEnabledFn()) {
-        await this.prepareTokenMiserRuntime();
-      }
-      if (completesManagedSwitch) {
-        this.markManagedCodexRuntimeSwitchCompleteFn();
-      }
-      return true;
-    })();
-    this.codexRuntimeRestartPromise = restart;
-    try {
-      return await restart;
-    } catch (error) {
-      this.codexRuntimeRestartPending = true;
-      if (completesManagedSwitch) {
-        this.managedCodexRuntimeSwitchPending = true;
-      }
-      backendRegistryLog.warn("managed Codex restart failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    } finally {
-      if (this.codexRuntimeRestartPromise === restart) {
-        this.codexRuntimeRestartPromise = undefined;
-      }
-    }
   }
 
   private nativeVoiceLeases = 0;
@@ -18615,12 +17735,12 @@ export class DesktopBackendRegistry {
               if (released) return;
               released = true;
               this.nativeVoiceLeases -= 1;
-              if (this.nativeVoiceLeases === 0) this.maybeDrainCodexInvalidIdRecoveries();
+              if (this.nativeVoiceLeases === 0) this.codexRuntimeSupervisor.maybeDrainCodexInvalidIdRecoveries();
             },
           };
         } finally {
           if (ownsReservation) this.reservedCodexStartThreadIds.delete(threadId);
-          this.maybeDrainCodexInvalidIdRecoveries();
+          this.codexRuntimeSupervisor.maybeDrainCodexInvalidIdRecoveries();
           if (ownsReservation && !this.threadHasActiveTurn(threadId)
             && this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0) {
             void this.threadTurnQueue.releaseThread({ backend: "codex", threadId, status: "voice_catalog_ready" });
@@ -22021,167 +21141,8 @@ export class DesktopBackendRegistry {
     return emitted;
   }
 
-  /** A successful turn may leave commands, but cannot leave an MCP/search call running. */
-  private settleCodexToolItems(
-    threadId: string,
-    belongsToEndedTurn: (item: LiveCodexToolItem) => boolean,
-    interrupted = false,
-  ): void {
-    const items = this.liveCodexToolItemsByThread.get(threadId);
-    if (!items) return;
-    for (const [itemId, item] of items) {
-      if (!belongsToEndedTurn(item)) continue;
-      if (item.itemType === "commandexecution" && !interrupted) {
-        // Set this at notification ingress, before asynchronous lifecycle
-        // bookkeeping. An immediate list response can then prune the ended
-        // command even while activeTurnKeys still contains its parent turn.
-        item.turnEnded = true;
-      } else {
-        items.delete(itemId);
-      }
-    }
-    if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
-  }
-
-  private trackLiveCodexToolItem(event: AgentEvent): void {
-    if (event.backend !== "codex") return;
-    const notification = event.notification;
-    const params = readRecord(notification.params);
-    const threadIdForRevision = readOptionalString(params, ["threadId"]);
-    if (threadIdForRevision && [
-      "item/started", "item/completed", "thread/status/changed", "turn/started",
-      "turn/completed", "turn/failed", "turn/cancelled",
-    ].includes(notification.method)) {
-      // Removing the token invalidates only reads already in flight. A newer
-      // read receives a fresh counter value; no invalidated token is retained.
-      this.backgroundTerminalReadRevisions.delete(threadIdForRevision);
-    }
-    if (notification.method === "item/completed") {
-      const item = readRecord(params?.item);
-      const itemId = readOptionalString(item, ["id", "itemId", "item_id", "callId", "call_id"]);
-      const threadId = notification.params.threadId;
-      const terminals = this.codexBackgroundTerminals.get(threadId);
-      if (terminals && itemId) {
-        this.publishCodexBackgroundTerminals(threadId, terminals.filter((terminal) => terminal.itemId !== itemId));
-      }
-    }
-    if (notification.method === "thread/status/changed") {
-      const threadId = notification.params.threadId;
-      const status = readStatusType(notification.params.status);
-      if (status === "notLoaded") {
-        // The unloaded thread owns no processes. Child threads have their own
-        // runtime entries and are deliberately untouched by this boundary.
-        this.liveCodexToolItemsByThread.delete(threadId);
-        this.publishCodexBackgroundTerminals(threadId, []);
-      } else if (status === "idle") {
-        this.settleCodexToolItems(threadId, (item) =>
-          !this.threadHasActiveCodexReviewTurn(threadId)
-          || (!this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
-            && !this.activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId))),
-        );
-      }
-    }
-    if (
-      notification.method === "turn/completed"
-      || notification.method === "turn/failed"
-      || notification.method === "turn/cancelled"
-    ) {
-      const threadId = notification.params.threadId;
-      const turnId = turnIdFromTerminalNotification(notification);
-      this.settleCodexToolItems(threadId, (item) => turnId
-        ? item.turnId === turnId
-        : !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
-          && !this.activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId)),
-        notification.method !== "turn/completed",
-      );
-      return;
-    }
-    if (notification.method !== "item/started" && notification.method !== "item/completed") {
-      return;
-    }
-    const threadId = notification.params.threadId;
-    const itemType = readNotificationItemType(notification)
-      ?.replace(/[-_\s]/g, "").toLowerCase();
-    if (!itemType || ![
-      "commandexecution", "functioncall", "dynamictoolcall", "mcptoolcall",
-      "collabagenttoolcall", "websearch",
-    ].includes(itemType)) return;
-    const item = readRecord(readRecord(notification.params)?.item);
-    const itemId = readOptionalString(item, ["id", "itemId", "item_id", "callId", "call_id"]);
-    if (!itemId) return;
-    if (notification.method === "item/started") {
-      if (item?.status !== "inProgress" && item?.status !== "in_progress") return;
-      const turnId = readOptionalString(readRecord(notification.params), ["turnId", "turn_id"]);
-      if (!turnId) return;
-      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, LiveCodexToolItem>();
-      items.set(itemId, { turnId, itemType });
-      this.liveCodexToolItemsByThread.set(threadId, items);
-      return;
-    }
-    const items = this.liveCodexToolItemsByThread.get(threadId);
-    items?.delete(itemId);
-    if (items?.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
-  }
-
-  private async handleCodexAppServerUnexpectedExit(affected?: ReadonlySet<string>): Promise<void> {
-    this.backgroundTerminalGeneration += 1;
-    // The client synthesizes terminal failures only for turns it saw start.
-    // Settle accepted compactions it cannot know about at this same boundary.
-    const pendingCompactions: CodexRetryableCompaction[] = [];
-    for (const [threadId, candidate] of this.codexRetryableOperations) {
-      if (affected && !affected.has(threadId)) continue;
-      if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
-      candidate.terminalObserved = true;
-      this.codexRetryableOperations.delete(threadId);
-      pendingCompactions.push(candidate);
-    }
-    const threadIds = [...new Set([
-      ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
-      ...pendingCompactions.map((candidate) => candidate.params.threadId),
-    ])].filter((threadId) => !affected || affected.has(threadId));
-    for (const threadId of threadIds) this.liveCodexToolItemsByThread.delete(threadId);
-    // The terminals died with the app server. Publish the clear so rows that
-    // carried their mark refresh.
-    for (const threadId of [...this.codexBackgroundTerminals.keys()]) {
-      if (affected && !affected.has(threadId)) continue;
-      this.publishCodexBackgroundTerminals(threadId, []);
-    }
-    try {
-      await Promise.all(pendingCompactions.map((candidate) => {
-        const threadId = candidate.params.threadId;
-        const turnId = candidate.turnId ?? `pending:compact:${threadId}`;
-        return this.emit({
-          backend: "codex",
-          notification: {
-            method: "turn/failed",
-            params: {
-              threadId,
-              turnId,
-              turn: {
-                id: turnId,
-                status: "failed",
-                completedAt: Date.now(),
-                error: { message: "Codex app server exited before compaction completed." },
-              },
-            },
-          },
-        });
-      }));
-      await Promise.all(threadIds.map((threadId) => this.emit({
-        backend: "codex",
-        notification: {
-          method: "thread/status/changed",
-          params: { threadId, status: { type: "notLoaded" } },
-        },
-      })));
-    } finally {
-      this.maybeDrainCodexInvalidIdRecoveries();
-      await this.maybeRestartCodexForManagedRuntimeChange();
-    }
-  }
-
   private emitEvent(event: AgentEvent, codexStatusSequence?: number): Promise<void> {
-    this.trackLiveCodexToolItem(event);
+    this.codexRuntimeSupervisor.trackLiveCodexToolItem(event);
     if (event.backend === "codex" && event.notification.method === "turn/started") {
       const notification = event.notification as {
         params: { threadId: string; turnId?: string; turn: { id: string } };
@@ -22756,7 +21717,7 @@ export class DesktopBackendRegistry {
         void this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
         );
-        void this.maybeRestartCodexForManagedRuntimeChange();
+        void this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
       } else if (isAcpBackendId(event.backend)) {
         if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
@@ -22990,7 +21951,7 @@ export class DesktopBackendRegistry {
 
     if (event.backend === "codex" && event.notification.method === "thread/status/changed"
       && ["idle", "notLoaded"].includes(readStatusType(event.notification.params.status) ?? "")) {
-      void this.maybeRestartCodexForManagedRuntimeChange();
+      void this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
     }
 
     if (event.backend === "codex" && (
@@ -23002,8 +21963,8 @@ export class DesktopBackendRegistry {
     )) {
       const threadId = event.notification.params.threadId;
       if (!this.closed && !this.stoppingRunningTurnsForShutdown
-        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))) {
-        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
+        && (this.codexRuntimeSupervisor.liveToolItemRecords.has(threadId) || this.codexRuntimeSupervisor.backgroundTerminalRecords.has(threadId))) {
+        void this.codexRuntimeSupervisor.refreshCodexBackgroundTerminalsAfterTurn(threadId);
       }
     }
 

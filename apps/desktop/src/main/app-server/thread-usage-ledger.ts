@@ -169,6 +169,7 @@ export interface ThreadUsageLedgerDependencies {
  */
 export interface ThreadUsageLedgerHost extends Pick<RegistryHostPorts,
   "getActiveTurnForThread" | "invalidateThreadListCache" | "liveProfileRuntimeInstanceIds"
+  | "liveSubAgentMonitorIds"
 > {
   readonly activeTurnKeys: ReadonlySet<string>;
   readonly codexBackendSummary: BackendSummary | undefined;
@@ -182,7 +183,6 @@ export interface ThreadUsageLedgerHost extends Pick<RegistryHostPorts,
   readonly tokenMiserStore: TokenMiserStore | undefined;
   readonly toolOutputAlertPolicy: DesktopToolOutputAlertPolicy;
   captureUsageAccount(backend: AppServerBackendKind, threadId?: string): Promise<string | undefined>;
-  liveSubAgentMonitorIds(backend: AppServerBackendKind, threadId: string): string[];
   steerTurn(
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
