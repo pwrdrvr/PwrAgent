@@ -3042,7 +3042,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                 Reload threads
                               </button>
                             </div>
-                          ) : agentInventory.state?.page?.nextCursor ? (
+                          ) : null}
+                          {!pickerError && agentInventory.state?.page?.nextCursor ? (
                             <button
                               className="automation-agent-picker__option"
                               disabled={agentInventory.loading}

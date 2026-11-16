@@ -18,7 +18,7 @@ function agent(id: number): NavigationRow {
   };
 }
 
-function owner(rows: NavigationRow[]) {
+function owner(rows: NavigationRow[], coverage: NavigationQueryPage["coverage"] = { state: "complete" }) {
   const read = vi.fn(async (request: NavigationQueryRequest, _consumerId?: string): Promise<NavigationQueryPage> => {
     const query = request.query;
     expect(query.kind).toBe("messaging-threads");
@@ -30,7 +30,7 @@ function owner(rows: NavigationRow[]) {
     return {
       protocol: 2, queryKey: JSON.stringify(query), generation: "1", ownerEpoch: "1",
       countsRevision: "1", counts: { total: rows.length, active: 0, unread: 0, review: 0 },
-      coverage: { state: "complete" }, collectionSize: matches.length, rangeStart: start,
+      coverage, collectionSize: matches.length, rangeStart: start,
       entries: matches.slice(start, end).map((row, index) => ({ row, orderKey: String(start + index), placement: { kind: "root" } })),
       complete: end === matches.length, nextCursor: end < matches.length ? String(end) : undefined,
     };
@@ -117,5 +117,40 @@ describe("automation Agent inventory", () => {
     const list = screen.getByRole("listbox", { name: "Threads to promote" });
     expect(within(list).getAllByRole("option")).toHaveLength(1);
     expect(within(list).getByRole("option", { name: /Agent 2/ })).toBeInTheDocument();
+  });
+
+  it.each(["checking", "degraded"] as const)("keeps continuation available during %s coverage when the first page contains only Agents", async (state) => {
+    const rows = Array.from({ length: 100 }, (_, id) => agent(id));
+    const regular = { ...agent(100), agent: undefined };
+    const { api, read } = owner([...rows, regular], { state });
+    render(editor(api, []));
+    await openPicker();
+    await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Threads" })); });
+    expect(within(screen.getByRole("listbox", { name: "Threads to promote" })).queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load more threads" })); });
+    expect(read.mock.lastCall?.[0].cursor).toBe("100");
+    expect(screen.getByRole("option", { name: /Agent 100/ })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps paging toward regular threads independently of inventory coverage", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("checking", "degraded"), fc.integer({ min: 100, max: 106 }),
+      async (state, count) => {
+        const rows = Array.from({ length: count }, (_, id) => agent(id));
+        const regular = { ...agent(count), agent: undefined };
+        const { api } = owner([...rows, regular], { state });
+        try {
+          render(editor(api, []));
+          await openPicker();
+          await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Threads" })); });
+          await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load more threads" })); });
+          const list = screen.getByRole("listbox", { name: "Threads to promote" });
+          expect(within(list).getAllByRole("option")).toHaveLength(1);
+          expect(within(list).getByRole("option", { name: new RegExp(`Agent ${count}codex`) })).toBeInTheDocument();
+        } finally { cleanup(); }
+      },
+    ), { numRuns: 12 });
   });
 });
