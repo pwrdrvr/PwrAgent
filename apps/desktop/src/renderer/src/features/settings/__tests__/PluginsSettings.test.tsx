@@ -1905,7 +1905,29 @@ describe("PluginsSettings GitHub connection", () => {
 
     fireEvent.click(within(setup).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("form", { name: "Set up GitHub" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Set up GitHub" })).toBeInTheDocument();
+
+    // Opening it again reads gh again: the operator may have signed in since.
+    fireEvent.click(screen.getByRole("button", { name: "Set up GitHub" }));
+    await waitFor(() => expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps an open setup's choices when the URL probe asks for GitHub again", async () => {
+    const desktopApi = githubApi();
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Set up GitHub" }));
+    const setup = screen.getByRole("form", { name: "Set up GitHub" });
+    fireEvent.click(within(setup).getByRole("button", { name: "projects" }));
+    expect(within(setup).getByRole("button", { name: "projects" })).toHaveAttribute("aria-pressed", "true");
+
+    const addForm = screen.getByRole("form", { name: "Add an MCP server" });
+    fireEvent.change(within(addForm).getByPlaceholderText("https://mcp.example.com/mcp"), {
+      target: { value: "https://api.githubcopilot.com/mcp/" },
+    });
+    fireEvent.click(within(addForm).getByRole("button", { name: "Check" }));
+    fireEvent.click(await within(addForm).findByRole("button", { name: "Set up GitHub" }));
+
+    expect(within(setup).getByRole("button", { name: "projects" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
   });
 
   it("adds another GitHub connection under the ones already listed", async () => {

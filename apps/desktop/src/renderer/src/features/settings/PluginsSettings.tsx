@@ -76,6 +76,7 @@ import {
   sandboxerNeedsSetup,
 } from "./SandboxerConnectionSetup";
 import { McpProjectToolApprovals } from "./McpProjectToolApprovals";
+import { groupManagedMcpConnections } from "./managed-mcp-connection-groups";
 import {
   GithubCompactRow,
   GithubConnectionFields,
@@ -130,11 +131,6 @@ type ConnectionPendingAction = {
  * in the connection list beside PwrSnap and PwrGit.
  */
 type ConnectionAddKind = "remote" | "local";
-
-/** Built-in rows listed before GitHub's: PwrAgent's own sister apps. */
-function isPwrSuiteConnection(connection: McpConnectionStatus): boolean {
-  return connection.kind === "pwrsnap" || connection.kind === "pwrgit";
-}
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -330,11 +326,13 @@ export function PluginsSettings(props: {
   const [githubName, setGithubName] = useState("");
   const githubSetupNameRef = useRef<HTMLInputElement>(null);
   /**
-   * Set when setup opens from a control that then unmounts (the compact
-   * row's Set up, or the probe's Set up GitHub), so focus and the view
-   * follow the form instead of falling back to the page.
+   * Counts requests to bring the setup form into view. The controls that ask
+   * (the compact row's Set up, the probe's Set up GitHub) unmount as they
+   * do, so focus moves to the form's Name field instead of the page, also
+   * when the form was already open.
    */
-  const githubSetupFocusPendingRef = useRef(false);
+  const [githubSetupFocusRequest, setGithubSetupFocusRequest] = useState(0);
+  const addFormTitleId = useId();
   const [githubDraft, setGithubDraft] = useState<GithubConnectionDraft>(emptyGithubConnectionDraft);
   /** The last Test of `githubDraft`, cleared by any edit to it. */
   const [githubTest, setGithubTest] = useState<TestGithubMcpConnectionResponse>();
@@ -1152,12 +1150,19 @@ export function PluginsSettings(props: {
   }, [inspectGithub, showGithubForm]);
 
   const openGithubSetup = (name = "") => {
+    setGithubSetupFocusRequest((current) => current + 1);
+    setConnectionNotice(undefined);
+    if (githubSetupOpen) {
+      // Already open: keep what was entered, and only fill an empty name.
+      if (name && !githubName.trim()) setGithubName(name);
+      return;
+    }
     setGithubName(name);
     setGithubDraft(emptyGithubConnectionDraft());
     setGithubTest(undefined);
-    githubSetupFocusPendingRef.current = true;
     setGithubSetupOpen(true);
-    setConnectionNotice(undefined);
+    // The operator may have run `gh auth login` since the last look.
+    if (githubInspectedRef.current) void inspectGithub();
   };
 
   const closeGithubSetup = () => {
@@ -1168,12 +1173,11 @@ export function PluginsSettings(props: {
   };
 
   useEffect(() => {
-    if (!githubSetupOpen || !githubSetupFocusPendingRef.current) return;
-    githubSetupFocusPendingRef.current = false;
+    if (!githubSetupFocusRequest) return;
     const field = githubSetupNameRef.current;
     field?.focus();
     field?.scrollIntoView?.({ block: "nearest" });
-  }, [githubSetupOpen]);
+  }, [githubSetupFocusRequest]);
 
   /** Sign in, read the tools and skills, and disconnect. Saves nothing. */
   const testGithubConnection = async () => {
@@ -1206,8 +1210,10 @@ export function PluginsSettings(props: {
         displayName: name,
         github: githubConnectionInput(githubDraft),
       });
-      closeGithubSetup();
+      // Reload first, so the new row replaces the form without the list
+      // showing its old GitHub rows (or Set up) in between.
       await loadConnections();
+      closeGithubSetup();
       setConnectionNotice({
         kind: "success",
         text: `${name} was added. Offer it to threads, or turn it on in a thread's MCP panel.`,
@@ -1677,7 +1683,8 @@ export function PluginsSettings(props: {
   );
 
   const githubAvailable = Boolean(props.desktopApi?.testGithubMcpConnection);
-  const githubConnections = connections.filter((connection) => connection.kind === "github");
+  const connectionGroups = groupManagedMcpConnections(connections);
+  const githubConnections = connectionGroups.github;
   /*
    * GitHub's setup opens inside its own row, where the operator found it,
    * not as a third type in the add form below: the add form is for servers
@@ -1888,7 +1895,7 @@ export function PluginsSettings(props: {
             <p className="settings-empty">Loading connections...</p>
           ) : connections.length || githubAvailable ? (
             <div className="settings-mcp-list">
-              {connections.filter(isPwrSuiteConnection).map(renderConnectionRow)}
+              {connectionGroups.pwrSuite.map(renderConnectionRow)}
               {githubAvailable || githubConnections.length ? (
                 <>
                   {githubConnections.map(renderConnectionRow)}
@@ -1914,15 +1921,13 @@ export function PluginsSettings(props: {
                   )}
                 </>
               ) : null}
-              {connections
-                .filter((connection) => !isPwrSuiteConnection(connection) && connection.kind !== "github")
-                .map(renderConnectionRow)}
+              {connectionGroups.rest.map(renderConnectionRow)}
             </div>
           ) : (
             <p className="settings-empty">No PwrAgent connections yet.</p>
           )}
           <form
-            aria-label="Add an MCP server"
+            aria-labelledby={addFormTitleId}
             className="settings-mcp-create"
             onSubmit={(event) => {
               event.preventDefault();
@@ -1934,7 +1939,7 @@ export function PluginsSettings(props: {
               void createConnection();
             }}
           >
-            <h3 className="settings-mcp-create__title">Add an MCP server</h3>
+            <h3 className="settings-mcp-create__title" id={addFormTitleId}>Add an MCP server</h3>
             <SegmentedControl<ConnectionAddKind>
               disabled={Boolean(connectionPending)}
               label="Server type"

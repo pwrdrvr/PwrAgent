@@ -18,6 +18,7 @@ import {
   type InspectGithubMcpSetupResponse,
   type TestGithubMcpConnectionResponse,
 } from "@pwragent/shared";
+import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 /**
@@ -490,26 +491,19 @@ export function GithubCompactRow(props: {
   onSetUp: () => void;
 }) {
   return (
-    <article className="settings-mcp-row settings-mcp-row--managed settings-mcp-row--compact">
-      <div className="settings-mcp-row__main">
-        <span className="settings-mcp-row__toggle settings-mcp-row__toggle--static">
-          <span className="settings-mcp-row__name">GitHub</span>
-          <span className="settings-mcp-row__meta">
-            Issues, repositories and more &middot; signs in with your GitHub CLI
-          </span>
-        </span>
-        <div className="settings-mcp-row__actions">
-          <button
-            aria-label="Set up GitHub"
-            className="button button--secondary"
-            disabled={props.disabled}
-            type="button"
-            onClick={props.onSetUp}
-          >
-            Set up
-          </button>
-        </div>
-      </div>
-    </article>
+    <CompactMcpConnectionRow
+      meta={<>Issues, repositories and more &middot; signs in with your GitHub CLI</>}
+      name="GitHub"
+    >
+      <button
+        aria-label="Set up GitHub"
+        className="button button--secondary"
+        disabled={props.disabled}
+        type="button"
+        onClick={props.onSetUp}
+      >
+        Set up
+      </button>
+    </CompactMcpConnectionRow>
   );
 }

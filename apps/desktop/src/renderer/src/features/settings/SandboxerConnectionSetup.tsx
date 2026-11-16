@@ -12,6 +12,7 @@ import {
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
 
 /**
  * The Sandboxer row's own parts. Most operators have never heard of
@@ -348,38 +349,31 @@ export function SandboxerCompactRow(props: {
   onSetUp: () => void;
 }) {
   return (
-    <article className="settings-mcp-row settings-mcp-row--managed settings-mcp-row--compact">
-      <div className="settings-mcp-row__main">
-        <span className="settings-mcp-row__toggle settings-mcp-row__toggle--static">
-          <span className="settings-mcp-row__name">Sandboxer</span>
-          <span className="settings-mcp-row__meta">
-            Cloud Linux machines for your agent &middot; paid service
-          </span>
-        </span>
-        <div className="settings-mcp-row__actions">
-          <SandboxerLink
-            desktopApi={props.desktopApi}
-            label="Learn more"
-            target="home"
-            variant="inline"
-            onNotice={props.onNotice}
-          />
-          {props.onConnect ? (
-            <button className="button button--secondary" disabled={props.disabled} type="button" onClick={props.onConnect}>
-              Connect Sandboxer
-            </button>
-          ) : null}
-          <button
-            aria-label="Set up Sandboxer"
-            disabled={props.disabled}
-            className="button button--secondary"
-            type="button"
-            onClick={props.onSetUp}
-          >
-            Set up
-          </button>
-        </div>
-      </div>
-    </article>
+    <CompactMcpConnectionRow
+      meta={<>Cloud Linux machines for your agent &middot; paid service</>}
+      name="Sandboxer"
+    >
+      <SandboxerLink
+        desktopApi={props.desktopApi}
+        label="Learn more"
+        target="home"
+        variant="inline"
+        onNotice={props.onNotice}
+      />
+      {props.onConnect ? (
+        <button className="button button--secondary" disabled={props.disabled} type="button" onClick={props.onConnect}>
+          Connect Sandboxer
+        </button>
+      ) : null}
+      <button
+        aria-label="Set up Sandboxer"
+        disabled={props.disabled}
+        className="button button--secondary"
+        type="button"
+        onClick={props.onSetUp}
+      >
+        Set up
+      </button>
+    </CompactMcpConnectionRow>
   );
 }
