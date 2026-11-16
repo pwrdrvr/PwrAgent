@@ -12407,9 +12407,6 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
-    if (this.restartGate.phase === "quieting" && messageOrigin?.systemReason !== "app-restart") {
-      throw new Error("PwrAgent is restarting. Retry after it relaunches; this message was not accepted.");
-    }
     return await this.threadSteering.steerTurn(params, messageOrigin);
   }
 
@@ -12707,6 +12704,10 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<ThreadSteeringSubmission> {
+    // Accepted requests replay before reaching this admission boundary.
+    if (this.restartGate.phase === "quieting" && messageOrigin?.systemReason !== "app-restart") {
+      throw new Error("PwrAgent is restarting. Retry after it relaunches; this message was not accepted.");
+    }
     return await this.threadSteerSubmission.submit(params, messageOrigin);
   }
 

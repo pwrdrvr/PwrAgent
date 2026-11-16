@@ -370,3 +370,43 @@ it("refuses fresh admissions atomically once quiet shutdown begins", async () =>
     queue.close();
   }), { numRuns: 20 });
 });
+
+it("replays accepted queue identities during quiet shutdown without admitting new work", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.constantFrom("submit", "submitHeld", "submitProjectHeld"),
+    fc.string({ maxLength: 40 }),
+    fc.integer({ min: 1, max: 5 }),
+    async (method, text, copies) => {
+      let quieting = false;
+      const events: string[] = [];
+      const queue = new ThreadTurnQueue({
+        startTurn: async (entry) => ({ ...entry, turnId: "unused" }),
+        isThreadActive: () => true,
+        isDispatchHeld: () => quieting,
+        isAdmissionHeld: () => quieting,
+        onLifecycle: (event) => { events.push(event.type); },
+      });
+      const request = { id: "accepted", backend: "codex" as const, threadId: "t",
+        origin: "manual" as const, input: [{ type: "text" as const, text: `Original ${text}` }] };
+      const submit = (input: typeof request) => method === "submitHeld"
+        ? queue.submitHeld(input, "review")
+        : method === "submitProjectHeld"
+          ? queue.submitProjectHeld(input, { reason: "paused", projectHold: { directoryKey: "directory:/repo", source: "other", summary: "Wake up" } })
+          : queue.submit(input);
+      try {
+        const accepted = await submit(request);
+        const before = structuredClone(queue.getAllQueuedEntries());
+        const eventCount = events.length;
+        quieting = true;
+        const replays = await Promise.all(Array.from({ length: copies }, () => submit(request)));
+        expect(replays).toEqual(Array.from({ length: copies }, () => accepted));
+        await expect(submit({ ...request, id: "new" })).rejects.toThrow("this message was not accepted");
+        if (method !== "submitProjectHeld") {
+          await expect(submit({ ...request, input: [{ type: "text", text: "Changed" }] })).rejects.toThrow("reused");
+        }
+        expect(queue.getAllQueuedEntries()).toEqual(before);
+        expect(events.length).toBe(eventCount);
+      } finally { queue.close(); }
+    },
+  ), { numRuns: 30 });
+});

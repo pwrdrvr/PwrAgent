@@ -541,7 +541,6 @@ export class ThreadTurnQueue {
       queueIndex?: number;
     },
   ): Promise<ThreadTurnQueueSubmissionResult> {
-    this.assertAdmission();
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -560,6 +559,7 @@ export class ThreadTurnQueue {
     if (this.recentlyAdmittedEntries.has(entry.id)) {
       throw new Error(`Queued turn identity ${entry.id} was already admitted`);
     }
+    this.assertAdmission();
     const key = this.keyFor(entry);
 
     if (!this.canStartImmediately({ backend: entry.backend, threadId: entry.threadId })) {
@@ -600,7 +600,6 @@ export class ThreadTurnQueue {
       queueIndex?: number;
     },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
-    this.assertAdmission();
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -628,6 +627,7 @@ export class ThreadTurnQueue {
       throw new Error(`Queued turn identity ${entry.id} was already admitted`);
     }
 
+    this.assertAdmission();
     const key = this.keyFor(entry);
     const queue = this.queueFor(key);
     // On a held FIFO a held entry joins the back, so held entries go in the
@@ -671,7 +671,6 @@ export class ThreadTurnQueue {
     hold: { reason: string; projectHold: ThreadTurnQueueProjectHold },
     options?: { onAdmission?: () => void },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
-    this.assertAdmission();
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -686,6 +685,7 @@ export class ThreadTurnQueue {
       options?.onAdmission?.();
       return { status: "queued", entry: existing.entry, position: existing.position };
     }
+    this.assertAdmission();
     const queue = this.queueFor(this.keyFor(entry));
     queue.push(entry);
     options?.onAdmission?.();

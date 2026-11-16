@@ -870,13 +870,13 @@ function awaitSquirrelStage(next: HeldDownloadedUpdate): void {
 
 type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu" | "selection" | "discovery";
 
-// A track change must outlive an old track's check/download, not merely join
-// it. Coalesce rapid changes and keep electron-updater on one feed at a time.
+// A track change must outlive an old track's check/download or reserved quit,
+// not merely join it. Coalesce changes and keep the updater on one feed at a time.
 let selectionCheckGeneration = 0;
 async function checkChangedUpdateSelection(): Promise<void> {
   const generation = ++selectionCheckGeneration;
-  while (updateCheckInFlight || activeDownload?.settled || pendingSquirrelStage) {
-    await (updateCheckInFlight ?? activeDownload?.settled ?? pendingSquirrelStage?.settled);
+  while (updateInstallReserved || updateCheckInFlight || activeDownload?.settled || pendingSquirrelStage) {
+    await (updateInstallReserved ?? updateCheckInFlight ?? activeDownload?.settled ?? pendingSquirrelStage?.settled);
     if (generation !== selectionCheckGeneration) return;
   }
   if (generation === selectionCheckGeneration) {
@@ -1997,19 +1997,20 @@ export function initAutoUpdater(): void {
 
 // Reserve the updater before opening any asynchronous confirmation. A check
 // may replace electron-updater's single installer cache, even on another track.
-let updateInstallReserved = false;
+let updateInstallReserved: Promise<void> | undefined;
 
 /** Hold the single updater payload stable during an ordinary restart or quit. */
 export function reserveAppUpdateQuit(): () => void {
   if (updateInstallReserved || updateCheckInFlight || activeDownload || pendingSquirrelStage || supersedingDownload) {
     throw new Error("An update check, download, staging, or lifecycle request is in progress. Read status and retry.");
   }
-  updateInstallReserved = true;
-  let held = true;
+  let release!: () => void;
+  const reservation = new Promise<void>((resolve) => { release = resolve; });
+  updateInstallReserved = reservation;
   return () => {
-    if (!held) return;
-    held = false;
-    updateInstallReserved = false;
+    if (updateInstallReserved !== reservation) return;
+    updateInstallReserved = undefined;
+    release();
   };
 }
 
@@ -2023,14 +2024,14 @@ export async function installDownloadedAppUpdate(options?: {
   if (updateCheckInFlight || activeDownload || pendingSquirrelStage || supersedingDownload) {
     return { status: "error", message: "An update check, download, or staging operation is still in progress. Retry when it finishes." };
   }
-  updateInstallReserved = true;
+  const release = reserveAppUpdateQuit();
   let accepted = false;
   try {
     const result = await runDownloadedAppUpdateInstall(options);
     accepted = result.status === "restarting";
     return result;
   } finally {
-    if (!accepted) updateInstallReserved = false;
+    if (!accepted) release();
   }
 }
 

@@ -5257,6 +5257,47 @@ describe("DesktopBackendRegistry", () => {
       expect(second.codexClient.startTurnCallCount).toBe(0);
     });
 
+    it("replays accepted steers through quiet shutdown without sending them again (generated)", async () => {
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom("pending", "completed", "completion-failed"), fc.string({ maxLength: 30 }),
+        async (state, suffix) => {
+          const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
+          const registry = createDesktopBackendRegistry({ codexClient,
+            overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
+          const delivery = createDeferred<{ threadId: string; turnId: string }>();
+          const steer = vi.spyOn(codexClient, "steerTurn").mockImplementation(async () => await delivery.promise);
+          const host = registry as unknown as {
+            readTurnCausalMessagingOrigin: () => Promise<AppServerThreadMessageOrigin | undefined>;
+          };
+          const read = vi.spyOn(host, "readTurnCausalMessagingOrigin").mockResolvedValue(undefined);
+          if (state === "completion-failed") read.mockRejectedValueOnce(new Error("Origin read failed"));
+          const request = { backend: "codex" as const, threadId: "thread-1", expectedTurnId: "turn-1",
+            requestId: "accepted", input: text(`Steer ${suffix}`) };
+          const origin = { kind: "messaging" as const };
+          const first = registry.steerTurn(request, origin);
+          try {
+            await waitForCondition(() => steer.mock.calls.length === 1);
+            if (state !== "pending") {
+              delivery.resolve({ threadId: "thread-1", turnId: "turn-1" });
+              if (state === "completion-failed") await expect(first).rejects.toThrow("Origin read failed");
+              else await first;
+            }
+            registry.beginQuietRestart();
+            const replay = registry.steerTurn(request, origin);
+            delivery.resolve({ threadId: "thread-1", turnId: "turn-1" });
+            await expect(replay).resolves.toMatchObject({ disposition: "steered", turnId: "turn-1" });
+            await expect(registry.steerTurn({ ...request, input: text("Changed") }, origin)).rejects.toThrow("reused");
+            await expect(registry.steerTurn({ ...request, requestId: "new" }, origin)).rejects.toThrow("this message was not accepted");
+            expect(steer).toHaveBeenCalledOnce();
+          } finally {
+            delivery.resolve({ threadId: "thread-1", turnId: "turn-1" });
+            await first.catch(() => undefined);
+            await registry.close();
+          }
+        },
+      ), { numRuns: 12, examples: [["pending", ""], ["completed", ""], ["completion-failed", ""]] });
+    });
+
     it("refuses a messaging steer while shutdown admission is shut and lets the restart's own steer through", async () => {
       const { store } = durableStore();
       const { codexClient, registry } = launch(store, "instance-a");

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 
 type UpdateEventHandler = (info?: {
   version?: string;
@@ -915,6 +916,96 @@ describe("auto updater", () => {
       checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.1.0-beta.1" } });
       notifySelectionChanged();
       await vi.waitFor(() => expect(checkForUpdatesMock).toHaveBeenCalledTimes(2));
+    });
+
+    it("checks only the latest selection after each released quit reservation (generated)", async () => {
+      const updater = await startAtCurrentRelease();
+      mockGitHubReleases([]);
+      await fc.assert(fc.asyncProperty(
+        fc.array(fc.record({ train: fc.constantFrom("stable", "beta"), channel: fc.constantFrom("latest", "prerelease") }), { maxLength: 8 }),
+        fc.boolean(),
+        async (changes, reserveAgain) => {
+          const release = updater.reserveAppUpdateQuit();
+          const fetches = fetchMock.mock.calls.length;
+          // Always change at least once, including when the generated list is empty.
+          const first = { train: resolveUpdateTrainMock() === "stable" ? "beta" : "stable", channel: "latest" };
+          const selections = [first, ...changes];
+          for (const selection of selections) {
+            resolveUpdateTrainMock.mockReturnValue(selection.train);
+            resolveUpdateChannelMock.mockReturnValue(selection.channel);
+            notifySelectionChanged();
+          }
+          await vi.advanceTimersByTimeAsync(0);
+          expect(fetchMock).toHaveBeenCalledTimes(fetches);
+          release();
+          if (reserveAgain) {
+            const nextRelease = updater.reserveAppUpdateQuit();
+            release(); // A stale release cannot release the newer reservation.
+            await vi.advanceTimersByTimeAsync(0);
+            expect(fetchMock).toHaveBeenCalledTimes(fetches);
+            nextRelease();
+          }
+          release();
+          await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(fetches + 1));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(fetchMock).toHaveBeenCalledTimes(fetches + 1);
+          const checked = logInfoMock.mock.calls.filter(([message]) => message === "skipping app update check; no valid GitHub release found").at(-1)?.[1];
+          expect(checked).toMatchObject({ trigger: "selection", updateTrain: selections.at(-1)!.train, updateChannel: selections.at(-1)!.channel });
+        },
+      ), { numRuns: 15 });
+    });
+
+    it.each(["cancel", "refuse", "error"] as const)("replays the pending selection after an install confirmation ends with %s", async (outcome) => {
+      const updater = await startAtCurrentRelease();
+      mockGitHubReleases([githubRelease("v1.0.1")]);
+      checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.0.1" } });
+      await updater.checkForAppUpdatesNow("manual");
+      updateEventHandlers.get("update-downloaded")?.({ version: "1.0.1" });
+      const finish = createDeferred<void>();
+      const pending = updater.installDownloadedAppUpdate({ requestQuit: async (_quit, beforeQuit) => {
+        await finish.promise;
+        if (outcome === "error") throw new Error("Confirmation failed");
+        if (outcome === "refuse") expect(beforeQuit?.()).toBe(false);
+        return false;
+      } });
+      const fetches = fetchMock.mock.calls.length;
+      mockGitHubReleases([]);
+      resolveUpdateTrainMock.mockReturnValue("beta");
+      notifySelectionChanged();
+      resolveUpdateChannelMock.mockReturnValue("prerelease");
+      notifySelectionChanged();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(fetches);
+      finish.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "error" });
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(fetches + 1));
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it("keeps pending selection checks held after an accepted native handoff", async () => {
+      const updater = await startAtCurrentRelease();
+      mockGitHubReleases([githubRelease("v1.0.1")]);
+      checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.0.1" } });
+      await updater.checkForAppUpdatesNow("manual");
+      updateEventHandlers.get("update-downloaded")?.({ version: "1.0.1" });
+      const finish = createDeferred<void>();
+      const pending = updater.installDownloadedAppUpdate({ requestQuit: async (quit, beforeQuit) => {
+        await finish.promise;
+        if (!beforeQuit?.()) return false;
+        quit();
+        return true;
+      } });
+      const fetches = fetchMock.mock.calls.length;
+      resolveUpdateTrainMock.mockReturnValue("beta");
+      notifySelectionChanged();
+      resolveUpdateTrainMock.mockReturnValue("stable");
+      notifySelectionChanged();
+      finish.resolve();
+      await expect(pending).resolves.toEqual({ status: "restarting" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledTimes(fetches);
+      await expect(updater.checkForAppUpdatesNow("manual")).resolves.toMatchObject({ status: "skipped" });
     });
 
     it("rechecks a changed selection after joining the old in-flight check", async () => {
