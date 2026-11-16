@@ -7,6 +7,24 @@ import { once } from "node:events";
 const MAX_BYTES = 16 * 1024 * 1024;
 const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
 const invalidCode = 'throw new Error("Invalid exec arguments: expected a JSON object with exactly one string field, code. Retry the call.");';
+const portableErrors = new Set([
+  "Portable discovery requires third-party tools to stay inside Codex Code Mode.",
+  "Portable discovery requires Codex Code Mode.",
+  "Portable discovery bootstrap exceeds 32 KiB including core tools.",
+]);
+
+/** Apply the transport's required harness mode on start, resume and fork alike. */
+export function portableThreadRequest(message) {
+  const request = JSON.parse(message);
+  if (!["thread/start", "thread/resume", "thread/fork"].includes(request.method)) return message;
+  const config = request.params?.config ?? {};
+  const codeMode = config.features?.code_mode;
+  request.params = { ...request.params, config: { ...config, features: {
+    ...config.features, code_mode: codeMode && typeof codeMode === "object" ? { ...codeMode, enabled: true } : true,
+    code_mode_only: true, code_mode_tool_search: true,
+  } } };
+  return JSON.stringify(request);
+}
 
 function identity(namespace, name) {
   return `codex_${createHash("sha256").update(JSON.stringify([namespace ?? null, name])).digest("hex").slice(0, 48)}`;
@@ -114,7 +132,7 @@ async function readBounded(stream) {
 }
 
 /** Opt-in only. The owner supplies an authenticated upstream request closure. */
-export async function startPortableCodeModeTransport({ send, onDiagnostic }) {
+export async function startPortableCodeModeTransport({ send, onDiagnostic, clientApiKey, requireNestedDiscovery = false }) {
   const server = createServer(async (req, res) => {
     const abort = new AbortController();
     res.on("close", () => abort.abort());
@@ -122,10 +140,19 @@ export async function startPortableCodeModeTransport({ send, onDiagnostic }) {
     let phase = "request_parse";
     try {
       if (req.method !== "POST" || req.url !== "/v1/responses") { res.writeHead(404).end(); return; }
+      if (clientApiKey && req.headers.authorization !== `Bearer ${clientApiKey}`) { res.writeHead(401).end(); return; }
       const raw = await readBounded(req);
       const request = JSON.parse(raw);
       phase = "request_translation";
       const { body, translateResponse, translateEvent } = translateCodeModeRequest(request);
+      if (requireNestedDiscovery) {
+        const specs = [...request.tools ?? [], ...(Array.isArray(request.input) ? request.input : []).filter(item => item.type === "additional_tools").flatMap(item => item.tools ?? [])];
+        if (specs.some(spec => spec.type === "namespace" && !["functions", "clock", "collaboration"].includes(spec.name)
+          || spec.name?.startsWith("mcp__"))) throw new Error("Portable discovery requires third-party tools to stay inside Codex Code Mode.");
+        const exec = body.tools.find(tool => tool.parameters?.properties?.code);
+        if (!exec) throw new Error("Portable discovery requires Codex Code Mode.");
+        if (bytes(exec) > 32 * 1024) throw new Error("Portable discovery bootstrap exceeds 32 KiB including core tools.");
+      }
       diagnose({ stage: "request", inputBytes: Buffer.byteLength(raw), outputBytes: bytes(body), toolBytes: bytes(body.tools), toolCount: body.tools.length });
       // Exactly one send. No retries of possibly accepted invocations.
       phase = "upstream_request";
@@ -177,11 +204,13 @@ export async function startPortableCodeModeTransport({ send, onDiagnostic }) {
       }
       res.end();
       diagnose({ stage: "completed" });
-    } catch {
+    } catch (error) {
       diagnose({ stage: "transport_error", phase, canceled: abort.signal.aborted });
       if (abort.signal.aborted) return;
       if (res.headersSent) res.destroy();
-      else res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { message: "Portable Code Mode translation failed" } }));
+      else res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: {
+        message: error instanceof Error && portableErrors.has(error.message) ? error.message : "Portable Code Mode translation failed",
+      } }));
     }
   });
   server.listen(0, "127.0.0.1");

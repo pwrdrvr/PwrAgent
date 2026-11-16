@@ -63,6 +63,8 @@ export type CodexModelProviderSettings = {
   catalogPath?: string;
   /** Provider-scoped execution metadata saved by the explicit connection test. */
   modelMetadata?: CodexProviderCatalogModel[];
+  /** Explicit ordinary-function transport for Codex-owned nested discovery. */
+  toolDiscovery?: "portable";
 };
 
 /** Settings snapshot form: whether a key is stored, never the key. */
@@ -88,6 +90,8 @@ export type CodexProviderCatalogModel = {
   contextWindow?: number;
   /** Enabled only by a complete discovery test or explicit configuration. */
   supportsSearchTool?: boolean;
+  /** Verified portable transport, independently of native Responses search. */
+  supportsPortableDiscovery?: boolean;
 };
 
 /** What Settings shows after Test connection. */
@@ -107,6 +111,7 @@ export type CodexModelProviderTestResult = {
   /** A completed text response to a short request with instructions and namespaced tools. */
   responses: { ok: boolean; model?: string; skipped?: boolean; error?: string };
   discovery?: { ok: boolean; model: string; requests: number; error?: string };
+  portableDiscovery?: { ok: boolean; model: string; requests: number; error?: string; initialToolBytes?: number; initialRequestBytes?: number };
   latencyMs?: number;
 };
 
@@ -357,6 +362,9 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
     if (entry.compatibility !== undefined && entry.compatibility !== "bonsai") {
       throw new Error(`${label}.compatibility must be bonsai.`);
     }
+    if (entry.toolDiscovery !== undefined && entry.toolDiscovery !== "portable") {
+      throw new Error(`${label}.toolDiscovery must be portable.`);
+    }
     // Recognize the launcher alias and earlier GGUF imports without changing IDs.
     const compatibility = entry.compatibility ?? (
       isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1
@@ -381,6 +389,7 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       ...(compatibility ? { compatibility: "bonsai" as const } : {}),
       ...(typeof entry.catalogPath === "string" ? { catalogPath: entry.catalogPath.trim() } : {}),
       ...(entry.modelMetadata === undefined ? {} : { modelMetadata: validateProviderModelMetadata(entry.modelMetadata, label) }),
+      ...(entry.toolDiscovery === "portable" ? { toolDiscovery: "portable" as const } : {}),
     };
   });
 }
@@ -398,9 +407,11 @@ function validateProviderModelMetadata(value: unknown, label: string): CodexProv
     if (!parsed || seen.has(parsed.id)) throw new Error(`${label}.modelMetadata needs distinct valid model ids.`);
     if (model.contextWindow !== undefined && parsed.contextWindow === undefined) throw new Error(`${label}.modelMetadata has an invalid context window.`);
     if (model.supportsSearchTool !== undefined && typeof model.supportsSearchTool !== "boolean") throw new Error(`${label}.modelMetadata search support must be a boolean.`);
+    if (model.supportsPortableDiscovery !== undefined && typeof model.supportsPortableDiscovery !== "boolean") throw new Error(`${label}.modelMetadata portable discovery support must be a boolean.`);
     if (model.supportsImage !== undefined && typeof model.supportsImage !== "boolean") throw new Error(`${label}.modelMetadata image support must be a boolean.`);
     seen.add(parsed.id);
-    return { ...parsed, ...(model.supportsSearchTool === undefined ? {} : { supportsSearchTool: model.supportsSearchTool as boolean }) };
+    return { ...parsed, ...(model.supportsSearchTool === undefined ? {} : { supportsSearchTool: model.supportsSearchTool as boolean }),
+      ...(model.supportsPortableDiscovery === undefined ? {} : { supportsPortableDiscovery: model.supportsPortableDiscovery as boolean }) };
   });
 }
 

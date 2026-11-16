@@ -1,13 +1,54 @@
-# Portable discovery through Codex: experimental vertical slice
+# Portable discovery through model providers
 
 The existing Codex Code Mode runtime can discover and invoke deferred MCP tools
 through ordinary Responses function calls when a transport adapts its freeform
 `exec` tool. This is validated against a synthetic provider oracle, not a live
-MathOS model. No Settings option or automatic provider routing is enabled.
+MathOS model. Providers can now opt into this transport from Settings; selecting
+one of their verified models routes normal Codex threads through it.
+
+## Contributor verification in the product
+
+1. In **Settings → Models → Model providers**, edit the provider.
+2. Set **Tool discovery** to **Portable** and choose **Model to test**.
+3. Click **Test connection**. The portable result must say **Verified through
+   Codex**; a provider-native search failure can remain visible independently.
+4. Click **Save and reconnect**, then start a new thread with that provider's
+   verified model in the normal model picker.
+
+Test each additional model before using it in Portable mode. Unverified models
+produce a clear Settings instruction rather than silently exposing their full
+catalog. **Provider default** retains the existing transport. Changing discovery
+mode calls for a new thread; native search history is not silently rewritten.
+Provider changes retain the existing idle-boundary reconnect behavior.
+
+The portable connection check runs a real, isolated Codex process with a unique
+deferred read-only fixture. It requires discovery, one actual invocation and the
+exact marker in an App Server completion event. It uses at most six inference
+requests and a two-minute turn deadline. Together with the existing native
+checks, Test connection can send up to ten inference requests. The result shows
+the fixture check's request count and initial tool/request bytes; those numbers
+are not measurements of the operator's full integration inventory.
+
+The stored provider key follows the existing main-process/App Server injection
+path and is blanked from model shell environments. The temporary Codex home
+contains no key. A keyed provider's private loopback transport requires the same
+Bearer credential before forwarding. Probe diagnostics remain in memory and
+only bounded counts/sizes return to Settings; normal turns add no diagnostic
+persistence. Native and portable verification are stored separately in
+endpoint-bound model metadata. The new `tool_discovery = "portable"` provider
+field is additive; no operator configuration is changed by development checks.
+
+The normal route refuses eager third-party namespaces and caps the complete
+exec definition at 32 KiB before forwarding. This cap includes the existing
+PwrAgent bootstrap and core tools. A capture with PwrAgent's real search
+bootstrap, 106 deferred dynamic registrations and 1,000 MCP fixtures contained
+a 19,509-byte exec definition with no fixture names exposed. The separate
+16 KiB synthetic discovery target below uses the smaller isolated core fixture;
+it is not an absolute cap on all of PwrAgent's existing core guidance.
 
 Product requirements remain in the draft
 [Linear PRD](https://linear.app/pwrdrvr/document/prd-portable-tool-discovery-through-the-codex-harness-159212c72fc9).
-This contributor experiment does not complete its production release gates.
+The remaining release gates below are separate from this usable opt-in route.
 
 ## Verified harness and configuration
 
@@ -42,10 +83,12 @@ is not installed-binary validation.
 ## Transport and execution ownership
 
 `portable-code-mode-transport.mjs` exposes an opt-in owner API taking a `send`
-closure. The owner retains authentication and endpoint selection. The prototype
-never reads stored keys, changes a provider URL, or chooses an upstream itself.
-It preserves Responses instructions and content rather than using Bonsai's
-system-message/Chat compatibility route. PR #3742 is independent and unchanged.
+closure. The owner retains authentication and endpoint selection. The transport
+never reads stored keys or chooses an upstream itself. The provider runtime
+supplies a private local URL without changing the persisted endpoint. Generic
+providers retain Responses instructions/content. Bonsai retains its required
+compatibility bridge underneath portable translation, with integrations kept
+enabled. PR #3742 is independent and unchanged.
 
 The installed binary sends tool definitions in `additional_tools` input items.
 The transport resolves those snapshots into ordinary upstream function specs,
@@ -94,6 +137,13 @@ it in the tool result. All task-owned processes and temporary homes are removed.
 
 Measured on the binary above:
 
+The app-owned `verifyPortableProvider` entry point also completed the real Codex
+exchange against a synthetic Responses provider in both buffered and streaming
+modes. Each took three requests, with 14,434 initial tool bytes and 29,530 initial
+request bytes. This exercises the product connection-test implementation and
+its unique deferred dynamic fixture. The larger MCP matrix below uses the
+original controlled fixture/configuration for the inventory comparison.
+
 | Inventory | Direct tool bytes | Portable tool bytes | Direct request bytes | Portable initial request bytes |
 | ---: | ---: | ---: | ---: | ---: |
 | 100 | 92,179 | 17,472 | 100,866 | 26,159 |
@@ -140,8 +190,9 @@ denial, invocation-time revocation, connection loss, schema/catalog revisions,
 resume, concurrent searches and full result-type parity remain unverified.
 Transport tests cover identity, JSON recovery, image preservation, UTF-8/SSE
 fragmentation, cancellation and no transport retries; those tests do not prove
-every corresponding harness lifecycle invariant. Product integration requires
+every corresponding harness lifecycle invariant. Automatic selection requires
 owner-scoped capability evidence and version gates before enabling any default.
 
-No new product persistence is added (zero additional SQLite commits and MB/day).
+No new turn/event persistence is added (zero additional SQLite commits and MB/day).
+The provider fields use the existing explicit Settings save operation.
 The probe's local artifact and MCP invocation log are task-owned test files.

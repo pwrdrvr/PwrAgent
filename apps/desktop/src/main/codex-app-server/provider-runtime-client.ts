@@ -166,7 +166,7 @@ export function createProviderRuntimeClient(
     const existing = providerId ? runtimes.get(providerId) : undefined;
     if (existing) return existing;
     const provider = options.resolveProviders().find((entry) => entry.id === providerId);
-    if (!provider || (provider.compatibility !== "bonsai" && !provider.modelMetadata?.length)) return primary;
+    if (!provider || (provider.compatibility !== "bonsai" && !provider.modelMetadata?.length && provider.toolDiscovery !== "portable")) return primary;
     const client = options.create(provider);
     runtimes.set(provider.id, client);
     attach(client, provider.id);
@@ -197,6 +197,12 @@ export function createProviderRuntimeClient(
     }
     if (generation !== startedAtGeneration) throw new Error("Codex runtime pool closed during routing.");
     const provider = method === "forkThread" ? requested ?? owner : owner ?? requested;
+    const settings = options.resolveProviders().find(entry => entry.id === provider);
+    const selectedModel = typeof params?.model === "string" ? parseCodexProviderModelId(params.model).model : undefined;
+    if (settings?.toolDiscovery === "portable" && selectedModel && !READ_ONLY.has(method)
+      && !settings.modelMetadata?.some(model => model.id === selectedModel && model.supportsPortableDiscovery === true)) {
+      throw new Error(`Test portable discovery for ${selectedModel} in Settings → Models and save before using it.`);
+    }
     // Persisted history remains readable when the local inference server is offline.
     const client = provider && READ_ONLY.has(method) && !runtimes.has(provider) ? primary : runtime(provider);
     const result = await invoke(client, method, args);

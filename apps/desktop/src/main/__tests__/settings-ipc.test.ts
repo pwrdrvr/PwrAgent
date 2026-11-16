@@ -17,6 +17,8 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const portableProbe = vi.hoisted(() => vi.fn(async () => ({ requests: 3 })));
+vi.mock("../codex-app-server/portable-provider-probe", () => ({ verifyPortableProvider: portableProbe }));
 const tempRoots: string[] = [];
 const stateDbs: Array<ReturnType<typeof openInMemoryStateDb>> = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
@@ -275,6 +277,7 @@ describe("settings ipc", () => {
   });
 
   beforeEach(() => {
+    portableProbe.mockClear();
     handlers.clear();
     disposeDesktopBackendRegistryMock.mockClear();
     invalidateAcpBackendDiscoveryMock.mockClear();
@@ -327,6 +330,35 @@ describe("settings ipc", () => {
         throw new Error("unexpected network fetch in settings IPC test");
       }),
     );
+  });
+
+  it.each([true, false])("runs portable verification through the actual Settings IPC handler with scoped key selection: stored=%s", async (useStoredApiKey) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const stateDb = openInMemoryStateDb(); stateDbs.push(stateDb);
+    const service = new DesktopSettingsService({ configPath: path.join(tempRoot, "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { storage: new SqliteTokenMiserStorage(stateDb) }) });
+    const provider = { id: "flint", name: "Flint", baseUrl: "https://fixture.example/v1", models: ["fixture"], toolDiscovery: "portable" as const };
+    vi.spyOn(service, "resolveCodexModelProviders").mockReturnValue([provider]);
+    vi.spyOn(service, "resolveCodexModelProviderKeys").mockResolvedValue({ flint: "fixture-stored" });
+    vi.spyOn(service, "resolveCodexCommand").mockResolvedValue({ command: "fixture-codex", source: "config" });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "fixture" }] }));
+      const body = JSON.parse(init?.body as string);
+      return body.tools[0].type === "tool_search" ? new Response("unsupported native discovery", { status: 404 })
+        : new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] }));
+    }));
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+    const { SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+    try {
+      expect(await handlers.get(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL)?.({}, { provider, useStoredApiKey })).toMatchObject({
+        discovery: { ok: false }, portableDiscovery: { ok: true, model: "fixture", requests: 3 },
+      });
+      expect(portableProbe).toHaveBeenCalledWith(expect.objectContaining({ id: "flint", toolDiscovery: "portable" }),
+        useStoredApiKey ? "fixture-stored" : undefined, "fixture-codex");
+    } finally { disposeSettingsIpcHandlers(); }
   });
 
   it("refreshes provider catalogs through the owner's reader, and says so when Codex is not running", async () => {

@@ -16,7 +16,10 @@ export async function prepareProviderModelRuntime(provider: CodexModelProviderSe
   const directory = await mkdtemp(path.join(root, "provider-models-"));
   try {
     const catalogPath = path.join(directory, "models.json");
-    await writeFile(catalogPath, JSON.stringify({ models: ids.map((id) => modelDescriptor(metadata.get(id) ?? { id })) }), { mode: 0o600 });
+    await writeFile(catalogPath, JSON.stringify({ models: ids.map((id) => ({
+      ...modelDescriptor(metadata.get(id) ?? { id }),
+      ...(provider.toolDiscovery === "portable" ? { tool_mode: "code_mode_only", supports_search_tool: true } : {}),
+    })) }), { mode: 0o600 });
     return {
       overrides: [
         `model_provider=${JSON.stringify(provider.id)}`,

@@ -100,6 +100,7 @@ export class CodexModelProviderCatalog {
     fetch?: FetchLike;
     now?: () => number;
     prepareCompatibility?: typeof prepareBonsaiRuntime;
+    verifyPortable?: (provider: CodexModelProviderSettings, apiKey: string | undefined) => Promise<{ requests: number; initialToolBytes?: number; initialRequestBytes?: number }>;
   }) {}
 
   invalidate(): void {
@@ -275,6 +276,7 @@ export class CodexModelProviderCatalog {
     }
     let responsesError: string | undefined;
     let discovery: CodexModelProviderTestResult["discovery"];
+    let portableDiscovery: CodexModelProviderTestResult["portableDiscovery"];
     const effort = models.find((model) => model.id === probeModel)?.reasoningEfforts?.[0]
       ?? provider.modelMetadata?.find((model) => model.id === probeModel)?.reasoningEfforts?.[0];
     let runtime: Awaited<ReturnType<typeof prepareBonsaiRuntime>> | undefined;
@@ -329,10 +331,21 @@ export class CodexModelProviderCatalog {
     } finally {
       await runtime?.close();
     }
+    if (provider.toolDiscovery === "portable") {
+      try {
+        if (!this.options.verifyPortable) throw new Error("Portable discovery testing is unavailable on this instance.");
+        const checked = await this.options.verifyPortable({ ...provider, models: [probeModel],
+          modelMetadata: [{ ...models.find(model => model.id === probeModel), ...provider.modelMetadata?.find(model => model.id === probeModel), id: probeModel }] }, apiKey);
+        portableDiscovery = { ok: true, model: probeModel, ...checked };
+      } catch (error) {
+        portableDiscovery = { ok: false, model: probeModel, requests: 0, error: redactSecret(errorMessage(error), apiKey) };
+      }
+    }
     return {
       models: modelsTestResult(models, modelPages, modelsError),
       responses: { ok: !responsesError, model: probeModel, ...(responsesError ? { error: responsesError } : {}) },
       ...(discovery ? { discovery } : {}),
+      ...(portableDiscovery ? { portableDiscovery } : {}),
       latencyMs: reachedAfterMs,
     };
   }

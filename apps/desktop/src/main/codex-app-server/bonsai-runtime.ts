@@ -102,7 +102,9 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
   };
   try {
     const catalogPath = path.join(directory, "models.json");
-    await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
+    await writeFile(catalogPath, JSON.stringify(provider.toolDiscovery === "portable" ? {
+      ...catalog, models: catalog.models.map((model) => ({ ...model, tool_mode: "code_mode_only", supports_search_tool: true })),
+    } : catalog), { mode: 0o600 });
     // Codex and the bridge wait the same time on a silent prefill.
     bridge = await startBridge(provider.baseUrl, apiKey, {
       idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
@@ -127,8 +129,7 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
         'web_search="disabled"',
         "features.multi_agent=false",
         "features.goals=false",
-        "features.apps=false",
-        "features.plugins=false",
+        ...(provider.toolDiscovery === "portable" ? [] : ["features.apps=false", "features.plugins=false"]),
         "features.image_generation=false",
       ],
       close,

@@ -3697,6 +3697,7 @@ function readCodexModelProviders(
       ...(entry.discover_models === undefined ? {} : { discoverModels: entry.discover_models }),
       ...(entry.local === undefined ? {} : { local: entry.local }),
       ...(entry.compatibility === undefined ? {} : { compatibility: entry.compatibility }),
+      ...(entry.tool_discovery === undefined ? {} : { toolDiscovery: entry.tool_discovery }),
       ...(entry.catalog_path === undefined ? {} : { catalogPath: entry.catalog_path }),
       ...(modelMetadata.length ? { modelMetadata: modelMetadata.map((row) => ({
         id: row.model,
@@ -3706,6 +3707,7 @@ function readCodexModelProviders(
         ...(row.reasoning_efforts === undefined ? {} : { reasoningEfforts: row.reasoning_efforts }),
         ...(row.default_reasoning_effort === undefined ? {} : { defaultReasoningEffort: row.default_reasoning_effort }),
         ...(row.supports_search_tool === undefined ? {} : { supportsSearchTool: row.supports_search_tool }),
+        ...(row.supports_portable_discovery === undefined ? {} : { supportsPortableDiscovery: row.supports_portable_discovery }),
       })) } : {}),
       ...(rates.length ? { rates } : {}),
     };
@@ -3723,6 +3725,7 @@ function codexModelProviderTableEdits(
     ...(provider.discoverModels === undefined ? {} : { discover_models: provider.discoverModels }),
     ...(provider.local ? { local: true } : {}),
     ...(provider.compatibility ? { compatibility: provider.compatibility } : {}),
+    ...(provider.toolDiscovery ? { tool_discovery: provider.toolDiscovery } : {}),
     ...(provider.catalogPath ? { catalog_path: provider.catalogPath } : {}),
   }));
   const rateRows = providers.flatMap((provider) => (provider.rates ?? []).map((rate) => ({
@@ -3740,6 +3743,7 @@ function codexModelProviderTableEdits(
     ...(model.reasoningEfforts === undefined ? {} : { reasoning_efforts: model.reasoningEfforts }),
     ...(model.defaultReasoningEffort === undefined ? {} : { default_reasoning_effort: model.defaultReasoningEffort }),
     ...(model.supportsSearchTool === undefined ? {} : { supports_search_tool: model.supportsSearchTool }),
+    ...(model.supportsPortableDiscovery === undefined ? {} : { supports_portable_discovery: model.supportsPortableDiscovery }),
   })));
   return [
     providerRows.length

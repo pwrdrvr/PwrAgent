@@ -15,16 +15,18 @@ import { createOutpostCodexMessageRewriter } from "../headless/outpost-codex-san
 import { createOutpostAgentToolMessageRewriter } from "../headless/outpost-agent-tools";
 import { localAgentToolAllowlist } from "../member-containment";
 import { isCodexInvalidResponseMessageIdError, repairCodexInvalidResponseMessageIds } from "./invalid-response-message-id-recovery";
+import { portableThreadRequest } from "./portable-code-mode-transport.mjs";
 
 export * from "@pwragent/owner-core/codex-app-server/client";
 
 type DesktopCodexClientOptions = CodexClientOptions & Partial<Pick<StdioJsonRpcTransportOptions,
   "command" | "args" | "resolveArgs" | "resolveCommand"
 >>;
+type ProviderCodexClientOptions = DesktopCodexClientOptions & { portableDiscovery?: boolean };
 
 /** Desktop owns process launch, profile state, diagnostics, and rollout repair. */
 export class CodexAppServerClient extends OwnerCodexAppServerClient {
-  constructor(options: DesktopCodexClientOptions = {}) {
+  constructor(options: ProviderCodexClientOptions = {}) {
     const runtimePolicy = getOwnerHostServices().runtimePolicy;
     super({ ...options, ...(runtimePolicy ? { helperExecutionPolicy: { approvalPolicy: "never" as const, sandbox: "read-only" as const } } : {}) }, {
       createTransport: (callbacks) => {
@@ -48,7 +50,8 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         const agentTools = createOutpostAgentToolMessageRewriter(localAgentToolAllowlist);
         // The class's own send, looked up per message, so the rewrite stays
         // the only layer this adds.
-        transport.send = (message) => StdioJsonRpcTransport.prototype.send.call(transport, agentTools(sandbox(message)));
+        transport.send = (message) => StdioJsonRpcTransport.prototype.send.call(transport,
+          agentTools(sandbox(options.portableDiscovery ? portableThreadRequest(message) : message)));
         return transport;
       },
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
