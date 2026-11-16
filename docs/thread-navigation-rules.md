@@ -10,6 +10,15 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 - Put the lens name in the `aria-label` and tooltip.
 - A thread can have links to multiple Git directories.
 
+### History and unsubmitted composers
+
+- Back and Forward can reopen a project's unsubmitted composer, including an empty one.
+- Opening another destination after Back clears ordinary Forward visits.
+- Keep unsubmitted composers from that abandoned branch in Back, behind the thread just left.
+- Thus composer → Back to A → open B → Back visits A, then the composer.
+- Keep one entry per composer, keyed by project and owning instance.
+- Submitting a composer replaces its entry with the starting thread, then the created thread.
+
 ### Attention lens
 
 - Use Attention as the work queue.

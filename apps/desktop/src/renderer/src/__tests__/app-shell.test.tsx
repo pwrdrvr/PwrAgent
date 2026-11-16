@@ -7943,6 +7943,26 @@ describe("App", () => {
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", draft);
 
+    // Taking a different thread after Back abandons the ordinary Forward
+    // visits, but the unsubmitted composer must remain reachable via Back.
+    await clickButton("Back");
+    await screen.findByRole("heading", { level: 2, name: "First project thread" });
+    await clickButton("Second project thread");
+    await screen.findByRole("heading", { level: 2, name: "Second project thread" });
+    await clickButton("Back");
+    await screen.findByRole("heading", { level: 2, name: "First project thread" });
+    await waitFor(() => expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+      "aria-description", "New thread in PwrAgent",
+    ));
+    await clickButton("Back");
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
+      .toHaveAttribute("data-value", draft);
+    await clickButton("Forward");
+    await screen.findByRole("heading", { level: 2, name: "First project thread" });
+    await clickButton("Open new thread launchpad for PwrAgent");
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+
     await clickButton(/Second project thread/i);
     await screen.findByRole("heading", {
       level: 2,
@@ -7963,7 +7983,7 @@ describe("App", () => {
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", draft);
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
-    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(2);
 
     await waitFor(() => {
       expect(screen.getByTestId("history-nav-back")).toHaveAttribute(

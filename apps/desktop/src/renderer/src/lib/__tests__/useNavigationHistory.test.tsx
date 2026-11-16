@@ -131,6 +131,34 @@ describe("useNavigationHistory", () => {
     expect(hook.result.current.canGoBack).toBe(false);
   });
 
+  it("keeps an unsubmitted composer reachable after Back then opening another thread", () => {
+    const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
+    navigate(launchpad("directory:/repo"));
+    act(() => hook.result.current.goBack());
+    settle();
+    navigate(thread("codex:b"));
+    expect(hook.result.current.canGoForward).toBe(false);
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    settle();
+    expect(hook.result.current.canGoBack).toBe(true);
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo"));
+  });
+
+  it("does not duplicate a composer reopened from its Forward entry", () => {
+    const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
+    navigate(launchpad("directory:/repo"));
+    act(() => hook.result.current.goBack());
+    settle();
+    navigate(launchpad("directory:/repo"));
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    settle();
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
   it("holds the cursor across untracked overlay surfaces", () => {
     const { hook, navigate } = renderHistory(thread("codex:a"));
     navigate(thread("codex:b"));
@@ -391,6 +419,17 @@ describe("useNavigationHistory", () => {
       expect(h.hook.result.current.canGoBack).toBe(false);
       act(() => h.hook.result.current.goForward());
       expect(h.restore).toHaveBeenLastCalledWith(STARTING);
+    });
+
+    it("does not retain a submitted composer when another thread replaces Forward", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+      h.navigate(thread("codex:b"));
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+      h.settle();
+      expect(h.hook.result.current.canGoBack).toBe(false);
     });
 
     it("goes Forward to the created thread after leaving while it started", () => {

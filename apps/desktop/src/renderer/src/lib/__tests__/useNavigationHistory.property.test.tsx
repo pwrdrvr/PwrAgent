@@ -45,3 +45,50 @@ it("Back then Forward preserves the unsubmitted composer after any navigation pr
     },
   ), { numRuns: 25 });
 });
+
+it("branching after Back retains every unsubmitted composer and drops ordinary Forward visits", () => {
+  fc.assert(fc.property(
+    fc.uniqueArray(fc.record({
+      directoryKey: fc.integer({ min: 0, max: 6 }).map((key) => `directory:${key}`),
+      instanceId: fc.option(fc.constantFrom("studio", "laptop"), { nil: undefined }),
+    }), { minLength: 1, maxLength: 6, selector: (project) => JSON.stringify(project) }),
+    (projects) => {
+      const restore = vi.fn();
+      const source: NavigationHistoryLocation = { view: "thread", threadKey: "codex:source" };
+      const startingThreads = new Map<string, string | undefined>();
+      const h = renderHook(({ current }: { current: NavigationHistoryLocation }) =>
+        useNavigationHistory({ current, restore, startingThreads }), {
+        initialProps: { current: source as NavigationHistoryLocation },
+      });
+      const navigate = (current: NavigationHistoryLocation): void => {
+        act(() => h.rerender({ current }));
+      };
+      const back = (): NavigationHistoryLocation => {
+        restore.mockClear();
+        act(() => h.result.current.goBack());
+        expect(restore).toHaveBeenCalledOnce();
+        const location = restore.mock.lastCall![0] as NavigationHistoryLocation;
+        navigate(location);
+        return location;
+      };
+      try {
+        const composers: NavigationHistoryLocation[] = projects.map((project) => ({ view: "launchpad", ...project }));
+        for (const [index, composer] of composers.entries()) {
+          navigate(composer);
+          navigate({ view: "thread", threadKey: `codex:forward-${index}` });
+        }
+        for (let index = 0; index < composers.length * 2; index += 1) back();
+        navigate({ view: "thread", threadKey: "codex:other" });
+        expect(h.result.current.canGoForward).toBe(false);
+        // The thread just left remains the first Back target. Only live
+        // composers survive the abandoned branch, newest visit first.
+        for (const expected of [source, ...composers.toReversed()]) {
+          expect(back()).toEqual(expected);
+        }
+        expect(h.result.current.canGoBack).toBe(false);
+      } finally {
+        h.unmount();
+      }
+    },
+  ), { numRuns: 25 });
+});

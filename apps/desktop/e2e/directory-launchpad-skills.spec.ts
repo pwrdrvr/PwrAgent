@@ -7,7 +7,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 import { seedProfileOverlayState } from "./fixtures/overlay-state-seeding";
 import { canonicalizeNavigationPath } from "@pwragent/shared";
 
-async function createDirectoryLaunchpadSkillsFixture(): Promise<{
+async function createDirectoryLaunchpadSkillsFixture(options?: { navigationSibling?: boolean }): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
   repoDir: string;
@@ -91,6 +91,11 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
                 ],
                 updatedAt: 1760000000000,
               },
+              ...(options?.navigationSibling ? [{
+                id: "thread-navigation-sibling", title: "Other project thread", titleSource: "explicit",
+                source: "codex", executionMode: "default", updatedAt: 1759999999999,
+                linkedDirectories: [{ id: "fixture-repo", label: "FixtureRepo", path: repoDir, kind: "local" }],
+              }] : []),
             ],
           },
           {
@@ -253,7 +258,7 @@ function getLaunchpadComposer(app: Awaited<ReturnType<typeof launchElectronApp>>
 
 for (const draft of ["", "Keep this project draft."]) {
   test(`unsubmitted directory launchpad survives Back and Forward (${draft ? "text" : "empty"})`, async () => {
-    const fixture = await createDirectoryLaunchpadSkillsFixture();
+    const fixture = await createDirectoryLaunchpadSkillsFixture({ navigationSibling: true });
     const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
     try {
       await app.window.getByRole("button", { name: "Directory launchpad replay", exact: true }).click();
@@ -265,6 +270,17 @@ for (const draft of ["", "Keep this project draft."]) {
       await expect(page.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
       await expect(page.getByTestId("history-nav-forward")).toBeEnabled();
       await page.getByTestId("history-nav-forward").click();
+      await expect(page.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
+      await expect(page.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", draft);
+      await page.getByTestId("history-nav-back").click();
+      await expect(page.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
+      await page.getByRole("button", { name: "Other project thread", exact: true }).click();
+      await expect(page.getByRole("heading", { level: 2, name: "Other project thread" })).toBeVisible();
+      await expect(page.getByTestId("history-nav-forward")).toBeDisabled();
+      await page.getByTestId("history-nav-back").click();
+      await expect(page.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
+      await expect(page.getByTestId("history-nav-back")).toBeEnabled();
+      await page.getByTestId("history-nav-back").click();
       await expect(page.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
       await expect(page.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", draft);
     } finally {

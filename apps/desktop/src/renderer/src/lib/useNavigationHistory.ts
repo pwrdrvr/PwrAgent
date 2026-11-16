@@ -157,8 +157,9 @@ const EMPTY_STACKS: HistoryStacks = { back: [], cursor: undefined, forward: [] }
  * state. The hook OBSERVES `current` rather than requiring every
  * navigation call-site to push explicitly — any change of the tracked
  * location (sidebar click, search result, menu deep-link, thread
- * creation) lands in the back stack automatically, and a new navigation
- * clears the forward stack, exactly like a browser.
+ * creation) lands in the back stack automatically. A new navigation clears
+ * Forward, retaining its unsubmitted composers in Back so branching away
+ * from a copy/paste detour cannot strand a draft.
  *
  * `restore` is invoked from goBack/goForward to set the shell state that
  * derives `current`; the hook moves its cursor first, so the resulting
@@ -283,10 +284,18 @@ export function useNavigationHistory(args: {
       // would push the page being left and clear Forward.
       return;
     }
-    const baseBack =
-      current.view === "launchpad"
-        ? prev.back.filter((location) => !sameLocation(location, current))
-        : prev.back;
+    let baseBack = prev.back;
+    // A new destination abandons Forward. Keep its live composers behind
+    // the thread being left, so Back still visits that thread first and
+    // then the drafts. Reopening a composer must not retain a second copy.
+    for (const location of prev.forward) {
+      if (location.view === "launchpad" && !sameLocation(location, current)) {
+        baseBack = appendLocation(baseBack, location);
+      }
+    }
+    if (current.view === "launchpad") {
+      baseBack = baseBack.filter((location) => !sameLocation(location, current));
+    }
     const next: HistoryStacks = {
       back:
         prev.cursor !== undefined
