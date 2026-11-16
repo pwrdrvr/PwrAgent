@@ -52,7 +52,7 @@
     "test": "node --test test/*.test.js scripts/*.test.mjs",
     "pack:check": "node scripts/pack-check.mjs",
     "build": "node scripts/build.mjs",
-    "pretest": "node scripts/build.mjs",
+    "pretest": "node scripts/build.mjs --no-sourcemap",
     "prepack": "node scripts/build.mjs",
     "release:check": "node scripts/release.mjs",
     "postinstall": "node -e \"if(require('node:fs').existsSync('dist/runtime.json')) import('./scripts/install.mjs')\""

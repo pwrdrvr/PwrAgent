@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // These libraries belong to configured-only providers or first-use features.
 // Their code must be absent from the static emitted startup closure, even if
 // a bundler would defer their initializer inside a giant startup file.
-const optionalInput = /messaging\/providers\/|node_modules\/(?:@anthropic-ai\/claude-agent-sdk|@modelcontextprotocol\/sdk|@agentclientprotocol\/sdk|@napi-rs\/canvas|pdfjs-dist|sigstore|zod|ajv)\//;
+const optionalInput = /messaging\/providers\/|node_modules\/(?:discord\.js|grammy|@slack\/(?:socket-mode|web-api)|@larksuiteoapi\/node-sdk|@line\/bot-sdk|@mattermost\/client|@anthropic-ai\/claude-agent-sdk|@modelcontextprotocol\/sdk|@agentclientprotocol\/sdk|@napi-rs\/canvas|pdfjs-dist|sigstore|zod|ajv)\//;
 
 /** Assert the daemon's own load trace at readiness, before feature requests. */
 export function assertPortableStartupLoads(directory, urls) {

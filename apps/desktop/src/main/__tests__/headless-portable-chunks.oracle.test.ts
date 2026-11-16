@@ -41,3 +41,9 @@ it("keeps executable CJS entry paths, ESM direct execution, and source-map suppr
     expect(stdout.trim()).toBe(JSON.parse(fs.readFileSync(path.join(directory, "runtime.json"), "utf8")).appVersion);
   }
 });
+
+it("shared Outpost test preparation emits the real package without source maps", () => {
+  const files = fs.readdirSync(path.join(packageRoot, "dist"));
+  expect(files).toContain("index.mjs");
+  expect(files.filter(file => file.endsWith(".map"))).toEqual([]);
+});

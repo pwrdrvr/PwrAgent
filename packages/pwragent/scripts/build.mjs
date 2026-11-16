@@ -6,7 +6,11 @@ import path from "node:path";
 const root = fileURLToPath(new URL("../", import.meta.url));
 await mkdir(path.join(root, "dist"), { recursive: true });
 await rm(path.join(root, "dist"), { recursive: true, force: true });
-const result = await buildHeadless({ outputDirectory: path.join(root, "dist"), portable: true });
+// Tests execute the emitted code without source maps. Keep normal build/pack
+// defaults intact while avoiding map generation in their shared preparation.
+const sourcemap = process.argv.includes("--no-sourcemap") ? false : "external";
+const result = await buildHeadless({ outputDirectory: path.join(root, "dist"), portable: true,
+  sourcemap, logLevel: sourcemap === false ? "warning" : "info" });
 await mkdir(path.join(root, "native/mcp-ipc-relay"), { recursive: true });
 await mkdir(path.join(root, "resources"), { recursive: true });
 for (const file of ["stage-runtime.mjs", "build-mcp-ipc-relay.mjs"]) {

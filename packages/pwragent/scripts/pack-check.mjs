@@ -36,6 +36,7 @@ try {
     "dist/chunks.json", "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
+  assert.ok([...files].some(file => file.endsWith(".mjs.map")), "Normal packed builds retain debugging source maps");
   for (const file of files) assert.ok(!file.split("/").includes(".."), `Packed path escapes package: ${file}`);
   for (const file of ["runtime.js", "federation-backend.js", "federation.js", "federation-core.ts", "codex.js", "store.js", "projects.js", "handoffs.js", "owner-thread-registry.js"]) {
     assert.ok(!files.has(`src/${file}`), `Retired runtime shipped: ${file}`);
