@@ -42,6 +42,7 @@ import {
 import {
   disposeClipboardIpcHandlers,
   registerClipboardIpcHandlers,
+  requestPasteWithoutFormatting,
 } from "./ipc/clipboard";
 import {
   checkForAppUpdatesNow,
@@ -1019,6 +1020,7 @@ function installApplicationMenu(): void {
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
       },
+      pasteWithoutFormatting: requestPasteWithoutFormatting,
       quit: () => {
         void requestQuit({ source: "menu" });
       },
