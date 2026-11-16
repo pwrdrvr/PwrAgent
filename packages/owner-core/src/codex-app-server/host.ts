@@ -48,6 +48,12 @@ export type CodexClientHost = {
   }) => CodexClientTransport;
   clientInfo: { name: string; title: string };
   onRequestFailure?: (error: unknown) => void;
+  /** Host-scoped, process-local launch adaptations for thread MCP runtimes. */
+  prepareThreadRequest?: (input: {
+    method: string;
+    params: unknown;
+    request: (method: string, params: unknown) => Promise<unknown>;
+  }) => Promise<unknown>;
   logger: CodexClientLogger;
   rpcLogger: CodexClientLogger;
   listingDiagnostics: CodexListingDiagnostics;

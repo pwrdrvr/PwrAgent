@@ -81,6 +81,16 @@ are plaintext configuration, including in process arguments; provider secrets
 belong in environment variables referenced by Codex's `env_key` or
 `env_http_headers`. No new periodic or per-turn persistence is introduced.
 
+On macOS the desktop host prepares Computer Use's MCP launch configuration at
+the thread request boundary, covering start, resume and fork. Codex's protocol
+supplies plugin activation and the installed version; the adapter preserves
+that version's manifest environment and tool restrictions. Only the stock
+`cua_repl` launcher is adapted, with the plugin's own Node executable retained
+as `node_repl`'s immediate parent for Sky's authentication. The override lives
+in the thread request: no Codex config, plugin files, signatures or installed
+helpers are changed. Disabled plugins, custom MCP commands, helper threads,
+headless hosts and other platforms retain their existing launch behavior.
+
 ## Git information reads
 
 Navigation Git information goes through main-process stores. Directory enrichment
