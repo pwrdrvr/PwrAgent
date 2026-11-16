@@ -171,7 +171,6 @@ export interface ThreadUsageLedgerHost extends Pick<RegistryHostPorts,
   "getActiveTurnForThread" | "invalidateThreadListCache" | "liveProfileRuntimeInstanceIds"
   | "liveSubAgentMonitorIds"
 > {
-  readonly activeTurnKeys: ReadonlySet<string>;
   readonly codexBackendSummary: BackendSummary | undefined;
   readonly registrySessionId: string;
   readonly registrySessionStartedAt: number;
@@ -581,7 +580,7 @@ export class ThreadUsageLedger {
     if (!complete) {
       return;
     }
-    const turns = Array.from(this.host().activeTurnKeys).flatMap((key) => {
+    const turns = Array.from(this.context.turnState.registeredTurnKeys()).flatMap((key) => {
       const parsed = parseActiveTurnKey(key);
       return parsed ? [parsed] : [];
     });
@@ -3213,7 +3212,7 @@ export class ThreadUsageLedger {
     threadId: string,
   ): string | undefined {
     const prefix = `${backend}:${threadId}:`;
-    for (const key of this.host().activeTurnKeys) {
+    for (const key of this.context.turnState.registeredTurnKeys()) {
       if (key.startsWith(prefix)) {
         return key.slice(prefix.length);
       }

@@ -1,3 +1,4 @@
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind, TaskMonitorRequest, TaskMonitorResponse } from "@pwragent/shared";
@@ -85,6 +86,7 @@ function createService(options: {
   dependencies?: Record<string, unknown>;
 } = {}) {
   const context = {
+    ...registryContextStandIn(),
     stores: { subAgents: {}, threads: {}, usage: {}, ...options.stores },
     providers: {
       claude: {
@@ -136,6 +138,7 @@ describe("SubAgentMonitorService", () => {
     let bound = false;
     const reconciled: unknown[] = [];
     const context = {
+      ...registryContextStandIn(),
       get stores() {
         if (!bound) throw new Error("store read while constructing");
         return {

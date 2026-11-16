@@ -24,7 +24,6 @@ import {
   readForgeApprovalRememberChoice,
   resolveForgeAgentToolAccess,
   type AppServerBackendKind,
-  type AppServerCollaborationModeRequest,
   type AppServerPendingRequestNotification,
   type AttachThreadPullRequestToolArgs,
   type CodexModelProviderSettings,
@@ -147,7 +146,6 @@ export interface ForgeToolBridgeHost extends Pick<RegistryHostPorts,
   | "resolveCodexToolCallExecutionMode" | "taskMonitorForThread"
 > {
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
-  readonly activeCodexTurnCollaborationModes: Map<string, AppServerCollaborationModeRequest["mode"]>;
   readonly threadTodoHandler: PwrAgentThreadTodoHandler | undefined;
   resolveCodexModelProvidersFn(): CodexModelProviderSettings[];
   findHeadlessAutomationTurnForRequest: RegistryHostQueryResult<"findHeadlessAutomationTurnForRequest", "executionMode", true>;
@@ -946,10 +944,10 @@ export class ForgeToolBridge {
     const pendingKey = buildActiveTurnKey("codex", context.threadId, `pending:${context.threadId}`);
     const turnId = context.turnId ?? this.host().getActiveTurnForThread(context)?.turnId;
     const mode = turnId
-      ? this.host().activeCodexTurnCollaborationModes.get(buildActiveTurnKey("codex", context.threadId, turnId))
+      ? this.context.turnState.collaborationMode({ backend: "codex", threadId: context.threadId, turnId: turnId })
       : undefined;
     // A dynamic call can arrive before turn/start returns its real turn id.
-    return (mode ?? this.host().activeCodexTurnCollaborationModes.get(pendingKey)) === "plan";
+    return (mode ?? this.context.turnState.collaborationMode(pendingKey)) === "plan";
   }
 
   /**

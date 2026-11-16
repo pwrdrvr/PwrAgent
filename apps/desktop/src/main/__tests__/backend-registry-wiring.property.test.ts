@@ -66,9 +66,9 @@ function constructionTimeReads(file: ts.SourceFile): string[] {
   const reads: string[] = [];
   const visit = (node: ts.Node, hostNames: ReadonlySet<string>): void => {
     if (ts.isFunctionLike(node) || ts.isClassLike(node)) return;
-    const stores = ts.isPropertyAccessExpression(node) && node.name.text === "stores"
-      || ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && node.argumentExpression.text === "stores"
-      || ts.isBindingElement(node) && (node.propertyName ?? node.name).getText(file) === "stores";
+    const stores = ts.isPropertyAccessExpression(node) && ["stores", "turnState"].includes(node.name.text)
+      || ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && ["stores", "turnState"].includes(node.argumentExpression.text)
+      || ts.isBindingElement(node) && ["stores", "turnState"].includes((node.propertyName ?? node.name).getText(file));
     if (stores) reads.push(node.getText(file));
     if (ts.isCallExpression(node)) {
       const callee = node.expression;

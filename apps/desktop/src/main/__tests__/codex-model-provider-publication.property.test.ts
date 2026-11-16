@@ -1,3 +1,4 @@
+import { registryModules } from "../app-server/backend-registry-wiring";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -198,7 +199,7 @@ async function runScenario(params: {
     codexProviderCatalogRetryTimer: retryTimer,
   });
   if (params.turnActive) {
-    (registry as unknown as { activeTurnKeys: Set<string> }).activeTurnKeys.add("codex:thread-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
   }
   const federationBackends = federationListBackends(registry);
   try {

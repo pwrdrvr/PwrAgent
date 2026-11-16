@@ -21,7 +21,6 @@ describe("Codex catalog dynamic tool dispatch", () => {
   let db: StateDb;
   let registry: DesktopBackendRegistry;
   let internals: {
-    activeTurnKeys: Set<string>;
     tokenMiserStore?: TokenMiserStore;
     tokenMiserService?: TokenMiserService;
     buildCodexParentDynamicTools(tokenMiserEnabled: boolean, discoveryEnabled: boolean): DynamicToolSpec[];
@@ -49,7 +48,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
       overlayStore: new SqliteOverlayStore(db), isBootstrapMode: () => false,
     });
     internals = registry as unknown as typeof internals;
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
     // Only build contracts; no retrieval or inference runs in dispatch coverage.
     internals.tokenMiserStore = { flushAll: async () => {} } as TokenMiserStore;
     internals.tokenMiserService = { focused: { isEnabled: () => true } } as TokenMiserService;
@@ -93,7 +92,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
   });
 
   it("checks the active turn for every advertised tool before dispatch", async () => {
-    internals.activeTurnKeys.clear();
+    registryModules(registry).turnState.registeredTurnKeys().forEach(key => registryModules(registry).turnState.unregisterTurn(key));
     const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall");
     for (const spec of internals.buildCodexParentDynamicTools(true, true)) {
       if (spec.type !== "namespace") throw new Error(`Unexpected tool spec: ${spec.type}`);
@@ -123,7 +122,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
     }));
 
     checkDynamicToolPermission.mockClear();
-    internals.activeTurnKeys.clear();
+    registryModules(registry).turnState.registeredTurnKeys().forEach(key => registryModules(registry).turnState.unregisterTurn(key));
     const inactiveGuide = await internals.performServerRequest("codex", request("pwragent", "read_tool_guide"));
     expect(inactiveGuide.success).toBe(false);
     expect(JSON.parse((inactiveGuide.contentItems[0] as { text: string }).text).code).toBe("forbidden");

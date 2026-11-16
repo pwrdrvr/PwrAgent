@@ -571,7 +571,6 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     it("keeps the shutdown deadline while an answered ACP terminal is still adopting its branch", async () => {
       const registry = createRegistry();
       const internal = registry as unknown as {
-        activeTurnKeys: ReadonlySet<string>;
         adoptThreadBranchChangeFromActiveTurn(params: { backend: AppServerBackendKind; threadId: string }): Promise<void>;
       };
       let releaseBranch!: () => void;
@@ -596,7 +595,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
         let stopped = false;
         const stop = registry.stopRunningTurnsForShutdown().then(() => { stopped = true; });
         await entered;
-        expect(internal.activeTurnKeys.size).toBe(0);
+        expect(registryModules(registry).turnState.registeredTurnCount).toBe(0);
         expect(heard).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1_999);
         expect(stopped).toBe(false);

@@ -127,7 +127,6 @@ import {
   threadOrchestrationFailure,
 } from "./backend-registry-runtime-helpers";
 import {
-  buildActiveTurnModeKey,
 } from "./thread-turn-keys";
 import {
   cloneCodexEnvironmentRuntimeForFork,
@@ -189,7 +188,6 @@ export interface ThreadDirectoryServiceHost extends Pick<RegistryHostPorts,
   | "resolveCodexThreadExecutionModeForActiveTurn" | "resolveModelSettings"
   | "resolveThreadEnvironmentCwd" | "startThread" | "startTurn" | "threadHasActiveTurn"
 > {
-  readonly activeCodexTurnModes: ReadonlyMap<string, ThreadExecutionMode>;
   readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   readonly createScheduledThreadActionFn?: (
     request: CreateScheduledThreadActionRequest,
@@ -2778,8 +2776,8 @@ export class ThreadDirectoryService {
           threadId: sourceThreadId,
         });
         const executionMode =
-          this.host().activeCodexTurnModes.get(
-            buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+          this.context.turnState.executionMode(
+            { threadId: sourceThreadId, turnId: sourceTurnId },
           ) ??
           sourceOverlay?.executionMode ??
           (backend === "codex"

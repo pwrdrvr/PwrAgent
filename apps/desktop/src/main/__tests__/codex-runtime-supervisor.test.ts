@@ -15,6 +15,7 @@ import type {
 import type { StateDb } from "../state/state-db";
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
+import { RegistryTurnState } from "../app-server/registry-turn-state";
 
 const databases: StateDb[] = [];
 afterEach(() => {
@@ -30,8 +31,10 @@ function supervisor(params: {
   lifecycle?: { closed: boolean };
   emit?: (event: AgentEvent) => Promise<void>;
   dependencies?: Partial<CodexRuntimeSupervisorDependencies>;
+  turnState?: RegistryTurnState;
 } = {}): CodexRuntimeSupervisor {
   const context = registryContextStandIn({
+    turnState: params.turnState,
     overlayStore: params.overlayStore,
     providers: { codex: params.codex },
     lifecycle: params.lifecycle,
@@ -84,52 +87,58 @@ describe("managed runtime restart admission", () => {
       fc.subarray([...signals], { maxLength: 2 }),
       fc.constantFrom("open", "open", "closed", "unrequested"),
       fc.boolean(),
-      async (busy, admission, managed) => {
-        const close = vi.fn(async () => {});
-        const reset = vi.fn();
-        const complete = vi.fn();
-        const ledger = vi.fn(async () => {});
-        const prepare = vi.fn(async () => {});
-        const client = { close, resetAppServerRestarts: reset };
-        const host = {
-          nativeVoiceLeases: busy.includes("voice") ? 1 : 0,
-          reservedCodexStartThreadIds: new Set(busy.includes("reserved") ? ["t"] : []),
-          backendActiveCodexThreadIds: new Set(busy.includes("backend") ? ["t"] : []),
-          activeCodexTurnModes: new Map(busy.includes("mode") ? [["t:turn", "default"]] : []),
-          activeTurnKeys: new Set(["claude:unrelated:turn", ...(busy.includes("turn") ? ["codex:t:turn"] : [])]),
-          tokenMiserServerCapabilities: new WeakMap([[client, Promise.resolve(undefined)]]),
-          tokenMiserReducerCapabilityState: "supported",
-          tokenMiserCodeModeGroupingVersion: 1,
-          tokenMiserPostToolUseExactOutputVersion: 1,
-          tokenMiserRuntimePreparationFailure: "old runtime",
-          tokenMiserStore: {},
-          resolveTokenMiserEnabledFn: () => true,
-          prepareTokenMiserRuntime: prepare,
-        };
-        const service = supervisor({ host, codex: client, lifecycle: { closed: admission === "closed" }, dependencies: {
-          markManagedCodexRuntimeSwitchCompleteFn: complete,
-          threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
-        } });
-        if (busy.includes("terminal")) internals(service).codexBackgroundTerminals.set("t", [terminal("cmd")]);
-        if (busy.includes("tool")) internals(service).liveCodexToolItemsByThread.set("t", new Map());
-        service.setRuntimeRestartPending(admission !== "unrequested");
-        service.setManagedRuntimeSwitchPending(managed);
-        const allowed = admission === "open" && busy.length === 0;
-        expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(allowed);
-        expect(close).toHaveBeenCalledTimes(allowed ? 1 : 0);
-        expect(reset).toHaveBeenCalledTimes(allowed ? 1 : 0);
-        expect(complete).toHaveBeenCalledTimes(allowed && managed ? 1 : 0);
-        expect(ledger).toHaveBeenCalledTimes(allowed ? 1 : 0);
-        expect(prepare).toHaveBeenCalledTimes(allowed ? 1 : 0);
-        expect(service.runtimeRestartPending).toBe(admission !== "unrequested" && !allowed);
-        expect(service.managedRuntimeSwitchPending).toBe(managed && !allowed);
-        expect(service.runtimeRestartPromise).toBeUndefined();
-        if (allowed) {
-          expect(host.tokenMiserServerCapabilities.has(client)).toBe(false);
-          expect(host.tokenMiserReducerCapabilityState).toBeUndefined();
-          expect(host.tokenMiserCodeModeGroupingVersion).toBeUndefined();
-          expect(host.tokenMiserPostToolUseExactOutputVersion).toBeUndefined();
-          expect(host.tokenMiserRuntimePreparationFailure).toBeUndefined();
+      async (requestedBusy, admission, managed) => {
+        // Reach every independent gate and the idle boundary on each sample;
+        // random pairs alone can miss the one signal a mutation removes.
+        for (const busy of [[], ...signals.map(signal => [signal]), requestedBusy]) {
+          const close = vi.fn(async () => {});
+          const reset = vi.fn();
+          const complete = vi.fn();
+          const ledger = vi.fn(async () => {});
+          const prepare = vi.fn(async () => {});
+          const client = { close, resetAppServerRestarts: reset };
+          const turnState = new RegistryTurnState();
+          if (busy.includes("reserved")) turnState.reserveStart("t", "turn");
+          if (busy.includes("backend")) turnState.seedStatus("t", "active");
+          if (busy.includes("mode")) turnState.acceptExecution("t:turn", "default");
+          turnState.registerTurn("claude:unrelated:turn");
+          if (busy.includes("turn")) turnState.registerTurn("codex:t:turn");
+          const host = {
+            nativeVoiceLeases: busy.includes("voice") ? 1 : 0,
+            tokenMiserServerCapabilities: new WeakMap([[client, Promise.resolve(undefined)]]),
+            tokenMiserReducerCapabilityState: "supported",
+            tokenMiserCodeModeGroupingVersion: 1,
+            tokenMiserPostToolUseExactOutputVersion: 1,
+            tokenMiserRuntimePreparationFailure: "old runtime",
+            tokenMiserStore: {},
+            resolveTokenMiserEnabledFn: () => true,
+            prepareTokenMiserRuntime: prepare,
+          };
+          const service = supervisor({ host, turnState, codex: client, lifecycle: { closed: admission === "closed" }, dependencies: {
+            markManagedCodexRuntimeSwitchCompleteFn: complete,
+            threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
+          } });
+          if (busy.includes("terminal")) internals(service).codexBackgroundTerminals.set("t", [terminal("cmd")]);
+          if (busy.includes("tool")) internals(service).liveCodexToolItemsByThread.set("t", new Map());
+          service.setRuntimeRestartPending(admission !== "unrequested");
+          service.setManagedRuntimeSwitchPending(managed);
+          const allowed = admission === "open" && busy.length === 0;
+          expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(allowed);
+          expect(close).toHaveBeenCalledTimes(allowed ? 1 : 0);
+          expect(reset).toHaveBeenCalledTimes(allowed ? 1 : 0);
+          expect(complete).toHaveBeenCalledTimes(allowed && managed ? 1 : 0);
+          expect(ledger).toHaveBeenCalledTimes(allowed ? 1 : 0);
+          expect(prepare).toHaveBeenCalledTimes(allowed ? 1 : 0);
+          expect(service.runtimeRestartPending).toBe(admission !== "unrequested" && !allowed);
+          expect(service.managedRuntimeSwitchPending).toBe(managed && !allowed);
+          expect(service.runtimeRestartPromise).toBeUndefined();
+          if (allowed) {
+            expect(host.tokenMiserServerCapabilities.has(client)).toBe(false);
+            expect(host.tokenMiserReducerCapabilityState).toBeUndefined();
+            expect(host.tokenMiserCodeModeGroupingVersion).toBeUndefined();
+            expect(host.tokenMiserPostToolUseExactOutputVersion).toBeUndefined();
+            expect(host.tokenMiserRuntimePreparationFailure).toBeUndefined();
+          }
         }
       },
     ));
@@ -139,8 +148,7 @@ describe("managed runtime restart admission", () => {
     const close = vi.fn().mockRejectedValueOnce(new Error("close failed")).mockResolvedValue(undefined);
     const complete = vi.fn();
     const service = supervisor({ codex: { close }, host: {
-      nativeVoiceLeases: 0, reservedCodexStartThreadIds: new Set(), backendActiveCodexThreadIds: new Set(),
-      activeCodexTurnModes: new Map(), activeTurnKeys: new Set(), tokenMiserServerCapabilities: new WeakMap(),
+      nativeVoiceLeases: 0, tokenMiserServerCapabilities: new WeakMap(),
       resolveTokenMiserEnabledFn: () => false,
     }, dependencies: { markManagedCodexRuntimeSwitchCompleteFn: complete } });
     service.setRuntimeRestartPending(true);
@@ -218,7 +226,6 @@ describe("background terminals", () => {
       const lifecycle = { closed: false };
       const client = { listBackgroundTerminals: list };
       const service = supervisor({ lifecycle, emit, host: {
-        codexRetryableOperations: new Map(),
         withCodexThreadClient: async (_id: string, work: (client: object) => unknown) => await work(client),
       } });
       const old = service.listBackgroundTerminals({ backend: "codex", threadId: "t" });
@@ -271,7 +278,7 @@ describe("invalid-ID recovery", () => {
         };
         const service = supervisor({ codex: { recoverInvalidPersistedResponseMessageIds: recover }, emit: async (event) => { events.push(event); }, host: {
           hasActiveCodexWork: () => busy, listActiveCodexWorkThreadIds: () => busy ? ["other"] : [],
-          codexRetryableOperations: new Map(), startTurnNow: retry, compactThreadNow: retry,
+          startTurnNow: retry, compactThreadNow: retry,
         }, overlayStore: {
           getThreadOverlayState: async ({ threadId }: { threadId: string }) => ({ turnFailureLog: [{ turnId: `failed-${threadId}`, occurredAt: 0 }] }),
           setTurnFailureCodexInvalidIdRecovery: async (write: typeof writes[number]) => { writes.push(structuredClone(write)); },

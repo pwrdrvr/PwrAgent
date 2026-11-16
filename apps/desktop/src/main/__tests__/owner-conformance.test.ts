@@ -2504,8 +2504,6 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const internal = registry as unknown as {
         persistStartingTurnOrigin: () => Promise<void>;
         rememberTurnInputAttachments: () => Promise<void>;
-        reservedCodexStartThreadIds: Set<string>;
-        startingTurnOrigins: Set<unknown>;
       };
       const origin = vi.spyOn(internal, "persistStartingTurnOrigin");
       const retention = vi.spyOn(internal, "rememberTurnInputAttachments");
@@ -2521,8 +2519,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
         });
         expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "turn/start")).toHaveLength(before + 1);
-        expect(internal.reservedCodexStartThreadIds.has(identities[0].threadId)).toBe(false);
-        expect(internal.startingTurnOrigins.size).toBe(0);
+        expect(registryModules(registry).turnState.hasStartReservation(identities[0].threadId)).toBe(false);
+        expect(registryModules(registry).turnState.startingOrigins().length).toBe(0);
         expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
         const interruptions = await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
         for (const [index, interruption] of interruptions.entries()) expect(interruption).toMatchObject({
@@ -2552,7 +2550,6 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const registry = desktopOwner.registry as DesktopBackendRegistry;
       const internal = registry as unknown as {
         persistStartingTurnOrigin: () => Promise<void>;
-        startingTurnOrigins: Set<unknown>;
       };
       const grants: Array<{ held: boolean }> = [];
       vi.spyOn(registryModules(registry).threadMcpConnections, "registerMcpConnections").mockImplementation(async () => {
@@ -2575,7 +2572,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           turn = await desktop.client.startTurn({ backend: "claude", threadId,
             input: [{ type: "text", text: `Claude fixture ${index}` }], messageOrigin: { kind: "messaging" } });
           expect(turn).toMatchObject({ backend: "claude", threadId, turnId: expect.any(String) });
-          expect(internal.startingTurnOrigins.size).toBe(0);
+          expect(registryModules(registry).turnState.startingOrigins().length).toBe(0);
           expect(grants.at(-1)?.held).toBe(true);
           // A second invocation while this session is live refuses without
           // revoking either grant. The backend owns both release callbacks.
@@ -2636,7 +2633,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     });
     try {
       const registry = desktopOwner.registry as DesktopBackendRegistry;
-      const internal = registry as unknown as { reservedAcpStartThreadKeys: Set<string>; startingTurnOrigins: Set<unknown> };
+      const internal = registry as unknown as { reservedAcpStartThreadKeys: Set<string>;  };
       const overlay = new SqliteOverlayStore(db);
       const failures = [true, false, ...fc.sample(fc.boolean(), 3)];
       for (const [index, fails] of failures.entries()) {
@@ -2653,7 +2650,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
             input: [{ type: "text", text: `Continue ${index}` }], messageOrigin: { kind: "messaging" } });
           expect(turn).toMatchObject({ backend, threadId, turnId: expect.any(String) });
           expect(internal.reservedAcpStartThreadKeys.size).toBe(0);
-          expect(internal.startingTurnOrigins.size).toBe(0);
+          expect(registryModules(registry).turnState.startingOrigins().length).toBe(0);
           await settle(desktop);
           const requests = readFileSync(path.join(desktop.workspace, "acp-requests.jsonl"), "utf8")
             .trim().split("\n").map((line) => JSON.parse(line));

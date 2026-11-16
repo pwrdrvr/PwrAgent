@@ -1,3 +1,4 @@
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StartReviewRequest } from "@pwragent/shared";
 import { ManagedReviewService, type ManagedReviewServiceHost } from "../app-server/managed-review-service";
@@ -14,6 +15,7 @@ describe("PR review owner boundary", () => {
   function owner(executionTarget = "local"): ManagedReviewService {
     // Exercise the real admission method without booting an app server.
     const context = {
+      ...registryContextStandIn(),
       stores: { threads: { getThreadOverlayState: async () => ({
         prs: [{ url: "https://github.com/fixture/project/pull/1" }],
         codexEnvironmentRuntime: { executionTarget },

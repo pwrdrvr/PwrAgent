@@ -10,7 +10,9 @@ import type {
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { PendingLiveThreadUsageLine } from "../app-server/backend-registry-types";
 import type { RegistryContext } from "../app-server/registry-context";
-import { ActiveTurnKeySet, buildActiveTurnKey } from "../app-server/thread-turn-keys";
+import { buildActiveTurnKey } from "../app-server/thread-turn-keys";
+import { RegistryTurnState } from "../app-server/registry-turn-state";
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import {
   ThreadUsageLedger,
   type ThreadUsageLedgerDependencies,
@@ -40,26 +42,22 @@ function createLedger(options: {
   stores?: Record<string, unknown>;
   host?: Partial<ThreadUsageLedgerHost>;
   closed?: boolean;
+  turnState?: RegistryTurnState;
 } = {}) {
   const lifecycle = { closed: options.closed ?? false };
-  const context = {
-    stores: { threads: {}, usage: {}, subAgents: {}, toolAccounting: {}, ...options.stores },
-    providers: {},
-    lifecycle,
-    emit: async () => {},
-  } as unknown as RegistryContext;
+  const context = registryContextStandIn({ lifecycle, turnState: options.turnState });
+  Object.assign(context.stores, options.stores);
   const dependencies = {
     managedReviewService: { activeReviewSubAgentRecords: new Map(), reviewSubAgentRecordsByReviewTurn: new Map() },
     subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
   } as unknown as ThreadUsageLedgerDependencies;
   const host = {
-    activeTurnKeys: new ActiveTurnKeySet(),
     captureUsageAccount: async () => undefined,
     tokenMiserStore: undefined,
     ...options.host,
   } as unknown as ThreadUsageLedgerHost;
   const ledger = new ThreadUsageLedger(context, dependencies, () => host);
-  return { ledger, internals: ledger as unknown as LedgerInternals, lifecycle };
+  return { ledger, internals: ledger as unknown as LedgerInternals, lifecycle, context };
 }
 
 function usageLine(id: string, version: number): ThreadUsageLineRecord {
@@ -145,7 +143,13 @@ describe("ThreadUsageLedger", () => {
   it("reads neither its host nor its stores until it is used", async () => {
     let bound = false;
     const completed: unknown[] = [];
+    const turnState = new RegistryTurnState();
+    turnState.registerTurn(buildActiveTurnKey("codex", "thread-a", "turn-a"));
     const context = {
+      get turnState() {
+        if (!bound) throw new Error("activity read while constructing");
+        return turnState;
+      },
       get stores() {
         if (!bound) throw new Error("store read while constructing");
         return { usage: { completeThreadUsageTurns: async (params: unknown) => { completed.push(params); } } };
@@ -154,9 +158,7 @@ describe("ThreadUsageLedger", () => {
     } as unknown as RegistryContext;
     const host = () => {
       if (!bound) throw new Error("host read while constructing");
-      const activeTurnKeys = new ActiveTurnKeySet();
-      activeTurnKeys.add(buildActiveTurnKey("codex", "thread-a", "turn-a"));
-      return { activeTurnKeys } as unknown as ThreadUsageLedgerHost;
+      return {} as ThreadUsageLedgerHost;
     };
     const ledger = new ThreadUsageLedger(context, {} as ThreadUsageLedgerDependencies, host);
     bound = true;
@@ -305,12 +307,13 @@ describe("ThreadUsageLedger", () => {
       fc.uniqueArray(malformed, { maxLength: 3 }),
       fc.boolean(),
       async (turns, garbage, failing) => {
-        const activeTurnKeys = new ActiveTurnKeySet();
-        for (const entry of turns) activeTurnKeys.add(buildActiveTurnKey(entry.backend, entry.threadId, entry.turnId));
-        for (const key of garbage) activeTurnKeys.add(key);
+        const turnState = new RegistryTurnState();
+        for (const entry of turns) turnState.registerTurn(buildActiveTurnKey(entry.backend, entry.threadId, entry.turnId));
+        const validKeys = turnState.registeredTurnKeys();
+        vi.spyOn(turnState, "registeredTurnKeys").mockReturnValue([...validKeys, ...garbage]);
         const writes: Array<{ completedAt: number; turns: unknown[] }> = [];
         const { ledger } = createLedger({
-          host: { activeTurnKeys },
+          turnState,
           stores: { usage: { completeThreadUsageTurns: async (params: { completedAt: number; turns: unknown[] }) => {
             writes.push(params);
             if (failing) throw new Error("fixture write failure");
