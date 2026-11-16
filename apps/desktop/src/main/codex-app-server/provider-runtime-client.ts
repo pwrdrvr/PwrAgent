@@ -95,11 +95,14 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
 type Method = keyof CodexAppServerClient;
 type Callback = (...args: unknown[]) => unknown;
 type Subscription = { method: Method; args: unknown[]; stops: Map<CodexAppServerClient, () => void> };
-const READ_ONLY = new Set<Method>([
+// Persisted reads and direct history edits do not need an inference catalog.
+// A live provider runtime still owns these operations once it exists.
+const PERSISTED_OPERATIONS = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
   "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
   "readThreadToolInvocation", "readTurnRoot",
+  "archiveThread", "renameThread", "restoreThread", "deleteThread", "updateThreadMetadata",
 ]);
 
 /** Independent clients own their processes, caches, turn state, recovery and RPC IDs. */
@@ -200,9 +203,9 @@ export function createProviderRuntimeClient(
     }
     if (generation !== startedAtGeneration) throw new Error("Codex runtime pool closed during routing.");
     const provider = method === "forkThread" ? requested ?? owner : owner ?? requested;
-    // Persisted history remains readable when the local inference server is offline.
+    // Persisted history remains manageable when the inference server is offline.
     const model = typeof params?.model === "string" ? parseCodexProviderModelId(params.model).model : undefined;
-    const client = provider && READ_ONLY.has(method) && !runtimes.has(provider) ? primary : runtime(provider, model);
+    const client = provider && PERSISTED_OPERATIONS.has(method) && !runtimes.has(provider) ? primary : runtime(provider, model);
     const result = await invoke(client, method, args);
     observe(result, client === primary ? undefined : provider);
     return result;
