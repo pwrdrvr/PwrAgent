@@ -68,7 +68,55 @@ function fixture(db = openInMemoryStateDb()) {
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
+async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: boolean) {
+  const { db, store, ledger, internals } = fixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const reading = new Promise<void>((resolve) => { entered = resolve; });
+  const getMany = store.getThreadSubAgents.bind(store);
+  vi.spyOn(store, "getThreadSubAgents").mockImplementationOnce(async (params) => {
+    entered();
+    await held;
+    if (failFirst) throw new Error("fixture first-batch failure");
+    return getMany(params);
+  });
+  try {
+    const older = gate(0);
+    ledger.rememberPendingTokenMiserInterception(older);
+    const first = internals.persistTokenMiserLedgerEntries([older]);
+    // Observe rejection immediately; the next write must still proceed.
+    const settledFirst = first.then(() => "fulfilled", () => "rejected");
+    await reading;
+    const newer = { ...older, retrievedCharacters };
+    ledger.rememberPendingTokenMiserInterception(newer);
+    const second = internals.persistTokenMiserLedgerEntries([newer]);
+    // Drain the second call's ready microtasks before releasing the blocked
+    // first read. This models a later flush arriving during a paced batch.
+    await yieldToEventLoop();
+    release();
+    await second;
+    expect(await settledFirst).toBe(failFirst ? "rejected" : "fulfilled");
+    const card = await store.getThreadSubAgent({
+      backend: "codex", threadId: THREAD, monitorId: "system:token-miser:gate-0",
+    });
+    expect(card?.tokenMiserAccounting?.revealedParentTokens)
+      .toBe(estimateTokenCount(newer.replacementCharacters) + estimateTokenCount(retrievedCharacters));
+    expect(internals.pendingTokenMiserInterceptions.size).toBe(0);
+  } finally { release(); vi.restoreAllMocks(); db.close(); }
+}
+
 describe("Token Miser persistence work budgets", () => {
+  it("cannot overwrite one later retrieval with an overlapping older flush", async () => {
+    await checkOverlappingFlushes(400, false);
+  });
+
+  it("orders overlapping flushes and isolates an earlier write failure", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 10 }), fc.boolean(), async (chunks, failFirst) => {
+      await checkOverlappingFlushes(chunks * 400, failFirst);
+    }), { numRuns: 15 });
+  });
+
   it("retains a newer pending/live gate arriving while a bulk flush yields", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 65, max: 130 }), async (count) => {
       const { db, ledger, internals } = fixture();

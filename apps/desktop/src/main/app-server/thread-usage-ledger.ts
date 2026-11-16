@@ -382,6 +382,7 @@ export class ThreadUsageLedger {
    * for this, so gate cards update in the order the store reported them.
    */
   private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
+  private tokenMiserLedgerPersistenceChain: Promise<void> = Promise.resolve();
 
   private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
 
@@ -3701,9 +3702,23 @@ export class ThreadUsageLedger {
    * pricing changed. With `publishPricing: false` the caller publishes it,
    * which lets a turn end send one pricing update for all of its writes.
    */
-  private async persistTokenMiserLedgerEntries(
+  private persistTokenMiserLedgerEntries(
     metadata: readonly TokenMiserObjectMetadata[],
     options: { publishPricing?: boolean } = {},
+  ): Promise<string[]> {
+    // Pacing lets later flushes arrive before an earlier batch writes. Keep
+    // their database writes in call order, independently of the live publish
+    // chain. A failed batch rejects its caller without blocking the next one.
+    const persisted = this.tokenMiserLedgerPersistenceChain.then(() =>
+      this.writeTokenMiserLedgerEntries(metadata, options),
+    );
+    this.tokenMiserLedgerPersistenceChain = persisted.then(() => undefined, () => undefined);
+    return persisted;
+  }
+
+  private async writeTokenMiserLedgerEntries(
+    metadata: readonly TokenMiserObjectMetadata[],
+    options: { publishPricing?: boolean },
   ): Promise<string[]> {
     // Finalized helper usage joins the same one-second bulk-write window as
     // parent usage. Drain that window before terminal reconciliation so the
