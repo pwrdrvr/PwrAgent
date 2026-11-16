@@ -1,3 +1,4 @@
+import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -280,6 +281,30 @@ export class ThreadWorkspaceService {
     this.host = host;
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.gitWorkspaceHandoffService = dependencies.gitWorkspaceHandoffService;
+  }
+
+  turnEventObserver(): TurnEventObserver {
+    return {
+      name: "workspace-boundary",
+      onTurnTerminal: ({ event, lifecycleTurnId }) => {
+        if (event.notification.method !== "turn/completed"
+          && event.notification.method !== "turn/failed"
+          && event.notification.method !== "turn/cancelled") return;
+        this.drainPendingThreadWorkspaceMovesForTerminalTurn({
+          backend: event.backend,
+          threadId: event.notification.params.threadId,
+          turnId: lifecycleTurnId,
+        });
+      },
+      onStatusChanged: ({ event, endedTurnIds }) => {
+        if (event.notification.method !== "thread/status/changed" || !endedTurnIds) return;
+        this.drainPendingThreadWorkspaceMovesForTurnIds({
+          backend: event.backend,
+          threadId: event.notification.params.threadId,
+          turnIds: endedTurnIds,
+        });
+      },
+    };
   }
 
   /** Threads reserved by an instance handoff, for the registry's busy and live-event checks. */

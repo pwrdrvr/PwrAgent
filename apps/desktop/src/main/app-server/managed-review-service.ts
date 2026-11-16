@@ -1,3 +1,5 @@
+import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
+import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } from "./backend-registry-notifications";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import {
@@ -162,6 +164,80 @@ export class ManagedReviewService {
   ) {
     this.context = context;
     this.host = host;
+  }
+
+  turnEventObservers(): Record<"forwarding" | "output" | "terminal" | "boundary" | "metadata", TurnEventObserver> {
+    return {
+      forwarding: { name: "review-forwarding", onEvent: async ({ event }) => { await this.forwardManagedReviewActivity(event); } },
+      output: { name: "review-output", onEvent: ({ event }) => { this.rememberManagedReviewOutput(event); } },
+      terminal: { name: "review-terminal", onTurnTerminal: (delivery) => this.observeReviewTerminal(delivery) },
+      boundary: { name: "review-boundary", onTurnTerminal: (delivery) => this.observeReviewBoundary(delivery) },
+      metadata: { name: "review-metadata", onEvent: (delivery) => { delivery.event = this.withReviewRuntimeMetadata(delivery.event); } },
+    };
+  }
+
+  private async observeReviewTerminal(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    const notification = event.notification;
+    const managedReview = turnId
+      ? this.findActiveReviewSubAgentForTerminal({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId,
+        })?.record
+      : undefined;
+    delivery.managedReview = managedReview;
+    if (turnId) {
+      await this.completeReviewSubAgent({
+        backend: event.backend,
+        completedAt: completedAtFromTerminalNotification(event.notification),
+        errorMessage: errorMessageFromTerminalNotification(event.notification),
+        method: event.notification.method,
+        threadId: notification.params.threadId,
+        turnId,
+      });
+    }
+    if (managedReview?.mode === "managed") {
+      await this.publishManagedReviewTerminal({
+        method: event.notification.method,
+        notification: event.notification as Extract<
+          AppServerNotification,
+          { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+        >,
+        record: managedReview,
+      });
+    }
+  }
+
+  private async observeReviewBoundary(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const notification = event.notification;
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    const { managedReview } = delivery;
+    if (managedReview?.mode === "native"
+      && managedReview.reviewThreadId !== managedReview.parentThreadId) {
+      await this.releaseNativeReviewParent(managedReview, {
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId: managedReview.turnId,
+        method: event.notification.method,
+        errorMessage: errorMessageFromTerminalNotification(event.notification),
+      });
+    }
+    // Inline review waiters use the returned outer turn ID, even when
+    // Codex terminates the observed inner interrupt turn.
+    const lifecycleTurnId = managedReview?.mode === "native"
+      && managedReview.reviewThreadId === managedReview.parentThreadId
+      ? managedReview.turnId
+      : turnId;
+    await this.drainPendingReviewStartsForTerminalTurn({
+      backend: event.backend,
+      threadId: notification.params.threadId,
+      turnId: lifecycleTurnId,
+      method: event.notification.method,
+    });
+    delivery.lifecycleTurnId = lifecycleTurnId;
   }
 
   /** Live review sub-agents by review turn, for the registry's usage reads. */

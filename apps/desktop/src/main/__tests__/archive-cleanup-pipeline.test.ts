@@ -2,6 +2,7 @@ import { createDesktopBackendRegistry, registryModules } from "../app-server/bac
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import path from "node:path";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
@@ -680,6 +681,10 @@ describe("archive cleanup pipeline", () => {
     expect(registryLog.info).toHaveBeenCalledWith("archive cleanup stage started", expect.objectContaining({ threadId: "first", stage: "metadata" }));
     release();
     await drivePacer(fixture.registry, fixture.finished);
+    // finished resolves inside the last listener. Publication is logged by
+    // its caller after the awaited observer delivery returns; settle that
+    // continuation before inspecting the publication log.
+    await yieldToEventLoop();
 
     const started = registryLog.info.mock.calls.find(([message, details]) => message === "archive cleanup started" && details.threadId === "second")?.[1];
     expect(started).toMatchObject({ ...fields, archivedAt: requestedAt });

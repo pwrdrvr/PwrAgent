@@ -1,3 +1,4 @@
+import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
@@ -338,6 +339,39 @@ export class SubAgentMonitorService {
     this.forgeToolBridge = dependencies.forgeToolBridge;
     this.managedReviewService = dependencies.managedReviewService;
     this.threadMcpConnections = dependencies.threadMcpConnections;
+  }
+
+  turnEventObservers(): Record<"activity" | "terminal" | "accounting", TurnEventObserver> {
+    return {
+      activity: { name: "monitor-activity", onEvent: ({ event }) => { this.recordTaskMonitorActivity(event); } },
+      terminal: { name: "monitor-terminal", onTurnTerminal: (delivery) => this.observeMonitorTerminal(delivery) },
+      accounting: { name: "monitor-accounting", onEvent: (delivery) => this.observeMonitorAccounting(delivery) },
+    };
+  }
+
+  private async observeMonitorTerminal(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
+    if (
+      event.notification.method === "turn/completed" ||
+      event.notification.method === "turn/failed" ||
+      event.notification.method === "turn/cancelled"
+    ) {
+      await this.handleTaskMonitorTerminalNotification(
+        event.backend,
+        event.notification as Extract<
+          AppServerNotification,
+          { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+        >,
+      );
+    }
+  }
+
+  private async observeMonitorAccounting(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
+    await this.recordCodexNativeSubAgentActivity(event);
+    await this.recordCodexNativeSubAgentNotifications(event);
+    await this.recordCodexNativeSubAgentNames(event);
+    await this.recordTaskMonitorUsage(event);
   }
 
   /** Running monitor delegations by monitor id, for the registry's reads. */
