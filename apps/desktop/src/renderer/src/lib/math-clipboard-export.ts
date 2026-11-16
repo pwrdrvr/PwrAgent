@@ -1,6 +1,7 @@
 // Loaded only after a formula export is requested. No new rendering library:
 // freeze KaTeX's existing layout and embed the fonts it actually uses.
 import katexLicense from "katex/LICENSE?raw";
+import { DEFAULT_MATH_EXPORT_OPTIONS, type MathExportOptions, type MathExportScale } from "./math-export-options";
 
 const STYLE_PROPERTIES = [
   "display", "position", "top", "right", "bottom", "left", "box-sizing",
@@ -19,12 +20,13 @@ const STYLE_PROPERTIES = [
 ];
 const fontData = new Map<string, Promise<string>>();
 
-/** Finite 2x exports, capped before SVG decoding as well as canvas allocation. */
-export function formulaPngDimensions(width: number, height: number): { width: number; height: number } {
+/** Cap every requested scale before SVG decoding as well as canvas allocation. */
+export function formulaPngDimensions(width: number, height: number, requestedScale: MathExportScale = 2): { width: number; height: number } {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new Error("Formula has invalid dimensions");
   }
-  const scale = Math.min(2, 8192 / width, 8192 / height, Math.sqrt(16_000_000 / (width * height)));
+  if (requestedScale !== 1 && requestedScale !== 2 && requestedScale !== 4) throw new Error("Formula has invalid scale");
+  const scale = Math.min(requestedScale, 8192 / width, 8192 / height, Math.sqrt(16_000_000 / (width * height)));
   return { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) };
 }
 
@@ -110,7 +112,7 @@ function equationNumbers(formula: HTMLElement): Map<Element, string> {
   return numbers;
 }
 
-async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fonts: string }> {
+async function snapshot(formula: HTMLElement, options: MathExportOptions): Promise<{ clone: HTMLElement; fonts: string }> {
   await document.fonts.ready;
   if (!formula.isConnected) throw new Error("Formula changed before export");
   const originals = [formula, ...Array.from(formula.querySelectorAll<HTMLElement | SVGElement>("*"))];
@@ -118,6 +120,7 @@ async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fon
   const clone = formula.cloneNode(true) as HTMLElement;
   const copies = [clone, ...Array.from(clone.querySelectorAll<HTMLElement | SVGElement>("*"))];
   const ink = getComputedStyle(formula).color;
+  const exportInk = options.color === "theme" ? ink : options.color === "light" ? "white" : "black";
   const fonts = new Set<string>();
   const explicitlyColored = new Set<Element>();
   const numbers = equationNumbers(formula);
@@ -129,11 +132,11 @@ async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fon
     if (preserveColor) explicitlyColored.add(original);
     for (const property of STYLE_PROPERTIES) {
       const value = style.getPropertyValue(property);
-      // Use dark ink for documents without baking the app's theme background
-      // into the export. Explicit TeX colors remain intact.
+      // Replace inherited theme ink only. Explicit TeX colors remain intact
+      // for every export color choice, including explicit black or white.
       const themeInk = !preserveColor && value === ink
         && (property.endsWith("color") || property === "fill" || property === "stroke");
-      copy.style.setProperty(property, themeInk ? "black" : value);
+      copy.style.setProperty(property, themeInk ? exportInk : value);
     }
     if (family(style.fontFamily).startsWith("KaTeX_")) fonts.add(fontKey(style));
     const number = numbers.get(original);
@@ -178,8 +181,8 @@ async function snapshot(formula: HTMLElement): Promise<{ clone: HTMLElement; fon
   return { clone, fonts: await embeddedFonts(fonts) };
 }
 
-export async function formulaToHtml(formula: HTMLElement): Promise<string> {
-  const { clone, fonts } = await snapshot(formula);
+export async function formulaToHtml(formula: HTMLElement, options: MathExportOptions = DEFAULT_MATH_EXPORT_OPTIONS): Promise<string> {
+  const { clone, fonts } = await snapshot(formula, options);
   const container = document.createElement("div");
   const style = document.createElement("style");
   style.textContent = fonts;
@@ -187,8 +190,8 @@ export async function formulaToHtml(formula: HTMLElement): Promise<string> {
   return container.innerHTML;
 }
 
-export async function formulaToPng(formula: HTMLElement): Promise<string> {
-  const { clone, fonts } = await snapshot(formula);
+export async function formulaToPng(formula: HTMLElement, options: MathExportOptions = DEFAULT_MATH_EXPORT_OPTIONS): Promise<string> {
+  const { clone, fonts } = await snapshot(formula, options);
   clone.querySelector(".katex-mathml")?.remove();
   const visual = clone.querySelector<HTMLElement>(".katex-html");
   if (!visual) throw new Error("Formula rendering is unavailable");
@@ -206,7 +209,7 @@ export async function formulaToPng(formula: HTMLElement): Promise<string> {
     width = Math.ceil(rect.width) + 8;
     height = Math.ceil(rect.height) + 8;
   } finally { measurement.remove(); }
-  const size = formulaPngDimensions(width, height);
+  const size = formulaPngDimensions(width, height, options.scale);
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("width", String(size.width));
   svg.setAttribute("height", String(size.height));

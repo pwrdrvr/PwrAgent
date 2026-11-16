@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MathFormula } from "../MathFormula";
 import { MathClipboardApiContext } from "../../../lib/math-clipboard-context";
 import { copyImage } from "../../../lib/copy-image";
@@ -11,6 +11,7 @@ vi.mock("../../../lib/math-clipboard-export", () => ({
   formulaToHtml: vi.fn(async () => "<span>formatted</span>"),
   formulaToPng: vi.fn(async () => "data:image/png;base64,formula"),
 }));
+beforeEach(() => { localStorage.clear(); });
 afterEach(() => { vi.clearAllMocks(); });
 
 function fixture() {
@@ -41,11 +42,11 @@ describe("formula copy menu", () => {
   it("copies formatted HTML with exact LaTeX as the plain-text flavor", async () => {
     const view = fixture();
     fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Copy formatted HTML" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Copy formatted HTML/ }));
     await waitFor(() => expect(view.copyRichText).toHaveBeenCalledWith({
       text: view.latex, html: "<span>formatted</span>",
     }));
-    expect(formulaToHtml).toHaveBeenCalledWith(view.container.querySelector(".katex"));
+    expect(formulaToHtml).toHaveBeenCalledWith(view.container.querySelector(".katex"), { color: "dark", scale: 2 });
   });
 
   it("waits for PNG generation and clipboard acceptance before reporting success", async () => {
@@ -54,7 +55,7 @@ describe("formula copy menu", () => {
     fixture();
     const trigger = screen.getByRole("button", { name: "Copy formula" });
     fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Copy transparent PNG" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Copy PNG/ }));
     await waitFor(() => expect(formulaToPng).toHaveBeenCalledOnce());
     expect(trigger).toHaveAttribute("aria-disabled", "true");
     expect(trigger).toHaveFocus();
@@ -68,7 +69,7 @@ describe("formula copy menu", () => {
     vi.mocked(copyImage).mockRejectedValueOnce(new Error("Permission denied"));
     fixture();
     fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Copy transparent PNG" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Copy PNG/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not copy formula");
     expect(screen.queryByRole("status")).toBeNull();
   });
@@ -78,7 +79,7 @@ describe("formula copy menu", () => {
     const trigger = screen.getByRole("button", { name: "Copy formula" });
     trigger.focus();
     fireEvent.click(trigger);
-    expect(screen.getByRole("menuitem", { name: "Copy transparent PNG" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: /Copy PNG/ })).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(screen.getByRole("menuitem", { name: "Copy LaTeX" })).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
@@ -98,5 +99,33 @@ describe("formula copy menu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy LaTeX" }));
     await waitFor(() => expect(view.copyText).toHaveBeenLastCalledWith("y=2"));
+  });
+
+  it("remembers choices across formula remounts and passes them to both exporters", async () => {
+    const first = fixture();
+    fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export options…" }));
+    expect(screen.getByRole("menuitem", { name: "Back to copy" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Light" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "4×" }));
+    expect(screen.getByRole("menuitemradio", { name: "Light" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    first.unmount();
+    const second = fixture();
+    fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy PNG · 4× · Light" }));
+    await waitFor(() => expect(formulaToPng).toHaveBeenCalledWith(second.container.querySelector(".katex"), { color: "light", scale: 4 }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Formula copied"));
+    fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy formatted HTML · Light" }));
+    await waitFor(() => expect(formulaToHtml).toHaveBeenCalledWith(second.container.querySelector(".katex"), { color: "light", scale: 4 }));
+  });
+
+  it("reads external preference changes when opening another menu", () => {
+    fixture();
+    localStorage.setItem("pwragent.math.exportOptions", JSON.stringify({ color: "theme", scale: 1 }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy formula" }));
+    expect(screen.getByRole("menuitem", { name: "Copy PNG · 1× · App theme" })).toBeInTheDocument();
   });
 });

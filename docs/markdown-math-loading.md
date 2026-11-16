@@ -118,16 +118,24 @@ and dismissal behavior.
 Exports freeze the current KaTeX layout and embed only its used WOFF2 font
 faces. HTML carries inline styles, embedded fonts, MathML, and a plain-text
 LaTeX flavor. Paste targets may sanitize fonts or styles. PNG uses transparent
-padding and dark ink, preserves explicit TeX colors, and defaults to 2x
-resolution, capped at 8192 pixels per edge and 16 million pixels before image
-decoding or canvas allocation. Export work happens on click with no persistence
-or background rasterization. No rendering dependency is added.
+padding and defaults to dark ink at 2x resolution. Export options offer dark,
+light, or current app-theme ink for both PNG and HTML, and 1x, 2x, or 4x PNG
+scale. Explicit TeX colors remain intact. Every scale is capped at 8192 pixels
+per edge and 16 million pixels before image decoding or canvas allocation.
+The receiving app determines the pasted image's physical size.
+
+Choices persist locally in `pwragent.math.exportOptions`, following the existing
+renderer view-preference pattern. Menus read preferences on open; only explicit
+option changes write them. There are no per-formula preference subscriptions,
+SQLite writes, background rasterization, or new rendering dependencies. Export
+work happens on click, and LaTeX copy is unaffected by these options.
 
 `pnpm --filter @pwragent/desktop exec tsx scripts/verify-math-clipboard.ts` builds
 a production Chromium fixture with contrived formulas and an intercepted
 clipboard. It checks both inline and display copy, exact source, self-contained
 HTML fonts, transparent PNG pixels, unclipped borders, theme-independent dark
-ink, and export code loading only on demand. Artifacts go under
+ink, persisted color/scale choices across reloads, small-window menu placement,
+and export code loading only on demand. Artifacts go under
 `.local/formula-clipboard/`.
 
 ### Math asset loading

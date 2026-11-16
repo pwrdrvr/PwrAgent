@@ -69,8 +69,23 @@
 }
 
 .math-formula__menu {
-  min-width: 200px;
+  min-width: min(240px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   z-index: 150;
+}
+
+.math-formula__menu [role="menuitemradio"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.math-formula__option-label {
+  padding: 8px 12px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .math-formula__status {
