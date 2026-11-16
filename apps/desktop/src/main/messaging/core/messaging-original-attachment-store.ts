@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { PwrAgentMessagingAttachmentSummary } from "@pwragent/shared";
+import type { PwrAgentMessagingAttachmentSummary, PwrAgentMessagingResponse } from "@pwragent/shared";
 
 export const ORIGINAL_ATTACHMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ORIGINAL_ATTACHMENT_CACHE_LIMITS = { maxRecords: 256, maxOriginalBytes: 256 * 1024 * 1024 };
@@ -11,6 +11,10 @@ const ID_PATTERN = /^[a-f0-9]{64}$/u;
 
 export type OriginalAttachmentScope = { backend: string; threadId: string; provider?: string; instanceId?: string };
 export type OriginalAttachmentInput = { data: Uint8Array; name: string; mimeType?: string };
+export type VerifiedOriginalAttachment = { attachment: PwrAgentMessagingAttachmentSummary; data: Uint8Array };
+export type OriginalAttachmentConsumer = (
+  original: VerifiedOriginalAttachment, reauthorize: () => Promise<boolean>,
+) => Promise<PwrAgentMessagingResponse>;
 type RecordMetadata = PwrAgentMessagingAttachmentSummary & { scopeKey: string; actorKey: string };
 
 export class OriginalAttachmentError extends Error {
@@ -98,6 +102,20 @@ export class MessagingOriginalAttachmentStore {
     });
   }
 
+  /** Host-only byte snapshot for authenticated Federation export. Paths never
+   * cross this boundary; the receiver chooses its own private staging path. */
+  async read(scope: OriginalAttachmentScope, attachmentId: string, actorKey: string): Promise<VerifiedOriginalAttachment> {
+    return this.serial(async () => {
+      await this.ensureRoot();
+      const record = (await this.records()).find((item) => item.attachmentId === attachmentId
+        && this.matches(item, scope, actorKey));
+      if (!record) throw unavailable();
+      return { attachment: summary(record), data: await verifiedOriginalAttachmentBytes(
+        path.join(this.directory(record.attachmentId), "original"), record,
+      ) };
+    });
+  }
+
   /** Export to a fixed, generated sibling, never to a model/provider path.
    * The backend's ordinary filesystem tools own the final destination write
    * and its sandbox/approval checks. No overwrite/move/delete API is exposed.
@@ -111,7 +129,7 @@ export class MessagingOriginalAttachmentStore {
         && this.matches(item, scope, actorKey));
       if (!record) throw unavailable();
       const directory = this.directory(record.attachmentId);
-      const data = await verifiedBytes(path.join(directory, "original"), record);
+      const data = await verifiedOriginalAttachmentBytes(path.join(directory, "original"), record);
       // A remote filename is display data only. It never becomes a local path.
       const exportPath = path.join(directory, "export");
       const staging = path.join(directory, `.export-${randomUUID()}`);
@@ -128,7 +146,7 @@ export class MessagingOriginalAttachmentStore {
         await rm(staging, { force: true });
       }
       try {
-        await verifiedBytes(exportPath, record);
+        await verifiedOriginalAttachmentBytes(exportPath, record);
       } catch {
         throw new OriginalAttachmentError("forbidden", "The original is retained, but its generated export was changed or replaced. It cannot be safely reused or overwritten. Reattach the file as a new message to create a fresh export.");
       }
@@ -214,7 +232,7 @@ function unavailable(): OriginalAttachmentError {
   return new OriginalAttachmentError("not_found", "Original attachment is unavailable in this thread. It may have expired (7 days), reached the cache limit, or never downloaded. Ask the sender to attach it again.");
 }
 
-async function verifiedBytes(filePath: string, record: RecordMetadata): Promise<Uint8Array> {
+export async function verifiedOriginalAttachmentBytes(filePath: string, record: PwrAgentMessagingAttachmentSummary): Promise<Uint8Array> {
   try {
     // Explicit lstat also covers platforms where O_NOFOLLOW is unavailable.
     const observed = await lstat(filePath);

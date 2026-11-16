@@ -95,7 +95,7 @@ import {
 } from "./messaging-response-mode";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "../profile";
-import { MessagingOriginalAttachmentStore } from "./core/messaging-original-attachment-store";
+import { MessagingOriginalAttachmentStore, type OriginalAttachmentConsumer } from "./core/messaging-original-attachment-store";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
@@ -568,7 +568,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapterStartTimeoutMs?: number;
     },
   ) {
-    setFederationMessagingDestinationHandler(async (operation, callerInstanceId, contained) => {
+    setFederationMessagingDestinationHandler(async (operation, callerInstanceId, contained, consumeOriginal) => {
       const tool = operation?.kind === "authorize" ? operation.check?.tool : operation?.kind === "request" ? operation.request?.operation : undefined;
       if (contained && !(CONTAINED_OUTPOST_MESSAGING_OPERATIONS as readonly string[]).includes(tool ?? "")) {
         return { allowed: false, permission: "federation.remote_control" };
@@ -583,7 +583,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         return await this.authorizeRetainedTool(context, operation.check);
       }
       if (operation?.kind !== "request" || !operation.request?.context?.causalMessagingSource
-        || !["get_current_location", "get_current_messaging_surface", "send_private_response", "rename_current_messaging_conversation", "attach_thread_here", "list_messaging_surfaces", "attach_thread_to_surface", "send_messaging_file", "inspect_messaging_pdfs", "search_messaging_pdf_text", "render_messaging_pdf_pages"].includes(operation.request.operation)
+        || !["get_current_location", "get_current_messaging_surface", "send_private_response", "rename_current_messaging_conversation", "attach_thread_here", "list_messaging_surfaces", "attach_thread_to_surface", "send_messaging_file", "list_messaging_attachments", "export_messaging_attachment", "inspect_messaging_pdfs", "search_messaging_pdf_text", "render_messaging_pdf_pages"].includes(operation.request.operation)
         || operation.request.context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
         return { ok: false, error: { code: "forbidden", message: "The destination must be resolved by its original messaging owner." } };
       }
@@ -602,7 +602,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         return await this.handlePwrAgentMessagingRequest({ ...request, args: { ...request.args, path: "" } }, bytes);
       }
       if (operation.file) return { ok: false, error: { code: "invalid_arguments", message: "File receipts apply only to send_messaging_file." } };
-      return await this.handlePwrAgentMessagingRequest(request);
+      return await this.handlePwrAgentMessagingRequest(request, undefined, consumeOriginal);
     });
   }
 
@@ -631,12 +631,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   async handlePwrAgentMessagingRequest(
     request: PwrAgentMessagingRequest,
     receivedFile?: Uint8Array,
+    consumeOriginal?: OriginalAttachmentConsumer,
   ): Promise<PwrAgentMessagingResponse> {
     const sourceOwner = request.context.causalMessagingSource?.instanceId;
-    if (["list_messaging_attachments", "export_messaging_attachment"].includes(request.operation)
+    if ((request.operation === "list_messaging_attachments" || request.operation === "export_messaging_attachment")
       && sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
-      return { ok: false, error: { code: "unsupported_operation", message:
-        "Original-file access across machines is unavailable. Reattach the file to a local thread on the messaging owner and request the save there, then use an authorized file-transfer tool. Owner-local cache paths cannot be used on this machine." } };
+      return await getDesktopFederationRuntime().requestMessagingAttachments(sourceOwner, request);
     }
     if (["list_messaging_surfaces", "attach_thread_to_surface"].includes(request.operation)
       && sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
@@ -649,7 +649,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     let firstNotFound: PwrAgentMessagingResponse | undefined;
     for (const controller of this.controllers) {
-      const response = await controller.handlePwrAgentMessagingRequest(request, receivedFile);
+      const response = await controller.handlePwrAgentMessagingRequest(request, receivedFile, consumeOriginal);
       if (response.ok) {
         return response;
       }

@@ -495,6 +495,7 @@ export const FEDERATION_MEMBER_ROLE_DECLARE_METHOD = "federation.memberRole.decl
 // Replies and subscription events are envelopes, not new owner requests.
 export function containedFederationMethodAllowed(method: string): boolean {
   return method === "messaging.destination" || method === "messaging.destination.v2"
+    || method === "messaging.originals.v1"
     || method === FEDERATION_PEER_ROLE_METHOD || method === FEDERATION_MEMBER_ROLE_DECLARE_METHOD;
 }
 
@@ -502,8 +503,7 @@ export const CONTAINED_OUTPOST_MESSAGING_OPERATIONS = [
   "get_current_location", "get_current_messaging_surface", "send_private_response",
   "rename_current_messaging_conversation", "send_messaging_file", "inspect_messaging_pdfs",
   "search_messaging_pdf_text", "render_messaging_pdf_pages",
-  // Permit the source-actor authorization check. Execution returns an
-  // actionable unsupported-route result without transferring a cache path.
+  // Original-file operations remain bound to this peer's source binding.
   "list_messaging_attachments", "export_messaging_attachment",
 ] as const;
 

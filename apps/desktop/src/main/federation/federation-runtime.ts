@@ -43,6 +43,8 @@ import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest, type ThreadHandoffSendOptions } from "./thread-instance-handoff-service";
 import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDestination,
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
+import { FederationMessagingAttachmentExports, MESSAGING_ORIGINALS_CAPABILITY, MESSAGING_ORIGINALS_METHOD } from "./federation-messaging-attachments";
+import type { PwrAgentMessagingRequest, PwrAgentMessagingResponse } from "@pwragent/shared";
 import {
   FederationFilePushReceiver,
   FederationFilePushReceipts,
@@ -655,6 +657,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "messaging_route",
   "messaging_destinations",
   "messaging_files",
+  MESSAGING_ORIGINALS_CAPABILITY,
   "pwrsnap_connection",
   "gateway_relay",
   "peer_roles_v1",
@@ -1150,6 +1153,31 @@ function eventClassAllowedByCapabilities(
 }
 
 export class DesktopFederationRuntime {
+  private readonly messagingAttachmentExports = new FederationMessagingAttachmentExports({
+    directory: path.join(resolveActiveProfileDir(), "state", "messaging-attachment-exports"),
+    receiveAllowed: () => this.receiverPermissions().filePush,
+    sendAllowed: () => this.receiverPermissions().filePull === true,
+    rpc: (instanceId) => this.rpcFor({ scope: "remote", instanceId }),
+  });
+
+  async requestMessagingAttachments(instanceId: string, request: Extract<PwrAgentMessagingRequest, {
+    operation: "list_messaging_attachments" | "export_messaging_attachment";
+  }>): Promise<PwrAgentMessagingResponse> {
+    if (!this.remotePeerAdvertisesCapability(instanceId, MESSAGING_ORIGINALS_CAPABILITY)) {
+      return { ok: false, error: { code: "unsupported_operation",
+        message: "The original messaging owner is unavailable or needs an original-attachment export upgrade. Upgrade both peers; owner-local cache paths cannot be used on this machine." } };
+    }
+    const thread = await getDesktopBackendRegistry().resolveThread({ backend: request.context.backend, threadId: request.context.threadId });
+    if (!thread || thread.source !== request.context.backend || thread.id !== request.context.threadId) {
+      return { ok: false, error: { code: "forbidden", message: "Original attachments require a thread on this execution owner." } };
+    }
+    try {
+      return await this.messagingAttachmentExports.request(instanceId, request);
+    } catch {
+      return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner did not complete an authorized transfer. Check file permissions and peer availability, then request the original again." } };
+    }
+  }
+
   messagingSourceInstanceId(): FederationInstanceId {
     return this.ensureLocalInstanceId();
   }
@@ -1874,6 +1902,7 @@ export class DesktopFederationRuntime {
       log.warn("Could not clean up incoming file transfers", error);
     });
     this.filePushReceiver = undefined;
+    await this.messagingAttachmentExports.reset();
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
     this.messagingFileReceipts.clear();
@@ -4176,6 +4205,7 @@ export class DesktopFederationRuntime {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         [FEDERATION_MESSAGING_DESTINATION_METHOD]: "messaging_route",
         "messaging.destination.v2": "messaging_files",
+        [MESSAGING_ORIGINALS_METHOD]: MESSAGING_ORIGINALS_CAPABILITY,
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -4187,7 +4217,9 @@ export class DesktopFederationRuntime {
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
-      additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_MESSAGING_DESTINATION_METHOD
+      additionalRequiredCapabilities: (envelope) => envelope.method === MESSAGING_ORIGINALS_METHOD
+        ? ["messaging_route", "thread_navigation"]
+        : envelope.method === FEDERATION_MESSAGING_DESTINATION_METHOD
         ? ((envelope.params as FederationMessagingDestinationOperation)?.kind === "request"
           && (envelope.params as { request?: { operation?: string } }).request?.operation === "send_messaging_file"
           ? ["thread_navigation", "file_push"] : ["thread_navigation"])
@@ -4219,6 +4251,9 @@ export class DesktopFederationRuntime {
     });
     router.registerHandler(FEDERATION_MESSAGING_DESTINATION_METHOD, async (envelope) =>
       await handleFederationMessagingDestination(envelope.params as FederationMessagingDestinationOperation, envelope.sourceInstanceId,
+        this.peerRole(envelope.sourceInstanceId) === "contained"));
+    router.registerHandler(MESSAGING_ORIGINALS_METHOD, (envelope) =>
+      this.messagingAttachmentExports.handle(envelope.sourceInstanceId, envelope.params,
         this.peerRole(envelope.sourceInstanceId) === "contained"));
     router.registerHandler("messaging.destination.v2", async (envelope) => {
       const operation = envelope.params as { kind?: string; authorization?: FederationMessagingDestinationOperation;

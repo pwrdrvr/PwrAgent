@@ -17091,7 +17091,7 @@ describe("MessagingController", () => {
     })).toMatchObject({ ok: false, error: { code: "not_found" } });
     expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
       context: { backend: "codex", threadId: "thread-1", requestingInstanceId: "other-owner" }, args: { attachmentId },
-    })).toMatchObject({ ok: false, error: { code: "unsupported_operation" } });
+    })).toMatchObject({ ok: false, error: { code: "forbidden" } });
   });
 
   it.each([{ kinds: ["pdf"] }, { kinds: ["image"] }, { kinds: ["zip"] }, { kinds: ["pdf", "image", "zip"] }])("initial $kinds originals are bound before first-turn admission and survive restart", async ({ kinds }) => {

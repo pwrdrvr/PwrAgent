@@ -214,12 +214,39 @@ threads as well as Codex. Retained messaging sources are reauthorized after
 restart. When a provider cannot reauthorize a restarted messaging turn, access
 fails closed and asks for a new message or a local desktop save request.
 Cross-thread, cross-provider and cross-owner IDs cannot select a record.
-Remote executions receive an explicit unsupported-route error: the existing
-messaging-file route sends files **to** the provider owner and does not provide
-an authenticated reverse export receipt. Reattach to a local thread on the
-messaging owner, save there, then transfer the saved copy through an authorized
-file-transfer workflow.
-Owner-local paths are never returned as usable remote paths.
+Remote executions negotiate `messaging_original_attachments_v1` and use
+`messaging.originals.v1`, with `messaging_route` and `thread_navigation` also
+required. Missing or older owners fail closed without trying a local thread
+with the same ID. The provider owner rechecks the persisted human source,
+profile identity, actor RBAC, provider admission and current binding. That
+binding must name the authenticated caller's exact backend/thread/instance,
+even for a full peer. Original membership additionally matches provider,
+execution instance, actor and conversation; source references alone grant no
+access. The ordinary outbound file receipt cannot authorize reverse export.
+
+The execution owner creates a five-minute, single-use pending receipt for its
+local tool request. The provider owner reads a bounded, verified original
+snapshot and sends it using the existing acknowledged `file.push` primitives
+inside the scoped RPC. Every transfer step rechecks file-pull permission and
+human authority; the receiver requires file-push permission, the expected peer
+and receipt, original ID, size, SHA-256 and unexpired retention. The owner
+rechecks membership and authority before completing the request. Provider
+membership queries run at admission and final acknowledgment; each chunk
+rechecks local provider admission, binding and RBAC without repeating paginated
+membership queries. Restart
+invalidates pending receipts; interrupted staging is discarded. No provider
+cache path crosses the protocol or becomes a remote filesystem lookup.
+
+Verified bytes are retained under the execution profile's separate
+`state/messaging-attachment-exports/` bounded original-file store, preserving
+the original expiry. Each owner permits at most four outgoing snapshots and
+four incoming transfers of 10 MiB concurrently, with five-minute deadlines.
+Completed copies use the same 256-record/256-MiB cache and seven-day retention
+as local originals, with one verified generated export per record. Transfer
+and receipt handling add no SQLite writes (0 MB/day). The returned path is
+generated on the execution owner; its backend's normal filesystem sandbox and
+approval policy control the final user-selected save. No save path is accepted
+by the transfer RPC. Provider originals and existing previews are unchanged.
 
 Telegram's adapter uses `getFile` followed by an authenticated download. The
 [hosted Bot API](https://core.telegram.org/bots/api#getfile) permits downloads

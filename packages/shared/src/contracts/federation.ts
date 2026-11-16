@@ -30,6 +30,7 @@ export const FEDERATION_CAPABILITIES = [
   "messaging_route",
   "messaging_destinations",
   "messaging_files",
+  "messaging_original_attachments_v1",
   "pwrsnap_connection",
   "gateway_relay",
   "peer_roles_v1",

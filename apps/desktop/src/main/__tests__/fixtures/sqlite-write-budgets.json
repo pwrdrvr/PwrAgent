@@ -1,4 +1,5 @@
 {
+  "messaging-remote-original-export": {"commits": 0, "note": "One authenticated remote original export through restarted production messaging controllers and a destination receipt: 0 SQLite commits, 0 MB/day; source admission and fixture setup excluded.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "messaging-initial-original-admission": {"commits": 15, "note": "One initial ZIP via new-thread admission: 15 commits, ~0.218 MB/start or ~21.8 MB/day at 100 starts/day, including binding, retained actor source and status delivery. Original bytes/manifest add no SQLite or idle writes.", "observedWalBytes": 218360, "rowsChanged": 16, "statements": 17},
   "messaging-original-files": {"commits": 0, "note": "One original intake plus 10 duplicate/list/export cycles: 0 SQLite commits, 0 MB/day at any call rate; files use the bounded profile cache.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "token-miser-pricing-repeat": {"commits": 0, "note": "Targeted gate pricing with 24 legacy repairable rows, or an identical repeat; setup excluded.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
