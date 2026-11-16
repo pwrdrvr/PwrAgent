@@ -469,6 +469,7 @@ vi.mock("../shell/ipc/app-metadata", () => ({
 vi.mock("../shell/ipc/clipboard", () => ({
   registerClipboardIpcHandlers: registerClipboardIpcHandlersMock,
   disposeClipboardIpcHandlers: disposeClipboardIpcHandlersMock,
+  requestPasteWithoutFormatting: vi.fn(),
 }));
 
 vi.mock("../shell/ipc/app-icon-drag", () => ({
