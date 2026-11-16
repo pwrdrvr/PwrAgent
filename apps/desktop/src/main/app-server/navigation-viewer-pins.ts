@@ -49,7 +49,7 @@ export function loadViewerWatchedNavigationRows(
 
 /** Viewer-owned remote memberships use the same project grouping as the established sidebar. */
 export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: readonly NavigationThreadSummary[]): NavigationQueryIndex {
-  return { ...index, directories: attachRemoteThreadsToLocalDirectories(index.directories, [...pins]),
+  return { ...index, directories: attachRemoteThreadsToLocalDirectories(index.directories, [...pins], index.threads),
     threads: [...index.threads, ...pins] };
 }
 
@@ -107,6 +107,7 @@ function repositoriesOf(directory: NavigationDirectorySummary): string[] {
 export function attachRemoteThreadsToLocalDirectories(
   directories: NavigationDirectorySummary[],
   remoteThreads: NavigationThreadSummary[],
+  existingThreads: readonly NavigationThreadSummary[] = [],
 ): NavigationDirectorySummary[] {
   if (remoteThreads.length === 0) {
     return directories;
@@ -159,6 +160,13 @@ export function attachRemoteThreadsToLocalDirectories(
   if (addedByDirectoryIndex.size === 0) {
     return directories;
   }
+  // Extending a cached pin index must include its existing placeholder
+  // members when deriving ownership. Cold projections have no such members
+  // and need no identity map of the owner's unrelated local rows.
+  const membersByKey = [...placeholderThreads.keys()].some((index) => mergedDirectories[index]!.threadKeys.length > 0)
+    ? new Map([...existingThreads, ...remoteThreads].map((thread) => [thread.federation?.ref
+      ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id), thread]))
+    : undefined;
   return mergedDirectories.map((directory, index) => {
     const added = addedByDirectoryIndex
       .get(index)
@@ -166,9 +174,14 @@ export function attachRemoteThreadsToLocalDirectories(
     if (!added?.length) {
       return directory;
     }
-    const peerProject = placeholderPeerProject(directory, placeholderThreads.get(index));
+    const incoming = placeholderThreads.get(index);
+    const previous = incoming ? directory.threadKeys.map((key) => membersByKey?.get(key)) : [];
+    const members = previous.every((thread): thread is NavigationThreadSummary => thread !== undefined)
+      ? [...previous, ...incoming ?? []] : undefined;
+    const peerProject = placeholderPeerProject(directory, members);
+    const { peerProject: _previousProject, forgeAutomation: _previousAutomation, ...placeholderFields } = directory;
     return {
-      ...directory,
+      ...(incoming && directory.kind === "directory" ? placeholderFields : directory),
       ...peerProject,
       threadKeys: [
         ...directory.threadKeys,
