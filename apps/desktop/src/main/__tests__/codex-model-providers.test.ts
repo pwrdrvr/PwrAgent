@@ -24,6 +24,23 @@ describe("Codex model provider config", () => {
     desktopSettingsPatchToEdits({ models: { codex: { providers } } }, parseTomlTables(existing, "test.toml")),
   );
 
+  it("round trips provider-scoped execution metadata without changing legacy model ids or unrelated settings", () => {
+    const existing = '# Keep this comment\n[models.codex]\nprofile = "work"\n';
+    const configured = { ...refuseless, modelMetadata: [{ id: "glm-5.3-abliterated", contextWindow: 262144,
+      supportsImage: false, supportsSearchTool: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" }] };
+    const written = save(existing, [configured]);
+    expect(written).toContain("[[models.codex.provider_model_metadata]]");
+    expect(written).toContain("# Keep this comment");
+    expect(parseDesktopSettingsToml(written, "test.toml").models?.codex?.providers).toEqual([configured]);
+    // Older clients keep the unknown metadata table when changing a URL.
+    // A capability verified against the old endpoint must not follow that edit.
+    const changedEndpoint = written.replace('base_url = "https://api.refuseless.example/v1"', 'base_url = "https://other.example/v1"');
+    expect(parseDesktopSettingsToml(changedEndpoint, "test.toml").models?.codex?.providers?.[0].modelMetadata).toBeUndefined();
+    const cleared = save(written, []);
+    expect(cleared).not.toContain("provider_model_metadata");
+    expect(cleared).toContain('profile = "work"');
+  });
+
   it("round trips providers and their rates and keeps the rest of the file", () => {
     const existing = "# Keep my configuration\n[models.codex]\nprofile = \"work\"\n";
     const local: CodexModelProviderSettings = {

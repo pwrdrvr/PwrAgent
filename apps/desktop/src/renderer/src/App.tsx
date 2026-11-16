@@ -28,6 +28,7 @@ import {
   useState,
   type ComponentType,
   type CSSProperties,
+  type Dispatch,
   type PointerEvent,
   type RefObject,
   type SetStateAction,
@@ -481,125 +482,43 @@ function DesktopAppShell(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
 }) {
-  const [sidebarWidth, setSidebarWidth] = useState(408);
-  // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
-  // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
-  // (→ Sidebar → every un-virtualized ThreadRow) that used to fire on each
-  // pointermove is gone. The `.app-shell` CSS var is rendered from the ref so
-  // an incidental rerender mid-drag (e.g. an agent event) re-applies the live
-  // dragged width instead of snapping back to the stale committed state.
-  //
-  // INVARIANT: the rendered width reads from this ref, so it must track state.
-  // Write the width through `commitSidebarWidth` (below); never call
-  // `setSidebarWidth` directly, or the rendered width diverges from state.
-  const sidebarWidthRef = useRef(sidebarWidth);
-  const appShellRef = useRef<HTMLDivElement>(null);
-  // Hardcoded sidebar resize bounds — mirrored in clampSidebarWidth() below.
-  // Exposed as constants so both the clamp and the aria-valuemin/max
-  // attributes on the resize handle stay in sync.
-  const sidebarMinWidth = 280;
-  const sidebarMaxWidth = 560;
-  // Window-level layout preferences (persisted to config — see the
-  // `ui` settings section). The left sidebar can be hidden entirely and
-  // the right context rail pinned open; the active rail tab is also
-  // remembered.
-  //
-  // Seeded from the main-process bootstrap hint rather than from a
-  // hard-coded default corrected by the settings snapshot below. Both of
-  // these move layout: the rail reserves 428px when pinned, so correcting
-  // it after first paint reflows the whole transcript under the operator.
-  // `activeContextTab` and the dock prefs keep adopting from the snapshot,
-  // because none of them change the transcript's width.
-  const [sidebarHidden, setSidebarHidden] = useState(
-    () => readBootstrapLayoutPreferences().sidebarHidden,
-  );
+  const {
+    sidebarWidth,
+    sidebarWidthRef,
+    appShellRef,
+    sidebarMinWidth,
+    sidebarMaxWidth,
+    sidebarHidden,
+    contextRailPinned,
+    projectIndexHidden,
+    projectIndexWidth,
+    activeContextTab,
+    editedFilesDock,
+    actionRunsDock,
+    launchpadConnectionsDock,
+    threadJump,
+    closeThreadJump,
+    setSidebarHiddenPersisted,
+    setContextRailPinnedPersisted,
+    setProjectIndexHiddenPersisted,
+    setProjectIndexWidthPersisted,
+    setActiveContextTabPersisted,
+    setEditedFilesDockPersisted,
+    setActionRunsDockPersisted,
+    setLaunchpadConnectionsDockPersisted,
+    resizeSidebar,
+    startSidebarResize,
+  } = useShellLayout(props.settings);
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
   // The open thread whose title strip holds a rename field.
   const [titleRenameKey, setTitleRenameKey] = useState<string>();
   const [projectRevealRequest, setProjectRevealRequest] =
     useState<ProjectRevealRequest>();
-  const [contextRailPinned, setContextRailPinned] = useState(
-    () => readBootstrapLayoutPreferences().contextRailPinned,
-  );
-  // The sidebar's project index splits the sidebar's width, so it moves the
-  // list's width and is seeded before first paint like the two above.
-  const [projectIndexHidden, setProjectIndexHidden] = useState(
-    () => readBootstrapLayoutPreferences().projectIndexHidden,
-  );
-  const [projectIndexWidth, setProjectIndexWidth] = useState(
-    () => readBootstrapLayoutPreferences().projectIndexWidth,
-  );
-  const [activeContextTab, setActiveContextTab] =
-    useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
-  const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
-    DEFAULT_EDITED_FILES_DOCK,
-  );
-  const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
-    DEFAULT_ACTION_RUNS_DOCK,
-  );
-  // "pending" until the snapshot says where the cards live, so cards the
-  // operator moved to the rail never flash on the launchpad at launch.
-  const [launchpadConnectionsDock, setLaunchpadConnectionsDock] =
-    useState<LaunchpadConnectionsDock | "pending">("pending");
-  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
-  const mainViewRef = useRef<MainView>(mainView);
-  // The control that opened Settings or Automations. The layer covers the
-  // sidebar and main, which go inert under it, so focus returns here on
-  // close rather than dropping to <body>.
-  const layerOpenerRef = useRef<HTMLElement | null>(null);
-  const layerRef = useRef<HTMLDivElement>(null);
-  // Settings can hold edits the operator has not saved. Every way out of the
-  // overlay (Exit, a menu command, a notification, history) asks Settings
-  // first, so those edits get a Save / Discard prompt instead of vanishing.
-  const settingsLeaveGuardRef = useRef<ConfirmSettingsLeave | undefined>(
-    undefined,
-  );
-  const registerSettingsLeaveGuard = useCallback(
-    (confirmLeave: ConfirmSettingsLeave | undefined) => {
-      settingsLeaveGuardRef.current = confirmLeave;
-    },
-    [],
-  );
-  // `onShown` runs with the switch, not before it. A caller that pairs the
-  // two — open a thread, create one, restore a history entry — would
-  // otherwise act on a window the operator is still deciding whether to
-  // leave, and "Keep editing" would cancel only half of it.
-  const setMainView = useCallback(
-    (next: SetStateAction<MainView>, onShown?: () => void) => {
-      const current = mainViewRef.current;
-      const target = typeof next === "function" ? next(current) : next;
-      const show = () => {
-        if (!isLayerView(current) && isLayerView(target)) {
-          const opener = document.activeElement;
-          layerOpenerRef.current =
-            opener instanceof HTMLElement && opener !== document.body ? opener : null;
-        }
-        mainViewRef.current = target;
-        setMainViewState(target);
-        onShown?.();
-      };
-      const confirmLeave = settingsLeaveGuardRef.current;
-      if (current === "settings" && target !== "settings" && confirmLeave) {
-        confirmLeave(show);
-        return;
-      }
-      show();
-    },
-    [setMainViewState],
-  );
-  // The opener went inert with the sidebar or main, so focus moves onto the
-  // layer, and Tab starts at its first control. On close, or on a switch
-  // between the two layers, focus that fell with the layer goes back.
-  const layerView = isLayerView(mainView) ? mainView : undefined;
-  useEffect(() => {
-    if (!layerView) return;
-    const layer = layerRef.current;
-    if (layer && !layer.contains(document.activeElement)) {
-      layer.focus({ preventScroll: true });
-    }
-    return () => restoreFocusIfDropped(layerOpenerRef.current, layer);
-  }, [layerView]);
+  const {
+    mainView, layerRef, layerView, setMainView, registerSettingsLeaveGuard,
+    settingsInitialSection, settingsInitialSubsection, profileCreateRequested, setProfileCreateRequested, clearProfileCreateRequest, openSettingsSection,
+  } = useMainView();
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -617,37 +536,6 @@ function DesktopAppShell(props: {
   const messageLinkNonceRef = useRef(0);
   // Bumped on every ⌘F so an already-open find bar takes focus back.
   const [findFocusNonce, setFindFocusNonce] = useState(0);
-  // Initial section for SettingsScreen — non-undefined when navigation
-  // came from a deep-link to a specific section. Resets when the user
-  // switches mainView. The Messaging Activity surface is its own
-  // dedicated BrowserWindow, NOT a settings section, so it never
-  // appears through this slot.
-  const [settingsInitialSection, setSettingsInitialSection] = useState<
-    SettingsSection | undefined
-  >(undefined);
-  // Sub-screen within `settingsInitialSection` (a provider registry id under
-  // "models", a platform kind under "messaging"). Always written together with
-  // the section through `openSettingsSection` so a deep link can never carry a
-  // previous link's sub-screen into a different section.
-  const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
-    string | undefined
-  >(undefined);
-  // Profiles → New Profile… asks Settings → Profiles to open its create form.
-  // A one-shot flag rather than a route: ProfilesSettings clears it once the
-  // form is open, so a second click opens it again and a later visit to the
-  // pane does not.
-  const [profileCreateRequested, setProfileCreateRequested] = useState(false);
-  const clearProfileCreateRequest = useCallback(() => {
-    setProfileCreateRequested(false);
-  }, []);
-  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
-  // prompt kept another pane open, then Exit Settings). The request goes with
-  // it, or a later visit to Profiles would open a form nobody asked for.
-  useEffect(() => {
-    if (mainView !== "settings") {
-      setProfileCreateRequested(false);
-    }
-  }, [mainView]);
   const [threadViewReady, setThreadViewReady] = useState(false);
   // Onboarding wizard overlay state. Three paths into it:
   //  (1) auto-launch on first snapshot if `onboarding.completed` is
@@ -678,102 +566,18 @@ function DesktopAppShell(props: {
   // This is intentionally a queue rather than one slot per producer: backend
   // failures can arrive while another safety notice is already visible, and
   // every failure must remain individually reviewable and dismissible.
-  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
   const [appNotices, dispatchAppNotice] = useReducer(
     appNoticeReducer,
     INITIAL_APP_NOTICE_STATE,
   );
-  const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
-    dispatchAppNotice({ type: "show", notice });
-  }, []);
-  useEffect(() => turnFailureAcknowledgements.subscribeDismissals((id) => {
-    dispatchAppNotice({ type: "dismiss", id });
-  }), []);
-  const codexProfiles = props.settings.snapshot?.models?.codex?.profiles;
-  const activeCodexProfileRef = useRef(codexProfiles);
-  activeCodexProfileRef.current = codexProfiles;
-  const openCodexLogin = useCallback(() => {
-    const discovery = activeCodexProfileRef.current;
-    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
-    if (profile) setCodexLoginProfile(profile);
-  }, []);
-  const rejectedCodexHomes = useRef(new Set<string>());
-  useEffect(() => {
-    const rejected = codexProfiles?.profiles.filter((profile) => profile.authenticationRequired) ?? [];
-    const nextHomes = new Set(rejected.map((profile) => profile.codexHome));
-    for (const profile of rejected) {
-      if (rejectedCodexHomes.current.has(profile.codexHome)) continue;
-      showAppNotice({
-        id: `codex-auth:${profile.codexHome}`,
-        title: "Codex login required",
-        message: `${profile.displayName} is logged out. Codex operations are paused until you sign in again.`,
-        autoDismiss: false,
-        actions: [{ label: "Login", onClick: () => setCodexLoginProfile(profile) }],
-      });
-    }
-    for (const home of rejectedCodexHomes.current) {
-      if (!nextHomes.has(home)) dispatchAppNotice({ type: "dismiss", id: `codex-auth:${home}` });
-    }
-    rejectedCodexHomes.current = nextHomes;
-  }, [codexProfiles, showAppNotice]);
-  const dismissAppNotice = useCallback((id: string): void => {
-    dispatchAppNotice({ type: "dismiss", id });
-  }, []);
-  const configError =
-    props.bootstrapConfig.snapshot?.configError
-    ?? props.settings.snapshot?.configError;
-  useEffect(() => {
-    if (!configError) {
-      dispatchAppNotice({ type: "dismiss", id: "config-file-invalid" });
-      return;
-    }
-    showAppNotice({
-      autoDismiss: false,
-      id: "config-file-invalid",
-      title: "Settings config did not load",
-      message:
-        `${configError} PwrAgent is using the last known good configuration.`,
-    });
-  }, [configError, showAppNotice]);
-  const settingsRefreshError =
-    props.desktopApi?.readSettings && props.bootstrapConfig.snapshot
-      ? props.settings.error
-      : undefined;
-  useEffect(() => {
-    if (!settingsRefreshError) {
-      dispatchAppNotice({ type: "dismiss", id: "settings-refresh-failed" });
-      return;
-    }
-    showAppNotice({
-      autoDismiss: false,
-      id: "settings-refresh-failed",
-      title: "Settings refresh failed",
-      message:
-        `${settingsRefreshError} PwrAgent is continuing with its startup configuration.`,
-    });
-  }, [settingsRefreshError, showAppNotice]);
-  /* Thread create / rename / archive failures. The originating control is
-     always gone by the time these resolve — the rename dialog closes on
-     submit, the context menu closes on click, and a failed create has no
-     thread to point at — so they land in the durable stack rather than a
-     static slot. An empty message means the producer cleared it. */
-  const handleThreadActionError = useCallback((event: ThreadActionErrorEvent): void => {
-    if (!event.message) {
-      dispatchAppNotice({
-        type: "dismiss",
-        id: threadActionErrorNoticeId(event.kind),
-      });
-      return;
-    }
-    dispatchAppNotice({
-      type: "show",
-      notice: resolveThreadActionErrorNotice({
-        ...event,
-        kind: event.kind,
-        message: event.message,
-      }),
-    });
-  }, []);
+  const {
+    codexLoginProfile,
+    setCodexLoginProfile,
+    showAppNotice,
+    dismissAppNotice,
+    openCodexLogin,
+    handleThreadActionError,
+  } = useAppNoticeProducers(props, dispatchAppNotice);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
     useState<GithubPrSamlEnforcementEvent[]>([]);
   const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
@@ -943,14 +747,6 @@ function DesktopAppShell(props: {
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
-  const openSettingsSection = useCallback(
-    (section: SettingsSection | undefined, subsection?: string) => {
-      setSettingsInitialSection(section);
-      setSettingsInitialSubsection(section ? subsection : undefined);
-      setMainView("settings");
-    },
-    [setMainView],
-  );
   const openMessagingSettings = useCallback(() => {
     openSettingsSection("messaging");
   }, [openSettingsSection]);
@@ -1846,158 +1642,10 @@ function DesktopAppShell(props: {
     autoOpen: interactiveSvgAutoOpen,
     save: (patch) => writeConfig({ general: patch }),
   }), [interactiveSvgAutoOpen, interactiveSvgSkipNotice, writeConfig]);
-  // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
-  // its own open state and the sidebar peek a jump's landing scroll needs.
-  const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
-  const endSidebarPeek = threadJump.endPeek;
-  const closeThreadJump = threadJump.closeJump;
   const toggleGlobalThreadSearch = () => {
     threadJump.closeJump();
     setMainView((current) => current === "search" ? "thread" : "search");
   };
-  // Layout prefs the operator has set in this window. The startup snapshot
-  // never adopts one of these: see the adoption effect below.
-  const layoutPrefsChosenRef = useRef(
-    new Set<keyof DesktopSettingsSnapshot["ui"]>(),
-  );
-  const setSidebarHiddenPersisted = useCallback(
-    (next: boolean) => {
-      // An explicit toggle (⌘B, the chips) is the operator stating a preference,
-      // so it ends any jump-landing peek in flight.
-      endSidebarPeek();
-      layoutPrefsChosenRef.current.add("sidebarHidden");
-      setSidebarHidden(next);
-      void writeConfig({ ui: { sidebarHidden: next } });
-    },
-    [endSidebarPeek, writeConfig],
-  );
-  const setContextRailPinnedPersisted = useCallback(
-    (next: boolean) => {
-      layoutPrefsChosenRef.current.add("contextRailPinned");
-      setContextRailPinned(next);
-      void writeConfig({ ui: { contextRailPinned: next } });
-    },
-    [writeConfig],
-  );
-
-  const setProjectIndexHiddenPersisted = useCallback(
-    (next: boolean) => {
-      layoutPrefsChosenRef.current.add("projectIndexHidden");
-      setProjectIndexHidden(next);
-      void writeConfig({ ui: { projectIndexHidden: next } });
-    },
-    [writeConfig],
-  );
-  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
-  // PanelToggleButtons chip — so it fires exactly once regardless of how many
-  // chips are mounted.
-  useLayoutChordHotkeys({
-    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
-  });
-  // Called once per drag and once per arrow-key run, on release.
-  const setProjectIndexWidthPersisted = useCallback(
-    (next: number | null) => {
-      layoutPrefsChosenRef.current.add("projectIndexWidth");
-      setProjectIndexWidth(next);
-      void writeConfig({ ui: { projectIndexWidth: next } });
-    },
-    [writeConfig],
-  );
-  const setActiveContextTabPersisted = useCallback(
-    (tab: ContextTabId) => {
-      layoutPrefsChosenRef.current.add("activeContextTab");
-      setActiveContextTab(tab);
-      void writeConfig({ ui: { activeContextTab: tab } });
-    },
-    [writeConfig],
-  );
-  const setEditedFilesDockPersisted = useCallback(
-    (dock: EditedFilesDock) => {
-      layoutPrefsChosenRef.current.add("editedFilesDock");
-      setEditedFilesDock(dock);
-      void writeConfig({ ui: { editedFilesDock: dock } });
-    },
-    [writeConfig],
-  );
-  const setActionRunsDockPersisted = useCallback(
-    (dock: ActionRunsDock) => {
-      layoutPrefsChosenRef.current.add("actionRunsDock");
-      setActionRunsDock(dock);
-      void writeConfig({ ui: { actionRunsDock: dock } });
-    },
-    [writeConfig],
-  );
-  const setLaunchpadConnectionsDockPersisted = useCallback(
-    (dock: LaunchpadConnectionsDock) => {
-      layoutPrefsChosenRef.current.add("launchpadConnectionsDock");
-      setLaunchpadConnectionsDock(dock);
-      void writeConfig({ ui: { launchpadConnectionsDock: dock } });
-    },
-    [writeConfig],
-  );
-
-  // Adopt the persisted layout prefs once the settings snapshot arrives.
-  // Guarded so later snapshot refreshes never clobber an in-session toggle.
-  // `sidebarHidden` and `contextRailPinned` are normally already correct here
-  // — the bootstrap hint read the same file before first paint — so these two
-  // set what they already hold. They stay because a window that somehow got
-  // no hint would otherwise never see the operator's stored layout.
-  //
-  // The bootstrap projection opens navigation before this snapshot arrives,
-  // so the operator can already have toggled a pref. Their choice wins over
-  // the stored value, even when the read resolved first: this effect runs
-  // only after the snapshot's render commits, and a click in that gap would
-  // otherwise be reset (Windows Desktop E2E lost a Pricing tab click to it).
-  const uiPrefsSeededRef = useRef(false);
-  const uiPrefs = settings.snapshot?.ui;
-  useEffect(() => {
-    if (!uiPrefs || uiPrefsSeededRef.current) {
-      return;
-    }
-    uiPrefsSeededRef.current = true;
-    const chosen = layoutPrefsChosenRef.current;
-    if (!chosen.has("sidebarHidden")) {
-      setSidebarHidden(uiPrefs.sidebarHidden.value);
-    }
-    if (!chosen.has("contextRailPinned")) {
-      setContextRailPinned(uiPrefs.contextRailPinned.value);
-    }
-    if (!chosen.has("projectIndexHidden") && uiPrefs.projectIndexHidden) {
-      setProjectIndexHidden(uiPrefs.projectIndexHidden.value);
-    }
-    if (!chosen.has("projectIndexWidth") && uiPrefs.projectIndexWidth) {
-      setProjectIndexWidth(uiPrefs.projectIndexWidth.value);
-    }
-    if (
-      !chosen.has("activeContextTab")
-      && isContextTabId(uiPrefs.activeContextTab.value)
-    ) {
-      setActiveContextTab(uiPrefs.activeContextTab.value);
-    }
-    const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
-    if (
-      !chosen.has("editedFilesDock")
-      && isEditedFilesDock(editedFilesDockPref)
-    ) {
-      setEditedFilesDock(editedFilesDockPref);
-    }
-    const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
-    if (
-      !chosen.has("actionRunsDock")
-      && isActionRunsDock(actionRunsDockPref)
-    ) {
-      setActionRunsDock(actionRunsDockPref);
-    }
-    if (!chosen.has("launchpadConnectionsDock")) {
-      const connectionsDockPref = uiPrefs.launchpadConnectionsDock?.value;
-      setLaunchpadConnectionsDock(
-        isLaunchpadConnectionsDock(connectionsDockPref) ? connectionsDockPref : "launchpad",
-      );
-    }
-  }, [uiPrefs]);
 
   const normalAppEnabled = resolveNormalAppEnabled({
     bootstrapCompleted:
@@ -3172,7 +2820,7 @@ function DesktopAppShell(props: {
         subsection,
       );
     });
-  }, [desktopApi, openSettingsSection]);
+  }, [desktopApi, openSettingsSection, setProfileCreateRequested]);
   useEffect(() => {
     // View → Search Threads / View → Automations. The menu opens rather than
     // toggles: the row names a screen, so choosing it again keeps it up.
@@ -4665,6 +4313,1037 @@ function DesktopAppShell(props: {
   const threadDetailPending =
     mainView === "thread" && (!ThreadViewComponent || selectedThreadPending);
 
+  // Compile JSX separately from setup so both functions stay optimizable by V8.
+  function renderAppLayout() {
+    return (
+      <FederationDisplayLabelsProvider health={liveFederationHealth}>
+      <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
+      <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
+      <TodoDispatchProvider
+        api={desktopApi}
+        backends={backendSummaries.backends}
+        backendsTarget={activeFederationTarget}
+        todos={threadTodoController.openTodos}
+        localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
+      >
+      <OperatorWaitsContext.Provider value={operatorWaitsContext}>
+      <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+      <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
+      <ThreadProvidersContext.Provider value={threadProviders}>
+      <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
+      <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
+      <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
+      <TranscriptLinkProvider
+        localInstanceId={liveFederationHealth?.instanceId}
+        activeThread={navigation.selectedThread}
+        onOpenRemoteViewer={openRemoteViewerFromLink}
+        onShowThread={showThreadFromLink}
+        threads={navigation.threads}
+      >
+        {sendToMachineThread && sendToMachineSource ? (
+          <LiveThreadHandoff store={threadHandoffStore} handoffId={dialogHandoff?.handoffId}>
+            {(liveHandoff) => (
+              <SendThreadToMachineDialog
+                key={sendToMachineKey}
+                source={sendToMachineSource}
+                targets={threadHandoffTargets}
+                findRepository={findThreadHandoffRepository}
+                {...(liveHandoff ? { transfer: liveHandoff } : {})}
+                {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
+                {...(sendToMachineEntry.initialChoice
+                  ? { initialChoice: sendToMachineEntry.initialChoice }
+                  : {})}
+                onClose={closeSendToMachine}
+                onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+                onMinimise={(from) => {
+                  if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
+                }}
+                onCancelTransfer={() => {
+                  if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
+                }}
+                onRetryNow={() => {
+                  if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
+                }}
+              />
+            )}
+          </LiveThreadHandoff>
+        ) : null}
+        {continueAfter ? (
+          <ContinueAfterDialog
+            key={`${continueAfter.thread.federation?.ref.target.scope === "remote" ? continueAfter.thread.federation.ref.target.instanceId : "local"}:${continueAfter.thread.source}:${continueAfter.thread.id}`}
+            desktopApi={desktopApi}
+            {...(todoLocalMachine.instanceId ? { localInstanceId: todoLocalMachine.instanceId } : {})}
+            thread={continueAfter.thread}
+            {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
+            onClose={() => setContinueAfter(undefined)}
+          />
+        ) : null}
+        {threadMaintenance.session ? (
+          // Mounted for the whole session, hidden while minimized, so a scan or
+          // run that ends meanwhile lands in it.
+          <ThreadMaintenanceDialog
+            key={threadMaintenance.session.id}
+            desktopApi={desktopApi}
+            policy={settings.snapshot?.worktrees?.archive}
+            hibernationPolicy={settings.snapshot?.worktrees?.hibernate}
+            {...(threadMaintenance.session.projectKey ? { projectKey: threadMaintenance.session.projectKey } : {})}
+            minimized={threadMaintenance.session.minimized}
+            onMinimize={threadMaintenance.minimize}
+            onStatus={threadMaintenance.report}
+            onOpenThread={(thread) => {
+              threadMaintenance.minimize();
+              showThreadFromLink({ backend: thread.backend as AppServerBackendKind, threadId: thread.threadId });
+            }}
+            onClose={threadMaintenance.discard}
+          />
+        ) : null}
+        {codexLoginProfile ? (
+          <CodexAuthProfileLoginDialog
+            desktopApi={desktopApi}
+            profile={codexLoginProfile.name}
+            displayName={codexLoginProfile.displayName}
+            onCancel={() => setCodexLoginProfile(undefined)}
+            onAuthenticated={settings.refresh}
+          />
+        ) : null}
+        <AppTitleBar
+          desktopApi={desktopApi}
+          onOpenMessagingActivity={openMessagingActivityWindow}
+          onOpenMessagingSettings={openMessagingSettings}
+          layout={{
+            sidebarOpen: !sidebarHidden,
+            railOpen: contextRailPinned,
+            onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+            onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+          }}
+          starMap={starMapControls}
+          actions={mastheadActions}
+        />
+        <div
+          ref={appShellRef}
+          className="app-shell"
+          data-sidebar-hidden={sidebarHidden ? "true" : undefined}
+          style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
+        >
+          <Sidebar
+            mastheadVoiceControl={directorVoiceControl}
+            inert={layerView !== undefined}
+            directoryDisclosure={navigation.directoryDisclosure}
+            pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
+            subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
+            onSelectPendingLaunchpad={(entry) => {
+              setMainView("thread");
+              if (isSubthreadLaunchpadDraft(entry)) {
+                navigation.selectDirectoryLaunchpad(entry.directoryKey);
+              } else {
+                navigation.selectPendingLaunchpad(entry.selectionKey);
+              }
+            }}
+            onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
+            onDetachSubthreadDraft={(draft) => {
+              navigation.detachSubthreadLaunchpad(draft.directoryKey);
+            }}
+            addingProjectDirectory={navigation.pickingDirectory}
+            backends={windowBackendSummaries.backends}
+            remoteBackends={remoteSidebarBackends}
+            onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
+            browseMode={navigation.browseMode}
+            pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
+            pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
+            onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
+            threadLensesEmpty={navigation.threadLensesEmpty}
+            creatingThread={navigation.creatingThread}
+            pagedNavigation={navigation.pagedNavigation}
+            pagesAwaitingRows={navigation.pagesAwaitingRows}
+            selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
+            directories={navigation.directories}
+            error={navigation.error}
+            inboxThreads={navigation.inboxThreads}
+            recentThreads={navigation.recentThreads}
+            attentionPromoteOnTurnEnd={
+              settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true
+            }
+            runtimeIdentity={runtimeIdentity}
+            activeProfile={profiles.activeProfile}
+            profiles={profiles.profiles}
+            loaded={navigation.loaded}
+            loading={navigation.loading}
+            providerRefresh={navigation.providerRefresh}
+            approvalRequestThreadKeys={session.approvalRequestThreadKeys}
+            inputRequestThreadKeys={session.inputRequestThreadKeys}
+            terminalThreadKeys={terminalThreadKeys}
+            queuedMessageThreadKeys={queuedMessageThreadKeys}
+            draftThreadKeys={draftThreadKeys}
+            unassignedThreadDraftCount={unassignedThreadDraftCount}
+            composerSourceThreadKey={navigation.composerSourceThreadKey}
+            revealSelectedThreadRequest={revealSelectedThreadRequest}
+            onRevealSelectedThreadComplete={threadJump.completePeekRestore}
+            projectRevealRequest={projectRevealRequest}
+            projectIndexHidden={projectIndexHidden}
+            onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
+            projectIndexWidth={projectIndexWidth}
+            onProjectIndexWidthChange={setProjectIndexWidthPersisted}
+            selectedItemKey={navigation.selectedItemKey}
+            thinkingThreadKeys={session.thinkingThreadKeys}
+            agentCommandThreadKeys={session.agentCommandThreadKeys}
+            threads={navigation.threads}
+            automationsActive={mainView === "automations"}
+            threadSearchActive={mainView === "search"}
+            settingsActive={mainView === "settings"}
+            onBrowseModeChange={navigation.setBrowseMode}
+            newThreadDirectoryLabel={navigation.newThreadDirectoryLabel}
+            onCreateThread={async () => {
+              setMainView("thread");
+              await navigation.createThread();
+            }}
+            onCreateThreadWithoutDirectory={async () => {
+              setMainView("thread");
+              await navigation.createThread(undefined, undefined, {
+                forceWorkspace: true,
+              });
+            }}
+            newThreadFederationTargets={newThreadFederationTargets}
+            localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
+            platform={desktopApi?.platform}
+            onRevealPath={revealProjectPath}
+            checkFederationTargetProject={checkFederationTargetProject}
+            onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
+            onSendThreadToMachine={listedThreadHandoffTargets.length > 0
+              ? setSendToMachineThread
+              : undefined}
+            onContinueAfter={canContinueAfter
+              ? (thread, returnFocus) => setContinueAfter({ thread, returnFocus })
+              : undefined}
+            onAddProjectDirectory={readRendererFederationTarget()
+              ? undefined
+              : addProjectDirectory}
+            readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
+            readSubthreadWorktreeBase={navigation.readSubthreadWorktreeBase}
+            onCreateSubthread={async (thread, mode, machine) => {
+              setMainView("thread");
+              await navigation.createSubthread(thread, mode, machine);
+            }}
+            onForkThread={async (thread, mode) => {
+              setMainView("thread");
+              await navigation.forkThread(thread, mode);
+            }}
+            onOpenAutomations={() => {
+              setMainView("automations");
+            }}
+            onOpenThreadSearch={() => {
+              toggleGlobalThreadSearch();
+            }}
+            onOpenLaunchpad={async (directory, preferredBackend) => {
+              setMainView("thread");
+              await navigation.openDirectoryLaunchpad(directory, preferredBackend);
+            }}
+            onOpenSettings={() => {
+              openSettingsSection(undefined);
+            }}
+            onOpenProfile={profiles.openProfile}
+            onOpenUsageActivity={desktopApi?.openUsageActivity
+              ? () => void desktopApi.openUsageActivity?.()
+              : undefined}
+            onSelectThread={(thread, options) => {
+              setMainView("thread");
+              setComposerFocusRequest(options?.focusComposer && options.focusOrigin
+                ? {
+                  threadKey: threadSummaryIdentityKey(thread),
+                  id: ++composerFocusRequestIdRef.current,
+                  origin: options.focusOrigin,
+                }
+                : undefined);
+              navigation.selectThread(thread);
+            }}
+            threadJumpOpen={threadJump.open}
+            onThreadJumpOpenChange={(open) => {
+              // Every close (Escape, scrim click, picking a thread) goes through
+              // closeJump, so the toggle state can't drift from what's on screen.
+              if (open) {
+                threadJump.openJump();
+                return;
+              }
+              threadJump.closeJump();
+            }}
+            onJumpToProject={(directory) => {
+              setSidebarHiddenPersisted(false);
+              setMainView("thread");
+              void navigation.openDirectoryLaunchpad(directory);
+            }}
+            onJumpToThread={(thread) => {
+              setMainView("thread");
+              navigation.selectThread(thread);
+              // Reveal on the next frame, once the new selection has rendered.
+              // Do it even when the sidebar is hidden (⌘B): peek it open for the
+              // scroll, because hidden rows reveal asynchronously as their
+              // collapsed containers reopen, and hold that peek until ThreadRow
+              // reports the selected row mounted and scrolled. The offset
+              // survives restoring the hidden preference, and an instant scroll
+              // avoids dismissing the peek partway through an animation.
+              const instant = threadJump.beginRevealPeek();
+              requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
+            }}
+            onJumpToRemoteThread={(thread) => {
+              const ref = thread.federation?.ref;
+              if (!ref) {
+                return;
+              }
+              // Pin first (viewer-owned overlay row), then refresh so the
+              // merged snapshot carries the new row, then select it — the
+              // selection scopes ThreadView's IPC to the owning instance via
+              // selectedThreadFederationTarget.
+              const instant = threadJump.beginRevealPeek();
+              void (async () => {
+                try {
+                  await desktopApi?.addRemoteThreadPin?.({
+                    ref,
+                    summary: thread,
+                    instanceLabel: thread.federation?.instanceLabel,
+                  });
+                } catch (error) {
+                  console.warn("Pinning the remote thread failed.", error);
+                }
+                await navigation.refresh();
+                setMainView("thread");
+                navigation.selectThread(thread);
+                requestAnimationFrame(() =>
+                  revealSelectedThreadInList({ instant }),
+                );
+              })();
+            }}
+            onRemoveRemoteThreadPin={async (thread) => {
+              const ref = thread.federation?.ref;
+              if (!ref) {
+                return;
+              }
+              try {
+                await desktopApi?.removeRemoteThreadPin?.({ ref });
+              } catch (error) {
+                console.warn("Removing the remote thread pin failed.", error);
+              }
+              await navigation.refresh();
+            }}
+            onArchiveThread={navigation.archiveThread}
+            onArchiveThreads={navigation.archiveThreads}
+            onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
+            onMarkDirectoriesSeen={desktopApi?.markNavigationDirectorySeen ? navigation.markDirectoriesSeen : undefined}
+            onMarkThreadsSeen={
+              desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
+            }
+            onMarkThreadUnread={
+              desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
+            }
+            onRenameThread={navigation.renameThread}
+            onRequestTitleRename={requestTitleRename}
+            onThreadsArchived={offerArchiveUndo}
+            onSetThreadReaction={navigation.setThreadReaction}
+            onSetThreadLock={navigation.setThreadLock}
+            onSetThreadCheckoutHibernation={navigation.setThreadCheckoutHibernation}
+            onSetThreadPin={navigation.setThreadPin}
+            onReorderThreadPins={navigation.reorderThreadPins}
+            onSetThreadParent={navigation.setThreadParent}
+            onUnlinkThreads={navigation.unlinkThreads}
+            onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
+            onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
+            onSetDirectoryPin={navigation.setDirectoryPin}
+            onReorderDirectoryPins={navigation.reorderDirectoryPins}
+            onSetDirectoryThreadsCollapsed={
+              navigation.setDirectoryThreadsCollapsed
+            }
+            onSetProjectForgeAutomation={
+              desktopApi?.setProjectForgeAutomation
+                ? navigation.setProjectForgeAutomation
+                : undefined
+            }
+            onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
+            onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
+            federationOwnerForgeAutomation={federationOwnerForgeAutomation}
+            peerForgeAutomationInstanceIds={peerForgeAutomationInstanceIds}
+            onRemoveDirectory={(directory) =>
+              navigation.removeDirectory(directory.key)}
+            onOpenForgePermissions={readRendererFederationTarget()
+              ? undefined
+              : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
+            onPrefetchPullRequests={pullRequests.prefetch}
+            onPrefetchGitWorkingState={gitWorkingState.prefetch}
+            onDetachPullRequest={detachThreadPullRequest}
+            onUnbindMessagingBinding={unbindMessagingBinding}
+            onCopyThreadDiagnostics={
+              desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
+            }
+          />
+          <XrayMode
+            density={props.appearanceController.appearance.density}
+            enabled={!sidebarHidden && layerView === undefined}
+            platform={desktopApi?.platform}
+          />
+          {/* Sibling of the sidebar, not a child: the seam straddles the
+              sidebar's border, which the aside's overflow clip would cut off. */}
+          {sidebarHidden ? null : (
+            <SidebarResizeHandle
+              inert={layerView !== undefined}
+              onResizeStart={startSidebarResize}
+              onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
+              sidebarWidth={sidebarWidth}
+              sidebarMinWidth={sidebarMinWidth}
+              sidebarMaxWidth={sidebarMaxWidth}
+            />
+          )}
+
+          <main
+            inert={layerView ? true : undefined}
+            className={`app-main${
+              threadDetailPending ? " app-main--thread-detail-pending" : ""
+            }${
+              !peerConnectivity.connected
+                ? " app-main--federation-disconnected"
+                : ""
+            }`}
+          >
+            {!peerConnectivity.connected ? (
+              // The runtime keeps reconnecting on its own; this banner
+              // explains why the window went read-only (composer disabled,
+              // remote polling suspended) instead of leaving a half-dead
+              // surface that fails silently.
+              <div className="federation-disconnected-banner" role="alert">
+                <span className="federation-disconnected-banner__dot" aria-hidden="true" />
+                {`${activeFederationOwnerLabel ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
+              </div>
+            ) : null}
+            {mainView === "search" ? (
+              <ThreadSearchPanel
+                desktopApi={desktopApi}
+                onOpenMessagingActivity={openMessagingActivityWindow}
+                onOpenMessagingSettings={openMessagingSettings}
+                layout={{
+                  sidebarOpen: !sidebarHidden,
+                  railOpen: contextRailPinned,
+                  onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                  onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                }}
+                masthead={mastheadActions}
+                history={historyNav}
+                state={threadSearchState}
+                threads={navigation.threads}
+                onClose={() => {
+                  // Esc pops the search screen off the history stack (same as the
+                  // title-bar Back button); if there's nowhere to go back to,
+                  // just leave the search view.
+                  if (history.canGoBack) {
+                    history.goBack();
+                  } else {
+                    setMainView("thread");
+                  }
+                }}
+                onOpenResult={async (result) => {
+                  const plan = planSearchResultOpen(result, windowFederationTarget);
+                  if (plan.kind === "owner-window") {
+                    await desktopApi?.openFederationWindow?.({
+                      target: plan.target,
+                      initialThread: plan.initialThread,
+                    });
+                    return;
+                  }
+                  if (plan.federationTarget) {
+                    // A peer's thread joins this window's sidebar first, as a
+                    // thread link or Cmd+K adds it.
+                    try {
+                      await ensureWindowThreadMounted(
+                        desktopApi ?? {},
+                        plan,
+                        navigation.threads,
+                        false,
+                        result.federation?.instanceLabel,
+                      );
+                    } catch (error) {
+                      // Its owner's window needs no pin here, so the click
+                      // still opens the thread.
+                      console.warn("Adding the remote thread to this PwrAgent failed.", error);
+                      openRemoteViewerFromLink({
+                        backend: plan.backend,
+                        instanceId: plan.federationTarget.instanceId,
+                        threadId: plan.threadId,
+                      });
+                      return;
+                    }
+                  }
+                  // Deep-link to the match: open the thread with the find bar
+                  // seeded with the search query so it highlights + scrolls the
+                  // matched message into view (auto-loading older history if the
+                  // match lives further up than the first page).
+                  const seed = threadSearchState.query.trim();
+                  setFindRequest(
+                    seed
+                      ? {
+                          query: seed,
+                          threadKey: plan.threadKey,
+                          turnId: result.turnId,
+                        }
+                      : undefined,
+                  );
+                  setMainView("thread");
+                  await navigation.showThread(plan);
+                }}
+                onOpenResultInRemoteViewer={windowFederationTarget
+                  ? undefined
+                  : ({ ref }) => {
+                      if (!isRemoteFederationTarget(ref.target)) return;
+                      openRemoteViewerFromLink({
+                        backend: ref.backend,
+                        instanceId: ref.target.instanceId,
+                        threadId: ref.threadId,
+                      });
+                    }}
+              />
+            ) : threadDetailPending ? (
+              <section className="thread-view thread-view--pending">
+                <ThreadPlaceholderHeader
+                  desktopApi={desktopApi}
+                  title="Loading..."
+                  onOpenMessagingActivity={openMessagingActivityWindow}
+                  onOpenMessagingSettings={openMessagingSettings}
+                  layout={{
+                    sidebarOpen: !sidebarHidden,
+                    railOpen: contextRailPinned,
+                    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                  }}
+                  masthead={mastheadActions}
+                  history={historyNav}
+                  starMap={starMapControls}
+                />
+              </section>
+            ) : ThreadViewComponent ? (
+              <MarkdownRenderingOptionsProvider
+                incrementalEnabled={
+                  settings.snapshot?.experimental.incrementalMarkdownRendering?.value ?? false
+                }
+                mathEnabled={
+                  settings.snapshot?.experimental.markdownMathRendering?.value ?? true
+                }
+              >
+                <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
+                  <HtmlPreviewPreferencesProvider
+                    runScripts={
+                      settings.snapshot?.general.htmlPreviewRunScripts?.value ?? false
+                    }
+                  >
+                    <TerminalPreferencesProvider
+                      minimumContrast={
+                        settings.snapshot?.general.appearance.terminalMinimumContrast
+                          ?.value ?? false
+                      }
+                    >
+                      <ThreadViewComponent {...threadViewProps} />
+                    </TerminalPreferencesProvider>
+                  </HtmlPreviewPreferencesProvider>
+                </InteractiveSvgPreferencesProvider>
+              </MarkdownRenderingOptionsProvider>
+            ) : null}
+          </main>
+
+          {mainView === "settings" ? (
+            <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
+              <Suspense fallback={null}>
+                <LazySettingsScreen
+                  appearanceController={props.appearanceController}
+                  cachedBackends={backendSummaries.backends}
+                  desktopApi={desktopApi}
+                  initialSection={settingsInitialSection}
+                  initialSubsection={settingsInitialSubsection}
+                  profileCreateRequested={profileCreateRequested}
+                  profiles={profiles}
+                  registerLeaveGuard={registerSettingsLeaveGuard}
+                  settings={settings}
+                  onClose={() => setMainView("thread")}
+                  onOpenMessagingActivity={openMessagingActivityWindow}
+                  onProfileCreateRequestHandled={clearProfileCreateRequest}
+                  onOpenThread={(target) => {
+                    setMainView("thread");
+                    void navigation.showThread(target);
+                  }}
+                  onShowNotice={showAppNotice}
+                />
+              </Suspense>
+            </div>
+          ) : null}
+
+          {mainView === "automations" ? (
+            <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
+              <AutomationsScreen
+                desktopApi={desktopApi}
+                directories={navigation.directories}
+                threads={navigation.threads}
+                onClose={() => setMainView("thread")}
+                onOpenMessagingActivity={openMessagingActivityWindow}
+                onOpenMessagingSettings={openMessagingSettings}
+                onRefreshNavigation={navigation.refresh}
+                onSelectThread={(thread) => {
+                  setMainView("thread");
+                  navigation.selectThread(thread);
+                }}
+              />
+            </div>
+          ) : null}
+
+          {onboardingOpen !== null && settings.snapshot ? (
+            <Suspense fallback={null}>
+              <LazyOnboardingWizard
+                isReplay={onboardingOpen === "replay"}
+                bootInfo={bootInfo}
+                initialDensity={settings.snapshot.general.appearance.density.value}
+                initialTheme={settings.snapshot.general.appearance.theme.value}
+                initialCodexProfileModel={
+                  onboardingOpen === "replay" && replayCodexProfileSetup
+                    ? replayCodexProfileSetup.model
+                    : settings.snapshot.general.codexProfileModel.value
+                }
+                initialCodexProfileNames={
+                  onboardingOpen === "replay"
+                    ? replayCodexProfileSetup?.profileNames
+                    : undefined
+                }
+                appearanceController={props.appearanceController}
+                settings={settings}
+                desktopApi={desktopApi}
+                onComplete={async (patch) => {
+                  await settings.writeConfig(patch);
+                  // The wizard already flips theme + density live via
+                  // appearanceController as the operator clicks — the
+                  // explicit setters below are a belt-and-suspenders to keep
+                  // the controller's React state aligned with whatever the
+                  // final patch holds, even if persistAndComplete adjusts.
+                  if (patch.general?.appearance?.density) {
+                    props.appearanceController.setDensity(
+                      patch.general.appearance.density,
+                    );
+                  }
+                  if (patch.general?.appearance?.theme) {
+                    props.appearanceController.setTheme(
+                      patch.general.appearance.theme,
+                    );
+                  }
+                  // Mark onboarding complete AND kick off the deferred Codex
+                  // `listThreads` prefetch in one IPC call (#500). On replay,
+                  // skip the call entirely — replays don't touch onboarding.
+                  //
+                  // In bootstrap mode (#524), skip this too. The bootstrap
+                  // window is about to quit; firing
+                  // `completeOnboardingCodexBootstrap` here would (a) write
+                  // `[onboarding] completed = true` to `.bootstrap/config.toml`
+                  // (which we're about to delete) and (b) trigger a Codex
+                  // `listThreads` against the system default Codex install,
+                  // contaminating the soon-to-quit window with the operator's
+                  // real Codex Desktop threads. The new profile's window
+                  // handles its own completion + prefetch on launch.
+                  if (!onboardingOpen) return;
+                  if (
+                    onboardingOpen !== "replay" &&
+                    bootInfo?.mode !== "bootstrap" &&
+                    desktopApi?.completeOnboardingCodexBootstrap
+                  ) {
+                    await desktopApi.completeOnboardingCodexBootstrap({
+                      connect: true,
+                    });
+                    await settings.refresh();
+                  }
+                  setOnboardingOpen(null);
+                }}
+                onDismiss={(persistCompleted) => {
+                  if (persistCompleted) {
+                    // Skip path: persist `completed = true` so the wizard
+                    // doesn't auto-fire again, but pass `connect: false` so
+                    // we don't auto-load Codex threads under an unverified
+                    // identity. The renderer's next explicit refresh (or app
+                    // restart) will surface them.
+                    void desktopApi?.completeOnboardingCodexBootstrap?.({
+                      connect: false,
+                    }).then(() => settings.refresh());
+                  }
+                  setOnboardingOpen(null);
+                }}
+                onOpenMessagingSettings={() => {
+                  openSettingsSection("messaging");
+                }}
+              />
+            </Suspense>
+          ) : null}
+
+          <CodexConfigWarningBanner
+            desktopApi={desktopApi}
+            preferencesLoaded={
+              Boolean(props.settings.snapshot)
+              || !desktopApi?.readSettings
+            }
+            dismissedWarningIds={codexConfigWarningsDismissed}
+            onSuppressWarning={suppressCodexWarning}
+          />
+          <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
+          <CloudflareSignInNotice
+            desktopApi={desktopApi}
+            health={liveFederationHealth}
+            onNoticeChanged={syncCloudflareSignInNotice}
+            onRefreshHealth={refreshFederationHealth}
+          />
+          <MessagingErrorNotices
+            desktopApi={desktopApi}
+            onNoticeChanged={syncMessagingErrorNotice}
+          />
+          <GrokCliUpdateNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncGrokCliUpdateNotice}
+          />
+          <CodexVersionNotice
+            desktopApi={desktopApi}
+            snapshot={settings.snapshot}
+            onNoticeChanged={syncCodexVersionNotice}
+            onOpenCodexSettings={openCodexSettings}
+            onManagedBuildsChange={changeCodexManagedBuilds}
+            onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
+          />
+          <CodexLaunchNotice
+            discovery={settings.snapshot?.models?.codex?.discovery}
+            onNoticeChanged={syncCodexLaunchNotice}
+            onOpenCodexSettings={openCodexSettings}
+          />
+          <CodexRestartNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncCodexRestartNotice}
+          />
+          <RestartGateNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncRestartGateNotice}
+          />
+          <AppNoticeStack
+            desktopApi={desktopApi}
+            durableNotices={durableNotices}
+            onDismissDurable={dismissAppNotice}
+            onOpenThread={showThreadFromLink}
+            onSuppressSkillQuestionsWarning={() => settings.writeConfig({
+              experimental: { codexSkillQuestionsWarningDismissed: true },
+            })}
+            onSuppressCodexWarning={suppressCodexWarning}
+            transientNotices={[
+              {
+                notice: navigation.archiveCleanupSummaryNotice,
+                onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
+              },
+              {
+                notice: navigation.archiveCleanupProgressNotice,
+                onDismiss: navigation.dismissArchiveCleanupProgressNotice,
+              },
+              {
+                notice: navigation.archiveThreadNotice,
+                onDismiss: navigation.dismissArchiveThreadNotice,
+              },
+              ...appNotices.transient.map((notice) => ({
+                notice,
+                onDismiss: () => dismissAppNotice(notice.id),
+              })),
+            ]}
+          >
+            <QuitBlockerQueueToast desktopApi={desktopApi} />
+            <ThreadMaintenanceMinimizedNotice controller={threadMaintenance} />
+            <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
+            <AppUpdateBanner
+              desktopApi={desktopApi}
+              showNotice={showAppNotice}
+              dismissNotice={dismissAppNotice}
+            />
+            {Object.values(handoffTransfers)
+              .filter((transfer) => transfer.status === "running" && !isHandoffInDialog(transfer))
+              .sort((a, b) => a.startedAt - b.startedAt)
+              .map((transfer) => (
+                <LiveThreadHandoffToastCard
+                  key={transfer.handoffId}
+                  store={threadHandoffStore}
+                  handoffId={transfer.handoffId}
+                  onExpand={() => expandHandoff(transfer)}
+                  onCancel={() => threadHandoffs.cancel(transfer.handoffId)}
+                  onRetryNow={() => threadHandoffs.retryNow(transfer.handoffId)}
+                />
+              ))}
+          </AppNoticeStack>
+          {directorVoiceApi ? (
+            <DirectorVoicePanel
+              api={directorVoiceApi}
+              desktopApi={desktopApi}
+              focus={navigation.selectedThread}
+              launchpad={navigation.selectedLaunchpad}
+              onOpenThread={(threadId) => showThreadFromLink({ backend: "codex", threadId })}
+            />
+          ) : null}
+        </div>
+
+        {todoFullAccessRiskDialog}
+      </TranscriptLinkProvider>
+      </ThreadMaintenanceLauncherContext.Provider>
+      </ThreadHandoffBandContext.Provider>
+      </ThreadProviderCatalogsContext.Provider>
+      </ThreadProvidersContext.Provider>
+      </ThreadPrWatchIndicatorsContext.Provider>
+      </ThreadDependencyIndicatorsContext.Provider>
+      </OperatorWaitsContext.Provider>
+      </TodoDispatchProvider>
+      </ThreadTodoRevealContext.Provider>
+      </ThreadTodoCountsContext.Provider>
+      </FederationDisplayLabelsProvider>
+    );
+  }
+
+  return renderAppLayout();
+}
+
+function isSettingsSection(
+  section: string | undefined,
+): section is SettingsSection {
+  return (
+    section !== undefined && SETTINGS_SECTIONS.has(section as SettingsSection)
+  );
+}
+
+export type ReplayCodexProfileSetup = {
+  model: DesktopCodexProfileModel;
+  profileNames?: readonly string[];
+};
+
+export function inferReplayCodexProfileSetup(
+  persisted: DesktopCodexProfileModel,
+  profiles: readonly DesktopPwrAgentProfileSummary[],
+): ReplayCodexProfileSetup {
+  const namedPairings = profiles.filter((profile) => profile.codexProfile.name);
+  if (namedPairings.length >= 2) {
+    return {
+      model: "multiple",
+      profileNames: namedPairings.map((profile) => profile.name),
+    };
+  }
+
+  const activeProfile = profiles.find((profile) => profile.active);
+  const isolatedProfile = activeProfile?.codexProfile.name
+    ? activeProfile
+    : namedPairings[0];
+  if (isolatedProfile) {
+    return { model: "isolated", profileNames: [isolatedProfile.name] };
+  }
+
+  return { model: persisted };
+}
+
+export function inferReplayCodexProfileModel(
+  persisted: DesktopCodexProfileModel,
+  profiles: readonly DesktopPwrAgentProfileSummary[],
+): DesktopCodexProfileModel {
+  return inferReplayCodexProfileSetup(persisted, profiles).model;
+}
+
+// Own window layout, including live drag width and startup preference adoption.
+function useShellLayout(settings: DesktopSettingsState) {
+  const [sidebarWidth, setSidebarWidth] = useState(408);
+  // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
+  // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
+  // (→ Sidebar → every un-virtualized ThreadRow) that used to fire on each
+  // pointermove is gone. The `.app-shell` CSS var is rendered from the ref so
+  // an incidental rerender mid-drag (e.g. an agent event) re-applies the live
+  // dragged width instead of snapping back to the stale committed state.
+  //
+  // INVARIANT: the rendered width reads from this ref, so it must track state.
+  // Write the width through `commitSidebarWidth` (below); never call
+  // `setSidebarWidth` directly, or the rendered width diverges from state.
+  const sidebarWidthRef = useRef(sidebarWidth);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  // Hardcoded sidebar resize bounds — mirrored in clampSidebarWidth() below.
+  // Exposed as constants so both the clamp and the aria-valuemin/max
+  // attributes on the resize handle stay in sync.
+  const sidebarMinWidth = 280;
+  const sidebarMaxWidth = 560;
+  // Window-level layout preferences (persisted to config — see the
+  // `ui` settings section). The left sidebar can be hidden entirely and
+  // the right context rail pinned open; the active rail tab is also
+  // remembered.
+  //
+  // Seeded from the main-process bootstrap hint rather than from a
+  // hard-coded default corrected by the settings snapshot below. Both of
+  // these move layout: the rail reserves 428px when pinned, so correcting
+  // it after first paint reflows the whole transcript under the operator.
+  // `activeContextTab` and the dock prefs keep adopting from the snapshot,
+  // because none of them change the transcript's width.
+  const [sidebarHidden, setSidebarHidden] = useState(
+    () => readBootstrapLayoutPreferences().sidebarHidden,
+  );
+  const [contextRailPinned, setContextRailPinned] = useState(
+    () => readBootstrapLayoutPreferences().contextRailPinned,
+  );
+  // The sidebar's project index splits the sidebar's width, so it moves the
+  // list's width and is seeded before first paint like the two above.
+  const [projectIndexHidden, setProjectIndexHidden] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexHidden,
+  );
+  const [projectIndexWidth, setProjectIndexWidth] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexWidth,
+  );
+  const [activeContextTab, setActiveContextTab] =
+    useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
+  const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
+    DEFAULT_EDITED_FILES_DOCK,
+  );
+  const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
+    DEFAULT_ACTION_RUNS_DOCK,
+  );
+  // "pending" until the snapshot says where the cards live, so cards the
+  // operator moved to the rail never flash on the launchpad at launch.
+  const [launchpadConnectionsDock, setLaunchpadConnectionsDock] =
+    useState<LaunchpadConnectionsDock | "pending">("pending");
+  const writeConfig = settings.writeConfig;
+  // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
+  // its own open state and the sidebar peek a jump's landing scroll needs.
+  const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
+  const endSidebarPeek = threadJump.endPeek;
+  const closeThreadJump = threadJump.closeJump;
+  // Layout prefs the operator has set in this window. The startup snapshot
+  // never adopts one of these: see the adoption effect below.
+  const layoutPrefsChosenRef = useRef(
+    new Set<keyof DesktopSettingsSnapshot["ui"]>(),
+  );
+  const setSidebarHiddenPersisted = useCallback(
+    (next: boolean) => {
+      // An explicit toggle (⌘B, the chips) is the operator stating a preference,
+      // so it ends any jump-landing peek in flight.
+      endSidebarPeek();
+      layoutPrefsChosenRef.current.add("sidebarHidden");
+      setSidebarHidden(next);
+      void writeConfig({ ui: { sidebarHidden: next } });
+    },
+    [endSidebarPeek, writeConfig],
+  );
+  const setContextRailPinnedPersisted = useCallback(
+    (next: boolean) => {
+      layoutPrefsChosenRef.current.add("contextRailPinned");
+      setContextRailPinned(next);
+      void writeConfig({ ui: { contextRailPinned: next } });
+    },
+    [writeConfig],
+  );
+
+  const setProjectIndexHiddenPersisted = useCallback(
+    (next: boolean) => {
+      layoutPrefsChosenRef.current.add("projectIndexHidden");
+      setProjectIndexHidden(next);
+      void writeConfig({ ui: { projectIndexHidden: next } });
+    },
+    [writeConfig],
+  );
+  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
+  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
+  // PanelToggleButtons chip — so it fires exactly once regardless of how many
+  // chips are mounted.
+  useLayoutChordHotkeys({
+    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
+  });
+  // Called once per drag and once per arrow-key run, on release.
+  const setProjectIndexWidthPersisted = useCallback(
+    (next: number | null) => {
+      layoutPrefsChosenRef.current.add("projectIndexWidth");
+      setProjectIndexWidth(next);
+      void writeConfig({ ui: { projectIndexWidth: next } });
+    },
+    [writeConfig],
+  );
+  const setActiveContextTabPersisted = useCallback(
+    (tab: ContextTabId) => {
+      layoutPrefsChosenRef.current.add("activeContextTab");
+      setActiveContextTab(tab);
+      void writeConfig({ ui: { activeContextTab: tab } });
+    },
+    [writeConfig],
+  );
+  const setEditedFilesDockPersisted = useCallback(
+    (dock: EditedFilesDock) => {
+      layoutPrefsChosenRef.current.add("editedFilesDock");
+      setEditedFilesDock(dock);
+      void writeConfig({ ui: { editedFilesDock: dock } });
+    },
+    [writeConfig],
+  );
+  const setActionRunsDockPersisted = useCallback(
+    (dock: ActionRunsDock) => {
+      layoutPrefsChosenRef.current.add("actionRunsDock");
+      setActionRunsDock(dock);
+      void writeConfig({ ui: { actionRunsDock: dock } });
+    },
+    [writeConfig],
+  );
+  const setLaunchpadConnectionsDockPersisted = useCallback(
+    (dock: LaunchpadConnectionsDock) => {
+      layoutPrefsChosenRef.current.add("launchpadConnectionsDock");
+      setLaunchpadConnectionsDock(dock);
+      void writeConfig({ ui: { launchpadConnectionsDock: dock } });
+    },
+    [writeConfig],
+  );
+
+  // Adopt the persisted layout prefs once the settings snapshot arrives.
+  // Guarded so later snapshot refreshes never clobber an in-session toggle.
+  // `sidebarHidden` and `contextRailPinned` are normally already correct here
+  // — the bootstrap hint read the same file before first paint — so these two
+  // set what they already hold. They stay because a window that somehow got
+  // no hint would otherwise never see the operator's stored layout.
+  //
+  // The bootstrap projection opens navigation before this snapshot arrives,
+  // so the operator can already have toggled a pref. Their choice wins over
+  // the stored value, even when the read resolved first: this effect runs
+  // only after the snapshot's render commits, and a click in that gap would
+  // otherwise be reset (Windows Desktop E2E lost a Pricing tab click to it).
+  const uiPrefsSeededRef = useRef(false);
+  const uiPrefs = settings.snapshot?.ui;
+  useEffect(() => {
+    if (!uiPrefs || uiPrefsSeededRef.current) {
+      return;
+    }
+    uiPrefsSeededRef.current = true;
+    const chosen = layoutPrefsChosenRef.current;
+    if (!chosen.has("sidebarHidden")) {
+      setSidebarHidden(uiPrefs.sidebarHidden.value);
+    }
+    if (!chosen.has("contextRailPinned")) {
+      setContextRailPinned(uiPrefs.contextRailPinned.value);
+    }
+    if (!chosen.has("projectIndexHidden") && uiPrefs.projectIndexHidden) {
+      setProjectIndexHidden(uiPrefs.projectIndexHidden.value);
+    }
+    if (!chosen.has("projectIndexWidth") && uiPrefs.projectIndexWidth) {
+      setProjectIndexWidth(uiPrefs.projectIndexWidth.value);
+    }
+    if (
+      !chosen.has("activeContextTab")
+      && isContextTabId(uiPrefs.activeContextTab.value)
+    ) {
+      setActiveContextTab(uiPrefs.activeContextTab.value);
+    }
+    const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
+    if (
+      !chosen.has("editedFilesDock")
+      && isEditedFilesDock(editedFilesDockPref)
+    ) {
+      setEditedFilesDock(editedFilesDockPref);
+    }
+    const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
+    if (
+      !chosen.has("actionRunsDock")
+      && isActionRunsDock(actionRunsDockPref)
+    ) {
+      setActionRunsDock(actionRunsDockPref);
+    }
+    if (!chosen.has("launchpadConnectionsDock")) {
+      const connectionsDockPref = uiPrefs.launchpadConnectionsDock?.value;
+      setLaunchpadConnectionsDock(
+        isLaunchpadConnectionsDock(connectionsDockPref) ? connectionsDockPref : "launchpad",
+      );
+    }
+  }, [uiPrefs]);
+
   const clampSidebarWidth = (nextWidth: number): number =>
     Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth));
 
@@ -4735,821 +5414,243 @@ function DesktopAppShell(props: {
     window.addEventListener("pointercancel", stop);
   };
 
-  return (
-    <FederationDisplayLabelsProvider health={liveFederationHealth}>
-    <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
-    <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
-    <TodoDispatchProvider
-      api={desktopApi}
-      backends={backendSummaries.backends}
-      backendsTarget={activeFederationTarget}
-      todos={threadTodoController.openTodos}
-      localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
-    >
-    <OperatorWaitsContext.Provider value={operatorWaitsContext}>
-    <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
-    <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
-    <ThreadProvidersContext.Provider value={threadProviders}>
-    <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
-    <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
-    <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
-    <TranscriptLinkProvider
-      localInstanceId={liveFederationHealth?.instanceId}
-      activeThread={navigation.selectedThread}
-      onOpenRemoteViewer={openRemoteViewerFromLink}
-      onShowThread={showThreadFromLink}
-      threads={navigation.threads}
-    >
-      {sendToMachineThread && sendToMachineSource ? (
-        <LiveThreadHandoff store={threadHandoffStore} handoffId={dialogHandoff?.handoffId}>
-          {(liveHandoff) => (
-            <SendThreadToMachineDialog
-              key={sendToMachineKey}
-              source={sendToMachineSource}
-              targets={threadHandoffTargets}
-              findRepository={findThreadHandoffRepository}
-              {...(liveHandoff ? { transfer: liveHandoff } : {})}
-              {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
-              {...(sendToMachineEntry.initialChoice
-                ? { initialChoice: sendToMachineEntry.initialChoice }
-                : {})}
-              onClose={closeSendToMachine}
-              onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
-              onMinimise={(from) => {
-                if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
-              }}
-              onCancelTransfer={() => {
-                if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
-              }}
-              onRetryNow={() => {
-                if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
-              }}
-            />
-          )}
-        </LiveThreadHandoff>
-      ) : null}
-      {continueAfter ? (
-        <ContinueAfterDialog
-          key={`${continueAfter.thread.federation?.ref.target.scope === "remote" ? continueAfter.thread.federation.ref.target.instanceId : "local"}:${continueAfter.thread.source}:${continueAfter.thread.id}`}
-          desktopApi={desktopApi}
-          {...(todoLocalMachine.instanceId ? { localInstanceId: todoLocalMachine.instanceId } : {})}
-          thread={continueAfter.thread}
-          {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
-          onClose={() => setContinueAfter(undefined)}
-        />
-      ) : null}
-      {threadMaintenance.session ? (
-        // Mounted for the whole session, hidden while minimized, so a scan or
-        // run that ends meanwhile lands in it.
-        <ThreadMaintenanceDialog
-          key={threadMaintenance.session.id}
-          desktopApi={desktopApi}
-          policy={settings.snapshot?.worktrees?.archive}
-          hibernationPolicy={settings.snapshot?.worktrees?.hibernate}
-          {...(threadMaintenance.session.projectKey ? { projectKey: threadMaintenance.session.projectKey } : {})}
-          minimized={threadMaintenance.session.minimized}
-          onMinimize={threadMaintenance.minimize}
-          onStatus={threadMaintenance.report}
-          onOpenThread={(thread) => {
-            threadMaintenance.minimize();
-            showThreadFromLink({ backend: thread.backend as AppServerBackendKind, threadId: thread.threadId });
-          }}
-          onClose={threadMaintenance.discard}
-        />
-      ) : null}
-      {codexLoginProfile ? (
-        <CodexAuthProfileLoginDialog
-          desktopApi={desktopApi}
-          profile={codexLoginProfile.name}
-          displayName={codexLoginProfile.displayName}
-          onCancel={() => setCodexLoginProfile(undefined)}
-          onAuthenticated={settings.refresh}
-        />
-      ) : null}
-      <AppTitleBar
-        desktopApi={desktopApi}
-        onOpenMessagingActivity={openMessagingActivityWindow}
-        onOpenMessagingSettings={openMessagingSettings}
-        layout={{
-          sidebarOpen: !sidebarHidden,
-          railOpen: contextRailPinned,
-          onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-          onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-        }}
-        starMap={starMapControls}
-        actions={mastheadActions}
-      />
-      <div
-        ref={appShellRef}
-        className="app-shell"
-        data-sidebar-hidden={sidebarHidden ? "true" : undefined}
-        style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
-      >
-        <Sidebar
-          mastheadVoiceControl={directorVoiceControl}
-          inert={layerView !== undefined}
-          directoryDisclosure={navigation.directoryDisclosure}
-          pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
-          subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
-          onSelectPendingLaunchpad={(entry) => {
-            setMainView("thread");
-            if (isSubthreadLaunchpadDraft(entry)) {
-              navigation.selectDirectoryLaunchpad(entry.directoryKey);
-            } else {
-              navigation.selectPendingLaunchpad(entry.selectionKey);
-            }
-          }}
-          onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
-          onDetachSubthreadDraft={(draft) => {
-            navigation.detachSubthreadLaunchpad(draft.directoryKey);
-          }}
-          addingProjectDirectory={navigation.pickingDirectory}
-          backends={windowBackendSummaries.backends}
-          remoteBackends={remoteSidebarBackends}
-          onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
-          browseMode={navigation.browseMode}
-          pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
-          pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
-          onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
-          threadLensesEmpty={navigation.threadLensesEmpty}
-          creatingThread={navigation.creatingThread}
-          pagedNavigation={navigation.pagedNavigation}
-          pagesAwaitingRows={navigation.pagesAwaitingRows}
-          selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
-          directories={navigation.directories}
-          error={navigation.error}
-          inboxThreads={navigation.inboxThreads}
-          recentThreads={navigation.recentThreads}
-          attentionPromoteOnTurnEnd={
-            settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true
-          }
-          runtimeIdentity={runtimeIdentity}
-          activeProfile={profiles.activeProfile}
-          profiles={profiles.profiles}
-          loaded={navigation.loaded}
-          loading={navigation.loading}
-          providerRefresh={navigation.providerRefresh}
-          approvalRequestThreadKeys={session.approvalRequestThreadKeys}
-          inputRequestThreadKeys={session.inputRequestThreadKeys}
-          terminalThreadKeys={terminalThreadKeys}
-          queuedMessageThreadKeys={queuedMessageThreadKeys}
-          draftThreadKeys={draftThreadKeys}
-          unassignedThreadDraftCount={unassignedThreadDraftCount}
-          composerSourceThreadKey={navigation.composerSourceThreadKey}
-          revealSelectedThreadRequest={revealSelectedThreadRequest}
-          onRevealSelectedThreadComplete={threadJump.completePeekRestore}
-          projectRevealRequest={projectRevealRequest}
-          projectIndexHidden={projectIndexHidden}
-          onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
-          projectIndexWidth={projectIndexWidth}
-          onProjectIndexWidthChange={setProjectIndexWidthPersisted}
-          selectedItemKey={navigation.selectedItemKey}
-          thinkingThreadKeys={session.thinkingThreadKeys}
-          agentCommandThreadKeys={session.agentCommandThreadKeys}
-          threads={navigation.threads}
-          automationsActive={mainView === "automations"}
-          threadSearchActive={mainView === "search"}
-          settingsActive={mainView === "settings"}
-          onBrowseModeChange={navigation.setBrowseMode}
-          newThreadDirectoryLabel={navigation.newThreadDirectoryLabel}
-          onCreateThread={async () => {
-            setMainView("thread");
-            await navigation.createThread();
-          }}
-          onCreateThreadWithoutDirectory={async () => {
-            setMainView("thread");
-            await navigation.createThread(undefined, undefined, {
-              forceWorkspace: true,
-            });
-          }}
-          newThreadFederationTargets={newThreadFederationTargets}
-          localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
-          platform={desktopApi?.platform}
-          onRevealPath={revealProjectPath}
-          checkFederationTargetProject={checkFederationTargetProject}
-          onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
-          onSendThreadToMachine={listedThreadHandoffTargets.length > 0
-            ? setSendToMachineThread
-            : undefined}
-          onContinueAfter={canContinueAfter
-            ? (thread, returnFocus) => setContinueAfter({ thread, returnFocus })
-            : undefined}
-          onAddProjectDirectory={readRendererFederationTarget()
-            ? undefined
-            : addProjectDirectory}
-          readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
-          readSubthreadWorktreeBase={navigation.readSubthreadWorktreeBase}
-          onCreateSubthread={async (thread, mode, machine) => {
-            setMainView("thread");
-            await navigation.createSubthread(thread, mode, machine);
-          }}
-          onForkThread={async (thread, mode) => {
-            setMainView("thread");
-            await navigation.forkThread(thread, mode);
-          }}
-          onOpenAutomations={() => {
-            setMainView("automations");
-          }}
-          onOpenThreadSearch={() => {
-            toggleGlobalThreadSearch();
-          }}
-          onOpenLaunchpad={async (directory, preferredBackend) => {
-            setMainView("thread");
-            await navigation.openDirectoryLaunchpad(directory, preferredBackend);
-          }}
-          onOpenSettings={() => {
-            openSettingsSection(undefined);
-          }}
-          onOpenProfile={profiles.openProfile}
-          onOpenUsageActivity={desktopApi?.openUsageActivity
-            ? () => void desktopApi.openUsageActivity?.()
-            : undefined}
-          onSelectThread={(thread, options) => {
-            setMainView("thread");
-            setComposerFocusRequest(options?.focusComposer && options.focusOrigin
-              ? {
-                threadKey: threadSummaryIdentityKey(thread),
-                id: ++composerFocusRequestIdRef.current,
-                origin: options.focusOrigin,
-              }
-              : undefined);
-            navigation.selectThread(thread);
-          }}
-          threadJumpOpen={threadJump.open}
-          onThreadJumpOpenChange={(open) => {
-            // Every close (Escape, scrim click, picking a thread) goes through
-            // closeJump, so the toggle state can't drift from what's on screen.
-            if (open) {
-              threadJump.openJump();
-              return;
-            }
-            threadJump.closeJump();
-          }}
-          onJumpToProject={(directory) => {
-            setSidebarHiddenPersisted(false);
-            setMainView("thread");
-            void navigation.openDirectoryLaunchpad(directory);
-          }}
-          onJumpToThread={(thread) => {
-            setMainView("thread");
-            navigation.selectThread(thread);
-            // Reveal on the next frame, once the new selection has rendered.
-            // Do it even when the sidebar is hidden (⌘B): peek it open for the
-            // scroll, because hidden rows reveal asynchronously as their
-            // collapsed containers reopen, and hold that peek until ThreadRow
-            // reports the selected row mounted and scrolled. The offset
-            // survives restoring the hidden preference, and an instant scroll
-            // avoids dismissing the peek partway through an animation.
-            const instant = threadJump.beginRevealPeek();
-            requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
-          }}
-          onJumpToRemoteThread={(thread) => {
-            const ref = thread.federation?.ref;
-            if (!ref) {
-              return;
-            }
-            // Pin first (viewer-owned overlay row), then refresh so the
-            // merged snapshot carries the new row, then select it — the
-            // selection scopes ThreadView's IPC to the owning instance via
-            // selectedThreadFederationTarget.
-            const instant = threadJump.beginRevealPeek();
-            void (async () => {
-              try {
-                await desktopApi?.addRemoteThreadPin?.({
-                  ref,
-                  summary: thread,
-                  instanceLabel: thread.federation?.instanceLabel,
-                });
-              } catch (error) {
-                console.warn("Pinning the remote thread failed.", error);
-              }
-              await navigation.refresh();
-              setMainView("thread");
-              navigation.selectThread(thread);
-              requestAnimationFrame(() =>
-                revealSelectedThreadInList({ instant }),
-              );
-            })();
-          }}
-          onRemoveRemoteThreadPin={async (thread) => {
-            const ref = thread.federation?.ref;
-            if (!ref) {
-              return;
-            }
-            try {
-              await desktopApi?.removeRemoteThreadPin?.({ ref });
-            } catch (error) {
-              console.warn("Removing the remote thread pin failed.", error);
-            }
-            await navigation.refresh();
-          }}
-          onArchiveThread={navigation.archiveThread}
-          onArchiveThreads={navigation.archiveThreads}
-          onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
-          onMarkDirectoriesSeen={desktopApi?.markNavigationDirectorySeen ? navigation.markDirectoriesSeen : undefined}
-          onMarkThreadsSeen={
-            desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
-          }
-          onMarkThreadUnread={
-            desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
-          }
-          onRenameThread={navigation.renameThread}
-          onRequestTitleRename={requestTitleRename}
-          onThreadsArchived={offerArchiveUndo}
-          onSetThreadReaction={navigation.setThreadReaction}
-          onSetThreadLock={navigation.setThreadLock}
-          onSetThreadCheckoutHibernation={navigation.setThreadCheckoutHibernation}
-          onSetThreadPin={navigation.setThreadPin}
-          onReorderThreadPins={navigation.reorderThreadPins}
-          onSetThreadParent={navigation.setThreadParent}
-          onUnlinkThreads={navigation.unlinkThreads}
-          onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
-          onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
-          onSetDirectoryPin={navigation.setDirectoryPin}
-          onReorderDirectoryPins={navigation.reorderDirectoryPins}
-          onSetDirectoryThreadsCollapsed={
-            navigation.setDirectoryThreadsCollapsed
-          }
-          onSetProjectForgeAutomation={
-            desktopApi?.setProjectForgeAutomation
-              ? navigation.setProjectForgeAutomation
-              : undefined
-          }
-          onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
-          onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
-          federationOwnerForgeAutomation={federationOwnerForgeAutomation}
-          peerForgeAutomationInstanceIds={peerForgeAutomationInstanceIds}
-          onRemoveDirectory={(directory) =>
-            navigation.removeDirectory(directory.key)}
-          onOpenForgePermissions={readRendererFederationTarget()
-            ? undefined
-            : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
-          onPrefetchPullRequests={pullRequests.prefetch}
-          onPrefetchGitWorkingState={gitWorkingState.prefetch}
-          onDetachPullRequest={detachThreadPullRequest}
-          onUnbindMessagingBinding={unbindMessagingBinding}
-          onCopyThreadDiagnostics={
-            desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
-          }
-        />
-        <XrayMode
-          density={props.appearanceController.appearance.density}
-          enabled={!sidebarHidden && layerView === undefined}
-          platform={desktopApi?.platform}
-        />
-        {/* Sibling of the sidebar, not a child: the seam straddles the
-            sidebar's border, which the aside's overflow clip would cut off. */}
-        {sidebarHidden ? null : (
-          <SidebarResizeHandle
-            inert={layerView !== undefined}
-            onResizeStart={startSidebarResize}
-            onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
-            sidebarWidth={sidebarWidth}
-            sidebarMinWidth={sidebarMinWidth}
-            sidebarMaxWidth={sidebarMaxWidth}
-          />
-        )}
+  return {
+    sidebarWidth,
+    sidebarWidthRef,
+    appShellRef,
+    sidebarMinWidth,
+    sidebarMaxWidth,
+    sidebarHidden,
+    contextRailPinned,
+    projectIndexHidden,
+    projectIndexWidth,
+    activeContextTab,
+    editedFilesDock,
+    actionRunsDock,
+    launchpadConnectionsDock,
+    threadJump,
+    closeThreadJump,
+    setSidebarHiddenPersisted,
+    setContextRailPinnedPersisted,
+    setProjectIndexHiddenPersisted,
+    setProjectIndexWidthPersisted,
+    setActiveContextTabPersisted,
+    setEditedFilesDockPersisted,
+    setActionRunsDockPersisted,
+    setLaunchpadConnectionsDockPersisted,
+    resizeSidebar,
+    startSidebarResize,
+  };
+}
 
-        <main
-          inert={layerView ? true : undefined}
-          className={`app-main${
-            threadDetailPending ? " app-main--thread-detail-pending" : ""
-          }${
-            !peerConnectivity.connected
-              ? " app-main--federation-disconnected"
-              : ""
-          }`}
-        >
-          {!peerConnectivity.connected ? (
-            // The runtime keeps reconnecting on its own; this banner
-            // explains why the window went read-only (composer disabled,
-            // remote polling suspended) instead of leaving a half-dead
-            // surface that fails silently.
-            <div className="federation-disconnected-banner" role="alert">
-              <span className="federation-disconnected-banner__dot" aria-hidden="true" />
-              {`${activeFederationOwnerLabel ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
-            </div>
-          ) : null}
-          {mainView === "search" ? (
-            <ThreadSearchPanel
-              desktopApi={desktopApi}
-              onOpenMessagingActivity={openMessagingActivityWindow}
-              onOpenMessagingSettings={openMessagingSettings}
-              layout={{
-                sidebarOpen: !sidebarHidden,
-                railOpen: contextRailPinned,
-                onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-              }}
-              masthead={mastheadActions}
-              history={historyNav}
-              state={threadSearchState}
-              threads={navigation.threads}
-              onClose={() => {
-                // Esc pops the search screen off the history stack (same as the
-                // title-bar Back button); if there's nowhere to go back to,
-                // just leave the search view.
-                if (history.canGoBack) {
-                  history.goBack();
-                } else {
-                  setMainView("thread");
-                }
-              }}
-              onOpenResult={async (result) => {
-                const plan = planSearchResultOpen(result, windowFederationTarget);
-                if (plan.kind === "owner-window") {
-                  await desktopApi?.openFederationWindow?.({
-                    target: plan.target,
-                    initialThread: plan.initialThread,
-                  });
-                  return;
-                }
-                if (plan.federationTarget) {
-                  // A peer's thread joins this window's sidebar first, as a
-                  // thread link or Cmd+K adds it.
-                  try {
-                    await ensureWindowThreadMounted(
-                      desktopApi ?? {},
-                      plan,
-                      navigation.threads,
-                      false,
-                      result.federation?.instanceLabel,
-                    );
-                  } catch (error) {
-                    // Its owner's window needs no pin here, so the click
-                    // still opens the thread.
-                    console.warn("Adding the remote thread to this PwrAgent failed.", error);
-                    openRemoteViewerFromLink({
-                      backend: plan.backend,
-                      instanceId: plan.federationTarget.instanceId,
-                      threadId: plan.threadId,
-                    });
-                    return;
-                  }
-                }
-                // Deep-link to the match: open the thread with the find bar
-                // seeded with the search query so it highlights + scrolls the
-                // matched message into view (auto-loading older history if the
-                // match lives further up than the first page).
-                const seed = threadSearchState.query.trim();
-                setFindRequest(
-                  seed
-                    ? {
-                        query: seed,
-                        threadKey: plan.threadKey,
-                        turnId: result.turnId,
-                      }
-                    : undefined,
-                );
-                setMainView("thread");
-                await navigation.showThread(plan);
-              }}
-              onOpenResultInRemoteViewer={windowFederationTarget
-                ? undefined
-                : ({ ref }) => {
-                    if (!isRemoteFederationTarget(ref.target)) return;
-                    openRemoteViewerFromLink({
-                      backend: ref.backend,
-                      instanceId: ref.target.instanceId,
-                      threadId: ref.threadId,
-                    });
-                  }}
-            />
-          ) : threadDetailPending ? (
-            <section className="thread-view thread-view--pending">
-              <ThreadPlaceholderHeader
-                desktopApi={desktopApi}
-                title="Loading..."
-                onOpenMessagingActivity={openMessagingActivityWindow}
-                onOpenMessagingSettings={openMessagingSettings}
-                layout={{
-                  sidebarOpen: !sidebarHidden,
-                  railOpen: contextRailPinned,
-                  onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                  onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-                }}
-                masthead={mastheadActions}
-                history={historyNav}
-                starMap={starMapControls}
-              />
-            </section>
-          ) : ThreadViewComponent ? (
-            <MarkdownRenderingOptionsProvider
-              incrementalEnabled={
-                settings.snapshot?.experimental.incrementalMarkdownRendering?.value ?? false
-              }
-              mathEnabled={
-                settings.snapshot?.experimental.markdownMathRendering?.value ?? true
-              }
-            >
-              <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
-                <HtmlPreviewPreferencesProvider
-                  runScripts={
-                    settings.snapshot?.general.htmlPreviewRunScripts?.value ?? false
-                  }
-                >
-                  <TerminalPreferencesProvider
-                    minimumContrast={
-                      settings.snapshot?.general.appearance.terminalMinimumContrast
-                        ?.value ?? false
-                    }
-                  >
-                    <ThreadViewComponent {...threadViewProps} />
-                  </TerminalPreferencesProvider>
-                </HtmlPreviewPreferencesProvider>
-              </InteractiveSvgPreferencesProvider>
-            </MarkdownRenderingOptionsProvider>
-          ) : null}
-        </main>
-
-        {mainView === "settings" ? (
-          <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
-            <Suspense fallback={null}>
-              <LazySettingsScreen
-                appearanceController={props.appearanceController}
-                cachedBackends={backendSummaries.backends}
-                desktopApi={desktopApi}
-                initialSection={settingsInitialSection}
-                initialSubsection={settingsInitialSubsection}
-                profileCreateRequested={profileCreateRequested}
-                profiles={profiles}
-                registerLeaveGuard={registerSettingsLeaveGuard}
-                settings={settings}
-                onClose={() => setMainView("thread")}
-                onOpenMessagingActivity={openMessagingActivityWindow}
-                onProfileCreateRequestHandled={clearProfileCreateRequest}
-                onOpenThread={(target) => {
-                  setMainView("thread");
-                  void navigation.showThread(target);
-                }}
-                onShowNotice={showAppNotice}
-              />
-            </Suspense>
-          </div>
-        ) : null}
-
-        {mainView === "automations" ? (
-          <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
-            <AutomationsScreen
-              desktopApi={desktopApi}
-              directories={navigation.directories}
-              threads={navigation.threads}
-              onClose={() => setMainView("thread")}
-              onOpenMessagingActivity={openMessagingActivityWindow}
-              onOpenMessagingSettings={openMessagingSettings}
-              onRefreshNavigation={navigation.refresh}
-              onSelectThread={(thread) => {
-                setMainView("thread");
-                navigation.selectThread(thread);
-              }}
-            />
-          </div>
-        ) : null}
-
-        {onboardingOpen !== null && settings.snapshot ? (
-          <Suspense fallback={null}>
-            <LazyOnboardingWizard
-              isReplay={onboardingOpen === "replay"}
-              bootInfo={bootInfo}
-              initialDensity={settings.snapshot.general.appearance.density.value}
-              initialTheme={settings.snapshot.general.appearance.theme.value}
-              initialCodexProfileModel={
-                onboardingOpen === "replay" && replayCodexProfileSetup
-                  ? replayCodexProfileSetup.model
-                  : settings.snapshot.general.codexProfileModel.value
-              }
-              initialCodexProfileNames={
-                onboardingOpen === "replay"
-                  ? replayCodexProfileSetup?.profileNames
-                  : undefined
-              }
-              appearanceController={props.appearanceController}
-              settings={settings}
-              desktopApi={desktopApi}
-              onComplete={async (patch) => {
-                await settings.writeConfig(patch);
-                // The wizard already flips theme + density live via
-                // appearanceController as the operator clicks — the
-                // explicit setters below are a belt-and-suspenders to keep
-                // the controller's React state aligned with whatever the
-                // final patch holds, even if persistAndComplete adjusts.
-                if (patch.general?.appearance?.density) {
-                  props.appearanceController.setDensity(
-                    patch.general.appearance.density,
-                  );
-                }
-                if (patch.general?.appearance?.theme) {
-                  props.appearanceController.setTheme(
-                    patch.general.appearance.theme,
-                  );
-                }
-                // Mark onboarding complete AND kick off the deferred Codex
-                // `listThreads` prefetch in one IPC call (#500). On replay,
-                // skip the call entirely — replays don't touch onboarding.
-                //
-                // In bootstrap mode (#524), skip this too. The bootstrap
-                // window is about to quit; firing
-                // `completeOnboardingCodexBootstrap` here would (a) write
-                // `[onboarding] completed = true` to `.bootstrap/config.toml`
-                // (which we're about to delete) and (b) trigger a Codex
-                // `listThreads` against the system default Codex install,
-                // contaminating the soon-to-quit window with the operator's
-                // real Codex Desktop threads. The new profile's window
-                // handles its own completion + prefetch on launch.
-                if (!onboardingOpen) return;
-                if (
-                  onboardingOpen !== "replay" &&
-                  bootInfo?.mode !== "bootstrap" &&
-                  desktopApi?.completeOnboardingCodexBootstrap
-                ) {
-                  await desktopApi.completeOnboardingCodexBootstrap({
-                    connect: true,
-                  });
-                  await settings.refresh();
-                }
-                setOnboardingOpen(null);
-              }}
-              onDismiss={(persistCompleted) => {
-                if (persistCompleted) {
-                  // Skip path: persist `completed = true` so the wizard
-                  // doesn't auto-fire again, but pass `connect: false` so
-                  // we don't auto-load Codex threads under an unverified
-                  // identity. The renderer's next explicit refresh (or app
-                  // restart) will surface them.
-                  void desktopApi?.completeOnboardingCodexBootstrap?.({
-                    connect: false,
-                  }).then(() => settings.refresh());
-                }
-                setOnboardingOpen(null);
-              }}
-              onOpenMessagingSettings={() => {
-                openSettingsSection("messaging");
-              }}
-            />
-          </Suspense>
-        ) : null}
-
-        <CodexConfigWarningBanner
-          desktopApi={desktopApi}
-          preferencesLoaded={
-            Boolean(props.settings.snapshot)
-            || !desktopApi?.readSettings
-          }
-          dismissedWarningIds={codexConfigWarningsDismissed}
-          onSuppressWarning={suppressCodexWarning}
-        />
-        <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
-        <CloudflareSignInNotice
-          desktopApi={desktopApi}
-          health={liveFederationHealth}
-          onNoticeChanged={syncCloudflareSignInNotice}
-          onRefreshHealth={refreshFederationHealth}
-        />
-        <MessagingErrorNotices
-          desktopApi={desktopApi}
-          onNoticeChanged={syncMessagingErrorNotice}
-        />
-        <GrokCliUpdateNotice
-          desktopApi={desktopApi}
-          onNoticeChanged={syncGrokCliUpdateNotice}
-        />
-        <CodexVersionNotice
-          desktopApi={desktopApi}
-          snapshot={settings.snapshot}
-          onNoticeChanged={syncCodexVersionNotice}
-          onOpenCodexSettings={openCodexSettings}
-          onManagedBuildsChange={changeCodexManagedBuilds}
-          onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
-        />
-        <CodexLaunchNotice
-          discovery={settings.snapshot?.models?.codex?.discovery}
-          onNoticeChanged={syncCodexLaunchNotice}
-          onOpenCodexSettings={openCodexSettings}
-        />
-        <CodexRestartNotice
-          desktopApi={desktopApi}
-          onNoticeChanged={syncCodexRestartNotice}
-        />
-        <RestartGateNotice
-          desktopApi={desktopApi}
-          onNoticeChanged={syncRestartGateNotice}
-        />
-        <AppNoticeStack
-          desktopApi={desktopApi}
-          durableNotices={durableNotices}
-          onDismissDurable={dismissAppNotice}
-          onOpenThread={showThreadFromLink}
-          onSuppressSkillQuestionsWarning={() => settings.writeConfig({
-            experimental: { codexSkillQuestionsWarningDismissed: true },
-          })}
-          onSuppressCodexWarning={suppressCodexWarning}
-          transientNotices={[
-            {
-              notice: navigation.archiveCleanupSummaryNotice,
-              onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
-            },
-            {
-              notice: navigation.archiveCleanupProgressNotice,
-              onDismiss: navigation.dismissArchiveCleanupProgressNotice,
-            },
-            {
-              notice: navigation.archiveThreadNotice,
-              onDismiss: navigation.dismissArchiveThreadNotice,
-            },
-            ...appNotices.transient.map((notice) => ({
-              notice,
-              onDismiss: () => dismissAppNotice(notice.id),
-            })),
-          ]}
-        >
-          <QuitBlockerQueueToast desktopApi={desktopApi} />
-          <ThreadMaintenanceMinimizedNotice controller={threadMaintenance} />
-          <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
-          <AppUpdateBanner
-            desktopApi={desktopApi}
-            showNotice={showAppNotice}
-            dismissNotice={dismissAppNotice}
-          />
-          {Object.values(handoffTransfers)
-            .filter((transfer) => transfer.status === "running" && !isHandoffInDialog(transfer))
-            .sort((a, b) => a.startedAt - b.startedAt)
-            .map((transfer) => (
-              <LiveThreadHandoffToastCard
-                key={transfer.handoffId}
-                store={threadHandoffStore}
-                handoffId={transfer.handoffId}
-                onExpand={() => expandHandoff(transfer)}
-                onCancel={() => threadHandoffs.cancel(transfer.handoffId)}
-                onRetryNow={() => threadHandoffs.retryNow(transfer.handoffId)}
-              />
-            ))}
-        </AppNoticeStack>
-        {directorVoiceApi ? (
-          <DirectorVoicePanel
-            api={directorVoiceApi}
-            desktopApi={desktopApi}
-            focus={navigation.selectedThread}
-            launchpad={navigation.selectedLaunchpad}
-            onOpenThread={(threadId) => showThreadFromLink({ backend: "codex", threadId })}
-          />
-        ) : null}
-      </div>
-
-      {todoFullAccessRiskDialog}
-    </TranscriptLinkProvider>
-    </ThreadMaintenanceLauncherContext.Provider>
-    </ThreadHandoffBandContext.Provider>
-    </ThreadProviderCatalogsContext.Provider>
-    </ThreadProvidersContext.Provider>
-    </ThreadPrWatchIndicatorsContext.Provider>
-    </ThreadDependencyIndicatorsContext.Provider>
-    </OperatorWaitsContext.Provider>
-    </TodoDispatchProvider>
-    </ThreadTodoRevealContext.Provider>
-    </ThreadTodoCountsContext.Provider>
-    </FederationDisplayLabelsProvider>
+// Keep layer navigation, the Settings leave guard and focus restoration together.
+function useMainView() {
+  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
+  const mainViewRef = useRef<MainView>(mainView);
+  // The control that opened Settings or Automations. The layer covers the
+  // sidebar and main, which go inert under it, so focus returns here on
+  // close rather than dropping to <body>.
+  const layerOpenerRef = useRef<HTMLElement | null>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
+  // Settings can hold edits the operator has not saved. Every way out of the
+  // overlay (Exit, a menu command, a notification, history) asks Settings
+  // first, so those edits get a Save / Discard prompt instead of vanishing.
+  const settingsLeaveGuardRef = useRef<ConfirmSettingsLeave | undefined>(
+    undefined,
   );
-}
-
-function isSettingsSection(
-  section: string | undefined,
-): section is SettingsSection {
-  return (
-    section !== undefined && SETTINGS_SECTIONS.has(section as SettingsSection)
+  const registerSettingsLeaveGuard = useCallback(
+    (confirmLeave: ConfirmSettingsLeave | undefined) => {
+      settingsLeaveGuardRef.current = confirmLeave;
+    },
+    [],
   );
+  // `onShown` runs with the switch, not before it. A caller that pairs the
+  // two — open a thread, create one, restore a history entry — would
+  // otherwise act on a window the operator is still deciding whether to
+  // leave, and "Keep editing" would cancel only half of it.
+  const setMainView = useCallback(
+    (next: SetStateAction<MainView>, onShown?: () => void) => {
+      const current = mainViewRef.current;
+      const target = typeof next === "function" ? next(current) : next;
+      const show = () => {
+        if (!isLayerView(current) && isLayerView(target)) {
+          const opener = document.activeElement;
+          layerOpenerRef.current =
+            opener instanceof HTMLElement && opener !== document.body ? opener : null;
+        }
+        mainViewRef.current = target;
+        setMainViewState(target);
+        onShown?.();
+      };
+      const confirmLeave = settingsLeaveGuardRef.current;
+      if (current === "settings" && target !== "settings" && confirmLeave) {
+        confirmLeave(show);
+        return;
+      }
+      show();
+    },
+    [setMainViewState],
+  );
+  // The opener went inert with the sidebar or main, so focus moves onto the
+  // layer, and Tab starts at its first control. On close, or on a switch
+  // between the two layers, focus that fell with the layer goes back.
+  const layerView = isLayerView(mainView) ? mainView : undefined;
+  useEffect(() => {
+    if (!layerView) return;
+    const layer = layerRef.current;
+    if (layer && !layer.contains(document.activeElement)) {
+      layer.focus({ preventScroll: true });
+    }
+    return () => restoreFocusIfDropped(layerOpenerRef.current, layer);
+  }, [layerView]);
+  // Initial section for SettingsScreen — non-undefined when navigation
+  // came from a deep-link to a specific section. Resets when the user
+  // switches mainView. The Messaging Activity surface is its own
+  // dedicated BrowserWindow, NOT a settings section, so it never
+  // appears through this slot.
+  const [settingsInitialSection, setSettingsInitialSection] = useState<
+    SettingsSection | undefined
+  >(undefined);
+  // Sub-screen within `settingsInitialSection` (a provider registry id under
+  // "models", a platform kind under "messaging"). Always written together with
+  // the section through `openSettingsSection` so a deep link can never carry a
+  // previous link's sub-screen into a different section.
+  const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
+    string | undefined
+  >(undefined);
+  // Profiles → New Profile… asks Settings → Profiles to open its create form.
+  // A one-shot flag rather than a route: ProfilesSettings clears it once the
+  // form is open, so a second click opens it again and a later visit to the
+  // pane does not.
+  const [profileCreateRequested, setProfileCreateRequested] = useState(false);
+  const clearProfileCreateRequest = useCallback(() => {
+    setProfileCreateRequested(false);
+  }, []);
+  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
+  // prompt kept another pane open, then Exit Settings). The request goes with
+  // it, or a later visit to Profiles would open a form nobody asked for.
+  useEffect(() => {
+    if (mainView !== "settings") {
+      setProfileCreateRequested(false);
+    }
+  }, [mainView]);
+  const openSettingsSection = useCallback(
+    (section: SettingsSection | undefined, subsection?: string) => {
+      setSettingsInitialSection(section);
+      setSettingsInitialSubsection(section ? subsection : undefined);
+      setMainView("settings");
+    },
+    [setMainView],
+  );
+  return { mainView, layerRef, layerView, setMainView, registerSettingsLeaveGuard,
+    settingsInitialSection, settingsInitialSubsection, profileCreateRequested, setProfileCreateRequested, clearProfileCreateRequest, openSettingsSection,
+  };
 }
 
-export type ReplayCodexProfileSetup = {
-  model: DesktopCodexProfileModel;
-  profileNames?: readonly string[];
-};
-
-export function inferReplayCodexProfileSetup(
-  persisted: DesktopCodexProfileModel,
-  profiles: readonly DesktopPwrAgentProfileSummary[],
-): ReplayCodexProfileSetup {
-  const namedPairings = profiles.filter((profile) => profile.codexProfile.name);
-  if (namedPairings.length >= 2) {
-    return {
-      model: "multiple",
-      profileNames: namedPairings.map((profile) => profile.name),
-    };
-  }
-
-  const activeProfile = profiles.find((profile) => profile.active);
-  const isolatedProfile = activeProfile?.codexProfile.name
-    ? activeProfile
-    : namedPairings[0];
-  if (isolatedProfile) {
-    return { model: "isolated", profileNames: [isolatedProfile.name] };
-  }
-
-  return { model: persisted };
-}
-
-export function inferReplayCodexProfileModel(
-  persisted: DesktopCodexProfileModel,
-  profiles: readonly DesktopPwrAgentProfileSummary[],
-): DesktopCodexProfileModel {
-  return inferReplayCodexProfileSetup(persisted, profiles).model;
+// Own the authentication/configuration notice producers and login dialog state.
+function useAppNoticeProducers(props: {
+  desktopApi?: DesktopApi;
+  settings: DesktopSettingsState;
+  bootstrapConfig: DesktopConfigBootstrapState;
+}, dispatchAppNotice: Dispatch<Parameters<typeof appNoticeReducer>[1]>) {
+  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
+  const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
+    dispatchAppNotice({ type: "show", notice });
+  }, [dispatchAppNotice]);
+  useEffect(() => turnFailureAcknowledgements.subscribeDismissals((id) => {
+    dispatchAppNotice({ type: "dismiss", id });
+  }), [dispatchAppNotice]);
+  const codexProfiles = props.settings.snapshot?.models?.codex?.profiles;
+  const activeCodexProfileRef = useRef(codexProfiles);
+  activeCodexProfileRef.current = codexProfiles;
+  const openCodexLogin = useCallback(() => {
+    const discovery = activeCodexProfileRef.current;
+    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
+    if (profile) setCodexLoginProfile(profile);
+  }, []);
+  const rejectedCodexHomes = useRef(new Set<string>());
+  useEffect(() => {
+    const rejected = codexProfiles?.profiles.filter((profile) => profile.authenticationRequired) ?? [];
+    const nextHomes = new Set(rejected.map((profile) => profile.codexHome));
+    for (const profile of rejected) {
+      if (rejectedCodexHomes.current.has(profile.codexHome)) continue;
+      showAppNotice({
+        id: `codex-auth:${profile.codexHome}`,
+        title: "Codex login required",
+        message: `${profile.displayName} is logged out. Codex operations are paused until you sign in again.`,
+        autoDismiss: false,
+        actions: [{ label: "Login", onClick: () => setCodexLoginProfile(profile) }],
+      });
+    }
+    for (const home of rejectedCodexHomes.current) {
+      if (!nextHomes.has(home)) dispatchAppNotice({ type: "dismiss", id: `codex-auth:${home}` });
+    }
+    rejectedCodexHomes.current = nextHomes;
+  }, [codexProfiles, dispatchAppNotice, showAppNotice]);
+  const dismissAppNotice = useCallback((id: string): void => {
+    dispatchAppNotice({ type: "dismiss", id });
+  }, [dispatchAppNotice]);
+  const configError =
+    props.bootstrapConfig.snapshot?.configError
+    ?? props.settings.snapshot?.configError;
+  useEffect(() => {
+    if (!configError) {
+      dispatchAppNotice({ type: "dismiss", id: "config-file-invalid" });
+      return;
+    }
+    showAppNotice({
+      autoDismiss: false,
+      id: "config-file-invalid",
+      title: "Settings config did not load",
+      message:
+        `${configError} PwrAgent is using the last known good configuration.`,
+    });
+  }, [configError, dispatchAppNotice, showAppNotice]);
+  const settingsRefreshError =
+    props.desktopApi?.readSettings && props.bootstrapConfig.snapshot
+      ? props.settings.error
+      : undefined;
+  useEffect(() => {
+    if (!settingsRefreshError) {
+      dispatchAppNotice({ type: "dismiss", id: "settings-refresh-failed" });
+      return;
+    }
+    showAppNotice({
+      autoDismiss: false,
+      id: "settings-refresh-failed",
+      title: "Settings refresh failed",
+      message:
+        `${settingsRefreshError} PwrAgent is continuing with its startup configuration.`,
+    });
+  }, [settingsRefreshError, dispatchAppNotice, showAppNotice]);
+  /* Thread create / rename / archive failures. The originating control is
+     always gone by the time these resolve — the rename dialog closes on
+     submit, the context menu closes on click, and a failed create has no
+     thread to point at — so they land in the durable stack rather than a
+     static slot. An empty message means the producer cleared it. */
+  const handleThreadActionError = useCallback((event: ThreadActionErrorEvent): void => {
+    if (!event.message) {
+      dispatchAppNotice({
+        type: "dismiss",
+        id: threadActionErrorNoticeId(event.kind),
+      });
+      return;
+    }
+    dispatchAppNotice({
+      type: "show",
+      notice: resolveThreadActionErrorNotice({
+        ...event,
+        kind: event.kind,
+        message: event.message,
+      }),
+    });
+  }, [dispatchAppNotice]);
+  return {
+    codexLoginProfile,
+    setCodexLoginProfile,
+    showAppNotice,
+    dismissAppNotice,
+    openCodexLogin,
+    handleThreadActionError,
+  };
 }

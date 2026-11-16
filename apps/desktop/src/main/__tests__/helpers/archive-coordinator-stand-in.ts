@@ -1,10 +1,10 @@
 import type { AgentEvent } from "@pwragent/shared";
 import { DEFAULT_CHECKOUT_HIBERNATION_POLICY, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
-import type { RegistryContext } from "../../app-server/registry-context";
 import {
   ThreadArchiveCoordinator,
   type ThreadArchiveCoordinatorDependencies,
 } from "../../app-server/thread-archive-coordinator";
+import { registryContextStandIn } from "./registry-context-stand-in";
 
 /**
  * A real archive coordinator for a registry stand-in built from the
@@ -22,17 +22,8 @@ export function archiveCoordinatorStandIn(params: {
   emit?: (event: AgentEvent) => Promise<void>;
   dependencies?: Partial<ThreadArchiveCoordinatorDependencies>;
 }): ThreadArchiveCoordinator {
-  const store = params.overlayStore ?? {};
-  const context = {
-    stores: {
-      threads: store, usage: store, subAgents: store, workspaces: store, toolAccounting: store,
-      pullRequests: store, reviews: store, archive: store, messaging: store,
-    },
-    providers: params.providers ?? {},
-    lifecycle: params.lifecycle ?? { closed: false },
-    emit: params.emit ?? (async () => {}),
-  };
-  return new ThreadArchiveCoordinator(context as unknown as RegistryContext, {
+  const context = registryContextStandIn(params);
+  return new ThreadArchiveCoordinator(context, {
     managedMaintenanceRoots: async () => [],
     readThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY }),
     readCheckoutHibernationPolicy: () => ({ ...DEFAULT_CHECKOUT_HIBERNATION_POLICY }),

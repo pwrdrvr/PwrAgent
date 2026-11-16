@@ -9,11 +9,19 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   BackendAcpSessionRuntimeState,
+  BackendLaunchpadOptions,
   BackendModelOption,
+  CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
   MessagingDynamicToolCategory,
+  NavigationLaunchpadDraft,
   RenameThreadRequest,
   RenameThreadResponse,
+  StartThreadRequest,
+  StartThreadResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
 } from "@pwragent/shared";
@@ -31,6 +39,7 @@ import type {
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import type { BackendModelCatalogCallerReason } from "./backend-model-catalog";
 import type { ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
+import type { WorktreeBaseSource } from "./git-directory-service";
 
 /**
  * A registry read. Renderer and federation reads rebuild the request field
@@ -51,6 +60,11 @@ export type RegistryReadThreadRequest = AppServerReadThreadRequest & {
  * this contract must stay independent of the registry and its domain modules.
  */
 export interface RegistryHostPorts {
+  admitNewThreadModelSettings(
+    backend: AppServerBackendKind,
+    settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
+  ): Promise<ModelSettings>;
+  archiveThread(request: ArchiveThreadRequest & { preserveWorktrees?: boolean }): Promise<ArchiveThreadResponse>;
   assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void>;
   dynamicToolPermissionDenied(
     backend: AppServerBackendKind,
@@ -82,6 +96,10 @@ export interface RegistryHostPorts {
     backend: AppServerBackendKind;
     threadId: string;
   }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined;
+  getBackendLaunchpadOptions(
+    backend: AppServerBackendKind,
+    callerReason: BackendModelCatalogCallerReason,
+  ): Promise<BackendLaunchpadOptions | undefined>;
   getCachedThreadSummary(params: {
     backend?: AppServerBackendKind;
     threadId: string;
@@ -120,6 +138,11 @@ export interface RegistryHostPorts {
     turnId?: string;
   }): Promise<{ parentTurnId?: string; rootTurnId?: string }>;
   readThread(request: RegistryReadThreadRequest): Promise<AppServerReadThreadResponse>;
+  recordCodexWorktreeOwnerThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    worktreePath?: string;
+  }): Promise<void>;
   renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse>;
   resolveAgentCallerExecutionMode(context: {
     backend: AppServerBackendKind;
@@ -161,6 +184,53 @@ export interface RegistryHostPorts {
     input: AppServerTurnInputItem[];
     model?: string;
     reasoningEffort?: string;
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
+  startThread(params: {
+    backend: AppServerBackendKind;
+    executionMode?: ThreadExecutionMode;
+    cwd?: string;
+    directoryKey?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    mcpConnectionIds?: string[];
+    mcpProviderServersEnabled?: boolean;
+    agent?: StartThreadRequest["agent"];
+    acpRuntime?: BackendAcpSessionRuntimeState;
+    workMode?: NavigationLaunchpadDraft["workMode"];
+    branchName?: string;
+    /** Base for a new worktree when `branchName` is unset. */
+    worktreeBase?: WorktreeBaseSource;
+    requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
+    parentThreadId?: string;
+    parentThreadBackend?: AppServerBackendKind;
+    parentThreadInstanceId?: string;
+    prAutoDispatchEnabled?: boolean;
+    tokenMiserEnabled?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    /**
+     * Run the environment's setup in the new workspace even when it is not a
+     * new worktree. A named environment has never run there.
+     */
+    rerunCodexEnvironmentSetup?: boolean;
+    linkedDirectories?: LinkedDirectorySummary[];
+  }): Promise<StartThreadResponse>;
+  startTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   submitTurn(params: {
     queueEntryId?: string;

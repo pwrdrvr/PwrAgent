@@ -4,6 +4,7 @@ import {
   BONSAI_2_27B_DISPLAY_NAME,
   BONSAI_2_27B_MODEL_ID,
   LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  codexProviderContextWindow,
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
@@ -20,7 +21,10 @@ export function bonsaiNativeMcpOverrides(names: readonly string[]): string[] {
     : [];
 }
 
-export async function readBonsaiCatalog(provider: CodexModelProviderSettings): Promise<LocalModelCatalog> {
+export async function readBonsaiCatalog(
+  provider: CodexModelProviderSettings,
+  options: { verifyAliasWithServer?: boolean } = {},
+): Promise<LocalModelCatalog> {
   const slug = provider.models?.[0];
   if (provider.compatibility !== "bonsai" || provider.models?.length !== 1 || !slug) {
     throw new Error("Bonsai compatibility requires exactly one configured model.");
@@ -29,16 +33,21 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
     const info = await stat(provider.catalogPath);
     if (!info.isFile() || info.size > 1024 * 1024) throw new Error("The Bonsai catalog must be a JSON file smaller than 1 MiB.");
     const catalog = JSON.parse(await readFile(provider.catalogPath, "utf8")) as LocalModelCatalog;
-    if (!Array.isArray(catalog?.models) || catalog.models.length !== 1 || catalog.models[0]?.slug !== slug) {
+    if (!Array.isArray(catalog?.models) || catalog.models.length !== 1
+      || typeof catalog.models[0]?.slug !== "string" || !catalog.models[0].slug
+      || (!options.verifyAliasWithServer && catalog.models[0].slug !== slug)) {
       throw new Error("The Bonsai catalog must describe exactly the configured model.");
     }
     const model = catalog.models[0];
     if (model.context_window !== 65536 || model.apply_patch_tool_type !== null
-      || model.supports_search_tool === true || model.supports_reasoning_summaries === true
+      || model.supports_reasoning_summaries === true
       || !Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length !== 0) {
-      throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no search or reasoning support.");
+      throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no reasoning support.");
     }
-    return catalog;
+    // The compatibility bridge supplies Codex's search protocol through
+    // ordinary function calls. Its capability supersedes stale model metadata;
+    // preserve the caller's catalog and materialize the effective copy privately.
+    return { ...catalog, models: [{ ...model, supports_search_tool: true }] };
   }
   return { models: [{
     slug,
@@ -65,7 +74,7 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
     context_window: 65536,
     experimental_supported_tools: [],
     input_modalities: ["text"],
-    supports_search_tool: false,
+    supports_search_tool: true,
   }] };
 }
 
@@ -75,7 +84,16 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
   baseUrl: string;
   close: () => Promise<void>;
 }> {
-  const catalog = await discoverModelCatalog(provider.baseUrl, await readBonsaiCatalog(provider), apiKey);
+  // Alias changes may reuse a path-based catalog only after live metadata
+  // identifies both names as the same loaded model.
+  const discovered = await discoverModelCatalog(provider.baseUrl,
+    await readBonsaiCatalog(provider, { verifyAliasWithServer: true }), apiKey, provider.models![0]);
+  const contextWindow = Math.min(65536, codexProviderContextWindow(provider,
+    provider.modelMetadata?.find((model) => model.id === provider.models![0]) ?? { id: provider.models![0] }));
+  const compactLimit = Math.floor(contextWindow * 0.75);
+  const catalog = { ...discovered, models: discovered.models.map((model) => ({ ...model,
+    context_window: contextWindow, max_context_window: contextWindow, auto_compact_token_limit: compactLimit,
+  })) };
   const root = resolveActiveProfilePath("runtime");
   await mkdir(root, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(path.join(root, "bonsai-"));
@@ -91,10 +109,13 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
   };
   try {
     const catalogPath = path.join(directory, "models.json");
-    await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
+    await writeFile(catalogPath, JSON.stringify(provider.toolDiscovery === "portable" ? {
+      ...catalog, models: catalog.models.map((model) => ({ ...model, tool_mode: "code_mode_only", supports_search_tool: true })),
+    } : catalog), { mode: 0o600 });
     // Codex and the bridge wait the same time on a silent prefill.
     bridge = await startBridge(provider.baseUrl, apiKey, {
       idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+      ...(provider.toolDiscovery === "portable" ? { forwardHeaders: true } : {}),
       // One bounded JSON record bypasses structured-log depth/field compaction.
       onDiagnostic: (event) => diagnosticsLog.info(`local model request diagnostics ${JSON.stringify({ providerId: provider.id, ...event })}`),
     });
@@ -109,15 +130,14 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
         `model_providers.${provider.id}.supports_websockets=false`,
         `model_providers.${provider.id}.stream_idle_timeout_ms=${LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS}`,
         `model_catalog_json=${JSON.stringify(catalogPath)}`,
-        "model_context_window=65536",
-        "model_auto_compact_token_limit=49152",
+        `model_context_window=${contextWindow}`,
+        `model_auto_compact_token_limit=${compactLimit}`,
         'model_reasoning_effort="none"',
         'model_reasoning_summary="none"',
         'web_search="disabled"',
         "features.multi_agent=false",
         "features.goals=false",
-        "features.apps=false",
-        "features.plugins=false",
+        ...(provider.toolDiscovery === "portable" ? [] : ["features.apps=false", "features.plugins=false"]),
         "features.image_generation=false",
       ],
       close,

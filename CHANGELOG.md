@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.7 - 2026-11-15
+
+- Continue After Recovery - Recover ready continuations after the owner confirms a previously busy thread is idle, including when an idle notification was missed. Replace obsolete rolling waits with newer pinned turns instead of letting both fire.
+- Delivery Review - Group uncertain continuation deliveries by their error and review or dismiss them together. Dismiss only the deliveries shown at confirmation, never new arrivals. Uncertain delivery is not automatically replayed, and dismissing it neither cancels a turn nor sends another continuation.
+- Compaction Recovery - Add explicitly authorized Codex compaction recovery subscriptions that can steer the same active turn with recovery instructions. Keep stopped or replaced work untouched, with bounded attempts and operator review when delivery is uncertain.
+- Codex Provider Setup - Publish saved providers to the picker, retry unavailable endpoints before Codex discovery, and configure provider-specific execution metadata such as context size, image input, and verified search-tool support. Keep provider catalogs isolated from the default provider.
+- Cross-provider To-dos - Propose a different coding provider, model, and effort on a start-thread To-do card. Show the proposal to the operator and revalidate it against the destination catalog before launch.
+- Projects and Remote Threads - Add project hover cards with the path, Show in Finder, and new-thread actions. Remove selected remote threads from My List without archiving or changing threads on their owning instances.
+- Math Rendering - Render single-dollar inline math and bound malformed multi-dollar parsing so incomplete expressions cannot monopolize rendering work.
+- Archive Reliability - Keep automatic archiving intact through background dependency reads and content searches, and open thread links from archived cleanup results.
+- Quit and File Actions - Make Quiet the default quit choice when that action applies, and report failed Show in Finder or log-file Reveal actions instead of silently doing nothing.
+- Rendering and Diagnostics - Split oversized composer and window render functions to preserve engine optimization headroom. Add Bonsai request-size diagnostics without recording request content.
+
 ## v1.4.6 - 2026-11-15
 
 - New-thread Models - Honor profile defaults and remembered model and reasoning-effort choices when switching providers. Update the built-in Codex model defaults without letting a configured third-party provider override the OpenAI default.

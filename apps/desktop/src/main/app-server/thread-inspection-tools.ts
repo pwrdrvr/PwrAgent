@@ -22,7 +22,6 @@ import {
   type AppServerThreadSummary,
   type AppServerToolRequestUserInputResponse,
   type ArchiveThreadRequest,
-  type ArchiveThreadResponse,
   type FederationInstanceId,
   type GetThreadStatusToolArgs,
   type HandoffThreadWorkspaceRequest,
@@ -143,6 +142,7 @@ export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
   "dynamicToolPermissionDenied" | "listThreads" | "readCausalMessagingContext"
   | "readThread" | "renameThread" | "resolveAgentCallerExecutionMode"
   | "threadHasActiveTurn"
+  | "archiveThread"
 > {
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
   readonly agentThreadActions: RegistryHandlers["agentThreadActions"];
@@ -155,7 +155,6 @@ export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
   readonly messagingStore: MessagingArchiveCleanupStore | null | undefined;
   /** Nothing when an instance id names this instance itself, whose threads are local. */
   ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;
-  archiveThread(request: ArchiveThreadRequest & { preserveWorktrees?: boolean }): Promise<ArchiveThreadResponse>;
   restoreThread(request: RestoreThreadRequest): Promise<RestoreThreadResponse>;
   handoffThreadWorkspace(request: HandoffThreadWorkspaceRequest): Promise<HandoffThreadWorkspaceResponse>;
   setThreadExecutionMode(params: SetThreadExecutionModeRequest): Promise<SetThreadExecutionModeResponse>;

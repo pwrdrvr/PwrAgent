@@ -94,7 +94,7 @@ export async function resetLaunchpadAfterMaterialize(params: {
   defaultPrAutoDispatchEnabled: boolean;
   defaults: NavigationLaunchpadDefaults;
   launchpad: NavigationLaunchpadDraft;
-  overlayStore: OverlayStoreLike;
+  overlayStore: Pick<OverlayStoreLike, "getDirectoryLaunchpad" | "upsertDirectoryLaunchpad" | "resetDirectoryLaunchpad">;
 }): Promise<void> {
   const {
     defaultPrAutoDispatchEnabled,

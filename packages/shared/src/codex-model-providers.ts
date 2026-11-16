@@ -6,8 +6,8 @@
  * Codex App Server as a `model_providers.<id>` table and pins a thread to it
  * with `thread/start.modelProvider`. Codex then reports `Thread.modelProvider`
  * on every read.
- * Ordinary providers share the primary runtime. Bonsai compatibility runs in
- * a separate client and process so its catalog and feature limits stay local.
+ * Configured providers use independent clients/processes so their model
+ * catalogs and context budgets stay off the default provider.
  *
  * Every PwrAgent surface names one of these models with a qualified id,
  * `@<provider>/<model>`. Codex model ids never start with `@`, so the prefix
@@ -61,6 +61,12 @@ export type CodexModelProviderSettings = {
   compatibility?: "bonsai";
   /** Optional user-authored catalog template; never a Codex session or database. */
   catalogPath?: string;
+  /** Provider-scoped execution metadata saved by the explicit connection test. */
+  modelMetadata?: CodexProviderCatalogModel[];
+  /** Explicit ordinary-function transport for Codex-owned nested discovery. */
+  toolDiscovery?: "portable";
+  /** Optional provider-wide execution budget; never increases a discovered serving limit. */
+  contextWindowCap?: number;
 };
 
 /** Settings snapshot form: whether a key is stored, never the key. */
@@ -82,6 +88,12 @@ export type CodexProviderCatalogModel = {
   defaultReasoningEffort?: string;
   /** From `input_modalities`; absent when the endpoint did not say. */
   supportsImage?: boolean;
+  /** Active serving limit declared by the endpoint; absent when unknown. Never training capacity. */
+  contextWindow?: number;
+  /** Enabled only by a complete discovery test or explicit configuration. */
+  supportsSearchTool?: boolean;
+  /** Verified portable transport, independently of native Responses search. */
+  supportsPortableDiscovery?: boolean;
 };
 
 /** What Settings shows after Test connection. */
@@ -100,6 +112,8 @@ export type CodexModelProviderTestResult = {
   };
   /** A completed text response to a short request with instructions and namespaced tools. */
   responses: { ok: boolean; model?: string; skipped?: boolean; error?: string };
+  discovery?: { ok: boolean; model: string; requests: number; error?: string };
+  portableDiscovery?: { ok: boolean; model: string; requests: number; error?: string; initialToolBytes?: number; initialRequestBytes?: number };
   latencyMs?: number;
 };
 
@@ -350,6 +364,9 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
     if (entry.compatibility !== undefined && entry.compatibility !== "bonsai") {
       throw new Error(`${label}.compatibility must be bonsai.`);
     }
+    if (entry.toolDiscovery !== undefined && entry.toolDiscovery !== "portable") {
+      throw new Error(`${label}.toolDiscovery must be portable.`);
+    }
     // Recognize the launcher alias and earlier GGUF imports without changing IDs.
     const compatibility = entry.compatibility ?? (
       isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1
@@ -363,6 +380,9 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       || !entry.catalogPath.trim().endsWith(".json") || entry.catalogPath.length > 4096 || /[\0\r\n]/u.test(entry.catalogPath))) {
       throw new Error(`${label}.catalogPath needs Bonsai compatibility and a valid catalog path.`);
     }
+    if (entry.contextWindowCap !== undefined && !isValidProviderContextWindow(entry.contextWindowCap)) {
+      throw new Error(`${label}.contextWindowCap must be a whole number from 1024 to 2000000 tokens.`);
+    }
     return {
       id,
       name,
@@ -373,7 +393,31 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       ...(rates?.length ? { rates } : {}),
       ...(compatibility ? { compatibility: "bonsai" as const } : {}),
       ...(typeof entry.catalogPath === "string" ? { catalogPath: entry.catalogPath.trim() } : {}),
+      ...(entry.modelMetadata === undefined ? {} : { modelMetadata: validateProviderModelMetadata(entry.modelMetadata, label) }),
+      ...(entry.toolDiscovery === "portable" ? { toolDiscovery: "portable" as const } : {}),
+      ...(entry.contextWindowCap === undefined ? {} : { contextWindowCap: entry.contextWindowCap as number }),
     };
+  });
+}
+
+function validateProviderModelMetadata(value: unknown, label: string): CodexProviderCatalogModel[] {
+  if (!Array.isArray(value) || value.length > 2000) throw new Error(`${label}.modelMetadata must contain at most 2000 models.`);
+  const seen = new Set<string>();
+  return value.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${label}.modelMetadata needs model objects.`);
+    const model = entry as Record<string, unknown>;
+    const parsed = parseCodexProviderCatalogModel({
+      id: model.id, display_name: model.label, input_modalities: model.supportsImage === undefined ? undefined : model.supportsImage ? ["text", "image"] : ["text"],
+      context_window: model.contextWindow, supported_reasoning_efforts: model.reasoningEfforts, default_reasoning_effort: model.defaultReasoningEffort,
+    });
+    if (!parsed || seen.has(parsed.id)) throw new Error(`${label}.modelMetadata needs distinct valid model ids.`);
+    if (model.contextWindow !== undefined && parsed.contextWindow === undefined) throw new Error(`${label}.modelMetadata has an invalid context window.`);
+    if (model.supportsSearchTool !== undefined && typeof model.supportsSearchTool !== "boolean") throw new Error(`${label}.modelMetadata search support must be a boolean.`);
+    if (model.supportsPortableDiscovery !== undefined && typeof model.supportsPortableDiscovery !== "boolean") throw new Error(`${label}.modelMetadata portable discovery support must be a boolean.`);
+    if (model.supportsImage !== undefined && typeof model.supportsImage !== "boolean") throw new Error(`${label}.modelMetadata image support must be a boolean.`);
+    seen.add(parsed.id);
+    return { ...parsed, ...(model.supportsSearchTool === undefined ? {} : { supportsSearchTool: model.supportsSearchTool as boolean }),
+      ...(model.supportsPortableDiscovery === undefined ? {} : { supportsPortableDiscovery: model.supportsPortableDiscovery as boolean }) };
   });
 }
 
@@ -681,11 +725,31 @@ export function parseCodexProviderCatalogModel(entry: unknown): CodexProviderCat
     ? item.default_reasoning_effort.trim()
     : undefined;
   const modalities = Array.isArray(item.input_modalities) ? item.input_modalities : undefined;
+  const meta = item.meta && typeof item.meta === "object" && !Array.isArray(item.meta)
+    ? item.meta as Record<string, unknown> : undefined;
+  // llama-server's active slot context supersedes generic model capacity.
+  // n_ctx_train describes training, not the configured serving limit.
+  const contextWindow = [meta?.n_ctx, item.context_window, item.context_length].find(isValidProviderContextWindow);
   return {
     id,
     ...(label && label !== id ? { label } : {}),
     ...(efforts.length ? { reasoningEfforts: efforts } : {}),
     ...(defaultEffort && efforts.includes(defaultEffort) ? { defaultReasoningEffort: defaultEffort } : {}),
     ...(modalities ? { supportsImage: modalities.includes("image") } : {}),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
   };
+}
+
+function isValidProviderContextWindow(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 2_000_000;
+}
+
+/** Local inference defaults to a bounded working set, independently of training capacity. */
+export const LOCAL_CODEX_PROVIDER_CONTEXT_WINDOW = 65_536;
+
+export function codexProviderContextWindow(provider: CodexModelProviderSettings, model: CodexProviderCatalogModel): number {
+  const local = provider.local || provider.compatibility === "bonsai" || isLoopbackCodexBaseUrl(provider.baseUrl);
+  const cap = provider.contextWindowCap ?? (local ? LOCAL_CODEX_PROVIDER_CONTEXT_WINDOW : undefined);
+  // Remote endpoints without discovery retain the former unknown-model fallback.
+  return Math.min(model.contextWindow ?? cap ?? 272_000, cap ?? Infinity);
 }

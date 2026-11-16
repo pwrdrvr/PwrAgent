@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendModelOption,
   BackendSummary,
   CodexModelProviderCatalogState,
   CodexModelProviderImportScan,
+  CodexModelProviderSettings,
   DesktopCodexModelProvider,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -27,7 +28,7 @@ function renderSettings(
   scan?: CodexModelProviderImportScan,
   backends?: BackendSummary[],
 ) {
-  const onSave = vi.fn(async () => true);
+  const onSave = vi.fn(async (_providers: CodexModelProviderSettings[]) => true);
   const onRefresh = vi.fn(async () => undefined);
   const onRefreshCatalogs = vi.fn(async () => undefined);
   const setCodexModelProviderApiKey = vi.fn(async ({ providerId }: { providerId: string }) => ({ providerId, hasApiKey: true }));
@@ -72,6 +73,27 @@ const mathos: DesktopCodexModelProvider = {
   baseUrl: "https://mathos.example/v1",
   hasApiKey: true,
 };
+
+it("lets the operator verify portable discovery, save it with native support false, and use normal provider settings", async () => {
+  const { testCodexModelProvider, onSave } = renderSettings([{ ...refuseless, modelMetadata: [{ id: "glm-5.3-abliterated", supportsSearchTool: false }] }]);
+  testCodexModelProvider.mockResolvedValue({
+    models: { ok: true, count: 1 }, responses: { ok: true, model: "glm-5.3-abliterated" },
+    discovery: { ok: false, model: "glm-5.3-abliterated", requests: 1, error: "Native search unsupported" },
+    portableDiscovery: { ok: true, model: "glm-5.3-abliterated", requests: 3 },
+  } as never);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Tool discovery" }));
+  fireEvent.click(screen.getByRole("option", { name: "Portable" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+  expect(onSave).not.toHaveBeenCalled();
+  await screen.findByText(/verify portable discovery before saving/);
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+  await screen.findByText(/Verified through Codex for glm-5.3-abliterated/);
+  fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({
+    toolDiscovery: "portable", modelMetadata: [{ id: "glm-5.3-abliterated", supportsSearchTool: false, supportsPortableDiscovery: true }],
+  })]));
+});
 
 /** The owner's Codex summary after it read MathOS's `GET /models`. */
 function codexSummary(
@@ -132,6 +154,36 @@ const importScan: CodexModelProviderImportScan = {
 };
 
 describe("CodexModelProvidersSettings", () => {
+  it("edits a provider context cap while retaining advertised capabilities and neighboring providers", async () => {
+    const configured = { ...refuseless, contextWindowCap: 65536,
+      modelMetadata: [{ id: "glm-5.3-abliterated", contextWindow: 1048576, supportsSearchTool: true }] };
+    const { onSave } = renderSettings([configured, mathos]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    expect(screen.getByLabelText("Context cap (tokens)")).toHaveValue("65536");
+    expect(screen.getByText(/1,048,576 tokens advertised/u)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Context cap (tokens)"), { target: { value: "32768" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ contextWindowCap: 32768, modelMetadata: configured.modelMetadata }),
+      expect.not.objectContaining({ contextWindowCap: expect.anything() }),
+    ]);
+  });
+
+  it.each(["", "65536.5", "0", "2000001"])("handles a cleared or invalid context cap %j without replacing discovery metadata", async (value) => {
+    const { onSave } = renderSettings([{ ...refuseless, contextWindowCap: 65536 }]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Context cap (tokens)"), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    if (value === "") {
+      await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+      expect(onSave.mock.calls[0][0][0]).not.toHaveProperty("contextWindowCap");
+    } else {
+      expect(onSave).not.toHaveBeenCalled();
+      expect(await screen.findByText("Context cap must be a whole number from 1,024 to 2,000,000 tokens.")).toBeInTheDocument();
+    }
+  });
+
   it("adds a provider with a key, models and rates, storing the key first", async () => {
     const calls: string[] = [];
     const { onSave, setCodexModelProviderApiKey } = renderSettings();
@@ -274,6 +326,44 @@ describe("CodexModelProvidersSettings", () => {
     expect(screen.getByText(/A passing check does not validate a full PwrAgent turn/u)).toBeInTheDocument();
   });
 
+  it.each([true, false])("saves execution metadata for the chosen test model without changing the offered model list (discovery %s)", async (supported) => {
+    const { onSave, testCodexModelProvider } = renderSettings([mathos], undefined, [codexSummary([
+      mathosModel("other"), mathosModel("kimi"),
+    ])]);
+    testCodexModelProvider.mockImplementation(async () => ({
+      models: { ok: true, count: 1, items: [{ id: "kimi", contextWindow: 262144, reasoningEfforts: ["low", "high"] }] },
+      responses: { ok: true, model: "kimi", error: "" }, latencyMs: 1,
+      discovery: { ok: supported, model: "kimi", requests: 3, ...(supported ? {} : { error: "Native search is unavailable" }) },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model to test" }));
+    fireEvent.click(screen.getByRole("option", { name: "kimi" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalledWith({ provider: expect.objectContaining({ models: ["kimi"] }) }));
+    await screen.findByText(supported ? "Verified for kimi" : "Native search is unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({ modelMetadata: [{
+      id: "kimi", contextWindow: 262144, reasoningEfforts: ["low", "high"], supportsSearchTool: supported,
+    }] })]));
+    expect(onSave).toHaveBeenCalledWith([expect.not.objectContaining({ models: ["kimi"] })]);
+  });
+
+  it.each(["Base URL", "API key"])("ignores late metadata from a test after changing %s", async (field) => {
+    const { onSave, testCodexModelProvider } = renderSettings([mathos]);
+    let complete!: () => void;
+    const result = { models: { ok: true, count: 1, items: [{ id: "kimi", contextWindow: 262144 }] },
+      responses: { ok: true, model: "kimi", error: "" }, latencyMs: 1,
+      discovery: { ok: true, model: "kimi", requests: 3 } };
+    testCodexModelProvider.mockImplementation(async () => await new Promise((resolve) => { complete = () => resolve(result); }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    fireEvent.change(screen.getByLabelText(field), { target: { value: field === "Base URL" ? "https://other.example/v1" : "fixture-new-key" } });
+    await act(async () => { complete(); });
+    expect(screen.queryByText("Verified for kimi")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.not.objectContaining({ modelMetadata: expect.anything() })]));
+  });
+
   it("offers the providers Codex config files define and imports one into the form", async () => {
     const { onSave, setCodexModelProviderApiKey } = renderSettings([], importScan);
     const imports = await screen.findByRole("group", { name: "Providers in Codex config files" });
@@ -332,6 +422,81 @@ describe("CodexModelProvidersSettings", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({
       compatibility: "bonsai", catalogPath: "/profiles/bonsai/models.json",
     })]));
+  });
+
+  it.each(["cached", "tested", "import"])("saves and tests the discovered Bonsai alias after removing the old added path (%s)", async (source) => {
+    const provider: DesktopCodexModelProvider = {
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", hasApiKey: false,
+      models: ["/models/Bonsai.gguf"], compatibility: "bonsai", catalogPath: "/profiles/bonsai/models.json",
+    };
+    const summary = codexSummary([
+      { id: "@bonsai//models/Bonsai.gguf", providerId: "bonsai", supportsReasoning: false },
+      { id: "@bonsai/bonsai2-27b", providerId: "bonsai", supportsReasoning: false },
+    ], { id: "bonsai", name: "Bonsai", listedCount: 1, discoveredCount: 1 });
+    const candidate = { ...importScan.candidates[0], sourceId: "bonsai", name: "Bonsai", models: provider.models!,
+      baseUrl: provider.baseUrl, compatibility: "bonsai" as const, catalogPath: provider.catalogPath };
+    const { onSave, testCodexModelProvider } = renderSettings(source === "import" ? [] : [provider],
+      source === "import" ? { candidates: [candidate], skipped: [] } : undefined, [summary]);
+    testCodexModelProvider.mockImplementation(async () => ({
+      models: { ok: true, count: 1, items: [{ id: "bonsai2-27b" }] },
+      responses: { ok: false, model: "bonsai2-27b", error: "Old catalog identity" }, latencyMs: 1,
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: source === "import" ? "Import Bonsai" : "Edit" }));
+    if (source !== "cached") {
+      fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+      await screen.findByText("1 model from GET /models · from this test");
+      testCodexModelProvider.mockClear();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Remove /models/Bonsai.gguf" }));
+    expect(within(screen.getByRole("table", { name: "Provider models" })).getByText("bonsai2-27b")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalledWith({ provider: expect.objectContaining({
+      models: ["bonsai2-27b"], compatibility: "bonsai", catalogPath: provider.catalogPath,
+    }) }));
+    fireEvent.click(screen.getByRole("button", { name: source === "import" ? "Add and reconnect" : "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({
+      models: ["bonsai2-27b"], compatibility: "bonsai", catalogPath: provider.catalogPath,
+    })]));
+  });
+
+  // Rule: endpoint model listings never opt a generic draft into the Bonsai
+  // bridge. Check both catalog sources and every alias position for up to two
+  // models, including a single advertised alias without compatibility proof.
+  it("preserves generic execution when discovery advertises a Bonsai alias", async () => {
+    for (const source of ["cached", "tested"]) {
+      for (const ids of [["bonsai2-27b", "other"], ["other", "bonsai2-27b"], ["bonsai2-27b"]]) {
+        const provider: DesktopCodexModelProvider = {
+          id: "generic", name: "Generic", baseUrl: "http://127.0.0.1:8080/v1", hasApiKey: false,
+        };
+        const summary = codexSummary(ids.map((id) => ({
+          id: `@generic/${id}`, providerId: "generic", supportsReasoning: false,
+        })), { id: "generic", name: "Generic" });
+        const { onSave, testCodexModelProvider } = renderSettings([provider], undefined, [summary]);
+        testCodexModelProvider.mockImplementation(async () => ({
+          models: { ok: true, count: ids.length, items: ids.map((id) => ({ id })) },
+          responses: { ok: false, model: ids[0], error: "Compatibility not verified" }, latencyMs: 1,
+        }));
+        fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+        fireEvent.change(screen.getByRole("textbox", { name: "Provider name" }), { target: { value: "Generic updated" } });
+        fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+        await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalled());
+        if (source === "tested") {
+          await screen.findByText(`${ids.length} ${ids.length === 1 ? "model" : "models"} from GET /models · from this test`);
+          testCodexModelProvider.mockClear();
+          fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+          await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalled());
+        }
+        const tested = (testCodexModelProvider.mock.calls as unknown as [{ provider: DesktopCodexModelProvider }][])[0][0];
+        expect(tested.provider.models, `${source}: ${ids}`).toBeUndefined();
+        expect(tested.provider.compatibility, `${source}: ${ids}`).toBeUndefined();
+        fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+        await waitFor(() => expect(onSave).toHaveBeenCalled());
+        const saved = (onSave.mock.calls as unknown as [DesktopCodexModelProvider[]][])[0][0];
+        expect(saved[0].models, `${source}: ${ids}`).toBeUndefined();
+        expect(saved[0].compatibility, `${source}: ${ids}`).toBeUndefined();
+        cleanup();
+      }
+    }
   });
 
   it("asks for the key an imported provider needs and stores it in the keychain", async () => {

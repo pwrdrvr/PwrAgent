@@ -31,6 +31,7 @@ import {
   type ThreadDisplayCards,
 } from "./thread-display";
 import { randomUUID } from "node:crypto";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   type AgentEvent,
   type AppServerThreadActivityEntry,
@@ -133,6 +134,7 @@ import {
   detectObservedContextWindowDrop,
   foldLiveThreadRequestUsage,
   foldObservedContextReplay,
+  formatTaskMonitorNumber,
   mergeThreadPricingLines,
   readTaskMonitorTokenUsageRecords,
   readThreadCompactionBoundary,
@@ -151,6 +153,7 @@ import {
 import { isDevelopment, logDebug } from "./registry-debug-log";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const TOKEN_MISER_LEDGER_BATCH_SIZE = 64;
 
 /** Collaborators the composition root builds for this module. */
 export interface ThreadUsageLedgerDependencies {
@@ -379,6 +382,7 @@ export class ThreadUsageLedger {
    * for this, so gate cards update in the order the store reported them.
    */
   private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
+  private tokenMiserLedgerPersistenceChain: Promise<void> = Promise.resolve();
 
   private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
 
@@ -3407,6 +3411,7 @@ export class ThreadUsageLedger {
   private buildTokenMiserLedgerArtifact(params: {
     entry: TokenMiserObjectMetadata;
     indexes: TokenMiserLedgerIndexes;
+    accounting?: ReturnType<typeof resolveTokenMiserGateAccounting>;
   }): {
     gateUsageLine?: ThreadUsageLineRecord;
     subAgent: ThreadSubAgentSummary;
@@ -3421,7 +3426,7 @@ export class ThreadUsageLedger {
         })
       : undefined;
     const { gateUsageLine, tokenMiserAccounting } =
-      resolveTokenMiserGateAccounting({
+      params.accounting ?? resolveTokenMiserGateAccounting({
         entry,
         helperUsage: () => usage,
         indexes: params.indexes,
@@ -3459,12 +3464,12 @@ export class ThreadUsageLedger {
           ? { monitorTurnId: entry.helperUsage.helperTurnId }
           : {}),
         lastMessage: policyPassThrough
-          ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
+          ? `Passed ${formatTaskMonitorNumber(entry.originalCharacters)} characters `
             + `from ${entry.toolName} through unchanged by deterministic policy.`
           : entry.disposition === "passed_through"
-            ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
+            ? `Passed ${formatTaskMonitorNumber(entry.originalCharacters)} characters `
               + `from ${entry.toolName} through unchanged after evaluation.`
-          : `Compressed ${entry.originalCharacters.toLocaleString()} characters `
+          : `Compressed ${formatTaskMonitorNumber(entry.originalCharacters)} characters `
             + `from ${entry.toolName} before they entered the parent context.`,
         outcome: "success",
         completedAt: entry.createdAt,
@@ -3656,15 +3661,16 @@ export class ThreadUsageLedger {
   ): boolean {
     const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId);
     const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId);
+    const monitorIds = new Set(entries.map(tokenMiserMonitorId));
     let changed = false;
-    for (const entry of entries) {
-      const monitorId = tokenMiserMonitorId(entry);
+    for (const monitorId of monitorIds) {
       changed = liveSubAgents?.delete(monitorId) === true || changed;
-      for (const [usageLineId, line] of liveUsageLines ?? []) {
-        if (line.sourceItemId === monitorId) {
-          liveUsageLines?.delete(usageLineId);
-          changed = true;
-        }
+    }
+    for (const [usageLineId, line] of liveUsageLines ?? []) {
+      const sourceItemId = line.sourceItemId;
+      if (sourceItemId && monitorIds.has(sourceItemId)) {
+        liveUsageLines?.delete(usageLineId);
+        changed = true;
       }
     }
     if (liveSubAgents?.size === 0) {
@@ -3696,9 +3702,23 @@ export class ThreadUsageLedger {
    * pricing changed. With `publishPricing: false` the caller publishes it,
    * which lets a turn end send one pricing update for all of its writes.
    */
-  private async persistTokenMiserLedgerEntries(
+  private persistTokenMiserLedgerEntries(
     metadata: readonly TokenMiserObjectMetadata[],
     options: { publishPricing?: boolean } = {},
+  ): Promise<string[]> {
+    // Pacing lets later flushes arrive before an earlier batch writes. Keep
+    // their database writes in call order, independently of the live publish
+    // chain. A failed batch rejects its caller without blocking the next one.
+    const persisted = this.tokenMiserLedgerPersistenceChain.then(() =>
+      this.writeTokenMiserLedgerEntries(metadata, options),
+    );
+    this.tokenMiserLedgerPersistenceChain = persisted.then(() => undefined, () => undefined);
+    return persisted;
+  }
+
+  private async writeTokenMiserLedgerEntries(
+    metadata: readonly TokenMiserObjectMetadata[],
+    options: { publishPricing?: boolean },
   ): Promise<string[]> {
     // Finalized helper usage joins the same one-second bulk-write window as
     // parent usage. Drain that window before terminal reconciliation so the
@@ -3751,35 +3771,48 @@ export class ThreadUsageLedger {
         replays: indexTokenMiserCachedReplays(toolAccounting?.invocations ?? []),
       };
 
-      for (const entry of entries) {
-        const artifact = this.buildTokenMiserLedgerArtifact({ entry, indexes });
-        // One keyed read per gate in this batch, not the thread's whole history.
-        const existingSubAgent = await this.context.stores.subAgents.getThreadSubAgent({
-          backend: "codex",
-          threadId,
-          monitorId: artifact.subAgent.monitorId,
-        });
-        // Compare the fields the rail actually renders, not the whole record:
-        // owner ids change every process, so a whole-record compare would
-        // rewrite every gate on every launch. But comparing accounting alone
-        // meant a new rendered field — `parentTurnId`, which the rail nests
-        // on — never reached gates whose numbers had not moved, so a restart
-        // left them un-nested indefinitely.
-        if (
-          !existingSubAgent
-          || tokenMiserSubAgentProjectionChanged(
-            existingSubAgent,
-            artifact.subAgent,
-          )
-        ) {
-          subAgents.push(artifact.subAgent);
-        }
-        if (
-          artifact.gateUsageLine
-          && !knownUsageLineIds.has(artifact.gateUsageLine.usageLineId)
-        ) {
-          logUnpricedThreadUsageLine(artifact.gateUsageLine);
-          usageLines.push(artifact.gateUsageLine);
+      for (let offset = 0; offset < entries.length; offset += TOKEN_MISER_LEDGER_BATCH_SIZE) {
+        if (offset > 0) await yieldToEventLoop();
+        const batch = entries.slice(offset, offset + TOKEN_MISER_LEDGER_BATCH_SIZE);
+        // Read the authoritative cards on every flush, including a repeated
+        // one. A previous in-memory artifact cannot stand in for the database
+        // after a peer write, deletion, or rolled-back transaction.
+        const existingSubAgents = new Map((
+          await this.context.stores.subAgents.getThreadSubAgents({
+            backend: "codex", threadId, monitorIds: batch.map(tokenMiserMonitorId),
+          })
+        ).map((card) => [card.monitorId, card]));
+        for (const entry of batch) {
+          const accounting = resolveTokenMiserGateAccounting({
+            entry, indexes,
+            helperUsage: () => entry.helperUsage?.tokenUsage
+              ? buildTaskMonitorUsageTotals({
+                  model: entry.helperUsage.model,
+                  serviceTier: entry.helperUsage.serviceTier,
+                  tokenUsage: entry.helperUsage.tokenUsage,
+                })
+              : undefined,
+          });
+          const existingSubAgent = existingSubAgents.get(tokenMiserMonitorId(entry));
+          // Compare the same stable projection before building display text.
+          // Owner ids change every process; parentTurnId still participates
+          // so old cards acquire the rail's turn nesting on reconciliation.
+          if (
+            !existingSubAgent
+            || tokenMiserSubAgentProjectionChanged(
+              existingSubAgent,
+              { parentTurnId: entry.turnId, tokenMiserAccounting: accounting.tokenMiserAccounting },
+            )
+          ) {
+            subAgents.push(this.buildTokenMiserLedgerArtifact({ entry, indexes, accounting }).subAgent);
+          }
+          if (
+            accounting.gateUsageLine
+            && !knownUsageLineIds.has(accounting.gateUsageLine.usageLineId)
+          ) {
+            logUnpricedThreadUsageLine(accounting.gateUsageLine);
+            usageLines.push(accounting.gateUsageLine);
+          }
         }
       }
 
@@ -3810,11 +3843,18 @@ export class ThreadUsageLedger {
           }
         }
       }
+      // A paced bulk flush can overlap a newer metadata callback. Retire
+      // only the version we persisted; its replacement stays live and pending
+      // until a later flush records it.
+      const settledEntries = entries.filter((entry) => {
+        const pending = this.pendingTokenMiserInterceptions.get(entry.objectId);
+        return pending === undefined || pending === entry;
+      });
       const clearedLive = this.clearLiveTokenMiserLedgerEntries(
         threadId,
-        entries,
+        settledEntries,
       );
-      for (const entry of entries) {
+      for (const entry of settledEntries) {
         this.pendingTokenMiserInterceptions.delete(entry.objectId);
       }
       if (subAgents.length > 0 || clearedLive) {

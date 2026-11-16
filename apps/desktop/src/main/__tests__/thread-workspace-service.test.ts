@@ -9,15 +9,14 @@ import {
   type PendingThreadWorkspaceMoveSummary,
   type ThreadOverlayState,
 } from "@pwragent/shared";
-import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import type { RegistryContext } from "../app-server/registry-context";
+import { registryModules } from "../app-server/backend-registry-wiring";
 import {
   ThreadWorkspaceService,
   type ThreadWorkspaceServiceDependencies,
 } from "../app-server/thread-workspace-service";
-import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import type { StateDb } from "../state/state-db";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
+import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
 
 const databases: StateDb[] = [];
 afterEach(() => {
@@ -37,18 +36,9 @@ function workspaceService(params: {
   overlayStore?: object;
   dependencies?: Partial<ThreadWorkspaceServiceDependencies>;
 } = {}): ThreadWorkspaceService {
-  const store = params.overlayStore ?? {};
-  const context = {
-    stores: {
-      threads: store, usage: store, subAgents: store, workspaces: store, toolAccounting: store,
-      pullRequests: store, reviews: store, archive: store, messaging: store,
-    },
-    providers: params.providers ?? {},
-    lifecycle: { closed: false },
-    emit: async () => {},
-  };
+  const context = registryContextStandIn({ overlayStore: params.overlayStore, providers: params.providers });
   const host = params.host;
-  return new ThreadWorkspaceService(context as unknown as RegistryContext, {
+  return new ThreadWorkspaceService(context, {
     threadArchiveCoordinator: {
       recordArchiveWorkspaceChange: () => {},
       invalidateArchiveCleanupReads: () => {},
@@ -346,21 +336,7 @@ describe("module construction", () => {
 });
 
 describe("registry facades and reads", () => {
-  function registryFixture() {
-    const db = openInMemoryStateDb();
-    databases.push(db);
-    return createDesktopBackendRegistry({
-      overlayStore: new SqliteOverlayStore(db),
-      codexClient: {
-        close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
-        listThreads: async () => [], onNotification: () => () => {}, onPendingRequest: () => () => {},
-        readConfiguredMcpServerNames: async () => [], listModels: async () => [],
-      } as never,
-      archiveCleanupCheckpointStore: null,
-      isBootstrapMode: () => false,
-      resolveTokenMiserEnabled: () => false,
-    });
-  }
+  const registryFixture = () => registryWithInMemoryStore(databases);
 
   it("returns the service's own result for each importer-facing member", async () => {
     const registry = registryFixture();

@@ -37818,12 +37818,23 @@ div.composer-error-row__toggle {
   max-height: 240px;
   flex-direction: column;
   gap: 2px;
-  overflow: auto;
+  overflow: hidden;
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+.automation-agent-picker__results {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.automation-agent-picker__menu > .automation-agent-picker__tabs,
+.automation-agent-picker__menu > .automation-agent-picker__search {
+  flex-shrink: 0;
 }
 
 .automation-agent-picker__tabs {

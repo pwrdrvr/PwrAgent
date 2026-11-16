@@ -218,6 +218,8 @@ export type BackendModelOption = {
   providerId?: string;
   /** Display name of `providerId`, such as `Refuseless`. */
   providerLabel?: string;
+  /** Discovered serving capacity, separate from a provider's execution cap. */
+  contextWindow?: number;
   current?: boolean;
   /** Older or secondary catalog models shown in the Other Models submenu. */
   other?: boolean;

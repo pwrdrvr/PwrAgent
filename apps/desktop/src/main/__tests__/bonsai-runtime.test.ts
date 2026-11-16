@@ -25,6 +25,19 @@ afterEach(async () => {
 });
 
 describe("isolated Bonsai launch resources", () => {
+  it.each([32768, 65536, 131072])("honors a manual cap of %s within the Bonsai adapter ceiling", async (contextWindowCap) => {
+    const runtime = await prepareBonsaiRuntime({ ...provider, contextWindowCap });
+    try {
+      const context = Math.min(contextWindowCap, 65536);
+      expect(runtime.overrides).toContain(`model_context_window=${context}`);
+      expect(runtime.overrides).toContain(`model_auto_compact_token_limit=${Math.floor(context * 0.75)}`);
+      const file = JSON.parse(runtime.overrides.find((arg) => arg.startsWith("model_catalog_json="))!.slice("model_catalog_json=".length));
+      expect(JSON.parse(await readFile(file, "utf8")).models[0]).toMatchObject({
+        context_window: context, max_context_window: context, auto_compact_token_limit: Math.floor(context * 0.75),
+      });
+    } finally { await runtime.close(); }
+  });
+
   it("disables native MCPs in one table override, including names the CLI dotted-key parser would misparse", () => {
     expect(bonsaiNativeMcpOverrides(["awsdocs", "computer-use", "server.with.dots"])).toEqual([
       'mcp_servers={"awsdocs"={enabled=false},"computer-use"={enabled=false},"server.with.dots"={enabled=false}}',
@@ -41,7 +54,7 @@ describe("isolated Bonsai launch resources", () => {
       expect(catalog.models[0]).toMatchObject({
         slug: model, context_window: 65536, apply_patch_tool_type: null,
         display_name: model === "bonsai2-27b" ? "PrismML Bonsai 2 27B" : "PrismML Bonsai",
-        supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: false,
+        supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: true,
       });
       if (process.platform !== "win32") {
         expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
@@ -53,7 +66,7 @@ describe("isolated Bonsai launch resources", () => {
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
         "features.goals=false", "features.multi_agent=false", "features.image_generation=false", 'web_search="disabled"',
       ]));
-      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key");
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key", model);
       // The bridge waits on a silent prefill exactly as long as Codex does.
       expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key", { idleTimeoutMs: 900_000, onDiagnostic: expect.any(Function) });
       await runtime.close();
@@ -79,5 +92,40 @@ describe("isolated Bonsai launch resources", () => {
     template.models[0].context_window = 131072;
     await writeFile(catalogPath, JSON.stringify(template));
     await expect(readBonsaiCatalog({ ...selectedProvider, catalogPath })).rejects.toThrow("65536-token context");
+  });
+
+  it("materializes discovery for a legacy catalog without rewriting the source file", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-search-catalog-"));
+    directories.push(directory);
+    const catalogPath = path.join(directory, "models.json");
+    const template = await readBonsaiCatalog(provider);
+    template.models[0].supports_search_tool = false;
+    template.models[0].base_instructions = "User-authored coding instructions";
+    const original = JSON.stringify(template);
+    await writeFile(catalogPath, original);
+    const runtime = await prepareBonsaiRuntime({ ...provider, catalogPath });
+    try {
+      const catalogArg = runtime.overrides.find((value) => value.startsWith("model_catalog_json="))!;
+      const runtimePath = JSON.parse(catalogArg.slice("model_catalog_json=".length)) as string;
+      expect(runtimePath).not.toBe(catalogPath);
+      expect(JSON.parse(await readFile(runtimePath, "utf8"))).toEqual({
+        models: [{ ...template.models[0], supports_search_tool: true,
+          max_context_window: 65536, auto_compact_token_limit: 49152 }],
+      });
+      expect(await readFile(catalogPath, "utf8")).toBe(original);
+    } finally { await runtime.close(); }
+  });
+
+  it("verifies an old catalog's path against live metadata when switching to the alias", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-alias-catalog-"));
+    directories.push(directory);
+    const catalogPath = path.join(directory, "models.json");
+    const template = await readBonsaiCatalog(provider);
+    await writeFile(catalogPath, JSON.stringify(template));
+    const runtime = await prepareBonsaiRuntime({ ...provider, models: ["bonsai2-27b"], catalogPath });
+    try {
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, template, undefined, "bonsai2-27b");
+      expect(JSON.parse(await readFile(catalogPath, "utf8"))).toEqual(template);
+    } finally { await runtime.close(); }
   });
 });

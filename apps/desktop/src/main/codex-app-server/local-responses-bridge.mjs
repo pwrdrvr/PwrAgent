@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { once } from "node:events";
 
 /**
@@ -21,10 +22,11 @@ class UpstreamIdleTimeoutError extends Error {
  * 300 s without headers or body bytes. Node's HTTP client has no response
  * deadline, so the socket idle timer below is the only one.
  */
-function postUpstream(url, headers, body, signal, idleTimeoutMs) {
+export function postUpstream(url, headers, body, signal, idleTimeoutMs) {
   return new Promise((resolve, reject) => {
     let response;
-    const req = httpRequest(url, {
+    const request = new URL(url).protocol === "https:" ? httpsRequest : httpRequest;
+    const req = request(url, {
       method: "POST",
       agent: false,
       signal,
@@ -47,6 +49,21 @@ function postUpstream(url, headers, body, signal, idleTimeoutMs) {
     req.on("error", reject);
     req.end(body);
   });
+}
+
+/** Preserve provider/account headers, but rebuild framing for the translated body. */
+export function providerRequestHeaders(incoming) {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(incoming)) {
+    if (Array.isArray(value)) for (const part of value) headers.append(name, part);
+    else if (value !== undefined) headers.append(name, value);
+  }
+  const omitted = new Set(["host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "transfer-encoding", "upgrade", "content-length", "content-encoding", "accept-encoding", "expect"]);
+  for (const name of (headers.get("connection") ?? "").split(",")) omitted.add(name.trim().toLowerCase());
+  for (const name of omitted) if (name) headers.delete(name);
+  headers.set("content-type", "application/json");
+  return Object.fromEntries(headers);
 }
 
 async function readText(stream) {
@@ -82,7 +99,7 @@ async function readMetadata(url, apiKey) {
   return JSON.parse(text + decoder.decode());
 }
 
-export async function discoverModelCatalog(upstream, template, apiKey) {
+export async function discoverModelCatalog(upstream, template, apiKey, selectedModel = template?.models?.[0]?.slug) {
   const target = loopbackUpstream(upstream);
   const base = target.href.replace(/\/$/, "");
   if (!target.pathname.replace(/\/$/, "").endsWith("/v1")) {
@@ -98,8 +115,9 @@ export async function discoverModelCatalog(upstream, template, apiKey) {
   ]);
   const model = template.models[0];
   const advertised = Array.isArray(models?.data)
-    && models.data.some((entry) => entry?.id === model.slug);
-  if (!advertised || ![props?.model_alias, props?.model_path].includes(model.slug)) {
+    && models.data.some((entry) => entry?.id === selectedModel);
+  const identities = [props?.model_alias, props?.model_path];
+  if (!advertised || !identities.includes(model.slug) || !identities.includes(selectedModel)) {
     throw new Error("Local model metadata does not match the catalog model");
   }
   if (typeof props?.modalities?.vision !== "boolean") {
@@ -107,7 +125,7 @@ export async function discoverModelCatalog(upstream, template, apiKey) {
   }
   return {
     ...template,
-    models: [{ ...model, input_modalities: props.modalities.vision ? ["text", "image"] : ["text"] }],
+    models: [{ ...model, slug: selectedModel, input_modalities: props.modalities.vision ? ["text", "image"] : ["text"] }],
   };
 }
 
@@ -128,29 +146,71 @@ function textContent(content) {
 export function translateRequest(request) {
   const names = new Map();
   const tools = [];
-  const addFunction = (tool, namespace) => {
+  const items = typeof request.input === "string"
+    ? [{ role: "user", content: request.input }]
+    : request.input ?? [];
+  const selected = items.filter((item) => item.type === "tool_search_output").flatMap((item) => item.tools ?? []);
+  const invalidSearchArguments = new Map(items
+    .filter((item) => item.type === "tool_search_call" && typeof item.arguments === "string")
+    .map((item) => [item.call_id, item.arguments]));
+  const functions = (specs) => specs.flatMap((tool) => tool.type === "namespace"
+    ? tool.tools.map((nested) => ({ tool: nested, namespace: tool.name }))
+    : [{ tool }]);
+  const occupied = new Set(functions([...(request.tools ?? []), ...selected])
+    .map(({ tool, namespace }) => flatName(namespace, tool.name)));
+  let searchName = "pwragent_native_tool_search";
+  for (let suffix = 1; occupied.has(searchName); suffix++) searchName = `pwragent_native_tool_search_${suffix}`;
+  const functionSpec = (tool, namespace) => {
+    const { defer_loading: _deferred, ...spec } = tool;
+    return { ...spec, name: flatName(namespace, tool.name) };
+  };
+  const addFunction = (tool, namespace, discovered = false) => {
     if (tool.type !== "function") {
       throw new Error(`Local Responses bridge does not support tool type ${tool.type}`);
     }
     const name = flatName(namespace, tool.name);
-    if (names.has(name)) throw new Error(`Duplicate local tool name: ${name}`);
+    if (names.has(name)) {
+      // Search history can contain the same schema more than once. Direct
+      // definitions win; among discovery snapshots, the newest one wins.
+      if (discovered) return;
+      throw new Error(`Duplicate local tool name: ${name}`);
+    }
     names.set(name, { name: tool.name, ...(namespace ? { namespace } : {}) });
-    tools.push({ ...tool, name });
+    tools.push(functionSpec(tool, namespace));
   };
   for (const tool of request.tools ?? []) {
-    if (tool.type === "namespace") {
+    if (tool.type === "tool_search" && tool.execution === "client") {
+      names.set(searchName, { name: "tool_search", nativeSearch: true });
+      tools.push({ type: "function", name: searchName, description: tool.description, parameters: tool.parameters });
+    } else if (tool.type === "namespace") {
       for (const nested of tool.tools) addFunction(nested, tool.name);
     } else {
       addFunction(tool);
     }
   }
+  for (const { tool, namespace } of functions(selected.slice().reverse())) addFunction(tool, namespace, true);
   const instructions = request.instructions ? [request.instructions] : [];
   const input = [];
-  for (const item of typeof request.input === "string"
-    ? [{ role: "user", content: request.input }]
-    : request.input ?? []) {
+  for (const item of items) {
     if (["system", "developer"].includes(item.role)) {
       instructions.push(textContent(item.content));
+    } else if (item.type === "tool_search_call") {
+      if (item.execution !== "client") throw new Error("Local Responses bridge only supports client tool search");
+      input.push({ type: "function_call", call_id: item.call_id, name: searchName,
+        arguments: typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments),
+      });
+    } else if (item.type === "tool_search_output") {
+      // llama-server ignores native search output. Supply normal function
+      // history and advertise the discovered schemas on the next request.
+      input.push({ type: "function_call_output", call_id: item.call_id, output: JSON.stringify({
+        tools: functions(item.tools ?? []).map(({ tool, namespace }) => functionSpec(tool, namespace)),
+        // Codex 0.163 normalizes argument-validation failures to an empty
+        // native search result. Retain actionable feedback for the model.
+        ...(invalidSearchArguments.has(item.call_id) ? {
+          error: "Invalid tool_search arguments: expected a JSON object.",
+          arguments: invalidSearchArguments.get(item.call_id),
+        } : {}),
+      }) });
     } else if (item.type === "function_call") {
       const { namespace, ...call } = item;
       input.push({ ...call, name: flatName(namespace, item.name) });
@@ -173,8 +233,19 @@ export function translateRequest(request) {
 export function translateResponse(value, names) {
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((item) => translateResponse(item, names));
-  // Only protocol output items carry tool identities; never rewrite tool arguments.
+  // Only protocol output items carry tool identities; never recurse into arguments.
   if (value.type === "function_call" && names.has(value.name)) {
+    if (names.get(value.name).nativeSearch) {
+      const { name: _name, arguments: args, ...item } = value;
+      let argumentsValue;
+      try { argumentsValue = JSON.parse(args || "{}"); }
+      catch {
+        // A native search argument can be any JSON value. Preserve invalid
+        // text as a string so Codex returns recoverable argument feedback.
+        argumentsValue = args;
+      }
+      return { ...item, type: "tool_search_call", execution: "client", arguments: argumentsValue };
+    }
     return { ...value, ...names.get(value.name) };
   }
   const result = { ...value };
@@ -261,7 +332,7 @@ function contextTokenCounts(value) {
   return counts;
 }
 
-export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS, onDiagnostic } = {}) {
+export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS, onDiagnostic, forwardHeaders = false } = {}) {
   const target = loopbackUpstream(upstream);
   // Node truncates a socket timer above 2^31 - 1 ms and warns on every request.
   if (!Number.isInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 2 ** 31 - 1) {
@@ -302,7 +373,7 @@ export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UP
       });
       const response = await postUpstream(
         `${target.href.replace(/\/$/, "")}/responses`,
-        { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        { ...(forwardHeaders ? providerRequestHeaders(req.headers) : { "content-type": "application/json" }), ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
         upstreamBody,
         abort.signal,
         idleTimeoutMs,

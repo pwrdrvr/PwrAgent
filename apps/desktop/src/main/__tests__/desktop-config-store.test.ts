@@ -251,8 +251,9 @@ theme = "dark"
     };
     const replacement = { ...provider, models: ["replacement.gguf"] };
     const withCatalog = { ...replacement, catalogPath: "/tmp/models.json" };
+    const withMetadata = { ...withCatalog, modelMetadata: [{ id: "replacement.gguf", contextWindow: 65536, supportsSearchTool: true }] };
     let previous = original.runtimeFingerprint;
-    for (const entry of [provider, replacement, withCatalog]) {
+    for (const entry of [provider, replacement, withCatalog, withMetadata]) {
       await store.write({ models: { codex: { providers: [entry] } } }, ["providers"]);
       const current = store.read("providers").codex;
       expect(current.runtimeFingerprint).not.toBe(previous);
@@ -261,7 +262,7 @@ theme = "dark"
       previous = current.runtimeFingerprint;
     }
     await store.write({ models: { codex: { providers: [{
-      ...withCatalog, rates: [{ model: "replacement.gguf", inputPerMillion: 0 }],
+      ...withMetadata, rates: [{ model: "replacement.gguf", inputPerMillion: 0 }],
     }] } } }, ["providers"]);
     expect(store.read("providers").codex.runtimeFingerprint).toBe(previous);
     expect(discoverProvider).toHaveBeenCalledOnce();
