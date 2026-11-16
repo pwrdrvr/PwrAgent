@@ -18,8 +18,8 @@ Search when the user wants to:
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
 - Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
 - Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
-Use a short query describing the desired action, or exact tool names. Name every tool you need in one query: each exact tool name is always returned. Search separately for unrelated tasks. Otherwise returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.
-In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. Prefer a bulk tool when available; otherwise batch repeated calls in one cell and print compact aggregate results. If no tools match, retry with a more specific action; do not invent a tool name.`;
+Use a short action query, or exact tool names. Each exact tool name is always returned. Search separately for unrelated tasks. Otherwise returns up to 3 matching tools (maximum 5), within an 8,000-character budget; a single larger definition stays complete. No match means the catalog lacks a matching capability. Follow returned instructions and permissions. Search performs no action.
+In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. Prefer a bulk tool when available; otherwise batch repeated calls in one cell and print compact aggregate results. Respect noMatchReason; do not invent tool names.`;
 
 // Small domain vocabulary supplies words users use that need not appear in a
 // tool's literal name. Ranking otherwise follows the live catalog, not a copy.
@@ -84,6 +84,7 @@ const SEARCH_ALIASES: Record<string, string> = {
 };
 
 const STOP_WORDS = new Set(["a", "an", "and", "can", "for", "i", "in", "is", "it", "me", "my", "of", "on", "or", "our", "please", "the", "to", "use", "want", "with"]);
+const RANKED_RESULT_CHARACTER_BUDGET = 8_000;
 
 function words(text: string): string[] {
   return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word && !STOP_WORDS.has(word));
@@ -94,8 +95,36 @@ function exactToolNames(query: string): string[] {
     .map((token) => token.replace(/^tools\./, "").replace(/^pwragent(?:__|\.)/, ""));
 }
 
+function hasAnyWord(terms: ReadonlySet<string>, text: string): boolean {
+  return words(text).some((word) => terms.has(word));
+}
+
+function isRuntimeModelDiscoveryQuery(terms: ReadonlySet<string>): boolean {
+  return (
+    hasAnyWord(terms, "model models")
+    || (hasAnyWord(terms, "provider providers") && hasAnyWord(terms, "agent agents runtime subscription subscriptions"))
+  )
+    && (
+      hasAnyWord(terms, "available availability list supported options enumerate catalog")
+      || (hasAnyWord(terms, "models providers") && hasAnyWord(terms, "show inspect read get find discover which"))
+    )
+    && !hasAnyWord(terms, "change set switch select configure update register create delete remove")
+    && !hasAnyWord(terms, "decision decisions classifier classifiers rubric rubrics judge evaluator");
+}
+
+function describesRuntimeModelDiscovery(tool: { name: string; description: string }): boolean {
+  const name = new Set(words(tool.name));
+  // A mention in an example, optional setting, or cross-reference is not a
+  // capability. Use the tool's own name and opening purpose statement.
+  const purpose = new Set(words(`${tool.name} ${tool.description.split(/[.!?](?:\s|$)/, 1)[0]}`));
+  return hasAnyWord(name, "list get read inspect search discover enumerate")
+    && hasAnyWord(purpose, "model models provider providers")
+    && !hasAnyWord(purpose, "decision decisions");
+}
+
 export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, limit = 3) {
   const terms = [...new Set(words(query))];
+  const runtimeModelDiscovery = isRuntimeModelDiscoveryQuery(new Set(terms));
   const tools = catalog.flatMap((spec) =>
     spec.type === "namespace" && spec.name === PWRAGENT_TOOL_NAMESPACE
       ? spec.tools.filter((tool) => tool.name !== "tool_search")
@@ -106,7 +135,8 @@ export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, l
   // more searches recovering the rest. The limit caps only ranked matches.
   const named = [...new Set(exactToolNames(query))]
     .flatMap((name) => tools.filter((tool) => tool.name === name));
-  const ranked = tools.filter((tool) => !named.includes(tool)).map((tool) => {
+  const ranked = tools.filter((tool) => !named.includes(tool)
+    && (!runtimeModelDiscovery || describesRuntimeModelDiscovery(tool))).map((tool) => {
     const name = new Set(words(tool.name));
     const aliases = new Set(words(SEARCH_ALIASES[tool.name] ?? ""));
     const description = new Set(words(tool.description));
@@ -117,14 +147,27 @@ export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, l
     .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
     .map(({ tool }) => tool);
   const bounded = Math.min(5, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 3));
-  return [...named, ...ranked].slice(0, Math.max(bounded, named.length))
-    .map((tool) => ({
-      namespace: PWRAGENT_TOOL_NAMESPACE,
-      name: tool.name,
-      codeModeName: `${PWRAGENT_TOOL_NAMESPACE}__${tool.name}`,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-    }));
+  const definitionFor = (tool: typeof tools[number]) => ({
+    namespace: PWRAGENT_TOOL_NAMESPACE,
+    name: tool.name,
+    codeModeName: `${PWRAGENT_TOOL_NAMESPACE}__${tool.name}`,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  });
+  // Explicit names are requests, including their complete schemas. Only
+  // ranked fill is budgeted, and its first result must remain callable even
+  // when that one definition exceeds the budget by itself.
+  const result = named.map(definitionFor);
+  let characters = JSON.stringify({ tools: result }).length;
+  for (const tool of ranked) {
+    if (result.length >= Math.max(bounded, named.length)) break;
+    const definition = definitionFor(tool);
+    const addedCharacters = JSON.stringify(definition).length + (result.length ? 1 : 0);
+    if (result.length && characters + addedCharacters > RANKED_RESULT_CHARACTER_BUDGET) break;
+    result.push(definition);
+    characters += addedCharacters;
+  }
+  return result;
 }
 
 export function buildPwrAgentToolSearchDefinition(
@@ -153,7 +196,15 @@ export function buildPwrAgentToolSearchDefinition(
       ) {
         return agentToolFailure({ code: "invalid_arguments", message: "Provide a nonempty query of at most 500 characters and an optional integer limit from 1 to 5." });
       }
-      const result = { tools: searchPwrAgentTools(catalog, args.query, args.limit as number | undefined) };
+      const tools = searchPwrAgentTools(catalog, args.query, args.limit as number | undefined);
+      const result = {
+        tools,
+        ...(!tools.length ? {
+          noMatchReason: isRuntimeModelDiscoveryQuery(new Set(words(args.query)))
+            ? "No tool in this thread's catalog lists available runtime models or subscription providers. Thread settings and registered decisions do not provide that capability."
+            : "No matching tool in this thread's catalog. Try a more specific action or an exact tool name.",
+        } : {}),
+      };
       const visibleText = JSON.stringify(result);
       const delivery = store && context.turnId
         ? await store.prepareToolDefinitionDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText })
