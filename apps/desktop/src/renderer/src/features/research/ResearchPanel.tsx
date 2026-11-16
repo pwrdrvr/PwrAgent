@@ -5,10 +5,11 @@ import { readRendererFederationTarget } from "../../lib/federation-window";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { ResearchItemsPanel } from "./ResearchItemsPanel";
 import { ResearchHarnessForm } from "./ResearchHarnessForm";
+import { ResearchDiscoveryPanel } from "./ResearchDiscoveryPanel";
 import { useResearchSnapshot } from "./useResearchSnapshot";
 import "./research.css";
 
-type View = "graph" | "board" | "review" | "activity" | "items";
+type View = "graph" | "board" | "review" | "activity" | "items" | "discovery";
 
 export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
@@ -28,6 +29,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const [minutes, setMinutes] = useState(30);
   const [workspaceMode, setWorkspaceMode] = useState<"new_worktree" | "none">("new_worktree");
   const run = state.snapshot?.runs.find((r) => r.id === selectedRunId) ?? state.snapshot?.runs[0];
+  const currentView = run?.harness?.discovery && view !== "activity" ? "discovery" : view === "discovery" ? "graph" : view;
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
   const writable = Boolean(run && state.snapshot?.writableRunIds.includes(run.id));
   const active = run?.status === "running" || run?.status === "stopping";
@@ -103,11 +105,11 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     </div>}
     {run && <>
       <div className="research-summary"><strong>{run.objective}</strong><span className="research-state">{awaitingReview ? "Awaiting review" : label(run.status)}</span></div>
-      <p className="research-muted">{run.harness ? `${run.harness.members.length} source members` : `${run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length} active · ${run.approaches.length} total workers`} · limit {run.workerLimit} · deadline {new Date(run.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+      <p className="research-muted">{run.harness?.source === "discovery" ? "Read-only discovery observation" : run.harness ? `${run.harness.members.length} source members · limit ${run.workerLimit}` : `${run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length} active · ${run.approaches.length} total workers · limit ${run.workerLimit}`} · deadline {new Date(run.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
       <p className="research-muted">{run.findings.length} findings · {run.submissions.length} submissions{run.harness ? "" : " · usage in each worker’s Pricing panel"}</p>
       {run.harness && <div aria-label="Harness provenance">
         <p className="research-muted">Open Math Harness · protocol v{run.harness.version} · {label(run.harness.mode)} · {label(run.harness.state)}</p>
-        <p className="research-muted">{run.harness.project} / {run.harness.session} / {run.harness.swarm} · source cursor {run.harness.cursor} · revision {run.harness.upstreamRevision.slice(0, 12)}</p>
+        <p className="research-muted">{run.harness.project} / {run.harness.session} / {run.harness.swarm} · {run.harness.source === "discovery" ? "discovery snapshot; no event cursor" : `source cursor ${run.harness.cursor}`} · revision {run.harness.upstreamRevision.slice(0, 12)}</p>
         <p className="research-muted">{run.harness.note}</p>
         {run.harness.model && <p className="research-muted">Execution model: {run.harness.model} · endpoint: {run.harness.endpointOrigin}</p>}
         <p className="research-muted">{run.harness.calls === undefined ? "Model calls unknown" : `${run.harness.calls} source model calls reported`} · token and dollar usage unknown · no hard spend cap</p>
@@ -121,10 +123,11 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         {active && <button type="button" className="research-button" disabled={busy} onClick={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}>Stop run</button>}
         <button type="button" className="research-button" disabled={busy || !run.submissions.some((s) => s.review?.decision === "accepted")} onClick={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}>Finish run</button>
       </div>}
-      <div className="research-switch" role="group" aria-label="Research view">{(["graph", "items", "board", "review", "activity"] as const).map((v) => <button type="button" key={v} aria-pressed={view === v} onClick={() => { setView(v); setFilter(""); }}>{label(v)}</button>)}</div>
-      {view !== "items" && <input className="research-filter" type="search" aria-label="Filter research by approach, finding, or state" placeholder="Filter approaches, findings, states…" value={filter} onChange={(event) => setFilter(event.target.value)} />}
-      {view === "items" && <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run} writable={writable && !run.harness} coordinator={coordinator} />}
-      {view === "graph" && <div className="research-graph" aria-label="Recorded research graph">
+      <div className="research-switch" role="group" aria-label="Research view">{(run.harness?.discovery ? ["discovery", "activity"] as const : ["graph", "items", "board", "review", "activity"] as const).map((v) => <button type="button" key={v} aria-pressed={currentView === v} onClick={() => { setView(v); setFilter(""); }}>{label(v)}</button>)}</div>
+      {currentView === "discovery" && run.harness?.discovery && <ResearchDiscoveryPanel key={run.id} snapshot={run.harness.discovery} />}
+      {currentView !== "items" && currentView !== "discovery" && <input className="research-filter" type="search" aria-label="Filter research by approach, finding, or state" placeholder="Filter approaches, findings, states…" value={filter} onChange={(event) => setFilter(event.target.value)} />}
+      {currentView === "items" && <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run} writable={writable && !run.harness} coordinator={coordinator} />}
+      {currentView === "graph" && <div className="research-graph" aria-label="Recorded research graph">
         <div className="research-graph__root">{run.objective}</div>
         {run.approaches.filter((a, index) => (!run.harness || index < run.harness.members.length) && matches(`${a.title} ${a.state} ${a.note ?? ""}`)).map((a) => <div className="research-graph__branch" key={a.id}>
           <div className="research-node"><strong>{a.title}</strong><span>{label(a.directionState === "abandoned" ? "abandoned" : a.state)}</span>{a.worker && <ResearchThreadButton thread={a.worker} title="Open worker" />}</div>
@@ -136,7 +139,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         </div>)}
         <p className="research-muted">Connections show recorded assignments and contributions. The board preserves supporting and contradicting evidence.</p>
       </div>}
-      {view === "board" && <div className="research-board" aria-label="Shared findings">
+      {currentView === "board" && <div className="research-board" aria-label="Shared findings">
         {run.findings.filter((f) => matches(`${f.id} ${f.kind} ${f.text} ${titleFor(f.approachId)}`)).map((f) => <article key={f.id} className="research-entry">
           <div className="research-entry__meta">{label(f.kind)} · {titleFor(f.approachId)}</div><p>{f.text}</p>
           {f.author && <ResearchThreadButton thread={f.author} title="Open source thread" />}
@@ -146,7 +149,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         </article>)}
         {!run.findings.length && <p className="context-empty">Findings will appear here as workers share evidence.</p>}
       </div>}
-      {view === "review" && <div aria-label="Research submissions">
+      {currentView === "review" && <div aria-label="Research submissions">
         <p className="research-muted">Acceptance records a reviewer’s judgment. Formal verification has not been performed.</p>
         {run.harness && <p className="research-muted">Source records retain their original content. PwrAgent records acceptance or rejection; revision feedback requires the source service.</p>}
         {canReview && <label className="research-review-reason">Review reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} rows={2} /></label>}
@@ -160,7 +163,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         </article>)}
         {!run.submissions.length && <p className="context-empty">No candidates have been submitted.</p>}
       </div>}
-      {view === "activity" && <ol className="research-activity" aria-label="Research activity">{run.events.slice(-100).filter((event) => matches(`${event.data.type} ${JSON.stringify(event.data)}`)).map((event) => <li key={event.seq}><span>{event.seq} · {label(event.data.type)} · {new Date(event.at).toLocaleTimeString()}</span><p>{eventDescription(event.data)}</p></li>)}</ol>}
+      {currentView === "activity" && <ol className="research-activity" aria-label="Research activity">{run.events.slice(-100).filter((event) => matches(`${event.data.type} ${JSON.stringify(event.data)}`)).map((event) => <li key={event.seq}><span>{event.seq} · {label(event.data.type)} · {new Date(event.at).toLocaleTimeString()}</span><p>{eventDescription(event.data)}</p></li>)}</ol>}
     </>}
   </section>;
 }

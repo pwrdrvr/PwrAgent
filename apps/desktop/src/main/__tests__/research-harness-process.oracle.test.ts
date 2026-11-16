@@ -7,8 +7,37 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { openResearchHarnessProcess } from "../research/research-harness-process";
 import { harnessRecords } from "./fixtures/research-harness-records";
+import { discoveryRecords } from "./fixtures/research-discovery-records";
 
 describe("Harness process and upstream socket oracle", () => {
+  it("uses the actual discovery UI operation names and preserves bounded source snapshots", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pd-"));
+    const socket = process.platform === "win32" ? `\\\\.\\pipe\\pwr-discovery-${randomUUID()}` : path.join(root, "ui.sock");
+    const observed: unknown[] = [];
+    const records = discoveryRecords();
+    const server = net.createServer((connection) => {
+      let input = "";
+      connection.on("data", (chunk) => {
+        input += chunk;
+        if (!input.includes("\n")) return;
+        const request = JSON.parse(input); observed.push(request);
+        const value = records[request.op.slice("runs.".length) as keyof typeof records];
+        connection.end(`${JSON.stringify({ id: request.id, ok: value })}\n`);
+      });
+    });
+    server.listen(socket); await once(server, "listening");
+    const bridge = openResearchHarnessProcess({ command: process.execPath, args: [path.resolve("scripts/research-harness-ui-bridge.mjs"), socket] }, root,
+      async () => { throw new Error("Observation cannot call a model"); }, () => {});
+    try {
+      expect(await bridge.request("hello", {})).toMatchObject({ discovery: true, execute: false });
+      for (const kind of ["status", "problems", "tree"] as const) {
+        const params = { project: "fixture-project", run: "fixture-run", ...(kind === "tree" ? { problem: "fixture_problem" } : {}) };
+        expect(await bridge.request(`discovery.${kind}`, params)).toEqual(records[kind]);
+        expect(observed.at(-1)).toEqual({ id: 1, op: `runs.${kind}`, ...params });
+      }
+    } finally { await bridge.close(); server.close(); await once(server, "close"); rmSync(root, { force: true, recursive: true }); }
+  });
+
   it("imports a service page through a real child and the actual UI request/response envelope", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "ph-"));
     const socket = process.platform === "win32" ? `\\\\.\\pipe\\pwr-harness-${randomUUID()}` : path.join(root, "ui.sock");

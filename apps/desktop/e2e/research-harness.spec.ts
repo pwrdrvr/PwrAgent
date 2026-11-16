@@ -3,9 +3,28 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
-import { seedHarnessResearchState } from "./fixtures/research-harness-state-seeding";
+import { seedDiscoveryResearchState, seedHarnessResearchState } from "./fixtures/research-harness-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+test("Discovery status, problems and bounded ancestry retain source authority", async ({ playwright: _playwright }, testInfo) => {
+  const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
+    preLaunchHook: async (homeRoot) => seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot)) });
+  try {
+    await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
+    await app.window.getByRole("tab", { name: "Research", exact: true }).click();
+    const panel = app.window.getByRole("region", { name: "Research", exact: true });
+    await expect(panel.getByLabel("Discovery observation")).toBeVisible();
+    await expect(panel.getByText(/PwrAgent has not independently verified/)).toBeVisible();
+    await expect(panel.getByLabel("Recorded candidate ancestry").getByRole("listitem")).toHaveCount(20);
+    await panel.getByLabel("Filter discovery nodes").fill("candidate 30");
+    await expect(panel.getByText(/Node 30 · parent 14/)).toBeVisible();
+    await expect(panel.getByText(/passed \(source report\)/)).toBeVisible();
+    await panel.getByRole("button", { name: "Ancestry graph", exact: true }).click();
+    await expect(panel.locator('[data-node-id="30"][data-parent-id="14"]')).toBeVisible();
+    await testInfo.attach("discovery-ancestry", { body: await app.window.screenshot(), contentType: "image/png" });
+  } finally { await app.close(); }
+});
+
 for (const theme of ["dark", "light"] as const) {
   test(`Harness provenance and unknown cancellation remain inspectable in ${theme}`, async ({ playwright: _playwright }, testInfo) => {
     const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"), appearance: { theme },

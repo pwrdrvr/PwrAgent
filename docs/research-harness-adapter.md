@@ -14,8 +14,9 @@ cancellation disposition. External members are source identities, never invented
 PwrAgent worker threads. Native assignments and revision delivery are disabled
 for source observations. Local acceptance/rejection remains available.
 
-Version 1 covers swarm records. Discovery proof-search trees and Lean verification
-remain the next milestone. A source `solved` outcome or accepted verdict never
+Version 1 covers swarm records and read-only discovery status, problems and a
+selected problem's bounded tree. Running Lean verification remains the next
+milestone. A source `solved` outcome, verification report or accepted verdict never
 creates a PwrAgent review or formal-verification result.
 
 `research.harness` is an additive, optional profile configuration section. The
@@ -45,6 +46,7 @@ connection. Stderr is drained without copying it into the research journal.
 | `hello` | `{version: 1, upstreamRevision}` → `{version: 1, upstreamRevision, import, execute, cancel, researchFunctions?}`. Versions and the upstream revision must match. Capabilities must be explicitly true. |
 | `execute` | `{version: 1, runId, project, session, swarm, objective, workers, deadlineAt}`. The bridge must bind this identity and these limits before admission. A lost response is not retried. |
 | `records` | `{project, session, swarm, after, limit: 50}` → the upstream `RecordsResponse`: `{swarm, records, next?}`. Records carry their original `seq` and `at_ms`. |
+| `discovery.status`, `discovery.problems`, `discovery.tree` | `{project, run, problem?}` → upstream discovery v6 snapshots via UI `runs.status`, `runs.problems`, `runs.tree`. Explicit `discovery: true` capability is required; discovery execution is unavailable. |
 | `cancel` | `{runId, project, session, swarm}` → `{runId, swarm, stopped: true}` only after the exact run's owned work stopped. A request being accepted, a disconnected socket or a bridge process exiting is insufficient. |
 
 The bridge's `model_complete` callback accepts `{messages}`. PwrAgent selects the
@@ -72,6 +74,17 @@ require a separately installed bridge; the window API cannot start/stop/judge a
 swarm. The full runtime still requires its Linux/bubblewrap/deployment environment.
 The reference script is supplied in this repository, not installed as a packaged
 runtime. The desktop ships the adapter and loads only an explicitly configured bridge.
+
+The reference bridge also maps `status` to `swarm.status`, and discovery reads to
+the actual UI `runs.*` operation names. A discovery import retains status, all
+returned problem rows, and optionally one problem's tree. It makes no model call
+and has no source start/stop control. The source tree's `truncated` flag is visible;
+its missing suffix is never invented or treated as a continuation cursor.
+Snapshot provenance explicitly identifies an owner observation ordinal/time,
+because these APIs provide no source event sequence. Raw bounded responses and
+their hashes are retained alongside normalized values in one transaction. The
+graph and paged list use the same recorded node/parent identities. Source-reported
+verification remains separate from a PwrAgent verification target or review.
 
 ## Normalization and recovery
 
@@ -114,6 +127,12 @@ model weights or new npm dependencies. First-party MIT and existing disclosures
 remain intact. Vendoring or distributing any Harness material requires another
 dependency/disclosure review; the upstream top-level license alone is insufficient.
 
+`node scripts/research-harness-wire-oracle.mjs /path/to/pinned/checkout` is an
+offline, development-only conformance check. It builds a temporary oracle using
+the upstream interface crates and their existing MIT/Apache-2.0 serde dependencies,
+and checks the contrived fixtures with the actual Rust deserializers. It neither
+copies upstream source into this repository nor installs a shipped dependency.
+
 ## Verification and persistence budget
 
 Generated lifecycle commands compare dispatch/cancel counts and lifecycle against
@@ -141,6 +160,8 @@ The checked-in SQLite budgets measure the feature after database setup:
 | Execution admission with model provenance and an initial source page | 4 | 156,592 |
 | Changed Harness configuration revision | 1 | 4,120 |
 | One thousand adapter configuration reads | 0 | 0 |
+| Discovery status/problems/three-node tree import | 3 | 111,272 |
+| Repeated discovery request identity | 0 | 0 |
 
 At one six-record page per minute across the owner, the measured rate is
 `(1/60 commits/s) × 57,680 bytes/commit × 86,400 s = 83.06 MB/day`.
@@ -149,3 +170,31 @@ size add approximately 15.03 MB/day. WAL bytes vary with payload/page layout and
 are recorded, not asserted; commit/statement/row budgets fail in either direction.
 Configuration reads add zero MB/day. One configuration edit/hour at the measured
 commit size adds approximately 0.10 MB/day through the existing config snapshot.
+Four explicit discovery imports/hour at the measured three-node fixture size add
+approximately 10.68 MB/day; there is no background discovery polling or per-node
+commit. Larger bounded snapshots cost more WAL bytes in the same three commits.
+
+## Milestone acceptance
+
+`research-performance.spec.ts` measures native Electron navigation with 1,000
+contributions across ten recorded worker identities over the lifetime of a run,
+while retaining the eight-concurrent-worker admission limit. The initial checked
+gate is 2,000 ms for opening Research, 2,000 ms for finding and opening the last
+contribution, and 64 MiB of incremental renderer JS heap. Every run attaches its
+measurements as JSON, including failures. These are fixture performance budgets;
+deployed model execution and source-service compatibility require separate evidence.
+
+The production authorized execution bridge and deployed Harness acceptance remain
+outstanding until an accessible, authorized Linux/Open Math OS composition is
+provided. The read-only UI bridge cannot acquire those capabilities. Passing
+fixture tests or upstream wire deserialization does not establish live execution,
+remote cancellation, or hosted-model compatibility.
+
+The opt-in `research-harness-live.integration.test.ts` accepts a private JSON
+configuration path in `PWRAGENT_TEST_HARNESS_ACCEPTANCE_CONFIG`. It requires the
+explicit bridge configuration, canonical workspace, persistent private state
+directory and stable acknowledged request identity. Ordinary unit/CI runs skip it.
+It runs the real process/model adapters, requests scoped stop after active
+execution, and retains a digest-only result alongside the private journal. Reusing
+the request identity never replays an unknown start. A failed or interrupted
+acceptance run requires source reconciliation before any new identity is used.

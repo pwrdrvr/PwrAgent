@@ -4,6 +4,7 @@ import { RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, sameResearchThread, typ
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
 import { normalizeHarnessRecords, object, text } from "./research-harness-records";
+import { normalizeHarnessDiscovery } from "./research-harness-discovery";
 
 export interface ResearchHarnessConnection {
   model?: { model: string; endpointOrigin: string };
@@ -36,7 +37,10 @@ export class ResearchHarnessService {
       return this.pending.get(existing.id) ?? Promise.resolve(existing);
     }
     if (this.closed) return Promise.reject(new Error("Harness adapter is closed"));
-    for (const v of [request.project, request.session, request.swarm]) text(v, 64);
+    if (request.source !== undefined && !["swarm", "discovery"].includes(request.source)) throw new Error("Unsupported Harness source");
+    if (request.source === "discovery" && request.mode !== "import") throw new Error("Discovery supports read-only observation");
+    for (const v of [request.project, request.swarm, ...(request.source === "discovery" ? [] : [request.session])]) text(v, 64);
+    if (request.problem !== undefined) text(request.problem, 64);
     text(request.objective, 8000);
     if (!["import", "execute"].includes(request.mode) || !Number.isInteger(request.workers) || request.workers < 1 || request.workers > 8
       || !Number.isInteger(request.minutes) || request.minutes < 1 || request.minutes > 120) throw new Error("Choose 1–8 workers and 1–120 minutes");
@@ -46,6 +50,7 @@ export class ResearchHarnessService {
     const state: ResearchHarnessState = { version: 1, mode: request.mode, project: request.project, session: request.session, swarm: request.swarm,
       workspace, upstreamRevision: RESEARCH_HARNESS_REVISION, state: "pending", cursor: 0, members: [], cancelSupported: false,
       note: "Process admission pending. Tokens and dollar spend are unknown; cancellation may still bill." };
+    if (request.source === "discovery") { state.source = "discovery"; state.problem = request.problem; }
     const now = this.now();
     this.storage.create(id, key, { seq: 1, commandId: "start", signature, at: now, actor, data: { type: "created", objective: request.objective,
       coordinator: { backend: actor.backend, threadId: actor.threadId }, ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
@@ -67,6 +72,7 @@ export class ResearchHarnessService {
       if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
       if (this.closed || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before probing");
       const capabilities = hello as unknown as ResearchHarnessCapabilities;
+      if (request.source === "discovery" && capabilities.discovery !== true) throw new Error("Harness bridge does not support discovery observation");
       if (capabilities[request.mode] !== true) throw new Error(`Harness bridge does not support ${request.mode}`);
       const state = { ...this.run(id).harness!, ...connection.model, cancelSupported: capabilities.cancel === true };
       if (request.mode === "execute") {
@@ -87,9 +93,36 @@ export class ResearchHarnessService {
         await connection.request("execute", { version: 1, runId: id, project: request.project, session: request.session, swarm: request.swarm,
           objective: request.objective, workers: request.workers, deadlineAt: this.run(id).deadlineAt });
       }
-      if (this.run(id).status === "running") await this.poll(id);
+      if (this.run(id).status === "running") {
+        if (request.source === "discovery") await this.observeDiscovery(id);
+        else await this.poll(id);
+      }
     } catch (error) { this.unknown(id, error); }
     return this.run(id);
+  }
+
+  private async observeDiscovery(id: string): Promise<void> {
+    const run = this.run(id), origin = run.harness!, connection = this.connections.get(id)!;
+    const params = { project: origin.project, run: origin.swarm };
+    const admitted = () => !this.closed && this.connections.has(id) && this.run(id).status === "running" && this.now() < this.run(id).deadlineAt;
+    const status = await connection.request("discovery.status", params);
+    if (!admitted()) return;
+    const problems = await connection.request("discovery.problems", params);
+    if (!admitted()) return;
+    const tree = origin.problem ? await connection.request("discovery.tree", { ...params, problem: origin.problem }) : undefined;
+    const current = this.run(id);
+    if (!admitted()) return;
+    const normalized = normalizeHarnessDiscovery(current, { status, problems, tree }, this.now());
+    const actor = this.actor(current);
+    const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: current.revision + i + 1,
+      commandId: `discovery:${i}`, signature: entry.provenance.digest, at: this.now(), actor }));
+    const data: ResearchEventData[] = [{ type: "harness", state: { ...current.harness!, state: "imported", discovery: normalized.snapshot,
+      note: "Read-only discovery snapshot. Source verification and spend are observations; source work may continue. No source event cursor is available." } },
+    { type: "status", status: "interrupted", reason: "Retained discovery snapshot; no source work was started or stopped." }];
+    for (const entry of data) events.push({ seq: current.revision + events.length + 1, commandId: `discovery:${events.length}`, signature: JSON.stringify(entry), at: this.now(), actor, data: entry });
+    this.storage.appendBatch(id, current.revision, events);
+    this.changed(id);
+    this.release(id);
   }
 
   async poll(id: string): Promise<void> {

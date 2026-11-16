@@ -1,4 +1,6 @@
 {
+  "research-harness-discovery-repeat": {"commits": 0, "note": "Repeated request identity returns retained discovery without service calls or persistence", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "research-harness-discovery-import": {"commits": 3, "note": "Intent, read-only bridge admission and one atomic bounded discovery snapshot including raw observations; no per-node writes", "observedWalBytes": 111272, "rowsChanged": 10, "statements": 10},
   "research-harness-config-reads": {"commits": 0, "note": "1000 adapter status/admission config reads use the immutable owner snapshot without filesystem or SQLite work", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-config-revision": {"commits": 1, "note": "one existing config snapshot commit per changed Harness configuration revision", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "research-harness-model-admission": {"commits": 4, "note": "Intent, owner-selected model provenance before the paid probe, dispatch and one initial source page. No per-token writes.", "observedWalBytes": 156592, "rowsChanged": 17, "statements": 17},

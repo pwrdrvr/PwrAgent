@@ -16,6 +16,26 @@ export type ResearchProvenance = {
   member?: string;
   direction?: string;
   digest: string;
+  source?: "swarm" | "discovery";
+  /** Discovery APIs return snapshots, not a source event sequence or timestamp. */
+  sequenceKind?: "observation";
+  problem?: string;
+};
+export type ResearchDiscoverySnapshot = {
+  observedAt: number;
+  state: string;
+  finished: number;
+  solved: number;
+  tokensIn: number;
+  tokensOut: number;
+  usd?: number;
+  problems: Array<{ id: string; state: string; nodes: number; rounds: number; solved: boolean; stop?: string }>;
+  tree?: {
+    problem: string;
+    state: string;
+    truncated: boolean;
+    nodes: Array<{ id: number; parent: number | null; round: number; score: number; sourceVerified: boolean | null; excerpt: string; elapsedMs: number }>;
+  };
 };
 export type ResearchHarnessState = {
   version: 1;
@@ -34,6 +54,9 @@ export type ResearchHarnessState = {
   endpointOrigin?: string;
   calls?: number;
   note: string;
+  source?: "swarm" | "discovery";
+  problem?: string;
+  discovery?: ResearchDiscoverySnapshot;
 };
 export type ResearchHarnessRequest = ResearchThread & {
   requestId: string;
@@ -45,6 +68,8 @@ export type ResearchHarnessRequest = ResearchThread & {
   workers: number;
   minutes: number;
   budgetAcknowledged: boolean;
+  source?: "swarm" | "discovery";
+  problem?: string;
 };
 export type ResearchHarnessCapabilities = {
   version: 1;
@@ -52,6 +77,7 @@ export type ResearchHarnessCapabilities = {
   execute: boolean;
   import: boolean;
   cancel: boolean;
+  discovery?: boolean;
 };
 export type ResearchHarnessStatus = { configured: boolean; model?: string; endpointOrigin?: string };
 export type ResearchHarnessConfig = {
