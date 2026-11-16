@@ -9,6 +9,7 @@ import readline from "node:readline";
 import { stripVTControlCharacters } from "node:util";
 import {
   createCommandInvocation,
+  readJsonRpcLines,
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
@@ -241,8 +242,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       throw new Error("codex app server stdio pipes unavailable");
     }
 
-    const stdoutReader = readline.createInterface({ input: child.stdout });
-    stdoutReader.on("line", (line: string) => {
+    readJsonRpcLines(child.stdout, (line) => {
       // Only error envelopes and error notifications are auth evidence;
       // transcript text and tool output must never invalidate a login.
       try {

@@ -207,3 +207,6 @@ patchedDependencies:
   "khroma@2.1.0": "patches/khroma@2.1.0.patch"
   "playwright@1.63.0": "patches/playwright@1.63.0.patch"
   "playwright-core@1.63.0": "patches/playwright-core@1.63.0.patch"
+  # LF-only framing from pwrdrvr/agent-kit; remove after adopting its fixed release.
+  # Keep JS, declarations and source map together for desktop and Outpost bundles.
+  "@pwrdrvr/agent-transport@0.1.7": "patches/@pwrdrvr__agent-transport@0.1.7.patch"
