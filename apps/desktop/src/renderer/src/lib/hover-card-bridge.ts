@@ -101,21 +101,31 @@ export class HoverCardBridge {
   }
 }
 
-/** The sidebar, so a card opens past its edge rather than over the rows. */
+/**
+ * The region a sidebar card opens beside. A name in the project index lane
+ * opens past the lane, over the thread list beside it; past the whole sidebar
+ * it would land over the transcript, a list's width from the name. Anything
+ * else in the sidebar opens past the sidebar, clear of its rows.
+ */
+function hoverCardRegion(target: HTMLElement): Element | null {
+  return target.closest(".project-index-pane") ?? target.closest(".sidebar");
+}
+
+/** The trigger's region, so a card opens past its edge rather than over its rows. */
 export function sidebarAnchorRect(target: HTMLElement): DOMRect {
-  return (target.closest(".sidebar") ?? target).getBoundingClientRect();
+  return (hoverCardRegion(target) ?? target).getBoundingClientRect();
 }
 
 /**
- * Whether the card sits clear of the sidebar, where the pointer can reach it
- * without crossing other rows. A card that fell back over the rows (a narrow
- * window) does not qualify, and neither does one with no laid-out box.
+ * Whether the card sits clear of the trigger's region, where the pointer can
+ * reach it without crossing other rows. A card that fell back over the rows
+ * (a narrow window) does not qualify, and neither does one with no laid-out box.
  */
 export function cardIsBesideSidebar(card: HTMLElement | null, target: HTMLElement): boolean {
-  const sidebar = target.closest(".sidebar");
-  if (!card || !sidebar) return false;
+  const region = hoverCardRegion(target);
+  if (!card || !region) return false;
   const box = card.getBoundingClientRect();
-  const edges = sidebar.getBoundingClientRect();
+  const edges = region.getBoundingClientRect();
   return box.width > 0 && (box.left >= edges.right || box.right <= edges.left);
 }
 
