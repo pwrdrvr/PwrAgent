@@ -1,3 +1,4 @@
+import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import {
@@ -189,6 +190,23 @@ export class ForgeToolBridge {
     this.projectForgeAutomationHandler = handlers.projectForgeAutomationHandler;
     this.threadPullRequestRefreshHandler = handlers.threadPullRequestRefreshHandler;
   }
+
+  turnEventObserver(): TurnEventObserver {
+    return { name: "forge-terminal", onTurnTerminal: ({ event, withdrawnForgeApprovals }) => {
+      if (event.notification.method !== "turn/completed"
+        && event.notification.method !== "turn/failed"
+        && event.notification.method !== "turn/cancelled") return;
+      if (withdrawnForgeApprovals?.length) {
+        // Off the terminal path: the card is a notice, not turn state.
+        void this.raiseWithdrawnForgeApprovalTodo(
+          event.backend,
+          event.notification.params.threadId,
+          withdrawnForgeApprovals,
+        );
+      }
+    } };
+  }
+
 
   private forgeReadHandler?: ForgeReadHandler;
   private localForgeReadHandler?: ForgeReadHandler;

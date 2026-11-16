@@ -1,3 +1,4 @@
+import type { UsageLimitObservation } from "@pwragent/shared";
 import type {
   AcpBackendId,
   AgentEvent,
@@ -258,6 +259,7 @@ export interface RegistryHostPorts {
     backend?: AppServerBackendKind,
     ignoreCodexStartReservation?: boolean,
   ): boolean;
+  turnLimitObservation(backend: AppServerBackendKind): UsageLimitObservation | undefined;
   withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
   withCodexThreadClient<T>(
     threadId: string,

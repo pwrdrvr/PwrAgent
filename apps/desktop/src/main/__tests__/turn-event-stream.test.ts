@@ -203,10 +203,11 @@ function instrumentHub(registry: DesktopBackendRegistry): HubRecorder {
     return result;
   };
   const context = new AsyncLocalStorage<HookContext>();
-  const hub = "emitAfterLiveThreadUsageRegistration";
-  if (typeof target[hub] !== "function") throw new Error(`The hub ${hub} is not a registry method; point instrumentHub at its new owner.`);
-  const runHub = target[hub] as (...args: unknown[]) => Promise<void>;
-  target[hub] = function (this: unknown, ...args: unknown[]) {
+  const pipeline = registryModules(registry).turnEventObservers as unknown as Members;
+  const hub = "run";
+  if (typeof pipeline[hub] !== "function") throw new Error(`The hub ${hub} is not a registry method; point instrumentHub at its new owner.`);
+  const runHub = pipeline[hub] as (...args: unknown[]) => Promise<void>;
+  pipeline[hub] = function (this: unknown, ...args: unknown[]) {
     const event = args[0] as AgentEvent;
     const entry: HubEntry = { event: `${event.backend} ${event.notification.method}`, hooks: [] };
     entries.push(entry);

@@ -57,6 +57,7 @@ import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
 import { buildMcpGatewayToolDefinitions } from "./pwragent-mcp-gateway-tools.js";
+import { buildResearchToolDefinitions, type ResearchAgentHandler } from "./pwragent-research-agent-tools";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service.js";
 
 export type ResolvedAgentToolCatalog = {
@@ -85,6 +86,7 @@ export function resolveAgentToolCatalogs(params: {
   starMapHandler?: PwrAgentStarMapHandler;
   threadTodoHandler?: PwrAgentThreadTodoHandler;
   openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
+  researchHandler?: ResearchAgentHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -112,6 +114,7 @@ export function resolveAgentToolCatalogs(params: {
       ...buildPwrAgentThreadOrchestrationToolDefinitions(
         params.threadOrchestrationHandler,
       ),
+      ...buildResearchToolDefinitions(options?.taskMonitorRole === "monitor" ? undefined : params.researchHandler),
       ...buildPwrAgentTaskMonitorToolDefinitions(
         params.taskMonitorHandler,
         options?.taskMonitorRole,

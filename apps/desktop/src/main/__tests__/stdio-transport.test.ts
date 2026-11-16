@@ -106,6 +106,38 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it("acknowledges only the matching response after its pipe write completes", async () => {
+    const child = new MockCodexChildProcess();
+    let complete!: (error?: Error | null) => void;
+    Object.defineProperty(child, "stdin", { value: new Writable({
+      write: (_chunk, _encoding, callback) => { complete = callback; },
+    }) });
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({ command: "codex" });
+    await transport.connect();
+    let acknowledged = false;
+    const ack = transport.waitForResponseFlush("restart-call").then(() => { acknowledged = true; });
+    transport.send(JSON.stringify({ id: "restart-call", result: { accepted: true } }));
+    await Promise.resolve();
+    expect(acknowledged).toBe(false);
+    complete();
+    await ack;
+    expect(acknowledged).toBe(true);
+    await transport.close();
+  });
+
+  it("rejects an unsent acknowledgement on close instead of authorizing restart", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({ command: "codex" });
+    await transport.connect();
+    const ack = transport.waitForResponseFlush("restart-call");
+    transport.send(JSON.stringify({ id: "another-call", result: {} }));
+    const rejected = expect(ack).rejects.toThrow("closed before acknowledgement");
+    await transport.close();
+    await rejected;
+  });
+
   it.each([
     ["ERROR", "error"],
     ["WARN", "warn"],

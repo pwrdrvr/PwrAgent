@@ -2155,8 +2155,9 @@ Implementation notes remain in a readable bubble.`;
     expect(container.querySelector("pre code")).toHaveTextContent("| Key | Value |");
   });
 
-  it("opens transcript file links in the configured editor", async () => {
+  it("opens transcript file links with the OS default and provides a separate editor action", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const openPath = vi.fn(async () => ({ opened: true as const }));
 
     render(
       <TranscriptList
@@ -2192,7 +2193,7 @@ Implementation notes remain in a readable bubble.`;
             discovery: { candidates: [] },
           },
         }}
-        desktopApi={{ openApplication }}
+        desktopApi={{ openApplication, openPath }}
         entries={[
           {
             type: "message",
@@ -2209,6 +2210,10 @@ Implementation notes remain in a readable bubble.`;
     );
 
     fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+    expect(openPath).toHaveBeenCalledExactlyOnceWith({ path: "/repo/PwrAgent/AGENTS.md" });
+    expect(openApplication).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" }));
 
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
@@ -2219,6 +2224,7 @@ Implementation notes remain in a readable bubble.`;
         targetColumn: undefined,
       });
     });
+    expect(openPath).toHaveBeenCalledTimes(1);
   });
 
   it("does not turn pasted plan paths into transcript links", () => {

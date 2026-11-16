@@ -3247,6 +3247,16 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("offers research as a default-off experiment and writes only its feature flag", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen initialSection="experimental" settings={settings} />);
+    const toggle = screen.getByRole("switch", { name: "Enable research runs" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { researchEnabled: true } }));
+  });
+
+
   it("refreshes Archived Threads after leaving and reopening the tab", async () => {
     const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [] as AppServerThreadSummary[] }));
     render(<SettingsScreen desktopApi={{ listThreads }} settings={createSettingsState()} initialSection="archived" onClose={() => undefined} />);

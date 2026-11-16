@@ -1,3 +1,4 @@
+import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -280,6 +281,30 @@ export class ThreadWorkspaceService {
     this.host = host;
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.gitWorkspaceHandoffService = dependencies.gitWorkspaceHandoffService;
+  }
+
+  turnEventObserver(): TurnEventObserver {
+    return {
+      name: "workspace-boundary",
+      onTurnTerminal: ({ event, lifecycleTurnId }) => {
+        if (event.notification.method !== "turn/completed"
+          && event.notification.method !== "turn/failed"
+          && event.notification.method !== "turn/cancelled") return;
+        this.drainPendingThreadWorkspaceMovesForTerminalTurn({
+          backend: event.backend,
+          threadId: event.notification.params.threadId,
+          turnId: lifecycleTurnId,
+        });
+      },
+      onStatusChanged: ({ event, endedTurnIds }) => {
+        if (event.notification.method !== "thread/status/changed" || !endedTurnIds) return;
+        this.drainPendingThreadWorkspaceMovesForTurnIds({
+          backend: event.backend,
+          threadId: event.notification.params.threadId,
+          turnIds: endedTurnIds,
+        });
+      },
+    };
   }
 
   /** Threads reserved by an instance handoff, for the registry's busy and live-event checks. */
@@ -2007,10 +2032,11 @@ export class ThreadWorkspaceService {
 
   async handoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+    onCreated?: (worker: { backend: AppServerBackendKind; threadId: string }) => void,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const callId = request.context.callId?.trim();
     if (!callId || !this.host().isLiveDynamicToolCall(request.context.backend, request.context)) {
-      return await this.performHandoffTaskToThread(request);
+      return await this.performHandoffTaskToThread(request, onCreated);
     }
     const handoffId = [
       "handoff",
@@ -2036,7 +2062,7 @@ export class ThreadWorkspaceService {
     // Admit the call before the first await in the handoff path. The backend
     // can deliver the same dynamic tool call twice while workspace setup is
     // still running; both deliveries must await one child creation.
-    const promise = this.performHandoffTaskToThread(request);
+    const promise = this.performHandoffTaskToThread(request, onCreated);
     this.host().acceptedHandoffTaskRequests.set(handoffId, { promise, signature });
     return await promise;
   }
@@ -2064,6 +2090,7 @@ export class ThreadWorkspaceService {
 
   private async performHandoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+    onCreated?: (worker: { backend: AppServerBackendKind; threadId: string }) => void,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const sourceBackend = request.context.backend;
     const sourceThreadId = request.context.threadId;
@@ -2691,6 +2718,7 @@ export class ThreadWorkspaceService {
         message:
           "Child thread exists; starting the delegated turn. Do not create a replacement handoff.",
       });
+      onCreated?.({ backend, threadId });
       const turn = await this.host().startTurn({
         backend,
         threadId,

@@ -1,4 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
@@ -5155,18 +5156,47 @@ describe("DesktopBackendRegistry", () => {
       await emitStartedTurn(registry, "codex", threadId, started.turnId);
     };
 
+    it("restores admission after an initial checkpoint error and preserves a pending start", async () => {
+      const { store, payloads } = durableStore();
+      let finish!: () => void;
+      const delay = new Promise<void>((resolve) => { finish = resolve; });
+      const codexClient = new MockBackendClient({ startTurnDelay: delay });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+        projectHeldWakeupStore: null, restartContinuationStore: store, runtimeInstanceId: "instance-a" });
+      onTestFinished(() => registry.close());
+      const starting = registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Task") });
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+      const targets = registry.beginQuietRestart();
+      expect(targets).toContainEqual(expect.objectContaining({ threadId: "busy" }));
+      const save = vi.spyOn(store, "saveAll").mockImplementationOnce(() => { throw new Error("disk full"); });
+      expect(() => registry.saveRestartContinuations(targets, 1, true)).toThrow("disk full");
+      registry.cancelQuietRestart();
+      expect(registry.isRestartGateClosed()).toBe(false);
+      expect(payloads()).toEqual([]);
+      save.mockRestore();
+      const retry = registry.beginQuietRestart();
+      expect(registry.saveRestartContinuations(retry, 1, true)).toBe(1);
+      finish();
+      await starting;
+      registry.saveRestartContinuations(retry, 1);
+      expect(payloads()).toHaveLength(1);
+    });
+
     it("steers the running turn, then continues it first after a restart while other work waits", async () => {
       const { rows, store } = durableStore();
       const { writes } = await measureSqliteWrites(async () => {
         const first = launch(store, "instance-a");
         await startRunningTurn(first.registry, "busy");
 
+        // Work accepted before quiet begins is carried across the restart.
+        await expect(first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Later") }))
+          .resolves.toMatchObject({ status: "queued" });
         const targets = first.registry.beginQuietRestart();
         expect(targets).toEqual([expect.objectContaining({ backend: "codex", threadId: "busy" })]);
         expect(first.registry.isRestartGateClosed()).toBe(true);
         // Nothing new starts on the way down.
         await expect(first.registry.submitTurn({ backend: "codex", threadId: "idle", input: text("Later") }))
-          .resolves.toMatchObject({ status: "queued" });
+          .rejects.toThrow("this message was not accepted");
         expect(first.codexClient.startTurnCallCount).toBe(1);
 
         await expect(first.registry.steerTurnsForQuietRestart(targets)).resolves.toBe(1);
@@ -5177,7 +5207,7 @@ describe("DesktopBackendRegistry", () => {
         expect(first.registry.saveRestartContinuations(targets, Date.UTC(2026, 10, 4))).toBe(1);
         // A second quiet restart does not add a second continuation.
         expect(first.registry.saveRestartContinuations(targets)).toBe(0);
-        // The continuation and the message that queued on the way down.
+        // The continuation and the message accepted before shutdown.
         expect(rows()).toEqual([{ owner_instance_id: "instance-a" }, { owner_instance_id: "instance-a" }]);
         await first.registry.close();
 
@@ -5193,12 +5223,15 @@ describe("DesktopBackendRegistry", () => {
         expect(second.codexClient.startTurnCallCount).toBe(0);
 
         second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(2));
+        const resumed = second.registry.getActiveTurnForThread({ backend: "codex", threadId: "busy" });
+        await emitCompletedTurn(second.registry, "codex", "busy", resumed!.turnId);
         await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(3));
         expect(second.codexClient.startTurnCalls[0]).toMatchObject({
           threadId: "busy",
           input: [{ type: "text", text: expect.stringContaining("PwrAgent restarted. Your previous turn was stopped at 2026-11-04T00:00:00.000Z") }],
         });
-        expect(second.codexClient.startTurnCalls.slice(1).map((call) => call.threadId).sort()).toEqual(["elsewhere", "idle"]);
+        expect(second.codexClient.startTurnCalls.slice(1).map((call) => call.threadId).sort()).toEqual(["busy", "elsewhere"]);
         expect(second.registry.isRestartGateClosed()).toBe(false);
         await vi.waitFor(() => expect(rows()).toEqual([]));
       });
@@ -5225,14 +5258,55 @@ describe("DesktopBackendRegistry", () => {
       expect(second.codexClient.startTurnCallCount).toBe(0);
     });
 
-    it("queues a messaging steer while the gate is shut and lets the restart's own steer through", async () => {
+    it("replays accepted steers through quiet shutdown without sending them again (generated)", async () => {
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom("pending", "completed", "completion-failed"), fc.string({ maxLength: 30 }),
+        async (state, suffix) => {
+          const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
+          const registry = createDesktopBackendRegistry({ codexClient,
+            overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
+          const delivery = createDeferred<{ threadId: string; turnId: string }>();
+          const steer = vi.spyOn(codexClient, "steerTurn").mockImplementation(async () => await delivery.promise);
+          const host = registry as unknown as {
+            readTurnCausalMessagingOrigin: () => Promise<AppServerThreadMessageOrigin | undefined>;
+          };
+          const read = vi.spyOn(host, "readTurnCausalMessagingOrigin").mockResolvedValue(undefined);
+          if (state === "completion-failed") read.mockRejectedValueOnce(new Error("Origin read failed"));
+          const request = { backend: "codex" as const, threadId: "thread-1", expectedTurnId: "turn-1",
+            requestId: "accepted", input: text(`Steer ${suffix}`) };
+          const origin = { kind: "messaging" as const };
+          const first = registry.steerTurn(request, origin);
+          try {
+            await waitForCondition(() => steer.mock.calls.length === 1);
+            if (state !== "pending") {
+              delivery.resolve({ threadId: "thread-1", turnId: "turn-1" });
+              if (state === "completion-failed") await expect(first).rejects.toThrow("Origin read failed");
+              else await first;
+            }
+            registry.beginQuietRestart();
+            const replay = registry.steerTurn(request, origin);
+            delivery.resolve({ threadId: "thread-1", turnId: "turn-1" });
+            await expect(replay).resolves.toMatchObject({ disposition: "steered", turnId: "turn-1" });
+            await expect(registry.steerTurn({ ...request, input: text("Changed") }, origin)).rejects.toThrow("reused");
+            await expect(registry.steerTurn({ ...request, requestId: "new" }, origin)).rejects.toThrow("this message was not accepted");
+            expect(steer).toHaveBeenCalledOnce();
+          } finally {
+            delivery.resolve({ threadId: "thread-1", turnId: "turn-1" });
+            await first.catch(() => undefined);
+            await registry.close();
+          }
+        },
+      ), { numRuns: 12, examples: [["pending", ""], ["completed", ""], ["completion-failed", ""]] });
+    });
+
+    it("refuses a messaging steer while shutdown admission is shut and lets the restart's own steer through", async () => {
       const { store } = durableStore();
       const { codexClient, registry } = launch(store, "instance-a");
       await startRunningTurn(registry, "busy");
       const [target] = registry.beginQuietRestart();
       expect(target).toBeDefined();
 
-      const deferred = await registry.steerTurn(
+      await expect(registry.steerTurn(
         {
           backend: "codex",
           threadId: "busy",
@@ -5241,11 +5315,10 @@ describe("DesktopBackendRegistry", () => {
           input: text("From Telegram"),
         },
         { kind: "messaging" },
-      );
-      expect(deferred).toMatchObject({ disposition: "queued", turnId: target!.turnId });
+      )).rejects.toThrow("this message was not accepted");
       expect(codexClient.lastSteerTurnParams).toBeUndefined();
       expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" }))
-        .toEqual([expect.objectContaining({ queueEntryId: (deferred as { queueEntryId: string }).queueEntryId })]);
+        .toEqual([]);
 
       await expect(registry.steerTurnsForQuietRestart([target!])).resolves.toBe(1);
       expect(codexClient.lastSteerTurnParams).toMatchObject({
@@ -5783,6 +5856,75 @@ describe("DesktopBackendRegistry", () => {
 
   it("revokes Claude grants when origin preparation rejects before provider invocation", async () => {
     await assertClaudeStartOutcome("accepted", "begin");
+  });
+
+  describe("research handoff admission", () => {
+    it("research catalogs follow the live experiment and discovery gates", () => {
+      let enabled = false;
+      let discovery = true;
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), resolveCodexToolDiscovery: () => discovery });
+      onTestFinished(() => registry.close());
+      registry.setResearchHandler(async () => ({}), undefined, () => enabled);
+      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => DynamicToolSpec[] };
+      for (const [feature, discover] of [[false, true], [true, true], [true, false], [false, true]]) {
+        enabled = feature; discovery = discover;
+        const tools = catalog.buildCodexParentDynamicTools(false).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+        expect(tools).toHaveLength(feature && discover ? 5 : 0);
+        expect(tools.every((tool) => tool.deferLoading === true)).toBe(true);
+      }
+    });
+
+    async function readyResearchRegistry() {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        startThreadResult: { threadId: "research-worker" },
+      });
+      const registry = createDesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({ overlays: {
+          "codex:research-parent": { backend: "codex", threadId: "research-parent", executionMode: "full-access", extraLinkedDirectories: [] },
+        } }),
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "research-parent", turnId: "research-parent-turn", turn: { id: "research-parent-turn" },
+      } } });
+      return { registry, codexClient };
+    }
+    const researchHandoff = () => ({ operation: "handoff_task" as const,
+      context: { backend: "codex" as const, threadId: "research-parent", turnId: "research-parent-turn", callId: "research-start:a1" },
+      args: { task: "Explore event ordering", title: "Events", workspaceMode: "none" as const, messagingAttachment: "none" as const },
+    });
+
+    it("binds a research handoff before the provider admits its first model turn", async () => {
+      const { registry, codexClient } = await readyResearchRegistry();
+      const startTurn = vi.spyOn(codexClient, "startTurn");
+      const bound = vi.fn<Parameters<DesktopBackendRegistry["handoffResearchWorker"]>[1]>((worker) => {
+        expect(worker).toEqual({ backend: "codex", threadId: "research-worker" });
+        expect(startTurn).not.toHaveBeenCalled();
+      });
+      const result = await registry.handoffResearchWorker(researchHandoff(), bound);
+      expect(result).toMatchObject({ ok: true, data: { threadId: "research-worker", turnId: expect.any(String) } });
+      expect(bound).toHaveBeenCalledOnce();
+      expect(startTurn).toHaveBeenCalledOnce();
+    });
+
+    it("retains a refused research handoff's child identity without starting its model", async () => {
+      const { registry, codexClient } = await readyResearchRegistry();
+      const startTurn = vi.spyOn(codexClient, "startTurn");
+      const result = await registry.handoffResearchWorker(researchHandoff(), () => { throw new Error("The research deadline closed admission"); });
+      expect(result).toMatchObject({ ok: true, data: { threadId: "research-worker", turnStartFailure: { message: "The research deadline closed admission" } } });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("refuses another managed handoff from an active research worker", async () => {
+      const { registry, codexClient } = await readyResearchRegistry();
+      registry.setResearchHandler(async () => ({}), () => true);
+      const result = await registry.handoffResearchWorker(researchHandoff(), () => {});
+      expect(result).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    });
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {
@@ -33403,7 +33545,14 @@ command = "pnpm dev"
       const steer = vi.spyOn(registry, "steerTurn");
       if (scenario.monitor) {
         (registryModules(registry).subAgentMonitorService as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
-          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {});
+          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {
+            backend, monitorThreadId: threadId, monitorTurnId: turn.turnId,
+            monitorId: "finished-monitor", parentBackend: backend, parentThreadId: "parent-session",
+            parentTurnId: "parent-turn", activeCommandCount: 0,
+            createdAt: 1, lastActivityAt: 1, task: "Wait for CI",
+            heartbeatIntervalSeconds: 30, pollIntervalSeconds: 30, startupTimeoutSeconds: 45,
+            preferredModel: "fixture", preferredReasoningEffort: "low",
+          });
       }
       const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
       const registration = await server.registerClient({ backend, threadId });
@@ -42388,7 +42537,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("routes headless automation failure notices to the visible Agent thread", async () => {
+  it("routes headless automation retry and failure notices to the visible Agent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
@@ -42409,6 +42558,13 @@ command = "pnpm dev"
     });
 
     await codexClient.emit({
+      method: "error",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", willRetry: true,
+        error: { message: "Reconnecting" },
+      },
+    });
+    await codexClient.emit({
       method: "thread/status/changed",
       params: { threadId: "thread-1", status: { type: "systemError" } },
     });
@@ -42422,9 +42578,14 @@ command = "pnpm dev"
     });
 
     expect(events.filter((event) =>
-      event.notification.method === "thread/status/changed"
+      event.notification.method === "error"
+      || event.notification.method === "thread/status/changed"
       || event.notification.method === "turn/failed"
     )).toEqual([
+      expect.objectContaining({ errorNoticeContext: {
+        backend: "codex", threadId: "agent-thread-1", title: "Check email",
+        automationName: "Check email",
+      } }),
       expect.objectContaining({ errorNoticeContext: {
         backend: "codex", threadId: "agent-thread-1", title: "Check email",
         automationName: "Check email",
@@ -42566,6 +42727,9 @@ command = "pnpm dev"
               output: [{ type: "text", text: "Automation finished." }],
             },
           },
+        },
+        errorNoticeContext: {
+          backend: "codex", threadId: "agent-thread-1", title: "Check email", automationName: "Check email",
         },
       },
     ]);
@@ -58750,7 +58914,9 @@ script = "printf setup"
       },
     });
 
+    const responseFlushed = Promise.resolve();
     const response = await codexClient.emitRequest({
+      responseFlushed,
       method: "item/tool/call",
       params: {
         threadId: "ordinary-thread",
@@ -58774,7 +58940,7 @@ script = "printf setup"
     });
     expect(appManagementHandler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { responseFlushed },
       args: { action: "status" },
     });
 

@@ -1,4 +1,5 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchRun, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
@@ -1050,6 +1051,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request?: AppServerListSkillsRequest
   ) => Promise<AppServerListSkillsResponse>;
   getPrActivity?: () => Promise<PrActivitySnapshot>;
+  searchResearch?: (request: ResearchSearchRequest) => Promise<ResearchSearchPage>;
+  readResearchItem?: (request: ResearchItemReadRequest) => Promise<ResearchItemContext>;
+  updateResearchItem?: (request: ResearchWorkRequest) => Promise<ResearchItemContext>;
+  researchSnapshot?: (thread: ResearchThread) => Promise<ResearchSnapshot>;
+  prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
+  updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchRun>;
+  openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
+  onResearchChanged?: (callback: (thread: ResearchThread) => void) => () => void;
   getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
   getCodexRestartStatus?: () => Promise<CodexAppServerRestartStatus>;

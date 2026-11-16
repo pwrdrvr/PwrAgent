@@ -1196,13 +1196,15 @@ function DesktopAppShell(props: {
           type: "codex-stream-event",
           backend: event.backend,
           notification: { method: event.notification.method, params },
+          errorNoticeContext: event.errorNoticeContext,
           ...(instanceId ? { instanceId } : {}),
           skillQuestionsWarningDismissed:
             props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
           dismissedWarningIds: codexConfigWarningsDismissedRef.current,
           threadLabel: labelForThread(
-            event.backend,
-            typeof params.threadId === "string" ? params.threadId : undefined,
+            event.errorNoticeContext?.backend ?? event.backend,
+            event.errorNoticeContext?.threadId
+              ?? (typeof params.threadId === "string" ? params.threadId : undefined),
           ),
         });
       }
@@ -4076,6 +4078,9 @@ function DesktopAppShell(props: {
         : undefined,
     threadToolAccountingEnabled:
       settings.snapshot?.experimental.threadToolAccounting?.value === true,
+    researchEnabled:
+      settings.snapshot?.experimental.researchEnabled?.value === true
+      && settings.snapshot?.experimental.codexToolDiscovery?.value !== false,
     threadPricingSummaryEnabled:
       settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
     pricingDisplayOptions: {

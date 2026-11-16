@@ -45,6 +45,7 @@ import {
   PullRequestIcon,
   ServerIcon,
   SubAgentsIcon,
+  ResearchIcon,
   TerminalIcon,
   TodoIcon,
   ToolCallsIcon,
@@ -57,6 +58,7 @@ import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-pa
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
+import { ResearchPanel } from "../research/ResearchPanel";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
@@ -104,6 +106,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "connections", label: "Connections", Icon: ConnectionsIcon },
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "todos", label: "To-dos", Icon: TodoIcon },
+  { id: "research", label: "Research", Icon: ResearchIcon },
   { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
@@ -194,6 +197,7 @@ type ThreadContextPanelProps = {
   };
   threadPricingSummaryEnabled?: boolean;
   threadToolAccountingEnabled?: boolean;
+  researchEnabled?: boolean;
   /** Absent on the new-thread launchpad, where only provider context applies. */
   thread?: NavigationPresentedThread;
   worktreeArchiveError?: string;
@@ -317,6 +321,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
+  const researchEnabled = props.researchEnabled === true && props.thread?.source === "codex" && !props.thread?.federation?.ref.target;
 
   // The launchpad picks its own tab and never persists it: the stored tab
   // belongs to threads, and a launchpad visit should not reset it.
@@ -340,6 +345,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         ? "info"
       : props.activeTab === "todos" && !props.todos
         ? "info"
+      : props.activeTab === "research" && !researchEnabled
+        ? "info"
       : props.activeTab;
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
   const pendingWakeCount = pendingWakes.state.status === "ready"
@@ -358,6 +365,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         && (tab.id !== "pricing" || threadPricingSummaryEnabled)
         && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
         && (tab.id !== "todos" || props.todos !== undefined)
+        && (tab.id !== "research" || researchEnabled)
       : tab.id === "providers"
         || (tab.id === "connections" && props.launchpadConnections !== undefined),
   );
@@ -865,6 +873,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         );
       case "pr-activity":
         return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
+      case "research":
+        return <ResearchPanel key={`${props.thread?.source}:${props.thread?.id}`} desktopApi={props.desktopApi} thread={props.thread} />;
       case "info":
         if (!props.thread) return null;
         return (

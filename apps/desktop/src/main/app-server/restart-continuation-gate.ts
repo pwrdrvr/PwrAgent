@@ -47,6 +47,7 @@ export type RestartGateState =
 
 export type RestartGateEvent =
   | { type: "quiet"; at: number }
+  | { type: "cancel-quiet"; previous: RestartGateState }
   | { type: "restore"; schedule: readonly RestartContinuationSchedule[]; releaseBy: number }
   /** A continuation started, was discarded, failed, or was blocked. */
   | { type: "settled"; entryId: string }
@@ -73,6 +74,8 @@ export function transitionRestartGate(
   switch (event.type) {
     case "quiet":
       return current.phase === "quieting" ? current : { phase: "quieting", startedAt: event.at };
+    case "cancel-quiet":
+      return current.phase === "quieting" ? event.previous : current;
     case "restore": {
       // A restart already under way keeps everything shut.
       if (current.phase === "quieting") return current;

@@ -4,6 +4,7 @@ import type {
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
+import { registerResearchIpcHandlers, disposeResearchIpcHandlers } from "./research-ipc";
 import {
   AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL,
   AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
@@ -468,6 +469,7 @@ export function broadcastCodexEnvironmentSetupProgress(
 
 export function registerAgentIpcHandlers(): void {
   const registry = getDesktopBackendRegistry();
+  registerResearchIpcHandlers();
 
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.handle(
@@ -1584,6 +1586,7 @@ export function registerAgentIpcHandlers(): void {
 }
 
 export function disposeAgentIpcHandlers(): void {
+  disposeResearchIpcHandlers();
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);

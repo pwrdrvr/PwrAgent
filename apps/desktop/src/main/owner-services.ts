@@ -1,5 +1,9 @@
 import { createDesktopBackendRegistry } from "./app-server/backend-registry-wiring";
 import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
+import { ResearchAdmissionRefused } from "@pwragent/owner-core/research-service";
+import { createResearchOwnerIdentity } from "./research/research-owner-identity";
+import type { HandoffTaskResult, SendMessageToThreadResult } from "@pwragent/shared";
+import { initializeResearchRuntime, createResearchAgentHandler, closeResearchRuntime } from "./research/research-runtime";
 import { isAcpBackendId } from "@pwragent/shared";
 import { initializeDesktopAutomationService, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
@@ -63,7 +67,7 @@ import { createOwnerRoutedForgeReadHandler } from "./federation/federated-forge-
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../shared/navigation-diagnostic-cause";
 import { setBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { navigationQueryEventRequiresRefresh, type AgentEvent, forgeRuleProjectLabel } from "@pwragent/shared";
-import { CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
+import { CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import { disposeThreadMaintenanceService, getThreadMaintenanceService } from "./thread-maintenance-runtime";
 import { readFederationThreadPrWatchesRequest } from "./pr-status/thread-pr-watches-federation";
 import { getDesktopNavigationQueryStore } from "./app-server/navigation-query-store";
@@ -105,6 +109,10 @@ let mainProcessShutdownPromise: Promise<void> | undefined;
 let ownerShutdownStarted = false;
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
+function closeResearchOwner(): void {
+  try { closeResearchRuntime(); }
+  catch (error) { mainLog.warn("research shutdown failed", { error: String(error) }); }
+}
 const navigationQueryPool = getDesktopNavigationQueryPool();
 
 function invalidateNavigationEvent(event: AgentEvent): void {
@@ -310,6 +318,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         name: "running-turns",
         timeoutMs: RUNNING_TURNS_SHUTDOWN_TIMEOUT_MS,
         run: async () => {
+          closeResearchOwner();
           await getExistingDesktopBackendRegistry()?.stopRunningTurnsForShutdown({
             timeoutMs: RUNNING_TURNS_STOP_TIMEOUT_MS,
           });
@@ -434,6 +443,88 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         await getDesktopBackendRegistry().recordOpenAIDecisionsUsageLines(lines),
     }),
   );
+  const researchRegistry = getDesktopBackendRegistry();
+  const researchEnabled = () => getDesktopSettingsService().resolveResearchEnabled?.() === true;
+  const research = initializeResearchRuntime({
+    enabled: researchEnabled,
+    ...createResearchOwnerIdentity(),
+    onError: (error) => mainLog.warn("research operation failed", { error: String(error) }),
+    changed: (thread) => {
+      for (const target of rendererSubscribers(RESEARCH_CHANGED_EVENT_CHANNEL)) {
+        try { target.send(RESEARCH_CHANGED_EVENT_CHANNEL, thread); }
+        catch (error) { mainLog.warn("research view notification failed", { error: String(error) }); }
+      }
+    },
+    spawn: async (context, task, title, workspaceMode, onCreated) => {
+      let refused: ResearchAdmissionRefused | undefined;
+      const response = await researchRegistry.handoffResearchWorker({ operation: "handoff_task", context,
+        args: { task, title, workspaceMode, seedMode: "clean", groupingMode: "subthread", messagingAttachment: "none" },
+      }, (worker) => {
+        try { onCreated(worker); }
+        catch (error) { if (error instanceof ResearchAdmissionRefused) refused = error; throw error; }
+      });
+      if (refused) throw refused;
+      if (!response.ok) {
+        if (["invalid_arguments", "forbidden", "unsupported_backend", "unsupported_workspace", "unsupported_capability", "requires_confirmation", "ambiguous_workspace", "project_paused"].includes(response.error.code)) throw new ResearchAdmissionRefused(response.error.message);
+        throw new Error(response.error.message);
+      }
+      const result = response.data as HandoffTaskResult;
+      if (!result.threadId) throw new Error("Worker creation is unresolved. Inspect the pending handoff; do not retry it.");
+      // startTurn may throw after provider admission. Only an explicit
+      // ResearchAdmissionRefused can certify that no model work started.
+      if (result.turnStartFailure) throw new Error(result.turnStartFailure.message);
+      return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
+    },
+    stop: async (worker) => {
+      if (!worker.turnId) throw new Error("Worker turn has not been confirmed");
+      const active = researchRegistry.getActiveTurnForThread(worker);
+      if (active && active.turnId !== worker.turnId) throw new Error("Worker has a different active turn. Inspect it before stopping.");
+      await researchRegistry.interruptTurn({ ...worker, turnId: worker.turnId });
+    },
+    notify: async (context, target, prompt) => {
+      if (context.kind === "operator") {
+        const receipt = await researchRegistry.submitTurn({ backend: target.backend, threadId: target.threadId, origin: "manual", delivery: "new_turn", input: [{ type: "text", text: prompt }] });
+        return receipt.status === "queued" ? { queueEntryId: receipt.entry.id } : { turnId: receipt.turnId };
+      }
+      if (!context.turnId || !context.callId) throw new Error("Research feedback needs its live calling turn");
+      const response = await researchRegistry.deliverResearchMessage({ operation: "send_message_to_thread", context,
+        args: { backend: target.backend, threadId: target.threadId, prompt, delivery: "new_turn" },
+      });
+      if (!response.ok) throw new Error(response.error.message);
+      const receipt = response.data as SendMessageToThreadResult;
+      return receipt.queueStatus === "queued" ? { queueEntryId: receipt.queueEntryId } : { turnId: receipt.turnId };
+    },
+    cancelQueued: async (entryId) => {
+      const result = researchRegistry.cancelQueuedTurnWithDisposition(entryId, "Research run stopped");
+      if (result.disposition === "cancelled") return {};
+      if (result.disposition === "already_admitted" && result.turnId) return { turnId: result.turnId };
+      throw new Error("Revision queue outcome is unknown. Inspect the worker thread.");
+    },
+  });
+  researchRegistry.setResearchHandler(createResearchAgentHandler(research, (context) => researchRegistry.researchContextIsLive(context), researchEnabled), (thread) => research.isWorker(thread), researchEnabled);
+  let researchWasEnabled = researchEnabled();
+  ownerSubscriptions.add(getDesktopConfigStore().subscribe(["experimental"], () => {
+    const next = researchEnabled();
+    const stop = researchWasEnabled && !next;
+    researchWasEnabled = next;
+    if (stop) void research.stopOwnedRuns("Research runs were disabled in Experimental settings").catch((error) => mainLog.warn("research disable cancellation failed", { error: String(error) }));
+  }));
+  ownerSubscriptions.add(researchRegistry.onEvent((event) => {
+    const method = event.notification.method;
+    if (method === "thread/turnQueue/updated") {
+      const params = event.notification.params as { threadId?: string; queueEntryId?: string; status?: string; turnId?: string };
+      if (params.threadId && params.queueEntryId && params.status) void research.observeQueue({ backend: event.backend, threadId: params.threadId }, params.queueEntryId, params.status, params.turnId)
+        .catch((error) => mainLog.warn("research queue reconciliation failed", { error: String(error) }));
+      return;
+    }
+    if (!["turn/started", "turn/completed", "turn/failed", "turn/cancelled"].includes(method)) return;
+    const params = event.notification.params as { threadId?: string; turnId?: string; turn?: { id?: string; status?: string; error?: { message?: string } } };
+    const turnId = params.turnId ?? params.turn?.id;
+    if (!params.threadId || !turnId) return;
+    const target = { backend: event.backend, threadId: params.threadId };
+    if (method === "turn/started") void research.observeStart(target, turnId).catch((error) => mainLog.warn("research worker cancellation failed", { error: String(error) }));
+    else research.observeEnd(target, turnId, { failed: method === "turn/failed" || params.turn?.status === "failed", note: params.turn?.error?.message });
+  }));
   // Injected rather than owned by the registry: the federation runtime
   // already imports the registry, so the reverse import would be a cycle.
   const federationAgentToolOptions = {
@@ -748,6 +839,7 @@ wireOwnerRendererEvents();
 }
 
 export async function disposeAppServerOwnerServices(): Promise<void> {
+  closeResearchOwner();
   disposeOwnerRendererEvents();
   setNavigationDetailPendingWakesProjector(undefined);
   setBundledGitLfsAdvisory(undefined);
@@ -761,6 +853,7 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   unsubscribeThreadArchiveSweepStatus = undefined;
   disposeThreadMaintenanceService();
   const registry = getExistingDesktopBackendRegistry();
+  registry?.setResearchHandler(undefined);
   registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadDependenciesPeerHandler(undefined);
   registry?.setThreadMaintenanceToolHandler(undefined);
@@ -804,6 +897,7 @@ export function prepareOwnerShutdown(): void {
 }
 
 export function disposeOwnerServicesSync(options: { releaseFederationLease?: boolean } = {}): void {
+  closeResearchOwner();
   disposeDesktopAutomationService();
   if (options.releaseFederationLease !== false) releaseOwnerFederationLeaseSync();
   // Detached env-action trees (`pnpm dev` and friends) were previously just

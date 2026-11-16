@@ -50,7 +50,7 @@ describe("PwrAgent app management service", () => {
     await expect(
       handler({
         operation: "manage_pwragent",
-        context: {},
+        context: { responseFlushed: Promise.resolve() },
         args: { action: "status" },
       }),
     ).resolves.toMatchObject({
@@ -77,6 +77,7 @@ describe("PwrAgent app management service", () => {
   });
 
   it("checks for upgrades and marks downloaded updates as restart-ready", async () => {
+    readAppUpdateStatusMock.mockReturnValue({ status: "downloaded", version: "1.2.4" });
     checkForAppUpdatesNowMock.mockResolvedValue({
       status: "downloaded",
       version: "1.2.4",
@@ -91,7 +92,7 @@ describe("PwrAgent app management service", () => {
 
     const response = await handler({
       operation: "manage_pwragent",
-      context: {},
+      context: { responseFlushed: Promise.resolve() },
       args: { action: "upgrade_check" },
     });
 
@@ -113,7 +114,7 @@ describe("PwrAgent app management service", () => {
 
   it("routes plain restarts through the injected restart confirmation", async () => {
     readAppUpdateStatusMock.mockReturnValue({
-      status: "available",
+      status: "no-update",
       version: "1.2.4",
     });
     const requestRestart = vi.fn(async (performRestart: () => void) => {
@@ -131,7 +132,7 @@ describe("PwrAgent app management service", () => {
 
     const response = await handler({
       operation: "manage_pwragent",
-      context: {},
+      context: { responseFlushed: Promise.resolve() },
       args: { action: "restart" },
     });
 
@@ -142,11 +143,11 @@ describe("PwrAgent app management service", () => {
       ok: true,
       data: {
         result: {
-          status: "restart_accepted",
+          status: "restart_scheduled",
           installingDownloadedUpdate: false,
         },
         update: {
-          updateAvailableToDownload: true,
+          updateAvailableToDownload: false,
           updateDownloadedWillInstallOnRestart: false,
         },
       },
@@ -154,6 +155,7 @@ describe("PwrAgent app management service", () => {
   });
 
   it("keeps the switch-back direction on the reported update status", async () => {
+    readAppUpdateStatusMock.mockReturnValue({ status: "available", version: "1.0.2", direction: "downgrade" });
     // Without this the agent describes a move back down onto the operator's
     // selected channel as an ordinary update to a lower version.
     checkForAppUpdatesNowMock.mockResolvedValue({
@@ -169,7 +171,7 @@ describe("PwrAgent app management service", () => {
     await expect(
       handler({
         operation: "manage_pwragent",
-        context: {},
+        context: { responseFlushed: Promise.resolve() },
         args: { action: "upgrade_check" },
       }),
     ).resolves.toMatchObject({
@@ -186,37 +188,31 @@ describe("PwrAgent app management service", () => {
     });
   });
 
-  it("authorizes a downloaded install before the agent-tool quit is deferred", async () => {
+  it("reports a scheduled install, then exposes authorization cancellation without quitting", async () => {
     readAppUpdateStatusMock.mockReturnValue({ status: "downloaded", version: "1.2.4" });
     const beforeQuit = vi.fn(() => false);
     const performQuit = vi.fn();
     requestQuitMock.mockImplementation(async (options) => {
       expect(options.source).toBe("update-install");
-      expect(options.beforeQuit).toBe(beforeQuit);
+      expect(options.quietRestart).toBe(true);
       if (!options.beforeQuit()) return false;
       options.performQuit();
       return true;
     });
     installDownloadedAppUpdateMock.mockImplementation(async (options) => {
+      expect(options.expectedVersion).toBe("1.2.4");
       const accepted = await options.requestQuit(performQuit, beforeQuit);
       return accepted ? { status: "restarting" } : { status: "error", message: "Not authorized" };
     });
     const { createPwrAgentAppManagementHandler } = await import("../agent-tools/pwragent-app-management-service");
     const handler = createPwrAgentAppManagementHandler({ startedAt: 1_000 });
-    const response = await handler({ operation: "manage_pwragent", context: {}, args: { action: "restart" } });
+    const response = await handler({ operation: "manage_pwragent", context: { responseFlushed: Promise.resolve() }, args: { action: "restart" } });
+    expect(response).toMatchObject({ data: { result: { status: "restart_scheduled" }, operation: { status: "waiting_for_response" } } });
+    await vi.waitFor(async () => {
+      expect(await handler({ operation: "manage_pwragent", context: {}, args: { action: "status" } })).toMatchObject({ data: { operation: { status: "cancelled", message: "Not authorized" } } });
+    });
     expect(beforeQuit).toHaveBeenCalledOnce();
     expect(performQuit).not.toHaveBeenCalled();
-    expect(response).toMatchObject({ data: { result: { status: "cancelled", message: "Not authorized" } } });
-    vi.useFakeTimers();
-    try {
-      beforeQuit.mockReturnValue(true);
-      await handler({ operation: "manage_pwragent", context: {}, args: { action: "restart" } });
-      expect(performQuit).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(150);
-      expect(performQuit).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("uses update install when restarting with a downloaded update", async () => {
@@ -235,7 +231,7 @@ describe("PwrAgent app management service", () => {
 
     const response = await handler({
       operation: "manage_pwragent",
-      context: {},
+      context: { responseFlushed: Promise.resolve() },
       args: { action: "restart" },
     });
 
@@ -244,7 +240,7 @@ describe("PwrAgent app management service", () => {
       ok: true,
       data: {
         result: {
-          status: "restart_accepted",
+          status: "restart_scheduled",
           installingDownloadedUpdate: true,
         },
         update: {

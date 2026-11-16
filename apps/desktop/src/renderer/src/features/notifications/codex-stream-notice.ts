@@ -2,6 +2,7 @@ import {
   describeProviderResponseBlock,
   detectProviderResponseBlock,
   type AppServerBackendKind,
+  type AgentEvent,
   type FederationInstanceId,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -16,6 +17,7 @@ export type CodexStreamSignal = {
   backend?: AppServerBackendKind;
   notification: { method: string; params: Record<string, unknown> };
   instanceId?: FederationInstanceId;
+  errorNoticeContext?: AgentEvent["errorNoticeContext"];
   skillQuestionsWarningDismissed?: boolean;
   /** Saved `experimental.codexConfigWarningsDismissed` ids. */
   dismissedWarningIds?: readonly string[];
@@ -77,6 +79,8 @@ export function resolveCodexStreamNotice(
       turnId ?? null,
     ])}`;
   const provider = backend === "codex" ? "Codex" : formatBackendLabel(backend);
+  const owner = signal.errorNoticeContext;
+  const threadLabel = owner?.title ?? signal.threadLabel;
   const current = notices.find((notice) => notice.id === id);
 
   if (method === "error" || method === "warning") {
@@ -124,11 +128,11 @@ export function resolveCodexStreamNotice(
         ...(skillQuestionsWarning ? { skillQuestionsWarning: true } : {}),
         ...(warningSuppressionId ? { warningSuppressionId } : {}),
         tone: method === "warning" || retrying ? "warning" : "error",
-        detail: signal.threadLabel,
+        detail: threadLabel,
         threadLink: {
-          backend,
-          threadId,
-          title: signal.threadLabel,
+          backend: owner?.backend ?? backend,
+          threadId: owner?.threadId ?? threadId,
+          title: threadLabel,
           ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
         },
         ...(retrying ? {

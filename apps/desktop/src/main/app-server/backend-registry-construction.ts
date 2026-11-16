@@ -1,3 +1,4 @@
+import type { TurnEventObservers } from "./turn-event-observer";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryContext } from "./registry-context";
@@ -213,6 +214,7 @@ export type DesktopBackendRegistryOptions = {
 export interface RegistryDependencies {
   handlers: RegistryHandlers;
   context: RegistryContext;
+  turnEventObservers: TurnEventObservers;
   forgeToolBridge: ForgeToolBridge;
   threadInspectionTools: ThreadInspectionTools;
   threadMcpConnections: ThreadMcpConnections;

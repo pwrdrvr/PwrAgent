@@ -1,3 +1,5 @@
+import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchRun, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
+import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
@@ -1901,6 +1903,25 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_LIST_SKILLS_CHANNEL, request),
   getPrActivity: async (): Promise<PrActivitySnapshot> =>
     await ipcRenderer.invoke(APP_SERVER_GET_PR_ACTIVITY_CHANNEL),
+  searchResearch: async (request: ResearchSearchRequest): Promise<ResearchSearchPage> =>
+    await ipcRenderer.invoke(RESEARCH_SEARCH_CHANNEL, request),
+  readResearchItem: async (request: ResearchItemReadRequest): Promise<ResearchItemContext> =>
+    await ipcRenderer.invoke(RESEARCH_ITEM_CHANNEL, request),
+  updateResearchItem: async (request: ResearchWorkRequest): Promise<ResearchItemContext> =>
+    await ipcRenderer.invoke(RESEARCH_WORK_CHANNEL, request),
+  researchSnapshot: async (request: ResearchThread): Promise<ResearchSnapshot> =>
+    await ipcRenderer.invoke(RESEARCH_SNAPSHOT_CHANNEL, request),
+  prepareResearch: async (request: PrepareResearchRequest): Promise<{ intentId: string }> =>
+    await ipcRenderer.invoke(RESEARCH_PREPARE_CHANNEL, request),
+  updateResearch: async (request: ResearchUpdateRequest): Promise<ResearchRun> =>
+    await ipcRenderer.invoke(RESEARCH_UPDATE_CHANNEL, request),
+  openResearchEvidence: async (request: ResearchEvidenceRequest): Promise<OpenPathResponse> =>
+    await ipcRenderer.invoke(RESEARCH_OPEN_EVIDENCE_CHANNEL, request),
+  onResearchChanged: (callback: (thread: ResearchThread) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, thread: ResearchThread) => callback(thread);
+    ipcRenderer.on(RESEARCH_CHANGED_EVENT_CHANNEL, listener);
+    return () => ipcRenderer.off(RESEARCH_CHANGED_EVENT_CHANNEL, listener);
+  },
   getPrAutoDispatchBudgetStatus: async (): Promise<PrAutoDispatchBudgetStatus> =>
     await ipcRenderer.invoke(APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL),
   resumePrAutoDispatchBudget: async (): Promise<PrAutoDispatchBudgetStatus> =>

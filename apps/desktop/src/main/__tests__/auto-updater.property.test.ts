@@ -488,7 +488,7 @@ function newestEligible(feed: ReadonlySet<string>, train: Train): string {
   return eligible.sort(compareTags).at(-1)!.slice(1);
 }
 
-type Model = { feed: Set<string>; train: Train; downloading: boolean };
+type Model = { feed: Set<string>; train: Train; downloading: boolean; handedOff: boolean };
 type World = { updater: Updater };
 type Action = "publish" | "selectTrain" | "check" | "succeed" | "fail" | "cancel" | "restart";
 
@@ -528,6 +528,9 @@ async function afterCommand(model: Model, world: World): Promise<void> {
 class SessionCommand implements fc.AsyncCommand<Model, World> {
   constructor(readonly action: Action, readonly value = "") {}
   check(model: Readonly<Model>): boolean {
+    // A native restart ends this process. Only duplicate restart requests can
+    // still race its teardown; no new session work is admitted after handoff.
+    if (model.handedOff) return this.action === "restart";
     switch (this.action) {
       case "publish": return !model.feed.has(this.value);
       case "selectTrain": return model.train !== this.value;
@@ -573,11 +576,13 @@ class SessionCommand implements fc.AsyncCommand<Model, World> {
         const shown = state.shown;
         const named = shown?.status === "downloaded" ? shown.version : undefined;
         const before = state.ran.length;
-        await world.updater.installDownloadedAppUpdate();
+        const result = await world.updater.installDownloadedAppUpdate();
         await settle();
-        expect(state.ran.slice(before), "Restart installs only what its offer names").toEqual(
-          named === undefined ? [] : [{ file: named, onDisk: true }],
+        expect(state.ran.slice(before), "Restart installs only what its offer names, once").toEqual(
+          named === undefined || model.handedOff ? [] : [{ file: named, onDisk: true }],
         );
+        if (model.handedOff) expect(result.status).toBe("error");
+        if (result.status === "restarting") model.handedOff = true;
         break;
       }
     }
@@ -615,7 +620,7 @@ async function runSession(
   vi.resetModules();
   const world = { updater: await import("../shell/auto-updater") };
   world.updater.initAutoUpdater();
-  const model: Model = { feed, train: start.train, downloading: false };
+  const model: Model = { feed, train: start.train, downloading: false, handedOff: false };
   try {
     await afterCommand(model, world);
     await fc.asyncModelRun(() => ({ model, real: world }), commands);

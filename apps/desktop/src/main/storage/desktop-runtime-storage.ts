@@ -7,6 +7,7 @@ import { SqliteThreadReviewStorage } from "./thread-review-storage-sqlite";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import { ThreadTodoStore } from "./thread-todo-store";
 import { OpenAIDecisionStore, type OpenAIDecisionRegistryStorage } from "./openai-decision-store";
+import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import { RetainedOwnerThreadStore } from "./retained-owner-thread-store";
@@ -86,6 +87,10 @@ export function createThreadTodoStorage(): ThreadTodoStorage {
 
 export function createOpenAIDecisionStorage(): OpenAIDecisionRegistryStorage {
   return new OpenAIDecisionStore(getAppStateDb());
+}
+
+export function createResearchStorage() {
+  return new ResearchStore(getAppStateDb());
 }
 
 export function createThreadReviewStorage(): ThreadReviewStorage {

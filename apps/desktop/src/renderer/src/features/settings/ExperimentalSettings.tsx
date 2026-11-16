@@ -118,6 +118,7 @@ export function ExperimentalSettings(props: {
   onTokenMiserPollingReviewsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
+  onResearchEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -128,6 +129,8 @@ export function ExperimentalSettings(props: {
   const condensation = props.snapshot.experimental.diffCondensation;
   const codexToolDiscovery = props.snapshot.experimental.codexToolDiscovery
     ?? { value: true, source: "default" as const };
+  const researchEnabled = props.snapshot.experimental.researchEnabled
+    ?? { value: false, source: "default" as const };
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
@@ -221,6 +224,26 @@ export function ExperimentalSettings(props: {
             help="Applies to new threads and the next turn when the Codex runtime supports refreshing tools. Start a new thread on older runtimes. Other providers are unchanged."
             source={sourceBadge(codexToolDiscovery)}
             onChange={props.onCodexToolDiscoveryChange}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Research runs"
+        description="Coordinate local Codex workers, track findings and review research in the thread’s Research panel. Disabled by default."
+        chip={researchEnabled.value ? "On" : "Off"}
+        chipKind={researchEnabled.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={researchEnabled.value}
+            disabled={props.saving || (!codexToolDiscovery.value && !researchEnabled.value)}
+            label="Enable research runs"
+            sub="Requires Codex Tool Discovery; research tools load only when requested."
+            help="Turning this off hides the Research panel, removes its tools and stops active research runs. Saved findings remain available when re-enabled. New threads and runtimes with tool refresh pick up changes on their next turn."
+            source={sourceBadge(researchEnabled)}
+            onChange={props.onResearchEnabledChange}
           />
         </div>
       </SettingsSection>

@@ -1,3 +1,4 @@
+import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryContext } from "./registry-context";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -101,6 +102,7 @@ export interface CodexRuntimeSupervisorHost extends Pick<RegistryHostPorts,
   }>;
   hasActiveCodexWork(): boolean;
   listActiveCodexWorkThreadIds(): string[];
+  readonly stoppingRunningTurnsForShutdown: boolean;
   readonly nativeVoiceLeases: number;
   readonly resolveTokenMiserEnabledFn: () => boolean;
   readonly shutdownRequested: boolean;
@@ -154,6 +156,40 @@ export class CodexRuntimeSupervisor {
     this.resolveCodexAppServerRecycleSettingsFn = dependencies.resolveCodexAppServerRecycleSettingsFn;
     this.codexThreadIdleUnsubscribeMs = dependencies.codexThreadIdleUnsubscribeMs;
     this.markManagedCodexRuntimeSwitchCompleteFn = dependencies.markManagedCodexRuntimeSwitchCompleteFn;
+  }
+
+  turnEventObservers(): Record<"terminal" | "settled", TurnEventObserver> {
+    return {
+      terminal: { name: "runtime-terminal", onTurnTerminal: (delivery) => this.observeRuntimeTerminal(delivery) },
+      settled: { name: "runtime-settled", onEvent: (delivery) => this.observeRuntimeSettled(delivery) },
+    };
+  }
+
+  private observeRuntimeTerminal(delivery: TurnEventDelivery): void {
+    const { event } = delivery;
+    if (event.backend === "codex") void this.maybeRestartCodexForManagedRuntimeChange();
+  }
+
+  private observeRuntimeSettled(delivery: TurnEventDelivery): void {
+    const { event } = delivery;
+    if (event.backend === "codex" && event.notification.method === "thread/status/changed"
+      && ["idle", "notLoaded"].includes(readStatusType(event.notification.params.status) ?? "")) {
+      void this.maybeRestartCodexForManagedRuntimeChange();
+    }
+
+    if (event.backend === "codex" && (
+      event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled"
+      || (event.notification.method === "thread/status/changed"
+        && readStatusType(event.notification.params.status) === "idle")
+    )) {
+      const threadId = event.notification.params.threadId;
+      if (!this.context.lifecycle.closed && !this.host().stoppingRunningTurnsForShutdown
+        && (this.liveToolItemRecords.has(threadId) || this.backgroundTerminalRecords.has(threadId))) {
+        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
+      }
+    }
   }
 
   get runtimeRestartPending(): boolean { return this.codexRuntimeRestartPending; }
