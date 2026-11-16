@@ -153,13 +153,13 @@ type HistoryStacks = {
 const EMPTY_STACKS: HistoryStacks = { back: [], cursor: undefined, forward: [] };
 
 /**
- * Browser-style back/forward history over the app shell's navigation
+ * Ordered back/forward history over the app shell's navigation
  * state. The hook OBSERVES `current` rather than requiring every
  * navigation call-site to push explicitly — any change of the tracked
  * location (sidebar click, search result, menu deep-link, thread
- * creation) lands in the back stack automatically. A new navigation clears
- * Forward, retaining its unsubmitted composers in Back so branching away
- * from a copy/paste detour cannot strand a draft.
+ * creation) inserts the destination after the cursor. Existing Forward
+ * destinations keep their order, so a copy/paste detour cannot move an
+ * unsubmitted composer behind the operator or strand it.
  *
  * `restore` is invoked from goBack/goForward to set the shell state that
  * derives `current`; the hook moves its cursor first, so the resulting
@@ -281,20 +281,20 @@ export function useNavigationHistory(args: {
       // cursor before their restore commits, so the page being left can
       // still re-derive here: a commit whose effect was pending when Back
       // was clicked, or a restore that settles asynchronously. Recording it
-      // would push the page being left and clear Forward.
+      // would insert a spurious visit to the page being left.
       return;
     }
-    let baseBack = prev.back;
-    // A new destination abandons Forward. Keep its live composers behind
-    // the thread being left, so Back still visits that thread first and
-    // then the drafts. Reopening a composer must not retain a second copy.
-    for (const location of prev.forward) {
-      if (location.view === "launchpad" && !sameLocation(location, current)) {
-        baseBack = appendLocation(baseBack, location);
-      }
-    }
-    if (current.view === "launchpad") {
-      baseBack = baseBack.filter((location) => !sameLocation(location, current));
+    const baseBack = current.view === "launchpad"
+      ? collapseRepeats(prev.back.filter((location) => !sameLocation(location, current)))
+      : prev.back;
+    // Insert at the cursor without rewriting the order ahead. Launchpads
+    // remain singletons when explicitly reopened, and selecting the nearest
+    // Forward destination must not leave an immediate duplicate of itself.
+    let forward = current.view === "launchpad"
+      ? collapseRepeats(prev.forward.filter((location) => !sameLocation(location, current)))
+      : prev.forward;
+    while (forward.length && sameLocation(forward[0], current)) {
+      forward = forward.slice(1);
     }
     const next: HistoryStacks = {
       back:
@@ -302,7 +302,7 @@ export function useNavigationHistory(args: {
           ? appendLocation(baseBack, prev.cursor)
           : baseBack,
       cursor: current,
-      forward: [],
+      forward,
     };
     stacksRef.current = next;
     setStacks(next);

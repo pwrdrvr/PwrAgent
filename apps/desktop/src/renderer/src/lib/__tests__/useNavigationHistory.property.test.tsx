@@ -46,7 +46,7 @@ it("Back then Forward preserves the unsubmitted composer after any navigation pr
   ), { numRuns: 25 });
 });
 
-it("branching after Back retains every unsubmitted composer and drops ordinary Forward visits", () => {
+it("inserting a destination keeps existing thread, search and composer visits ahead in order", () => {
   fc.assert(fc.property(
     fc.uniqueArray(fc.record({
       directoryKey: fc.integer({ min: 0, max: 6 }).map((key) => `directory:${key}`),
@@ -73,19 +73,24 @@ it("branching after Back retains every unsubmitted composer and drops ordinary F
       };
       try {
         const composers: NavigationHistoryLocation[] = projects.map((project) => ({ view: "launchpad", ...project }));
-        for (const [index, composer] of composers.entries()) {
-          navigate(composer);
-          navigate({ view: "thread", threadKey: `codex:forward-${index}` });
-        }
-        for (let index = 0; index < composers.length * 2; index += 1) back();
-        navigate({ view: "thread", threadKey: "codex:other" });
-        expect(h.result.current.canGoForward).toBe(false);
-        // The thread just left remains the first Back target. Only live
-        // composers survive the abandoned branch, newest visit first.
-        for (const expected of [source, ...composers.toReversed()]) {
-          expect(back()).toEqual(expected);
-        }
+        const visits: NavigationHistoryLocation[] = composers.flatMap((composer, index) => [
+          composer, { view: "thread", threadKey: `codex:forward-${index}` }, { view: "search" },
+        ]);
+        for (const visit of visits) navigate(visit);
+        for (let index = 0; index < visits.length; index += 1) back();
+        const inserted: NavigationHistoryLocation = { view: "thread", threadKey: "codex:other" };
+        navigate(inserted);
+        expect(h.result.current.canGoForward).toBe(true);
+        expect(back()).toEqual(source);
         expect(h.result.current.canGoBack).toBe(false);
+        for (const expected of [inserted, ...visits]) {
+          restore.mockClear();
+          act(() => h.result.current.goForward());
+          expect(restore).toHaveBeenCalledOnce();
+          expect(restore).toHaveBeenLastCalledWith(expected);
+          navigate(restore.mock.lastCall![0]);
+        }
+        expect(h.result.current.canGoForward).toBe(false);
       } finally {
         h.unmount();
       }

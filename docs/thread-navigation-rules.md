@@ -13,9 +13,9 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 ### History and unsubmitted composers
 
 - Back and Forward can reopen a project's unsubmitted composer, including an empty one.
-- Opening another destination after Back clears ordinary Forward visits.
-- Keep unsubmitted composers from that abandoned branch in Back, behind the thread just left.
-- Thus composer → Back to A → open B → Back visits A, then the composer.
+- Opening another destination after Back inserts it after the current position, preserving Forward order.
+- Thus composer → Back to A → open B yields A → B → composer: Back opens A and Forward opens the composer.
+- Selecting the nearest Forward destination consumes that entry without duplicating it.
 - Keep one entry per composer, keyed by project and owning instance.
 - Submitting a composer replaces its entry with the starting thread, then the created thread.
 

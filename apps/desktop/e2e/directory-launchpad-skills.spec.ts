@@ -276,11 +276,13 @@ for (const draft of ["", "Keep this project draft."]) {
       await expect(page.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
       await page.getByRole("button", { name: "Other project thread", exact: true }).click();
       await expect(page.getByRole("heading", { level: 2, name: "Other project thread" })).toBeVisible();
-      await expect(page.getByTestId("history-nav-forward")).toBeDisabled();
+      await expect(page.getByTestId("history-nav-forward")).toBeEnabled();
       await page.getByTestId("history-nav-back").click();
       await expect(page.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
-      await expect(page.getByTestId("history-nav-back")).toBeEnabled();
-      await page.getByTestId("history-nav-back").click();
+      await expect(page.getByTestId("history-nav-back")).toBeDisabled();
+      await page.getByTestId("history-nav-forward").click();
+      await expect(page.getByRole("heading", { level: 2, name: "Other project thread" })).toBeVisible();
+      await page.getByTestId("history-nav-forward").click();
       await expect(page.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
       await expect(page.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", draft);
     } finally {
