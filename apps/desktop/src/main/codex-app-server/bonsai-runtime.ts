@@ -4,6 +4,7 @@ import {
   BONSAI_2_27B_DISPLAY_NAME,
   BONSAI_2_27B_MODEL_ID,
   LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  codexProviderContextWindow,
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
@@ -85,8 +86,14 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
 }> {
   // Alias changes may reuse a path-based catalog only after live metadata
   // identifies both names as the same loaded model.
-  const catalog = await discoverModelCatalog(provider.baseUrl,
+  const discovered = await discoverModelCatalog(provider.baseUrl,
     await readBonsaiCatalog(provider, { verifyAliasWithServer: true }), apiKey, provider.models![0]);
+  const contextWindow = Math.min(65536, codexProviderContextWindow(provider,
+    provider.modelMetadata?.find((model) => model.id === provider.models![0]) ?? { id: provider.models![0] }));
+  const compactLimit = Math.floor(contextWindow * 0.75);
+  const catalog = { ...discovered, models: discovered.models.map((model) => ({ ...model,
+    context_window: contextWindow, max_context_window: contextWindow, auto_compact_token_limit: compactLimit,
+  })) };
   const root = resolveActiveProfilePath("runtime");
   await mkdir(root, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(path.join(root, "bonsai-"));
@@ -123,8 +130,8 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
         `model_providers.${provider.id}.supports_websockets=false`,
         `model_providers.${provider.id}.stream_idle_timeout_ms=${LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS}`,
         `model_catalog_json=${JSON.stringify(catalogPath)}`,
-        "model_context_window=65536",
-        "model_auto_compact_token_limit=49152",
+        `model_context_window=${contextWindow}`,
+        `model_auto_compact_token_limit=${compactLimit}`,
         'model_reasoning_effort="none"',
         'model_reasoning_summary="none"',
         'web_search="disabled"',

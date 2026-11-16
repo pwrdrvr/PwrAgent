@@ -578,11 +578,12 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           );
         if (!provider) return args;
         await cleanup;
-        resources ??= provider.toolDiscovery === "portable"
-          ? preparePortableProviderRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)])
-          : provider.compatibility === "bonsai"
-          ? prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)])
-          : prepareProviderModelRuntime(provider);
+        resources ??= ports.codexModelProviderCatalog.resolveRuntimeProvider(provider).then((configured) =>
+          configured.toolDiscovery === "portable"
+            ? preparePortableProviderRuntime(configured, env?.[codexModelProviderApiKeyEnv(configured.id)])
+            : configured.compatibility === "bonsai"
+            ? prepareBonsaiRuntime(configured, env?.[codexModelProviderApiKeyEnv(configured.id)])
+            : prepareProviderModelRuntime(configured));
         try {
           const prepared = await resources;
           const nativeMcpNames = provider.compatibility === "bonsai" && provider.toolDiscovery !== "portable"

@@ -95,11 +95,14 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
 type Method = keyof CodexAppServerClient;
 type Callback = (...args: unknown[]) => unknown;
 type Subscription = { method: Method; args: unknown[]; stops: Map<CodexAppServerClient, () => void> };
-const READ_ONLY = new Set<Method>([
+// Persisted reads and direct history edits do not need an inference catalog.
+// A live provider runtime still owns these operations once it exists.
+const PERSISTED_OPERATIONS = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
   "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
   "readThreadToolInvocation", "readTurnRoot",
+  "archiveThread", "renameThread", "restoreThread", "deleteThread", "updateThreadMetadata",
 ]);
 
 /** Independent clients own their processes, caches, turn state, recovery and RPC IDs. */
@@ -161,13 +164,16 @@ export function createProviderRuntimeClient(
     }] : subscription.args;
     subscription.stops.set(client, invoke(client, subscription.method, args) as () => void);
   };
-  const runtime = (providerId: string | undefined): CodexAppServerClient => {
+  const runtime = (providerId: string | undefined, selectedModel?: string): CodexAppServerClient => {
     // Settings changes defer shutdown while turns are active; their owner stays live.
     const existing = providerId ? runtimes.get(providerId) : undefined;
     if (existing) return existing;
     const provider = options.resolveProviders().find((entry) => entry.id === providerId);
-    if (!provider || (provider.compatibility !== "bonsai" && !provider.modelMetadata?.length && provider.toolDiscovery !== "portable")) return primary;
-    const client = options.create(provider);
+    if (!provider) return primary;
+    const selected = selectedModel && !provider.models?.includes(selectedModel)
+      && !provider.modelMetadata?.some((model) => model.id === selectedModel)
+      ? { ...provider, models: [...(provider.models ?? []), selectedModel] } : provider;
+    const client = options.create(selected);
     runtimes.set(provider.id, client);
     attach(client, provider.id);
     for (const subscription of subscriptions) subscribe(subscription, client, provider.id);
@@ -199,12 +205,12 @@ export function createProviderRuntimeClient(
     const provider = method === "forkThread" ? requested ?? owner : owner ?? requested;
     const settings = options.resolveProviders().find(entry => entry.id === provider);
     const selectedModel = typeof params?.model === "string" ? parseCodexProviderModelId(params.model).model : undefined;
-    if (settings?.toolDiscovery === "portable" && selectedModel && !READ_ONLY.has(method)
+    if (settings?.toolDiscovery === "portable" && selectedModel && !PERSISTED_OPERATIONS.has(method)
       && !settings.modelMetadata?.some(model => model.id === selectedModel && model.supportsPortableDiscovery === true)) {
       throw new Error(`Test portable discovery for ${selectedModel} in Settings → Models and save before using it.`);
     }
-    // Persisted history remains readable when the local inference server is offline.
-    const client = provider && READ_ONLY.has(method) && !runtimes.has(provider) ? primary : runtime(provider);
+    // Persisted history remains manageable when the inference server is offline.
+    const client = provider && PERSISTED_OPERATIONS.has(method) && !runtimes.has(provider) ? primary : runtime(provider, selectedModel);
     const result = await invoke(client, method, args);
     observe(result, client === primary ? undefined : provider);
     return result;

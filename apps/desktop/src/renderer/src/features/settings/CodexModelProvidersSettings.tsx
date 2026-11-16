@@ -43,6 +43,7 @@ type ProviderDraft = {
   listed: string[];
   discoverModels: boolean;
   local: boolean;
+  contextWindowCap: string;
   rates: Record<string, RateDraft>;
   /** The Codex config provider this draft was prefilled from. */
   imported?: CodexModelProviderImportCandidate;
@@ -647,6 +648,21 @@ function ProviderEditor(props: {
           />
         }
       />
+      <SettingsField
+        label="Context cap (tokens)"
+        sub="Optional budget for this provider. Local servers default to 65,536 tokens; remote models use their advertised limits (272,000 if unknown). A cap never increases a discovered limit. Automatic compaction starts at 75% of this provider's smallest model budget."
+        control={
+          <input
+            aria-label="Context cap (tokens)"
+            className="settings-input"
+            disabled={props.disabled}
+            inputMode="numeric"
+            placeholder="Automatic"
+            value={draft.contextWindowCap}
+            onChange={(event) => props.onChange({ contextWindowCap: event.currentTarget.value })}
+          />
+        }
+      />
       {/* Sticky to the pane's bottom edge while the card is on screen, so
           Save and Cancel stay in reach from the top of a long form. */}
       <div className="codex-provider-editor__footer">
@@ -787,7 +803,8 @@ function ProviderModels(props: {
             <tbody>
               {shown.map((row) => {
                 const rate = draft.rates[row.id] ?? EMPTY_RATE;
-                const metadata = draft.modelMetadata?.find((model) => model.id === row.id);
+                const savedMetadata = draft.modelMetadata?.find((model) => model.id === row.id);
+                const metadata = { ...savedMetadata, ...row };
                 const setRate = (patch: Partial<RateDraft>) =>
                   props.onChange({ rates: { ...draft.rates, [row.id]: { ...rate, ...patch } } });
                 return (
@@ -799,12 +816,12 @@ function ProviderModels(props: {
                           {row.added ? <span className="codex-provider-models__tag">Added</span> : null}
                         </span>
                         {row.label ? <code>{row.id}</code> : null}
-                        {metadata ? <span className="codex-provider-models__muted">
-                          {metadata.contextWindow ? `${metadata.contextWindow.toLocaleString("en-US")} token context` : "Context unknown"}
+                        <span className="codex-provider-models__muted">
+                          {metadata.contextWindow ? `${metadata.contextWindow.toLocaleString("en-US")} tokens advertised` : "Context unknown"}
                           {" · "}{draft.toolDiscovery === "portable"
                             ? metadata.supportsPortableDiscovery ? "Portable discovery verified" : "Portable discovery not verified"
                             : draft.compatibility === "bonsai" || metadata.supportsSearchTool === true ? "Tool discovery enabled" : "Tool discovery not enabled"}
-                        </span> : null}
+                        </span>
                       </span>
                     </th>
                     <td>
@@ -1098,6 +1115,7 @@ function emptyDraft(): ProviderDraft {
     listed: [],
     discoverModels: true,
     local: false,
+    contextWindowCap: "",
     rates: {},
   };
 }
@@ -1122,6 +1140,7 @@ function draftFromProvider(provider: DesktopCodexModelProvider): ProviderDraft {
     listed: [...(provider.models ?? [])],
     discoverModels: provider.discoverModels !== false,
     local: provider.local === true,
+    contextWindowCap: provider.contextWindowCap?.toString() ?? "",
     rates,
     compatibility: provider.compatibility,
     toolDiscovery: provider.toolDiscovery,
@@ -1155,6 +1174,11 @@ function providerFromDraft(draft: ProviderDraft, discovered: readonly CodexProvi
     else if (discovered.length === 1) models.push(discovered[0].id);
   }
   const rates: CodexModelProviderRate[] = [];
+  const contextWindowCap = draft.contextWindowCap.trim() ? Number(draft.contextWindowCap) : undefined;
+  if (contextWindowCap !== undefined && (!/^\d+$/u.test(draft.contextWindowCap.trim())
+    || !Number.isInteger(contextWindowCap) || contextWindowCap < 1024 || contextWindowCap > 2_000_000)) {
+    throw new Error("Context cap must be a whole number from 1,024 to 2,000,000 tokens.");
+  }
   if (!draft.local) {
     // A rate is kept for any model, listed by the endpoint or added here.
     for (const [model, rate] of Object.entries(draft.rates)) {
@@ -1182,6 +1206,7 @@ function providerFromDraft(draft: ProviderDraft, discovered: readonly CodexProvi
     ...(draft.toolDiscovery ? { toolDiscovery: draft.toolDiscovery } : {}),
     ...(draft.catalogPath ? { catalogPath: draft.catalogPath } : {}),
     ...(draft.modelMetadata?.length ? { modelMetadata: draft.modelMetadata } : {}),
+    ...(contextWindowCap === undefined ? {} : { contextWindowCap }),
   };
 }
 
@@ -1222,6 +1247,7 @@ function savedProviderCatalog(
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
         ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
         ...(model.supportsImage === undefined ? {} : { supportsImage: model.supportsImage }),
+        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
       }];
     }),
   };

@@ -108,8 +108,8 @@ it("preserves header authentication and account selection through the real Respo
 });
 
 it("round-trips portable selection and its verification independently of native support", () => {
-  fc.assert(fc.property(fc.boolean(), fc.boolean(), (native, portable) => {
-    const configured = { ...provider, modelMetadata: [{ id: "fixture", supportsSearchTool: native, supportsPortableDiscovery: portable }] };
+  fc.assert(fc.property(fc.boolean(), fc.boolean(), fc.integer({ min: 1024, max: 2_000_000 }), (native, portable, contextWindowCap) => {
+    const configured = { ...provider, contextWindowCap, modelMetadata: [{ id: "fixture", supportsSearchTool: native, supportsPortableDiscovery: portable }] };
     const text = '# Keep this comment\n[models.codex]\nprofile = "work"\n';
     const written = applyTomlEdits(text, desktopSettingsPatchToEdits({ models: { codex: { providers: [configured] } } }, parseTomlTables(text, "test")));
     expect(parseDesktopSettingsToml(written, "test").models?.codex?.providers).toEqual([configured]);
@@ -119,18 +119,25 @@ it("round-trips portable selection and its verification independently of native 
   }));
 });
 
-it("sets only the private adapter catalog's search capability and preserves native metadata", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), async native => {
-    const configured = { ...provider, modelMetadata: [{ id: "fixture", supportsSearchTool: native }] };
+it("preserves portable discovery and native metadata while applying provider context budgets", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1024, max: 2_000_000 }), fc.integer({ min: 1024, max: 2_000_000 }), async (native, contextWindow, contextWindowCap) => {
+    const configured = { ...provider, contextWindowCap, modelMetadata: [{ id: "fixture", contextWindow, supportsSearchTool: native }] };
+    const budget = Math.min(contextWindow, contextWindowCap);
     const runtime = await prepareProviderModelRuntime(configured);
     const file = JSON.parse(runtime.overrides.find(value => value.startsWith("model_catalog_json="))!.slice("model_catalog_json=".length)) as string;
     try {
-      expect(JSON.parse(await readFile(file, "utf8")).models[0]).toMatchObject({ tool_mode: "code_mode_only", supports_search_tool: true });
+      expect(JSON.parse(await readFile(file, "utf8")).models[0]).toMatchObject({
+        tool_mode: "code_mode_only", supports_search_tool: true,
+        context_window: budget, max_context_window: budget, auto_compact_token_limit: Math.floor(budget * 0.75),
+      });
+      expect(runtime.overrides).toContain(`model_context_window=${budget}`);
+      expect(runtime.overrides).toContain(`model_auto_compact_token_limit=${Math.floor(budget * 0.75)}`);
       expect(configured.modelMetadata[0].supportsSearchTool).toBe(native);
+      expect(configured.modelMetadata[0].contextWindow).toBe(contextWindow);
       expect(runtime.overrides.some(value => /mcp_servers|apps=false|plugins=false/.test(value))).toBe(false);
     } finally { await runtime.close(); }
     await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-  }), { numRuns: 10 });
+  }), { numRuns: 10, examples: [[false, 1048576, 32768], [true, 32768, 1048576]] });
 });
 
 it("retains whole-table request policy while supplying required Code Mode features on every admission path", () => {

@@ -6,6 +6,7 @@ import type {
   BackendSummary,
   CodexModelProviderCatalogState,
   CodexModelProviderImportScan,
+  CodexModelProviderSettings,
   DesktopCodexModelProvider,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -27,7 +28,7 @@ function renderSettings(
   scan?: CodexModelProviderImportScan,
   backends?: BackendSummary[],
 ) {
-  const onSave = vi.fn(async () => true);
+  const onSave = vi.fn(async (_providers: CodexModelProviderSettings[]) => true);
   const onRefresh = vi.fn(async () => undefined);
   const onRefreshCatalogs = vi.fn(async () => undefined);
   const setCodexModelProviderApiKey = vi.fn(async ({ providerId }: { providerId: string }) => ({ providerId, hasApiKey: true }));
@@ -153,6 +154,36 @@ const importScan: CodexModelProviderImportScan = {
 };
 
 describe("CodexModelProvidersSettings", () => {
+  it("edits a provider context cap while retaining advertised capabilities and neighboring providers", async () => {
+    const configured = { ...refuseless, contextWindowCap: 65536,
+      modelMetadata: [{ id: "glm-5.3-abliterated", contextWindow: 1048576, supportsSearchTool: true }] };
+    const { onSave } = renderSettings([configured, mathos]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    expect(screen.getByLabelText("Context cap (tokens)")).toHaveValue("65536");
+    expect(screen.getByText(/1,048,576 tokens advertised/u)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Context cap (tokens)"), { target: { value: "32768" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ contextWindowCap: 32768, modelMetadata: configured.modelMetadata }),
+      expect.not.objectContaining({ contextWindowCap: expect.anything() }),
+    ]);
+  });
+
+  it.each(["", "65536.5", "0", "2000001"])("handles a cleared or invalid context cap %j without replacing discovery metadata", async (value) => {
+    const { onSave } = renderSettings([{ ...refuseless, contextWindowCap: 65536 }]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Context cap (tokens)"), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    if (value === "") {
+      await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+      expect(onSave.mock.calls[0][0][0]).not.toHaveProperty("contextWindowCap");
+    } else {
+      expect(onSave).not.toHaveBeenCalled();
+      expect(await screen.findByText("Context cap must be a whole number from 1,024 to 2,000,000 tokens.")).toBeInTheDocument();
+    }
+  });
+
   it("adds a provider with a key, models and rates, storing the key first", async () => {
     const calls: string[] = [];
     const { onSave, setCodexModelProviderApiKey } = renderSettings();

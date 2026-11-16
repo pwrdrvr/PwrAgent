@@ -6,8 +6,8 @@
  * Codex App Server as a `model_providers.<id>` table and pins a thread to it
  * with `thread/start.modelProvider`. Codex then reports `Thread.modelProvider`
  * on every read.
- * Providers with execution metadata and Bonsai compatibility use independent
- * clients/processes so their model catalogs stay off the default provider.
+ * Configured providers use independent clients/processes so their model
+ * catalogs and context budgets stay off the default provider.
  *
  * Every PwrAgent surface names one of these models with a qualified id,
  * `@<provider>/<model>`. Codex model ids never start with `@`, so the prefix
@@ -65,6 +65,8 @@ export type CodexModelProviderSettings = {
   modelMetadata?: CodexProviderCatalogModel[];
   /** Explicit ordinary-function transport for Codex-owned nested discovery. */
   toolDiscovery?: "portable";
+  /** Optional provider-wide execution budget; never increases a discovered serving limit. */
+  contextWindowCap?: number;
 };
 
 /** Settings snapshot form: whether a key is stored, never the key. */
@@ -86,7 +88,7 @@ export type CodexProviderCatalogModel = {
   defaultReasoningEffort?: string;
   /** From `input_modalities`; absent when the endpoint did not say. */
   supportsImage?: boolean;
-  /** Declared by the endpoint; absent when unknown. */
+  /** Active serving limit declared by the endpoint; absent when unknown. Never training capacity. */
   contextWindow?: number;
   /** Enabled only by a complete discovery test or explicit configuration. */
   supportsSearchTool?: boolean;
@@ -378,6 +380,9 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       || !entry.catalogPath.trim().endsWith(".json") || entry.catalogPath.length > 4096 || /[\0\r\n]/u.test(entry.catalogPath))) {
       throw new Error(`${label}.catalogPath needs Bonsai compatibility and a valid catalog path.`);
     }
+    if (entry.contextWindowCap !== undefined && !isValidProviderContextWindow(entry.contextWindowCap)) {
+      throw new Error(`${label}.contextWindowCap must be a whole number from 1024 to 2000000 tokens.`);
+    }
     return {
       id,
       name,
@@ -390,6 +395,7 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       ...(typeof entry.catalogPath === "string" ? { catalogPath: entry.catalogPath.trim() } : {}),
       ...(entry.modelMetadata === undefined ? {} : { modelMetadata: validateProviderModelMetadata(entry.modelMetadata, label) }),
       ...(entry.toolDiscovery === "portable" ? { toolDiscovery: "portable" as const } : {}),
+      ...(entry.contextWindowCap === undefined ? {} : { contextWindowCap: entry.contextWindowCap as number }),
     };
   });
 }
@@ -719,13 +725,31 @@ export function parseCodexProviderCatalogModel(entry: unknown): CodexProviderCat
     ? item.default_reasoning_effort.trim()
     : undefined;
   const modalities = Array.isArray(item.input_modalities) ? item.input_modalities : undefined;
-  const contextWindow = item.context_window ?? item.context_length;
+  const meta = item.meta && typeof item.meta === "object" && !Array.isArray(item.meta)
+    ? item.meta as Record<string, unknown> : undefined;
+  // llama-server's active slot context supersedes generic model capacity.
+  // n_ctx_train describes training, not the configured serving limit.
+  const contextWindow = [meta?.n_ctx, item.context_window, item.context_length].find(isValidProviderContextWindow);
   return {
     id,
     ...(label && label !== id ? { label } : {}),
     ...(efforts.length ? { reasoningEfforts: efforts } : {}),
     ...(defaultEffort && efforts.includes(defaultEffort) ? { defaultReasoningEffort: defaultEffort } : {}),
     ...(modalities ? { supportsImage: modalities.includes("image") } : {}),
-    ...(typeof contextWindow === "number" && Number.isInteger(contextWindow) && contextWindow >= 1024 && contextWindow <= 2_000_000 ? { contextWindow } : {}),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
   };
+}
+
+function isValidProviderContextWindow(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 2_000_000;
+}
+
+/** Local inference defaults to a bounded working set, independently of training capacity. */
+export const LOCAL_CODEX_PROVIDER_CONTEXT_WINDOW = 65_536;
+
+export function codexProviderContextWindow(provider: CodexModelProviderSettings, model: CodexProviderCatalogModel): number {
+  const local = provider.local || provider.compatibility === "bonsai" || isLoopbackCodexBaseUrl(provider.baseUrl);
+  const cap = provider.contextWindowCap ?? (local ? LOCAL_CODEX_PROVIDER_CONTEXT_WINDOW : undefined);
+  // Remote endpoints without discovery retain the former unknown-model fallback.
+  return Math.min(model.contextWindow ?? cap ?? 272_000, cap ?? Infinity);
 }

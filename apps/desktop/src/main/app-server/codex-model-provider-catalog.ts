@@ -31,7 +31,10 @@ function providerModelOptions(
 ): BackendModelOption[] {
   const byId = new Map(discovered.map((model) => [model.id, model]));
   for (const metadata of provider.modelMetadata ?? []) {
-    byId.set(metadata.id, { ...byId.get(metadata.id), ...metadata });
+    const current = byId.get(metadata.id);
+    byId.set(metadata.id, { ...current, ...metadata,
+      ...(current?.contextWindow === undefined ? {} : { contextWindow: current.contextWindow }),
+    });
   }
   const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
   return ids.map((model): BackendModelOption => {
@@ -43,6 +46,7 @@ function providerModelOptions(
         ? BONSAI_2_27B_DISPLAY_NAME : model),
       providerId: provider.id,
       providerLabel: provider.name,
+      ...(found?.contextWindow === undefined ? {} : { contextWindow: found.contextWindow }),
       // Codex sends any effort as `reasoning.effort`, for any model, so a
       // provider model offers the levels its endpoint declares. A model
       // the endpoint names none for (or only listed in Settings) takes
@@ -110,6 +114,22 @@ export class CodexModelProviderCatalog {
   /** Forget one provider's last read, so the next list reads it again. */
   invalidateProvider(providerId: string): void {
     this.discovery.delete(providerId);
+  }
+
+  /** Runtime discovery uses the same bounded, authenticated read as the picker. */
+  async resolveRuntimeProvider(provider: CodexModelProviderSettings): Promise<CodexModelProviderSettings> {
+    const keys = provider.discoverModels === false ? {} : await this.options.resolveKeys().catch((): Record<string, string> => ({}));
+    const discovered = provider.discoverModels === false ? []
+      : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
+    const metadata = new Map((provider.modelMetadata ?? []).map((model) => [model.id, { ...model }]));
+    for (const model of discovered) {
+      // Fresh serving limits supersede saved observations. Discovery cannot
+      // assert verified search support, so that capability remains separate.
+      metadata.set(model.id, { ...model, ...metadata.get(model.id),
+        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+      });
+    }
+    return { ...provider, modelMetadata: [...metadata.values()] };
   }
 
   async listModelOptions(): Promise<BackendModelOption[]> {

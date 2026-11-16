@@ -58,6 +58,31 @@ function fixture() {
 }
 
 describe("provider-specific Codex runtimes", () => {
+  it("keeps generated starts and subsequent turns on their owning provider, regardless of interleaving", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("openai", "flint", "mathos"), { minLength: 1, maxLength: 25, size: "max" }), async (sequence) => {
+      const clients = { openai: fixture(), flint: fixture(), mathos: fixture() };
+      for (const [id, value] of Object.entries(clients)) value.raw.startThread.mockImplementation(async () => ({ threadId: `${id}-thread` }));
+      const providers = [
+        { id: "flint", name: "Flint", baseUrl: "http://localhost:8080/v1", models: ["model"] },
+        { id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1", models: ["model"] },
+      ];
+      const client = createProviderRuntimeClient(clients.openai.client, {
+        resolveProviders: () => providers,
+        create: (provider) => clients[provider.id as "flint" | "mathos"].client,
+      });
+      for (const id of sequence) {
+        const result = await client.startThread({ model: id === "openai" ? "gpt-5.5" : `@${id}/model` });
+        expect(result.threadId).toBe(`${id}-thread`);
+        await client.startTurn({ threadId: result.threadId, input: [] });
+      }
+      for (const [id, value] of Object.entries(clients)) {
+        const count = sequence.filter((entry) => entry === id).length;
+        expect(value.raw.startThread).toHaveBeenCalledTimes(count);
+        expect(value.raw.startTurn).toHaveBeenCalledTimes(count);
+      }
+      await client.close();
+    }), { numRuns: 30 });
+  });
   function setup() {
     const primary = fixture();
     const local = fixture();
@@ -102,6 +127,16 @@ describe("provider-specific Codex runtimes", () => {
     const { primary, local, create, client, providers } = setup();
     const configured = { id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1",
       modelMetadata: [{ id: "kimi", contextWindow: 262144, supportsSearchTool: true }] };
+    providers.push(configured);
+    await client.startThread({ model: "@mathos/kimi" });
+    expect(create).toHaveBeenCalledWith(configured);
+    expect(local.raw.startThread).toHaveBeenCalledWith({ model: "@mathos/kimi" });
+    expect(primary.raw.startThread).not.toHaveBeenCalled();
+  });
+
+  it("isolates configured providers even before execution metadata has been saved", async () => {
+    const { primary, local, create, client, providers } = setup();
+    const configured = { id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1", models: ["kimi"] };
     providers.push(configured);
     await client.startThread({ model: "@mathos/kimi" });
     expect(create).toHaveBeenCalledWith(configured);

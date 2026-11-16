@@ -3699,6 +3699,7 @@ function readCodexModelProviders(
       ...(entry.compatibility === undefined ? {} : { compatibility: entry.compatibility }),
       ...(entry.tool_discovery === undefined ? {} : { toolDiscovery: entry.tool_discovery }),
       ...(entry.catalog_path === undefined ? {} : { catalogPath: entry.catalog_path }),
+      ...(entry.context_window_cap === undefined ? {} : { contextWindowCap: entry.context_window_cap }),
       ...(modelMetadata.length ? { modelMetadata: modelMetadata.map((row) => ({
         id: row.model,
         ...(row.label === undefined ? {} : { label: row.label }),
@@ -3727,6 +3728,7 @@ function codexModelProviderTableEdits(
     ...(provider.compatibility ? { compatibility: provider.compatibility } : {}),
     ...(provider.toolDiscovery ? { tool_discovery: provider.toolDiscovery } : {}),
     ...(provider.catalogPath ? { catalog_path: provider.catalogPath } : {}),
+    ...(provider.contextWindowCap === undefined ? {} : { context_window_cap: provider.contextWindowCap }),
   }));
   const rateRows = providers.flatMap((provider) => (provider.rates ?? []).map((rate) => ({
     provider: provider.id,
