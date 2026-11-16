@@ -20,6 +20,37 @@ Read this before changing desktop configuration, profiles, runtime storage, deve
 - Multiple instances can safely share one profile database through SQLite WAL mode.
 - Do not add a lock file for this database.
 
+### Provider context configuration
+
+Codex model providers use independent App Server processes and private runtime
+catalogs. Runtime preparation uses the same bounded, authenticated `/models`
+discovery as the picker; it does not require a saved connection test. Fresh
+serving limits supersede saved context observations. Saved verified tool
+capabilities remain separate from discovery.
+
+`meta.n_ctx` is llama-server's active slot limit and takes precedence over
+`context_window` and `context_length`. `meta.n_ctx_train` is training capacity
+and never supplies an execution limit. Invalid values are ignored individually;
+accepted limits are integer token counts from 1,024 through 2,000,000.
+
+The optional provider `contextWindowCap` is stored as `context_window_cap` on
+its existing `models.codex.providers` row. This is additive; no legacy shape is
+replaced. A cap never raises a discovered limit. Loopback, local, and Bonsai
+providers default to 65,536 tokens. Remote providers use discovered limits,
+falling back to the former 272,000-token unknown-model budget. Bonsai's adapter
+still has a 65,536-token ceiling. Execution budgets never overwrite the saved
+upstream metadata.
+
+Each private catalog sets the effective context as both `context_window` and
+`max_context_window`, with a 75% auto-compaction threshold. Process overrides
+take precedence over inherited Codex context settings: the context override is
+the largest model budget, clamped by Codex to each model's catalog maximum;
+the compaction override is 75% of the smallest budget. This conservative
+provider-wide threshold also covers model switches within one process. A
+65,536-token local budget therefore compacts at 49,152 tokens. No generated
+context setting is installed on the primary process or another provider, and
+the local stream idle timeout remains 15 minutes.
+
 ### Dev-only env vars
 
 These variables are for development only.

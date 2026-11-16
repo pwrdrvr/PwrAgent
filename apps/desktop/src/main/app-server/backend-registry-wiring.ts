@@ -575,9 +575,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           );
         if (!provider) return args;
         await cleanup;
-        resources ??= provider.compatibility === "bonsai"
-          ? prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)])
-          : prepareProviderModelRuntime(provider);
+        resources ??= ports.codexModelProviderCatalog.resolveRuntimeProvider(provider).then((configured) =>
+          configured.compatibility === "bonsai"
+            ? prepareBonsaiRuntime(configured, env?.[codexModelProviderApiKeyEnv(configured.id)])
+            : prepareProviderModelRuntime(configured));
         try {
           const prepared = await resources;
           const nativeMcpNames = provider.compatibility === "bonsai"

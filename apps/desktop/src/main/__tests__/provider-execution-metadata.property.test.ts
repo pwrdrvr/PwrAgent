@@ -39,7 +39,10 @@ it("materializes metadata per model in a private disposable catalog without disa
       ]);
       expect(catalog.models[0].context_window).toBe(272000);
       expect(catalog.models[0].truncation_policy).toEqual({ mode: "bytes", limit: 10000 });
-      expect(runtime.overrides).toEqual(['model_provider="mathos"', 'model="unknown"', catalogArg]);
+      expect(runtime.overrides).toEqual(['model_provider="mathos"', 'model="unknown"', catalogArg,
+        `model_context_window=${Math.max(272000, contextWindow)}`,
+        `model_auto_compact_token_limit=${Math.floor(Math.min(272000, contextWindow) * 0.75)}`,
+      ]);
       if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
     } finally { await runtime.close(); }
     await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
