@@ -112,14 +112,11 @@ describe("useNavigationHistory", () => {
     expect(restore).toHaveBeenLastCalledWith(SEARCH);
     settle();
 
-    // Opening a different result inserts it before the existing result.
+    // Opening a different result appends it after the existing result.
     navigate(thread("codex:c"));
-    expect(hook.result.current.canGoForward).toBe(true);
-    act(() => hook.result.current.goForward());
-    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
-    settle();
+    expect(hook.result.current.canGoForward).toBe(false);
     act(() => hook.result.current.goBack());
-    expect(restore).toHaveBeenLastCalledWith(thread("codex:c"));
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
     settle();
 
     act(() => hook.result.current.goBack());
@@ -137,23 +134,26 @@ describe("useNavigationHistory", () => {
     expect(hook.result.current.canGoBack).toBe(false);
   });
 
-  it("inserts another thread between the Back destination and the unsubmitted composer", () => {
+  it("appends a newly opened thread after the composer when opening it from Back", () => {
     const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
     navigate(launchpad("directory:/repo"));
     act(() => hook.result.current.goBack());
     settle();
     navigate(thread("codex:b"));
-    expect(hook.result.current.canGoForward).toBe(true);
+    expect(hook.result.current.canGoForward).toBe(false);
 
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo"));
+    settle();
     act(() => hook.result.current.goBack());
     expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
     settle();
     expect(hook.result.current.canGoBack).toBe(false);
     act(() => hook.result.current.goForward());
-    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
+    expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo"));
     settle();
     act(() => hook.result.current.goForward());
-    expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo"));
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
   });
 
   it("does not duplicate a composer reopened from its Forward entry", () => {
@@ -168,7 +168,7 @@ describe("useNavigationHistory", () => {
     expect(hook.result.current.canGoBack).toBe(false);
   });
 
-  it("consumes a clicked nearest Forward thread without duplicating it", () => {
+  it("appends a clicked Forward thread after every existing visit", () => {
     const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
     navigate(thread("codex:b"));
     navigate(thread("codex:c"));
@@ -177,10 +177,46 @@ describe("useNavigationHistory", () => {
     act(() => hook.result.current.goBack());
     settle();
     navigate(thread("codex:b"));
-    act(() => hook.result.current.goForward());
+    expect(hook.result.current.canGoForward).toBe(false);
+    act(() => hook.result.current.goBack());
     expect(restore).toHaveBeenLastCalledWith(thread("codex:c"));
     settle();
-    expect(hook.result.current.canGoForward).toBe(false);
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
+    settle();
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    settle();
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
+  it("opens at the newest end after going Back 20 places and opening 400 threads", () => {
+    const h = renderHistory(thread("codex:initial"));
+    for (let index = 0; index < 20; index += 1) h.navigate(thread(`codex:old-${index}`));
+    for (let index = 0; index < 20; index += 1) {
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+    }
+    for (let index = 0; index < 400; index += 1) {
+      h.navigate(thread(`codex:new-${index}`));
+      expect(h.hook.result.current.canGoForward).toBe(false);
+    }
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:new-398"));
+  });
+
+  it("does not duplicate the newest thread when it is opened from an older position", () => {
+    const h = renderHistory(thread("codex:a"));
+    h.navigate(thread("codex:b"));
+    h.navigate(thread("codex:c"));
+    act(() => h.hook.result.current.goBack());
+    h.settle();
+    act(() => h.hook.result.current.goBack());
+    h.settle();
+    h.navigate(thread("codex:c"));
+    expect(h.hook.result.current.canGoForward).toBe(false);
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:b"));
   });
 
   it("collapses repeated thread visits exposed when a composer is reopened", () => {
@@ -456,22 +492,46 @@ describe("useNavigationHistory", () => {
       expect(h.restore).toHaveBeenLastCalledWith(STARTING);
     });
 
-    it("keeps the starting thread ahead of an inserted thread without restoring its submitted composer", () => {
-      const h = submitFromLaunchpad();
+    it("replaces a composer submitted from an older position without moving it past newer visits", () => {
+      const h = renderHistory(thread("codex:a"));
+      h.update({ startingThreads: new Map() });
+      h.navigate(LAUNCHPAD);
+      h.navigate(thread("codex:b"));
       act(() => h.hook.result.current.goBack());
       h.settle();
-      h.navigate(thread("codex:b"));
+      h.update({ current: STARTING, startingThreads: new Map([["op-1", undefined]]) });
+      h.update({ current: thread("codex:new"), startingThreads: new Map([["op-1", "codex:new"]]) });
+      h.update({ startingThreads: new Map() });
       act(() => h.hook.result.current.goBack());
       expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
       h.settle();
       expect(h.hook.result.current.canGoBack).toBe(false);
       act(() => h.hook.result.current.goForward());
-      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:b"));
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:new"));
       h.settle();
+      act(() => h.hook.result.current.goForward());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:b"));
+    });
+
+    it("keeps the submitted thread before a newly opened thread without restoring its composer", () => {
+      const h = submitFromLaunchpad();
+      act(() => h.hook.result.current.goBack());
+      h.settle();
+      h.navigate(thread("codex:b"));
       h.update({ startingThreads: new Map([["op-1", "codex:new"]]) });
       h.update({ startingThreads: new Map() });
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:new"));
+      h.settle();
+      act(() => h.hook.result.current.goBack());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:a"));
+      h.settle();
+      expect(h.hook.result.current.canGoBack).toBe(false);
       act(() => h.hook.result.current.goForward());
       expect(h.restore).toHaveBeenLastCalledWith(thread("codex:new"));
+      h.settle();
+      act(() => h.hook.result.current.goForward());
+      expect(h.restore).toHaveBeenLastCalledWith(thread("codex:b"));
     });
 
     it("goes Forward to the created thread after leaving while it started", () => {

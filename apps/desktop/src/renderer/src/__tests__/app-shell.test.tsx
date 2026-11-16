@@ -7943,25 +7943,22 @@ describe("App", () => {
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", draft);
 
-    // Insert the selected thread before the composer without moving the
-    // composer behind the current position in history.
+    // Opening another thread appends it after the composer, even when the
+    // operator opened it from an older position in history.
     await clickButton("Back");
     await screen.findByRole("heading", { level: 2, name: "First project thread" });
     await clickButton("Second project thread");
     await screen.findByRole("heading", { level: 2, name: "Second project thread" });
-    await waitFor(() => expect(screen.getByTestId("history-nav-forward")).toHaveAttribute(
-      "aria-description", "New thread in PwrAgent",
-    ));
-    await clickButton("Forward");
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-forward")).toBeDisabled();
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description", "New thread in PwrAgent",
+      );
+    });
+    await clickButton("Back");
     await screen.findByRole("heading", { level: 2, name: "New thread" });
     expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
       .toHaveAttribute("data-value", draft);
-    await clickButton("Back");
-    await screen.findByRole("heading", { level: 2, name: "Second project thread" });
-    await clickButton("Back");
-    await screen.findByRole("heading", { level: 2, name: "First project thread" });
-    await clickButton("Open new thread launchpad for PwrAgent");
-    await screen.findByRole("heading", { level: 2, name: "New thread" });
 
     await clickButton(/Second project thread/i);
     await screen.findByRole("heading", {
@@ -7983,7 +7980,7 @@ describe("App", () => {
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", draft);
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
-    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(2);
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
     await waitFor(() => {
       expect(screen.getByTestId("history-nav-back")).toHaveAttribute(

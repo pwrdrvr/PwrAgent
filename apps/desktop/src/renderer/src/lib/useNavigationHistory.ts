@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { useRecoverableState } from "./RendererRecoveryState";
 
 /**
- * One entry in the renderer's browser-style navigation history. Only the
+ * One entry in the renderer's navigation history. Only the
  * "content" surfaces are recorded: an open thread (by identity key), a
  * project launchpad (by directory key, plus the peer's instance id when the
  * launchpad starts its thread on another machine), a thread that is still
@@ -157,9 +157,9 @@ const EMPTY_STACKS: HistoryStacks = { back: [], cursor: undefined, forward: [] }
  * state. The hook OBSERVES `current` rather than requiring every
  * navigation call-site to push explicitly — any change of the tracked
  * location (sidebar click, search result, menu deep-link, thread
- * creation) inserts the destination after the cursor. Existing Forward
- * destinations keep their order, so a copy/paste detour cannot move an
- * unsubmitted composer behind the operator or strand it.
+ * creation) appends the destination at the newest end of the complete
+ * history, even after Back. Back and Forward only move through existing
+ * visits; opening another destination returns the cursor to the newest end.
  *
  * `restore` is invoked from goBack/goForward to set the shell state that
  * derives `current`; the hook moves its cursor first, so the resulting
@@ -281,28 +281,27 @@ export function useNavigationHistory(args: {
       // cursor before their restore commits, so the page being left can
       // still re-derive here: a commit whose effect was pending when Back
       // was clicked, or a restore that settles asynchronously. Recording it
-      // would insert a spurious visit to the page being left.
+      // would append a spurious visit to the page being left.
       return;
     }
-    const baseBack = current.view === "launchpad"
-      ? collapseRepeats(prev.back.filter((location) => !sameLocation(location, current)))
-      : prev.back;
-    // Insert at the cursor without rewriting the order ahead. Launchpads
-    // remain singletons when explicitly reopened, and selecting the nearest
-    // Forward destination must not leave an immediate duplicate of itself.
-    let forward = current.view === "launchpad"
-      ? collapseRepeats(prev.forward.filter((location) => !sameLocation(location, current)))
-      : prev.forward;
-    while (forward.length && sameLocation(forward[0], current)) {
-      forward = forward.slice(1);
+    // Opening a destination appends after every existing visit, including
+    // those ahead of the cursor. A reopened composer moves its one entry
+    // to the newest end. Never duplicate the destination already at that end.
+    const history = [
+      ...prev.back,
+      ...(prev.cursor !== undefined ? [prev.cursor] : []),
+      ...prev.forward,
+    ];
+    const back = collapseRepeats(current.view === "launchpad"
+      ? history.filter((location) => !sameLocation(location, current))
+      : history);
+    while (back.length && sameLocation(back[back.length - 1], current)) {
+      back.pop();
     }
     const next: HistoryStacks = {
-      back:
-        prev.cursor !== undefined
-          ? appendLocation(baseBack, prev.cursor)
-          : baseBack,
+      back: back.slice(-MAX_HISTORY_DEPTH),
       cursor: current,
-      forward,
+      forward: [],
     };
     stacksRef.current = next;
     setStacks(next);

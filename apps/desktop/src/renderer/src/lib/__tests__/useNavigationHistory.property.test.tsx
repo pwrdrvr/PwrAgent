@@ -46,13 +46,14 @@ it("Back then Forward preserves the unsubmitted composer after any navigation pr
   ), { numRuns: 25 });
 });
 
-it("inserting a destination keeps existing thread, search and composer visits ahead in order", () => {
+it("opening a destination appends it after the entire existing history", () => {
   fc.assert(fc.property(
     fc.uniqueArray(fc.record({
       directoryKey: fc.integer({ min: 0, max: 6 }).map((key) => `directory:${key}`),
       instanceId: fc.option(fc.constantFrom("studio", "laptop"), { nil: undefined }),
     }), { minLength: 1, maxLength: 6, selector: (project) => JSON.stringify(project) }),
-    (projects) => {
+    fc.constantFrom("thread", "launchpad"),
+    (projects, destinationView) => {
       const restore = vi.fn();
       const source: NavigationHistoryLocation = { view: "thread", threadKey: "codex:source" };
       const startingThreads = new Map<string, string | undefined>();
@@ -78,12 +79,14 @@ it("inserting a destination keeps existing thread, search and composer visits ah
         ]);
         for (const visit of visits) navigate(visit);
         for (let index = 0; index < visits.length; index += 1) back();
-        const inserted: NavigationHistoryLocation = { view: "thread", threadKey: "codex:other" };
-        navigate(inserted);
-        expect(h.result.current.canGoForward).toBe(true);
-        expect(back()).toEqual(source);
+        const opened: NavigationHistoryLocation = destinationView === "thread"
+          ? { view: "thread", threadKey: "codex:other" }
+          : { view: "launchpad", directoryKey: "directory:new" };
+        navigate(opened);
+        expect(h.result.current.canGoForward).toBe(false);
+        for (const expected of [...visits.toReversed(), source]) expect(back()).toEqual(expected);
         expect(h.result.current.canGoBack).toBe(false);
-        for (const expected of [inserted, ...visits]) {
+        for (const expected of [...visits, opened]) {
           restore.mockClear();
           act(() => h.result.current.goForward());
           expect(restore).toHaveBeenCalledOnce();
