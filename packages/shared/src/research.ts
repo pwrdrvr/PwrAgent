@@ -15,6 +15,8 @@ export type ResearchApproach = {
   overlapsApproachId?: string;
   /** An item-focused child assignment; its source evidence remains immutable. */
   itemId?: string;
+  /** Durable capacity held by pending, queued or unresolved revision work. */
+  revisionDeliveryIds?: string[];
 };
 export type ResearchFinding = {
   id: string;
@@ -34,7 +36,7 @@ export type ResearchSubmission = {
   paths: string[];
   review?: { decision: "accepted" | "revision_requested" | "rejected"; reason: string; actor: ResearchActor };
 };
-export type ResearchDelivery = { id: string; target: ResearchThread; state: "pending" | "queued" | "started" | "cancelled" | "unknown"; queueEntryId?: string; turnId?: string };
+export type ResearchDelivery = { id: string; target: ResearchThread; approachId?: string; state: "pending" | "queued" | "started" | "cancelled" | "unknown" | "ended"; queueEntryId?: string; turnId?: string };
 export type StartResearchRequest = {
   intentId?: string;
   objective: string;
@@ -186,13 +188,18 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
       const index = run.deliveries.findIndex((d) => d.id === data.delivery.id);
       if (index < 0) run.deliveries.push(data.delivery);
       else run.deliveries[index] = data.delivery;
+      if (data.delivery.approachId) {
+        const item = items.get(data.delivery.approachId);
+        const approach = run.approaches.find((a) => a.id === data.delivery.approachId);
+        if (item?.type === "approach" && approach) Object.assign(approach, item.record);
+      }
     } else if (data.type === "status") {
       run.status = data.status;
       run.reason = data.reason;
     }
   }
   run.items = [...items.values()];
-  run.activeWorkers = run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length;
+  run.activeWorkers = run.approaches.filter(researchApproachOccupiesSlot).length;
   return run;
 }
 
@@ -215,6 +222,13 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
       create({ id: data.approach.id, approachId: data.approach.id, type: "approach", record: { ...data.approach } })];
   }
   if (data.type === "item_work") return [touch({ ...require(data.itemId), work: { ...data.work } })];
+  if (data.type === "delivery" && data.delivery.approachId) {
+    const item = require(data.delivery.approachId);
+    if (item.type !== "approach") throw new Error("Research delivery must name an approach");
+    const ids = (item.record.revisionDeliveryIds ?? []).filter((id) => id !== data.delivery.id);
+    if (!["cancelled", "ended"].includes(data.delivery.state)) ids.push(data.delivery.id);
+    return [touch({ ...item, record: { ...item.record, revisionDeliveryIds: ids } })];
+  }
   if (data.type === "review") {
     const item = require(data.submissionId);
     if (item.type !== "submission") throw new Error("Research review must name a submission");
@@ -291,6 +305,10 @@ export function searchResearchItems(runId: string, items: ResearchItem[], revisi
 
 export function sameResearchThread(a: ResearchThread, b: ResearchThread): boolean {
   return a.backend === b.backend && a.threadId === b.threadId;
+}
+
+export function researchApproachOccupiesSlot(approach: ResearchApproach): boolean {
+  return !["ended", "failed", "stopped"].includes(approach.state) || Boolean(approach.revisionDeliveryIds?.length);
 }
 
 export const RESEARCH_MAX_WORKERS = 8;

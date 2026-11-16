@@ -70,7 +70,8 @@ export class ResearchStore implements ResearchStorage {
     const row = this.stateDb.raw.prepare(`SELECT r.status, e.payload,
       (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND item_type = 'approach'
-        AND json_extract(payload, '$.record.state') NOT IN ('ended', 'failed', 'stopped')) AS active_workers
+        AND (json_extract(payload, '$.record.state') NOT IN ('ended', 'failed', 'stopped')
+          OR json_array_length(json_extract(payload, '$.record.revisionDeliveryIds')) > 0)) AS active_workers
       FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1 WHERE r.run_id = ?`).get(id) as { status: ResearchRun["status"]; payload: string; revision: number; active_workers: number } | undefined;
     if (!row) return undefined;
     const event = JSON.parse(row.payload) as ResearchEvent;

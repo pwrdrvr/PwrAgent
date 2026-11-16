@@ -43,6 +43,228 @@ function fixture(overrides: Partial<ResearchPorts> = {}, storage = new MemoryRes
 }
 
 describe("research lifecycle model", () => {
+  it("synthetic pending notifications never own a worker or its cancellation", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (cancelAtDeadline) => {
+      let deadline!: () => void;
+      const { service, ports } = fixture({ schedule: (callback) => { deadline = callback; return () => {}; } });
+      ports.spawn = async (_c, _task, _title, _mode, created) => {
+        const worker = { backend: "codex" as const, threadId: "created-child" };
+        created(worker);
+        await service.observeStart(worker, `pending:${worker.threadId}`);
+        return { ...worker, turnId: "accepted-real-turn" };
+      };
+      const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+      expect(run.approaches[0]?.worker?.turnId).toBe("accepted-real-turn");
+      expect(run.events.some((e) => e.data.type === "worker" && e.data.worker?.turnId?.startsWith("pending:"))).toBe(false);
+      if (cancelAtDeadline) { deadline(); await vi.waitFor(() => expect(ports.stop).toHaveBeenCalled()); }
+      else await service.stop(run.id, context, "stopped", "Operator stop");
+      expect(ports.stop).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "created-child", turnId: "accepted-real-turn" });
+      service.close();
+    }), { numRuns: 4 });
+  });
+
+  it("ambiguous start errors retain the worker reservation and deadline", async () => {
+    const cancelTimer = vi.fn();
+    let deadline!: () => void;
+    const { service } = fixture({ schedule: (callback) => { deadline = callback; return cancelTimer; },
+      spawn: async (_c, _task, _title, _mode, created) => { created({ backend: "codex", threadId: "possibly-admitted" }); throw new Error("Provider accepted the turn but its response was lost"); },
+    });
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    expect(run.status).toBe("running");
+    expect(run.activeWorkers).toBe(1);
+    expect(run.approaches[0]?.state).toBe("unknown");
+    expect(cancelTimer).not.toHaveBeenCalled();
+    const item = service.readItem(run.id, "a1", context).item;
+    await expect(service.assign({ runId: run.id, itemId: "a1", expectedVersion: item.version, task: "Must not spend a second slot" }, { ...context, callId: "extra" })).rejects.toThrow("worker limit");
+    deadline();
+    await vi.waitFor(() => expect(service.read(run.id, context).status).toBe("stopping"));
+    service.close();
+  });
+
+  it("revision admission cannot spend a slot already reused by a focused child", async () => {
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    await service.update(run.id, "candidate", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, context);
+    const submission = service.read(run.id, context).submissions[0]!;
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const item = service.readItem(run.id, submission.id, context).item;
+    await service.assign({ runId: run.id, itemId: item.id, expectedVersion: item.version, task: "Investigate this candidate" }, { ...context, callId: "child" });
+    const before = service.read(run.id, context);
+    await expect(service.update(run.id, "revise", { action: "review", submissionId: item.id, decision: "revision_requested", reason: "Revise the original candidate" }, context)).rejects.toThrow("worker limit");
+    expect(service.read(run.id, context).revision).toBe(before.revision);
+    expect(ports.notify).not.toHaveBeenCalled();
+    service.close();
+  });
+
+  it.each(["pending", "queued", "unknown", "started"] as const)("revision reservations survive worker end and reconstruction while %s", async (state) => {
+    const { service, ports, storage } = fixture();
+    let release!: (value: { queueEntryId?: string; turnId?: string }) => void;
+    const gate = new Promise<{ queueEntryId?: string; turnId?: string }>((resolve) => { release = resolve; });
+    ports.notify = async () => await gate;
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    await service.update(run.id, "candidate", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, context);
+    const itemId = service.read(run.id, context).submissions[0]!.id;
+    const revision = service.update(run.id, "revise", { action: "review", submissionId: itemId, decision: "revision_requested", reason: "Check it" }, context);
+    if (state !== "pending") { release(state === "queued" ? { queueEntryId: "queued-revision" } : state === "started" ? { turnId: "revision-turn" } : {}); await revision; }
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const rebuilt = fixture({}, storage).service;
+    const current = rebuilt.read(run.id, context);
+    expect(current.activeWorkers).toBe(1);
+    const item = rebuilt.readItem(run.id, itemId, context).item;
+    await expect(rebuilt.assign({ runId: run.id, itemId, expectedVersion: item.version, task: "Competing child" }, { ...context, callId: "extra" })).rejects.toThrow("worker limit");
+    if (state === "started") {
+      service.observeEnd(run.approaches[0]!.worker!, "revision-turn");
+      expect(service.read(run.id, context).activeWorkers).toBe(0);
+      expect(service.read(run.id, context).deliveries[0]?.state).toBe("ended");
+    }
+    if (state === "pending") { release({ queueEntryId: "queued-revision" }); await revision; }
+    service.close(); rebuilt.close();
+  });
+
+  it("focused approach cancellation settles the selected approach and can be reopened", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (cancelSourceFirst) => {
+      let stops = 0;
+      const { service, ports } = fixture({ stop: vi.fn(async () => { if (cancelSourceFirst && ++stops === 1) throw new Error("Lost first cancellation receipt"); }) });
+      const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+      await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Source evidence", paths: [] }, context);
+      const sourceId = service.read(run.id, context).findings[0]!.id;
+      service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+      const source = service.readItem(run.id, sourceId, context).item;
+      const child = await service.assign({ runId: run.id, itemId: sourceId, expectedVersion: source.version, task: "Focused child" }, { ...context, callId: "child" });
+      if (cancelSourceFirst) {
+        const current = service.readItem(run.id, sourceId, context).item;
+        expect((await service.work(run.id, "cancel-source", { action: "work", itemId: sourceId, expectedVersion: current.version, state: "cancelled", reason: "Cancel source" }, context)).work.state).toBe("cancel_requested");
+      }
+      const approach = service.readItem(run.id, child.assignmentId, context).item;
+      const cancelled = await service.work(run.id, "cancel-approach", { action: "work", itemId: approach.id, expectedVersion: approach.version, state: "cancelled", reason: "Cancel this approach" }, context);
+      expect(cancelled.work.state).toBe("cancelled");
+      expect(ports.stop).toHaveBeenCalledTimes(cancelSourceFirst ? 2 : 1);
+      expect(ports.stop).toHaveBeenLastCalledWith(child.worker);
+      expect(service.readItem(run.id, sourceId, context).item.work.state).toBe(cancelSourceFirst ? "cancelled" : "assigned");
+      expect(service.readItem(run.id, sourceId, context).item.record).toEqual(source.record);
+      const reopened = await service.work(run.id, "reopen-approach", { action: "work", itemId: approach.id, expectedVersion: cancelled.version, state: "open", reason: "Retain for another investigation" }, context);
+      expect(reopened.work.state).toBe("open");
+      service.close();
+    }), { numRuns: 6 });
+  });
+
+  it("revision capacity follows the queue owner's terminal oracle under generated delivery order", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("started", "terminal", "unrelated", "wrong_thread"), { minLength: 1, maxLength: 12 }), async (events) => {
+      const { service, storage } = fixture({ notify: async () => ({ queueEntryId: "revision-entry" }) });
+      const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+      const worker = run.approaches[0]!.worker!;
+      await service.update(run.id, "candidate", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, context);
+      await service.update(run.id, "revise", { action: "review", submissionId: service.read(run.id, context).submissions[0]!.id, decision: "revision_requested", reason: "Check it" }, context);
+      service.observeEnd(worker, worker.turnId!);
+      let reserved = true;
+      for (const event of events) {
+        if (event === "terminal") reserved = false;
+        await service.observeQueue(event === "wrong_thread" ? { ...worker, threadId: "other" } : worker,
+          event === "unrelated" ? "other-entry" : "revision-entry", event === "started" ? "started" : "terminal", "revision-turn");
+        expect(service.read(run.id, context).activeWorkers).toBe(Number(reserved));
+        expect(projectResearchRun(run.id, storage.records.get(run.id)!).activeWorkers).toBe(Number(reserved));
+      }
+      service.close();
+    }), { numRuns: 25 });
+  });
+
+  it.each(["before_receipt", "after_receipt"] as const)("exact queue receipts release revision capacity %s", async (order) => {
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    const worker = run.approaches[0]!.worker!;
+    await service.update(run.id, "candidate", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, context);
+    const itemId = service.read(run.id, context).submissions[0]!.id;
+    ports.notify = async () => {
+      if (order === "before_receipt") {
+        await service.observeQueue(worker, "exact-entry", "started", "revision-turn");
+        await service.observeQueue(worker, "exact-entry", "terminal", "revision-turn");
+      }
+      return { queueEntryId: "exact-entry" };
+    };
+    await service.update(run.id, "revise", { action: "review", submissionId: itemId, decision: "revision_requested", reason: "Check evidence" }, context);
+    service.observeEnd(worker, worker.turnId!);
+    if (order === "after_receipt") {
+      expect(service.read(run.id, context).activeWorkers).toBe(1);
+      await expect(service.update(run.id, "overlapping-revision", { action: "review", submissionId: itemId, decision: "revision_requested", reason: "Another request" }, context)).rejects.toThrow("already pending");
+      await service.observeQueue(worker, "unrelated-entry", "terminal", "unrelated-turn");
+      await service.observeQueue({ ...worker, threadId: "stranger" }, "exact-entry", "terminal", "revision-turn");
+      expect(service.read(run.id, context).activeWorkers).toBe(1);
+      await service.observeQueue(worker, "exact-entry", "started", "revision-turn");
+      await service.observeQueue(worker, "exact-entry", "terminal", "different-turn");
+      expect(service.read(run.id, context).activeWorkers).toBe(1);
+      await service.observeQueue(worker, "exact-entry", "terminal", "revision-turn");
+    }
+    const settled = service.read(run.id, context);
+    expect(settled.activeWorkers).toBe(0);
+    expect(settled.deliveries[0]).toMatchObject({ state: "ended", turnId: "revision-turn", queueEntryId: "exact-entry" });
+    await service.observeQueue(worker, "exact-entry", "started", "revision-turn");
+    await service.observeQueue(worker, "exact-entry", "terminal", "revision-turn");
+    expect(service.read(run.id, context).revision).toBe(settled.revision);
+    const item = service.readItem(run.id, itemId, context).item;
+    await service.assign({ runId: run.id, itemId, expectedVersion: item.version, task: "Use the released slot" }, { ...context, callId: "child" });
+    service.close();
+  });
+
+  it("cancelling source evidence fences a late queued revision of its focused child", async () => {
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Source", paths: [] }, context);
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const source = service.readItem(run.id, service.read(run.id, context).findings[0]!.id, context).item;
+    const child = await service.assign({ runId: run.id, itemId: source.id, expectedVersion: source.version, task: "Investigate" }, { ...context, callId: "child" });
+    await service.update(run.id, "candidate", { action: "submit", approachId: child.assignmentId, text: "Candidate", paths: [] }, context);
+    let release!: (receipt: { queueEntryId: string }) => void;
+    const gate = new Promise<{ queueEntryId: string }>((resolve) => { release = resolve; });
+    ports.notify = async () => await gate;
+    const revision = service.update(run.id, "revise", { action: "review", submissionId: service.read(run.id, context).submissions[0]!.id, decision: "revision_requested", reason: "Check it" }, context);
+    const item = service.readItem(run.id, source.id, context).item;
+    expect((await service.work(run.id, "cancel", { action: "work", itemId: item.id, expectedVersion: item.version, state: "cancelled", reason: "Cancel source assignment" }, context)).work.state).toBe("cancel_requested");
+    release({ queueEntryId: "late-revision" });
+    await revision;
+    expect(ports.cancelQueued).toHaveBeenCalledExactlyOnceWith("late-revision");
+    expect(service.readItem(run.id, source.id, context).item.work.state).toBe("cancelled");
+    expect(service.read(run.id, context).activeWorkers).toBe(0);
+    service.close();
+  });
+
+  it.each(["acknowledged", "lost"] as const)("an exact queue terminal event wins over a late cancellation result: %s", async (outcome) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { service } = fixture({ notify: async () => ({ queueEntryId: "revision-entry" }), cancelQueued: async () => { await gate; if (outcome === "lost") throw new Error("Lost cancellation response"); return {}; } });
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    const worker = run.approaches[0]!.worker!;
+    await service.update(run.id, "candidate", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, context);
+    await service.update(run.id, "revise", { action: "review", submissionId: service.read(run.id, context).submissions[0]!.id, decision: "revision_requested", reason: "Check it" }, context);
+    service.observeEnd(worker, worker.turnId!);
+    const item = service.readItem(run.id, "a1", context).item;
+    const cancelling = service.work(run.id, "cancel", { action: "work", itemId: item.id, expectedVersion: item.version, state: "cancelled", reason: "Cancel this approach" }, context);
+    await service.observeQueue(worker, "revision-entry", "terminal", "revision-turn");
+    release();
+    expect((await cancelling).work.state).toBe("cancelled");
+    expect(service.read(run.id, context).deliveries[0]?.state).toBe("ended");
+    expect(service.read(run.id, context).activeWorkers).toBe(0);
+    service.close();
+  });
+
+  it("cancelling a focused approach before binding prevents its admission", async () => {
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let admitted = false;
+    ports.spawn = async (_c, _task, _title, _mode, created) => { await gate; created({ backend: "codex", threadId: "focused" }); admitted = true; return { backend: "codex", threadId: "focused", turnId: "must-not-start" }; };
+    const source = service.readItem(run.id, "a1", context).item;
+    const assigning = service.assign({ runId: run.id, itemId: source.id, expectedVersion: source.version, task: "Focused work" }, { ...context, callId: "child" });
+    const focusedId = service.readItem(run.id, "a1", context).item.work.assignmentId!;
+    const focused = service.readItem(run.id, focusedId, context).item;
+    expect((await service.work(run.id, "cancel-focused", { action: "work", itemId: focusedId, expectedVersion: focused.version, state: "cancelled", reason: "Do not admit this child" }, context)).work.state).toBe("cancel_requested");
+    release(); await assigning;
+    expect(admitted).toBe(false);
+    expect(service.readItem(run.id, focusedId, context).item.work.state).toBe("cancelled");
+    service.close();
+  });
+
   it("supports search, a focused child, optimistic progress and compact item identity", async () => {
     const { service, ports } = fixture();
     const run = await service.start(request, context);

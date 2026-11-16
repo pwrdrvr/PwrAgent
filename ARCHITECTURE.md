@@ -115,6 +115,18 @@ different live process retains authority. Older journals without a process
 start time cannot prove live ownership and become interrupted. Revision
 queue receipts identify exactly which pending sends a
 run may cancel. An unknown cancellation outcome keeps the run stopping.
+Synthetic pending turn notifications do not establish worker identity. A
+caught start error cannot establish non-admission: its worker stays unknown,
+retaining capacity and deadline enforcement until trusted evidence arrives.
+
+Revision requests reserve capacity before delivery. Pending, queued and
+unresolved revisions retain their approach's slot even after its current
+turn ends; exact queue admission and terminal receipts reconcile that work.
+The reservation is projected with the approach in the journal transaction,
+so reconstruction and focused headers enforce the same worker limit.
+Overlapping revision requests for one worker are rejected until its prior
+delivery settles. Cancelling a focused approach settles the selected item as
+well as any source item awaiting that assignment's cancellation.
 
 `research_items` projects approaches, findings and candidates in the same
 transaction as each journal event. Existing journals are backfilled once at
@@ -139,6 +151,11 @@ redelivery. A small finding measured 37,080 observed WAL bytes: approximately
 53.4 MB/day at one aggregate finding per minute; a progress change measured
 28,840 bytes (41.5 MB/day at one per minute). No per-token or idle writes are
 introduced. Actual WAL volume depends on payload size and page layout.
+A queued revision measured three commits and 86,520 WAL bytes for review,
+intent and receipt; its two exact queue boundaries add two commits and
+57,680 bytes. At one revision per ten minutes across all workers that is
+approximately 20.8 MB/day, including 13.1 MB/day added by reservation tracking
+and queue reconciliation. Repeated or unrelated queue events write nothing.
 
 The renderer reads research through IPC. This first integration serves local
 Codex threads; federation viewers must use the owning instance. Graph edges

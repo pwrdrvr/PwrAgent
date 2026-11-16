@@ -4,7 +4,9 @@ import { getDesktopConfigStore } from "../settings/config-store/desktop-config-s
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
-import { afterAll, expect, expectTypeOf, it } from "vitest";
+import { afterAll, expect, expectTypeOf, it, vi } from "vitest";
+import type { ResearchPorts } from "@pwragent/owner-core/research-service";
+import * as researchRuntime from "../research/research-runtime";
 import type { RegistryContext } from "../app-server/registry-context";
 import { getOwnerHostServices } from "../owner-host";
 import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown } from "../owner-services";
@@ -16,8 +18,14 @@ import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { getRuntimeLeaseManager } from "../runtime-lease-manager";
 import { disposeAppState } from "../storage/desktop-state-lifecycle";
 
+let researchPorts: ResearchPorts;
 it("returns the root's instances through every owner getter", async () => {
-  const services = await startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 0 });
+  const initialize = researchRuntime.initializeResearchRuntime;
+  const capture = vi.spyOn(researchRuntime, "initializeResearchRuntime").mockImplementation((ports) => {
+    researchPorts = ports;
+    return initialize(ports);
+  });
+  const services = await startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 0 }).finally(() => capture.mockRestore());
   expect(getDesktopBackendRegistry()).toBe(services.registry);
   expect(getDesktopAppServerService()).toBe(services.service);
   expect(getDesktopSettingsService()).toBe(services.settings);
@@ -42,6 +50,20 @@ it("returns the root's instances through every owner getter", async () => {
     expect(port).not.toHaveProperty("setThreadExecutionMode");
   }
   expect(() => startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 1 })).toThrow(/already/);
+});
+
+it.each(["Lost response after admission", "Transport closed during start"])("does not certify non-admission from a caught start error: %s", async (message) => {
+  const workspace = { mode: "none", git: { kind: "none", worktreeCreationAvailable: false, unavailableReason: "Scratch worker" } } as const;
+  const handoff = vi.spyOn(getDesktopBackendRegistry(), "handoffResearchWorker").mockResolvedValue({ ok: true, data: {
+    backend: "codex", threadId: "possibly-admitted", turnStartFailure: { message, phase: "turn" },
+    threadUrl: "pwragent://thread/possibly-admitted?backend=codex", threadLink: "[Worker](pwragent://thread/possibly-admitted?backend=codex)",
+    seedMode: "clean", groupingMode: "subthread", inheritedSettings: { backend: "codex" }, workspace,
+    origin: { sourceBackend: "codex", sourceThreadId: "parent", seedMode: "clean", groupingMode: "subthread", createdAt: 1000, workspace },
+    messagingAttachment: { requested: false, outcome: "not_requested" },
+  } });
+  try {
+    await expect(researchPorts.spawn({ backend: "codex", threadId: "parent", kind: "agent", turnId: "turn", callId: "call" }, "Task", "Title", "none", () => {})).rejects.toThrow(message);
+  } finally { handoff.mockRestore(); }
 });
 
 afterAll(async () => {

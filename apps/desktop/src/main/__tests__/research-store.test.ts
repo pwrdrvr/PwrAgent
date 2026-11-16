@@ -141,7 +141,7 @@ describe("research journal storage", () => {
     expect(reopened.writes.commits).toBe(0);
   });
 
-  it("budgets one focused child admission and exact item cancellation", async () => {
+  it.each(["source", "approach"] as const)("budgets one focused child admission and exact %s item cancellation", async (target) => {
     const service = createService();
     const run = await service.start(mutableRequest(), actor);
     await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Investigate this item", paths: [] }, actor);
@@ -151,10 +151,27 @@ describe("research journal storage", () => {
     const assignment = await measureSqliteWrites(async () => await service.assign({ runId: run.id, itemId: item.id, expectedVersion: item.version, task: "Investigate only this evidence" }, { ...actor, callId: "assign" }));
     expect(assignment.result.worker?.threadId).toBe("worker-4");
     expectSqliteWriteBudget({ scenario: "research-item-assignment", note: "One child intent, starting boundary, durable binding and provider admission; projection updates share each journal commit.", writes: assignment.writes });
-    const current = service.readItem(run.id, item.id, actor).item;
-    const cancelled = await measureSqliteWrites(async () => await service.work(run.id, "cancel", { action: "work", itemId: item.id, expectedVersion: current.version, state: "cancelled", reason: "Stop this assignment" }, actor));
+    const current = service.readItem(run.id, target === "source" ? item.id : assignment.result.assignmentId, actor).item;
+    const cancelled = await measureSqliteWrites(async () => await service.work(run.id, "cancel", { action: "work", itemId: current.id, expectedVersion: current.version, state: "cancelled", reason: "Stop this assignment" }, actor));
     expect(cancelled.result.work.state).toBe("cancelled");
-    expectSqliteWriteBudget({ scenario: "research-item-cancel", note: "Durable cancellation request, exact worker acknowledgement and item settlement. An unknown outcome would retain cancel_requested.", writes: cancelled.writes });
+    expectSqliteWriteBudget({ scenario: target === "source" ? "research-item-cancel" : "research-focused-approach-cancel", note: "Durable cancellation request, exact worker acknowledgement and item settlement. An unknown outcome would retain cancel_requested.", writes: cancelled.writes });
+  });
+
+  it("budgets settling both cancelled references to one focused assignment", async () => {
+    const service = createService({ stop: async () => { throw new Error("Lost cancellation response"); } });
+    const run = await service.start(mutableRequest(), actor);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Source evidence", paths: [] }, actor);
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const source = service.readItem(run.id, service.read(run.id, actor).findings[0]!.id, actor).item;
+    const child = await service.assign({ runId: run.id, itemId: source.id, expectedVersion: source.version, task: "Investigate" }, { ...actor, callId: "child" });
+    for (const id of [source.id, child.assignmentId]) {
+      const item = service.readItem(run.id, id, actor).item;
+      await service.work(run.id, `cancel-${id}`, { action: "work", itemId: id, expectedVersion: item.version, state: "cancelled", reason: "Cancel this assignment" }, actor);
+    }
+    const settled = await measureSqliteWrites(() => service.observeEnd(child.worker!, child.worker!.turnId!));
+    expect(service.readItem(run.id, source.id, actor).item.work.state).toBe("cancelled");
+    expect(service.readItem(run.id, child.assignmentId, actor).item.work.state).toBe("cancelled");
+    expectSqliteWriteBudget({ scenario: "research-focused-cancel-both-references", note: "One exact worker terminal event and one settlement per requested item: source evidence and focused approach. No duplicate settlement writes.", writes: settled.writes });
   });
   it("retains the board and exact review provenance after reopening a real database", async () => {
     const service = createService();
@@ -222,9 +239,47 @@ describe("research journal storage", () => {
     const submissionId = service.read(run.id, actor).submissions[0]!.id;
     const revision = await measureSqliteWrites(async () => await service.update(run.id, "review", { action: "review", submissionId, decision: "revision_requested", reason: "Reproduce the counterexample" }, { ...actor, kind: "operator" }));
     expectSqliteWriteBudget({ scenario: "research-revision-feedback", note: "One review decision, delivery intent, and accepted queue receipt. No blind retry on an unknown receipt.", writes: revision.writes });
+    for (const approach of run.approaches) service.observeEnd(approach.worker!, approach.worker!.turnId!);
+    const store = new ResearchStore(db);
+    expect(store.header(run.id)?.activeWorkers).toBe(1);
+    expect(store.get(run.id)?.activeWorkers).toBe(1);
+    const held = await measureSqliteWrites(async () => {
+      const item = service.readItem(run.id, submissionId, actor).item;
+      // Other slots are free, but three concurrent children cannot consume the reserved one.
+      for (let i = 0; i < 2; i++) {
+        await service.update(run.id, `extra-${i}`, { action: "finding", approachId: "a1", kind: "note", text: `Evidence ${i}`, paths: [] }, actor);
+        const finding = service.read(run.id, actor).findings.at(-1)!;
+        await service.assign({ runId: run.id, itemId: finding.id, expectedVersion: service.readItem(run.id, finding.id, actor).item.version, task: "Focused work" }, { ...actor, callId: `child-${i}` });
+      }
+      const denied = await measureSqliteWrites(async () => await expect(service.assign({ runId: run.id, itemId: item.id, expectedVersion: item.version, task: "One too many" }, { ...actor, callId: "denied" })).rejects.toThrow("worker limit"));
+      expect(denied.writes.commits).toBe(0);
+    });
+    expect(held.writes.commits).toBeGreaterThan(0);
     await service.update(run.id, "stop", { action: "stop", reason: "Cancel" }, actor);
     expect(cancelQueued).toHaveBeenCalledExactlyOnceWith("research-feedback");
     expect(service.read(run.id, actor).status).toBe("stopped");
+  });
+
+  it("budgets exact queued revision admission and terminal release", async () => {
+    const service = createService({ notify: async () => ({ queueEntryId: "exact-feedback" }) });
+    const run = await service.start({ ...mutableRequest(), approaches: [request.approaches[0]] }, actor);
+    await service.update(run.id, "submission", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, actor);
+    await service.update(run.id, "review", { action: "review", submissionId: service.read(run.id, actor).submissions[0]!.id, decision: "revision_requested", reason: "Check it" }, actor);
+    const worker = run.approaches[0]!.worker!;
+    service.observeEnd(worker, worker.turnId!);
+    const lifecycle = await measureSqliteWrites(async () => {
+      await service.observeQueue(worker, "exact-feedback", "started", "revision-turn");
+      await service.observeQueue(worker, "exact-feedback", "terminal", "revision-turn");
+    });
+    expectSqliteWriteBudget({ scenario: "research-revision-queue-lifecycle", note: "Two exact queue boundaries: bind the admitted revision and release its reservation on terminal evidence. No token or timer writes.", writes: lifecycle.writes });
+    const store = new ResearchStore(db);
+    expect(store.header(run.id)?.activeWorkers).toBe(0);
+    expect(store.get(run.id)?.activeWorkers).toBe(0);
+    const duplicate = await measureSqliteWrites(async () => {
+      await service.observeQueue(worker, "exact-feedback", "terminal", "revision-turn");
+      await service.observeQueue(worker, "other-feedback", "terminal", "other-turn");
+    });
+    expectSqliteWriteBudget({ scenario: "research-revision-queue-redelivery", note: "Repeated or unrelated queue terminal events do not write research state.", writes: duplicate.writes });
   });
 
   it("budgets terminal observations and restart recovery without polling writes", async () => {

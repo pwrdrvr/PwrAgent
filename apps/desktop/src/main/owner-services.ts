@@ -463,7 +463,10 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       }
       const result = response.data as HandoffTaskResult;
       if (!result.threadId) throw new Error("Worker creation is unresolved. Inspect the pending handoff; do not retry it.");
-      return { backend: result.backend, threadId: result.threadId, turnId: result.turnId, failure: result.turnStartFailure?.message };
+      // startTurn may throw after provider admission. Only an explicit
+      // ResearchAdmissionRefused can certify that no model work started.
+      if (result.turnStartFailure) throw new Error(result.turnStartFailure.message);
+      return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
     },
     stop: async (worker) => {
       if (!worker.turnId) throw new Error("Worker turn has not been confirmed");
@@ -494,6 +497,12 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   researchRegistry.setResearchHandler(createResearchAgentHandler(research, (context) => researchRegistry.researchContextIsLive(context)), (thread) => research.isWorker(thread));
   ownerSubscriptions.add(researchRegistry.onEvent((event) => {
     const method = event.notification.method;
+    if (method === "thread/turnQueue/updated") {
+      const params = event.notification.params as { threadId?: string; queueEntryId?: string; status?: string; turnId?: string };
+      if (params.threadId && params.queueEntryId && params.status) void research.observeQueue({ backend: event.backend, threadId: params.threadId }, params.queueEntryId, params.status, params.turnId)
+        .catch((error) => mainLog.warn("research queue reconciliation failed", { error: String(error) }));
+      return;
+    }
     if (!["turn/started", "turn/completed", "turn/failed", "turn/cancelled"].includes(method)) return;
     const params = event.notification.params as { threadId?: string; turnId?: string; turn?: { id?: string; status?: string; error?: { message?: string } } };
     const turnId = params.turnId ?? params.turn?.id;
