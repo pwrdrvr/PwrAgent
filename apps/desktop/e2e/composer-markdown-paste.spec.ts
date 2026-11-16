@@ -187,7 +187,7 @@ const CODE_HTML = `<pre><code class="language-swift">${CODE_LINES.join("\n")}</c
 const EXPECTED_PROSE_VALUE = PROSE_LINES.join("\n\n");
 const EXPECTED_CODE_VALUE = ["```swift", ...CODE_LINES, "```"].join("\n");
 
-test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter exits pasted marks", async (_fixtures, testInfo) => {
+test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter exits pasted marks", async ({ playwright: _playwright }, testInfo) => {
   const fixture = await createPasteFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
