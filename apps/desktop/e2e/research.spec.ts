@@ -3,16 +3,44 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
-import { RESEARCH_FIXTURE_OBJECTIVE, seedResearchState } from "./fixtures/research-state-seeding";
+import { RESEARCH_FIXTURE_OBJECTIVE, seedResearchState, enableResearchFixture } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+test("research stays hidden until the experiment is enabled and hides again when disabled", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
+    preLaunchHook: async (homeRoot) => { seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
+    await expect(app.window.getByRole("tab", { name: "Research", exact: true })).toHaveCount(0);
+    await app.window.getByRole("button", { name: "Open settings" }).click();
+    const nav = app.window.getByRole("navigation", { name: "Settings sections" });
+    await nav.getByRole("button", { name: "Experimental", exact: true }).click();
+    const toggle = app.window.getByRole("switch", { name: "Enable research runs", exact: true });
+    await expect(toggle).not.toBeChecked();
+    await app.window.screenshot({ path: path.resolve(specDir, "../../../.local/research-experiment-off.png") });
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await nav.getByRole("button", { name: /Exit Settings/i }).click();
+    await app.window.getByRole("tab", { name: "Research", exact: true }).click();
+    await expect(app.window.getByRole("region", { name: "Research", exact: true }).getByText(RESEARCH_FIXTURE_OBJECTIVE, { exact: true }).first()).toBeVisible();
+    await app.window.getByRole("button", { name: "Open settings" }).click();
+    await nav.getByRole("button", { name: "Experimental", exact: true }).click();
+    await app.window.getByRole("switch", { name: "Enable research runs", exact: true }).click();
+    await nav.getByRole("button", { name: /Exit Settings/i }).click();
+    await expect(app.window.getByRole("tab", { name: "Research", exact: true })).toHaveCount(0);
+    await expect(app.window.getByRole("region", { name: "Research", exact: true })).toHaveCount(0);
+  } finally { await app.close(); }
+});
 
 for (const theme of ["dark", "light"] as const) {
   test(`research graph, board and review preserve their evidence in ${theme} mode`, async () => {
     const app = await launchElectronApp({
       fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
       appearance: { theme },
-      preLaunchHook: async (homeRoot) => { seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
+      preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
     });
     try {
       await app.window.emulateMedia({ reducedMotion: "reduce" });

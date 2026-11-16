@@ -4,11 +4,12 @@ import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { seedDiscoveryResearchState, seedHarnessResearchState } from "./fixtures/research-harness-state-seeding";
+import { enableResearchFixture } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 test("Discovery status, problems and bounded ancestry retain source authority", async ({ playwright: _playwright }, testInfo) => {
   const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
-    preLaunchHook: async (homeRoot) => seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot)) });
+    preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot)); } });
   try {
     await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
     await app.window.getByRole("tab", { name: "Research", exact: true }).click();
@@ -28,7 +29,7 @@ test("Discovery status, problems and bounded ancestry retain source authority", 
 for (const theme of ["dark", "light"] as const) {
   test(`Harness provenance and unknown cancellation remain inspectable in ${theme}`, async ({ playwright: _playwright }, testInfo) => {
     const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"), appearance: { theme },
-      preLaunchHook: async (homeRoot) => { seedHarnessResearchState(stateDbPathForHomeRoot(homeRoot)); } });
+      preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedHarnessResearchState(stateDbPathForHomeRoot(homeRoot)); } });
     try {
       await app.window.emulateMedia({ reducedMotion: "reduce" });
       await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();

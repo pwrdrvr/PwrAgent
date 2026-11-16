@@ -11,7 +11,7 @@ export interface ResearchHarnessConnection {
   request(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): void | Promise<void>;
 }
-export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | "ownerStartedAt" | "changed" | "now" | "onError" | "schedule"> & {
+export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | "ownerStartedAt" | "changed" | "now" | "onError" | "schedule" | "enabled"> & {
   open: (workspace: string, id: string, mode: "import" | "execute") => ResearchHarnessConnection;
   /** An actual ordinary-function round trip, bound to the configured endpoint and model. */
   probe: (id: string, signal: AbortSignal) => Promise<void>;
@@ -37,6 +37,7 @@ export class ResearchHarnessService {
       return this.pending.get(existing.id) ?? Promise.resolve(existing);
     }
     if (this.closed) return Promise.reject(new Error("Harness adapter is closed"));
+    if (this.ports.enabled?.() === false) return Promise.reject(new Error("Research runs are disabled"));
     if (request.source !== undefined && !["swarm", "discovery"].includes(request.source)) throw new Error("Unsupported Harness source");
     if (request.source === "discovery" && request.mode !== "import") throw new Error("Discovery supports read-only observation");
     for (const v of [request.project, request.swarm, ...(request.source === "discovery" ? [] : [request.session])]) text(v, 64);
@@ -70,7 +71,7 @@ export class ResearchHarnessService {
       this.connections.set(id, connection);
       const hello = object(await connection.request("hello", { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION }));
       if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
-      if (this.closed || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before probing");
+      if (this.closed || this.ports.enabled?.() === false || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before probing");
       const capabilities = hello as unknown as ResearchHarnessCapabilities;
       if (request.source === "discovery" && capabilities.discovery !== true) throw new Error("Harness bridge does not support discovery observation");
       if (capabilities[request.mode] !== true) throw new Error(`Harness bridge does not support ${request.mode}`);
@@ -86,7 +87,7 @@ export class ResearchHarnessService {
         } finally { this.probes.delete(id); }
       }
       // Stop/close can win while hello or the compatibility probe is outstanding.
-      if (this.closed || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before dispatch");
+      if (this.closed || this.ports.enabled?.() === false || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before dispatch");
       this.append(id, [{ type: "harness", state: { ...state, state: "running", note: request.mode === "execute" ? "Execution dispatch recorded; no automatic replay." : "Observing source records; source work is not owned by this import." } }]);
       if (request.mode === "execute") {
         // Durable boundary above must remain before this potentially budget-spending call.

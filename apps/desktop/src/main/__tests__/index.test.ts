@@ -469,6 +469,7 @@ vi.mock("../shell/ipc/app-metadata", () => ({
 vi.mock("../shell/ipc/clipboard", () => ({
   registerClipboardIpcHandlers: registerClipboardIpcHandlersMock,
   disposeClipboardIpcHandlers: disposeClipboardIpcHandlersMock,
+  requestPasteWithoutFormatting: vi.fn(),
 }));
 
 vi.mock("../shell/ipc/app-icon-drag", () => ({
@@ -943,7 +944,8 @@ describe("bootstrapApp", () => {
     };
     const originalStarts = legacyOwnerBoot.events.flatMap((name) => starts[name.replace(/\s+/g, "")] ?? []);
     expect(events.filter((name) => name.endsWith(".start"))).toEqual(originalStarts);
-    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe"]);
+    // Research observes its experiment gate in addition to the existing config owners.
+    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe", "config.subscribe"]);
     expect(events.filter((name) => name.startsWith("federation.on"))).toEqual(["federation.onRemoteBackendEvent"]);
     expect(events.filter((name) => name.startsWith("registry.on"))).toEqual([
       "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",

@@ -26,23 +26,54 @@ beforeEach(() => {
 });
 afterEach(async () => { for (const service of services.splice(0)) await service.close(); db.close(); rmSync(fixture.tempDir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 
-function setup(options: { records?: unknown[]; execute?: () => Promise<unknown>; cancel?: (params: Record<string, unknown>) => Promise<unknown>; probe?: ResearchHarnessPorts["probe"] } = {}) {
+function setup(options: { records?: unknown[]; enabled?: () => boolean; hello?: () => Promise<unknown>; execute?: () => Promise<unknown>; cancel?: (params: Record<string, unknown>) => Promise<unknown>; probe?: ResearchHarnessPorts["probe"] } = {}) {
   const store = new ResearchStore(db);
   let delivered = false;
   const connection: ResearchHarnessConnection = { close: vi.fn(), request: vi.fn(async (method, params) => {
-    if (method === "hello") return { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION, execute: true, import: true, cancel: true, researchFunctions: true };
+    if (method === "hello") return await (options.hello?.() ?? Promise.resolve({ version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION, execute: true, import: true, cancel: true, researchFunctions: true }));
     if (method === "execute") return await (options.execute?.() ?? Promise.resolve({ admitted: true }));
     if (method === "cancel") return await (options.cancel?.(params) ?? Promise.resolve({ stopped: true, runId: params.runId, swarm: params.swarm }));
     if (method === "records") { const records = delivered ? [] : options.records ?? harnessRecords().slice(0, 4); delivered = true; return { swarm: "fixture-swarm", records }; }
     throw new Error("Unexpected request");
   }) };
-  const ports: ResearchHarnessPorts = { ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, changed: vi.fn(), now: () => 1000,
+  const ports: ResearchHarnessPorts = { enabled: options.enabled, ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, changed: vi.fn(), now: () => 1000,
     schedule: () => () => {}, onError: vi.fn(), open: vi.fn(() => connection), probe: options.probe ?? vi.fn(async () => {}) };
   const service = new ResearchHarnessService(store, ports); services.push(service);
   return { service, store, connection, ports };
 }
 
 describe("Harness lifecycle and real SQLite oracle", () => {
+  it.each(["import", "execute"] as const)("refuses disabled %s admission before any intent or process effect", async (mode) => {
+    const { service, store, ports } = setup({ enabled: () => false });
+    const result = await measureSqliteWrites(async () => {
+      await expect(service.start(request(mode), fixture.tempDir)).rejects.toThrow("Research runs are disabled");
+    });
+    expect(store.list(actor)).toHaveLength(0);
+    expect(ports.open).not.toHaveBeenCalled();
+    expect(ports.probe).not.toHaveBeenCalled();
+    expectSqliteWriteBudget({ scenario: "research-harness-disabled-admission", note: "Disabled import or execution is refused before intent, process admission or model work.", writes: result.writes });
+  });
+
+  it.each(["hello", "probe"] as const)("fences execution when the live experiment is disabled during %s", async (boundary) => {
+    let enabled = true;
+    const waiting = deferred<void>();
+    const gate = deferred<void>();
+    const { service, connection, ports } = setup({ enabled: () => enabled,
+      hello: async () => {
+        if (boundary === "hello") { waiting.resolve(); await gate.promise; }
+        return { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION, execute: true, import: true, cancel: true, researchFunctions: true };
+      },
+      probe: vi.fn(async () => { if (boundary === "probe") { waiting.resolve(); await gate.promise; } }),
+    });
+    const starting = service.start(request(), fixture.tempDir);
+    await waiting.promise;
+    enabled = false;
+    gate.resolve();
+    expect((await starting).status).toBe("interrupted");
+    expect(vi.mocked(connection.request).mock.calls.map(([method]) => method)).not.toContain("execute");
+    expect(ports.probe).toHaveBeenCalledTimes(boundary === "probe" ? 1 : 0);
+  });
+
   it("retains owner-selected model provenance instead of accepting a model identity from source records", async () => {
     const { service, connection } = setup();
     connection.model = { model: "owner-selected", endpointOrigin: "https://fixture.example" };

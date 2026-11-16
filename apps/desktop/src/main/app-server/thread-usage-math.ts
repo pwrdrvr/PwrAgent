@@ -950,7 +950,15 @@ export function estimateTaskMonitorUsageCost(params: {
 }
 
 export function formatTaskMonitorTokenCount(value: number): string {
-  return Math.round(value).toLocaleString();
+  return formatTaskMonitorNumber(Math.round(value));
+}
+
+// The default locale is process-owned. Reuse its formatter rather than
+// constructing ICU formatting state for every number in every gate card.
+const taskMonitorNumberFormatter = new Intl.NumberFormat();
+
+export function formatTaskMonitorNumber(value: number): string {
+  return taskMonitorNumberFormatter.format(value);
 }
 
 export function collectThreadUsageLinesFromReplay(
@@ -1096,8 +1104,8 @@ export function buildTaskMonitorUsageLine(params: {
  * renders and that are stable across processes take part; see the call site.
  */
 export function tokenMiserSubAgentProjectionChanged(
-  existing: ThreadSubAgentSummary,
-  next: ThreadSubAgentSummary,
+  existing: Pick<ThreadSubAgentSummary, "parentTurnId" | "tokenMiserAccounting">,
+  next: Pick<ThreadSubAgentSummary, "parentTurnId" | "tokenMiserAccounting">,
 ): boolean {
   return existing.parentTurnId !== next.parentTurnId
     || JSON.stringify(existing.tokenMiserAccounting)

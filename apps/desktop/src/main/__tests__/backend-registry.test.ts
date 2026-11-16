@@ -1,4 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
@@ -5798,6 +5799,21 @@ describe("DesktopBackendRegistry", () => {
   });
 
   describe("research handoff admission", () => {
+    it("research catalogs follow the live experiment and discovery gates", () => {
+      let enabled = false;
+      let discovery = true;
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), resolveCodexToolDiscovery: () => discovery });
+      onTestFinished(() => registry.close());
+      registry.setResearchHandler(async () => ({}), undefined, () => enabled);
+      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => DynamicToolSpec[] };
+      for (const [feature, discover] of [[false, true], [true, true], [true, false], [false, true]]) {
+        enabled = feature; discovery = discover;
+        const tools = catalog.buildCodexParentDynamicTools(false).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+        expect(tools).toHaveLength(feature && discover ? 5 : 0);
+        expect(tools.every((tool) => tool.deferLoading === true)).toBe(true);
+      }
+    });
+
     async function readyResearchRegistry() {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
@@ -28266,7 +28282,10 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
       return { backend: "codex", threadId: "late-empty-thread", executionMode: "default" };
     });
     const turn = vi.spyOn(registry, "startTurn");
-    const archive = vi.spyOn(registry, "archiveThread").mockResolvedValue({ backend: "codex", threadId: "late-empty-thread", archivedAt: 1, cleanup: [] });
+    // The directory service reaches archive through its host, which
+    // delegates to the archive coordinator.
+    const archive = vi.spyOn(registryModules(registry).threadArchiveCoordinator, "archiveThread")
+      .mockResolvedValue({ backend: "codex", threadId: "late-empty-thread", archivedAt: 1, cleanup: [] });
     let outcome: Promise<unknown> | undefined;
     try {
       const running = registry.materializeDirectoryLaunchpad({ operationId: "cancel-race", submittedAt: 100,
@@ -46856,7 +46875,9 @@ script = "printf setup"
       gitWorkspaceHandoffService: { handoff } as never,
     });
     onTestFinished(() => registry.close());
-    vi.spyOn(registry, "ensureDirectoryLaunchpad").mockResolvedValue({} as never);
+    // The workspace service reaches the launchpad through its host, which
+    // delegates to the directory service.
+    vi.spyOn(registryModules(registry).threadDirectoryService, "ensureDirectoryLaunchpad").mockResolvedValue({} as never);
     await registry.publishLocalEvent({ backend: "codex", notification: {
       method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } },
     } });
@@ -54825,11 +54846,12 @@ script = "printf setup"
     });
 
     let fenced = false;
-    const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => {
-      fenced = true;
-      try { return await work(); } finally { fenced = false; }
-    });
-    Object.assign(registry, { withThreadWorkspaceMutation });
+    // attach_thread_directory takes the archive coordinator's workspace fence.
+    const withThreadWorkspaceMutation = vi.spyOn(registryModules(registry).threadArchiveCoordinator, "withThreadWorkspaceMutation")
+      .mockImplementation(async (_identity, work) => {
+        fenced = true;
+        try { return await work(); } finally { fenced = false; }
+      });
     let fencedAtFirstOverlayRead: boolean | undefined;
     const readOverlay = overlayStore.getThreadOverlayState.bind(overlayStore);
     vi.spyOn(overlayStore, "getThreadOverlayState").mockImplementation(async (identity) => {

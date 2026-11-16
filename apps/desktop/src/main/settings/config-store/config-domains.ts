@@ -225,10 +225,12 @@ export function normalizeConfigDomains(params: {
                 // isolated compatibility runtime also owns its model catalog.
                 codexModelProviders: config.models?.codex?.providers?.map(
                   (entry) => `${entry.id}\u0000${entry.name}\u0000${entry.baseUrl}`
-                    + (entry.compatibility ? `\u0000${JSON.stringify({
+                    + (entry.compatibility || entry.toolDiscovery || entry.modelMetadata?.length ? `\u0000${JSON.stringify({
                         compatibility: entry.compatibility,
+                        toolDiscovery: entry.toolDiscovery,
                         models: entry.models,
                         catalogPath: entry.catalogPath,
+                        modelMetadata: entry.modelMetadata,
                       })}` : ""),
                 ),
               }),

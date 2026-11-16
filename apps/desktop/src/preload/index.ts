@@ -41,6 +41,8 @@ import {
   WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL,
 } from "../shared/ipc";
 import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
+import { createPlainTextPasteSubscription } from "./plain-text-paste";
+import { PASTE_WITHOUT_FORMATTING_CHANNEL } from "../shared/plain-text-paste";
 import type {
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -1331,6 +1333,8 @@ const desktopApi = Object.freeze({
     return () => { ipcRenderer.removeListener(NATIVE_VOICE_EVENT_CHANNEL, listener); };
   },
   ping: () => "pong",
+  onPasteWithoutFormattingRequested: createPlainTextPasteSubscription(ipcRenderer),
+  pasteWithoutFormatting: (): void => { ipcRenderer.send(PASTE_WITHOUT_FORMATTING_CHANNEL); },
   replayFixtureActive: Boolean(process.env.PWRAGENT_REPLAY_FIXTURE_PATH),
   // Clipboard writes go through the main process: the sandboxed preload's
   // `electron` module does not expose `clipboard`.

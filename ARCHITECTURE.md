@@ -105,11 +105,20 @@ through `handoff_task`.
 The Research panel binds its exact objective, worker count, deadline and
 workspace choice to an in-memory request before submitting it to the
 coordinator. That request is caller-scoped, single-use and expires after five
-minutes without admission. It is neither persisted nor federated. The five
-ordinary functions `research_start`, `research_read`, `research_update`,
-`research_search` and `research_assign` remain eager when catalog discovery is
-enabled; native tool search is not a
-requirement of the research protocol.
+minutes without admission. It is neither persisted nor federated. Research is
+an opt-in, default-off experiment stored as `experimental.research_enabled`.
+Its context-rail tab, native/MCP catalogs, IPC and dispatch require this flag
+and Codex Tool Discovery. The five ordinary functions `research_start`,
+`research_read`, `research_update`, `research_search` and `research_assign`
+remain deferred and are discovered on demand; they have no eager exemption.
+Providers without native tool search can use the existing portable discovery
+transport. Disabling the feature or discovery fences admissions immediately
+and stops owned active runs through the existing cancellation lifecycle.
+Retained evidence is preserved for re-enabling. Missing or malformed flags
+remain off, and stale loaded schemas cannot bypass the live gate.
+Disabling a three-worker run uses the existing five-commit stop budget,
+127,720 WAL bytes (approximately 0.128 MB/day at one active disable per day).
+Unchanged disabled settings and idle checks introduce no research writes.
 
 `research_runs`, `research_events` and `research_workers` retain PwrAgent-owned
 structured state, not provider transcripts. Each mutation compares the

@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BONSAI_2_27B_MODEL_ID,
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
   isValidCodexModelProviderId,
@@ -24,6 +25,7 @@ import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
+import { Select } from "../../components/Select";
 
 type RateDraft = { input: string; output: string; cached: string };
 
@@ -41,11 +43,15 @@ type ProviderDraft = {
   listed: string[];
   discoverModels: boolean;
   local: boolean;
+  contextWindowCap: string;
   rates: Record<string, RateDraft>;
   /** The Codex config provider this draft was prefilled from. */
   imported?: CodexModelProviderImportCandidate;
   compatibility?: "bonsai";
+  toolDiscovery?: "portable";
   catalogPath?: string;
+  modelMetadata?: CodexProviderCatalogModel[];
+  testModel?: string;
 };
 
 const EMPTY_RATE: RateDraft = { input: "", output: "", cached: "" };
@@ -94,6 +100,7 @@ export function CodexModelProvidersSettings(props: {
   onRefreshCatalogs?: (providerId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<ProviderDraft>();
+  const testGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [test, setTest] = useState<ProviderTest>();
@@ -127,6 +134,7 @@ export function CodexModelProvidersSettings(props: {
   );
 
   const close = () => {
+    testGeneration.current += 1;
     setDraft(undefined);
     setError(undefined);
     setTest(undefined);
@@ -137,7 +145,10 @@ export function CodexModelProvidersSettings(props: {
     if (!draft) return true;
     let next: CodexModelProviderSettings[];
     try {
-      const provider = providerFromDraft(draft);
+      const provider = providerFromDraft(draft, providerModelSource(draft, editingCatalog, test).models);
+      if (provider.toolDiscovery === "portable" && !provider.modelMetadata?.some(model => model.supportsPortableDiscovery)) {
+        throw new Error("Choose a model and run Test connection to verify portable discovery before saving.");
+      }
       const others = props.providers
         .filter((entry) => entry.id !== draft.existingId)
         .map(stripKeyState);
@@ -207,21 +218,55 @@ export function CodexModelProvidersSettings(props: {
     if (!draft || !props.desktopApi?.testCodexModelProvider) return;
     let provider: CodexModelProviderSettings;
     try {
-      [provider] = validateCodexModelProviders([providerFromDraft(draft)]);
+      [provider] = validateCodexModelProviders([
+        providerFromDraft(draft, providerModelSource(draft, editingCatalog, test).models),
+      ]);
+      const offered = providerModelRows(providerModelSource(draft, editingCatalog, test).models, draft.listed);
+      if (draft.testModel && offered.some((model) => model.id === draft.testModel)) {
+        provider = { ...provider, models: [draft.testModel] };
+      }
     } catch (problem) {
       setTest({ running: false, error: describeError(problem) });
       return;
     }
     // The URL as the form holds it, so the table can tell when it changes.
     const testedUrl = draft.baseUrl.trim();
+    const generation = testGeneration.current;
     setTest({ running: true, baseUrl: testedUrl });
     try {
       const result = await props.desktopApi.testCodexModelProvider({
         provider,
         ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+        ...(draft.removeKey ? { useStoredApiKey: false } : {}),
       });
+      if (generation !== testGeneration.current) return;
       setTest({ running: false, result, baseUrl: testedUrl });
+      if ((result.models.ok && result.models.items) || result.discovery || result.portableDiscovery) {
+        setDraft((current) => {
+          if (!current || current.id !== draft.id || !sameBaseUrl(current.baseUrl, testedUrl)
+            || current.apiKey !== draft.apiKey || current.removeKey !== draft.removeKey
+            || current.toolDiscovery !== draft.toolDiscovery) return current;
+          const previous = new Map((current.modelMetadata ?? []).map((model) => [model.id, model]));
+          for (const model of result.models.ok ? result.models.items ?? [] : []) previous.set(model.id, {
+            ...model, ...(previous.get(model.id)?.supportsSearchTool === undefined ? {} : {
+              supportsSearchTool: previous.get(model.id)!.supportsSearchTool,
+            }),
+            ...(previous.get(model.id)?.supportsPortableDiscovery === undefined ? {} : {
+              supportsPortableDiscovery: previous.get(model.id)!.supportsPortableDiscovery,
+            }),
+          });
+          if (result.discovery) previous.set(result.discovery.model, {
+            ...(previous.get(result.discovery.model) ?? { id: result.discovery.model }), supportsSearchTool: result.discovery.ok,
+          });
+          if (result.portableDiscovery) previous.set(result.portableDiscovery.model, {
+            ...(previous.get(result.portableDiscovery.model) ?? { id: result.portableDiscovery.model }),
+            supportsPortableDiscovery: result.portableDiscovery.ok,
+          });
+          return { ...current, modelMetadata: [...previous.values()] };
+        });
+      }
     } catch (problem) {
+      if (generation !== testGeneration.current) return;
       setTest({ running: false, error: describeError(problem), baseUrl: testedUrl });
     }
   };
@@ -264,7 +309,13 @@ export function CodexModelProvidersSettings(props: {
       test={test}
       refresh={refresh}
       error={error}
-      onChange={(patch) => setDraft((current) => current ? applyPatch(current, patch) : current)}
+      onChange={(patch) => {
+        if (patch.baseUrl !== undefined || patch.apiKey !== undefined || patch.removeKey !== undefined || "toolDiscovery" in patch) {
+          testGeneration.current += 1;
+          setTest(undefined);
+        }
+        setDraft((current) => current ? applyPatch(current, patch) : current);
+      }}
       onSave={() => void save()}
       onCancel={close}
       onRemove={draft.existingId ? () => void remove() : undefined}
@@ -417,6 +468,7 @@ function ProviderEditor(props: {
   onRefresh?: () => void;
 }) {
   const draft = props.draft;
+  const testModels = providerModelRows(providerModelSource(draft, props.catalog, props.test).models, draft.listed);
   const idProblem = draft.id && !isValidCodexModelProviderId(draft.id)
     ? RESERVED_CODEX_MODEL_PROVIDER_IDS.has(draft.id)
       ? `"${draft.id}" is reserved. Choose another id.`
@@ -499,6 +551,18 @@ function ProviderEditor(props: {
         }
       />
       <SettingsField
+        label="Tool discovery"
+        sub="Portable loads tool definitions as needed through ordinary function calls. Test each model before using it. Start a new thread when changing discovery mode."
+        control={<Select
+          aria-label="Tool discovery"
+          className="settings-input"
+          disabled={props.disabled || props.test?.running}
+          value={draft.toolDiscovery ?? "default"}
+          options={[{ value: "default", label: "Provider default" }, { value: "portable", label: "Portable" }]}
+          onChange={(value) => props.onChange({ toolDiscovery: value === "portable" ? "portable" : undefined })}
+        />}
+      />
+      <SettingsField
         label="API key"
         sub={keyHelp}
         control={
@@ -514,6 +578,18 @@ function ProviderEditor(props: {
               value={draft.apiKey}
               onChange={(event) => props.onChange({ apiKey: event.currentTarget.value })}
             />
+            {props.canTest && testModels.length ? (
+              <Select
+                aria-label="Model to test"
+                className="settings-input"
+                disabled={props.disabled || props.test?.running}
+                value={draft.testModel ?? ""}
+                onChange={(value) => props.onChange({ testModel: value || undefined })}
+                options={[{ value: "", label: "First available model" }, ...testModels.map((model) => ({
+                  value: model.id, label: model.label ?? model.id,
+                }))]}
+              />
+            ) : null}
             <div className="settings-inline-actions">
               {props.canTest ? (
                 <button
@@ -539,8 +615,12 @@ function ProviderEditor(props: {
             {props.test && !props.test.running ? <ProviderTestResult test={props.test} /> : null}
             {props.canTest ? (
               <p className="settings-field__help">
-                The test reads /models and sends one short /responses request with instructions and namespaced
-                tools, which the provider may bill. A passing check does not validate a full PwrAgent turn.
+                The test reads /models and sends up to {draft.toolDiscovery === "portable" ? "ten" : "four"} short /responses requests, which the provider may bill.
+                {draft.toolDiscovery === "portable"
+                  ? " It also runs a read-only fixture through Codex to check portable discovery and execution."
+                  : " It checks ordinary tools and discovery through a read-only fixture."}
+                {" "}Save to apply the model metadata.
+                {draft.toolDiscovery !== "portable" ? " A passing check does not validate a full PwrAgent turn." : null}
               </p>
             ) : null}
           </>
@@ -565,6 +645,21 @@ function ProviderEditor(props: {
             disabled={props.disabled}
             label="Runs locally"
             onChange={(local) => props.onChange({ local })}
+          />
+        }
+      />
+      <SettingsField
+        label="Context cap (tokens)"
+        sub="Optional budget for this provider. Local servers default to 65,536 tokens; remote models use their advertised limits (272,000 if unknown). A cap never increases a discovered limit. Automatic compaction starts at 75% of this provider's smallest model budget."
+        control={
+          <input
+            aria-label="Context cap (tokens)"
+            className="settings-input"
+            disabled={props.disabled}
+            inputMode="numeric"
+            placeholder="Automatic"
+            value={draft.contextWindowCap}
+            onChange={(event) => props.onChange({ contextWindowCap: event.currentTarget.value })}
           />
         }
       />
@@ -708,6 +803,8 @@ function ProviderModels(props: {
             <tbody>
               {shown.map((row) => {
                 const rate = draft.rates[row.id] ?? EMPTY_RATE;
+                const savedMetadata = draft.modelMetadata?.find((model) => model.id === row.id);
+                const metadata = { ...savedMetadata, ...row };
                 const setRate = (patch: Partial<RateDraft>) =>
                   props.onChange({ rates: { ...draft.rates, [row.id]: { ...rate, ...patch } } });
                 return (
@@ -719,6 +816,12 @@ function ProviderModels(props: {
                           {row.added ? <span className="codex-provider-models__tag">Added</span> : null}
                         </span>
                         {row.label ? <code>{row.id}</code> : null}
+                        <span className="codex-provider-models__muted">
+                          {metadata.contextWindow ? `${metadata.contextWindow.toLocaleString("en-US")} tokens advertised` : "Context unknown"}
+                          {" · "}{draft.toolDiscovery === "portable"
+                            ? metadata.supportsPortableDiscovery ? "Portable discovery verified" : "Portable discovery not verified"
+                            : draft.compatibility === "bonsai" || metadata.supportsSearchTool === true ? "Tool discovery enabled" : "Tool discovery not enabled"}
+                        </span>
                       </span>
                     </th>
                     <td>
@@ -877,6 +980,21 @@ function ProviderTestResult(props: {
           }`
           : result.models.error ?? "Failed"}
       </li>
+      {result.discovery ? (
+        <li className={result.discovery.ok ? "is-ok" : "is-err"}>
+          <strong>Provider discovery</strong>{" "}
+          {result.discovery.ok ? `Verified for ${result.discovery.model}` : result.discovery.error ?? "Not verified"}
+        </li>
+      ) : null}
+      {result.portableDiscovery ? (
+        <li className={result.portableDiscovery.ok ? "is-ok" : "is-err"}>
+          <strong>Portable discovery</strong>{" "}
+          {result.portableDiscovery.ok ? `Verified through Codex for ${result.portableDiscovery.model}` : result.portableDiscovery.error ?? "Not verified"}
+          {result.portableDiscovery.ok ? ` · ${result.portableDiscovery.requests} requests` : null}
+          {result.portableDiscovery.initialToolBytes === undefined ? null : ` · ${(result.portableDiscovery.initialToolBytes / 1024).toFixed(1)} KiB initial tool definitions`}
+          {result.portableDiscovery.initialRequestBytes === undefined ? null : ` · ${(result.portableDiscovery.initialRequestBytes / 1024).toFixed(1)} KiB initial request`}
+        </li>
+      ) : null}
       <li className={responses.ok ? "is-ok" : responses.skipped ? "is-skip" : "is-err"}>
         <strong>/responses</strong>{" "}
         {responses.ok
@@ -997,6 +1115,7 @@ function emptyDraft(): ProviderDraft {
     listed: [],
     discoverModels: true,
     local: false,
+    contextWindowCap: "",
     rates: {},
   };
 }
@@ -1021,23 +1140,45 @@ function draftFromProvider(provider: DesktopCodexModelProvider): ProviderDraft {
     listed: [...(provider.models ?? [])],
     discoverModels: provider.discoverModels !== false,
     local: provider.local === true,
+    contextWindowCap: provider.contextWindowCap?.toString() ?? "",
     rates,
     compatibility: provider.compatibility,
+    toolDiscovery: provider.toolDiscovery,
     catalogPath: provider.catalogPath,
+    modelMetadata: provider.modelMetadata,
   };
 }
 
 function applyPatch(draft: ProviderDraft, patch: Partial<ProviderDraft>): ProviderDraft {
   const next = { ...draft, ...patch };
+  if ((patch.baseUrl !== undefined && patch.baseUrl !== draft.baseUrl)
+    || (patch.apiKey !== undefined && patch.apiKey !== draft.apiKey)
+    || (patch.removeKey !== undefined && patch.removeKey !== draft.removeKey)) {
+    next.modelMetadata = undefined;
+  }
+  if (patch.baseUrl !== undefined && patch.baseUrl !== draft.baseUrl) next.testModel = undefined;
   if (patch.name !== undefined && !next.idEdited && !next.existingId) {
     next.id = slugifyProviderId(patch.name);
   }
   return next;
 }
 
-function providerFromDraft(draft: ProviderDraft): CodexModelProviderSettings {
+function providerFromDraft(draft: ProviderDraft, discovered: readonly CodexProviderCatalogModel[] = []): CodexModelProviderSettings {
   const models = [...new Set(draft.listed.map((model) => model.trim()).filter(Boolean))];
+  // An existing Bonsai runtime needs one explicit model even when its choice
+  // came from discovery. A generic endpoint advertising the alias does not
+  // establish Bonsai compatibility or opt the provider into its bridge.
+  if (!models.length && draft.compatibility === "bonsai") {
+    const alias = discovered.find((model) => model.id === BONSAI_2_27B_MODEL_ID);
+    if (alias) models.push(alias.id);
+    else if (discovered.length === 1) models.push(discovered[0].id);
+  }
   const rates: CodexModelProviderRate[] = [];
+  const contextWindowCap = draft.contextWindowCap.trim() ? Number(draft.contextWindowCap) : undefined;
+  if (contextWindowCap !== undefined && (!/^\d+$/u.test(draft.contextWindowCap.trim())
+    || !Number.isInteger(contextWindowCap) || contextWindowCap < 1024 || contextWindowCap > 2_000_000)) {
+    throw new Error("Context cap must be a whole number from 1,024 to 2,000,000 tokens.");
+  }
   if (!draft.local) {
     // A rate is kept for any model, listed by the endpoint or added here.
     for (const [model, rate] of Object.entries(draft.rates)) {
@@ -1062,7 +1203,10 @@ function providerFromDraft(draft: ProviderDraft): CodexModelProviderSettings {
     ...(draft.local ? { local: true } : {}),
     ...(rates.length ? { rates } : {}),
     ...(draft.compatibility ? { compatibility: draft.compatibility } : {}),
+    ...(draft.toolDiscovery ? { toolDiscovery: draft.toolDiscovery } : {}),
     ...(draft.catalogPath ? { catalogPath: draft.catalogPath } : {}),
+    ...(draft.modelMetadata?.length ? { modelMetadata: draft.modelMetadata } : {}),
+    ...(contextWindowCap === undefined ? {} : { contextWindowCap }),
   };
 }
 
@@ -1103,6 +1247,7 @@ function savedProviderCatalog(
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
         ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
         ...(model.supportsImage === undefined ? {} : { supportsImage: model.supportsImage }),
+        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
       }];
     }),
   };

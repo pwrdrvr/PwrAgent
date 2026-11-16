@@ -4,11 +4,12 @@ import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { seedResearchPerformanceState } from "./fixtures/research-performance-state-seeding";
+import { enableResearchFixture } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 test("1,000 contributions across ten workers stay navigable within the Research performance budget", async ({ playwright: _playwright }, testInfo) => {
   const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
-    preLaunchHook: async (homeRoot) => seedResearchPerformanceState(stateDbPathForHomeRoot(homeRoot)) });
+    preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedResearchPerformanceState(stateDbPathForHomeRoot(homeRoot)); } });
   const measurements: Record<string, unknown> = { events: 1014, workerIdentities: 10, concurrentLimit: 8, interactionBudgetMs: 2_000, heapGrowthBudgetBytes: 64 * 1024 * 1024 };
   try {
     await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();

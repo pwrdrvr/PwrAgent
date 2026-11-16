@@ -5,7 +5,7 @@ import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition";
 export type ResearchToolName = "research_start" | "research_read" | "research_update" | "research_search" | "research_assign";
 export type ResearchAgentHandler = (name: ResearchToolName, args: Record<string, unknown>, context: AgentToolCallContext) => Promise<unknown>;
 
-/** Ordinary eager functions; research never requires native tool search. */
+/** Research schemas are discovered on demand after the experiment is enabled. */
 export function buildResearchToolDefinitions(handler?: ResearchAgentHandler): AgentToolDefinition[] {
   if (!handler) return [];
   return (["research_start", "research_read", "research_update", "research_search", "research_assign"] as const).map((name) => ({
@@ -13,7 +13,7 @@ export function buildResearchToolDefinitions(handler?: ResearchAgentHandler): Ag
     name,
     description: descriptions[name],
     inputSchema: schemas[name],
-    deferLoading: false,
+    deferLoading: true,
     annotations: { readOnlyHint: name === "research_read" || name === "research_search" },
     dispatch: async (args, context) => {
       try { return agentToolSuccess(await handler(name, args, context)); }

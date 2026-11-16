@@ -1440,6 +1440,8 @@ export type DesktopSettingsSnapshot = {
     tokenMiserDefaultEnabled?: DesktopSettingsValue<boolean>;
     /** Load PwrAgent tool schemas on demand in Codex Code Mode. */
     codexToolDiscovery?: DesktopSettingsValue<boolean>;
+    /** Opt-in native research UI and tools. Defaults to off. */
+    researchEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in focused questions over retained output; independent of ordinary gating. */
     tokenMiserFocusedSummariesEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in helper review for ambiguous poll-shaped parent activity. */
@@ -1816,6 +1818,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
+    researchEnabled?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;
@@ -2180,6 +2183,8 @@ export type TestCodexModelProviderRequest = {
   provider: CodexModelProviderSettings;
   /** A key typed but not saved yet. Without it, the stored key is used. */
   apiKey?: string;
+  /** False when the draft removes the saved key; test the resulting anonymous connection. */
+  useStoredApiKey?: boolean;
 };
 
 export type CreateDesktopCodexAuthProfileRequest = {

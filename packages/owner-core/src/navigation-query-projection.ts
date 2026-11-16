@@ -770,7 +770,11 @@ function selectQueryThreads(params: {
       if (query.excludeFullAccess && thread.executionMode === "full-access") return false;
       if (query.allowedBackends && !query.allowedBackends.includes(thread.source)) return false;
       if (query.directoryKey && (!members || !members.has(threadKey(thread)))) return false;
-      return !filter || [thread.id, thread.title, thread.summary, thread.agent?.name, thread.agent?.instructions, thread.projectKey,
+      if (!filter) return true;
+      // Preserve searches on the automation picker's displayed provider metadata.
+      const provider = thread.source.startsWith("acp:") ? thread.source.slice("acp:".length) : thread.source;
+      const pickerText = `${thread.agent?.name ?? thread.title} ${provider} - ${thread.title} ${thread.title}`;
+      return [pickerText, thread.id, thread.title, thread.summary, thread.agent?.name, thread.agent?.instructions, thread.projectKey,
         ...thread.linkedDirectories.flatMap((linked) => [linked.label, linked.path, linked.worktreePath])]
         .some((value) => value?.toLowerCase().includes(filter));
     }).sort(compareUpdated);

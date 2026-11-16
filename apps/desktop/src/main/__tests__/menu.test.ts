@@ -60,6 +60,7 @@ function buildTemplate(
       openThreadMaintenance: vi.fn(),
       openThreadSearch: vi.fn(),
       openWebsite: vi.fn(),
+      pasteWithoutFormatting: vi.fn(),
       quit: vi.fn(),
       replayOnboarding: vi.fn(),
       showAbout: vi.fn(),
@@ -154,6 +155,17 @@ const HELP_SHARED = [
 ];
 
 describe("buildApplicationMenuTemplate", () => {
+  it.each([true, false])("offers one literal paste command on CmdOrCtrl+Shift+V (macOS: %s)", (isMac) => {
+    const pasteWithoutFormatting = vi.fn();
+    const items = allItems(buildTemplate(false, { isMac, actions: { pasteWithoutFormatting } }));
+    const paste = items.find((item) => item.label === "Paste Without Formatting");
+    expect(paste?.accelerator).toBe("CmdOrCtrl+Shift+V");
+    expect(items.filter((item) => item.role === "paste")).toHaveLength(1);
+    expect(items.some((item) => item.role === "pasteAndMatchStyle")).toBe(false);
+    click(items, "Paste Without Formatting");
+    expect(pasteWithoutFormatting).toHaveBeenCalledOnce();
+  });
+
   // The PwrSuite menu standard (v1). PwrGit and PwrSnap pin the same order
   // in their own menu tests; a change here is a change to the suite standard.
   describe("PwrSuite menu standard on macOS", () => {

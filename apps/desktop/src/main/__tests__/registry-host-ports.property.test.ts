@@ -9,6 +9,7 @@ import type { ManagedReviewServiceHost } from "../app-server/managed-review-serv
 import type { RegistryHostPorts, RegistryHostQueryResult } from "../app-server/registry-host-ports";
 import type { SubAgentMonitorServiceHost } from "../app-server/subagent-monitor-service";
 import type { ThreadArchiveCoordinatorHost } from "../app-server/thread-archive-coordinator";
+import type { ThreadDirectoryServiceHost } from "../app-server/thread-directory-service";
 import type { ThreadInspectionToolsHost } from "../app-server/thread-inspection-tools";
 import type { ThreadMcpConnectionsHost } from "../app-server/thread-mcp-connections";
 import type { ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
@@ -19,6 +20,7 @@ type Hosts = {
   ManagedReviewServiceHost: ManagedReviewServiceHost;
   SubAgentMonitorServiceHost: SubAgentMonitorServiceHost;
   ThreadArchiveCoordinatorHost: ThreadArchiveCoordinatorHost;
+  ThreadDirectoryServiceHost: ThreadDirectoryServiceHost;
   ThreadInspectionToolsHost: ThreadInspectionToolsHost;
   ThreadMcpConnectionsHost: ThreadMcpConnectionsHost;
   ThreadUsageLedgerHost: ThreadUsageLedgerHost;
@@ -99,6 +101,7 @@ it("declares no operation separately in multiple module hosts", () => {
     ManagedReviewServiceHost: true,
     SubAgentMonitorServiceHost: true,
     ThreadArchiveCoordinatorHost: true,
+    ThreadDirectoryServiceHost: true,
     ThreadInspectionToolsHost: true,
     ThreadMcpConnectionsHost: true,
     ThreadUsageLedgerHost: true,

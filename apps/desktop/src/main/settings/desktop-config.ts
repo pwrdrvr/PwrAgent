@@ -184,6 +184,7 @@ export type DesktopSettingsConfig = {
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
+    researchEnabled?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;
@@ -950,6 +951,9 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "codex_tool_discovery"],
       patch.experimental.codexToolDiscovery,
     );
+  }
+  if (patch.experimental?.researchEnabled !== undefined) {
+    set(["experimental", "research_enabled"], patch.experimental.researchEnabled);
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
     set(
@@ -2414,6 +2418,7 @@ function normalizeDesktopConfig(
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
+      researchEnabled: readBoolean(experimental?.research_enabled),
       threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,
@@ -2676,7 +2681,7 @@ function normalizeDesktopConfig(
         managedBuilds: readBoolean(codex?.managed_builds),
         managedBuildChannel: readUpdateChannel(codex?.managed_build_channel),
         localModelIds: codex?.local_model_ids === undefined ? undefined : validateLocalModelIds(codex.local_model_ids),
-        providers: readCodexModelProviders(codex?.providers, codex?.provider_rates),
+        providers: readCodexModelProviders(codex?.providers, codex?.provider_rates, codex?.provider_model_metadata),
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
@@ -3677,15 +3682,18 @@ function normalizeHelperModelChoice(
 function readCodexModelProviders(
   value: unknown,
   ratesValue: unknown,
+  metadataValue?: unknown,
 ): CodexModelProviderSettings[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
     throw new Error("models.codex.providers must be a table array.");
   }
   const rateRows = Array.isArray(ratesValue) ? ratesValue : [];
+  const metadataRows = Array.isArray(metadataValue) ? metadataValue : [];
   return validateCodexModelProviders(value.map((row) => {
     const entry = row && typeof row === "object" ? row as Record<string, unknown> : {};
     const id = typeof entry.id === "string" ? entry.id.trim() : entry.id;
+    const modelMetadata = metadataRows.filter((row) => row?.provider === id && row.base_url === entry.base_url);
     const rates = rateRows
       .filter((rate) => rate && typeof rate === "object" && (rate as Record<string, unknown>).provider === id)
       .map((rate) => {
@@ -3705,7 +3713,19 @@ function readCodexModelProviders(
       ...(entry.discover_models === undefined ? {} : { discoverModels: entry.discover_models }),
       ...(entry.local === undefined ? {} : { local: entry.local }),
       ...(entry.compatibility === undefined ? {} : { compatibility: entry.compatibility }),
+      ...(entry.tool_discovery === undefined ? {} : { toolDiscovery: entry.tool_discovery }),
       ...(entry.catalog_path === undefined ? {} : { catalogPath: entry.catalog_path }),
+      ...(entry.context_window_cap === undefined ? {} : { contextWindowCap: entry.context_window_cap }),
+      ...(modelMetadata.length ? { modelMetadata: modelMetadata.map((row) => ({
+        id: row.model,
+        ...(row.label === undefined ? {} : { label: row.label }),
+        ...(row.context_window === undefined ? {} : { contextWindow: row.context_window }),
+        ...(row.supports_image === undefined ? {} : { supportsImage: row.supports_image }),
+        ...(row.reasoning_efforts === undefined ? {} : { reasoningEfforts: row.reasoning_efforts }),
+        ...(row.default_reasoning_effort === undefined ? {} : { defaultReasoningEffort: row.default_reasoning_effort }),
+        ...(row.supports_search_tool === undefined ? {} : { supportsSearchTool: row.supports_search_tool }),
+        ...(row.supports_portable_discovery === undefined ? {} : { supportsPortableDiscovery: row.supports_portable_discovery }),
+      })) } : {}),
       ...(rates.length ? { rates } : {}),
     };
   }));
@@ -3722,7 +3742,9 @@ function codexModelProviderTableEdits(
     ...(provider.discoverModels === undefined ? {} : { discover_models: provider.discoverModels }),
     ...(provider.local ? { local: true } : {}),
     ...(provider.compatibility ? { compatibility: provider.compatibility } : {}),
+    ...(provider.toolDiscovery ? { tool_discovery: provider.toolDiscovery } : {}),
     ...(provider.catalogPath ? { catalog_path: provider.catalogPath } : {}),
+    ...(provider.contextWindowCap === undefined ? {} : { context_window_cap: provider.contextWindowCap }),
   }));
   const rateRows = providers.flatMap((provider) => (provider.rates ?? []).map((rate) => ({
     provider: provider.id,
@@ -3731,6 +3753,16 @@ function codexModelProviderTableEdits(
     ...(rate.outputPerMillion === undefined ? {} : { output: rate.outputPerMillion }),
     ...(rate.cachedInputPerMillion === undefined ? {} : { cached_input: rate.cachedInputPerMillion }),
   })));
+  const metadataRows = providers.flatMap((provider) => (provider.modelMetadata ?? []).map((model) => ({
+    provider: provider.id, base_url: provider.baseUrl, model: model.id,
+    ...(model.label === undefined ? {} : { label: model.label }),
+    ...(model.contextWindow === undefined ? {} : { context_window: model.contextWindow }),
+    ...(model.supportsImage === undefined ? {} : { supports_image: model.supportsImage }),
+    ...(model.reasoningEfforts === undefined ? {} : { reasoning_efforts: model.reasoningEfforts }),
+    ...(model.defaultReasoningEffort === undefined ? {} : { default_reasoning_effort: model.defaultReasoningEffort }),
+    ...(model.supportsSearchTool === undefined ? {} : { supports_search_tool: model.supportsSearchTool }),
+    ...(model.supportsPortableDiscovery === undefined ? {} : { supports_portable_discovery: model.supportsPortableDiscovery }),
+  })));
   return [
     providerRows.length
       ? { op: "setTableArray", path: ["models", "codex", "providers"], value: providerRows }
@@ -3738,6 +3770,9 @@ function codexModelProviderTableEdits(
     rateRows.length
       ? { op: "setTableArray", path: ["models", "codex", "provider_rates"], value: rateRows }
       : { op: "deleteTableArray", path: ["models", "codex", "provider_rates"] },
+    metadataRows.length
+      ? { op: "setTableArray", path: ["models", "codex", "provider_model_metadata"], value: metadataRows }
+      : { op: "deleteTableArray", path: ["models", "codex", "provider_model_metadata"] },
   ];
 }
 

@@ -42,6 +42,7 @@ import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
+import { getDesktopApi } from "../../lib/desktop-api";
 import { ensureStatusPulse } from "../../lib/status-pulse";
 import {
   ChipContextMenu,
@@ -1745,17 +1746,17 @@ function insertWysiwygLineBreak(editor: TiptapEditor): boolean {
 
   if (editor.isActive("listItem")) {
     return editor.commands.first(({ commands }) => [
-      () => commands.splitListItem("listItem"),
+      () => commands.splitListItem("listItem", { keepMarks: false }),
       () => commands.createParagraphNear(),
       () => commands.liftEmptyBlock(),
-      () => commands.splitBlock(),
+      () => commands.splitBlock({ keepMarks: false }),
     ]);
   }
 
   return editor.commands.first(({ commands }) => [
     () => commands.createParagraphNear(),
     () => commands.liftEmptyBlock(),
-    () => commands.splitBlock(),
+    () => commands.splitBlock({ keepMarks: false }),
   ]);
 }
 
@@ -1845,6 +1846,24 @@ function insertParagraphBeforeInitialCodeBlock(editor: TiptapEditor): boolean {
 
 function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
   return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
+}
+
+function insertLiteralClipboardText(editor: TiptapEditor, text: string): void {
+  if (!text) return;
+  closeEditorHistory(editor);
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const { state, schema } = editor;
+  const transaction = state.tr.setStoredMarks([]);
+  if (state.selection.$from.parent.type.spec.code && state.selection.$to.parent.type.spec.code) {
+    transaction.insertText(normalized);
+  } else {
+    const nodes = splitTextContent(normalized).map((node) =>
+      node.type === "text" ? schema.text(node.text!) : schema.nodes.hardBreak.create(),
+    );
+    transaction.replaceSelection(schema.nodes.paragraph.create(null, nodes).slice(0));
+  }
+  editor.view.dispatch(transaction.setStoredMarks([]).scrollIntoView());
+  closeEditorHistory(editor);
 }
 
 function normalizeClipboardText(text: string): string {
@@ -3261,6 +3280,18 @@ export const ComposerTiptapInput = forwardRef<
 
   editorRef.current = editor;
 
+  useEffect(() => {
+    if (!editor) return;
+    return getDesktopApi()?.onPasteWithoutFormattingRequested?.((text) => {
+      if (!editor.view.dom.contains(document.activeElement)) return false;
+      // Claim disabled/read-only composers without editing or falling back.
+      if (!propsRef.current.readOnly && !propsRef.current.disabled) {
+        insertLiteralClipboardText(editor, text);
+      }
+      return true;
+    });
+  }, [editor]);
+
   useLayoutEffect(() => {
     if (!editor) {
       return;
@@ -3744,6 +3775,18 @@ export const ComposerTiptapInput = forwardRef<
       onKeyDownCapture={(event) => {
         if (!editor || event.defaultPrevented || propsRef.current.readOnly) {
           return;
+        }
+        if (
+          event.key.toLowerCase() === "v" && event.shiftKey && !event.altKey
+          && (isMacPlatform() ? event.metaKey : event.ctrlKey)
+        ) {
+          const paste = getDesktopApi()?.pasteWithoutFormatting;
+          if (paste) {
+            event.preventDefault();
+            event.stopPropagation();
+            paste();
+            return;
+          }
         }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           if (

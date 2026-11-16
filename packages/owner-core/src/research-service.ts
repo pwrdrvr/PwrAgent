@@ -14,6 +14,7 @@ export type ResearchAssignmentReceipt = { runId: string; itemId: string; version
 export class ResearchAdmissionRefused extends Error {}
 export type ResearchPorts = {
   stopHarness?: (id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string) => Promise<ResearchRun>;
+  enabled?: () => boolean;
   spawn: (context: ResearchExecutionContext, task: string, title: string, workspaceMode: StartResearchRequest["workspaceMode"],
     onCreated: (worker: ResearchThread) => void) => Promise<ResearchThread & { turnId?: string }>;
   stop: (worker: NonNullable<ResearchApproach["worker"]>) => Promise<void>;
@@ -622,6 +623,11 @@ export class ResearchService {
     }
   }
 
+  async stopOwnedRuns(reason: string): Promise<void> {
+    await Promise.all(this.storage.list().filter((run) => run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status))
+      .map(async (run) => await this.stop(run.id, this.operator(run), "stopped", reason)));
+  }
+
   private finishStopping(run: ResearchRun): void {
     if (run.status !== "stopping"
       || run.deliveries.some((d) => this.pendingDeliveries.has(`${run.id}:${d.id}`) || !["cancelled", "ended"].includes(d.state))
@@ -651,8 +657,11 @@ export class ResearchService {
     this.publish(run.id);
   }
   private publish(id: string): void { for (const thread of this.storage.members(id)) this.ports.changed(thread); }
-  private requireOpen(): void { if (this.closed) throw new Error("Research service is closed"); }
-  private canDispatch(run: ResearchRun): boolean { return !this.closed && run.status === "running" && this.now() < run.deadlineAt; }
+  private requireOpen(): void {
+    if (this.closed) throw new Error("Research service is closed");
+    if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
+  }
+  private canDispatch(run: ResearchRun): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && this.now() < run.deadlineAt; }
   private canAdmitApproach(run: ResearchRun, approach: ResearchApproach): boolean {
     if (!this.canDispatch(run)) return false;
     if (run.activeWorkers > run.workerLimit) return false;

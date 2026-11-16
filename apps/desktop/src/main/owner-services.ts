@@ -444,7 +444,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     }),
   );
   const researchRegistry = getDesktopBackendRegistry();
+  const researchEnabled = () => getDesktopSettingsService().resolveResearchEnabled?.() === true;
   const research = initializeResearchRuntime({
+    enabled: researchEnabled,
     ...createResearchOwnerIdentity(),
     onError: (error) => mainLog.warn("research operation failed", { error: String(error) }),
     changed: (thread) => {
@@ -454,9 +456,14 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       }
     },
     spawn: async (context, task, title, workspaceMode, onCreated) => {
+      let refused: ResearchAdmissionRefused | undefined;
       const response = await researchRegistry.handoffResearchWorker({ operation: "handoff_task", context,
         args: { task, title, workspaceMode, seedMode: "clean", groupingMode: "subthread", messagingAttachment: "none" },
-      }, onCreated);
+      }, (worker) => {
+        try { onCreated(worker); }
+        catch (error) { if (error instanceof ResearchAdmissionRefused) refused = error; throw error; }
+      });
+      if (refused) throw refused;
       if (!response.ok) {
         if (["invalid_arguments", "forbidden", "unsupported_backend", "unsupported_workspace", "unsupported_capability", "requires_confirmation", "ambiguous_workspace", "project_paused"].includes(response.error.code)) throw new ResearchAdmissionRefused(response.error.message);
         throw new Error(response.error.message);
@@ -494,7 +501,14 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       throw new Error("Revision queue outcome is unknown. Inspect the worker thread.");
     },
   });
-  researchRegistry.setResearchHandler(createResearchAgentHandler(research, (context) => researchRegistry.researchContextIsLive(context)), (thread) => research.isWorker(thread));
+  researchRegistry.setResearchHandler(createResearchAgentHandler(research, (context) => researchRegistry.researchContextIsLive(context), researchEnabled), (thread) => research.isWorker(thread), researchEnabled);
+  let researchWasEnabled = researchEnabled();
+  ownerSubscriptions.add(getDesktopConfigStore().subscribe(["experimental"], () => {
+    const next = researchEnabled();
+    const stop = researchWasEnabled && !next;
+    researchWasEnabled = next;
+    if (stop) void research.stopOwnedRuns("Research runs were disabled in Experimental settings").catch((error) => mainLog.warn("research disable cancellation failed", { error: String(error) }));
+  }));
   ownerSubscriptions.add(researchRegistry.onEvent((event) => {
     const method = event.notification.method;
     if (method === "thread/turnQueue/updated") {

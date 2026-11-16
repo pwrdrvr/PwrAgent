@@ -5709,6 +5709,22 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("research is an additive default-off experiment with a targeted config round trip", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "# keep this comment\n[experimental]\nmanaged_review = true\n");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await service.readSettingsProjection()).experimental.researchEnabled).toEqual({ value: false, source: "default" });
+    for (const enabled of [true, false, true]) {
+      await service.writeConfigPatchTargeted({ experimental: { researchEnabled: enabled } });
+      const reopened = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+      expect((await reopened.readSettingsProjection()).experimental.researchEnabled).toEqual({ value: enabled, source: "config" });
+      expect(fs.readFileSync(configPath, "utf8")).toContain(`research_enabled = ${enabled}`);
+      expect(fs.readFileSync(configPath, "utf8")).toContain("# keep this comment");
+      expect(fs.readFileSync(configPath, "utf8")).toContain("managed_review = true");
+    }
+  });
+
   it("defaults managed review to false and persists the additive flag", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

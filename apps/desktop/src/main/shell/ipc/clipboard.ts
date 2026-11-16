@@ -1,10 +1,17 @@
-import { clipboard, ClipboardItem, ipcMain } from "electron";
+import { clipboard, ClipboardItem, ipcMain, webContents } from "electron";
+import {
+  PASTE_WITHOUT_FORMATTING_CHANNEL,
+  PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL,
+} from "../../../shared/plain-text-paste";
 import {
   CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
   CLIPBOARD_WRITE_TEXT_CHANNEL,
   TRANSCRIPT_IMAGE_READ_CHANNEL,
 } from "../../../shared/ipc";
 import { readTranscriptImageForRenderer } from "../transcript-image-protocol";
+import { getMainLogger } from "../../log";
+
+const clipboardLog = getMainLogger("pwragent:clipboard");
 
 export type E2eClipboardSnapshot = {
   html?: string;
@@ -49,6 +56,18 @@ async function writeRichText(
 }
 
 export function registerClipboardIpcHandlers(): void {
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_CHANNEL);
+  ipcMain.on(PASTE_WITHOUT_FORMATTING_CHANNEL, (event) => {
+    if (event.sender === webContents.getFocusedWebContents()) {
+      void requestPasteWithoutFormatting();
+    }
+  });
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL);
+  ipcMain.on(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL, (event) => {
+    if (event.sender === webContents.getFocusedWebContents()) {
+      event.sender.pasteAndMatchStyle();
+    }
+  });
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);
   ipcMain.removeHandler(TRANSCRIPT_IMAGE_READ_CHANNEL);
@@ -83,7 +102,25 @@ export function registerClipboardIpcHandlers(): void {
 }
 
 export function disposeClipboardIpcHandlers(): void {
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_CHANNEL);
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);
   ipcMain.removeHandler(TRANSCRIPT_IMAGE_READ_CHANNEL);
+}
+
+export async function requestPasteWithoutFormatting(): Promise<void> {
+  const target = webContents.getFocusedWebContents();
+  if (!target) return;
+  try {
+    const text = process.env.PWRAGENT_E2E === "1" && globalThis.__PWRAGENT_E2E_CLIPBOARD__
+      ? globalThis.__PWRAGENT_E2E_CLIPBOARD__.text
+      : await clipboard.readText();
+    if (target.isDestroyed() || target !== webContents.getFocusedWebContents()) return;
+    target.send(PASTE_WITHOUT_FORMATTING_CHANNEL, text);
+  } catch (error) {
+    clipboardLog.warn("Paste Without Formatting failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
