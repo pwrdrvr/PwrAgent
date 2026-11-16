@@ -518,6 +518,7 @@ import {
   withPwrAgentToolDiscovery,
 } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
+import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import {
@@ -1350,6 +1351,8 @@ export class DesktopBackendRegistry {
   private starMapHandler?: PwrAgentStarMapHandler;
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
+  private researchHandler?: ResearchAgentHandler;
+  private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly changingCodexAgentThreadIds = new Set<string>();
@@ -2258,6 +2261,7 @@ export class DesktopBackendRegistry {
       get threadStarts() { return current().threadStarts; },
       get threadTodoHandler() { return current().threadTodoHandler; },
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
+      get researchHandler() { return current().researchHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       get tokenMiserDiagnostics() { return current().tokenMiserDiagnostics; },
@@ -2735,6 +2739,26 @@ export class DesktopBackendRegistry {
     handler: PwrAgentOpenAIDecisionsHandler | null | undefined,
   ): void {
     this.openAIDecisionsHandler = handler ?? undefined;
+  }
+
+  setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean): void {
+    this.researchHandler = handler;
+    this.researchWorkerCheck = workerCheck;
+  }
+
+  researchContextIsLive(context: AgentToolCallContext): boolean {
+    return context.backend === "codex" && this.isLiveDynamicToolCall(context.backend, context);
+  }
+
+  async handoffResearchWorker(
+    request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+    onCreated: (worker: { backend: AppServerBackendKind; threadId: string }) => void,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    return await this.handleThreadOrchestrationRequest(request, onCreated);
+  }
+
+  async deliverResearchMessage(request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">): Promise<PwrAgentThreadOrchestrationResponse> {
+    return await this.handleThreadOrchestrationRequest(request);
   }
 
   /**
@@ -8646,6 +8670,7 @@ export class DesktopBackendRegistry {
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
+      researchHandler: this.researchHandler,
     });
     const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -17856,6 +17881,7 @@ export class DesktopBackendRegistry {
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
+        researchHandler: this.researchHandler,
       }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
@@ -22019,6 +22045,7 @@ export class DesktopBackendRegistry {
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
+        researchHandler: this.researchHandler,
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and
@@ -22549,6 +22576,7 @@ export class DesktopBackendRegistry {
 
   private async handleThreadOrchestrationRequest(
     request: PwrAgentThreadOrchestrationRequest,
+    onCreated?: (worker: { backend: AppServerBackendKind; threadId: string }) => void,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     if (request.operation === "attach_thread_directory") {
       return await this.attachThreadDirectory(request);
@@ -22557,7 +22585,8 @@ export class DesktopBackendRegistry {
       return await this.detachThreadDirectory(request);
     }
     if (request.operation === "handoff_task") {
-      const response = await this.threadWorkspaceService.handoffTaskToThread(request);
+      if (this.researchWorkerCheck?.(request.context)) return threadOrchestrationFailure("forbidden", "Research workers must ask their coordinator for another assignment; they cannot delegate additional managed workers.");
+      const response = await this.threadWorkspaceService.handoffTaskToThread(request, onCreated);
       if (response.ok && this.agentCreatedThreadObserver) {
         const created = response.data as HandoffTaskResult;
         try {

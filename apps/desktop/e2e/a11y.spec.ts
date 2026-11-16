@@ -58,6 +58,7 @@ import {
 } from "./fixtures/sub-agent-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
+import { seedResearchState } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -773,6 +774,30 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     // at 11px, a dashed hint box, a mono attempt aside in the menu, and a
     // history toggle that sits 4px into the card's padding. The hover card
     // adds a muted Auto-fix value.
+    test("research surfaces have no violations", async () => {
+      const app = await launchAuditApp({
+        ...appearance,
+        fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
+        preLaunchHook: async (homeRoot) => { seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
+      });
+      try {
+        await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
+        await app.window.getByRole("tab", { name: "Research", exact: true }).click();
+        const panel = app.window.getByRole("region", { name: "Research", exact: true });
+        await expect(panel.getByLabel("Recorded research graph")).toBeVisible();
+        await runAxe(app.window, "research graph");
+        await panel.getByRole("button", { name: "Board", exact: true }).click();
+        await expect(panel.getByLabel("Shared findings")).toBeVisible();
+        await runAxe(app.window, "research findings board");
+        await panel.getByRole("button", { name: "Review", exact: true }).click();
+        await expect(panel.getByText(/Formal verification has not been performed/)).toBeVisible();
+        await runAxe(app.window, "research review");
+        await panel.getByRole("button", { name: "New run", exact: true }).click();
+        await expect(panel.getByRole("textbox", { name: "Objective", exact: true })).toBeVisible();
+        await runAxe(app.window, "research request form");
+      } finally { await app.close(); }
+    });
+
     test("PR watch surfaces have no violations", async () => {
       // Five unscoped scans plus a launch, like the Directories block.
       test.setTimeout(75_000);

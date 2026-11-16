@@ -5797,6 +5797,60 @@ describe("DesktopBackendRegistry", () => {
     await assertClaudeStartOutcome("accepted", "begin");
   });
 
+  describe("research handoff admission", () => {
+    async function readyResearchRegistry() {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        startThreadResult: { threadId: "research-worker" },
+      });
+      const registry = createDesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({ overlays: {
+          "codex:research-parent": { backend: "codex", threadId: "research-parent", executionMode: "full-access", extraLinkedDirectories: [] },
+        } }),
+        threadTitleGenerationService: null,
+      });
+      onTestFinished(() => registry.close());
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "research-parent", turnId: "research-parent-turn", turn: { id: "research-parent-turn" },
+      } } });
+      return { registry, codexClient };
+    }
+    const researchHandoff = () => ({ operation: "handoff_task" as const,
+      context: { backend: "codex" as const, threadId: "research-parent", turnId: "research-parent-turn", callId: "research-start:a1" },
+      args: { task: "Explore event ordering", title: "Events", workspaceMode: "none" as const, messagingAttachment: "none" as const },
+    });
+
+    it("binds a research handoff before the provider admits its first model turn", async () => {
+      const { registry, codexClient } = await readyResearchRegistry();
+      const startTurn = vi.spyOn(codexClient, "startTurn");
+      const bound = vi.fn<Parameters<DesktopBackendRegistry["handoffResearchWorker"]>[1]>((worker) => {
+        expect(worker).toEqual({ backend: "codex", threadId: "research-worker" });
+        expect(startTurn).not.toHaveBeenCalled();
+      });
+      const result = await registry.handoffResearchWorker(researchHandoff(), bound);
+      expect(result).toMatchObject({ ok: true, data: { threadId: "research-worker", turnId: expect.any(String) } });
+      expect(bound).toHaveBeenCalledOnce();
+      expect(startTurn).toHaveBeenCalledOnce();
+    });
+
+    it("retains a refused research handoff's child identity without starting its model", async () => {
+      const { registry, codexClient } = await readyResearchRegistry();
+      const startTurn = vi.spyOn(codexClient, "startTurn");
+      const result = await registry.handoffResearchWorker(researchHandoff(), () => { throw new Error("The research deadline closed admission"); });
+      expect(result).toMatchObject({ ok: true, data: { threadId: "research-worker", turnStartFailure: { message: "The research deadline closed admission" } } });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("refuses another managed handoff from an active research worker", async () => {
+      const { registry, codexClient } = await readyResearchRegistry();
+      registry.setResearchHandler(async () => ({}), () => true);
+      const result = await registry.handoffResearchWorker(researchHandoff(), () => {});
+      expect(result).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    });
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());

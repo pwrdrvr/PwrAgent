@@ -222,6 +222,11 @@ export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
 export const THREAD_REVIEWS_LIST_CHANNEL = "thread-reviews:list";
 export const THREAD_REVIEWS_UPDATE_CHANNEL = "thread-reviews:update";
+export const RESEARCH_SNAPSHOT_CHANNEL = "research:snapshot";
+export const RESEARCH_UPDATE_CHANNEL = "research:update";
+export const RESEARCH_CHANGED_EVENT_CHANNEL = "research:changed";
+export const RESEARCH_OPEN_EVIDENCE_CHANNEL = "research:open-evidence";
+export const RESEARCH_PREPARE_CHANNEL = "research:prepare";
 /** A thread's armed reviews and Auto-fix runs, read from its owner. */
 export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
 /** Don't auto-fix: turns Auto-fix off for one running review. */

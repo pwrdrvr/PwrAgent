@@ -69,6 +69,7 @@ export { PullRequestIcon } from "./PullRequestIcon";
 export { PwrAgentIcon } from "./PwrAgentIcon";
 export { ServerIcon } from "./ServerIcon";
 export { SearchIcon } from "./SearchIcon";
+export { ResearchIcon } from "./ResearchIcon";
 export { SettingsIcon } from "./SettingsIcon";
 export { ShieldIcon } from "./ShieldIcon";
 export { SkillIcon } from "./SkillIcon";

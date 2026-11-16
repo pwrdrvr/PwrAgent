@@ -45,6 +45,7 @@ import {
   PullRequestIcon,
   ServerIcon,
   SubAgentsIcon,
+  ResearchIcon,
   TerminalIcon,
   TodoIcon,
   ToolCallsIcon,
@@ -57,6 +58,7 @@ import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-pa
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
+import { ResearchPanel } from "../research/ResearchPanel";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
@@ -104,6 +106,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "connections", label: "Connections", Icon: ConnectionsIcon },
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "todos", label: "To-dos", Icon: TodoIcon },
+  { id: "research", label: "Research", Icon: ResearchIcon },
   { id: "waiting", label: "Waiting for", Icon: HourglassIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
@@ -865,6 +868,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         );
       case "pr-activity":
         return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
+      case "research":
+        return <ResearchPanel key={`${props.thread?.source}:${props.thread?.id}`} desktopApi={props.desktopApi} thread={props.thread} />;
       case "info":
         if (!props.thread) return null;
         return (

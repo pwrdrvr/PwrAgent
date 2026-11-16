@@ -11,7 +11,8 @@
     "./review-output": "./src/review-output.ts",
     "./tool-activity": "./src/tool-activity.ts",
     "./native-voice-action": "./src/native-voice-action.ts",
-    "./openai-decisions": "./src/openai-decisions.ts"
+    "./openai-decisions": "./src/openai-decisions.ts",
+    "./research": "./src/research.ts"
   },
   "scripts": {
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"

@@ -81,6 +81,42 @@ are plaintext configuration, including in process arguments; provider secrets
 belong in environment variables referenced by Codex's `env_key` or
 `env_http_headers`. No new periodic or per-turn persistence is introduced.
 
+## Research runs
+
+Research runs attach an objective, approaches, shared findings and submissions
+to a coordinating thread. The owner composition root constructs
+`ResearchService` from `packages/owner-core` with desktop execution ports and a
+profile-scoped `ResearchStore`. Workers are ordinary managed Codex handoffs;
+their identities are journaled before their first model turn starts. The
+owner admits at most eight managed workers per run and enforces a deadline of
+one to 120 minutes. A research worker cannot create another research run or
+delegate additional managed workers through `handoff_task`.
+
+The Research panel binds its exact objective, worker count, deadline and
+workspace choice to an in-memory request before submitting it to the
+coordinator. That request is caller-scoped, single-use and expires after five
+minutes without admission. It is neither persisted nor federated. The three
+ordinary functions `research_start`, `research_read` and `research_update`
+remain eager when catalog discovery is enabled; native tool search is not a
+requirement of the research protocol.
+
+`research_runs`, `research_events` and `research_workers` retain PwrAgent-owned
+structured state, not provider transcripts. Each mutation compares the
+journal revision and appends its command identity in one transaction. Reads
+and duplicate deliveries write nothing. Worker start/end events, explicit
+research operations and run boundaries write; streamed tokens do not. The
+checked-in SQLite budgets cover those boundaries. A dead owner becomes
+interrupted without replaying model work; a different live process retains
+authority. Revision queue receipts identify exactly which pending sends a
+run may cancel. An unknown cancellation outcome keeps the run stopping.
+
+The renderer reads research through IPC. This first integration serves local
+Codex threads; federation viewers must use the owning instance. Graph edges
+represent recorded assignments and contributions, and finding relationships
+identify their source explicitly. Review acceptance is a coordinator or
+operator judgment, never formal verification. Open Math Harness execution
+and Lean verification remain separate adapter milestones.
+
 ## Git information reads
 
 Navigation Git information goes through main-process stores. Directory enrichment
