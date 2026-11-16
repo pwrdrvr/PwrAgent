@@ -27,6 +27,7 @@ import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/o
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
@@ -4165,7 +4166,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     }
     const sourceItemIds = JSON.stringify(params.sourceItemIds);
     const turnIds = JSON.stringify(params.turnIds);
-    const lineRows = this.stateDb.raw
+    const readMatches = () => this.stateDb.raw
       .prepare(
         `SELECT *
          FROM (
@@ -4201,18 +4202,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         params.threadId,
         sourceItemIds,
       ) as ThreadUsageLineRow[];
-    const lines = lineRows.map(threadUsageLineFromRow);
-    // The whole-ledger read reprices unpriced rows by a rule that depends on
-    // every unpriced row of the thread. Take its copy of these rows, so a
-    // gate card prices exactly as the thread's savings total does.
+    let lines = readMatches().map(threadUsageLineFromRow);
+    // Preserve the whole-ledger read's retry barriers and fixed point. Just
+    // repricing the matched rows would skip a newer no-progress batch and
+    // disagree with the thread savings total. Priced history is unnecessary.
     if (lines.some((line) => line.priceStatus !== "priced")) {
-      const matched = new Set(lines.map((line) => line.usageLineId));
-      const ledger = await this.readThreadPricing({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
-      return ledger.lines.filter((line) => matched.has(line.usageLineId));
+      await this.repriceTokenMiserGateHistory(params);
+      // The retry can yield. A peer may have priced or superseded a matched
+      // row even when this reader itself made no repair.
+      lines = readMatches().map(threadUsageLineFromRow);
     }
+    this.attachTokenMiserUsageTurnMetadataSync(params.backend, params.threadId, lines);
+    return lines;
+  }
+
+  /** Attach only the turns the projection actually uses, including children. */
+  private attachTokenMiserUsageTurnMetadataSync(
+    backend: string,
+    threadId: string,
+    lines: ThreadUsageLineRecord[],
+  ): void {
     const usageTurnIds = [...new Set(lines.flatMap((line) =>
       line.usageTurnId ? [line.usageTurnId] : []))];
     if (usageTurnIds.length > 0) {
@@ -4235,13 +4244,77 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         )
         .all(
           JSON.stringify(usageTurnIds),
-          params.backend,
-          params.threadId,
-          params.threadId,
+          backend,
+          threadId,
+          threadId,
         ) as UsageTurnMetadataRow[];
       applyUsageTurnMetadata(lines, turnRows);
     }
-    return lines;
+  }
+
+  /**
+   * The full read's ten-row retry policy, without materializing priced rows
+   * or unrelated turns. A repairable history can still require every unpriced
+   * row. Page it in ledger order and yield between groups; retain one repair
+   * transaction per pass, exactly as materializeThreadPricing does.
+   */
+  private async repriceTokenMiserGateHistory(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<void> {
+    const db = this.stateDb.raw;
+    const versions = sqliteUsageLedgerVersions(db);
+    const select = db.prepare(
+      `SELECT * FROM (
+         SELECT * FROM thread_usage_lines
+         WHERE backend = ? AND thread_id = ? AND status != 'superseded'
+           AND price_status != 'priced'
+           AND (created_at, usage_line_id) < (?, ?)
+         UNION ALL
+         SELECT * FROM thread_usage_lines
+         WHERE backend = ? AND parent_thread_id = ? AND thread_id != ?
+           AND status != 'superseded' AND price_status != 'priced'
+           AND (created_at, usage_line_id) < (?, ?)
+       ) ORDER BY created_at DESC, usage_line_id DESC LIMIT ?`,
+    );
+    for (;;) {
+      const version = versions?.get(params.threadId) ?? 0;
+      const dataVersion = db.pragma("data_version", { simple: true });
+      const repairs: Array<{ existing: ThreadUsageLineRow; repaired: ThreadUsageLineRecord }> = [];
+      let cursor = { created_at: Number.MAX_VALUE, usage_line_id: "" };
+      let stale = false;
+      for (;;) {
+        const rows = select.all(
+          params.backend, params.threadId, cursor.created_at, cursor.usage_line_id,
+          params.backend, params.threadId, params.threadId, cursor.created_at, cursor.usage_line_id,
+          THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE,
+        ) as ThreadUsageLineRow[];
+        const lines = rows.map(threadUsageLineFromRow);
+        this.attachTokenMiserUsageTurnMetadataSync(params.backend, params.threadId, lines);
+        const before = repairs.length;
+        for (let index = 0; index < rows.length; index += 1) {
+          const repaired = repriceTokenUsageLine(lines[index]!);
+          if (repaired.priceStatus === "priced") repairs.push({ existing: rows[index]!, repaired });
+        }
+        if (repairs.length === before || rows.length < THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE) break;
+        cursor = rows.at(-1)!;
+        // Never yield a caller-owned transaction. Outside one, restart a
+        // stale pass instead of persisting prices derived before a local or
+        // peer ledger edit. The generation includes raw SQL and rollbacks.
+        if (!db.inTransaction && versions) {
+          await yieldToEventLoop();
+          stale = version !== (versions.get(params.threadId) ?? 0)
+            || dataVersion !== db.pragma("data_version", { simple: true });
+          if (stale) break;
+        }
+      }
+      if (stale) continue;
+      if (repairs.length === 0) return;
+      this.persistThreadUsagePricingRepairsSync(repairs);
+      // Repairs regroup the remaining unpriced rows. The old recursive full
+      // read retries from the newest row too, until a pass makes no progress.
+      if (!db.inTransaction && versions) await yieldToEventLoop();
+    }
   }
 
   async upsertThreadSubAgent(params: {

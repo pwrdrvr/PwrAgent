@@ -242,7 +242,7 @@ describe("SqliteOverlayStore Token Miser gate pricing lines", () => {
       threadId: THREAD_ID,
       turnIds: ["gate-turn-u"],
     });
-    expect(ledgerReads).toHaveBeenCalledTimes(1);
+    expect(ledgerReads).toHaveBeenCalledTimes(0);
     const ledger = (await read()).lines;
     expect(gateLines).toEqual(ledger.filter((line) => line.usageLineId === "gate-u-line"));
     expect(gateLines.map((line) => line.priceStatus)).toEqual(["unpriced"]);
