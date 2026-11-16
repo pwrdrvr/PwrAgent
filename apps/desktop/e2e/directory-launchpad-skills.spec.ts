@@ -251,6 +251,29 @@ function getLaunchpadComposer(app: Awaited<ReturnType<typeof launchElectronApp>>
   };
 }
 
+for (const draft of ["", "Keep this project draft."]) {
+  test(`unsubmitted directory launchpad survives Back and Forward (${draft ? "text" : "empty"})`, async () => {
+    const fixture = await createDirectoryLaunchpadSkillsFixture();
+    const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+    try {
+      await app.window.getByRole("button", { name: "Directory launchpad replay", exact: true }).click();
+      await expect(app.window.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
+      await openDirectoryLaunchpad(app);
+      const page = app.window;
+      if (draft) await page.getByRole("textbox", { name: "New thread" }).fill(draft);
+      await page.getByTestId("history-nav-back").click();
+      await expect(page.getByRole("heading", { level: 2, name: "Directory launchpad replay" })).toBeVisible();
+      await expect(page.getByTestId("history-nav-forward")).toBeEnabled();
+      await page.getByTestId("history-nav-forward").click();
+      await expect(page.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
+      await expect(page.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", draft);
+    } finally {
+      await app.close();
+      await fixture.cleanup();
+    }
+  });
+}
+
 test("directory launchpad loads skill autocomplete from user and local scope", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({    fixturePath: fixture.fixturePath,
