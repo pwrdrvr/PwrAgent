@@ -12,8 +12,9 @@ import { Script } from "node:vm";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), "..");
-// Leave 12 KiB of growth before V8's default 60 KiB TurboFan cutoff.
-const bytecodeBudget = 48 * 1024;
+// Cohesive controllers and render helpers leave 28 KiB before V8's default
+// 60 KiB TurboFan cutoff. Check every function, including nested helpers.
+const bytecodeBudget = 32 * 1024;
 const components = [
   ["DesktopAppShell", "apps/desktop/src/renderer/src/App.tsx"],
   ["Sidebar", "apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx"],

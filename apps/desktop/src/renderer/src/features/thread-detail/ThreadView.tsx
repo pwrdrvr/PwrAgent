@@ -25,6 +25,8 @@ import {
   useState,
   Suspense,
   type ComponentProps,
+  type Dispatch,
+  type SetStateAction,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -1305,30 +1307,6 @@ export function ThreadView(props: ThreadViewProps) {
   const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
-  const asyncQuestionReplyId = useRef(0);
-  const asyncQuestionReplySettlers = useRef(new Map<number, (accepted: boolean) => void>());
-  const asyncQuestionSubmissions = useRef(new Map<number, { threadKey: string; text: string }>());
-  const [asyncQuestionReply, setAsyncQuestionReply] = useState<{
-    id: number;
-    threadId: string;
-    backend: NavigationThreadSummary["source"];
-    federationTarget?: FederationRemoteTarget;
-    text: string;
-    busyBehavior?: "queue";
-  }>();
-  // Dismissing Codex's async questions only hides their controls, so it is
-  // this window's choice for the session, as skipping is in Codex's own UI.
-  const [dismissedAsyncQuestions, setDismissedAsyncQuestions] =
-    useState<ReadonlySet<string>>(() => new Set());
-  // Answers the composer took that the transcript may not show yet, as when
-  // one waits in the queue. Kept here so a card mounted again still has them.
-  const [sentAsyncQuestionAnswers, setSentAsyncQuestionAnswers] =
-    useState<ReadonlyMap<string, string>>(() => new Map());
-  const [expandedGallery, setExpandedGallery] = useState<{
-    images: AppServerThreadImagePart[];
-    index: number;
-  }>();
-  const expandedImage = expandedGallery?.images[expandedGallery.index];
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
@@ -1362,18 +1340,6 @@ export function ThreadView(props: ThreadViewProps) {
   const terminals = props.terminals;
   const [launchpadMaterializeError, setLaunchpadMaterializeError] =
     useState<string>();
-  const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
-    useState<Set<string>>(() => new Set());
-  // Thread keys this window has already written an environment-failure
-  // acknowledgement for. The overlay write is idempotent, but the navigation
-  // snapshot this window holds keeps the pre-write runtime until it refreshes,
-  // so without this the backfill below would re-send on every render pass that
-  // moves one of its inputs.
-  const environmentFailureAcknowledgedRef = useRef<Set<string>>(new Set());
-  const [setupFailureArchiving, setSetupFailureArchiving] = useState(false);
-  const [setupFailureContinuing, setSetupFailureContinuing] = useState(false);
-  const [setupFailureContinueError, setSetupFailureContinueError] =
-    useState<string>();
   const [localLaunchpadSetupProgress, setLaunchpadSetupProgress] =
     useState<LaunchpadEnvironmentSetupProgress>();
   const launchpadSetupProgress = props.pendingLaunchpadCreation?.setupProgress ?? localLaunchpadSetupProgress;
@@ -1405,27 +1371,14 @@ export function ThreadView(props: ThreadViewProps) {
   const onLaunchpadConnectionsDockChange =
     props.onLaunchpadConnectionsDockChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
-  const [rewindConfirm, setRewindConfirm] = useState<RewindConfirmState>();
-  const rewoundPromptRestoreId = useRef(0);
-  const [rewoundPromptRestore, setRewoundPromptRestore] = useState<{
-    id: number;
-    threadId: string;
-    backend: NavigationThreadSummary["source"];
-    federationTarget?: FederationTarget;
-    text: string;
-    imageAttachments: RewoundPrompt["imageAttachments"];
-    kind: "rewound-prompt" | "rewound-prompt-undone";
-  }>();
-  const handleDraftRestoreHandled = useCallback((id: number): void => {
-    setRewoundPromptRestore((current) => current?.id === id ? undefined : current);
-  }, []);
-  const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
   const transcriptPanelRef = useRef<HTMLElement>(null);
 
-  useEffect(() => {
+  // Keep the selection reset in its original effect position. Setters from
+  // the feature hooks are stable; the event callback reads them after commit.
+  const resetThreadViewState = useEventCallback(() => {
     setPendingActivityEntry(undefined);
     setPendingProtocolActivityEntry(undefined);
     setPendingUsageActivityEntry(undefined);
@@ -1448,7 +1401,9 @@ export function ThreadView(props: ThreadViewProps) {
     setSetupFailureContinueError(undefined);
     setRewindConfirm(undefined);
     setWorkflowBudgetDialog(undefined);
-  }, [
+  });
+  useEffect(resetThreadViewState, [
+    resetThreadViewState,
     props.selectedLaunchpad?.directoryKey,
     // A starting thread and the next launchpad in its directory share a
     // directory key; switching between them is still a new view.
@@ -1646,10 +1601,6 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
-  const rewindDesktopApi = props.desktopApi;
-  const onRefreshNavigationAfterRewind = props.onRefreshNavigation;
-  const onReloadThreadAfterRewind = props.onReloadThread;
-  const onShowRewindNotice = props.onShowNotice;
   // A peer's thread pinned in this window is rewound by its owner, so the
   // owner's summary decides whether to offer it. `props.backends` describes
   // this window's own target, which is that owner only in a peer's window.
@@ -1672,75 +1623,19 @@ export function ThreadView(props: ThreadViewProps) {
   const rewindOwnerBackend = peerOwnerTarget
     ? peerOwnerSummaries.backends.find((backend) => backend.kind === selectedThread?.source)
     : selectedThreadBackend;
-  const threadRewindSupport = rewindOwnerBackend?.available
-    ? rewindOwnerBackend.capabilities.threadRewind
-    : undefined;
-  const rewindProviderLabel = rewindOwnerBackend?.label ?? "The provider";
-  const rewindThreadSource = selectedThread?.source;
-  const rewindableMessageIds = useMemo(
-    () => rewindThreadSource && threadRewindSupport
-      ? collectRewindableMessageIds(props.transcriptEntries, rewindThreadSource)
-      : undefined,
-    [props.transcriptEntries, rewindThreadSource, threadRewindSupport],
-  );
-  const rewindDisabledReason = props.threadBusy
-    ? "Wait for the active turn to finish before rewinding"
-    : undefined;
-  const transcriptEntriesRef = useRef(props.transcriptEntries);
-  transcriptEntriesRef.current = props.transcriptEntries;
-  // What the confirmation's file dry run needs, read when it opens.
-  const rewindPreviewContextRef = useRef({
-    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
-  });
-  rewindPreviewContextRef.current = {
-    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
-  };
-  const openRewindConfirm = useCallback(
-    (message: AppServerThreadMessageEntry): void => {
-      if (!rewindThreadSource) return;
-      const summary = summarizeThreadRewind(
-        transcriptEntriesRef.current,
-        message.id,
-        rewindThreadSource,
-      );
-      if (!summary) return;
-      const { desktopApi, support, thread } = rewindPreviewContextRef.current;
-      const previewThreadRewind = desktopApi?.previewThreadRewind;
-      const preview = support?.files && previewThreadRewind && thread;
-      setRewindConfirm({
-        busy: false,
-        messageId: message.id,
-        ...(preview ? { preview: { status: "loading" as const } } : {}),
-        prompt: rewoundPrompt(message),
-        summary,
-        turnId: message.turn?.id,
-      });
-      if (!preview) return;
-      void previewThreadRewind({
-        backend: thread.source,
-        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
-        threadId: thread.id,
-        target: { messageId: message.id, ...(message.turn?.id ? { turnId: message.turn.id } : {}) },
-      }).then(
-        (response): ThreadRewindPreview => ({
-          status: "ready",
-          ...(response.files ? { files: response.files } : {}),
-          ...(response.filesUnavailableReason ? { filesUnavailableReason: response.filesUnavailableReason } : {}),
-          ...(response.unavailableReason ? { unavailableReason: response.unavailableReason } : {}),
-        }),
-        (error: unknown): ThreadRewindPreview => ({
-          status: "ready",
-          filesUnavailableReason: error instanceof Error ? error.message : String(error),
-        }),
-      ).then((ready) => {
-        // The operator may have closed it or opened another prompt meanwhile.
-        setRewindConfirm((current) => current?.messageId === message.id && current.preview?.status === "loading"
-          ? { ...current, preview: ready }
-          : current);
-      });
-    },
-    [rewindThreadSource],
-  );
+  const {
+    rewindConfirm,
+    setRewindConfirm,
+    rewoundPromptRestore,
+    handleDraftRestoreHandled,
+    threadRewindSupport,
+    rewindProviderLabel,
+    rewindableMessageIds,
+    rewindDisabledReason,
+    openRewindConfirm,
+    executeRewind,
+    rewindUndo,
+  } = useThreadRewind(props, rewindOwnerBackend);
   const openLastPromptRewind = (): void => {
     const entries = props.transcriptEntries;
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -1754,125 +1649,13 @@ export function ThreadView(props: ThreadViewProps) {
       }
     }
   };
-  const executeRewind = async (mode: ThreadRewindMode): Promise<void> => {
-    const confirm = rewindConfirm;
-    const rewindThread = rewindDesktopApi?.rewindThread;
-    if (!selectedThread || !confirm || confirm.busy) return;
-    if (!rewindThread) {
-      setRewindConfirm({ ...confirm, error: "This PwrAgent build cannot rewind threads." });
-      return;
-    }
-    const thread = selectedThread;
-    const federationTarget = thread.federation?.ref.target
-      ?? readRendererFederationTarget();
-    setRewindConfirm({ ...confirm, busy: true, error: undefined });
-    try {
-      const response = await rewindThread({
-        backend: thread.source,
-        federationTarget,
-        threadId: thread.id,
-        target: {
-          messageId: confirm.messageId,
-          ...(confirm.turnId ? { turnId: confirm.turnId } : {}),
-        },
-        mode,
-        removedTurnCount: confirm.summary.laterTurnCount + 1,
-      });
-      setRewindConfirm(undefined);
-      const promptText = response.promptText ?? confirm.prompt.text;
-      const { droppedAttachmentCount, imageAttachments } = confirm.prompt;
-      if (promptText.trim() || imageAttachments.length > 0) {
-        rewoundPromptRestoreId.current += 1;
-        setRewoundPromptRestore({
-          id: rewoundPromptRestoreId.current,
-          threadId: thread.id,
-          backend: thread.source,
-          federationTarget,
-          text: promptText,
-          imageAttachments,
-          kind: "rewound-prompt",
-        });
-      }
-      if (droppedAttachmentCount > 0) {
-        onShowRewindNotice?.({
-          id: `rewind-attachments:${thread.id}`,
-          title: "Attachments not restored",
-          message: droppedAttachmentCount === 1
-            ? "One attachment from the rewound prompt could not return to the composer. Attach it again before you resend."
-            : `${droppedAttachmentCount} attachments from the rewound prompt could not return to the composer. Attach them again before you resend.`,
-          tone: "warning",
-        });
-      }
-      await onRefreshNavigationAfterRewind?.();
-      await onReloadThreadAfterRewind?.();
-    } catch (error) {
-      setRewindConfirm((current) => current?.messageId === confirm.messageId
-        ? {
-            ...current,
-            busy: false,
-            error: error instanceof Error ? error.message : String(error),
-          }
-        : current);
-    }
-  };
-  // What an undo needs, read when the operator clicks it.
-  const rewindUndoContextRef = useRef({ desktopApi: rewindDesktopApi, thread: selectedThread });
-  rewindUndoContextRef.current = { desktopApi: rewindDesktopApi, thread: selectedThread };
-  const undoRewind = useCallback((rewindId: string): void => {
-    const { desktopApi, thread } = rewindUndoContextRef.current;
-    const undoThreadRewind = desktopApi?.undoThreadRewind;
-    if (!thread || !undoThreadRewind) return;
-    const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
-    setRewindUndoBusyId(rewindId);
-    void (async () => {
-      try {
-        await undoThreadRewind({ backend: thread.source, federationTarget, threadId: thread.id, rewindId });
-      } catch (error) {
-        onShowRewindNotice?.({
-          id: `rewind-undo:${thread.id}`,
-          title: "Rewind not undone",
-          message: error instanceof Error ? error.message : String(error),
-          tone: "warning",
-        });
-        return;
-      } finally {
-        setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
-      }
-      // The prompt is back in the transcript, so the composer's copy goes.
-      rewoundPromptRestoreId.current += 1;
-      setRewoundPromptRestore({
-        id: rewoundPromptRestoreId.current,
-        threadId: thread.id,
-        backend: thread.source,
-        federationTarget,
-        text: "",
-        imageAttachments: [],
-        kind: "rewound-prompt-undone",
-      });
-      try {
-        await onRefreshNavigationAfterRewind?.();
-        await onReloadThreadAfterRewind?.();
-      } catch {
-        // The thread/rewound event refreshes the thread as well.
-      }
-    })();
-  }, [onRefreshNavigationAfterRewind, onReloadThreadAfterRewind, onShowRewindNotice]);
-  const canUndoRewind = Boolean(threadRewindSupport?.undo && rewindDesktopApi?.undoThreadRewind);
-  const rewindUndo = useMemo(
-    () => canUndoRewind
-      ? {
-          busyId: rewindUndoBusyId,
-          disabledReason: rewindDisabledReason,
-          onUndo: undoRewind,
-        }
-      : undefined,
-    [canUndoRewind, rewindDisabledReason, rewindUndoBusyId, undoRewind],
-  );
+  const workflowBudgetDesktopApi = props.desktopApi;
+  const onShowWorkflowBudgetNotice = props.onShowNotice;
   const openWorkflowBudgetDialog = useCallback(async (): Promise<void> => {
     if (!selectedThread || selectedThread.source !== "acp:grok") {
       return;
     }
-    const configureWorkflowBudget = rewindDesktopApi?.configureGrokWorkflowBudget;
+    const configureWorkflowBudget = workflowBudgetDesktopApi?.configureGrokWorkflowBudget;
     if (!configureWorkflowBudget) {
       setWorkflowBudgetDialog({
         busy: false,
@@ -1909,7 +1692,7 @@ export function ThreadView(props: ThreadViewProps) {
         maxAgentBudget: "",
       });
     }
-  }, [rewindDesktopApi, selectedThread]);
+  }, [workflowBudgetDesktopApi, selectedThread]);
   const saveWorkflowBudget = useCallback(async (): Promise<void> => {
     if (!selectedThread || selectedThread.source !== "acp:grok" || !workflowBudgetDialog) {
       return;
@@ -1930,7 +1713,7 @@ export function ThreadView(props: ThreadViewProps) {
         : current);
       return;
     }
-    const configureWorkflowBudget = rewindDesktopApi?.configureGrokWorkflowBudget;
+    const configureWorkflowBudget = workflowBudgetDesktopApi?.configureGrokWorkflowBudget;
     if (!configureWorkflowBudget) {
       return;
     }
@@ -1945,7 +1728,7 @@ export function ThreadView(props: ThreadViewProps) {
         maxAgentBudget,
       });
       setWorkflowBudgetDialog(undefined);
-      onShowRewindNotice?.({
+      onShowWorkflowBudgetNotice?.({
         id: `grok-workflow-budget:${selectedThread.id}`,
         message: `New workflows default to ${defaultAgentBudget} child-agent calls, with an enforced maximum of ${maxAgentBudget}.`,
         title: "Workflow budgets updated",
@@ -1961,8 +1744,8 @@ export function ThreadView(props: ThreadViewProps) {
         : current);
     }
   }, [
-    onShowRewindNotice,
-    rewindDesktopApi,
+    onShowWorkflowBudgetNotice,
+    workflowBudgetDesktopApi,
     selectedThread,
     workflowBudgetDialog,
   ]);
@@ -2281,319 +2064,14 @@ export function ThreadView(props: ThreadViewProps) {
       setBranchDriftError(undefined);
     }
   }, [props.suppressBranchDriftDialog]);
-  const selectedThreadSetupFailed =
-    selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
-  const selectedThreadEnvironmentId =
-    selectedThread?.codexEnvironmentRuntime?.environmentId;
-  // The setup-failure dialog only surfaces during launchpad materialise
-  // (messageCount === 0), where at most one auto-action runs. Look for
-  // the most recent failed run in actionRuns to drive the action-phase
-  // branch of the dialog.
-  const selectedThreadActionRuns = readCodexEnvironmentActionRuns(
-    selectedThread?.codexEnvironmentRuntime,
-  );
-  const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
-    .reverse()
-    .find((run) =>
-      run.status === "failed"
-      && Boolean(selectedThreadEnvironmentId)
-      && (!run.environmentId || run.environmentId === selectedThreadEnvironmentId));
-  const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
-  // `setupStatus: "failed"` and a failed action run are permanent history; the
-  // prompt they raise is not. This is the record of the operator having
-  // answered it. Setup runs once, at thread creation, so any acknowledgement
-  // covers the setup phase; an action that failed *after* the acknowledgement
-  // is a new failure and raises the prompt again.
-  const selectedThreadEnvironmentFailureAcknowledgedAt =
-    selectedThread?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt;
-  const selectedThreadEnvironmentFailureAcknowledged =
-    typeof selectedThreadEnvironmentFailureAcknowledgedAt === "number"
-    && (!selectedThreadActionFailed
-      || (selectedThreadLatestFailedActionRun?.exitedAt
-        ?? selectedThreadLatestFailedActionRun?.startedAt
-        ?? 0) <= selectedThreadEnvironmentFailureAcknowledgedAt);
-  const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
-    (directory) =>
-      directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
-  );
-  const selectedThreadOptimisticLaunchpadInput =
-    buildInputFromOptimisticUserMessage(selectedThread?.optimisticUserMessage);
-  const hasOnlyOptimisticLaunchpadMessage =
-    props.messageCount === 1 && selectedThreadOptimisticLaunchpadInput.length > 0;
-  const showSetupFailureChoice = Boolean(
-    selectedThread &&
-      selectedThreadKey &&
-      (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage) &&
-      // `messageCount` is the loaded transcript's length, so it also reads 0
-      // for a thread whose history has not arrived yet. Without this the
-      // prompt reappeared for the whole hydration window every time an old
-      // failed-setup thread was opened, then vanished when the transcript
-      // landed — a decision prompt for a decision made weeks ago.
-      !props.loading &&
-      !props.activeTurnId &&
-      (selectedThreadSetupFailed || selectedThreadActionFailed) &&
-      !selectedThreadEnvironmentFailureAcknowledged &&
-      !setupFailureDismissedThreadKeys.has(selectedThreadKey),
-  );
-  const selectedThreadEnvironmentFailurePhase = selectedThreadActionFailed
-    ? "action"
-    : "setup";
-  // Retire a failure the thread has already moved past. This covers the
-  // threads that failed before the acknowledgement existed, and the operator
-  // who answered the prompt by quitting the app rather than by clicking: once
-  // the transcript has loaded and holds real turns, the decision is long made,
-  // so record it instead of raising the prompt again on the next launch. Only
-  // a loaded transcript counts — `messageCount` is 0 during hydration too.
-  const selectedThreadEnvironmentFailureStale = Boolean(
-    selectedThread
-      && selectedThreadKey
-      && (selectedThreadSetupFailed || selectedThreadActionFailed)
-      && !selectedThreadEnvironmentFailureAcknowledged
-      && !props.loading
-      // A failed read may leave only our locally displayed initial prompt.
-      // It is not evidence that the backend ever started a turn.
-      && !props.transcriptError
-      && props.messageCount > 0
-      && !hasOnlyOptimisticLaunchpadMessage,
-  );
-  const acknowledgeThreadEnvironmentFailure =
-    props.desktopApi?.acknowledgeThreadEnvironmentFailure;
-  // Named apart from `selectedThreadBackend` above, which is the backend
-  // *descriptor* from props.backends, not the thread's own backend kind.
-  const selectedThreadBackendKind = selectedThread?.source;
-  const selectedThreadId = selectedThread?.id;
-  const selectedThreadFederationTarget = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
-  useEffect(() => {
-    if (
-      !selectedThreadEnvironmentFailureStale
-      || !selectedThreadKey
-      || !selectedThreadId
-      || !selectedThreadBackendKind
-      || !acknowledgeThreadEnvironmentFailure
-      || environmentFailureAcknowledgedRef.current.has(selectedThreadKey)
-    ) {
-      return;
-    }
-    environmentFailureAcknowledgedRef.current.add(selectedThreadKey);
-    void acknowledgeThreadEnvironmentFailure({
-      backend: selectedThreadBackendKind,
-      threadId: selectedThreadId,
-      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
-    }).catch(() => undefined);
-  }, [
-    acknowledgeThreadEnvironmentFailure,
-    selectedThreadBackendKind,
-    selectedThreadEnvironmentFailureStale,
-    selectedThreadFederationTarget,
-    selectedThreadId,
-    selectedThreadKey,
-  ]);
-  /**
-   * Retire the environment-failure prompt for this thread, in this window and
-   * durably. The in-memory set alone did not survive an app restart — or a
-   * ThreadView unmount — so the prompt came back on a thread whose failure the
-   * operator had already answered.
-   */
-  const dismissEnvironmentFailureChoice = (threadKey: string, acknowledgedOnOwner = false): void => {
-    setSetupFailureDismissedThreadKeys((current) => {
-      const next = new Set(current);
-      next.add(threadKey);
-      return next;
-    });
-    if (!selectedThread || environmentFailureAcknowledgedRef.current.has(threadKey)) {
-      return;
-    }
-    environmentFailureAcknowledgedRef.current.add(threadKey);
-    if (acknowledgedOnOwner) return;
-    void props.desktopApi?.acknowledgeThreadEnvironmentFailure?.({
-      backend: selectedThread.source,
-      threadId: selectedThread.id,
-      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
-    })
-      // The prompt is already gone from this window; a failed write only means
-      // it can appear once more on a later launch, which is not worth a notice.
-      .catch(() => undefined);
-  };
-  const continueAfterSetupFailure = async (): Promise<void> => {
-    if (!selectedThread || !selectedThreadKey || props.composerDisabled) {
-      return;
-    }
-
-    const input = buildInputFromOptimisticUserMessage(
-      selectedThread.optimisticUserMessage,
-    );
-    setSetupFailureContinueError(undefined);
-    setSetupFailureContinuing(true);
-    props.onPendingStatusChange?.("Thinking");
-    try {
-      const fallbackTurn = {
-        input,
-        executionMode: selectedThread.executionMode,
-        model: selectedThread.model,
-        reasoningEffort: selectedThread.reasoningEffort,
-        serviceTier: selectedThread.serviceTier,
-        fastMode: selectedThread.source === "codex"
-          ? selectedThread.fastMode
-          : undefined,
-      };
-      const federationTarget = selectedThreadFederationTarget;
-      const response = props.desktopApi?.continueThreadEnvironmentStartup
-        ? await props.desktopApi.continueThreadEnvironmentStartup({
-            backend: selectedThread.source,
-            federationTarget,
-            threadId: selectedThread.id,
-            ...(input.length > 0 ? { fallbackTurn } : {}),
-          })
-        : input.length > 0 && props.desktopApi?.startTurn
-          ? await props.desktopApi.startTurn({
-              ...fallbackTurn,
-              backend: selectedThread.source,
-              federationTarget,
-              threadId: selectedThread.id,
-            })
-          : undefined;
-      if (!response) {
-        throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
-      }
-      props.onActiveTurnIdChange?.(response.turnId);
-      if (!response.turnId) props.onPendingStatusChange?.(undefined);
-      dismissEnvironmentFailureChoice(selectedThreadKey, Boolean(props.desktopApi?.continueThreadEnvironmentStartup));
-      await props.onRefreshNavigation?.();
-    } catch (error) {
-      props.onPendingStatusChange?.(undefined);
-      props.onActiveTurnIdChange?.(undefined);
-      setSetupFailureContinueError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      setSetupFailureContinuing(false);
-    }
-  };
-
-  // Environment setup, as one row in the composer band. It covers a live run
-  // on this thread, the failure that run left behind, and, for a thread with
-  // no turns yet, the keep-or-close decision a failed launch still needs.
-  // Memoized because the Composer is: a fresh model on every streamed event
-  // would re-render it for the life of an undismissed failure.
-  const selectedThreadSetupProgress =
-    selectedThread
-    && launchpadSetupProgress?.directoryKey
-      === `thread:${selectedThread.source}:${selectedThread.id}`
-      ? launchpadSetupProgress
-      : undefined;
-  const selectedThreadSetupProgressStatus = describeSetupProgressRowStatus(
-    selectedThreadSetupProgress,
-  );
-  // A failed run belongs to the environment it ran for. Choosing another
-  // environment (or none) emits no progress when it has no setup script, so
-  // nothing would replace the failure: the row would keep describing — and
-  // Retry would re-select — an environment the operator has left. The runtime
-  // update for the failed selection itself names the same environment and
-  // arrives after the `failed` event, so it keeps the row.
-  const selectedThreadProgressKey = selectedThread
-    ? `thread:${selectedThread.source}:${selectedThread.id}`
-    : undefined;
-  useEffect(() => {
-    setLaunchpadSetupProgress((current) =>
-      current
-      && current.directoryKey === selectedThreadProgressKey
-      && describeSetupProgressRowStatus(current) !== "running"
-      && current.environmentId !== selectedThreadEnvironmentId
-        ? undefined
-        : current);
-  }, [selectedThreadEnvironmentId, selectedThreadProgressKey]);
-  const cleanupAfterSetupFailure = useEventCallback(() => {
-    if (!selectedThread || !props.onArchiveThread) {
-      return;
-    }
-    setSetupFailureArchiving(true);
-    void props.onArchiveThread(selectedThread).finally(() => {
-      setSetupFailureArchiving(false);
-    });
+  const {
+    selectedThreadEnvironmentSetup,
+    setSetupFailureArchiving,
+    setSetupFailureContinuing,
+    setSetupFailureContinueError,
+  } = useThreadEnvironmentSetup({
+    props, selectedThreadKey, launchpadSetupProgress, setLaunchpadSetupProgress,
   });
-  const continueAfterSetupFailureEvent = useEventCallback(() => {
-    void continueAfterSetupFailure();
-  });
-  const dismissSelectedThreadSetupProgress = useEventCallback(() => {
-    setLaunchpadSetupProgress(undefined);
-  });
-  const selectedThreadRuntime = selectedThread?.codexEnvironmentRuntime;
-  const selectedThreadEnvironmentSetup = useMemo<
-    EnvironmentSetupRowModel | undefined
-  >(() => {
-    const progress = selectedThreadSetupProgress;
-    if (progress && selectedThreadSetupProgressStatus === "running") {
-      return {
-        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
-        phase: "setup",
-        status: "running",
-        ...setupRowFieldsFromProgress(progress),
-      };
-    }
-    if (showSetupFailureChoice && selectedThreadKey) {
-      const phase = selectedThreadEnvironmentFailurePhase;
-      return {
-        key: `decision:${selectedThreadKey}:${phase}`,
-        phase,
-        status: "failed",
-        environmentId: selectedThreadRuntime?.environmentId,
-        environmentName:
-          selectedThreadRuntime?.environmentName ?? progress?.environmentName,
-        command:
-          phase === "action"
-            ? selectedThreadLatestFailedActionRun?.command
-            : selectedThreadRuntime?.setupCommand ?? progress?.command,
-        cwd: selectedThreadRuntime?.cwd ?? progress?.cwd,
-        output:
-          phase === "action"
-            ? selectedThreadLatestFailedActionRun?.output
-            : selectedThreadRuntime?.setupOutput ?? progress?.output,
-        exitCode:
-          phase === "action"
-            ? selectedThreadLatestFailedActionRun?.exitCode
-            : selectedThreadRuntime?.setupExitCode ?? progress?.exitCode,
-        durationMs: phase === "action" ? undefined : progress?.durationMs,
-        decision: {
-          busy: setupFailureArchiving || setupFailureContinuing,
-          continuing: setupFailureContinuing,
-          disabled: props.composerDisabled,
-          // Archive failures go to the durable notice stack (they can also
-          // originate from a context menu with nothing left on screen), so
-          // this reports only the Continue button's own failure.
-          error: setupFailureContinueError,
-          hasWorktree: Boolean(selectedThreadWorktree),
-          onCleanup: cleanupAfterSetupFailure,
-          onContinue: continueAfterSetupFailureEvent,
-        },
-      };
-    }
-    if (progress && selectedThreadSetupProgressStatus === "failed") {
-      return {
-        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
-        phase: "setup",
-        status: "failed",
-        ...setupRowFieldsFromProgress(progress),
-        onDismiss: dismissSelectedThreadSetupProgress,
-      };
-    }
-    return undefined;
-  }, [
-    cleanupAfterSetupFailure,
-    continueAfterSetupFailureEvent,
-    dismissSelectedThreadSetupProgress,
-    props.composerDisabled,
-    selectedThreadEnvironmentFailurePhase,
-    selectedThreadKey,
-    selectedThreadLatestFailedActionRun,
-    selectedThreadRuntime,
-    selectedThreadSetupProgress,
-    selectedThreadSetupProgressStatus,
-    selectedThreadWorktree,
-    setupFailureArchiving,
-    setupFailureContinueError,
-    setupFailureContinuing,
-    showSetupFailureChoice,
-  ]);
 
   // The launchpad's setup command rides in its composer's band, collapsed,
   // while the transcript slot keeps the short placeholder. A failure here has
@@ -2784,219 +2262,18 @@ export function ThreadView(props: ThreadViewProps) {
     }
   };
 
-  const asyncQuestionThreadKey = selectedThread
-    ? threadSummaryIdentityKey(selectedThread)
-    : undefined;
-  const questionOwner = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
-  const questionFederationTarget = questionOwner?.scope === "remote" ? questionOwner : undefined;
-  const dismissalThreadKey = `${questionFederationTarget?.instanceId ?? "local"}:${asyncQuestionThreadKey}`;
-  const ownerDismissedQuestionIds = useDismissedOperatorQuestions(props.desktopApi, selectedThread ? {
-    backend: selectedThread.source, threadId: selectedThread.id, federationTarget: questionFederationTarget,
-  } : undefined);
-  // Apply each owner dismissal once, so Show questions can still reopen a card
-  // for inspection without changing the owner's resolved state.
-  const appliedOwnerDismissals = useRef(new Set<string>());
-  useEffect(() => {
-    const fresh = ownerDismissedQuestionIds.map((id) => `${dismissalThreadKey}\0${id}`)
-      .filter((key) => !appliedOwnerDismissals.current.has(key));
-    if (fresh.length === 0) return;
-    for (const key of fresh) appliedOwnerDismissals.current.add(key);
-    setDismissedAsyncQuestions((current) => new Set([...current, ...fresh]));
-  }, [ownerDismissedQuestionIds, dismissalThreadKey]);
-  const dismissedAsyncQuestionMessageIds = useMemo(() => {
-    const prefix = `${dismissalThreadKey}\0`;
-    return new Set(
-      [...dismissedAsyncQuestions]
-        .filter((key) => key.startsWith(prefix))
-        .map((key) => key.slice(prefix.length)),
-    );
-  }, [dismissalThreadKey, dismissedAsyncQuestions]);
-  // The To-dos panel's answers count too: one sent while this thread was off
-  // screen may still be waiting to reach the transcript.
-  const panelSentAsyncQuestionAnswers = props.threadTodos?.sentQuestionAnswers;
-  const threadSentAsyncQuestionAnswers = useMemo(() => {
-    const prefix = `${asyncQuestionThreadKey}\0`;
-    return new Map(
-      [...(panelSentAsyncQuestionAnswers ?? []), ...sentAsyncQuestionAnswers]
-        .filter(([key]) => key.startsWith(prefix))
-        .map(([key, answer]) => [key.slice(prefix.length), answer]),
-    );
-  }, [asyncQuestionThreadKey, panelSentAsyncQuestionAnswers, sentAsyncQuestionAnswers]);
-  useEffect(() => {
-    const settlers = asyncQuestionReplySettlers.current;
-    return () => {
-      // The composer drops a reply addressed to a thread it no longer shows.
-      for (const settle of settlers.values()) settle(false);
-      settlers.clear();
-      setAsyncQuestionReply(undefined);
-    };
-  }, [asyncQuestionThreadKey]);
-  const handleAnswerAsyncQuestions = useEventCallback((text: string, busyBehavior?: "queue"): Promise<boolean> => {
-    // One answer at a time: the composer applies only the newest submission.
-    if (
-      props.composerDisabled
-      || !selectedThread
-      || asyncQuestionReplySettlers.current.size > 0
-    ) {
-      return Promise.resolve(false);
-    }
-    asyncQuestionReplyId.current += 1;
-    const id = asyncQuestionReplyId.current;
-    const thread = selectedThread;
-    asyncQuestionSubmissions.current.set(id, {
-      threadKey: threadSummaryIdentityKey(thread),
-      text,
-    });
-    return new Promise<boolean>((resolve) => {
-      asyncQuestionReplySettlers.current.set(id, resolve);
-      setAsyncQuestionReply({
-        id,
-        threadId: thread.id,
-        backend: thread.source,
-        federationTarget: questionFederationTarget,
-        text,
-        busyBehavior,
-      });
-    });
-  });
-  // A review card's Start review opens the composer's `/review` panel, and
-  // the card resolves only once a review actually starts from it.
-  const [todoReviewRequest, setTodoReviewRequest] = useState<{
-    id: number;
-    threadId: string;
-    backend: AppServerBackendKind;
-    federationTarget?: FederationRemoteTarget;
-  }>();
-  // The card's answer about open steps rides along, so the resolve once the
-  // review starts sends the override only if the operator confirmed it.
-  const pendingReviewTodos = useRef(new Map<number, { todo: ThreadTodo; options?: ThreadTodoResolveOptions }>());
-  const todoReviewRequestId = useRef(0);
-  const startTodoReview = useEventCallback((
-    todo: ThreadTodo,
-    options?: ThreadTodoResolveOptions,
-  ) => {
-    const id = ++todoReviewRequestId.current;
-    for (const [previousId, pending] of pendingReviewTodos.current) {
-      if (threadTodoThreadKey(pending.todo) === threadTodoThreadKey(todo)) pendingReviewTodos.current.delete(previousId);
-    }
-    pendingReviewTodos.current.set(id, { todo, options });
-    setTodoReviewRequest({
-      id,
-      threadId: todo.threadId,
-      backend: todo.backend,
-      federationTarget: todo.federationTarget,
-    });
-  });
-  const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
-    if (requestId === undefined) return;
-    const pending = pendingReviewTodos.current.get(requestId);
-    if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
-    pendingReviewTodos.current.delete(requestId);
-    // The original owner's acceptance can arrive after navigation changes.
-    void props.threadTodos?.resolve(pending.todo, "done", undefined, pending.options).catch(
-      (error: unknown) => setPendingRequestError(String(error)),
-    );
-  });
-  // "Do it here" starts a handoff's prompt when idle, or queues it behind
-  // the active turn so the new task does not steer work already in progress.
-  // The card resolves only once the composer has taken it.
-  // Resolves false when the composer would not take it (disabled, or
-  // another answer still sending), so the card can say so.
-  // A review card passes its own prompt and stays open: the agent settles
-  // the findings, and the review leaves To-dos when the last one is.
-  const doTodoHere = useEventCallback(async (
-    todo: ThreadTodo,
-    options?: ThreadTodoDoHereOptions,
-  ): Promise<boolean> => {
-    const { prompt, ...resolveOptions } = options ?? {};
-    const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
-    const text = prompt ?? handoff;
-    if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
-    try {
-      const accepted = await handleAnswerAsyncQuestions(text, "queue");
-      if (accepted && prompt === undefined) {
-        await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
-      }
-      return accepted;
-    } catch (error) {
-      props.onShowNotice?.({ id: `todo-dispatch:${todo.id}`, tone: "error", title: "To-do dispatch failed",
-        message: error instanceof Error ? error.message : String(error) });
-      return false;
-    }
-  });
-  const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
-    const settle = asyncQuestionReplySettlers.current.get(id);
-    asyncQuestionReplySettlers.current.delete(id);
-    // Record the answer even when the operator has left the thread, whose
-    // card was already told the send did not settle there.
-    const submission = asyncQuestionSubmissions.current.get(id);
-    asyncQuestionSubmissions.current.delete(id);
-    if (accepted && submission) {
-      setSentAsyncQuestionAnswers((current) => {
-        const next = new Map(current);
-        for (const reply of parseCodexAsyncQuestionReply(submission.text) ?? []) {
-          next.set(`${submission.threadKey}\0${reply.questionItemId}`, reply.answer);
-        }
-        return next;
-      });
-    }
-    settle?.(accepted);
-    // A Composer mounted later, as after the launchpad, must not send it again.
-    setAsyncQuestionReply((current) => (current?.id === id ? undefined : current));
-  });
-  // A question dismissed from the To-dos panel folds here too. Copied in
-  // once per key, so the card can still be reopened in the transcript.
-  const panelDismissedQuestionKeys = props.threadTodos?.dismissedQuestionKeys;
-  const foldedPanelQuestionKeysRef = useRef(new Set<string>());
-  useEffect(() => {
-    if (!panelDismissedQuestionKeys || !selectedThread) return;
-    const prefix = `question:${selectedThread.source}:${selectedThread.id}:`;
-    const fresh = [...panelDismissedQuestionKeys].flatMap((key) => {
-      const projected = parseRemoteOperatorItemKey(key);
-      const localKey = projected?.key ?? key;
-      return projected?.target.instanceId === questionFederationTarget?.instanceId
-        && localKey.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key)
-        ? [{ key, messageId: localKey.slice(prefix.length) }] : [];
-    });
-    if (fresh.length === 0) return;
-    for (const { key } of fresh) foldedPanelQuestionKeysRef.current.add(key);
-    setDismissedAsyncQuestions((current) => new Set([...current,
-      ...fresh.map(({ messageId }) => `${dismissalThreadKey}\0${messageId}`),
-    ]));
-  }, [panelDismissedQuestionKeys, selectedThread, dismissalThreadKey, questionFederationTarget?.instanceId]);
-  const handleAsyncQuestionsDismissedChange = useEventCallback(
-    (messageId: string, dismissed: boolean) => {
-      if (!asyncQuestionThreadKey) return;
-      const key = `${dismissalThreadKey}\0${messageId}`;
-      if (dismissed && selectedThread) {
-        void props.desktopApi?.dismissOperatorQuestion?.({
-          backend: selectedThread.source,
-          threadId: selectedThread.id,
-          messageId,
-          ...(questionFederationTarget ? { federationTarget: questionFederationTarget } : {}),
-        }).catch((error: unknown) => {
-          setDismissedAsyncQuestions((current) => {
-            const next = new Set(current);
-            next.delete(key);
-            return next;
-          });
-          props.onShowNotice?.({ id: `question-dismissal:${key}`, tone: "error", title: "Question dismissal failed",
-            message: error instanceof Error ? error.message : String(error) });
-          console.warn("Dismissing the question failed.", error);
-        });
-      }
-      setDismissedAsyncQuestions((current) => {
-        if (current.has(key) === dismissed) return current;
-        const next = new Set(current);
-        if (dismissed) {
-          next.add(key);
-        } else {
-          next.delete(key);
-        }
-        return next;
-      });
-    },
-  );
+  const {
+    asyncQuestionReply,
+    dismissedAsyncQuestionMessageIds,
+    threadSentAsyncQuestionAnswers,
+    handleAnswerAsyncQuestions,
+    todoReviewRequest,
+    startTodoReview,
+    handleReviewStarted,
+    doTodoHere,
+    handleReplySubmissionSettled,
+    handleAsyncQuestionsDismissedChange,
+  } = useThreadQuestionReplies(props, setPendingRequestError);
   const handleBeforeStartTurn = useEventCallback(async (signal?: AbortSignal) => {
     const drifted = await checkSelectedThreadBranchDrift("turn", signal);
     // An aborted check reports no drift. It must still prevent sending.
@@ -3260,34 +2537,9 @@ export function ThreadView(props: ThreadViewProps) {
       props.transcriptEntries,
     ],
   );
-  const threadImageGallery = useMemo(
-    () =>
-      collectThreadImageGallery([
-        ...props.transcriptEntries,
-        pendingTranscriptActivityEntry,
-        pendingProtocolActivityEntry,
-        pendingUsageActivityEntry,
-        props.pendingAssistantMessage,
-      ]),
-    [
-      pendingProtocolActivityEntry,
-      pendingTranscriptActivityEntry,
-      pendingUsageActivityEntry,
-      props.pendingAssistantMessage,
-      props.transcriptEntries,
-    ],
-  );
-  const openImageGallery = useCallback((image: AppServerThreadImagePart) => {
-    const index = threadImageGallery.findIndex((candidate) =>
-      threadGalleryImageMatches(candidate, image)
-    );
-    // Keep the open viewer independent of optimistic-message replacement,
-    // hydration gaps, and streamed images. Reopening takes a fresh snapshot.
-    setExpandedGallery({
-      images: index >= 0 ? threadImageGallery : [image],
-      index: index >= 0 ? index : 0,
-    });
-  }, [threadImageGallery]);
+  const { openImageGallery, imageLightbox, setExpandedGallery } = useThreadImageGallery({
+    props, pendingTranscriptActivityEntry, pendingProtocolActivityEntry, pendingUsageActivityEntry,
+  });
 
   // One collector per mounted view: `props.transcriptEntries` gets a fresh
   // array identity on every streamed delta, so the derivation folds each entry
@@ -4066,41 +3318,6 @@ export function ThreadView(props: ThreadViewProps) {
   const showLaunchpadMcpAccess = useCallback(() => setLaunchpadMcpAccessOpen(true), []);
   const showThreadMcpAccess = useCallback(() => setThreadMcpAccessOpen(true), []);
 
-  const imageLightbox = expandedImage && expandedGallery ? (
-    <ImageLightbox
-      src={expandedImage.url}
-      alt={expandedImage.alt ?? "Expanded image"}
-      interactiveSvg={!expandedImage.url.startsWith("pwragent-image://federation/")
-        && (/\.svg(?:$|[?#])/i.test(expandedImage.sourceUrl ?? expandedImage.url)
-          || expandedImage.url.startsWith("data:image/svg+xml"))}
-      position={expandedGallery.index + 1}
-      total={expandedGallery.images.length}
-      onClose={() => {
-        setExpandedGallery(undefined);
-      }}
-      onNext={
-        expandedGallery.index < expandedGallery.images.length - 1
-          ? () => {
-              setExpandedGallery((gallery) => gallery && ({
-                ...gallery,
-                index: Math.min(gallery.index + 1, gallery.images.length - 1),
-              }));
-            }
-          : undefined
-      }
-      onPrevious={
-        expandedGallery.index > 0
-          ? () => {
-              setExpandedGallery((gallery) => gallery && ({
-                ...gallery,
-                index: Math.max(gallery.index - 1, 0),
-              }));
-            }
-          : undefined
-      }
-    />
-  ) : null;
-
   const launchpadBackend = composerLaunchpad
     ? props.backends.find(
         (backend) => backend.kind === composerLaunchpad.backend
@@ -4225,74 +3442,9 @@ export function ThreadView(props: ThreadViewProps) {
           threadBusy: props.threadBusy,
           updatingExecutionMode: props.updatingExecutionMode,
         };
-  // A thread whose worktree folder is gone gets the recovery card in the
-  // composer's place. During a live turn the composer stays, so Stop is
-  // still reachable, and the card waits for the turn to end.
-  const [workspaceRecovery, setWorkspaceRecovery] = useState<{
-    threadKey: string;
-    outcome: WorkspaceRecoveryOutcome;
-  }>();
-  const workspaceRecoveryOutcome = workspaceRecovery && workspaceRecovery.threadKey === selectedThreadKey
-    ? workspaceRecovery.outcome
-    : undefined;
-  const missingWorkspace = threadView && !workspaceRecoveryOutcome
-    ? selectedThread?.workspaceMissing
-    : undefined;
-  const missingWorkspaceOwnerStatus = selectedThread?.federation?.peerStatus;
-  // A hibernated checkout keeps the composer: the next send restores it.
-  const hibernatedWorkspace = threadView && !missingWorkspace
-    ? selectedThread?.workspaceHibernated
-    : undefined;
-  const missingWorkspaceTurnActive = Boolean(props.activeTurnId);
-  const composerReplacedByRecovery = Boolean(missingWorkspace) && !missingWorkspaceTurnActive;
-  const workspaceRecoverySlot = missingWorkspace && selectedThread && selectedThreadKey ? (
-    <MissingWorktreeCard
-      key={`${selectedThreadKey}:${missingWorkspace.worktreePath}`}
-      missing={missingWorkspace}
-      ownerLabel={selectedThread.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
-      ownerOffline={
-        missingWorkspaceOwnerStatus !== undefined
-        && missingWorkspaceOwnerStatus !== "connected"
-        && missingWorkspaceOwnerStatus !== "degraded"
-      }
-      turnActive={missingWorkspaceTurnActive}
-      onRecreate={props.onRecreateThreadWorktree
-        ? async (options) => await props.onRecreateThreadWorktree!({
-            worktreePath: missingWorkspace.worktreePath,
-            ...options,
-          })
-        : undefined}
-      onMoveToMainCheckout={props.onMoveThreadToMainCheckout
-        ? async () => await props.onMoveThreadToMainCheckout!(missingWorkspace.worktreePath)
-        : undefined}
-      onArchive={props.onArchiveThread
-        ? async () => await props.onArchiveThread!(selectedThread)
-        : undefined}
-      onRecovered={(outcome) => setWorkspaceRecovery({ threadKey: selectedThreadKey, outcome })}
-    />
-  ) : hibernatedWorkspace && selectedThreadKey ? (
-    <HibernatedCheckoutCard
-      key={`${selectedThreadKey}:${hibernatedWorkspace.worktreePath}`}
-      workspace={hibernatedWorkspace}
-      ownerLabel={selectedThread?.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
-      ownerOffline={
-        missingWorkspaceOwnerStatus !== undefined
-        && missingWorkspaceOwnerStatus !== "connected"
-        && missingWorkspaceOwnerStatus !== "degraded"
-      }
-      onRestore={props.onSetThreadCheckoutHibernation
-        ? async () => await props.onSetThreadCheckoutHibernation!({ restore: true })
-        : undefined}
-      onKeepAwake={props.onSetThreadCheckoutHibernation
-        ? async () => await props.onSetThreadCheckoutHibernation!({ keepAwake: true })
-        : undefined}
-    />
-  ) : workspaceRecoveryOutcome ? (
-    <WorkspaceRecoveryNotice
-      outcome={workspaceRecoveryOutcome}
-      onDismiss={() => setWorkspaceRecovery(undefined)}
-    />
-  ) : null;
+  const { workspaceRecoverySlot, composerReplacedByRecovery } = useWorkspaceRecovery({
+    props, selectedThread, selectedThreadKey, threadView,
+  });
   // ThreadView's one composer: the launchpad's centred column, or a flex item
   // of the thread's `.thread-view__primary` (the thread slot is
   // `display: contents`). The key decides when the composer survives a move
@@ -4417,224 +3569,30 @@ export function ThreadView(props: ThreadViewProps) {
     </div>
   ) : null;
 
-  // Everything below is the one view ThreadView renders. The fork setup,
-  // the empty state, the launchpad and the thread differ only in the parts
-  // chosen here, so the chrome they share is written once.
-  const headerChrome = {
-    desktopApi: props.desktopApi,
-    onOpenMessagingActivity: props.onOpenMessagingActivity,
-    onOpenMessagingSettings: props.onOpenMessagingSettings,
-    layout: {
-      sidebarOpen: !sidebarHidden,
-      railOpen: contextRailPinned,
-      onToggleSidebar,
-      onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
-    },
-    masthead: props.mastheadActions,
-    history: props.historyNav,
-    starMap: props.starMap,
-  };
-  // Only a project the thread list shows is a link. A remote thread whose
-  // project has no local counterpart still names it, as plain text.
-  // `selectedDirectory` waits for the selected thread's detail, so until it
-  // arrives the row's primary project is looked up the same way, by key. The
-  // link and its caret are then there from the first frame, instead of
-  // appearing a request later and pushing the title right.
-  const rowPrimaryDirectory = selectedThread?.linkedDirectories[0];
-  const rowPrimaryDirectoryKey = rowPrimaryDirectory
-    ? classifyDirectory(rowPrimaryDirectory).key
-    : undefined;
-  const headerDirectory = props.selectedDirectory
-    ?? (rowPrimaryDirectoryKey
-      ? props.directories?.find((directory) => directory.key === rowPrimaryDirectoryKey)
-      : undefined);
-  const onRevealSelectedProjectInList = props.onRevealSelectedProjectInList;
-  const projectThreadActions = props.projectThreadActions;
-  const headerProject: ThreadHeaderProject | undefined =
-    headerDirectory && onRevealSelectedProjectInList && projectThreadActions
-      ? {
-          directoryKey: headerDirectory.key,
-          onReveal: () => onRevealSelectedProjectInList(headerDirectory),
-          onCreateThread: () => projectThreadActions.onCreateThread(headerDirectory),
-          ...(projectThreadActions.federationTargets.length > 0
-            ? {
-                federation: {
-                  directory: headerDirectory,
-                  targets: projectThreadActions.federationTargets,
-                  check: projectThreadActions.checkFederationTargetProject,
-                  onCreateThread: (instanceId: string) =>
-                    projectThreadActions.onCreateThreadOnFederationTarget(
-                      instanceId,
-                      headerDirectory,
-                    ),
-                },
-              }
-            : {}),
-        }
-      : undefined;
-  // The header names the provider of the model the composer shows, which is
-  // the backend's default while the launchpad has chosen none.
-  const launchpadHeaderModel = composerLaunchpad
-    ? composerLaunchpad.model
-      ?? getDefaultModelOption(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
-    : undefined;
-  const header = pendingForkEnvironmentSetup ? (
-    <ThreadPlaceholderHeader
-      {...headerChrome}
-      backend={pendingForkEnvironmentSetup.backend}
-      backendLabel={formatBackendLabel(
-        pendingForkEnvironmentSetup.backend,
-        props.backends,
-      )}
-      projectLabel={pendingForkEnvironmentSetup.directoryLabel}
-      title="Forking thread"
-    />
-  ) : emptyView ? (
-    <ThreadPlaceholderHeader {...headerChrome} title="Pick a Thread" />
-  ) : composerLaunchpad ? (
-    <ThreadPlaceholderHeader
-      {...headerChrome}
-      backend={composerLaunchpad.backend}
-      model={launchpadHeaderModel}
-      backendLabel={formatOwnerProviderLabel(
-        composerLaunchpad.backend,
-        launchpadHeaderModel,
-        props.backends,
-      )}
-      projectLabel={composerLaunchpad.directoryLabel}
-      // The composer's source row names the parent; the breadcrumb only says
-      // what is being made.
-      title={composerLaunchpad.parentThreadId ? "New sub-thread" : "New thread"}
-      machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
-    />
-  ) : (
-    <ThreadHeader
-      {...headerChrome}
-      hasApprovalRequest={Boolean(props.pendingRequest)}
-      machine={props.threadMachine}
-      projectLabel={
-        headerDirectory?.label
-        // Navigation rows already carry the primary project name. Keep it
-        // visible while selected detail or its directory summary is loading,
-        // including remote projects with no local directory counterpart.
-        ?? rowPrimaryDirectory?.label
-      }
-      project={headerProject}
-      thread={selectedThread!}
-      backends={props.backends}
-      onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
-      titleRename={props.titleRename}
-      rewind={
-        threadRewindSupport
-          ? {
-              disabledReason: rewindDisabledReason
-                ?? (rewindableMessageIds?.size
-                  ? undefined
-                  : "No prompts to rewind to yet"),
-              onOpen: openLastPromptRewind,
-            }
-          : undefined
-      }
-      workflowBudget={
-        selectedThread?.source === "acp:grok"
-        && selectedThread.federation?.ref.target.scope !== "remote"
-          ? {
-              disabledReason: props.threadBusy
-                ? "Wait for the active Grok turn to finish before changing budgets"
-                : undefined,
-              onOpen: () => {
-                void openWorkflowBudgetDialog();
-              },
-            }
-          : undefined
-      }
-    />
-  );
-  // The connection cards, shared by the launchpad and the rail's Connections
-  // tab: the operator picks where they live, and they work the same in both.
+  const header = renderThreadViewHeader({
+    props,
+    selectedThread,
+    composerLaunchpad,
+    pendingForkEnvironmentSetup,
+    emptyView,
+    sidebarHidden,
+    contextRailPinned,
+    onToggleSidebar,
+    onContextRailPinnedChange,
+    setLaunchpadMachineSlot,
+    openWorkflowBudgetDialog,
+    rewind: threadRewindSupport ? {
+      disabledReason: rewindDisabledReason
+        ?? (rewindableMessageIds?.size ? undefined : "No prompts to rewind to yet"),
+      onOpen: openLastPromptRewind,
+    } : undefined,
+  });
   const launchpadConnectionTiles = composerLaunchpad && !launchpadMaterializing ? (
-    <>
-      <PwrGitConnectionPrompt
-        backend={composerLaunchpad.backend}
-        desktopApi={props.desktopApi}
-        enabled={
-          composerLaunchpad.mcpConnectionIds?.includes(
-            PWRGIT_MCP_CONNECTION_ID,
-          ) === true
-        }
-        remoteOwnerLabel={
-          props.activeFederationTarget
-            ? props.activeFederationOwnerLabel ?? "the remote machine"
-            : undefined
-        }
-        onEnabledChange={async (enabled) => {
-          await props.onUpdateLaunchpad?.(
-            composerLaunchpad.directoryKey,
-            {
-              mcpConnectionIds: pwrGitConnectionIds(
-                composerLaunchpad.mcpConnectionIds,
-                enabled,
-              ),
-            },
-          );
-        }}
-      />
-      {/* Both PwrSuite apps get a card, so each can be discovered,
-          downloaded, and paired from here; per-thread selection also
-          lives in the composer's MCP access panel, which reaches an
-          existing thread too. The remote card offers access from the
-          machine that owns the thread, and the local panel refuses to
-          edit a remote thread's selection. */}
-      <PwrSnapConnectionPrompt
-        backend={composerLaunchpad.backend}
-        desktopApi={props.desktopApi}
-        enabled={
-          composerLaunchpad.mcpConnectionIds?.includes(
-            PWRSNAP_MCP_CONNECTION_ID,
-          ) === true
-        }
-        remoteOwnerLabel={
-          props.activeFederationTarget
-            ? props.activeFederationOwnerLabel ?? "the remote machine"
-            : undefined
-        }
-        onEnabledChange={async (enabled) => {
-          await props.onUpdateLaunchpad?.(
-            composerLaunchpad.directoryKey,
-            {
-              mcpConnectionIds: pwrSnapConnectionIds(
-                composerLaunchpad.mcpConnectionIds,
-                enabled,
-              ),
-            },
-          );
-        }}
-      />
-      {/* A third-party service, advertised until set up. Its remote
-          owner's CLI is invisible here, so a remote thread shows none. */}
-      <SandboxerConnectionPrompt
-        backend={composerLaunchpad.backend}
-        desktopApi={props.desktopApi}
-        enabled={
-          composerLaunchpad.mcpConnectionIds?.includes(
-            SANDBOXER_MCP_CONNECTION_ID,
-          ) === true
-        }
-        remote={props.activeFederationTarget !== undefined}
-        onEnabledChange={async (enabled) => {
-          await props.onUpdateLaunchpad?.(
-            composerLaunchpad.directoryKey,
-            {
-              mcpConnectionIds: sandboxerConnectionIds(
-                composerLaunchpad.mcpConnectionIds,
-                enabled,
-              ),
-            },
-          );
-        }}
-        onOpenSettings={openMcpConnectionSettings}
-      />
-    </>
+    <LaunchpadConnectionTiles
+      view={props}
+      launchpad={composerLaunchpad}
+      onOpenSettings={openMcpConnectionSettings}
+    />
   ) : null;
   // Each view's own part of the chat column, ahead of the composer slot. The
   // fragments are keyed so React never matches one view's children against
@@ -5430,4 +4388,1220 @@ function resolveRemoteTerminalDisabledReason(
     return `Remote terminal not granted by ${federation.instanceLabel}.`;
   }
   return undefined;
+}
+
+// Pure header projection shared by the thread, launchpad and setup views.
+function renderThreadViewHeader({
+  props,
+  selectedThread,
+  composerLaunchpad,
+  pendingForkEnvironmentSetup,
+  emptyView,
+  sidebarHidden,
+  contextRailPinned,
+  onToggleSidebar,
+  onContextRailPinnedChange,
+  setLaunchpadMachineSlot,
+  rewind,
+  openWorkflowBudgetDialog,
+}: {
+  props: ThreadViewProps;
+  selectedThread: NavigationThreadSummary | undefined;
+  composerLaunchpad: NavigationLaunchpadDraft | undefined;
+  pendingForkEnvironmentSetup: PendingForkEnvironmentSetup | undefined;
+  emptyView: boolean;
+  sidebarHidden: boolean;
+  contextRailPinned: boolean;
+  onToggleSidebar: () => void;
+  onContextRailPinnedChange: (pinned: boolean) => void;
+  setLaunchpadMachineSlot: (element: HTMLSpanElement | null) => void;
+  rewind: ComponentProps<typeof ThreadHeader>["rewind"];
+  openWorkflowBudgetDialog: () => Promise<void>;
+}) {
+  const headerChrome = {
+    desktopApi: props.desktopApi,
+    onOpenMessagingActivity: props.onOpenMessagingActivity,
+    onOpenMessagingSettings: props.onOpenMessagingSettings,
+    layout: {
+      sidebarOpen: !sidebarHidden,
+      railOpen: contextRailPinned,
+      onToggleSidebar,
+      onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+    },
+    masthead: props.mastheadActions,
+    history: props.historyNav,
+    starMap: props.starMap,
+  };
+  // Only a project the thread list shows is a link. A remote thread whose
+  // project has no local counterpart still names it, as plain text.
+  // `selectedDirectory` waits for the selected thread's detail, so until it
+  // arrives the row's primary project is looked up the same way, by key. The
+  // link and its caret are then there from the first frame, instead of
+  // appearing a request later and pushing the title right.
+  const rowPrimaryDirectory = selectedThread?.linkedDirectories[0];
+  const rowPrimaryDirectoryKey = rowPrimaryDirectory
+    ? classifyDirectory(rowPrimaryDirectory).key
+    : undefined;
+  const headerDirectory = props.selectedDirectory
+    ?? (rowPrimaryDirectoryKey
+      ? props.directories?.find((directory) => directory.key === rowPrimaryDirectoryKey)
+      : undefined);
+  const onRevealSelectedProjectInList = props.onRevealSelectedProjectInList;
+  const projectThreadActions = props.projectThreadActions;
+  const headerProject: ThreadHeaderProject | undefined =
+    headerDirectory && onRevealSelectedProjectInList && projectThreadActions
+      ? {
+          directoryKey: headerDirectory.key,
+          onReveal: () => onRevealSelectedProjectInList(headerDirectory),
+          onCreateThread: () => projectThreadActions.onCreateThread(headerDirectory),
+          ...(projectThreadActions.federationTargets.length > 0
+            ? {
+                federation: {
+                  directory: headerDirectory,
+                  targets: projectThreadActions.federationTargets,
+                  check: projectThreadActions.checkFederationTargetProject,
+                  onCreateThread: (instanceId: string) =>
+                    projectThreadActions.onCreateThreadOnFederationTarget(
+                      instanceId,
+                      headerDirectory,
+                    ),
+                },
+              }
+            : {}),
+        }
+      : undefined;
+  // The header names the provider of the model the composer shows, which is
+  // the backend's default while the launchpad has chosen none.
+  const launchpadHeaderModel = composerLaunchpad
+    ? composerLaunchpad.model
+      ?? getDefaultModelOption(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
+    : undefined;
+  return pendingForkEnvironmentSetup ? (
+    <ThreadPlaceholderHeader
+      {...headerChrome}
+      backend={pendingForkEnvironmentSetup.backend}
+      backendLabel={formatBackendLabel(
+        pendingForkEnvironmentSetup.backend,
+        props.backends,
+      )}
+      projectLabel={pendingForkEnvironmentSetup.directoryLabel}
+      title="Forking thread"
+    />
+  ) : emptyView ? (
+    <ThreadPlaceholderHeader {...headerChrome} title="Pick a Thread" />
+  ) : composerLaunchpad ? (
+    <ThreadPlaceholderHeader
+      {...headerChrome}
+      backend={composerLaunchpad.backend}
+      model={launchpadHeaderModel}
+      backendLabel={formatOwnerProviderLabel(
+        composerLaunchpad.backend,
+        launchpadHeaderModel,
+        props.backends,
+      )}
+      projectLabel={composerLaunchpad.directoryLabel}
+      // The composer's source row names the parent; the breadcrumb only says
+      // what is being made.
+      title={composerLaunchpad.parentThreadId ? "New sub-thread" : "New thread"}
+      machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
+    />
+  ) : (
+    <ThreadHeader
+      {...headerChrome}
+      hasApprovalRequest={Boolean(props.pendingRequest)}
+      machine={props.threadMachine}
+      projectLabel={
+        headerDirectory?.label
+        // Navigation rows already carry the primary project name. Keep it
+        // visible while selected detail or its directory summary is loading,
+        // including remote projects with no local directory counterpart.
+        ?? rowPrimaryDirectory?.label
+      }
+      project={headerProject}
+      thread={selectedThread!}
+      backends={props.backends}
+      onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
+      titleRename={props.titleRename}
+      rewind={rewind}
+      workflowBudget={
+        selectedThread?.source === "acp:grok"
+        && selectedThread.federation?.ref.target.scope !== "remote"
+          ? {
+              disabledReason: props.threadBusy
+                ? "Wait for the active Grok turn to finish before changing budgets"
+                : undefined,
+              onOpen: () => {
+                void openWorkflowBudgetDialog();
+              },
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+// Stable component identity while connection selections update in either dock.
+function LaunchpadConnectionTiles({ view, launchpad, onOpenSettings }: {
+  view: ThreadViewProps;
+  launchpad: NavigationLaunchpadDraft;
+  onOpenSettings: (() => void) | undefined;
+}) {
+  return (
+    <>
+      <PwrGitConnectionPrompt
+        backend={launchpad.backend}
+        desktopApi={view.desktopApi}
+        enabled={
+          launchpad.mcpConnectionIds?.includes(
+            PWRGIT_MCP_CONNECTION_ID,
+          ) === true
+        }
+        remoteOwnerLabel={
+          view.activeFederationTarget
+            ? view.activeFederationOwnerLabel ?? "the remote machine"
+            : undefined
+        }
+        onEnabledChange={async (enabled) => {
+          await view.onUpdateLaunchpad?.(
+            launchpad.directoryKey,
+            {
+              mcpConnectionIds: pwrGitConnectionIds(
+                launchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+      />
+      {/* Both PwrSuite apps get a card, so each can be discovered,
+          downloaded, and paired from here; per-thread selection also
+          lives in the composer's MCP access panel, which reaches an
+          existing thread too. The remote card offers access from the
+          machine that owns the thread, and the local panel refuses to
+          edit a remote thread's selection. */}
+      <PwrSnapConnectionPrompt
+        backend={launchpad.backend}
+        desktopApi={view.desktopApi}
+        enabled={
+          launchpad.mcpConnectionIds?.includes(
+            PWRSNAP_MCP_CONNECTION_ID,
+          ) === true
+        }
+        remoteOwnerLabel={
+          view.activeFederationTarget
+            ? view.activeFederationOwnerLabel ?? "the remote machine"
+            : undefined
+        }
+        onEnabledChange={async (enabled) => {
+          await view.onUpdateLaunchpad?.(
+            launchpad.directoryKey,
+            {
+              mcpConnectionIds: pwrSnapConnectionIds(
+                launchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+      />
+      {/* A third-party service, advertised until set up. Its remote
+          owner's CLI is invisible here, so a remote thread shows none. */}
+      <SandboxerConnectionPrompt
+        backend={launchpad.backend}
+        desktopApi={view.desktopApi}
+        enabled={
+          launchpad.mcpConnectionIds?.includes(
+            SANDBOXER_MCP_CONNECTION_ID,
+          ) === true
+        }
+        remote={view.activeFederationTarget !== undefined}
+        onEnabledChange={async (enabled) => {
+          await view.onUpdateLaunchpad?.(
+            launchpad.directoryKey,
+            {
+              mcpConnectionIds: sandboxerConnectionIds(
+                launchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+        onOpenSettings={onOpenSettings}
+      />
+    </>
+  );
+}
+
+function useWorkspaceRecovery({ props, selectedThread, selectedThreadKey, threadView }: {
+  props: ThreadViewProps;
+  selectedThread: NavigationThreadSummary | undefined;
+  selectedThreadKey: string | undefined;
+  threadView: boolean;
+}) {
+  // A thread whose worktree folder is gone gets the recovery card in the
+  // composer's place. During a live turn the composer stays, so Stop is
+  // still reachable, and the card waits for the turn to end.
+  const [workspaceRecovery, setWorkspaceRecovery] = useState<{
+    threadKey: string;
+    outcome: WorkspaceRecoveryOutcome;
+  }>();
+  const workspaceRecoveryOutcome = workspaceRecovery && workspaceRecovery.threadKey === selectedThreadKey
+    ? workspaceRecovery.outcome
+    : undefined;
+  const missingWorkspace = threadView && !workspaceRecoveryOutcome
+    ? selectedThread?.workspaceMissing
+    : undefined;
+  const missingWorkspaceOwnerStatus = selectedThread?.federation?.peerStatus;
+  // A hibernated checkout keeps the composer: the next send restores it.
+  const hibernatedWorkspace = threadView && !missingWorkspace
+    ? selectedThread?.workspaceHibernated
+    : undefined;
+  const missingWorkspaceTurnActive = Boolean(props.activeTurnId);
+  const composerReplacedByRecovery = Boolean(missingWorkspace) && !missingWorkspaceTurnActive;
+  const workspaceRecoverySlot = missingWorkspace && selectedThread && selectedThreadKey ? (
+    <MissingWorktreeCard
+      key={`${selectedThreadKey}:${missingWorkspace.worktreePath}`}
+      missing={missingWorkspace}
+      ownerLabel={selectedThread.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
+      ownerOffline={
+        missingWorkspaceOwnerStatus !== undefined
+        && missingWorkspaceOwnerStatus !== "connected"
+        && missingWorkspaceOwnerStatus !== "degraded"
+      }
+      turnActive={missingWorkspaceTurnActive}
+      onRecreate={props.onRecreateThreadWorktree
+        ? async (options) => await props.onRecreateThreadWorktree!({
+            worktreePath: missingWorkspace.worktreePath,
+            ...options,
+          })
+        : undefined}
+      onMoveToMainCheckout={props.onMoveThreadToMainCheckout
+        ? async () => await props.onMoveThreadToMainCheckout!(missingWorkspace.worktreePath)
+        : undefined}
+      onArchive={props.onArchiveThread
+        ? async () => await props.onArchiveThread!(selectedThread)
+        : undefined}
+      onRecovered={(outcome) => setWorkspaceRecovery({ threadKey: selectedThreadKey, outcome })}
+    />
+  ) : hibernatedWorkspace && selectedThreadKey ? (
+    <HibernatedCheckoutCard
+      key={`${selectedThreadKey}:${hibernatedWorkspace.worktreePath}`}
+      workspace={hibernatedWorkspace}
+      ownerLabel={selectedThread?.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
+      ownerOffline={
+        missingWorkspaceOwnerStatus !== undefined
+        && missingWorkspaceOwnerStatus !== "connected"
+        && missingWorkspaceOwnerStatus !== "degraded"
+      }
+      onRestore={props.onSetThreadCheckoutHibernation
+        ? async () => await props.onSetThreadCheckoutHibernation!({ restore: true })
+        : undefined}
+      onKeepAwake={props.onSetThreadCheckoutHibernation
+        ? async () => await props.onSetThreadCheckoutHibernation!({ keepAwake: true })
+        : undefined}
+    />
+  ) : workspaceRecoveryOutcome ? (
+    <WorkspaceRecoveryNotice
+      outcome={workspaceRecoveryOutcome}
+      onDismiss={() => setWorkspaceRecovery(undefined)}
+    />
+  ) : null;
+  return { workspaceRecoverySlot, composerReplacedByRecovery };
+}
+
+// Rewind preview, execution, prompt restoration and undo share one owner context.
+function useThreadRewind(props: ThreadViewProps, rewindOwnerBackend: BackendSummary | undefined) {
+  const selectedThread = props.selectedThread;
+  const [rewindConfirm, setRewindConfirm] = useState<RewindConfirmState>();
+  const rewoundPromptRestoreId = useRef(0);
+  const [rewoundPromptRestore, setRewoundPromptRestore] = useState<{
+    id: number;
+    threadId: string;
+    backend: NavigationThreadSummary["source"];
+    federationTarget?: FederationTarget;
+    text: string;
+    imageAttachments: RewoundPrompt["imageAttachments"];
+    kind: "rewound-prompt" | "rewound-prompt-undone";
+  }>();
+  const handleDraftRestoreHandled = useCallback((id: number): void => {
+    setRewoundPromptRestore((current) => current?.id === id ? undefined : current);
+  }, []);
+  const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
+  const rewindDesktopApi = props.desktopApi;
+  const onRefreshNavigationAfterRewind = props.onRefreshNavigation;
+  const onReloadThreadAfterRewind = props.onReloadThread;
+  const onShowRewindNotice = props.onShowNotice;
+  const threadRewindSupport = rewindOwnerBackend?.available
+    ? rewindOwnerBackend.capabilities.threadRewind
+    : undefined;
+  const rewindProviderLabel = rewindOwnerBackend?.label ?? "The provider";
+  const rewindThreadSource = selectedThread?.source;
+  const rewindableMessageIds = useMemo(
+    () => rewindThreadSource && threadRewindSupport
+      ? collectRewindableMessageIds(props.transcriptEntries, rewindThreadSource)
+      : undefined,
+    [props.transcriptEntries, rewindThreadSource, threadRewindSupport],
+  );
+  const rewindDisabledReason = props.threadBusy
+    ? "Wait for the active turn to finish before rewinding"
+    : undefined;
+  const transcriptEntriesRef = useRef(props.transcriptEntries);
+  transcriptEntriesRef.current = props.transcriptEntries;
+  // What the confirmation's file dry run needs, read when it opens.
+  const rewindPreviewContextRef = useRef({
+    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
+  });
+  rewindPreviewContextRef.current = {
+    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
+  };
+  const openRewindConfirm = useCallback(
+    (message: AppServerThreadMessageEntry): void => {
+      if (!rewindThreadSource) return;
+      const summary = summarizeThreadRewind(
+        transcriptEntriesRef.current,
+        message.id,
+        rewindThreadSource,
+      );
+      if (!summary) return;
+      const { desktopApi, support, thread } = rewindPreviewContextRef.current;
+      const previewThreadRewind = desktopApi?.previewThreadRewind;
+      const preview = support?.files && previewThreadRewind && thread;
+      setRewindConfirm({
+        busy: false,
+        messageId: message.id,
+        ...(preview ? { preview: { status: "loading" as const } } : {}),
+        prompt: rewoundPrompt(message),
+        summary,
+        turnId: message.turn?.id,
+      });
+      if (!preview) return;
+      void previewThreadRewind({
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+        target: { messageId: message.id, ...(message.turn?.id ? { turnId: message.turn.id } : {}) },
+      }).then(
+        (response): ThreadRewindPreview => ({
+          status: "ready",
+          ...(response.files ? { files: response.files } : {}),
+          ...(response.filesUnavailableReason ? { filesUnavailableReason: response.filesUnavailableReason } : {}),
+          ...(response.unavailableReason ? { unavailableReason: response.unavailableReason } : {}),
+        }),
+        (error: unknown): ThreadRewindPreview => ({
+          status: "ready",
+          filesUnavailableReason: error instanceof Error ? error.message : String(error),
+        }),
+      ).then((ready) => {
+        // The operator may have closed it or opened another prompt meanwhile.
+        setRewindConfirm((current) => current?.messageId === message.id && current.preview?.status === "loading"
+          ? { ...current, preview: ready }
+          : current);
+      });
+    },
+    [rewindThreadSource],
+  );
+  const executeRewind = async (mode: ThreadRewindMode): Promise<void> => {
+    const confirm = rewindConfirm;
+    const rewindThread = rewindDesktopApi?.rewindThread;
+    if (!selectedThread || !confirm || confirm.busy) return;
+    if (!rewindThread) {
+      setRewindConfirm({ ...confirm, error: "This PwrAgent build cannot rewind threads." });
+      return;
+    }
+    const thread = selectedThread;
+    const federationTarget = thread.federation?.ref.target
+      ?? readRendererFederationTarget();
+    setRewindConfirm({ ...confirm, busy: true, error: undefined });
+    try {
+      const response = await rewindThread({
+        backend: thread.source,
+        federationTarget,
+        threadId: thread.id,
+        target: {
+          messageId: confirm.messageId,
+          ...(confirm.turnId ? { turnId: confirm.turnId } : {}),
+        },
+        mode,
+        removedTurnCount: confirm.summary.laterTurnCount + 1,
+      });
+      setRewindConfirm(undefined);
+      const promptText = response.promptText ?? confirm.prompt.text;
+      const { droppedAttachmentCount, imageAttachments } = confirm.prompt;
+      if (promptText.trim() || imageAttachments.length > 0) {
+        rewoundPromptRestoreId.current += 1;
+        setRewoundPromptRestore({
+          id: rewoundPromptRestoreId.current,
+          threadId: thread.id,
+          backend: thread.source,
+          federationTarget,
+          text: promptText,
+          imageAttachments,
+          kind: "rewound-prompt",
+        });
+      }
+      if (droppedAttachmentCount > 0) {
+        onShowRewindNotice?.({
+          id: `rewind-attachments:${thread.id}`,
+          title: "Attachments not restored",
+          message: droppedAttachmentCount === 1
+            ? "One attachment from the rewound prompt could not return to the composer. Attach it again before you resend."
+            : `${droppedAttachmentCount} attachments from the rewound prompt could not return to the composer. Attach them again before you resend.`,
+          tone: "warning",
+        });
+      }
+      await onRefreshNavigationAfterRewind?.();
+      await onReloadThreadAfterRewind?.();
+    } catch (error) {
+      setRewindConfirm((current) => current?.messageId === confirm.messageId
+        ? {
+            ...current,
+            busy: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        : current);
+    }
+  };
+  // What an undo needs, read when the operator clicks it.
+  const rewindUndoContextRef = useRef({ desktopApi: rewindDesktopApi, thread: selectedThread });
+  rewindUndoContextRef.current = { desktopApi: rewindDesktopApi, thread: selectedThread };
+  const undoRewind = useCallback((rewindId: string): void => {
+    const { desktopApi, thread } = rewindUndoContextRef.current;
+    const undoThreadRewind = desktopApi?.undoThreadRewind;
+    if (!thread || !undoThreadRewind) return;
+    const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+    setRewindUndoBusyId(rewindId);
+    void (async () => {
+      try {
+        await undoThreadRewind({ backend: thread.source, federationTarget, threadId: thread.id, rewindId });
+      } catch (error) {
+        onShowRewindNotice?.({
+          id: `rewind-undo:${thread.id}`,
+          title: "Rewind not undone",
+          message: error instanceof Error ? error.message : String(error),
+          tone: "warning",
+        });
+        return;
+      } finally {
+        setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
+      }
+      // The prompt is back in the transcript, so the composer's copy goes.
+      rewoundPromptRestoreId.current += 1;
+      setRewoundPromptRestore({
+        id: rewoundPromptRestoreId.current,
+        threadId: thread.id,
+        backend: thread.source,
+        federationTarget,
+        text: "",
+        imageAttachments: [],
+        kind: "rewound-prompt-undone",
+      });
+      try {
+        await onRefreshNavigationAfterRewind?.();
+        await onReloadThreadAfterRewind?.();
+      } catch {
+        // The thread/rewound event refreshes the thread as well.
+      }
+    })();
+  }, [onRefreshNavigationAfterRewind, onReloadThreadAfterRewind, onShowRewindNotice]);
+  const canUndoRewind = Boolean(threadRewindSupport?.undo && rewindDesktopApi?.undoThreadRewind);
+  const rewindUndo = useMemo(
+    () => canUndoRewind
+      ? {
+          busyId: rewindUndoBusyId,
+          disabledReason: rewindDisabledReason,
+          onUndo: undoRewind,
+        }
+      : undefined,
+    [canUndoRewind, rewindDisabledReason, rewindUndoBusyId, undoRewind],
+  );
+  return {
+    rewindConfirm,
+    setRewindConfirm,
+    rewoundPromptRestore,
+    handleDraftRestoreHandled,
+    threadRewindSupport,
+    rewindProviderLabel,
+    rewindableMessageIds,
+    rewindDisabledReason,
+    openRewindConfirm,
+    executeRewind,
+    rewindUndo,
+  };
+}
+
+// Keep question dismissal, accepted replies and to-do settlement in one session.
+function useThreadQuestionReplies(
+  props: ThreadViewProps,
+  setPendingRequestError: (error: string) => void,
+) {
+  const selectedThread = props.selectedThread;
+  const asyncQuestionReplyId = useRef(0);
+  const asyncQuestionReplySettlers = useRef(new Map<number, (accepted: boolean) => void>());
+  const asyncQuestionSubmissions = useRef(new Map<number, { threadKey: string; text: string }>());
+  const [asyncQuestionReply, setAsyncQuestionReply] = useState<{
+    id: number;
+    threadId: string;
+    backend: NavigationThreadSummary["source"];
+    federationTarget?: FederationRemoteTarget;
+    text: string;
+    busyBehavior?: "queue";
+  }>();
+  // Dismissing Codex's async questions only hides their controls, so it is
+  // this window's choice for the session, as skipping is in Codex's own UI.
+  const [dismissedAsyncQuestions, setDismissedAsyncQuestions] =
+    useState<ReadonlySet<string>>(() => new Set());
+  // Answers the composer took that the transcript may not show yet, as when
+  // one waits in the queue. Kept here so a card mounted again still has them.
+  const [sentAsyncQuestionAnswers, setSentAsyncQuestionAnswers] =
+    useState<ReadonlyMap<string, string>>(() => new Map());
+  const asyncQuestionThreadKey = selectedThread
+    ? threadSummaryIdentityKey(selectedThread)
+    : undefined;
+  const questionOwner = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
+  const questionFederationTarget = questionOwner?.scope === "remote" ? questionOwner : undefined;
+  const dismissalThreadKey = `${questionFederationTarget?.instanceId ?? "local"}:${asyncQuestionThreadKey}`;
+  const ownerDismissedQuestionIds = useDismissedOperatorQuestions(props.desktopApi, selectedThread ? {
+    backend: selectedThread.source, threadId: selectedThread.id, federationTarget: questionFederationTarget,
+  } : undefined);
+  // Apply each owner dismissal once, so Show questions can still reopen a card
+  // for inspection without changing the owner's resolved state.
+  const appliedOwnerDismissals = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = ownerDismissedQuestionIds.map((id) => `${dismissalThreadKey}\0${id}`)
+      .filter((key) => !appliedOwnerDismissals.current.has(key));
+    if (fresh.length === 0) return;
+    for (const key of fresh) appliedOwnerDismissals.current.add(key);
+    setDismissedAsyncQuestions((current) => new Set([...current, ...fresh]));
+  }, [ownerDismissedQuestionIds, dismissalThreadKey]);
+  const dismissedAsyncQuestionMessageIds = useMemo(() => {
+    const prefix = `${dismissalThreadKey}\0`;
+    return new Set(
+      [...dismissedAsyncQuestions]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length)),
+    );
+  }, [dismissalThreadKey, dismissedAsyncQuestions]);
+  // The To-dos panel's answers count too: one sent while this thread was off
+  // screen may still be waiting to reach the transcript.
+  const panelSentAsyncQuestionAnswers = props.threadTodos?.sentQuestionAnswers;
+  const threadSentAsyncQuestionAnswers = useMemo(() => {
+    const prefix = `${asyncQuestionThreadKey}\0`;
+    return new Map(
+      [...(panelSentAsyncQuestionAnswers ?? []), ...sentAsyncQuestionAnswers]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, answer]) => [key.slice(prefix.length), answer]),
+    );
+  }, [asyncQuestionThreadKey, panelSentAsyncQuestionAnswers, sentAsyncQuestionAnswers]);
+  useEffect(() => {
+    const settlers = asyncQuestionReplySettlers.current;
+    return () => {
+      // The composer drops a reply addressed to a thread it no longer shows.
+      for (const settle of settlers.values()) settle(false);
+      settlers.clear();
+      setAsyncQuestionReply(undefined);
+    };
+  }, [asyncQuestionThreadKey]);
+  const handleAnswerAsyncQuestions = useEventCallback((text: string, busyBehavior?: "queue"): Promise<boolean> => {
+    // One answer at a time: the composer applies only the newest submission.
+    if (
+      props.composerDisabled
+      || !selectedThread
+      || asyncQuestionReplySettlers.current.size > 0
+    ) {
+      return Promise.resolve(false);
+    }
+    asyncQuestionReplyId.current += 1;
+    const id = asyncQuestionReplyId.current;
+    const thread = selectedThread;
+    asyncQuestionSubmissions.current.set(id, {
+      threadKey: threadSummaryIdentityKey(thread),
+      text,
+    });
+    return new Promise<boolean>((resolve) => {
+      asyncQuestionReplySettlers.current.set(id, resolve);
+      setAsyncQuestionReply({
+        id,
+        threadId: thread.id,
+        backend: thread.source,
+        federationTarget: questionFederationTarget,
+        text,
+        busyBehavior,
+      });
+    });
+  });
+  // A review card's Start review opens the composer's `/review` panel, and
+  // the card resolves only once a review actually starts from it.
+  const [todoReviewRequest, setTodoReviewRequest] = useState<{
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+    federationTarget?: FederationRemoteTarget;
+  }>();
+  // The card's answer about open steps rides along, so the resolve once the
+  // review starts sends the override only if the operator confirmed it.
+  const pendingReviewTodos = useRef(new Map<number, { todo: ThreadTodo; options?: ThreadTodoResolveOptions }>());
+  const todoReviewRequestId = useRef(0);
+  const startTodoReview = useEventCallback((
+    todo: ThreadTodo,
+    options?: ThreadTodoResolveOptions,
+  ) => {
+    const id = ++todoReviewRequestId.current;
+    for (const [previousId, pending] of pendingReviewTodos.current) {
+      if (threadTodoThreadKey(pending.todo) === threadTodoThreadKey(todo)) pendingReviewTodos.current.delete(previousId);
+    }
+    pendingReviewTodos.current.set(id, { todo, options });
+    setTodoReviewRequest({
+      id,
+      threadId: todo.threadId,
+      backend: todo.backend,
+      federationTarget: todo.federationTarget,
+    });
+  });
+  const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
+    if (requestId === undefined) return;
+    const pending = pendingReviewTodos.current.get(requestId);
+    if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
+    pendingReviewTodos.current.delete(requestId);
+    // The original owner's acceptance can arrive after navigation changes.
+    void props.threadTodos?.resolve(pending.todo, "done", undefined, pending.options).catch(
+      (error: unknown) => setPendingRequestError(String(error)),
+    );
+  });
+  // "Do it here" starts a handoff's prompt when idle, or queues it behind
+  // the active turn so the new task does not steer work already in progress.
+  // The card resolves only once the composer has taken it.
+  // Resolves false when the composer would not take it (disabled, or
+  // another answer still sending), so the card can say so.
+  // A review card passes its own prompt and stays open: the agent settles
+  // the findings, and the review leaves To-dos when the last one is.
+  const doTodoHere = useEventCallback(async (
+    todo: ThreadTodo,
+    options?: ThreadTodoDoHereOptions,
+  ): Promise<boolean> => {
+    const { prompt, ...resolveOptions } = options ?? {};
+    const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
+    const text = prompt ?? handoff;
+    if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
+    try {
+      const accepted = await handleAnswerAsyncQuestions(text, "queue");
+      if (accepted && prompt === undefined) {
+        await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
+      }
+      return accepted;
+    } catch (error) {
+      props.onShowNotice?.({ id: `todo-dispatch:${todo.id}`, tone: "error", title: "To-do dispatch failed",
+        message: error instanceof Error ? error.message : String(error) });
+      return false;
+    }
+  });
+  const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
+    const settle = asyncQuestionReplySettlers.current.get(id);
+    asyncQuestionReplySettlers.current.delete(id);
+    // Record the answer even when the operator has left the thread, whose
+    // card was already told the send did not settle there.
+    const submission = asyncQuestionSubmissions.current.get(id);
+    asyncQuestionSubmissions.current.delete(id);
+    if (accepted && submission) {
+      setSentAsyncQuestionAnswers((current) => {
+        const next = new Map(current);
+        for (const reply of parseCodexAsyncQuestionReply(submission.text) ?? []) {
+          next.set(`${submission.threadKey}\0${reply.questionItemId}`, reply.answer);
+        }
+        return next;
+      });
+    }
+    settle?.(accepted);
+    // A Composer mounted later, as after the launchpad, must not send it again.
+    setAsyncQuestionReply((current) => (current?.id === id ? undefined : current));
+  });
+  // A question dismissed from the To-dos panel folds here too. Copied in
+  // once per key, so the card can still be reopened in the transcript.
+  const panelDismissedQuestionKeys = props.threadTodos?.dismissedQuestionKeys;
+  const foldedPanelQuestionKeysRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!panelDismissedQuestionKeys || !selectedThread) return;
+    const prefix = `question:${selectedThread.source}:${selectedThread.id}:`;
+    const fresh = [...panelDismissedQuestionKeys].flatMap((key) => {
+      const projected = parseRemoteOperatorItemKey(key);
+      const localKey = projected?.key ?? key;
+      return projected?.target.instanceId === questionFederationTarget?.instanceId
+        && localKey.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key)
+        ? [{ key, messageId: localKey.slice(prefix.length) }] : [];
+    });
+    if (fresh.length === 0) return;
+    for (const { key } of fresh) foldedPanelQuestionKeysRef.current.add(key);
+    setDismissedAsyncQuestions((current) => new Set([...current,
+      ...fresh.map(({ messageId }) => `${dismissalThreadKey}\0${messageId}`),
+    ]));
+  }, [panelDismissedQuestionKeys, selectedThread, dismissalThreadKey, questionFederationTarget?.instanceId]);
+  const handleAsyncQuestionsDismissedChange = useEventCallback(
+    (messageId: string, dismissed: boolean) => {
+      if (!asyncQuestionThreadKey) return;
+      const key = `${dismissalThreadKey}\0${messageId}`;
+      if (dismissed && selectedThread) {
+        void props.desktopApi?.dismissOperatorQuestion?.({
+          backend: selectedThread.source,
+          threadId: selectedThread.id,
+          messageId,
+          ...(questionFederationTarget ? { federationTarget: questionFederationTarget } : {}),
+        }).catch((error: unknown) => {
+          setDismissedAsyncQuestions((current) => {
+            const next = new Set(current);
+            next.delete(key);
+            return next;
+          });
+          props.onShowNotice?.({ id: `question-dismissal:${key}`, tone: "error", title: "Question dismissal failed",
+            message: error instanceof Error ? error.message : String(error) });
+          console.warn("Dismissing the question failed.", error);
+        });
+      }
+      setDismissedAsyncQuestions((current) => {
+        if (current.has(key) === dismissed) return current;
+        const next = new Set(current);
+        if (dismissed) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+  );
+  return {
+    asyncQuestionReply,
+    dismissedAsyncQuestionMessageIds,
+    threadSentAsyncQuestionAnswers,
+    handleAnswerAsyncQuestions,
+    todoReviewRequest,
+    startTodoReview,
+    handleReviewStarted,
+    doTodoHere,
+    handleReplySubmissionSettled,
+    handleAsyncQuestionsDismissedChange,
+  };
+}
+
+// Snapshot the gallery when opened, independently of transcript hydration or streaming.
+function useThreadImageGallery({
+  props, pendingTranscriptActivityEntry, pendingProtocolActivityEntry, pendingUsageActivityEntry,
+}: {
+  props: ThreadViewProps;
+  pendingTranscriptActivityEntry: AppServerThreadActivityEntry | undefined;
+  pendingProtocolActivityEntry: AppServerThreadActivityEntry | undefined;
+  pendingUsageActivityEntry: AppServerThreadActivityEntry | undefined;
+}) {
+  const [expandedGallery, setExpandedGallery] = useState<{
+    images: AppServerThreadImagePart[];
+    index: number;
+  }>();
+  const expandedImage = expandedGallery?.images[expandedGallery.index];
+  const threadImageGallery = useMemo(
+    () =>
+      collectThreadImageGallery([
+        ...props.transcriptEntries,
+        pendingTranscriptActivityEntry,
+        pendingProtocolActivityEntry,
+        pendingUsageActivityEntry,
+        props.pendingAssistantMessage,
+      ]),
+    [
+      pendingProtocolActivityEntry,
+      pendingTranscriptActivityEntry,
+      pendingUsageActivityEntry,
+      props.pendingAssistantMessage,
+      props.transcriptEntries,
+    ],
+  );
+  const openImageGallery = useCallback((image: AppServerThreadImagePart) => {
+    const index = threadImageGallery.findIndex((candidate) =>
+      threadGalleryImageMatches(candidate, image)
+    );
+    // Keep the open viewer independent of optimistic-message replacement,
+    // hydration gaps, and streamed images. Reopening takes a fresh snapshot.
+    setExpandedGallery({
+      images: index >= 0 ? threadImageGallery : [image],
+      index: index >= 0 ? index : 0,
+    });
+  }, [threadImageGallery]);
+
+  const imageLightbox = expandedImage && expandedGallery ? (
+    <ImageLightbox
+      src={expandedImage.url}
+      alt={expandedImage.alt ?? "Expanded image"}
+      interactiveSvg={!expandedImage.url.startsWith("pwragent-image://federation/")
+        && (/\.svg(?:$|[?#])/i.test(expandedImage.sourceUrl ?? expandedImage.url)
+          || expandedImage.url.startsWith("data:image/svg+xml"))}
+      position={expandedGallery.index + 1}
+      total={expandedGallery.images.length}
+      onClose={() => {
+        setExpandedGallery(undefined);
+      }}
+      onNext={
+        expandedGallery.index < expandedGallery.images.length - 1
+          ? () => {
+              setExpandedGallery((gallery) => gallery && ({
+                ...gallery,
+                index: Math.min(gallery.index + 1, gallery.images.length - 1),
+              }));
+            }
+          : undefined
+      }
+      onPrevious={
+        expandedGallery.index > 0
+          ? () => {
+              setExpandedGallery((gallery) => gallery && ({
+                ...gallery,
+                index: Math.max(gallery.index - 1, 0),
+              }));
+            }
+          : undefined
+      }
+    />
+  ) : null;
+
+  return { openImageGallery, imageLightbox, setExpandedGallery };
+}
+
+// Own the thread's setup progress, failure acknowledgement and keep-or-close choice.
+function useThreadEnvironmentSetup({
+  props, selectedThreadKey, launchpadSetupProgress, setLaunchpadSetupProgress,
+}: {
+  props: ThreadViewProps;
+  selectedThreadKey: string | undefined;
+  launchpadSetupProgress: LaunchpadEnvironmentSetupProgress | undefined;
+  setLaunchpadSetupProgress: Dispatch<SetStateAction<LaunchpadEnvironmentSetupProgress | undefined>>;
+}) {
+  const selectedThread = props.selectedThread;
+  const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
+    useState<Set<string>>(() => new Set());
+  // Thread keys this window has already written an environment-failure
+  // acknowledgement for. The overlay write is idempotent, but the navigation
+  // snapshot this window holds keeps the pre-write runtime until it refreshes,
+  // so without this the backfill below would re-send on every render pass that
+  // moves one of its inputs.
+  const environmentFailureAcknowledgedRef = useRef<Set<string>>(new Set());
+  const [setupFailureArchiving, setSetupFailureArchiving] = useState(false);
+  const [setupFailureContinuing, setSetupFailureContinuing] = useState(false);
+  const [setupFailureContinueError, setSetupFailureContinueError] =
+    useState<string>();
+  const selectedThreadSetupFailed =
+    selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
+  const selectedThreadEnvironmentId =
+    selectedThread?.codexEnvironmentRuntime?.environmentId;
+  // The setup-failure dialog only surfaces during launchpad materialise
+  // (messageCount === 0), where at most one auto-action runs. Look for
+  // the most recent failed run in actionRuns to drive the action-phase
+  // branch of the dialog.
+  const selectedThreadActionRuns = readCodexEnvironmentActionRuns(
+    selectedThread?.codexEnvironmentRuntime,
+  );
+  const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
+    .reverse()
+    .find((run) =>
+      run.status === "failed"
+      && Boolean(selectedThreadEnvironmentId)
+      && (!run.environmentId || run.environmentId === selectedThreadEnvironmentId));
+  const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
+  // `setupStatus: "failed"` and a failed action run are permanent history; the
+  // prompt they raise is not. This is the record of the operator having
+  // answered it. Setup runs once, at thread creation, so any acknowledgement
+  // covers the setup phase; an action that failed *after* the acknowledgement
+  // is a new failure and raises the prompt again.
+  const selectedThreadEnvironmentFailureAcknowledgedAt =
+    selectedThread?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt;
+  const selectedThreadEnvironmentFailureAcknowledged =
+    typeof selectedThreadEnvironmentFailureAcknowledgedAt === "number"
+    && (!selectedThreadActionFailed
+      || (selectedThreadLatestFailedActionRun?.exitedAt
+        ?? selectedThreadLatestFailedActionRun?.startedAt
+        ?? 0) <= selectedThreadEnvironmentFailureAcknowledgedAt);
+  const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
+    (directory) =>
+      directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
+  );
+  const selectedThreadOptimisticLaunchpadInput =
+    buildInputFromOptimisticUserMessage(selectedThread?.optimisticUserMessage);
+  const hasOnlyOptimisticLaunchpadMessage =
+    props.messageCount === 1 && selectedThreadOptimisticLaunchpadInput.length > 0;
+  const showSetupFailureChoice = Boolean(
+    selectedThread &&
+      selectedThreadKey &&
+      (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage) &&
+      // `messageCount` is the loaded transcript's length, so it also reads 0
+      // for a thread whose history has not arrived yet. Without this the
+      // prompt reappeared for the whole hydration window every time an old
+      // failed-setup thread was opened, then vanished when the transcript
+      // landed — a decision prompt for a decision made weeks ago.
+      !props.loading &&
+      !props.activeTurnId &&
+      (selectedThreadSetupFailed || selectedThreadActionFailed) &&
+      !selectedThreadEnvironmentFailureAcknowledged &&
+      !setupFailureDismissedThreadKeys.has(selectedThreadKey),
+  );
+  const selectedThreadEnvironmentFailurePhase = selectedThreadActionFailed
+    ? "action"
+    : "setup";
+  // Retire a failure the thread has already moved past. This covers the
+  // threads that failed before the acknowledgement existed, and the operator
+  // who answered the prompt by quitting the app rather than by clicking: once
+  // the transcript has loaded and holds real turns, the decision is long made,
+  // so record it instead of raising the prompt again on the next launch. Only
+  // a loaded transcript counts — `messageCount` is 0 during hydration too.
+  const selectedThreadEnvironmentFailureStale = Boolean(
+    selectedThread
+      && selectedThreadKey
+      && (selectedThreadSetupFailed || selectedThreadActionFailed)
+      && !selectedThreadEnvironmentFailureAcknowledged
+      && !props.loading
+      // A failed read may leave only our locally displayed initial prompt.
+      // It is not evidence that the backend ever started a turn.
+      && !props.transcriptError
+      && props.messageCount > 0
+      && !hasOnlyOptimisticLaunchpadMessage,
+  );
+  const acknowledgeThreadEnvironmentFailure =
+    props.desktopApi?.acknowledgeThreadEnvironmentFailure;
+  // Named apart from `selectedThreadBackend` above, which is the backend
+  // *descriptor* from props.backends, not the thread's own backend kind.
+  const selectedThreadBackendKind = selectedThread?.source;
+  const selectedThreadId = selectedThread?.id;
+  const selectedThreadFederationTarget = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
+  useEffect(() => {
+    if (
+      !selectedThreadEnvironmentFailureStale
+      || !selectedThreadKey
+      || !selectedThreadId
+      || !selectedThreadBackendKind
+      || !acknowledgeThreadEnvironmentFailure
+      || environmentFailureAcknowledgedRef.current.has(selectedThreadKey)
+    ) {
+      return;
+    }
+    environmentFailureAcknowledgedRef.current.add(selectedThreadKey);
+    void acknowledgeThreadEnvironmentFailure({
+      backend: selectedThreadBackendKind,
+      threadId: selectedThreadId,
+      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
+    }).catch(() => undefined);
+  }, [
+    acknowledgeThreadEnvironmentFailure,
+    selectedThreadBackendKind,
+    selectedThreadEnvironmentFailureStale,
+    selectedThreadFederationTarget,
+    selectedThreadId,
+    selectedThreadKey,
+  ]);
+  /**
+   * Retire the environment-failure prompt for this thread, in this window and
+   * durably. The in-memory set alone did not survive an app restart — or a
+   * ThreadView unmount — so the prompt came back on a thread whose failure the
+   * operator had already answered.
+   */
+  const dismissEnvironmentFailureChoice = (threadKey: string, acknowledgedOnOwner = false): void => {
+    setSetupFailureDismissedThreadKeys((current) => {
+      const next = new Set(current);
+      next.add(threadKey);
+      return next;
+    });
+    if (!selectedThread || environmentFailureAcknowledgedRef.current.has(threadKey)) {
+      return;
+    }
+    environmentFailureAcknowledgedRef.current.add(threadKey);
+    if (acknowledgedOnOwner) return;
+    void props.desktopApi?.acknowledgeThreadEnvironmentFailure?.({
+      backend: selectedThread.source,
+      threadId: selectedThread.id,
+      ...(selectedThreadFederationTarget ? { federationTarget: selectedThreadFederationTarget } : {}),
+    })
+      // The prompt is already gone from this window; a failed write only means
+      // it can appear once more on a later launch, which is not worth a notice.
+      .catch(() => undefined);
+  };
+  const continueAfterSetupFailure = async (): Promise<void> => {
+    if (!selectedThread || !selectedThreadKey || props.composerDisabled) {
+      return;
+    }
+
+    const input = buildInputFromOptimisticUserMessage(
+      selectedThread.optimisticUserMessage,
+    );
+    setSetupFailureContinueError(undefined);
+    setSetupFailureContinuing(true);
+    props.onPendingStatusChange?.("Thinking");
+    try {
+      const fallbackTurn = {
+        input,
+        executionMode: selectedThread.executionMode,
+        model: selectedThread.model,
+        reasoningEffort: selectedThread.reasoningEffort,
+        serviceTier: selectedThread.serviceTier,
+        fastMode: selectedThread.source === "codex"
+          ? selectedThread.fastMode
+          : undefined,
+      };
+      const federationTarget = selectedThreadFederationTarget;
+      const response = props.desktopApi?.continueThreadEnvironmentStartup
+        ? await props.desktopApi.continueThreadEnvironmentStartup({
+            backend: selectedThread.source,
+            federationTarget,
+            threadId: selectedThread.id,
+            ...(input.length > 0 ? { fallbackTurn } : {}),
+          })
+        : input.length > 0 && props.desktopApi?.startTurn
+          ? await props.desktopApi.startTurn({
+              ...fallbackTurn,
+              backend: selectedThread.source,
+              federationTarget,
+              threadId: selectedThread.id,
+            })
+          : undefined;
+      if (!response) {
+        throw new Error("The original request is unavailable. Send your prompt again to start this thread.");
+      }
+      props.onActiveTurnIdChange?.(response.turnId);
+      if (!response.turnId) props.onPendingStatusChange?.(undefined);
+      dismissEnvironmentFailureChoice(selectedThreadKey, Boolean(props.desktopApi?.continueThreadEnvironmentStartup));
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      props.onPendingStatusChange?.(undefined);
+      props.onActiveTurnIdChange?.(undefined);
+      setSetupFailureContinueError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setSetupFailureContinuing(false);
+    }
+  };
+
+  // Environment setup, as one row in the composer band. It covers a live run
+  // on this thread, the failure that run left behind, and, for a thread with
+  // no turns yet, the keep-or-close decision a failed launch still needs.
+  // Memoized because the Composer is: a fresh model on every streamed event
+  // would re-render it for the life of an undismissed failure.
+  const selectedThreadSetupProgress =
+    selectedThread
+    && launchpadSetupProgress?.directoryKey
+      === `thread:${selectedThread.source}:${selectedThread.id}`
+      ? launchpadSetupProgress
+      : undefined;
+  const selectedThreadSetupProgressStatus = describeSetupProgressRowStatus(
+    selectedThreadSetupProgress,
+  );
+  // A failed run belongs to the environment it ran for. Choosing another
+  // environment (or none) emits no progress when it has no setup script, so
+  // nothing would replace the failure: the row would keep describing — and
+  // Retry would re-select — an environment the operator has left. The runtime
+  // update for the failed selection itself names the same environment and
+  // arrives after the `failed` event, so it keeps the row.
+  const selectedThreadProgressKey = selectedThread
+    ? `thread:${selectedThread.source}:${selectedThread.id}`
+    : undefined;
+  useEffect(() => {
+    setLaunchpadSetupProgress((current) =>
+      current
+      && current.directoryKey === selectedThreadProgressKey
+      && describeSetupProgressRowStatus(current) !== "running"
+      && current.environmentId !== selectedThreadEnvironmentId
+        ? undefined
+        : current);
+  }, [selectedThreadEnvironmentId, selectedThreadProgressKey, setLaunchpadSetupProgress]);
+  const cleanupAfterSetupFailure = useEventCallback(() => {
+    if (!selectedThread || !props.onArchiveThread) {
+      return;
+    }
+    setSetupFailureArchiving(true);
+    void props.onArchiveThread(selectedThread).finally(() => {
+      setSetupFailureArchiving(false);
+    });
+  });
+  const continueAfterSetupFailureEvent = useEventCallback(() => {
+    void continueAfterSetupFailure();
+  });
+  const dismissSelectedThreadSetupProgress = useEventCallback(() => {
+    setLaunchpadSetupProgress(undefined);
+  });
+  const selectedThreadRuntime = selectedThread?.codexEnvironmentRuntime;
+  const selectedThreadEnvironmentSetup = useMemo<
+    EnvironmentSetupRowModel | undefined
+  >(() => {
+    const progress = selectedThreadSetupProgress;
+    if (progress && selectedThreadSetupProgressStatus === "running") {
+      return {
+        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
+        phase: "setup",
+        status: "running",
+        ...setupRowFieldsFromProgress(progress),
+      };
+    }
+    if (showSetupFailureChoice && selectedThreadKey) {
+      const phase = selectedThreadEnvironmentFailurePhase;
+      return {
+        key: `decision:${selectedThreadKey}:${phase}`,
+        phase,
+        status: "failed",
+        environmentId: selectedThreadRuntime?.environmentId,
+        environmentName:
+          selectedThreadRuntime?.environmentName ?? progress?.environmentName,
+        command:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.command
+            : selectedThreadRuntime?.setupCommand ?? progress?.command,
+        cwd: selectedThreadRuntime?.cwd ?? progress?.cwd,
+        output:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.output
+            : selectedThreadRuntime?.setupOutput ?? progress?.output,
+        exitCode:
+          phase === "action"
+            ? selectedThreadLatestFailedActionRun?.exitCode
+            : selectedThreadRuntime?.setupExitCode ?? progress?.exitCode,
+        durationMs: phase === "action" ? undefined : progress?.durationMs,
+        decision: {
+          busy: setupFailureArchiving || setupFailureContinuing,
+          continuing: setupFailureContinuing,
+          disabled: props.composerDisabled,
+          // Archive failures go to the durable notice stack (they can also
+          // originate from a context menu with nothing left on screen), so
+          // this reports only the Continue button's own failure.
+          error: setupFailureContinueError,
+          hasWorktree: Boolean(selectedThreadWorktree),
+          onCleanup: cleanupAfterSetupFailure,
+          onContinue: continueAfterSetupFailureEvent,
+        },
+      };
+    }
+    if (progress && selectedThreadSetupProgressStatus === "failed") {
+      return {
+        key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
+        phase: "setup",
+        status: "failed",
+        ...setupRowFieldsFromProgress(progress),
+        onDismiss: dismissSelectedThreadSetupProgress,
+      };
+    }
+    return undefined;
+  }, [
+    cleanupAfterSetupFailure,
+    continueAfterSetupFailureEvent,
+    dismissSelectedThreadSetupProgress,
+    props.composerDisabled,
+    selectedThreadEnvironmentFailurePhase,
+    selectedThreadKey,
+    selectedThreadLatestFailedActionRun,
+    selectedThreadRuntime,
+    selectedThreadSetupProgress,
+    selectedThreadSetupProgressStatus,
+    selectedThreadWorktree,
+    setupFailureArchiving,
+    setupFailureContinueError,
+    setupFailureContinuing,
+    showSetupFailureChoice,
+  ]);
+
+  return {
+    selectedThreadEnvironmentSetup,
+    setSetupFailureArchiving,
+    setSetupFailureContinuing,
+    setSetupFailureContinueError,
+  };
 }

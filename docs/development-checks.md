@@ -110,8 +110,11 @@ Read this before source edits, dependency installation, test execution, lint/too
 - The check uses the real Vitest SSR transform and module wrapper, then asks
   V8 to compile every function in those four files without executing them.
   It checks both ordinary output and output compressed by Vite's Oxc minifier.
-- Each function, including nested render helpers, has a 48 KiB budget. This
-  leaves 12 KiB before V8's default 60 KiB TurboFan eligibility limit.
+- Each function, including nested render helpers, has a 32 KiB budget. This
+  leaves 28 KiB before V8's default 60 KiB TurboFan eligibility limit.
+- Extract cohesive state, effects and actions into custom hooks, and use pure
+  projections or stable module-level components for presentation. Keep
+  callbacks and state at the same lifetime as their owning view.
 - Keep JSX construction in separate local function declarations. The minifier
   folds single-use arrow helpers back into their callers. Calling a helper
   preserves the component's hook order and React identity while compiling the
