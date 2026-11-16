@@ -9,7 +9,7 @@ import { formatTaskMonitorNumber, formatTaskMonitorTokenCount } from "../app-ser
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import { estimateTokenCount, type TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -165,21 +165,36 @@ describe("Token Miser persistence work budgets", () => {
   });
 
   it("follows database edits and metadata transitions instead of caching a previous flush", async () => {
-    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("retrieve", "replay", "stop", "version", "delete", "reparent"), {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.array(fc.constantFrom("retrieve", "replay", "stop", "delete", "reparent"), {
       minLength: 5, maxLength: 20, size: "max",
-    }), async (operations) => {
+    }), async (legacy, operations) => {
       const { db, store, internals } = fixture();
       try {
-        let entry = gate(0);
+        // The store never downgrades a gate's tracking version or observes
+        // replays after it stops. Generate both creation-time cohorts.
+        let entry: TokenMiserObjectMetadata = {
+          ...gate(0), replayTrackingVersion: legacy ? undefined : 2 as const,
+          originalCharacters: 12_000,
+          cachedReplayCount: legacy ? undefined : 0,
+          cachedBaselineTokens: legacy ? undefined : 0,
+          cachedRevealedTokens: legacy ? undefined : 0,
+          parentRequestsObservedAfterGate: legacy ? undefined : 2,
+          lastParentCumulativeInputTokens: legacy ? undefined : 2_000,
+        };
         for (const operation of operations) {
           if (operation === "retrieve") entry = { ...entry, retrievedCharacters: entry.retrievedCharacters + 400 };
-          if (operation === "replay") entry = { ...entry, cachedReplayCount: (entry.cachedReplayCount ?? 0) + 1,
-            cachedBaselineTokens: (entry.cachedBaselineTokens ?? 0) + 3_000,
-            cachedRevealedTokens: (entry.cachedRevealedTokens ?? 0) + 100 };
-          if (operation === "stop") entry = { ...entry, replayTrackingStoppedAt: AT + 100 };
-          if (operation === "version") entry = { ...entry, replayTrackingVersion: entry.replayTrackingVersion === 2 ? undefined : 2 };
+          const active = entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined;
+          if (operation === "replay" && active) entry = { ...entry, cachedReplayCount: (entry.cachedReplayCount ?? 0) + 1,
+            cachedBaselineTokens: (entry.cachedBaselineTokens ?? 0) + entry.baselineParentTokens,
+            cachedRevealedTokens: (entry.cachedRevealedTokens ?? 0)
+              + estimateTokenCount(entry.replacementCharacters + entry.retrievedCharacters),
+            parentRequestsObservedAfterGate: (entry.parentRequestsObservedAfterGate ?? 0) + 1,
+            lastParentCumulativeInputTokens: (entry.lastParentCumulativeInputTokens ?? 0) + 1_000 };
+          if (operation === "stop" && active) entry = { ...entry, replayTrackingStoppedAt: AT + 100 };
           if (operation === "delete") db.raw.prepare("DELETE FROM thread_sub_agents WHERE monitor_id = ?").run("system:token-miser:gate-0");
-          if (operation === "reparent") entry = { ...entry, turnId: `${entry.turnId}-next` };
+          // Legacy persisted cards can lack nesting; the gate's turn is fixed.
+          if (operation === "reparent") db.raw.prepare("UPDATE thread_sub_agents SET card = json_remove(card, '$.parentTurnId') WHERE monitor_id = ?")
+            .run("system:token-miser:gate-0");
           // Slow oracle: build a complete card on every transition from the
           // authoritative whole ledger, regardless of the comparison shortcut.
           const pricing = await store.readThreadPricing({ backend: "codex", threadId: THREAD });
