@@ -40,6 +40,7 @@ import {
 } from "../../lib/markdown-fences";
 import { useIncrementalMarkdownRenderer, useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
 import type { MarkdownMathRuntime } from "../../lib/markdown-math-runtime";
+import { MathClipboardApiContext } from "../../lib/math-clipboard-context";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -802,8 +803,11 @@ const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
     remarkPullRequestReferences,
     remarkTableProfile,
   ], [props.mathRuntime]);
+  const components = useMemo(() => ({
+    ...markdownComponents, ...props.mathRuntime?.components,
+  }), [props.mathRuntime]);
   const options = {
-    components: markdownComponents,
+    components,
     rehypePlugins: props.mathRuntime?.rehypePlugins,
     remarkPlugins,
     urlTransform: normalizeMarkdownUrl,
@@ -1012,7 +1016,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       <MarkdownRenderContext.Provider value={renderState}>
         <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
           <MarkdownCodeApiContext.Provider value={props.desktopApi}>
-            <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
+            <MathClipboardApiContext.Provider value={props.desktopApi}>
+              <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
+            </MathClipboardApiContext.Provider>
           </MarkdownCodeApiContext.Provider>
         </TranscriptFileRegistrationContext.Provider>
       </MarkdownRenderContext.Provider>

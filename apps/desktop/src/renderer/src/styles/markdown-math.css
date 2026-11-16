@@ -10,3 +10,82 @@
   overflow-x: auto;
   overflow-y: hidden;
 }
+
+.math-formula {
+  position: relative;
+  display: inline-block;
+}
+
+.math-formula--display {
+  display: block;
+}
+
+.math-formula__copy {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.math-formula--display > .math-formula__copy {
+  top: 0;
+  bottom: auto;
+}
+
+.math-formula:hover > .math-formula__copy,
+.math-formula:focus-within > .math-formula__copy,
+.math-formula__copy[aria-expanded="true"],
+.math-formula__copy[data-status="copied"],
+.math-formula__copy[data-status="failed"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.math-formula__copy:hover {
+  color: var(--accent-bright);
+  background: var(--bg-panel-hover);
+}
+
+.math-formula__copy:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.math-formula__copy[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: progress;
+}
+
+.math-formula__menu {
+  min-width: 200px;
+  z-index: 150;
+}
+
+.math-formula__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (hover: none) {
+  .math-formula__copy {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}

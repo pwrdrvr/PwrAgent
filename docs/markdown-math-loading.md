@@ -105,6 +105,33 @@ pnpm test apps/desktop/src/renderer/src/lib/__tests__/markdown-math-budget.prope
 
 ## Validation and measurements
 
+### Formula clipboard exports
+
+The demand-loaded math runtime wraps each complete KaTeX root once, preserving
+its original MathML, layout, and source annotation. A compact hover/focus copy
+menu offers transparent PNG, exact LaTeX, and formatted HTML. Its clipboard
+context is eager but has no export dependencies. Only an image or HTML action
+imports `math-clipboard-export`; LaTeX copy does not load it. Copy feedback is
+outside the selectable formula, and menu navigation uses the shared keyboard
+and dismissal behavior.
+
+Exports freeze the current KaTeX layout and embed only its used WOFF2 font
+faces. HTML carries inline styles, embedded fonts, MathML, and a plain-text
+LaTeX flavor. Paste targets may sanitize fonts or styles. PNG uses transparent
+padding and dark ink, preserves explicit TeX colors, and defaults to 2x
+resolution, capped at 8192 pixels per edge and 16 million pixels before image
+decoding or canvas allocation. Export work happens on click with no persistence
+or background rasterization. No rendering dependency is added.
+
+`pnpm --filter @pwragent/desktop exec tsx scripts/verify-math-clipboard.ts` builds
+a production Chromium fixture with contrived formulas and an intercepted
+clipboard. It checks both inline and display copy, exact source, self-contained
+HTML fonts, transparent PNG pixels, unclipped borders, theme-independent dark
+ink, and export code loading only on demand. Artifacts go under
+`.local/formula-clipboard/`.
+
+### Math asset loading
+
 With math enabled and ordinary Markdown, **309,513 B of math JavaScript and
 CSS are no longer loaded**. This avoids loading math code and installing its
 stylesheet until a message has a math hint. Installed application size is

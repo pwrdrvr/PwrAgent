@@ -30,7 +30,7 @@ const loaded = await resolveConfig({
 }, "build", "production");
 const config = loaded.config?.renderer;
 assert(config, "Missing renderer build configuration");
-const mathModule = /(?:(?:markdown-math(?:-runtime)?|remark-bounded-math|remark-single-dollar-math)\.[tc]|node_modules\/(?:remark-math|rehype-katex|katex|micromark-extension-math|mdast-util-math)\/|markdown-math\.css)/;
+const mathModule = /(?:(?:markdown-math(?:-runtime)?|remark-bounded-math|remark-single-dollar-math|rehype-math-copy|MathFormula|math-clipboard-export)\.[tc]|node_modules\/(?:remark-math|rehype-katex|katex|micromark-extension-math|mdast-util-math)\/|markdown-math\.css)/;
 const reports: unknown[] = [];
 function boundaries(label: string): Plugin {
   return {
