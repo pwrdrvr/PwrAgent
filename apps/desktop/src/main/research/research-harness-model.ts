@@ -1,6 +1,12 @@
 import type { ResearchHarnessConfig } from "@pwragent/shared";
 import type { ResearchModelTransport } from "@pwragent/owner-core/research-model-adapter";
 
+export function selectHarnessModel(config: ResearchHarnessConfig, mode: "import" | "execute") {
+  if (mode === "import" || !config.model || !config.endpoint) return undefined;
+  const complete = createHarnessModelTransport(config);
+  return { model: config.model, endpointOrigin: new URL(config.endpoint).origin, complete };
+}
+
 /** Explicit endpoint/model only. Never list models, infer tools, or forward credentials to the process. */
 export function createHarnessModelTransport(config: ResearchHarnessConfig): ResearchModelTransport {
   if (!config.endpoint || !config.model) throw new Error("Configure an explicit research model and Chat Completions endpoint before execution");

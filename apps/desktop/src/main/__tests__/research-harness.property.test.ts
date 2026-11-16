@@ -43,6 +43,16 @@ function setup(options: { records?: unknown[]; execute?: () => Promise<unknown>;
 }
 
 describe("Harness lifecycle and real SQLite oracle", () => {
+  it("retains owner-selected model provenance instead of accepting a model identity from source records", async () => {
+    const { service, connection } = setup();
+    connection.model = { model: "owner-selected", endpointOrigin: "https://fixture.example" };
+    const admitted = await measureSqliteWrites(() => service.start(request(), fixture.tempDir));
+    const run = admitted.result;
+    expectSqliteWriteBudget({ scenario: "research-harness-model-admission", note: "Intent, owner-selected model provenance before the paid probe, dispatch and one initial source page. No per-token writes.", writes: admitted.writes });
+    expect(run.harness).toMatchObject({ model: "owner-selected", endpointOrigin: "https://fixture.example" });
+    expect(run.events.some((e) => e.data.type === "harness_observation" && e.data.text.includes("fixture-model"))).toBe(true);
+    expect(run.harness?.model).not.toBe("fixture-model");
+  });
   it("requires a local acceptance before explicitly finishing retained source execution", async () => {
     const { service, store, connection } = setup({ records: harnessRecords() });
     const run = await service.start(request("import"), fixture.tempDir);

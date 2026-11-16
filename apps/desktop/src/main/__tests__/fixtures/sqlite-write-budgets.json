@@ -1,4 +1,5 @@
 {
+  "research-harness-model-admission": {"commits": 4, "note": "Intent, owner-selected model provenance before the paid probe, dispatch and one initial source page. No per-token writes.", "observedWalBytes": 156592, "rowsChanged": 17, "statements": 17},
   "research-harness-finish": {"commits": 1, "note": "Explicit local completion after local acceptance; does not infer or request source cancellation.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "research-harness-shutdown": {"commits": 1, "note": "One durable unknown-outcome boundary before owned process cleanup; no remote stop is inferred.", "observedWalBytes": 20600, "rowsChanged": 3, "statements": 3},
   "research-harness-probe-refusal": {"commits": 2, "note": "Intent and unsupported/unknown capability boundary; no research execution is dispatched.", "observedWalBytes": 78312, "rowsChanged": 7, "statements": 7},

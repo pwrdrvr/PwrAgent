@@ -3,7 +3,8 @@ import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-se
 import { probeResearchModel, researchModelRequest } from "@pwragent/owner-core/research-model-adapter";
 import { readDesktopSettingsConfig, resolveDesktopConfigPath } from "../settings/desktop-config";
 import { openResearchHarnessProcess } from "./research-harness-process";
-import { createHarnessModelTransport } from "./research-harness-model";
+import { createHarnessModelTransport, selectHarnessModel } from "./research-harness-model";
+import type { ResearchHarnessStatus } from "@pwragent/shared";
 import type { ResearchActor, ResearchCommand, StartResearchRequest, ResearchAssignRequest, ResearchSearchQuery, ResearchItem } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
@@ -12,8 +13,11 @@ import { createResearchStorage } from "../storage/desktop-runtime-storage";
 let service: ResearchService | undefined;
 let harness: ResearchHarnessService | undefined;
 
-export function researchHarnessConfigured(): boolean {
-  return Boolean(readDesktopSettingsConfig(resolveDesktopConfigPath()).research?.harness?.command);
+export function researchHarnessStatus(): ResearchHarnessStatus {
+  const config = readDesktopSettingsConfig(resolveDesktopConfigPath()).research?.harness;
+  let endpointOrigin: string | undefined;
+  try { if (config?.endpoint) endpointOrigin = new URL(config.endpoint).origin; } catch { /* Execution validation reports invalid endpoints; observation stays available. */ }
+  return { configured: Boolean(config?.command), model: config?.model, endpointOrigin };
 }
 export function getResearchHarnessService(): ResearchHarnessService {
   if (!harness) throw new Error("Research Harness owner has not started");
@@ -26,10 +30,10 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
   const models = new Map<string, { model: string; complete: ReturnType<typeof createHarnessModelTransport> }>();
   harness = new ResearchHarnessService(storage, {
     ...ports,
-    open: (workspace, id) => {
+    open: (workspace, id, mode) => {
       const config = readDesktopSettingsConfig(resolveDesktopConfigPath()).research?.harness;
       if (!config?.command) throw new Error("Configure research.harness in this profile's config.toml");
-      const selectedModel = config.endpoint && config.model ? { model: config.model, complete: createHarnessModelTransport(config) } : undefined;
+      const selectedModel = selectHarnessModel(config, mode);
       let modelBusy = false;
       const connection = openResearchHarnessProcess(config, workspace, async (method, params, signal) => {
         const run = storage.get(id);
@@ -40,7 +44,8 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
         finally { modelBusy = false; }
       }, ports.onError);
       if (selectedModel) models.set(id, selectedModel);
-      return { request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
+      return { ...(selectedModel ? { model: { model: selectedModel.model, endpointOrigin: selectedModel.endpointOrigin } } : {}),
+        request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
     },
     probe: async (id, signal) => {
       const model = models.get(id);

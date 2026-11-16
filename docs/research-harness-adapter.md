@@ -24,6 +24,9 @@ optional `endpoint`, `model`, `api_key_env` (an environment-variable name).
 No existing setting changes shape; no conversion or dual write is needed.
 Configuration is captured per connection. A malformed argument list fails closed.
 Neither model text nor IPC selects an executable, endpoint, model or workspace.
+The form discloses the configured execution model and endpoint origin; the owner
+retains that selection before paid probing, separately from any source model name.
+Import never initializes or validates the model transport.
 The bridge receives a minimal OS environment and no model credential. Production
 operator setup documentation belongs in `pwrdrvr/docs.pwragent.ai`.
 
@@ -133,6 +136,7 @@ The checked-in SQLite budgets measure the feature after database setup:
 | Six-record source page and cursor | 1 | 57,680 |
 | Fifty repeated pages | 0 | 0 |
 | Confirmed cancellation | 2 | 74,160 |
+| Execution admission with model provenance and an initial source page | 4 | 156,592 |
 
 At one six-record page per minute across the owner, the measured rate is
 `(1/60 commits/s) × 57,680 bytes/commit × 86,400 s = 83.06 MB/day`.

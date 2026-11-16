@@ -8,14 +8,14 @@ import { isLocalMainWindowWebContents } from "../window-channels";
 import { realpath } from "node:fs/promises";
 import type { ResearchHarnessRequest } from "@pwragent/shared";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL } from "../../../shared/ipc";
-import { getResearchHarnessService, researchHarnessConfigured } from "../../research/research-runtime";
+import { getResearchHarnessService, researchHarnessStatus } from "../../research/research-runtime";
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
 export function registerResearchIpcHandlers(): void {
   disposeResearchIpcHandlers();
   ipcMain.handle(RESEARCH_HARNESS_STATUS_CHANNEL, (event) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    return { configured: researchHarnessConfigured() };
+    return researchHarnessStatus();
   });
   ipcMain.handle(RESEARCH_HARNESS_START_CHANNEL, async (event, request: ResearchHarnessRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");

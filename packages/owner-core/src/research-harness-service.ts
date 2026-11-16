@@ -6,11 +6,12 @@ import type { ResearchPorts } from "./research-service";
 import { normalizeHarnessRecords, object, text } from "./research-harness-records";
 
 export interface ResearchHarnessConnection {
+  model?: { model: string; endpointOrigin: string };
   request(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): void | Promise<void>;
 }
 export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | "ownerStartedAt" | "changed" | "now" | "onError" | "schedule"> & {
-  open: (workspace: string, id: string) => ResearchHarnessConnection;
+  open: (workspace: string, id: string, mode: "import" | "execute") => ResearchHarnessConnection;
   /** An actual ordinary-function round trip, bound to the configured endpoint and model. */
   probe: (id: string, signal: AbortSignal) => Promise<void>;
 };
@@ -60,20 +61,23 @@ export class ResearchHarnessService {
 
   private async connect(id: string, request: ResearchHarnessRequest): Promise<ResearchRun> {
     try {
-      const connection = this.ports.open(this.run(id).harness!.workspace, id);
+      const connection = this.ports.open(this.run(id).harness!.workspace, id, request.mode);
       this.connections.set(id, connection);
       const hello = object(await connection.request("hello", { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION }));
       if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
       if (this.closed || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before probing");
       const capabilities = hello as unknown as ResearchHarnessCapabilities;
       if (capabilities[request.mode] !== true) throw new Error(`Harness bridge does not support ${request.mode}`);
-      const state = { ...this.run(id).harness!, cancelSupported: capabilities.cancel === true };
+      const state = { ...this.run(id).harness!, ...connection.model, cancelSupported: capabilities.cancel === true };
       if (request.mode === "execute") {
         if (hello.researchFunctions !== true) throw new Error("Bridge must dispatch the ordinary research_read/research_update functions to its scoped service");
         if (!state.cancelSupported) throw new Error("Execution requires a bridge that can request scoped cancellation");
         const probe = new AbortController();
         this.probes.set(id, probe);
-        try { await this.ports.probe(id, probe.signal); } finally { this.probes.delete(id); }
+        try {
+          if (connection.model) this.append(id, [{ type: "harness", state: { ...state, note: "Checking the configured model's ordinary functions. Compatibility calls may bill even if execution is refused." } }]);
+          await this.ports.probe(id, probe.signal);
+        } finally { this.probes.delete(id); }
       }
       // Stop/close can win while hello or the compatibility probe is outstanding.
       if (this.closed || this.run(id).status !== "running" || this.now() >= this.run(id).deadlineAt) throw new Error("Harness admission was fenced before dispatch");

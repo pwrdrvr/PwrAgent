@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { ResearchThread } from "@pwragent/shared";
+import type { ResearchThread, ResearchHarnessStatus } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export function ResearchHarnessForm({ api, thread, onStarted }: { api: DesktopApi; thread: ResearchThread; onStarted: () => void }) {
-  const [configured, setConfigured] = useState(false);
+  const [configuration, setConfiguration] = useState<ResearchHarnessStatus>({ configured: false });
   const [mode, setMode] = useState<"import" | "execute">("import");
   const [objective, setObjective] = useState("");
   const [project, setProject] = useState("");
@@ -17,7 +17,7 @@ export function ResearchHarnessForm({ api, thread, onStarted }: { api: DesktopAp
   const [requestId] = useState(() => crypto.randomUUID());
   useEffect(() => {
     let active = true;
-    void api.researchHarnessStatus?.().then((result) => { if (active) setConfigured(result.configured); }).catch(() => { if (active) setError("Harness settings could not be read."); });
+    void api.researchHarnessStatus?.().then((result) => { if (active) setConfiguration(result); }).catch(() => { if (active) setError("Harness settings could not be read."); });
     return () => { active = false; };
   }, [api]);
   async function submit(event: FormEvent) {
@@ -35,7 +35,8 @@ export function ResearchHarnessForm({ api, thread, onStarted }: { api: DesktopAp
       <button type="button" aria-pressed={mode === "import"} onClick={() => setMode("import")}>Import records</button>
       <button type="button" aria-pressed={mode === "execute"} onClick={() => setMode("execute")}>Execute</button>
     </div>
-    {!configured && <p className="research-muted">Configure a trusted Harness process bridge in this profile’s settings file to enable this operation.</p>}
+    {!configuration.configured && <p className="research-muted">Configure a trusted Harness process bridge in this profile’s settings file to enable this operation.</p>}
+    {mode === "execute" && <p className="research-muted">Execution model: {configuration.model ?? "not configured"} · endpoint: {configuration.endpointOrigin ?? "not configured or invalid"}. This model must pass the compatibility probe before execution.</p>}
     <label>Objective<textarea required maxLength={8000} rows={2} value={objective} onChange={(e) => setObjective(e.target.value)} /></label>
     <label>Harness project<input required maxLength={64} value={project} onChange={(e) => setProject(e.target.value)} /></label>
     <label>Harness session<input required maxLength={64} value={session} onChange={(e) => setSession(e.target.value)} /></label>
@@ -46,6 +47,6 @@ export function ResearchHarnessForm({ api, thread, onStarted }: { api: DesktopAp
     <p className="research-muted">{mode === "execute" ? "Execution spends model budget. Compatibility probing makes two model calls. The owner fences model calls at the deadline and requests scoped cancellation; remote stop must be acknowledged." : "Import observes an existing swarm. It does not start or stop source work."} Token and dollar usage may be unknown. There is no hard spend cap, and in-flight calls may bill after cancellation.</p>
     <label><input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />I acknowledge the workspace and budget scope.</label>
     {error && <p role="alert" className="research-error">{error}</p>}
-    <button type="submit" className="research-button research-button--primary" disabled={busy || !configured || !acknowledged}>{mode === "execute" ? "Start Harness execution" : "Import Harness records"}</button>
+    <button type="submit" className="research-button research-button--primary" disabled={busy || !configuration.configured || !acknowledged || (mode === "execute" && (!configuration.model || !configuration.endpointOrigin))}>{mode === "execute" ? "Start Harness execution" : "Import Harness records"}</button>
   </form>;
 }

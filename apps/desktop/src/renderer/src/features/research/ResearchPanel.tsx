@@ -109,6 +109,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         <p className="research-muted">Open Math Harness · protocol v{run.harness.version} · {label(run.harness.mode)} · {label(run.harness.state)}</p>
         <p className="research-muted">{run.harness.project} / {run.harness.session} / {run.harness.swarm} · source cursor {run.harness.cursor} · revision {run.harness.upstreamRevision.slice(0, 12)}</p>
         <p className="research-muted">{run.harness.note}</p>
+        {run.harness.model && <p className="research-muted">Execution model: {run.harness.model} · endpoint: {run.harness.endpointOrigin}</p>}
         <p className="research-muted">{run.harness.calls === undefined ? "Model calls unknown" : `${run.harness.calls} source model calls reported`} · token and dollar usage unknown · no hard spend cap</p>
       </div>}
       {run.reason && <p className="research-muted">{run.reason}</p>}

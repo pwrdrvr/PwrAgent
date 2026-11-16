@@ -1,5 +1,5 @@
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchRun, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
-import type { ResearchHarnessRequest } from "@pwragent/shared";
+import type { ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
@@ -1909,7 +1909,7 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_WORK_CHANNEL, request),
   researchSnapshot: async (request: ResearchThread): Promise<ResearchSnapshot> =>
     await ipcRenderer.invoke(RESEARCH_SNAPSHOT_CHANNEL, request),
-  researchHarnessStatus: async (): Promise<{ configured: boolean }> =>
+  researchHarnessStatus: async (): Promise<ResearchHarnessStatus> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_STATUS_CHANNEL),
   startResearchHarness: async (request: ResearchHarnessRequest): Promise<ResearchRun> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_START_CHANNEL, request),

@@ -30,6 +30,8 @@ export type ResearchHarnessState = {
   cursor: number;
   members: string[];
   cancelSupported: boolean;
+  model?: string;
+  endpointOrigin?: string;
   calls?: number;
   note: string;
 };
@@ -51,6 +53,7 @@ export type ResearchHarnessCapabilities = {
   import: boolean;
   cancel: boolean;
 };
+export type ResearchHarnessStatus = { configured: boolean; model?: string; endpointOrigin?: string };
 export type ResearchHarnessConfig = {
   command: string;
   args: string[];
