@@ -1,3 +1,4 @@
+import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryContext } from "./registry-context";
 import type { CodexStartDeliveryReceipt } from "./registry-turn-state";
@@ -677,7 +678,6 @@ import {
   type DirectoryGitStatusWriter,
   type ForgeToolRuleWriter,
   type HandoffSourceSettings,
-  type LiveThreadUsageEmitWork,
   type LocalPullRequestAuthorityResolver,
   type McpProjectToolApprovalCardOffer,
   type MessagingArchiveCleaner,
@@ -1692,11 +1692,13 @@ export class DesktopBackendRegistry {
    */
   private readonly isBootstrapModeFn: () => boolean;
   private readonly ownerAdmission?: ThreadOwnerAdmission;
+  private readonly turnEventObservers: TurnEventObservers;
   constructor(
     dependencies: RegistryDependencies,
     connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
   ) {
     this.context = dependencies.context;
+    this.turnEventObservers = dependencies.turnEventObservers;
     this.ownerAdmission = dependencies.ownerAdmission;
     this.configStore = dependencies.configStore;
     this.runtimeInstanceId = dependencies.runtimeInstanceId;
@@ -1980,6 +1982,20 @@ export class DesktopBackendRegistry {
       get modelCatalog() { return current().modelCatalog; },
       get nativeVoiceLeases() { return current().nativeVoiceLeases; },
       observeLiveThreadContextReplay: (...args: Parameters<ThreadUsageLedger["observeLiveThreadContextReplay"]>) => this.threadUsageLedger.observeLiveThreadContextReplay(...args),
+      observeTurnFailure: (...args: Parameters<typeof this.observeTurnFailure>) => this.observeTurnFailure(...args),
+      observeTurnListeners: (...args: Parameters<typeof this.observeTurnListeners>) => this.observeTurnListeners(...args),
+      observeTurnMessageContext: (...args: Parameters<typeof this.observeTurnMessageContext>) => this.observeTurnMessageContext(...args),
+      observeTurnNotifications: (...args: Parameters<typeof this.observeTurnNotifications>) => this.observeTurnNotifications(...args),
+      observeTurnRequestResolution: (...args: Parameters<typeof this.observeTurnRequestResolution>) => this.observeTurnRequestResolution(...args),
+      observeTurnStarted: (...args: Parameters<typeof this.observeTurnStarted>) => this.observeTurnStarted(...args),
+      observeTurnStatus: (...args: Parameters<typeof this.observeTurnStatus>) => this.observeTurnStatus(...args),
+      observeTurnStatusQueue: (...args: Parameters<typeof this.observeTurnStatusQueue>) => this.observeTurnStatusQueue(...args),
+      observeTurnTerminalActivity: (...args: Parameters<typeof this.observeTurnTerminalActivity>) => this.observeTurnTerminalActivity(...args),
+      observeTurnTerminalModes: (...args: Parameters<typeof this.observeTurnTerminalModes>) => this.observeTurnTerminalModes(...args),
+      observeTurnTerminalQueue: (...args: Parameters<typeof this.observeTurnTerminalQueue>) => this.observeTurnTerminalQueue(...args),
+      observeTurnTerminalRequests: (...args: Parameters<typeof this.observeTurnTerminalRequests>) => this.observeTurnTerminalRequests(...args),
+      observeTurnTerminalResources: (...args: Parameters<typeof this.observeTurnTerminalResources>) => this.observeTurnTerminalResources(...args),
+      observeTurnThreadState: (...args: Parameters<typeof this.observeTurnThreadState>) => this.observeTurnThreadState(...args),
       get overlayStore() { return current().overlayStore; },
       ownerRelativeInstanceId: (...args: Parameters<typeof this.ownerRelativeInstanceId>) => this.ownerRelativeInstanceId(...args),
       get pendingEnvironmentLaunchStore() { return current().pendingEnvironmentLaunchStore; },
@@ -2111,6 +2127,7 @@ export class DesktopBackendRegistry {
       get tokenMiserStore() { return current().tokenMiserStore; },
       get toolOutputAlertPolicy() { return current().toolOutputAlertPolicy; },
       set toolOutputAlertPolicy(value) { current().toolOutputAlertPolicy = value; },
+      turnLimitObservation: (...args: Parameters<typeof this.turnLimitObservation>) => this.turnLimitObservation(...args),
       get unsubscribers() { return current().unsubscribers; },
       updateThreadGitBranchMetadata: (...args: Parameters<typeof this.updateThreadGitBranchMetadata>) => this.updateThreadGitBranchMetadata(...args),
       usageAccountForTurn: (...args: Parameters<ThreadUsageLedger["usageAccountForTurn"]>) => this.threadUsageLedger.usageAccountForTurn(...args),
@@ -21142,7 +21159,7 @@ export class DesktopBackendRegistry {
       || method === "turn/cancelled"
         ? this.threadUsageLedger.waitForLiveThreadUsageEmitWork()
         : undefined;
-    const emitted = this.emitAfterLiveThreadUsageRegistration(
+    const emitted = this.turnEventObservers.run(
       event,
       liveThreadUsageWork,
       precedingLiveThreadUsageBarrier,
@@ -21159,39 +21176,14 @@ export class DesktopBackendRegistry {
       : emitted;
   }
 
-  private async emitAfterLiveThreadUsageRegistration(
-    event: AgentEvent,
-    liveThreadUsageWork: LiveThreadUsageEmitWork | undefined,
-    precedingLiveThreadUsageBarrier: Promise<void> | undefined,
-    codexStatusSequence?: number,
-    codexStartDelivery?: CodexStartDeliveryReceipt,
-  ): Promise<void> {
-    await this.managedReviewService.forwardManagedReviewActivity(event);
-    event = await this.withThreadMessageContext(event);
-    this.rememberFileChangeApprovalContext(event);
-    event = this.withEmbeddedFileChangeApprovalContext(event);
-    this.managedReviewService.rememberManagedReviewOutput(event);
+  private async observeTurnMessageContext(delivery: TurnEventDelivery): Promise<void> {
+    delivery.event = await this.withThreadMessageContext(delivery.event);
+    this.rememberFileChangeApprovalContext(delivery.event);
+    delivery.event = this.withEmbeddedFileChangeApprovalContext(delivery.event);
+  }
 
-    this.subAgentMonitorService.recordTaskMonitorActivity(event);
-
-    if (event.backend === "codex" && (
-      event.notification.method === "turn/started"
-      || event.notification.method === "turn/completed"
-    )) {
-      // Lifecycle notifications must not discover a workspace by listing the
-      // provider. Notification-context reconciliation already owns that read
-      // for unseen threads; refresh only a workspace we have observed.
-      const known = this.getCachedThreadSummary({
-        backend: "codex", threadId: event.notification.params.threadId,
-      });
-      if (known?.projectKey?.trim()) {
-        void this.threadDirectoryService.repairCodexThreadDirectoryRelationship({
-          reason: "selected-thread",
-          threadId: event.notification.params.threadId,
-        });
-      }
-    }
-
+  private async observeTurnThreadState(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
     if (event.backend === "codex" && event.notification.method === "thread/name/updated") {
       const { threadId, threadName, titleSource } = event.notification.params;
       if (typeof threadName === "string" && threadName.trim()) {
@@ -21255,7 +21247,10 @@ export class DesktopBackendRegistry {
     ) {
       this.latestCodexConfigWarning = event;
     }
+  }
 
+  private async observeTurnStarted(delivery: TurnEventDelivery): Promise<void> {
+    const { event, codexStatusSequence, codexStartDelivery } = delivery;
     if (event.notification.method === "turn/started") {
       const notification = event.notification as {
         params: {
@@ -21333,362 +21328,235 @@ export class DesktopBackendRegistry {
         }
       }
     }
+  }
 
-    if (
-      event.notification.method === "turn/completed" ||
-      event.notification.method === "turn/failed" ||
-      event.notification.method === "turn/cancelled"
-    ) {
-      // A terminal event is the turn's explicit durability boundary. Flush all
-      // coalesced turns in one transaction before terminal state reaches any
-      // listener, even when several turns were active concurrently.
-      await precedingLiveThreadUsageBarrier;
-      // Most turns still have a buffered usage line. Include the end time in
-      // its pending batch so completion does not require a second commit.
-      const completedTurnId = turnIdFromTerminalNotification(event.notification);
-      this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
-      if (completedTurnId) {
-        for (const pending of this.pendingThreadMessageContexts.values()) {
-          if (pending.backend === event.backend
-            && pending.threadId === event.notification.params.threadId
-            && pending.turnId === completedTurnId) {
-            // Turn completion does not confirm admission or cancellation of
-            // an accepted steer. Keep attribution for delayed user items.
-            pending.turnEnded = true;
-          }
-        }
-        // An MCP elicitation cannot keep its provider turn alive after that
-        // turn ends. Retaining it lets a later read resurrect the ended turn.
-        // A turn the operator did not stop ended on the agent's own word, so
-        // they may still be looking for a card the agent pointed them at.
-        const endedWithoutOperator = event.notification.method === "turn/failed"
-          || (event.notification.method === "turn/completed"
-            && readRecord(readRecord(event.notification.params)?.turn)?.status === "completed");
-        const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
-        for (const [key, pending] of this.pendingServerRequests) {
-          const request = pending.notification;
-          const owner = pending.owner ?? { backend: pending.backend, threadId: request.params.threadId, turnId: request.params.turnId };
-          if (owner.backend !== event.backend
-            || owner.threadId !== event.notification.params.threadId
-            || owner.turnId !== completedTurnId
-            || request.method !== "mcpServer/elicitation/request") {
-            continue;
-          }
-          if (endedWithoutOperator && String(request.params.requestId).startsWith(FORGE_TOOL_REQUEST_ID_PREFIX)) {
-            withdrawnForgeApprovals.push(request);
-          }
-          this.pendingServerRequests.delete(key);
-          pending.resolve({ action: "cancel", content: null, _meta: null });
-          await this.emit({ backend: pending.backend, notification: {
-            method: "serverRequest/resolved", params: {
-              threadId: request.params.threadId, turnId: request.params.turnId,
-              requestId: request.params.requestId,
-            },
-          } });
-        }
-        if (withdrawnForgeApprovals.length > 0) {
-          // Off the terminal path: the card is a notice, not turn state.
-          void this.forgeToolBridge.raiseWithdrawnForgeApprovalTodo(
-            event.backend,
-            event.notification.params.threadId,
-            withdrawnForgeApprovals,
-          );
+  private async observeTurnTerminalRequests(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const completedTurnId = turnIdFromTerminalNotification(event.notification);
+    if (completedTurnId) {
+      for (const pending of this.pendingThreadMessageContexts.values()) {
+        if (pending.backend === event.backend
+          && pending.threadId === event.notification.params.threadId
+          && pending.turnId === completedTurnId) {
+          // Turn completion does not confirm admission or cancellation of
+          // an accepted steer. Keep attribution for delayed user items.
+          pending.turnEnded = true;
         }
       }
-      if (completedTurnId) {
-        const usageKey = [
-          event.backend,
-          event.notification.params.threadId,
-          completedTurnId,
-          "live-token-usage",
-        ].join(":");
-        const pending = this.threadUsageLedger.pendingLiveThreadUsageLineRecords.get(usageKey);
-        if (pending) {
-          this.threadUsageLedger.setPendingLiveThreadUsageLine(usageKey, {
-            ...pending,
-            line: {
-              ...pending.line,
-              completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
-            },
-          });
+      // An MCP elicitation cannot keep its provider turn alive after that
+      // turn ends. Retaining it lets a later read resurrect the ended turn.
+      // A turn the operator did not stop ended on the agent's own word, so
+      // they may still be looking for a card the agent pointed them at.
+      const endedWithoutOperator = event.notification.method === "turn/failed"
+        || (event.notification.method === "turn/completed"
+          && readRecord(readRecord(event.notification.params)?.turn)?.status === "completed");
+      const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
+      for (const [key, pending] of this.pendingServerRequests) {
+        const request = pending.notification;
+        const owner = pending.owner ?? { backend: pending.backend, threadId: request.params.threadId, turnId: request.params.turnId };
+        if (owner.backend !== event.backend
+          || owner.threadId !== event.notification.params.threadId
+          || owner.turnId !== completedTurnId
+          || request.method !== "mcpServer/elicitation/request") {
+          continue;
         }
+        if (endedWithoutOperator && String(request.params.requestId).startsWith(FORGE_TOOL_REQUEST_ID_PREFIX)) {
+          withdrawnForgeApprovals.push(request);
+        }
+        this.pendingServerRequests.delete(key);
+        pending.resolve({ action: "cancel", content: null, _meta: null });
+        await this.emit({ backend: pending.backend, notification: {
+          method: "serverRequest/resolved", params: {
+            threadId: request.params.threadId, turnId: request.params.turnId,
+            requestId: request.params.requestId,
+          },
+        } });
       }
-      // The final usage line, the turn's end time, and the turn's Token Miser
-      // gates each change this thread's pricing. Publish once after all
-      // three, still before the terminal event reaches any listener: every
-      // publish re-reads the whole ledger, and a long thread has thousands
-      // of lines. Other threads in the flush publish as usual.
-      const terminalPricingThread = {
+      delivery.withdrawnForgeApprovals = withdrawnForgeApprovals;
+    }
+  }
+
+  private observeTurnTerminalResources(delivery: TurnEventDelivery): void {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const { codexStatusSequence } = delivery;
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    const notification = event.notification;
+    if (turnId) {
+      this.pdfAttachmentStore.releaseTurn({
         backend: event.backend,
-        threadId: event.notification.params.threadId,
-      };
-      const flushedPricing = await this.threadUsageLedger.flushLiveThreadUsageLines({
-        deferPricingFor: terminalPricingThread,
+        threadId: notification.params.threadId,
+        turnId,
       });
-      let terminalPricingChanged = flushedPricing !== undefined;
-      const notification = event.notification as {
-        params: {
-          threadId: string;
-          turnId?: string;
-          turn?: {
-            id?: string;
-          };
-        };
-      };
-      const turnId = completedTurnId;
-      try {
-        // A worker's turn end is where its card takes the usage held live.
-        await this.subAgentMonitorService.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
-        // The final token snapshot can precede this notification, with no
-        // later usage event to carry the end time into the pricing row.
-        if (turnId && this.overlayStore.completeThreadUsageTurn) {
-          const accountKey = await this.threadUsageLedger.usageAccountForTurn(event.backend, notification.params.threadId, turnId);
-          const limits = this.turnLimitObservation(event.backend);
-          const completed = await this.overlayStore.completeThreadUsageTurn({
-            backend: event.backend,
-            threadId: notification.params.threadId,
-            turnId,
-            completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
-            limitObservation: accountKey && limits?.accountKey === accountKey ? limits : undefined,
-          });
-          terminalPricingChanged ||= completed;
-        }
-        if (event.backend === "codex") {
-          const gatesChangedPricing = await this.threadUsageLedger.flushPendingTokenMiserLedger({
-            publishPricing: false,
-            threadId: notification.params.threadId,
-          });
-          terminalPricingChanged ||= gatesChangedPricing;
-        }
-      } finally {
-        // A failed later step must not withhold the pricing already written.
-        if (terminalPricingChanged) {
-          try {
-            await this.threadUsageLedger.emitThreadPricingUpdated({
-              ...(flushedPricing?.activeTurnIds.length
-                ? { activeTurnIds: flushedPricing.activeTurnIds }
-                : {}),
-              ...terminalPricingThread,
-            });
-          } catch (error) {
-            backendRegistryLog.warn("turn end pricing update failed", {
-              backend: event.backend,
-              error: error instanceof Error ? error.message : String(error),
-              threadId: notification.params.threadId,
-            });
-          }
-        }
-      }
-      if (turnId) {
-        this.pdfAttachmentStore.releaseTurn({
-          backend: event.backend,
-          threadId: notification.params.threadId,
-          turnId,
-        });
-      }
-      if (event.backend === "codex") {
-        this.reconcileBackendCodexThreadStatus(
-          notification.params.threadId,
-          "idle",
-          // A synthetic failure belongs to its start's observation. A newer
-          // provider status must not become idle because submission failed.
-          codexStatusSequence,
-        );
-      }
-      const managedReview = turnId
-        ? this.managedReviewService.findActiveReviewSubAgentForTerminal({
-            backend: event.backend,
-            threadId: notification.params.threadId,
-            turnId,
-          })?.record
-        : undefined;
-      if (turnId) {
-        await this.managedReviewService.completeReviewSubAgent({
-          backend: event.backend,
-          completedAt: completedAtFromTerminalNotification(event.notification),
-          errorMessage: errorMessageFromTerminalNotification(event.notification),
-          method: event.notification.method,
-          threadId: notification.params.threadId,
-          turnId,
-        });
-      }
-      if (managedReview?.mode === "managed") {
-        await this.managedReviewService.publishManagedReviewTerminal({
-          method: event.notification.method,
-          notification: event.notification as Extract<
-            AppServerNotification,
-            { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
-          >,
-          record: managedReview,
-        });
-      }
-      const genericActiveTurnKeyPrefix =
-        `${event.backend}:${notification.params.threadId}:`;
-      const hadGenericActiveTurn = Array.from(this.context.turnState.registeredTurnKeys()).some((key) =>
-        key.startsWith(genericActiveTurnKeyPrefix),
+    }
+    if (event.backend === "codex") {
+      this.reconcileBackendCodexThreadStatus(
+        notification.params.threadId,
+        "idle",
+        // A synthetic failure belongs to its start's observation. A newer
+        // provider status must not become idle because submission failed.
+        codexStatusSequence,
       );
-      const hadMatchingGenericActiveTurn = turnId !== undefined
-        && this.context.turnState.hasRegisteredTurn({ backend: event.backend, threadId: notification.params.threadId, turnId: turnId });
-      if (turnId) {
-        if (isAcpBackendId(event.backend)) {
-          for (const key of Array.from(this.context.turnState.registeredTurnKeys())) {
-            if (key.startsWith(genericActiveTurnKeyPrefix)) {
-              this.context.turnState.unregisterTurn(key);
-              const parsed = parseActiveTurnKey(key);
-              backendRegistryLog.info("ACP active turn removed", {
-                backend: event.backend,
-                threadId: notification.params.threadId,
-                turnId: parsed?.turnId ?? null,
-                method: event.notification.method,
-                completedTurnId: turnId,
-              });
-              if (parsed) {
-                this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
-              }
+    }
+  }
+
+  private async observeTurnTerminalActivity(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    const notification = event.notification;
+    const { managedReview } = delivery;
+    const genericActiveTurnKeyPrefix =
+      `${event.backend}:${notification.params.threadId}:`;
+    const hadGenericActiveTurn = Array.from(this.context.turnState.registeredTurnKeys()).some((key) =>
+      key.startsWith(genericActiveTurnKeyPrefix),
+    );
+    const hadMatchingGenericActiveTurn = turnId !== undefined
+      && this.context.turnState.hasRegisteredTurn({ backend: event.backend, threadId: notification.params.threadId, turnId: turnId });
+    if (turnId) {
+      if (isAcpBackendId(event.backend)) {
+        for (const key of Array.from(this.context.turnState.registeredTurnKeys())) {
+          if (key.startsWith(genericActiveTurnKeyPrefix)) {
+            this.context.turnState.unregisterTurn(key);
+            const parsed = parseActiveTurnKey(key);
+            backendRegistryLog.info("ACP active turn removed", {
+              backend: event.backend,
+              threadId: notification.params.threadId,
+              turnId: parsed?.turnId ?? null,
+              method: event.notification.method,
+              completedTurnId: turnId,
+            });
+            if (parsed) {
+              this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
             }
           }
-        } else {
-          this.context.turnState.unregisterTurn(
-            { backend: event.backend, threadId: notification.params.threadId, turnId: turnId },
-          );
         }
-        this.clearAcceptedToolCallsForEndedTurn(event.backend, notification.params.threadId, turnId);
-        this.threadSteering.retireTurn({
-          backend: event.backend,
-          threadId: notification.params.threadId,
-          turnId,
-        });
+      } else {
+        this.context.turnState.unregisterTurn(
+          { backend: event.backend, threadId: notification.params.threadId, turnId: turnId },
+        );
       }
-      if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
-        || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
+      this.clearAcceptedToolCallsForEndedTurn(event.backend, notification.params.threadId, turnId);
+      this.threadSteering.retireTurn({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId,
+      });
+    }
+    if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
+      || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
+      await this.adoptThreadBranchChangeFromActiveTurn({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+      });
+    }
+    if (event.backend === "codex" && turnId) {
+      const activeTurnModeKey = buildActiveTurnModeKey(
+        notification.params.threadId,
+        turnId,
+      );
+      const wasKnownActiveTurn =
+        !turnId.startsWith("pending:") &&
+        this.context.turnState.ownsExecution(activeTurnModeKey);
+      if (managedReview?.mode === "native") {
+        this.managedReviewService.clearNativeReviewActiveTurns(managedReview);
+      }
+      this.clearCodexReviewInterruptMappingForTurn(
+        notification.params.threadId,
+        turnId,
+      );
+      this.context.turnState.forgetExecution(activeTurnModeKey);
+      // The start response can register a turn whose started notification was absent.
+      this.context.turnState.forgetCollaboration(
+        { backend: "codex", threadId: notification.params.threadId, turnId: turnId },
+      );
+      this.context.turnState.forgetReview(activeTurnModeKey);
+      if (wasKnownActiveTurn) {
         await this.adoptThreadBranchChangeFromActiveTurn({
           backend: event.backend,
           threadId: notification.params.threadId,
         });
       }
-      if (event.backend === "codex" && turnId) {
-        const activeTurnModeKey = buildActiveTurnModeKey(
-          notification.params.threadId,
-          turnId,
-        );
-        const wasKnownActiveTurn =
-          !turnId.startsWith("pending:") &&
-          this.context.turnState.ownsExecution(activeTurnModeKey);
-        if (managedReview?.mode === "native") {
-          this.managedReviewService.clearNativeReviewActiveTurns(managedReview);
-        }
-        this.clearCodexReviewInterruptMappingForTurn(
-          notification.params.threadId,
-          turnId,
-        );
-        this.context.turnState.forgetExecution(activeTurnModeKey);
-        // The start response can register a turn whose started notification was absent.
-        this.context.turnState.forgetCollaboration(
-          { backend: "codex", threadId: notification.params.threadId, turnId: turnId },
-        );
-        this.context.turnState.forgetReview(activeTurnModeKey);
-        if (wasKnownActiveTurn) {
-          await this.adoptThreadBranchChangeFromActiveTurn({
-            backend: event.backend,
-            threadId: notification.params.threadId,
-          });
-        }
-        try {
-          const overlay = await this.overlayStore.getThreadOverlayState({
-            backend: event.backend,
-            threadId: notification.params.threadId,
-          });
-          const observedSettings = this.observedCodexSettingsByThread.get(
-            notification.params.threadId,
-          );
-          const warning = getCodexFastModeMismatchWarning({
-            threadId: notification.params.threadId,
-            turnId,
-            expectedFastMode: Boolean(overlay?.fastMode),
-            notificationParams: buildCodexFastModeMismatchNotificationParams(
-              notification.params,
-              observedSettings,
-            ),
-          });
-          if (warning) {
-            backendRegistryLog.warn("codex fast mode state mismatch", warning);
-          }
-        } catch (error) {
-          backendRegistryLog.warn("codex fast mode state mismatch check failed", {
-            error: error instanceof Error ? error.message : String(error),
-            threadId: notification.params.threadId,
-            turnId,
-          });
-        }
-      }
-      if (managedReview?.mode === "native"
-        && managedReview.reviewThreadId !== managedReview.parentThreadId) {
-        await this.managedReviewService.releaseNativeReviewParent(managedReview, {
+      try {
+        const overlay = await this.overlayStore.getThreadOverlayState({
           backend: event.backend,
           threadId: notification.params.threadId,
-          turnId: managedReview.turnId,
-          method: event.notification.method,
-          errorMessage: errorMessageFromTerminalNotification(event.notification),
+        });
+        const observedSettings = this.observedCodexSettingsByThread.get(
+          notification.params.threadId,
+        );
+        const warning = getCodexFastModeMismatchWarning({
+          threadId: notification.params.threadId,
+          turnId,
+          expectedFastMode: Boolean(overlay?.fastMode),
+          notificationParams: buildCodexFastModeMismatchNotificationParams(
+            notification.params,
+            observedSettings,
+          ),
+        });
+        if (warning) {
+          backendRegistryLog.warn("codex fast mode state mismatch", warning);
+        }
+      } catch (error) {
+        backendRegistryLog.warn("codex fast mode state mismatch check failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: notification.params.threadId,
+          turnId,
         });
       }
-      // Inline review waiters use the returned outer turn ID, even when
-      // Codex terminates the observed inner interrupt turn.
-      const lifecycleTurnId = managedReview?.mode === "native"
-        && managedReview.reviewThreadId === managedReview.parentThreadId
-        ? managedReview.turnId
-        : turnId;
-      await this.managedReviewService.drainPendingReviewStartsForTerminalTurn({
-        backend: event.backend,
-        threadId: notification.params.threadId,
-        turnId: lifecycleTurnId,
-        method: event.notification.method,
-      });
-      this.threadWorkspaceService.drainPendingThreadWorkspaceMovesForTerminalTurn({
-        backend: event.backend,
-        threadId: notification.params.threadId,
-        turnId: lifecycleTurnId,
-      });
-      if (event.backend === "codex") {
-        // Turn-end is the resume boundary — flush any queued mode change
-        // now. Fire-and-forget so terminal turn fan-out does not block on
-        // permission prompts; startTurn/startReview also await any in-flight
-        // flush before launching the next Codex request.
-        // Failures are logged + retried inside
-        // flushQueuedExecutionModeIfPresent.
-        this.scheduleQueuedAgentChange(notification.params.threadId);
-        void this.flushQueuedExecutionModeIfPresent(
-          notification.params.threadId,
-        );
-        void this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
-      } else if (isAcpBackendId(event.backend)) {
-        if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
-          await this.flushQueuedExecutionModeIfPresent(
-            notification.params.threadId,
-            event.backend,
-          );
-        }
-        await this.flushQueuedAcpRuntimeOptionIfPresent(
-          event.backend,
-          notification.params.threadId,
-        );
-        if (event.notification.method !== "turn/completed") {
-          this.threadTitles.forgetPendingInput({ backend: event.backend, threadId: notification.params.threadId });
-        }
-      }
-      void this.threadTurnQueue.releaseThread({
-        backend: event.backend,
-        threadId: notification.params.threadId,
-        turnId: lifecycleTurnId,
-        status: event.notification.method,
-        ...(event.notification.method === "turn/failed"
-          ? {
-              errorMessage:
-                errorMessageFromTerminalNotification(event.notification)
-                ?? "The previous turn failed.",
-            }
-          : {}),
-      });
     }
+  }
+
+  private async observeTurnTerminalModes(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const notification = event.notification;
+    if (event.backend === "codex") {
+      // Turn-end is the resume boundary — flush any queued mode change
+      // now. Fire-and-forget so terminal turn fan-out does not block on
+      // permission prompts; startTurn/startReview also await any in-flight
+      // flush before launching the next Codex request.
+      // Failures are logged + retried inside
+      // flushQueuedExecutionModeIfPresent.
+      this.scheduleQueuedAgentChange(notification.params.threadId);
+      void this.flushQueuedExecutionModeIfPresent(
+        notification.params.threadId,
+      );
+    } else if (isAcpBackendId(event.backend)) {
+      if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
+        await this.flushQueuedExecutionModeIfPresent(
+          notification.params.threadId,
+          event.backend,
+        );
+      }
+      await this.flushQueuedAcpRuntimeOptionIfPresent(
+        event.backend,
+        notification.params.threadId,
+      );
+      if (event.notification.method !== "turn/completed") {
+        this.threadTitles.forgetPendingInput({ backend: event.backend, threadId: notification.params.threadId });
+      }
+    }
+  }
+
+  private async observeTurnTerminalQueue(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const notification = event.notification;
+    const { lifecycleTurnId } = delivery;
+    void this.threadTurnQueue.releaseThread({
+      backend: event.backend,
+      threadId: notification.params.threadId,
+      turnId: lifecycleTurnId,
+      status: event.notification.method,
+      ...(event.notification.method === "turn/failed"
+        ? {
+            errorMessage:
+              errorMessageFromTerminalNotification(event.notification)
+              ?? "The previous turn failed.",
+          }
+        : {}),
+    });
+  }
+
+  private async observeTurnFailure(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
     if (
       event.notification.method === "turn/failed" &&
       !isAcpBackendId(event.backend)
@@ -21725,21 +21593,10 @@ export class DesktopBackendRegistry {
         },
       });
     }
+  }
 
-    if (
-      event.notification.method === "turn/completed" ||
-      event.notification.method === "turn/failed" ||
-      event.notification.method === "turn/cancelled"
-    ) {
-      await this.subAgentMonitorService.handleTaskMonitorTerminalNotification(
-        event.backend,
-        event.notification as Extract<
-          AppServerNotification,
-          { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
-        >,
-      );
-    }
-
+  private async observeTurnStatus(delivery: TurnEventDelivery): Promise<void | false> {
+    const { event } = delivery;
     if (
       event.notification.method === "thread/status/changed" &&
       readStatusType(event.notification.params.status) !== "active"
@@ -21848,20 +21705,24 @@ export class DesktopBackendRegistry {
         // review's own terminal event. Do not release queued turns at that
         // stray idle boundary; the matching review turn/completed is the real
         // point where the thread becomes available again.
-        return;
+        return false;
       }
-      this.threadWorkspaceService.drainPendingThreadWorkspaceMovesForTurnIds({
-        backend: event.backend,
-        threadId: event.notification.params.threadId,
-        turnIds: endedTurnIds,
-      });
-      void this.threadTurnQueue.releaseThread({
-        backend: event.backend,
-        threadId: event.notification.params.threadId,
-        status: readStatusType(event.notification.params.status),
-      });
+      delivery.endedTurnIds = endedTurnIds;
     }
+  }
 
+  private observeTurnStatusQueue(delivery: TurnEventDelivery): void {
+    const { event } = delivery;
+    if (event.notification.method !== "thread/status/changed" || !delivery.endedTurnIds) return;
+    void this.threadTurnQueue.releaseThread({
+      backend: event.backend,
+      threadId: event.notification.params.threadId,
+      status: readStatusType(event.notification.params.status),
+    });
+  }
+
+  private observeTurnRequestResolution(delivery: TurnEventDelivery): void | false {
+    const { event } = delivery;
     if (event.notification.method === "serverRequest/resolved") {
       const key = buildPendingRequestKey({
         backend: event.backend,
@@ -21877,7 +21738,7 @@ export class DesktopBackendRegistry {
             requestId: event.notification.params.requestId,
           },
         );
-        return;
+        return false;
       }
       try {
         getDesktopNotificationService().clearAttentionKey(key);
@@ -21890,57 +21751,17 @@ export class DesktopBackendRegistry {
         });
       }
     }
+  }
 
-    if (event.backend === "codex" && event.notification.method === "thread/status/changed"
-      && ["idle", "notLoaded"].includes(readStatusType(event.notification.params.status) ?? "")) {
-      void this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
-    }
-
-    if (event.backend === "codex" && (
-      event.notification.method === "turn/completed"
-      || event.notification.method === "turn/failed"
-      || event.notification.method === "turn/cancelled"
-      || (event.notification.method === "thread/status/changed"
-        && readStatusType(event.notification.params.status) === "idle")
-    )) {
-      const threadId = event.notification.params.threadId;
-      if (!this.closed && !this.stoppingRunningTurnsForShutdown
-        && (this.codexRuntimeSupervisor.liveToolItemRecords.has(threadId) || this.codexRuntimeSupervisor.backgroundTerminalRecords.has(threadId))) {
-        void this.codexRuntimeSupervisor.refreshCodexBackgroundTerminalsAfterTurn(threadId);
-      }
-    }
-
-    await this.threadUsageLedger.recordLiveThreadUsage(
-      event,
-      liveThreadUsageWork,
-    );
-    // Token Miser is a fail-open accounting feature; a filesystem error in it
-    // must not abort the pipeline before `emitToListeners`, which would drop
-    // the notification the renderer is waiting on.
-    // Token Miser is fail-open accounting: a filesystem error in it must not
-    // abort the pipeline before `emitToListeners`, which would drop the
-    // notification the renderer is waiting on.
-    await this.threadUsageLedger.runTokenMiserSideEffect(
-      "recordTokenMiserParentModelRequest",
-      () => this.threadUsageLedger.recordTokenMiserParentModelRequest(event),
-    );
-    await this.threadUsageLedger.handleThreadCompactionReplayBoundary(event);
-    await this.threadUsageLedger.recordToolInvocationAccounting(event);
-    this.threadUsageLedger.forgetCompletedTurnReplayObservations(event);
-    await this.subAgentMonitorService.recordCodexNativeSubAgentActivity(event);
-    await this.subAgentMonitorService.recordCodexNativeSubAgentNotifications(event);
-    await this.subAgentMonitorService.recordCodexNativeSubAgentNames(event);
-    await this.subAgentMonitorService.recordTaskMonitorUsage(event);
-
+  private async observeTurnNotifications(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
     this.notifyForAttentionRequired(event);
     await this.notifyForTerminalOutcome(event);
+  }
 
-    if (liveThreadUsageWork) {
-      this.threadUsageLedger.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
-    }
-    event = this.managedReviewService.withReviewRuntimeMetadata(event);
-    event = { ...event, navigationDirectoryScope: this.navigationDirectoryScope.forEvent(event) };
-    await this.emitToListeners(event);
+  private async observeTurnListeners(delivery: TurnEventDelivery): Promise<void> {
+    delivery.event = { ...delivery.event, navigationDirectoryScope: this.navigationDirectoryScope.forEvent(delivery.event) };
+    await this.emitToListeners(delivery.event);
   }
 
   /**

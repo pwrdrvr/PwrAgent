@@ -1,3 +1,5 @@
+import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
+import type { AppServerNotification } from "@pwragent/shared";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ManagedReviewService } from "./managed-review-service";
@@ -170,6 +172,7 @@ export interface ThreadUsageLedgerDependencies {
 export interface ThreadUsageLedgerHost extends Pick<RegistryHostPorts,
   "getActiveTurnForThread" | "invalidateThreadListCache" | "liveProfileRuntimeInstanceIds"
   | "liveSubAgentMonitorIds"
+  | "turnLimitObservation"
 > {
   readonly codexBackendSummary: BackendSummary | undefined;
   readonly registrySessionId: string;
@@ -211,6 +214,132 @@ export class ThreadUsageLedger {
     this.host = host;
     this.managedReviewService = dependencies.managedReviewService;
     this.subAgentMonitorService = dependencies.subAgentMonitorService;
+  }
+
+  turnEventObservers(): Record<"barrier" | "terminal" | "accounting" | "finish", TurnEventObserver> {
+    return {
+      barrier: { name: "usage-terminal-barrier", onTurnTerminal: async (delivery) => { await delivery.precedingLiveThreadUsageBarrier; } },
+      terminal: { name: "usage-terminal", onTurnTerminal: (delivery) => this.observeUsageTerminal(delivery) },
+      accounting: { name: "usage-accounting", onEvent: (delivery) => this.observeUsageAccounting(delivery) },
+      finish: { name: "usage-finish", onEvent: (delivery) => this.observeUsageFinish(delivery) },
+    };
+  }
+
+  private async observeUsageTerminal(delivery: TurnEventDelivery): Promise<void> {
+    const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
+    const completedTurnId = turnIdFromTerminalNotification(event.notification);
+    if (completedTurnId) {
+      const usageKey = [
+        event.backend,
+        event.notification.params.threadId,
+        completedTurnId,
+        "live-token-usage",
+      ].join(":");
+      const pending = this.pendingLiveThreadUsageLineRecords.get(usageKey);
+      if (pending) {
+        this.setPendingLiveThreadUsageLine(usageKey, {
+          ...pending,
+          line: {
+            ...pending.line,
+            completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+          },
+        });
+      }
+    }
+    // The final usage line, the turn's end time, and the turn's Token Miser
+    // gates each change this thread's pricing. Publish once after all
+    // three, still before the terminal event reaches any listener: every
+    // publish re-reads the whole ledger, and a long thread has thousands
+    // of lines. Other threads in the flush publish as usual.
+    const terminalPricingThread = {
+      backend: event.backend,
+      threadId: event.notification.params.threadId,
+    };
+    const flushedPricing = await this.flushLiveThreadUsageLines({
+      deferPricingFor: terminalPricingThread,
+    });
+    let terminalPricingChanged = flushedPricing !== undefined;
+    const notification = event.notification as {
+      params: {
+        threadId: string;
+        turnId?: string;
+        turn?: {
+          id?: string;
+        };
+      };
+    };
+    const turnId = completedTurnId;
+    try {
+      // A worker's turn end is where its card takes the usage held live.
+      await this.subAgentMonitorService.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
+      // The final token snapshot can precede this notification, with no
+      // later usage event to carry the end time into the pricing row.
+      if (turnId && this.context.stores.usage.completeThreadUsageTurn) {
+        const accountKey = await this.usageAccountForTurn(event.backend, notification.params.threadId, turnId);
+        const limits = this.host().turnLimitObservation(event.backend);
+        const completed = await this.context.stores.usage.completeThreadUsageTurn({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId,
+          completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+          limitObservation: accountKey && limits?.accountKey === accountKey ? limits : undefined,
+        });
+        terminalPricingChanged ||= completed;
+      }
+      if (event.backend === "codex") {
+        const gatesChangedPricing = await this.flushPendingTokenMiserLedger({
+          publishPricing: false,
+          threadId: notification.params.threadId,
+        });
+        terminalPricingChanged ||= gatesChangedPricing;
+      }
+    } finally {
+      // A failed later step must not withhold the pricing already written.
+      if (terminalPricingChanged) {
+        try {
+          await this.emitThreadPricingUpdated({
+            ...(flushedPricing?.activeTurnIds.length
+              ? { activeTurnIds: flushedPricing.activeTurnIds }
+              : {}),
+            ...terminalPricingThread,
+          });
+        } catch (error) {
+          backendRegistryLog.warn("turn end pricing update failed", {
+            backend: event.backend,
+            error: error instanceof Error ? error.message : String(error),
+            threadId: notification.params.threadId,
+          });
+        }
+      }
+    }
+  }
+
+  private async observeUsageAccounting(delivery: TurnEventDelivery): Promise<void> {
+    const { event, liveThreadUsageWork } = delivery;
+    await this.recordLiveThreadUsage(
+      event,
+      liveThreadUsageWork,
+    );
+    // Token Miser is a fail-open accounting feature; a filesystem error in it
+    // must not abort the pipeline before `emitToListeners`, which would drop
+    // the notification the renderer is waiting on.
+    // Token Miser is fail-open accounting: a filesystem error in it must not
+    // abort the pipeline before `emitToListeners`, which would drop the
+    // notification the renderer is waiting on.
+    await this.runTokenMiserSideEffect(
+      "recordTokenMiserParentModelRequest",
+      () => this.recordTokenMiserParentModelRequest(event),
+    );
+    await this.handleThreadCompactionReplayBoundary(event);
+    await this.recordToolInvocationAccounting(event);
+    this.forgetCompletedTurnReplayObservations(event);
+  }
+
+  private observeUsageFinish(delivery: TurnEventDelivery): void {
+    const { liveThreadUsageWork } = delivery;
+    if (liveThreadUsageWork) {
+      this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
+    }
   }
 
   /** Recently ended turns by thread, for the sub-agent monitor's reads. */

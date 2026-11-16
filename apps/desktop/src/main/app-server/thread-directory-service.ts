@@ -1,3 +1,4 @@
+import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
@@ -256,6 +257,30 @@ export class ThreadDirectoryService {
     this.threadMcpConnections = dependencies.threadMcpConnections;
     this.codexEnvironmentCommandRunner = dependencies.codexEnvironmentCommandRunner;
     this.codexEnvironmentHydrationStore = dependencies.codexEnvironmentHydrationStore;
+  }
+
+  turnEventObserver(): TurnEventObserver {
+    return { name: "directory-lifecycle", onEvent: (delivery) => this.observeDirectoryLifecycle(delivery) };
+  }
+
+  private observeDirectoryLifecycle({ event }: TurnEventDelivery): void {
+    if (event.backend === "codex" && (
+      event.notification.method === "turn/started"
+      || event.notification.method === "turn/completed"
+    )) {
+      // Lifecycle notifications must not discover a workspace by listing the
+      // provider. Notification-context reconciliation already owns that read
+      // for unseen threads; refresh only a workspace we have observed.
+      const known = this.host().getCachedThreadSummary({
+        backend: "codex", threadId: event.notification.params.threadId,
+      });
+      if (known?.projectKey?.trim()) {
+        void this.repairCodexThreadDirectoryRelationship({
+          reason: "selected-thread",
+          threadId: event.notification.params.threadId,
+        });
+      }
+    }
   }
 
   /** Cancels every cancellable launchpad creation, for the registry's close. */
