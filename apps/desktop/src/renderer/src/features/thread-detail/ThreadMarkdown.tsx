@@ -322,7 +322,6 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
     props: markdownProps,
     inlineFiles,
     editorApplication,
-    openLocalFileLink,
     openLocalFileInEditor,
     viewLocalFile,
   } = useContext(MarkdownRenderContext)!;
@@ -342,7 +341,7 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
               if (canPreview) {
                 viewLocalFile({ ...target, label: props.text });
               } else {
-                openLocalFileLink(event, `file://${encodeURI(target.path)}`, props.text);
+                openLocalFileWithOsDefault(markdownProps.desktopApi, target.path);
               }
             }}
           >
@@ -929,15 +928,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       }
 
       event.preventDefault();
-      void props.desktopApi?.openPath?.({ path: target.path })
-        .then((response) => {
-          if (!response.opened) {
-            console.error("Failed to open transcript file link", response.error);
-          }
-        })
-        .catch((error: unknown) => {
-          console.error("Failed to open transcript file link", error);
-        });
+      openLocalFileWithOsDefault(props.desktopApi, target.path);
     },
     [props.desktopApi]
   );
@@ -1375,6 +1366,21 @@ function skillNameFromPath(filePath: string, label: string): string {
     return segments.at(-2) ?? "skill";
   }
   return label.replace(/^\$/, "") || segments.at(-1) || "skill";
+}
+
+function openLocalFileWithOsDefault(
+  desktopApi: Pick<DesktopApi, "openPath"> | undefined,
+  path: string,
+): void {
+  void desktopApi?.openPath?.({ path })
+    .then((response) => {
+      if (!response.opened) {
+        console.error("Failed to open transcript file link", response.error);
+      }
+    })
+    .catch((error: unknown) => {
+      console.error("Failed to open transcript file link", error);
+    });
 }
 
 // This only controls the optional editor button. File opens always use the

@@ -62,6 +62,40 @@ describe("transcript file opener", () => {
     ), { numRuns: 50 });
   });
 
+  it("honors the owner's non-previewable result regardless of the link's extension", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.uniqueArray(fc.tuple(
+        fc.stringMatching(/^[a-z]{1,12}$/),
+        fc.constantFrom("json", "md", "yaml", "txt", "html", "csv"),
+      ).map(([name, extension]) => `${name}.${extension}`), { minLength: 1, maxLength: 6 }),
+      async (references) => {
+        // A previewable symlink name can resolve to an unsupported target. The
+        // owner's resolved eligibility, rather than the name, is authoritative.
+        const files = references.map((reference) => ({
+          reference, path: `/repo/${reference}`, previewable: false,
+        }));
+        const openPath = vi.fn(async () => ({ opened: true as const }));
+        const readMarkdownFile = vi.fn(async () => ({ path: "", content: "" }));
+        const view = render(<ThreadMarkdown
+          desktopApi={{ openPath, readMarkdownFile, resolveTranscriptFiles: async () => ({ files }) }}
+          fileViewerContext={{ key: "files", title: "Files", projectPath: "/repo" }}
+          text={references.map((reference) => `\`${reference}\``).join(" ")}
+        />);
+        try {
+          for (const file of files) {
+            fireEvent.click(await view.findByRole("link", { name: file.reference }));
+            expect(openPath).toHaveBeenLastCalledWith({ path: file.path });
+          }
+          expect(openPath).toHaveBeenCalledTimes(files.length);
+          expect(readMarkdownFile).not.toHaveBeenCalled();
+          expect(view.queryByRole("dialog")).toBeNull();
+        } finally {
+          view.unmount();
+        }
+      },
+    ), { numRuns: 6 });
+  });
+
   it.each([
     ["source.TS", true], ["notes.md", true], ["events.ndjson", true],
     ["main.py", true], [".env.local", true], ["Makefile", true],

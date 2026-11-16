@@ -101,6 +101,21 @@ describe("inline file links", () => {
       .toBe(name === "main.ts");
   });
 
+  it("opens report.json through the OS when its symlink target cannot be previewed", async () => {
+    const path = "/owner/project/report.json";
+    const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: "report.json", path, previewable: false }] }));
+    const openPath = vi.fn(async () => ({ opened: true as const }));
+    const readMarkdownFile = vi.fn(async () => ({ path, error: "This file type cannot be previewed." }));
+    render(<ThreadMarkdown fileViewerContext={context}
+      desktopApi={{ resolveTranscriptFiles, openPath, readMarkdownFile }} text="Open `report.json`." />);
+    const chip = await screen.findByRole("link", { name: "report.json" });
+    expect(chip).toHaveAttribute("data-tooltip", `Open ${path}`);
+    fireEvent.click(chip);
+    expect(openPath).toHaveBeenCalledExactlyOnceWith({ path });
+    expect(readMarkdownFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("sends stat, preview and editor requests to the remote owner", async () => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: "notes.md", path: "/remote/notes.md", previewable: true }] }));
