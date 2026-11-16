@@ -218,6 +218,7 @@ const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
 /** Wire method Codex uses to invoke a dynamic tool the client advertised. */
 const CODEX_DYNAMIC_TOOL_CALL_METHOD = "item/tool/call";
 const CODEX_CONNECTION_MCP_CONFIG_READ_REASON = "connection-mcp-inventory";
+const CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON = "thread-mcp-runtime-preparation";
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
   "pwragent",
@@ -892,6 +893,7 @@ function createCodexObserverWithConfigReadRedaction(
         && (
           redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
           || redactedEvent.diagnostics?.callerReason === CODEX_CONNECTION_MCP_CONFIG_READ_REASON
+          || redactedEvent.diagnostics?.callerReason === CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON
         )
         && requestKey
       ) {
@@ -8032,8 +8034,18 @@ export class CodexAppServerClient {
     this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
       if (!PASSIVE_CODEX_REQUESTS.has(method)) this.options.assertOwnerAdmission?.();
       try {
-        const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
-        this.observeThreadSubscription(method, params, result);
+        const prepared = this.host.prepareThreadRequest
+          && (method === "thread/start" || method === "thread/resume" || method === "thread/fork")
+          ? await this.host.prepareThreadRequest({
+            method,
+            params,
+            request: (name, value) => requestBeforeSubscriptionTracking(name, value, timeoutMs, {
+              callerReason: CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON,
+            }),
+          })
+          : params;
+        const result = await requestBeforeSubscriptionTracking(method, prepared, timeoutMs, diagnostics);
+        this.observeThreadSubscription(method, prepared, result);
         return result;
       } catch (error) {
         this.host.onRequestFailure?.(error);
@@ -8242,6 +8254,11 @@ export class CodexAppServerClient {
         wireRequest?.params ?? params,
         rpcId
       );
+
+      if (method === "item/tool/call" && helperToolCallParams?.tool === "manage_pwragent" && rpcId != null) {
+        const responseFlushed = this.transport.waitForResponseFlush?.(rpcId);
+        if (responseFlushed) Object.defineProperty(request, "responseFlushed", { value: responseFlushed });
+      }
 
       const listeners = [...this.requestListeners];
       if (listeners.length === 0) {

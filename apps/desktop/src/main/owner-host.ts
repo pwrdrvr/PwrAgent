@@ -10,6 +10,7 @@ import type { WindowShowThreadRequest } from "../shared/window-show-thread";
 import type { AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateStatus } from "../shared/app-metadata";
 import type { ClaudeSessionReaderChild } from "./claude/claude-session-reader-contracts";
 import type { OwnerReplayClients } from "./testing/replay-clients";
+import type { CodexClientHost } from "@pwragent/owner-core/codex-app-server/host";
 
 /** Host capabilities used by owners. None of these contracts requires a window. */
 export interface RendererEventTarget {
@@ -59,6 +60,10 @@ export interface FilePickerOptions {
 
 export interface OwnerHostServices {
   runtimePolicy?: OwnerRuntimePolicy;
+  /** Native desktop integration; headless and replay hosts omit this service. */
+  createComputerUseRuntime?: (env: () => NodeJS.ProcessEnv) => {
+    prepare: NonNullable<CodexClientHost["prepareThreadRequest"]>;
+  };
   application: { getVersion(): string; isPackaged: boolean; getPath(name: "downloads"): string; relaunch(): void; quit(): void };
   secrets: SettingsSecretEncryption<Buffer>;
   links: { openExternal(url: string): Promise<void>; openPath(path: string): Promise<string>; showItemInFolder(path: string): void; trashItem(path: string): Promise<void> };
@@ -80,8 +85,10 @@ export interface OwnerHostServices {
   updates: {
     check(source: "manual"): Promise<AppUpdateCheckResult>;
     read(): AppUpdateStatus;
-    install(options: { requestQuit: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean> }): Promise<AppUpdateInstallResult>;
-    requestQuit(options: { performQuit: () => void; source: "agent-tool" | "update-install"; beforeQuit?: () => boolean }): Promise<boolean>;
+    stateToken?(): string;
+    reserveQuit?(): () => void;
+    install(options: { expectedVersion?: string; requestQuit: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean> }): Promise<AppUpdateInstallResult>;
+    requestQuit(options: { performQuit: () => void; source: "agent-tool" | "update-install"; quietRestart?: boolean; beforeQuit?: () => boolean }): Promise<boolean>;
   };
   workers: { forkClaudeSessionReader(path: string, env: NodeJS.ProcessEnv): Promise<ClaudeSessionReaderChild> };
   storageMaintenance: StorageMaintenanceHost;

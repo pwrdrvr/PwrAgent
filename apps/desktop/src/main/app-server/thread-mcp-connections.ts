@@ -1,3 +1,5 @@
+import { turnIdFromTerminalNotification } from "./backend-registry-notifications";
+import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -160,6 +162,20 @@ export class ThreadMcpConnections {
     this.host = host;
     this.forgeToolBridge = dependencies.forgeToolBridge;
   }
+
+  turnEventObserver(): TurnEventObserver {
+    return { name: "mcp-terminal", onTurnTerminal: ({ event }) => {
+      if (event.notification.method !== "turn/completed"
+        && event.notification.method !== "turn/failed"
+        && event.notification.method !== "turn/cancelled") return;
+      this.host().mcpGatewayTools?.cancel(
+        event.backend,
+        event.notification.params.threadId,
+        turnIdFromTerminalNotification(event.notification),
+      );
+    } };
+  }
+
 
   // Process-local conversation grants. A source's revision also includes the
   // broker's authorization generation, so reauthorization needs fresh consent.

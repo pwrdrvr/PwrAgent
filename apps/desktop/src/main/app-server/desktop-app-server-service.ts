@@ -359,6 +359,7 @@ import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-s
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -2316,27 +2317,32 @@ class DesktopAppServerService {
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
+        const summaries = request.inventory === "viewer"
+          ? getDesktopFederationRuntime().remoteThreadSummaries() : undefined;
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
           signal: rpcOptions?.signal,
+          ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
+            const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
+            if (!pins.length) return local;
+            const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
+            return appendViewerNavigationPins({ ...local, localInstanceId }, pins);
+          } } } : {}),
         });
         rpcOptions?.signal.throwIfAborted();
-        if (request.inventory === "viewer") {
-          const summaries = getDesktopFederationRuntime().remoteThreadSummaries();
-          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
-          rpcOptions?.signal.throwIfAborted();
+        if (summaries) {
           // Drafts name threads on any instance. Peer rows come from the cache
           // that keeps pins current, so this read never waits on a peer.
           const watched = request.query.kind === "exact" && request.query.resolveFromOwners
-            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins,
+            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, index.threads,
                 { cacheOnly: request.consumer === "exact-link" }) : [];
-          if (!pins.length && !watched.length) return index;
-          const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
+          if (!watched.length) return index;
+          const localInstanceId = index.localInstanceId ?? (await getDesktopFederationRuntime().health()).instanceId;
           rpcOptions?.signal.throwIfAborted();
           // Watched rows join local project groups as pins do, so a selected
           // draft resolves its project. The index serves this one read only.
-          return appendViewerNavigationPins({ ...index, localInstanceId }, [...pins, ...watched]);
+          return appendViewerNavigationPins({ ...index, localInstanceId }, watched);
         }
         return index;
       },

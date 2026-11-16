@@ -385,6 +385,9 @@ describe("action → permission lookup tables", () => {
     expect(
       permissionForDynamicTool("messaging_context", "send_messaging_file"),
     ).toBe("message.reply");
+    for (const tool of ["list_messaging_attachments", "export_messaging_attachment"]) {
+      expect(permissionForDynamicTool("messaging_context", tool)).toBe("message.reply");
+    }
     expect(
       permissionForDynamicTool("messaging_context", "attach_thread_here"),
     ).toBe("thread.resume");

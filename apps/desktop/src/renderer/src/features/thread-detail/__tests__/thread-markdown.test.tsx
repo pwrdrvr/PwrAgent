@@ -439,7 +439,7 @@ describe("ThreadMarkdown", () => {
     },
   );
 
-  it("opens local file links in the configured editor", async () => {
+  it("opens local files in the configured editor through the separate editor button", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 
     render(
@@ -481,7 +481,7 @@ describe("ThreadMarkdown", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" }));
 
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
@@ -773,9 +773,10 @@ describe("ThreadMarkdown", () => {
     expect(openApplication).not.toHaveBeenCalled();
   });
 
-  it("keeps source code links opening the editor", async () => {
+  it("opens source code links with the OS default and offers separate editor buttons", async () => {
     const readMarkdownFile = vi.fn();
     const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const openPath = vi.fn(async () => ({ opened: true as const }));
     render(
       <ThreadMarkdown
         applications={{
@@ -802,7 +803,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
         }}
-        desktopApi={{ openApplication, readMarkdownFile }}
+        desktopApi={{ openApplication, openPath, readMarkdownFile }}
         text={"Open [.env](/repo/PwrAgent/.env) and [main.py](/repo/PwrAgent/main.py)."}
       />
     );
@@ -810,6 +811,11 @@ describe("ThreadMarkdown", () => {
     fireEvent.click(screen.getByRole("link", { name: ".env" }));
     fireEvent.click(screen.getByRole("link", { name: "main.py" }));
 
+    expect(openPath).toHaveBeenCalledWith({ path: "/repo/PwrAgent/.env" });
+    expect(openPath).toHaveBeenCalledWith({ path: "/repo/PwrAgent/main.py" });
+    expect(openApplication).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open file in Zed: .env" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open file in Zed: main.py" }));
     await waitFor(() => expect(openApplication).toHaveBeenCalledTimes(2));
     expect(readMarkdownFile).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -849,7 +855,7 @@ describe("ThreadMarkdown", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("link", { name: "source" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open file in VS Code: source" }));
 
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({

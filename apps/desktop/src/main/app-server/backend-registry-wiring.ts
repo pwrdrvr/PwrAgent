@@ -1,3 +1,6 @@
+import { TurnEventObservers, type TurnEventObserver } from "./turn-event-observer";
+import { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
+import { RegistryTurnState } from "./registry-turn-state";
 import { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
 import type { RegistryContext } from "./registry-context";
 import { getMainLogger } from "../log";
@@ -124,6 +127,8 @@ const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
 /** The domain modules the composition root built for one registry. */
 export interface RegistryModules {
+  readonly turnState: RegistryTurnState;
+  readonly turnEventObservers: TurnEventObservers;
   readonly forgeToolBridge: ForgeToolBridge;
   readonly threadInspectionTools: ThreadInspectionTools;
   readonly threadMcpConnections: ThreadMcpConnections;
@@ -133,6 +138,7 @@ export interface RegistryModules {
   readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
   readonly threadWorkspaceService: ThreadWorkspaceService;
   readonly threadDirectoryService: ThreadDirectoryService;
+  readonly codexRuntimeSupervisor: CodexRuntimeSupervisor;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -185,9 +191,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let createScheduledThreadActionFn: RegistryDependencies["createScheduledThreadActionFn"];
   let threadTitleGenerationService: RegistryDependencies["threadTitleGenerationService"];
   ownerAdmission = options?.ownerAdmission;
-  initialize.push(() => {
-    ports.activeTurnKeys.onDelete((key) => { ports.activeCodexTurnCollaborationModes.delete(key); });
-  });
   const managedMaintenanceRoots = options?.managedWorktreeRoots
     ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
   const readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
@@ -1249,6 +1252,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       : {}),
   });
   const threadTurnQueue = new ThreadTurnQueue({
+    isAdmissionHeld: () => ports.restartGate.phase === "quieting",
     startTurn: async (entry) => await ports.startTurnNow(entry),
     canSteerThread: (entry) => !ports.stoppingRunningTurnsForShutdown
       && !ports.threadHasBlockingWorkspaceMove(entry)
@@ -1340,6 +1344,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   // Optional store methods are read on each access, as the registry's own
   // `this.overlayStore.method?.(...)` reads were, never captured once here.
   const context: RegistryContext = {
+    turnState: new RegistryTurnState(),
     stores: {
       threads: {
         getThreadOverlayState: (...args) => overlayStore.getThreadOverlayState(...args),
@@ -1358,6 +1363,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // it, as the registry did; a getter keeps a missing method missing.
         get updateSubthreadOrder() { return overlayStore.updateSubthreadOrder?.bind(overlayStore); },
         setThreadScheduledStart: (...args) => overlayStore.setThreadScheduledStart(...args),
+        setTurnFailureCodexInvalidIdRecovery: (...args) => overlayStore.setTurnFailureCodexInvalidIdRecovery(...args),
       },
       usage: {
         // The store requires upsertThreadUsageLine and readThreadPricing, but
@@ -1510,8 +1516,70 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     codexEnvironmentHydrationStore,
   }, () => ports);
 
+  const codexRuntimeSupervisor = new CodexRuntimeSupervisor(context, {
+    threadUsageLedger,
+    threadArchiveCoordinator,
+    threadWorkspaceService,
+    resolveCodexAppServerRecycleSettingsFn,
+    codexThreadIdleUnsubscribeMs,
+    markManagedCodexRuntimeSwitchCompleteFn,
+  }, () => ports);
+
+  const reviewObservers = managedReviewService.turnEventObservers();
+  const monitorObservers = subAgentMonitorService.turnEventObservers();
+  const usageObservers = threadUsageLedger.turnEventObservers();
+  const runtimeObservers = codexRuntimeSupervisor.turnEventObservers();
+  // Thread-State Update Bus (apps/desktop/AGENTS.md): persist before fan-out;
+  // executionMode/updated precedes executionMode/queueCleared on application.
+  // Preserve domain interleaving: review forwarding precedes attribution;
+  // terminal usage is durable before review/activity cleanup; review and
+  // workspace waiters see retired activity before queued modes and turns run.
+  // Idle review suppression and premature request resolution consume the
+  // delivery. Accounting finishes before notifications and listener fan-out;
+  // the usage barrier is released before a listener can close the owner.
+  // This order is per delivery. Provider notifications remain concurrent.
+  const observers: TurnEventObserver[] = [
+    reviewObservers.forwarding,
+    { name: "message-context", onEvent: (delivery) => ports.observeTurnMessageContext(delivery) },
+    reviewObservers.output,
+    monitorObservers.activity,
+    threadDirectoryService.turnEventObserver(),
+    { name: "thread-state", onEvent: (delivery) => ports.observeTurnThreadState(delivery) },
+    { name: "turn-started", onTurnStarted: (delivery) => ports.observeTurnStarted(delivery) },
+    usageObservers.barrier,
+    threadMcpConnections.turnEventObserver(),
+    { name: "terminal-requests", onTurnTerminal: (delivery) => ports.observeTurnTerminalRequests(delivery) },
+    forgeToolBridge.turnEventObserver(),
+    usageObservers.terminal,
+    { name: "terminal-resources", onTurnTerminal: (delivery) => ports.observeTurnTerminalResources(delivery) },
+    reviewObservers.terminal,
+    { name: "terminal-activity", onTurnTerminal: (delivery) => ports.observeTurnTerminalActivity(delivery) },
+    reviewObservers.boundary,
+    { ...threadWorkspaceService.turnEventObserver(), onStatusChanged: undefined },
+    { name: "terminal-modes", onTurnTerminal: (delivery) => ports.observeTurnTerminalModes(delivery) },
+    runtimeObservers.terminal,
+    { name: "terminal-queue", onTurnTerminal: (delivery) => ports.observeTurnTerminalQueue(delivery) },
+    { name: "turn-failure", onTurnTerminal: (delivery) => ports.observeTurnFailure(delivery) },
+    monitorObservers.terminal,
+    { name: "turn-status", onStatusChanged: (delivery) => ports.observeTurnStatus(delivery) },
+    // Status workspace draining follows status cleanup, while terminal draining
+    // above precedes mode flushing. Both are the same workspace owner's hooks.
+    { ...threadWorkspaceService.turnEventObserver(), name: "workspace-status", onTurnTerminal: undefined },
+    { name: "status-queue", onStatusChanged: (delivery) => ports.observeTurnStatusQueue(delivery) },
+    { name: "request-resolution", onEvent: (delivery) => ports.observeTurnRequestResolution(delivery) },
+    runtimeObservers.settled,
+    usageObservers.accounting,
+    monitorObservers.accounting,
+    { name: "turn-notifications", onEvent: (delivery) => ports.observeTurnNotifications(delivery) },
+    usageObservers.finish,
+    reviewObservers.metadata,
+    { name: "turn-listeners", onEvent: (delivery) => ports.observeTurnListeners(delivery) },
+  ];
+  const turnEventObservers = new TurnEventObservers(observers);
+
   const registry = new DesktopBackendRegistry({
     context,
+    turnEventObservers,
     forgeToolBridge,
     threadInspectionTools,
     threadMcpConnections,
@@ -1521,6 +1589,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadArchiveCoordinator,
     threadWorkspaceService,
     threadDirectoryService,
+    codexRuntimeSupervisor,
     handlers,
     ownerAdmission,
     configStore,
@@ -1552,13 +1621,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveCodexFastAllowedFn,
     resolvePdfAnalysisEnabledFn,
     acpSessionIdleCloseMs,
-    codexThreadIdleUnsubscribeMs,
     resolveTokenMiserEnabledFn,
-    resolveCodexAppServerRecycleSettingsFn,
     resolveTokenMiserDefaultEnabledFn,
     resolveTokenMiserPollingReviewsEnabledFn,
     resolveManagedTokenMiserActivationRequiredFn,
-    markManagedCodexRuntimeSwitchCompleteFn,
     resolveCodexDiscoveryPendingFn,
     resolveToolOutputAlertPolicyFn,
     resolveSpendAlertPolicyFn,
@@ -1612,6 +1678,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     for (const run of initialize) run();
   });
   registryModulesByRegistry.set(registry, {
+    turnEventObservers,
+    turnState: context.turnState,
     forgeToolBridge,
     threadInspectionTools,
     threadMcpConnections,
@@ -1621,6 +1689,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadArchiveCoordinator,
     threadWorkspaceService,
     threadDirectoryService,
+    codexRuntimeSupervisor,
   });
   return registry;
 }

@@ -69,6 +69,7 @@ type TranscriptMessageProps = {
     | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
+    | "openPath"
     | "readMarkdownFile"
     | "readThread"
   >;
@@ -1054,7 +1055,7 @@ function renderMessageSegment(params: {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "openPath" | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   imageParts?: AppServerThreadImagePart[];

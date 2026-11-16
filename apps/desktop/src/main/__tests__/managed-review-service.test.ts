@@ -13,13 +13,13 @@ import { ManagedReviewService, type ManagedReviewServiceHost } from "../app-serv
 import type { RegistryContext } from "../app-server/registry-context";
 import { reviewStartFailureFingerprint } from "../app-server/thread-orchestration-prompts";
 import {
-  ActiveTurnKeySet,
   buildActiveTurnKey,
   buildReviewSubAgentKey,
   reviewSubAgentId,
 } from "../app-server/thread-turn-keys";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 
 const THREAD = "thread-parent";
 const REVIEW_TURN = "review-turn";
@@ -88,13 +88,8 @@ function createReviewHarness(options: {
     },
   } as unknown as BackendClient;
   const host = {
-    activeCodexReviewInterruptTurnIds: new Map<string, string>(),
-    activeCodexReviewTurnKeys: new Set<string>(),
-    activeCodexTurnModes: new Map(),
-    activeTurnKeys: new ActiveTurnKeySet(),
     registrySessionId: "session-fixture",
     reservedAcpStartThreadKeys: new Set<string>(),
-    reservedCodexStartThreadIds: new Set<string>(),
     runtimeInstanceId: "runtime-fixture",
     threadTurnQueue: { releaseThread: vi.fn(async () => {}) },
     assertNotBootstrap: () => {},
@@ -122,12 +117,12 @@ function createReviewHarness(options: {
     scheduleQueuedAgentChange: () => {},
     submitTurn: vi.fn(async () => ({ status: "started" })),
   };
-  // Busy as the registry's threadHasActiveTurn reads it: a start reservation or a live turn key.
+  // Admission reads the real activity owner, including native review ownership.
   function busy(threadId: string): boolean {
-    return host.reservedCodexStartThreadIds.has(threadId)
-      || [...host.activeTurnKeys].some((key) => key.startsWith(`codex:${threadId}:`));
+    return context.turnState.hasActiveTurn(threadId);
   }
   const context = {
+    ...registryContextStandIn(),
     stores: {
       threads: {
         getThreadOverlayState: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => {
@@ -158,7 +153,7 @@ function createReviewHarness(options: {
     },
   } as unknown as RegistryContext;
   const service = new ManagedReviewService(context, () => host as unknown as ManagedReviewServiceHost);
-  return { service, host, busy, steps, cards, cardWrites, events };
+  return { service, host, activity: context.turnState, busy, steps, cards, cardWrites, events };
 }
 
 const reviewTerminal: ReviewTerminal = {
@@ -182,6 +177,7 @@ describe("ManagedReviewService", () => {
   it("reads neither its host nor its stores until a review runs", async () => {
     let bound = false;
     const context = {
+      ...registryContextStandIn(),
       get stores() {
         if (!bound) throw new Error("store read while constructing");
         return { threads: { getThreadOverlayState: async () => undefined } };
@@ -282,7 +278,7 @@ describe("ManagedReviewService", () => {
         const harness = createReviewHarness({
           failAt,
           onStep: (name) => {
-            reserved ||= harness.host.reservedCodexStartThreadIds.has(THREAD);
+            reserved ||= harness.activity.hasStartReservation(THREAD);
             // From the reservation until the start settles, a turn submitted
             // now must see this thread as busy.
             if (reserved && !settled && !harness.busy(THREAD)) idleSteps.push(name);
@@ -295,16 +291,16 @@ describe("ManagedReviewService", () => {
         settled = true;
 
         expect(idleSteps).toEqual([]);
-        expect(harness.host.reservedCodexStartThreadIds.has(THREAD)).toBe(false);
+        expect(harness.activity.hasStartReservation(THREAD)).toBe(false);
         expect(outcome).toBe(failAt ? "failed" : "started");
         const turnKey = buildActiveTurnKey("codex", THREAD, REVIEW_TURN);
         if (failAt && PRE_RECORD_STEPS.includes(failAt)) {
           // The start never took effect: nothing of it may remain.
-          expect(harness.host.activeTurnKeys.has(turnKey)).toBe(false);
+          expect(harness.activity.hasRegisteredTurn(turnKey)).toBe(false);
           expect(harness.service.findReviewForParentTurn({ backend: "codex", parentThreadId: THREAD })).toBeUndefined();
         } else {
           // The review turn is running; its terminal will clear it.
-          expect(harness.host.activeTurnKeys.has(turnKey)).toBe(true);
+          expect(harness.activity.hasRegisteredTurn(turnKey)).toBe(true);
         }
       },
     ), { numRuns: 60 });
@@ -331,16 +327,16 @@ describe("ManagedReviewService", () => {
         if (arrivesAt === undefined) {
           expect(live).toBeDefined();
           expect(card?.status).toBe("running");
-          expect(harness.host.activeTurnKeys.has(turnKey)).toBe(true);
+          expect(harness.activity.hasRegisteredTurn(turnKey)).toBe(true);
           expect(harness.host.threadTurnQueue.releaseThread).not.toHaveBeenCalled();
           return;
         }
         expect(live).toBeUndefined();
         expect(card?.status).toBe("success");
-        expect(harness.host.activeTurnKeys.has(turnKey)).toBe(false);
-        expect(harness.host.activeCodexTurnModes.size).toBe(0);
-        expect(harness.host.activeCodexReviewTurnKeys.size).toBe(0);
-        expect(harness.host.reservedCodexStartThreadIds.has(THREAD)).toBe(false);
+        expect(harness.activity.hasRegisteredTurn(turnKey)).toBe(false);
+        expect(harness.activity.executionCount).toBe(0);
+        expect(harness.activity.reviewKeys().length).toBe(0);
+        expect(harness.activity.hasStartReservation(THREAD)).toBe(false);
         expect(harness.host.threadTurnQueue.releaseThread).toHaveBeenCalledTimes(1);
         expect(harness.host.threadTurnQueue.releaseThread).toHaveBeenCalledWith(expect.objectContaining({
           threadId: THREAD, turnId: REVIEW_TURN, status: "turn/completed",
@@ -428,20 +424,20 @@ const pendingCommand: fc.Arbitrary<PendingCommand> = fc.oneof(
 
 describe("ManagedReviewService pending review starts", () => {
   it("schedules, cancels, rebinds and drains agent-requested reviews as the model does", async () => {
-    await fc.assert(fc.asyncProperty(fc.array(pendingCommand, { maxLength: 24 }), async (commands) => {
+    await fc.assert(fc.asyncProperty(fc.array(pendingCommand, { maxLength: 24, size: "max" }), async (commands) => {
       const events: AgentEvent[] = [];
       let activeTurnId: string | undefined;
       let startsSucceed = true;
       const submitTurn = vi.fn(async () => ({ status: "started" }));
       const host = {
-        reservedCodexStartThreadIds: new Set<string>(),
-        reservedAcpStartThreadKeys: new Set<string>(),
+            reservedAcpStartThreadKeys: new Set<string>(),
         assertThreadNotLocked: async () => {},
         getActiveTurnForThread: () => activeTurnId ? { backend: "codex", threadId: THREAD, turnId: activeTurnId } : undefined,
         getPendingTurnForThread: () => undefined,
         submitTurn,
       } as unknown as ManagedReviewServiceHost;
       const context = {
+      ...registryContextStandIn(),
         emit: async (event: AgentEvent) => { events.push(event); },
       } as unknown as RegistryContext;
       const service = new ManagedReviewService(context, () => host);

@@ -15,16 +15,24 @@ import { subscribersForChannel } from "./window-channels";
 import { requestShowThread } from "./window-show-thread";
 import { requestOpenThreadMaintenance } from "./window-open-thread-maintenance";
 import { getDesktopNotificationService } from "./notifications/desktop-notification-service";
-import { checkForAppUpdatesNow, installDownloadedAppUpdate, readAppUpdateStatus } from "./auto-updater";
+import { checkForAppUpdatesNow, installDownloadedAppUpdate, readAppUpdateStateToken, readAppUpdateStatus, reserveAppUpdateQuit } from "./auto-updater";
 import { requestQuit } from "./quit-manager";
 import { sendStarMapCommand } from "./star-map/star-map-command-bus";
 import { readStarMapView } from "./star-map/star-map-view-registry";
 import { readOperatorFocus } from "./native-voice/operator-focus-registry";
 import { createReplayClientsFromEnv } from "./testing/replay-runtime";
+import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
+import { ComputerUseRuntime } from "../codex-app-server/computer-use-runtime";
+import { getMainLogger } from "../log";
 
 /** Electron implements the owner contracts; owner modules never import this file. */
 export function createDesktopOwnerHostServices(): OwnerHostServices {
   return {
+    createComputerUseRuntime: (env) => new ComputerUseRuntime({
+      codexHome: () => env().CODEX_HOME || resolveDefaultCodexHome(),
+      executorId: () => env().BROWSER_USE_ACCESS_EXECUTOR_ID,
+      warn: (message) => getMainLogger("pwragent:computer-use").warn(message),
+    }),
     application: {
       getVersion: () => app.getVersion(),
       get isPackaged() { return app.isPackaged; },
@@ -76,7 +84,7 @@ export function createDesktopOwnerHostServices(): OwnerHostServices {
   },
     },
     starMap: { sendCommand: sendStarMapCommand, readView: readStarMapView, readFocus: readOperatorFocus },
-    updates: { check: (source) => checkForAppUpdatesNow(source), read: () => readAppUpdateStatus(), install: (options) => installDownloadedAppUpdate(options), requestQuit: (options) => requestQuit(options) },
+    updates: { reserveQuit: () => reserveAppUpdateQuit(), stateToken: () => readAppUpdateStateToken(), check: (source) => checkForAppUpdatesNow(source), read: () => readAppUpdateStatus(), install: (options) => installDownloadedAppUpdate(options), requestQuit: (options) => requestQuit(options) },
     workers: {
       forkClaudeSessionReader: async (path, env) => forkOwnerWorker(path, env),
     },

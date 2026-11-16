@@ -3,10 +3,10 @@
  *
  * The renderer routes transcript links with this, the main process gates its
  * local read with it, and a federation owner gates file pull with it, so the
- * three checks cannot drift apart. Source code stays editor-first. `.env`
+ * three checks cannot drift apart. Source code uses the OS default opener. `.env`
  * files stay out: they hold secrets that a federated peer could pull. Codex
  * session logs stay out too: PwrAgent reads Codex data only through the App
- * Server protocol, so a link to a rollout opens the editor instead.
+ * Server protocol, so a link to a rollout uses the OS default opener instead.
  *
  * HTML renders in a sandboxed frame with no network access and, unless the
  * operator turns them on, no scripts.

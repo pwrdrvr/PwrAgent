@@ -21,7 +21,7 @@ import {
   type ForgeToolBridgeHandlers,
   type ForgeToolBridgeHost,
 } from "../app-server/forge-tool-bridge";
-import type { RegistryContext } from "../app-server/registry-context";
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 
 const repository: ForgeRepository = { provider: "github", host: "github.com", owner: "fixture", repo: "project" };
@@ -35,14 +35,12 @@ function createBridge(options: {
   const published: AgentEvent[] = [];
   const pendingServerRequests = new Map<string, PendingServerRequest>();
   const addThreadPullRequestReference = vi.fn(async (params: { pr: PrSummary }) => ({ prs: [params.pr] }));
-  const context = {
-    stores: {
-      threads: {
-        getThreadOverlayState: async () => undefined,
-        getThreadOverlayStates: async () => [],
-        getThreadMetadata: async () => undefined,
-      },
-      pullRequests: { addThreadPullRequestReference },
+  const context = registryContextStandIn({
+    overlayStore: {
+      getThreadOverlayState: async () => undefined,
+      getThreadOverlayStates: async () => [],
+      getThreadMetadata: async () => undefined,
+      addThreadPullRequestReference,
     },
     providers: {
       codex: { reportedModelProviderForThread: () => "openai" },
@@ -51,10 +49,9 @@ function createBridge(options: {
     },
     lifecycle: { closed: false },
     emit: async (event: AgentEvent) => { events.push(event); },
-  } as unknown as RegistryContext;
+  });
   const host: ForgeToolBridgeHost = {
     pendingServerRequests,
-    activeCodexTurnCollaborationModes: new Map(),
     threadTodoHandler: undefined,
     resolveCodexModelProvidersFn: () => [],
     findHeadlessAutomationTurnForRequest: () => undefined,
@@ -210,10 +207,10 @@ describe("ForgeToolBridge", () => {
       const policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
       policy.access.comments = "allow";
       const github = vi.fn<ForgePrToolHandler>(async () => ({ ok: true }));
-      const { bridge, events } = createBridge({
+      const { bridge, context, events } = createBridge({
         handlers: { forgePrToolHandler: github, forgeToolPolicyResolver: () => policy },
-        host: { activeCodexTurnCollaborationModes: new Map([["codex:thread-1:turn-1", "plan" as const]]) },
       });
+      context.turnState.setCollaboration("codex:thread-1:turn-1", "plan");
       await expect(bridge.gatedForgePrToolHandler("add_issue_comment", { number: 9, body: "x" }, callContext))
         .rejects.toMatchObject({ code: "plan_mode" });
       expect(github).not.toHaveBeenCalled();

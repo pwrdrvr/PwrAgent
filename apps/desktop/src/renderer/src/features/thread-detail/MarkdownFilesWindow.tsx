@@ -12,14 +12,10 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { useFilePreviewRead } from "./useFilePreviewRead";
 import { FilePreviewBody, FilePreviewCopyButton } from "./FilePreview";
 import { FileViewerHeader } from "./FileViewerHeader";
 import { HtmlFilePreview } from "./HtmlFilePreview";
-
-type LoadState =
-  | { status: "idle" | "loading" }
-  | { status: "loaded"; content: string; path: string }
-  | { status: "error"; error: string; path: string };
 
 export function MarkdownFilesWindow() {
   const desktopApi = useDesktopApi();
@@ -46,13 +42,8 @@ export function MarkdownFilesWindow() {
     () => markdownFilesBreadcrumbParts(snapshot?.context),
     [snapshot?.context],
   );
-  const [rawLoadState, setLoadState] = useState<LoadState>({ status: "idle" });
-  // Selecting another file renders once before the read effect runs. Never
-  // show the previous file's content under the new file's kind.
-  const loadState: LoadState = "path" in rawLoadState && rawLoadState.path !== selectedPath
-    ? { status: "loading" }
-    : rawLoadState;
   const readMarkdownFile = viewerApi?.readMarkdownFile;
+  const loadState = useFilePreviewRead(readMarkdownFile, selectedPath, thread, federationTarget);
   const remoteSource = Boolean(federationTarget && isRemoteFederationTarget(federationTarget));
 
   useEffect(() => {
@@ -96,41 +87,6 @@ export function MarkdownFilesWindow() {
       setSnapshot(response.snapshot);
     });
   }, [contextKey, desktopApi]);
-
-  useEffect(() => {
-    const reader = readMarkdownFile;
-    if (!reader || !selectedPath) {
-      return;
-    }
-
-    let cancelled = false;
-    setLoadState({ status: "loading" });
-    void reader({ path: selectedPath, thread })
-      .then((response) => {
-        if (cancelled) return;
-        if (response.error || response.content === undefined) {
-          setLoadState({
-            status: "error",
-            error: response.error ?? "File could not be read.",
-            path: selectedPath,
-          });
-          return;
-        }
-        setLoadState({ status: "loaded", content: response.content, path: selectedPath });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setLoadState({
-          status: "error",
-          error: error instanceof Error ? error.message : "File could not be read.",
-          path: selectedPath,
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [readMarkdownFile, selectedPath, thread]);
 
   const selectFile = useCallback(
     (file: MarkdownFileViewerFile) => {

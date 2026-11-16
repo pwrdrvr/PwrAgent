@@ -1,3 +1,5 @@
+import type { TurnEventObservers } from "./turn-event-observer";
+import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryContext } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
@@ -212,6 +214,7 @@ export type DesktopBackendRegistryOptions = {
 export interface RegistryDependencies {
   handlers: RegistryHandlers;
   context: RegistryContext;
+  turnEventObservers: TurnEventObservers;
   forgeToolBridge: ForgeToolBridge;
   threadInspectionTools: ThreadInspectionTools;
   threadMcpConnections: ThreadMcpConnections;
@@ -221,6 +224,7 @@ export interface RegistryDependencies {
   threadArchiveCoordinator: ThreadArchiveCoordinator;
   threadWorkspaceService: ThreadWorkspaceService;
   threadDirectoryService: ThreadDirectoryService;
+  codexRuntimeSupervisor: CodexRuntimeSupervisor;
   ownerAdmission?: ThreadOwnerAdmission;
   configStore?: Pick<
     DesktopConfigStore,
@@ -260,13 +264,10 @@ export interface RegistryDependencies {
   resolveCodexFastAllowedFn: () => boolean;
   resolvePdfAnalysisEnabledFn: () => boolean;
   acpSessionIdleCloseMs: number;
-  codexThreadIdleUnsubscribeMs: number;
   resolveTokenMiserEnabledFn: () => boolean;
-  resolveCodexAppServerRecycleSettingsFn: () => CodexAppServerRecycleSettings;
   resolveTokenMiserDefaultEnabledFn: () => boolean;
   resolveTokenMiserPollingReviewsEnabledFn: () => boolean;
   resolveManagedTokenMiserActivationRequiredFn: () => boolean;
-  markManagedCodexRuntimeSwitchCompleteFn: () => void;
   resolveCodexDiscoveryPendingFn: () => boolean;
   resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;

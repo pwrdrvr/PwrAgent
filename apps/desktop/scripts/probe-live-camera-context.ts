@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
-import { createInterface } from "node:readline";
+import { readJsonRpcLines } from "@pwrdrvr/agent-transport";
 import { chromium } from "@playwright/test";
 import { NATIVE_VOICE_PROMPTS, cameraStatusText } from "../src/main/codex-app-server/native-voice-prompts";
 import { cameraCueText } from "../src/shared/native-voice-camera";
@@ -40,8 +40,7 @@ const rpc = (method: string, params: unknown, timeout = 15_000): Promise<unknown
   });
   child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
 });
-const lines = createInterface({ input: child.stdout });
-lines.on("line", (line) => {
+const stopReading = readJsonRpcLines(child.stdout, (line) => {
   let message: { id?: number; method?: string; result?: unknown; error?: { message: string }; params?: Record<string, unknown> };
   try { message = JSON.parse(line); } catch { return; }
   if (message.id !== undefined && pending.has(message.id)) {
@@ -179,7 +178,7 @@ try {
   const timer = setTimeout(() => child.kill("SIGTERM"), 2500);
   if (child.exitCode === null) await stopped;
   clearTimeout(timer);
-  lines.close();
+  stopReading();
   await browser.close();
   await rm(workspace, { recursive: true, force: true });
 }

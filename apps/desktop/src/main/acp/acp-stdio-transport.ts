@@ -1,6 +1,5 @@
 import type { SpawnOptionsWithoutStdio } from "node:child_process";
 import { spawn } from "node:child_process";
-import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import {
   normalizeAcpLaunchDescriptor,
@@ -9,6 +8,7 @@ import {
 import type { AcpJsonRpcTransport } from "./acp-client.js";
 import {
   createCommandInvocation,
+  readJsonRpcLines,
   JsonRpcConnection,
   type JsonRpcId,
   type JsonRpcObserver,
@@ -272,8 +272,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       throw new Error("ACP stdio pipes unavailable");
     }
 
-    const stdoutReader = readline.createInterface({ input: child.stdout });
-    stdoutReader.on("line", (line: string) => {
+    readJsonRpcLines(child.stdout, (line) => {
       this.messageHandler(line);
     });
 

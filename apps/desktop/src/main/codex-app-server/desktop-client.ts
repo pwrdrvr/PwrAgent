@@ -28,12 +28,19 @@ type ProviderCodexClientOptions = DesktopCodexClientOptions & { portableDiscover
 export class CodexAppServerClient extends OwnerCodexAppServerClient {
   constructor(options: ProviderCodexClientOptions = {}) {
     const runtimePolicy = getOwnerHostServices().runtimePolicy;
+    let spawnEnv = options.env ?? process.env;
+    const computerUse = runtimePolicy ? undefined
+      : getOwnerHostServices().createComputerUseRuntime?.(() => spawnEnv);
     super({ ...options, ...(runtimePolicy ? { helperExecutionPolicy: { approvalPolicy: "never" as const, sandbox: "read-only" as const } } : {}) }, {
       createTransport: (callbacks) => {
         const transport = new StdioJsonRpcTransport({
           ...options,
           command: options.command?.trim() || "codex",
           args: options.args ?? [],
+          resolveEnv: async () => {
+            spawnEnv = options.resolveEnv ? await options.resolveEnv() : options.env ?? process.env;
+            return spawnEnv;
+          },
           ...callbacks,
         });
         // Every outbound request is the one place no path can skip: on an
@@ -55,6 +62,7 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         return transport;
       },
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
+      ...(computerUse ? { prepareThreadRequest: (input) => computerUse.prepare(input) } : {}),
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),
       listingDiagnostics,

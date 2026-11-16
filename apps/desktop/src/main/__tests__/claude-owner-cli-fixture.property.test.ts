@@ -14,7 +14,8 @@ import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
+import { PassThrough } from "node:stream";
+import { readJsonRpcLines } from "@pwrdrvr/agent-transport";
 import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { expect, it } from "vitest";
@@ -30,7 +31,10 @@ it("completes every released turn exactly once, wherever the release lands", asy
   const child = spawn(process.execPath, [path.join(workspace, "claude.js")], { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  const frames = new PassThrough({ objectMode: true });
+  const stopReading = readJsonRpcLines(child.stdout, (line) => { frames.write(line); });
+  child.stdout.once("end", () => frames.end());
+  const lines = frames[Symbol.asyncIterator]();
   const next = async (): Promise<Record<string, unknown>> => {
     const { value, done } = await lines.next();
     if (done) throw new Error(`Fixture exited: ${stderr}`);
@@ -70,6 +74,7 @@ it("completes every released turn exactly once, wherever the release lands", asy
       await new Promise((resolve) => { child.once("exit", resolve); child.kill(); });
     }
     await releases.close();
+    stopReading();
     rmSync(workspace, { recursive: true, force: true });
   }
 });

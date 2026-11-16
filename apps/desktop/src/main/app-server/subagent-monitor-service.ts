@@ -1,3 +1,4 @@
+import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
@@ -102,9 +103,6 @@ import {
 } from "./backend-registry-runtime-helpers";
 import { executionModeSettings } from "./execution-mode-settings";
 import {
-  ActiveTurnKeySet,
-  buildActiveTurnKey,
-  buildActiveTurnModeKey,
   buildReviewSubAgentKey,
   reviewSubAgentId,
   taskMonitorThreadKey,
@@ -201,13 +199,10 @@ export interface SubAgentMonitorServiceHost extends Pick<RegistryHostPorts,
   | "startAcpTurn" | "submitTurn" | "withArchiveWorkspaceWrite"
   | "withCodexThreadClient"
 > {
-  readonly activeCodexTurnModes: Map<string, ThreadExecutionMode>;
-  readonly activeTurnKeys: ActiveTurnKeySet;
   readonly mcpGatewayTools: McpGatewayToolService | undefined;
   readonly recentlyCompletedThreadUsageTurns: ReadonlyMap<string, RecentlyCompletedThreadUsageTurn>;
   readonly registrySessionId: string;
   readonly registrySessionStartedAt: number;
-  readonly reservedCodexStartThreadIds: Set<string>;
   readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
   readonly resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   readonly runtimeInstanceId: string;
@@ -346,6 +341,39 @@ export class SubAgentMonitorService {
     this.threadMcpConnections = dependencies.threadMcpConnections;
   }
 
+  turnEventObservers(): Record<"activity" | "terminal" | "accounting", TurnEventObserver> {
+    return {
+      activity: { name: "monitor-activity", onEvent: ({ event }) => { this.recordTaskMonitorActivity(event); } },
+      terminal: { name: "monitor-terminal", onTurnTerminal: (delivery) => this.observeMonitorTerminal(delivery) },
+      accounting: { name: "monitor-accounting", onEvent: (delivery) => this.observeMonitorAccounting(delivery) },
+    };
+  }
+
+  private async observeMonitorTerminal(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
+    if (
+      event.notification.method === "turn/completed" ||
+      event.notification.method === "turn/failed" ||
+      event.notification.method === "turn/cancelled"
+    ) {
+      await this.handleTaskMonitorTerminalNotification(
+        event.backend,
+        event.notification as Extract<
+          AppServerNotification,
+          { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+        >,
+      );
+    }
+  }
+
+  private async observeMonitorAccounting(delivery: TurnEventDelivery): Promise<void> {
+    const { event } = delivery;
+    await this.recordCodexNativeSubAgentActivity(event);
+    await this.recordCodexNativeSubAgentNotifications(event);
+    await this.recordCodexNativeSubAgentNames(event);
+    await this.recordTaskMonitorUsage(event);
+  }
+
   /** Running monitor delegations by monitor id, for the registry's reads. */
   get taskMonitorDelegationRecords(): ReadonlyMap<string, TaskMonitorDelegationRecord> {
     return this.taskMonitorDelegations;
@@ -476,11 +504,8 @@ export class SubAgentMonitorService {
       }
       visited.add(key);
 
-      const taskMonitor = [...this.taskMonitorDelegations.values()].find(
-        (record) =>
-          record.backend === backend
-          && record.monitorThreadId === threadId,
-      );
+      const taskMonitor = this.taskMonitorForThread({ backend, threadId })
+        ?? this.completedTaskMonitorsByThread.get(taskMonitorThreadKey(backend, threadId));
       const reviewSubAgentCandidate = !taskMonitor
         ? [...this.managedReviewService.activeReviewSubAgentRecords.values()].find(
             (record) =>
@@ -3346,8 +3371,8 @@ export class SubAgentMonitorService {
     });
     const executionMode =
       (params.context.backend === "codex"
-        ? this.host().activeCodexTurnModes.get(
-            buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
+        ? this.context.turnState.executionMode(
+            { threadId: params.context.threadId, turnId: params.context.turnId },
           )
         : undefined) ??
       sourceOverlay?.executionMode ??
@@ -3516,12 +3541,12 @@ export class SubAgentMonitorService {
         : {}),
     }));
     this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
-    this.host().reservedCodexStartThreadIds.add(thread.threadId);
+    const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     let ownsStartReservation = true;
     const releaseStartReservation = () => {
       if (!ownsStartReservation) return;
       ownsStartReservation = false;
-      this.host().reservedCodexStartThreadIds.delete(thread.threadId);
+      this.context.turnState.releaseStart(thread.threadId, startReservation);
     };
     let turn: { threadId: string; turnId: string };
     try {
@@ -3547,11 +3572,11 @@ export class SubAgentMonitorService {
             : {}),
         }),
         afterStart: (startedTurn) => {
-          this.host().activeTurnKeys.add(
-            buildActiveTurnKey("codex", startedTurn.threadId, startedTurn.turnId),
+          this.context.turnState.registerTurn(
+            { backend: "codex", threadId: startedTurn.threadId, turnId: startedTurn.turnId },
           );
-          this.host().activeCodexTurnModes.set(
-            buildActiveTurnModeKey(startedTurn.threadId, startedTurn.turnId),
+          this.context.turnState.acceptExecution(
+            { threadId: startedTurn.threadId, turnId: startedTurn.turnId },
             executionMode,
           );
           releaseStartReservation();

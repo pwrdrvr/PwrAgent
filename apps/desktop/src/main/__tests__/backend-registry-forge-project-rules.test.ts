@@ -9,7 +9,6 @@ import {
   type AppServerPendingRequestNotification,
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRule,
-  type ThreadExecutionMode,
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { type ForgeToolRuleWriter } from "../app-server/backend-registry-types";
@@ -34,8 +33,6 @@ describe("forge project rules at the write gate", () => {
   /** What Codex reported for the thread: `openai` is its default provider. */
   let codexProvider: string | undefined;
   let internals: {
-    activeTurnKeys: Set<string>;
-    activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     headlessAutomationTurns: Map<string, unknown>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<DynamicResult>;
   };
@@ -75,8 +72,8 @@ describe("forge project rules at the write gate", () => {
       },
     });
     internals = registry as unknown as typeof internals;
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "default");
     registryModules(registry).forgeToolBridge.handleAttachThreadPullRequestInspectionRequest = async () => ({ ok: true }) as never;
   });
 
@@ -127,7 +124,7 @@ describe("forge project rules at the write gate", () => {
   });
 
   it("asks when a rule says Ask, even in an Auto turn, and offers no remember options", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "auto");
     policy.rules = [rule({ backend: "codex" }, { pull_requests: "ask" })];
     const prompt = nextApproval();
     const pending = internals.handleServerRequest("codex", request("update_pull_request", { number: 9, title: "New title" }, "call-rule-ask"));
@@ -258,7 +255,7 @@ describe("forge project rules at the write gate", () => {
   });
 
   it("asks, naming config.toml, when the repository has an unreadable rule", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "auto");
     policy.rules = [rule({ backend: "*" }, { comments: "allow" })];
     policy.unreadableRuleRepositories = ["github.com/Fixture/Project"];
     const prompt = nextApproval();

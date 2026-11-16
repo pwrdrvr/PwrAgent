@@ -13,6 +13,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
@@ -33,6 +34,8 @@ import type {
   FederationProjectDirectory,
 } from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
+import { TOOLTIP_GAP } from "../../../lib/tooltip-placement";
+import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";
@@ -10104,6 +10107,72 @@ describe("Sidebar directory pinning", () => {
       renderSidebar([projectADirectory, projectBDirectory], { projectIndex: true });
       const card = await openCard(screen.getByRole("button", { name: "Jump to ProjectB" }));
       expect(within(card).getByText(projectBDirectory.path!)).toBeInTheDocument();
+    });
+
+    it("opens a lane name's card beside the lane, and a header's beside the sidebar", () => {
+      // Both used to open past the sidebar, so a lane name's card landed over
+      // the transcript, the thread list's width away from the name.
+      const rectOf = (left: number, right: number, top = 0, height = 0): DOMRect => ({
+        bottom: top + height,
+        height,
+        left,
+        right,
+        top,
+        width: right - left,
+        x: left,
+        y: top,
+        toJSON: () => ({}),
+      });
+      const innerWidth = window.innerWidth;
+      vi.useFakeTimers();
+      try {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1600 });
+        fc.assert(
+          fc.property(
+            fc.integer({ min: 60, max: 220 }),
+            fc.integer({ min: 200, max: 480 }),
+            (laneWidth, listWidth) => {
+              cleanup();
+              const sidebarRight = laneWidth + listWidth;
+              const rects = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+                .mockImplementation(function getBoundingClientRect(this: HTMLElement) {
+                  if (this.classList.contains("project-card")) {
+                    const left = Number.parseFloat(this.style.left) || 0;
+                    return rectOf(left, left + 272, 0, 220);
+                  }
+                  if (this.classList.contains("project-index-pane")) return rectOf(0, laneWidth, 0, 600);
+                  if (this.classList.contains("sidebar")) return rectOf(0, sidebarRight, 0, 600);
+                  return rectOf(0, 0, 40, 24);
+                });
+              try {
+                renderSidebar([projectADirectory, projectBDirectory], { projectIndex: true });
+                const laneName = screen.getByRole("button", { name: "Jump to ProjectB" });
+                fireEvent.mouseEnter(laneName);
+                act(() => {
+                  vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS + 50);
+                });
+                const laneCard = document.querySelector<HTMLElement>(".project-card");
+                expect(laneCard).toHaveTextContent("ProjectB");
+                expect(laneCard?.style.left).toBe(`${laneWidth + TOOLTIP_GAP}px`);
+
+                // The bridge swaps to the header's card at once.
+                fireEvent.mouseLeave(laneName);
+                fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+                const headerCard = document.querySelector<HTMLElement>(".project-card");
+                expect(headerCard).toHaveTextContent("ProjectA");
+                expect(headerCard?.style.left).toBe(`${sidebarRight + TOOLTIP_GAP}px`);
+              } finally {
+                cleanup();
+                rects.mockRestore();
+              }
+            },
+          ),
+          { numRuns: 12 },
+        );
+      } finally {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: innerWidth });
+        vi.useRealTimers();
+      }
     });
 
     it("names the open card as the header's description", async () => {

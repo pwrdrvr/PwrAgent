@@ -42,7 +42,9 @@ reconciled without changing those members, not reread. RPC fallback attempts car
 Federation owner work. `inventory` distinguishes owner and viewer inventories.
 Provider categories are Codex, ACP, or aggregate; individual ACP transport
 calls are not instrumented. Known registry caller reasons are recorded;
-unrecognized labels become `unknown`.
+unrecognized labels become `unknown`. The fixed `:archived-metadata` suffix is
+retained for known callers: its pages are the archived metadata traversal
+inside that listing, not separate listing invocations.
 
 The bounded sidebar and Star Map project controllers attach a random
 renderer-lifetime `origin` plus numeric `view`, `effect`, `logical`, and
@@ -66,6 +68,20 @@ Invalidation metadata contains a fixed cause category and an allowlisted
 protocol method (for example `turn/completed`). The controller records the
 latest relevant method and the number of invalidations collapsed into the
 next read. Main invalidation events retain the individual method sequence.
+Refresh reads also carry `diagnostic.caller` through IPC into main's `caller`
+field, independently of the event in `trigger`. For example, a read can have
+`caller: scheduled/thread-lifecycle` and `trigger: turn/completed`. The first
+caller queued for a physical read remains attached to its retries; a later
+coalesced replacement has its own caller. The renderer records it on both
+`refresh` and `dispatch`, so main-only captures no longer need the initiating
+renderer event to interpret it.
+
+`navigation/refresh` identifies the public generic refresh entry point; it
+does **not** prove that the operator clicked Refresh. Known PR-detach,
+messaging-unbind, remote-pin, reply, automation, and scheduled lifecycle paths
+supply explicit fixed labels. Missing labels in older captures remain unknown.
+No request scope, event fencing, or provider page policy is changed by a label.
+
 Sidebar and project-card periodic refreshes explicitly say `timer`; project
 and sidebar owner notifications retain their cause. No payload, title, prompt,
 path, raw thread ID, owner ID, or exception message is copied into this history.

@@ -974,7 +974,7 @@ Apache-2.0
 ~~~~~~~~~~
 - @agentclientprotocol/sdk@1.3.0 | https://github.com/agentclientprotocol/typescript-sdk
 - @chevrotain/types@11.1.2 | https://github.com/Chevrotain/chevrotain
-- @discordjs/builders@1.14.1 | https://github.com/discordjs/discord.js
+- @discordjs/builders@1.15.0 | https://github.com/discordjs/discord.js
 - @discordjs/collection@1.5.3 | https://github.com/discordjs/discord.js
 - @discordjs/collection@2.1.1 | https://github.com/discordjs/discord.js
 - @discordjs/formatters@0.6.2 | https://github.com/discordjs/discord.js
@@ -994,7 +994,7 @@ Apache-2.0
 - bare-path@3.1.2 | https://github.com/holepunchto/bare-path
 - bare-stream@2.13.4 | https://github.com/holepunchto/bare-stream
 - bare-url@2.5.4 | https://github.com/holepunchto/bare-url
-- discord.js@14.27.0 | https://github.com/discordjs/discord.js
+- discord.js@14.28.1 | https://github.com/discordjs/discord.js
 - events-universal@1.0.1 | https://github.com/holepunchto/events-universal
 - long@5.3.2 | https://github.com/dcodeIO/long.js
 - pdfjs-dist@6.5.438 | https://github.com/mozilla/pdf.js
@@ -1171,7 +1171,7 @@ MIT
 - @pwrdrvr/agent-acp@0.17.0 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-client@0.8.2 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.2.0 | https://github.com/pwrdrvr/agent-kit
-- @pwrdrvr/agent-transport@0.1.7 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-transport@0.1.8 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/codex-app-server-protocol@0.144.0 | https://github.com/pwrdrvr/codex-app-server-protocol
 - @pwrdrvr/codex-app-server-protocol@0.164.0 | https://github.com/pwrdrvr/codex-app-server-protocol
 - @pwrdrvr/codex-discovery@0.4.0 | https://github.com/pwrdrvr/agent-kit
@@ -1185,36 +1185,36 @@ MIT
 - @slack/types@3.3.0 | https://github.com/slackapi/node-slack-sdk
 - @slack/web-api@8.3.0 | https://github.com/slackapi/node-slack-sdk
 - @stablelib/base64@1.0.1 | https://github.com/StableLib/stablelib
-- @tiptap/core@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-blockquote@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bold@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bubble-menu@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bullet-list@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-code@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-code-block@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-document@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-dropcursor@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-floating-menu@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-gapcursor@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-hard-break@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-heading@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-horizontal-rule@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-italic@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-link@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list-item@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list-keymap@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-mention@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-ordered-list@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-paragraph@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-strike@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-text@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-underline@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/extensions@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/pm@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/react@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/starter-kit@3.32.2 | https://github.com/ueberdosis/tiptap
-- @tiptap/suggestion@3.32.2 | https://github.com/ueberdosis/tiptap
+- @tiptap/core@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-blockquote@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bold@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bubble-menu@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bullet-list@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-code@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-code-block@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-document@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-dropcursor@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-floating-menu@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-gapcursor@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-hard-break@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-heading@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-horizontal-rule@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-italic@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-link@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list-item@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list-keymap@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-mention@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-ordered-list@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-paragraph@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-strike@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-text@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-underline@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/extensions@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/pm@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/react@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/starter-kit@3.33.0 | https://github.com/ueberdosis/tiptap
+- @tiptap/suggestion@3.33.0 | https://github.com/ueberdosis/tiptap
 - @tufjs/canonical-json@2.0.0 | https://github.com/theupdateframework/tuf-js
 - @tufjs/models@5.0.0 | https://github.com/theupdateframework/tuf-js
 - @types/d3@7.4.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -1266,7 +1266,7 @@ MIT
 - @types/unist@2.0.11 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/unist@3.0.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/use-sync-external-store@0.0.6 | https://github.com/DefinitelyTyped/DefinitelyTyped
-- @types/ws@8.18.1 | https://github.com/DefinitelyTyped/DefinitelyTyped
+- @types/ws@8.18.2 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @upsetjs/venn.js@2.0.0 | https://github.com/upsetjs/venn.js
 - @vladfrangu/async_event_emitter@2.4.7 | https://github.com/vladfrangu/async_event_emitter
 - @xterm/addon-fit@0.11.0 | https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit
@@ -1330,7 +1330,7 @@ MIT
 - dugite@3.3.2 | https://github.com/desktop/dugite
 - dunder-proto@1.0.1 | https://github.com/es-shims/dunder-proto
 - ee-first@1.1.1 | jonathanong/ee-first
-- electron@44.10.1 | https://github.com/electron/electron
+- electron@44.10.2 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.11 | https://github.com/electron-userland/electron-builder
 - emojilib@2.4.0 | https://github.com/muan/emojilib
@@ -1441,7 +1441,7 @@ MIT
 - magic-bytes.js@1.13.0 | https://github.com/LarsKoelpin/magic-bytes
 - markdown-table@3.0.4 | wooorm/markdown-table
 - marked@16.4.2 | https://github.com/markedjs/marked
-- marked@18.1.2 | https://github.com/markedjs/marked
+- marked@18.1.3 | https://github.com/markedjs/marked
 - math-intrinsics@1.1.0 | https://github.com/es-shims/math-intrinsics
 - mdast-squeeze-paragraphs@6.0.0 | syntax-tree/mdast-squeeze-paragraphs
 - mdast-util-definition-list@2.0.1 | https://github.com/wataru-chocola/mdast-util-definition-list
@@ -1630,7 +1630,7 @@ MIT
 - tuf-js@6.0.0 | https://github.com/theupdateframework/tuf-js
 - type-is@2.1.0 | jshttp/type-is
 - undici@6.29.1 | https://github.com/nodejs/undici
-- undici@8.12.3 | https://github.com/nodejs/undici
+- undici@8.12.4 | https://github.com/nodejs/undici
 - undici-types@7.24.6 | https://github.com/nodejs/undici
 - unicode-emoji-modifier-base@1.0.0 | https://github.com/mathiasbynens/unicode-emoji-modifier-base
 - unified@11.0.5 | unifiedjs/unified
@@ -2381,13 +2381,13 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
-@discordjs/builders@1.14.1 (Apache-2.0)
+@discordjs/builders@1.15.0 (Apache-2.0)
 ---------------------------------------
 
 Applies to:
-- @discordjs/builders@1.14.1 (Apache-2.0)
+- @discordjs/builders@1.15.0 (Apache-2.0)
 
-Representative file: @discordjs/builders@1.14.1/LICENSE
+Representative file: @discordjs/builders@1.15.0/LICENSE
 
 Apache License
                            Version 2.0, January 2004
@@ -2587,7 +2587,7 @@ Apache License
 Applies to:
 - @discordjs/collection@1.5.3 (Apache-2.0)
 - @discordjs/collection@2.1.1 (Apache-2.0)
-- discord.js@14.27.0 (Apache-2.0)
+- discord.js@14.28.1 (Apache-2.0)
 
 Representative file: @discordjs/collection@1.5.3/LICENSE
 
@@ -4871,7 +4871,7 @@ Applies to:
 - @pwrdrvr/agent-acp@0.17.0 (MIT)
 - @pwrdrvr/agent-client@0.8.2 (MIT)
 - @pwrdrvr/agent-core@0.2.0 (MIT)
-- @pwrdrvr/agent-transport@0.1.7 (MIT)
+- @pwrdrvr/agent-transport@0.1.8 (MIT)
 - @pwrdrvr/codex-app-server-protocol@0.144.0 (MIT)
 - @pwrdrvr/codex-app-server-protocol@0.164.0 (MIT)
 - @pwrdrvr/codex-discovery@0.4.0 (MIT)
@@ -5309,42 +5309,42 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@tiptap/core@3.32.2 (MIT)
+@tiptap/core@3.33.0 (MIT)
 -------------------------
 
 Applies to:
-- @tiptap/core@3.32.2 (MIT)
-- @tiptap/extension-blockquote@3.32.2 (MIT)
-- @tiptap/extension-bold@3.32.2 (MIT)
-- @tiptap/extension-bubble-menu@3.32.2 (MIT)
-- @tiptap/extension-bullet-list@3.32.2 (MIT)
-- @tiptap/extension-code@3.32.2 (MIT)
-- @tiptap/extension-code-block@3.32.2 (MIT)
-- @tiptap/extension-document@3.32.2 (MIT)
-- @tiptap/extension-dropcursor@3.32.2 (MIT)
-- @tiptap/extension-floating-menu@3.32.2 (MIT)
-- @tiptap/extension-gapcursor@3.32.2 (MIT)
-- @tiptap/extension-hard-break@3.32.2 (MIT)
-- @tiptap/extension-heading@3.32.2 (MIT)
-- @tiptap/extension-horizontal-rule@3.32.2 (MIT)
-- @tiptap/extension-italic@3.32.2 (MIT)
-- @tiptap/extension-link@3.32.2 (MIT)
-- @tiptap/extension-list@3.32.2 (MIT)
-- @tiptap/extension-list-item@3.32.2 (MIT)
-- @tiptap/extension-list-keymap@3.32.2 (MIT)
-- @tiptap/extension-mention@3.32.2 (MIT)
-- @tiptap/extension-ordered-list@3.32.2 (MIT)
-- @tiptap/extension-paragraph@3.32.2 (MIT)
-- @tiptap/extension-strike@3.32.2 (MIT)
-- @tiptap/extension-text@3.32.2 (MIT)
-- @tiptap/extension-underline@3.32.2 (MIT)
-- @tiptap/extensions@3.32.2 (MIT)
-- @tiptap/pm@3.32.2 (MIT)
-- @tiptap/react@3.32.2 (MIT)
-- @tiptap/starter-kit@3.32.2 (MIT)
-- @tiptap/suggestion@3.32.2 (MIT)
+- @tiptap/core@3.33.0 (MIT)
+- @tiptap/extension-blockquote@3.33.0 (MIT)
+- @tiptap/extension-bold@3.33.0 (MIT)
+- @tiptap/extension-bubble-menu@3.33.0 (MIT)
+- @tiptap/extension-bullet-list@3.33.0 (MIT)
+- @tiptap/extension-code@3.33.0 (MIT)
+- @tiptap/extension-code-block@3.33.0 (MIT)
+- @tiptap/extension-document@3.33.0 (MIT)
+- @tiptap/extension-dropcursor@3.33.0 (MIT)
+- @tiptap/extension-floating-menu@3.33.0 (MIT)
+- @tiptap/extension-gapcursor@3.33.0 (MIT)
+- @tiptap/extension-hard-break@3.33.0 (MIT)
+- @tiptap/extension-heading@3.33.0 (MIT)
+- @tiptap/extension-horizontal-rule@3.33.0 (MIT)
+- @tiptap/extension-italic@3.33.0 (MIT)
+- @tiptap/extension-link@3.33.0 (MIT)
+- @tiptap/extension-list@3.33.0 (MIT)
+- @tiptap/extension-list-item@3.33.0 (MIT)
+- @tiptap/extension-list-keymap@3.33.0 (MIT)
+- @tiptap/extension-mention@3.33.0 (MIT)
+- @tiptap/extension-ordered-list@3.33.0 (MIT)
+- @tiptap/extension-paragraph@3.33.0 (MIT)
+- @tiptap/extension-strike@3.33.0 (MIT)
+- @tiptap/extension-text@3.33.0 (MIT)
+- @tiptap/extension-underline@3.33.0 (MIT)
+- @tiptap/extensions@3.33.0 (MIT)
+- @tiptap/pm@3.33.0 (MIT)
+- @tiptap/react@3.33.0 (MIT)
+- @tiptap/starter-kit@3.33.0 (MIT)
+- @tiptap/suggestion@3.33.0 (MIT)
 
-Representative file: @tiptap/core@3.32.2/LICENSE.md
+Representative file: @tiptap/core@3.33.0/LICENSE.md
 
 MIT License
 
@@ -5452,7 +5452,7 @@ Applies to:
 - @types/unist@2.0.11 (MIT)
 - @types/unist@3.0.3 (MIT)
 - @types/use-sync-external-store@0.0.6 (MIT)
-- @types/ws@8.18.1 (MIT)
+- @types/ws@8.18.2 (MIT)
 
 Representative file: @types/d3@7.4.3/LICENSE
 
@@ -7971,13 +7971,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-electron@44.10.1 (MIT)
+electron@44.10.2 (MIT)
 ----------------------
 
 Applies to:
-- electron@44.10.1 (MIT)
+- electron@44.10.2 (MIT)
 
-Representative file: electron@44.10.1/LICENSE
+Representative file: electron@44.10.2/LICENSE
 
 Copyright (c) Electron contributors
 Copyright (c) 2013-2020 GitHub Inc.
@@ -10401,7 +10401,7 @@ marked@16.4.2 (MIT)
 
 Applies to:
 - marked@16.4.2 (MIT)
-- marked@18.1.2 (MIT)
+- marked@18.1.3 (MIT)
 
 Representative file: marked@16.4.2/LICENSE.md
 
@@ -13540,7 +13540,7 @@ undici@6.29.1 (MIT)
 
 Applies to:
 - undici@6.29.1 (MIT)
-- undici@8.12.3 (MIT)
+- undici@8.12.4 (MIT)
 - undici-types@7.24.6 (MIT)
 
 Representative file: undici@6.29.1/LICENSE

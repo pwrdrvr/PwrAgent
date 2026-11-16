@@ -1948,6 +1948,8 @@ export type AppServerListSkillsResponse = {
 };
 
 export type AppServerPendingRequestNotification = {
+  /** Local-only, non-enumerable acknowledgement. Never put on the wire. */
+  responseFlushed?: Promise<void>;
   method: string;
   params: {
     threadId: string;

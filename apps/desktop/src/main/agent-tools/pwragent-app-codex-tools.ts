@@ -39,6 +39,7 @@ export async function handlePwrAgentAppDynamicToolCall(params: {
   backend: AppServerBackendKind;
   call: DynamicToolCallParams;
   handler: PwrAgentAppManagementHandler | undefined;
+  responseFlushed?: Promise<void>;
 }): Promise<DynamicToolCallResponse> {
   const call = isPwrAgentAppDynamicToolCall(params.call)
     ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
@@ -46,6 +47,7 @@ export async function handlePwrAgentAppDynamicToolCall(params: {
   return await buildPwrAgentAppToolRouter(params.handler).handleDynamicToolCall({
     backend: params.backend,
     call,
+    responseFlushed: params.responseFlushed,
   });
 }
 

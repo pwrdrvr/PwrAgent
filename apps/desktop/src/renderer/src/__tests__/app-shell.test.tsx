@@ -2,7 +2,7 @@ import { probe } from "../test/phase-probes";
 import { settleFakeTimers } from "../test/settle-fake-timers";
 import "@testing-library/jest-dom/vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
-import type { DesktopApi } from "../lib/desktop-api";
+import { getDesktopApi, type DesktopApi } from "../lib/desktop-api";
 import { Composer } from "../features/composer/Composer";
 import { buildThreadComposerScopeKey, useComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import {
@@ -7644,7 +7644,9 @@ describe("App", () => {
     await waitForHistory("First cached thread", "Search");
   });
 
-  it("restores an unsubmitted project launchpad from thread history", async () => {
+  it.each(["", "Keep this configured project draft."])("restores an unsubmitted project launchpad through refreshes (draft: %j)", async (draft) => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    let activityRevision = 0;
     const directoryKey = "directory:/Users/fixture-user/pwrdrvr/PwrAgent";
     let launchpad = {
       directoryKey,
@@ -7751,6 +7753,15 @@ describe("App", () => {
           unchanged: false,
           inboxThreadKeys: ["codex:thread-1", "codex:thread-2"],
           threads: [
+            ...Array.from({ length: 5 }, (_, index) => ({
+              id: `working-${index}`, title: `Working thread ${index}`, titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [{ id: directoryKey, label: "PwrAgent", kind: "local" as const,
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent" }],
+              inbox: { inInbox: false },
+              threadStatus: activityRevision % 2 ? "idle" as const : "active" as const,
+              updatedAt: 800 + activityRevision + index,
+            })),
             {
               id: "thread-1",
               title: "First project thread",
@@ -7816,7 +7827,10 @@ describe("App", () => {
           threadId,
           seenAt: Date.now(),
         }),
-        onAgentEvent: () => () => undefined,
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
         onWindowFocus: () => () => undefined,
         readThread: async ({
           backend,
@@ -7846,6 +7860,36 @@ describe("App", () => {
       }),
     });
 
+    const api = getDesktopApi()!;
+    const readQueryPage = api.getNavigationQueryPage!;
+    let holdRefresh = false;
+    const pendingReads: Array<() => void> = [];
+    const queryPage = vi.spyOn(api, "getNavigationQueryPage").mockImplementation(async (...args) => {
+      const response = await readQueryPage(...args);
+      if (holdRefresh) await new Promise<void>((resolve) => pendingReads.push(resolve));
+      return response;
+    });
+    const refreshWorkingThreads = async (duringRefresh?: () => Promise<void>): Promise<void> => {
+      holdRefresh = Boolean(duringRefresh);
+      const previousReads = queryPage.mock.calls.length;
+      activityRevision += 1;
+      await act(async () => {
+        for (let index = 0; index < 5; index += 1) {
+          for (const listener of listeners) listener({ backend: "codex", notification: {
+            method: "thread/status/changed",
+            params: { threadId: `working-${index}`, status: { type: activityRevision % 2 ? "idle" : "active" } },
+          } });
+        }
+      });
+      await waitFor(() => expect(queryPage.mock.calls.length).toBeGreaterThan(previousReads));
+      if (duringRefresh) {
+        await waitFor(() => expect(pendingReads.length).toBeGreaterThan(0));
+        await duringRefresh();
+        holdRefresh = false;
+        await act(async () => { pendingReads.splice(0).forEach((resolve) => resolve()); });
+      }
+      await flushReactUpdates();
+    };
     await renderThreadApp();
 
     await screen.findByRole("heading", {
@@ -7865,13 +7909,56 @@ describe("App", () => {
     ).toHaveAttribute("aria-pressed", "false");
 
     const composer = screen.getByRole("textbox", { name: "New thread" });
-    pasteComposerText(composer, "Keep this configured project draft.");
+    if (draft) pasteComposerText(composer, draft);
     await waitFor(() => {
       expect(getComposerValueHost(composer)).toHaveAttribute(
         "data-value",
-        "Keep this configured project draft.",
+        draft,
       );
     });
+
+    await refreshWorkingThreads();
+
+    // An unsubmitted composer remains a Forward destination while the
+    // operator goes Back to copy something from the previous thread.
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description", "First project thread",
+      );
+    });
+    await refreshWorkingThreads(async () => {
+      await clickButton("Back");
+      await screen.findByRole("heading", { level: 2, name: "First project thread" });
+    });
+    await refreshWorkingThreads();
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-forward")).toHaveAttribute(
+        "aria-description", "New thread in PwrAgent",
+      );
+      expect(screen.getByTestId("history-nav-forward")).toBeEnabled();
+    });
+    await clickButton("Forward");
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    expect(
+      getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
+    ).toHaveAttribute("data-value", draft);
+
+    // Opening another thread appends it after the composer, even when the
+    // operator opened it from an older position in history.
+    await clickButton("Back");
+    await screen.findByRole("heading", { level: 2, name: "First project thread" });
+    await clickButton("Second project thread");
+    await screen.findByRole("heading", { level: 2, name: "Second project thread" });
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-forward")).toBeDisabled();
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description", "New thread in PwrAgent",
+      );
+    });
+    await clickButton("Back");
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
+      .toHaveAttribute("data-value", draft);
 
     await clickButton(/Second project thread/i);
     await screen.findByRole("heading", {
@@ -7891,7 +7978,7 @@ describe("App", () => {
     await screen.findByRole("heading", { level: 2, name: "New thread" });
     expect(
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
-    ).toHaveAttribute("data-value", "Keep this configured project draft.");
+    ).toHaveAttribute("data-value", draft);
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 

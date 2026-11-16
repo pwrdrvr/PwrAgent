@@ -12,7 +12,8 @@ import {
 const IDS = ["a", "b", "c", "d", "e"] as const;
 const id = fc.constantFrom(...IDS);
 
-const event: fc.Arbitrary<RestartGateEvent> = fc.oneof(
+type NormalRestartGateEvent = Exclude<RestartGateEvent, { type: "cancel-quiet" }>;
+const event: fc.Arbitrary<NormalRestartGateEvent> = fc.oneof(
   fc.record({ type: fc.constant("quiet" as const), at: fc.nat(1_000) }),
   fc.record({
     type: fc.constant("restore" as const),
@@ -43,7 +44,7 @@ type Reference = {
 
 const OPEN_REFERENCE: Reference = { quiet: false, pending: new Set(), times: new Map(), releaseBy: 0 };
 
-function referenceStep(reference: Reference, next: RestartGateEvent): Reference {
+function referenceStep(reference: Reference, next: NormalRestartGateEvent): Reference {
   if (reference.quiet) return reference;
   const open = reference.pending.size === 0;
   let after: Reference;
@@ -152,4 +153,15 @@ describe("planRestartDispatch (property)", () => {
       }
     }));
   });
+});
+
+
+it("restores the exact prior gate when the initial quiet checkpoint fails", () => {
+  fc.assert(fc.property(fc.array(event, { maxLength: 20 }), (events) => {
+    let before = OPEN_RESTART_GATE;
+    for (const next of events) before = transitionRestartGate(before, next);
+    fc.pre(before.phase !== "quieting");
+    const quiet = transitionRestartGate(before, { type: "quiet", at: 1_000 });
+    expect(transitionRestartGate(quiet, { type: "cancel-quiet", previous: before })).toBe(before);
+  }));
 });

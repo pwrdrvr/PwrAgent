@@ -635,10 +635,10 @@ export async function showQuitConfirmationDialog(
         void options.quietRestart().then(
           (proceed) => finish(proceed ? "quiet-restart" : "manual-cancel"),
           (error: unknown) => {
-            quitDialogLog.warn("quiet restart failed; quitting", {
+            quitDialogLog.warn("quiet restart failed; cancelling quit", {
               error: error instanceof Error ? error.message : String(error),
             });
-            finish("quiet-restart");
+            finish("manual-cancel");
           },
         );
         return;

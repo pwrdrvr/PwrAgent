@@ -6,7 +6,7 @@ import { ListingDiagnostics } from "../diagnostics/listing-diagnostics";
 it("keeps a measured append/async operation budget independent of payload size", async () => {
   const diagnostics = new ListingDiagnostics();
   const fields = { origin: "68ca84ce-8d32-4230-a10f-76bc96eb2f33", source: "local" as const, consumer: "main-sidebar", query: "lens", reason: "turn",
-    trigger: "turn/completed", view: 12, effect: 2, logical: 42, attempt: 1, invalidations: 3 };
+    trigger: "turn/completed", caller: "scheduled/thread-lifecycle", view: 12, effect: 2, logical: 42, attempt: 1, invalidations: 3 };
   // Warm the code; report wall cost rather than imposing a flaky CI timing threshold.
   for (let i = 0; i < 10_000; i++) diagnostics.record("ipc", "start", fields);
   const eventCount = 100_000;

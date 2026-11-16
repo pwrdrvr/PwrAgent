@@ -1,3 +1,4 @@
+import type { UsageLimitObservation } from "@pwragent/shared";
 import type {
   AcpBackendId,
   AgentEvent,
@@ -125,6 +126,8 @@ export interface RegistryHostPorts {
     skipArchivedMetadataRefresh?: boolean;
   }): Promise<AppServerThreadSummary[]>;
   liveProfileRuntimeInstanceIds(): string[] | undefined;
+  liveSubAgentMonitorIds(backend: AppServerBackendKind, threadId: string): string[];
+  prepareTokenMiserRuntime(): Promise<void>;
   publishLocalEvent(event: AgentEvent): Promise<void>;
   readCausalMessagingContext(
     context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
@@ -256,6 +259,7 @@ export interface RegistryHostPorts {
     backend?: AppServerBackendKind,
     ignoreCodexStartReservation?: boolean,
   ): boolean;
+  turnLimitObservation(backend: AppServerBackendKind): UsageLimitObservation | undefined;
   withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
   withCodexThreadClient<T>(
     threadId: string,

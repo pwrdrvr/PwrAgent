@@ -10,7 +10,7 @@ Search when the user wants to:
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
-- Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
+- Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, list/export received original files for saving, or inspect/render PDF attachments. Search does not authorize sending messages.
 - Open, edit, read back, comment on, review, approve or merge GitHub pull requests and GitLab merge requests, with screenshot or video attachments; read PR/MR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub and GitLab issues.
 - Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs and download CI artifacts, GitLab CI pipelines and failure logs; request rerunning failed CI jobs; attach or watch pull requests; hold merging until another thread finishes; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred. Prefer these tools to GitHub connectors and gh/glab.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
@@ -75,6 +75,8 @@ const SEARCH_ALIASES: Record<string, string> = {
   rename_current_messaging_conversation: "telegram discord slack line lark feishu mattermost rename topic",
   send_private_response: "telegram discord slack line lark feishu mattermost message private reply dm",
   send_messaging_file: "telegram discord slack line lark feishu mattermost send attachment file",
+  list_messaging_attachments: "telegram discord slack line lark feishu mattermost received original attachment file pdf list save copy download",
+  export_messaging_attachment: "telegram discord slack line lark feishu mattermost received original attachment file pdf save copy download export bytes folder",
   // Registered OpenAI Decisions. People ask for "a decision model", "a
   // classifier" or "a rubric", in the singular, rather than for the tool names.
   decisions_register: "decision decisions decide model prompt rubric classifier classify judge evaluate evaluator grade score predicate choice create define save reusable jev typesafe clef local",

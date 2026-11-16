@@ -157,28 +157,3 @@ export function taskMonitorThreadKey(
 ): string {
   return `${backend}:${threadId}`;
 }
-
-/**
- * The registry's running turns. Removal is observable, so a quit can wait for
- * each turn it stopped to end, whichever terminal path removes it.
- */
-export class ActiveTurnKeySet extends Set<string> {
-  private readonly deleteListeners = new Set<(key: string) => void>();
-
-  override delete(key: string): boolean {
-    const deleted = super.delete(key);
-    if (deleted) {
-      for (const listener of this.deleteListeners) {
-        listener(key);
-      }
-    }
-    return deleted;
-  }
-
-  onDelete(listener: (key: string) => void): () => void {
-    this.deleteListeners.add(listener);
-    return () => {
-      this.deleteListeners.delete(listener);
-    };
-  }
-}

@@ -85,16 +85,22 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "clearCodexReviewInterruptMappingForTurn",
     "scheduleQueuedAgentChange",
     "flushQueuedExecutionModeIfPresent",
-    "maybeRestartCodexForManagedRuntimeChange",
     "usesSlashControlledAcpExecutionModes",
     "flushQueuedAcpRuntimeOptionIfPresent",
     "appendTurnFailure",
     "threadHasActiveCodexReviewTurn",
-    "refreshCodexBackgroundTerminalsAfterTurn",
     "notifyForAttentionRequired",
     "notifyForTerminalOutcome",
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
+  // Moved to the Codex runtime supervisor (PWR-146).
+  ...[
+    "maybeRestartCodexForManagedRuntimeChange",
+    "refreshCodexBackgroundTerminalsAfterTurn",
+  ].map((name) => ({
+    name,
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).codexRuntimeSupervisor as unknown as Members,
+  })),
   // Moved to the forge tool bridge (PWR-146).
   {
     name: "raiseWithdrawnForgeApprovalTodo",
@@ -197,10 +203,11 @@ function instrumentHub(registry: DesktopBackendRegistry): HubRecorder {
     return result;
   };
   const context = new AsyncLocalStorage<HookContext>();
-  const hub = "emitAfterLiveThreadUsageRegistration";
-  if (typeof target[hub] !== "function") throw new Error(`The hub ${hub} is not a registry method; point instrumentHub at its new owner.`);
-  const runHub = target[hub] as (...args: unknown[]) => Promise<void>;
-  target[hub] = function (this: unknown, ...args: unknown[]) {
+  const pipeline = registryModules(registry).turnEventObservers as unknown as Members;
+  const hub = "run";
+  if (typeof pipeline[hub] !== "function") throw new Error(`The hub ${hub} is not a registry method; point instrumentHub at its new owner.`);
+  const runHub = pipeline[hub] as (...args: unknown[]) => Promise<void>;
+  pipeline[hub] = function (this: unknown, ...args: unknown[]) {
     const event = args[0] as AgentEvent;
     const entry: HubEntry = { event: `${event.backend} ${event.notification.method}`, hooks: [] };
     entries.push(entry);

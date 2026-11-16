@@ -55,6 +55,8 @@ export type RequestQuitOptions = {
   /** Authorize an update after confirmation, before committing shutdown. */
   beforeQuit?: () => boolean;
   source: QuitRequestSource;
+  /** Use bounded checkpoint-and-continue after the normal quit decision. */
+  quietRestart?: boolean;
 };
 
 export type QuitBlockerSnapshot = {
@@ -97,7 +99,7 @@ export type QuitManagerDependencies = {
   /**
    * Quiet & Continue After Restart: stop running work so each thread
    * continues after the next launch. Offered by the dialog only when set.
-   * Must not reject; the quit follows whatever it managed.
+   * A failed initial checkpoint refuses the quit and restores admission.
    */
   quietForRestart?: () => Promise<void>;
   /** Hold new automation launches until quitting proceeds or the prompt closes. */
@@ -130,6 +132,8 @@ export function createQuitManager(
   dependencies: QuitManagerDependencies,
 ): QuitManager {
   let quitAllowed = false;
+  let committedPerformQuit: (() => void) | undefined;
+  let immediateDecisionInProgress = false;
   let pendingBeforeQuit: (() => boolean) | undefined;
   let pendingPerformQuit: (() => void) | undefined;
   let promptPromise: Promise<boolean> | undefined;
@@ -150,11 +154,53 @@ export function createQuitManager(
   };
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
-    if (quitAllowed) {
-      if (options.beforeQuit && !options.beforeQuit()) return false;
-      (options.performQuit ?? dependencies.performQuit)();
-      return true;
+    if (quitAllowed) return !options.performQuit || options.performQuit === committedPerformQuit;
+    if (immediateDecisionInProgress) return false;
+    if (options.quietRestart && !dependencies.quietForRestart) throw new Error("Quiet restart is unavailable on this host.");
+    // Ownership precedes the idle check. Work may finish while the prompt is
+    // open; that must not let another request bypass it or change its action.
+    if (promptPromise) {
+      const raised = dependencies.focusPendingConfirmation?.() ?? false;
+      dependencies.log.info?.("quit requested while confirmation is open", { raisedConfirmation: raised, source: options.source });
+      if (options.performQuit && options.performQuit !== pendingPerformQuit) return false;
+      return await promptPromise;
     }
+
+    const immediateQuit = (): boolean => {
+      immediateDecisionInProgress = true;
+      try {
+        if (options.beforeQuit && !options.beforeQuit()) return false;
+        committedPerformQuit = options.performQuit ?? dependencies.performQuit;
+        quitAllowed = true;
+        committedPerformQuit();
+        return true;
+      } finally {
+        immediateDecisionInProgress = false;
+      }
+    };
+
+    const quietQuit = (): Promise<boolean> => {
+      pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
+      const resumeAutomationDispatch = dependencies.quiesceAutomationDispatch?.();
+      const pending = Promise.resolve().then(async () => {
+        if (options.beforeQuit && !options.beforeQuit()) return false;
+        await dependencies.quietForRestart?.();
+        dependencies.commitShutdown?.();
+        committedPerformQuit = pendingPerformQuit;
+        quitAllowed = true;
+        committedPerformQuit?.();
+        return true;
+      }).finally(() => {
+        promptPromise = undefined;
+        pendingPerformQuit = undefined;
+        if (!quitAllowed) {
+          dependencies.cancelShutdown?.();
+          resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
+        }
+      });
+      promptPromise = pending;
+      return pending;
+    };
 
     const snapshot = dependencies.getQuitBlockers();
     const federationPeerCount = dependencies.getFederationPeerCount?.() ?? 0;
@@ -162,10 +208,8 @@ export function createQuitManager(
       dependencies.log.info?.("quit requested with no active work", {
         source: options.source,
       });
-      if (options.beforeQuit && !options.beforeQuit()) return false;
-      quitAllowed = true;
-      (options.performQuit ?? dependencies.performQuit)();
-      return true;
+      if (options.quietRestart) return await quietQuit();
+      return immediateQuit();
     }
 
     if (!promptPromise && dependencies.getBlockerDiagnostics) {
@@ -192,30 +236,8 @@ export function createQuitManager(
           threadIds: snapshot.threadIds,
         },
       );
-      if (options.beforeQuit && !options.beforeQuit()) return false;
-      quitAllowed = true;
-      (options.performQuit ?? dependencies.performQuit)();
-      return true;
-    }
-
-    if (promptPromise) {
-      if (options.performQuit) {
-        pendingPerformQuit = options.performQuit;
-        pendingBeforeQuit = options.beforeQuit;
-      }
-      // Asking again has to do *something*. Any deliberate interaction with the
-      // prompt — a click, a scroll, a keystroke — cancels its countdown for
-      // good and clears the main-process ceiling with it, so from that point the
-      // only thing that ever settles this quit is the user answering the dialog.
-      // It is a small frameless window that can end up behind the main window or
-      // on another Space, and a repeat request that silently returns this
-      // pending promise reads as an app that refuses to quit. Raise it instead.
-      const raised = dependencies.focusPendingConfirmation?.() ?? false;
-      dependencies.log.info?.("quit requested while confirmation is open", {
-        raisedConfirmation: raised,
-        source: options.source,
-      });
-      return await promptPromise;
+      if (options.quietRestart) return await quietQuit();
+      return immediateQuit();
     }
 
     dependencies.log.warn?.("quit requested with active work", {
@@ -256,19 +278,23 @@ export function createQuitManager(
       // work, so a refusal leaves everything running and the prompt open.
       let beforeQuitAuthorized = false;
       const quietForRestart = dependencies.quietForRestart;
+      let quietPromise: Promise<boolean> | undefined;
       const quietRestart = quietForRestart
-        ? async (): Promise<boolean> => {
+        ? (): Promise<boolean> => quietPromise ??= (async (): Promise<boolean> => {
+            // Publish ownership before any host callback can re-enter quit.
+            await Promise.resolve();
             if (pendingBeforeQuit && !pendingBeforeQuit()) return false;
             beforeQuitAuthorized = true;
             try {
               await quietForRestart();
             } catch (error) {
-              dependencies.log.warn?.("quiet restart failed; quitting", {
+              dependencies.log.warn?.("quiet restart failed; cancelling quit", {
                 error: error instanceof Error ? error.message : String(error),
               });
+              return false;
             }
             return true;
-          }
+          })()
         : undefined;
       try {
         resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
@@ -289,6 +315,10 @@ export function createQuitManager(
             ),
           ...(quietRestart ? { quietRestart } : {}),
         });
+        // Quit Now is the operator's explicit override of the quiet default.
+        if (resolution === "countdown-expired" && options.quietRestart && quietRestart) {
+          if (!await quietRestart()) resolution = "manual-cancel";
+        }
         if (
           resolution !== "manual-cancel"
           && !beforeQuitAuthorized
@@ -328,8 +358,9 @@ export function createQuitManager(
         return false;
       }
       dependencies.commitShutdown?.();
+      committedPerformQuit = pendingPerformQuit ?? dependencies.performQuit;
       quitAllowed = true;
-      (pendingPerformQuit ?? dependencies.performQuit)();
+      committedPerformQuit();
       pendingPerformQuit = undefined;
       pendingBeforeQuit = undefined;
       return true;

@@ -1,3 +1,4 @@
+import type { CodexRuntimeSupervisorHost } from "../app-server/codex-runtime-supervisor";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -16,6 +17,7 @@ import type { ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
 import type { ThreadWorkspaceServiceHost } from "../app-server/thread-workspace-service";
 
 type Hosts = {
+  CodexRuntimeSupervisorHost: CodexRuntimeSupervisorHost;
   ForgeToolBridgeHost: ForgeToolBridgeHost;
   ManagedReviewServiceHost: ManagedReviewServiceHost;
   SubAgentMonitorServiceHost: SubAgentMonitorServiceHost;
@@ -97,6 +99,7 @@ it("declares no operation separately in multiple module hosts", () => {
   }
   // Keep the type-level inventory above exhaustive as modules are extracted.
   const checkedHosts: Record<keyof Hosts, true> = {
+    CodexRuntimeSupervisorHost: true,
     ForgeToolBridgeHost: true,
     ManagedReviewServiceHost: true,
     SubAgentMonitorServiceHost: true,

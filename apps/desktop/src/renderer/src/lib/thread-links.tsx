@@ -298,6 +298,79 @@ function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
   );
 }
 
+type ThreadLinkMetadataInput = {
+  backend: NavigationThreadSummary["source"];
+  instanceId: string | undefined;
+  threadId: string;
+  title: string;
+  titleSource: NavigationThreadSummary["titleSource"];
+  instanceLabel: string | undefined;
+  gitBranch: string | undefined;
+  directories: LinkedDirectorySummary[];
+};
+
+function threadLinkMetadataInputsMatch(
+  inputs: ThreadLinkMetadataInput[],
+  threads: NavigationThreadSummary[],
+): boolean {
+  if (inputs.length !== threads.length) return false;
+  for (let index = 0; index < threads.length; index++) {
+    const thread = threads[index]!;
+    const previous = inputs[index]!;
+    const target = thread.federation?.ref.target;
+    if (previous.backend !== thread.source
+      || previous.instanceId !== (target?.scope === "remote" ? target.instanceId : undefined)
+      || previous.threadId !== thread.id
+      || previous.title !== thread.title
+      || previous.titleSource !== thread.titleSource
+      || previous.instanceLabel !== thread.federation?.instanceLabel
+      || previous.gitBranch !== thread.gitBranch) return false;
+    const directories = thread.linkedDirectories;
+    if (previous.directories.length !== (directories?.length ?? 0)) return false;
+    for (let directoryIndex = 0; directoryIndex < previous.directories.length; directoryIndex++) {
+      const directory = directories![directoryIndex]!;
+      const old = previous.directories[directoryIndex]!;
+      if (old.id !== directory.id || old.label !== directory.label
+        || old.kind !== directory.kind || old.path !== directory.path
+        || old.worktreePath !== directory.worktreePath) return false;
+    }
+  }
+  return true;
+}
+
+/** One committed snapshot; summary and directory objects are not identity tokens. */
+function useThreadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
+  const cache = useRef<{ inputs: ThreadLinkMetadataInput[]; key: string } | null>(null);
+  const previous = cache.current;
+  const next = previous && threadLinkMetadataInputsMatch(previous.inputs, threads)
+    ? previous
+    : {
+        inputs: threads.map((thread) => {
+          const target = thread.federation?.ref.target;
+          return {
+            backend: thread.source,
+            instanceId: target?.scope === "remote" ? target.instanceId : undefined,
+            threadId: thread.id,
+            title: thread.title,
+            titleSource: thread.titleSource,
+            instanceLabel: thread.federation?.instanceLabel,
+            gitBranch: thread.gitBranch,
+            directories: (thread.linkedDirectories ?? []).map((directory) => ({
+              id: directory.id,
+              label: directory.label,
+              kind: directory.kind,
+              path: directory.path,
+              worktreePath: directory.worktreePath,
+            })),
+          };
+        }),
+        key: threadLinkMetadataKey(threads),
+      };
+  // An abandoned render must not become the baseline for a later commit.
+  useLayoutEffect(() => { cache.current = next; }, [next]);
+  return next.key;
+}
+
 /**
  * A narrowly-scoped external store for mutable thread-link metadata.
  *
@@ -669,7 +742,7 @@ export function ThreadLinkProvider(props: {
   const hoverStore = hoverStoreRef.current;
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
-  const metadataKey = threadLinkMetadataKey(threads);
+  const metadataKey = useThreadLinkMetadataKey(threads);
 
   useLayoutEffect(() => {
     const api = getDesktopApi();

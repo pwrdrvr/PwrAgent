@@ -22,6 +22,11 @@ const catalog: DynamicToolSpec[] = [{
 }];
 
 describe("PwrAgent tool discovery", () => {
+  it("finds original-file export from a request to save a Telegram PDF", () => {
+    for (const query of ["save original telegram pdf to folder", "copy received attachment", "download original file"]) {
+      expect(searchPwrAgentTools(catalog, query, 3).map((tool) => tool.name)).toContain("export_messaging_attachment");
+    }
+  });
   it("finds the recovery subscription by compaction and instruction-read language", () => {
     for (const query of ["compaction recovery hook", "reread instructions after compact"]) {
       expect(searchPwrAgentTools(catalog, query, 3).map((tool) => tool.name)).toContain("manage_thread_dependencies");

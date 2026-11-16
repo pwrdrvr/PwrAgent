@@ -41,6 +41,7 @@ export type NavigationWindowQueriesState = {
 type Resource = {
   diagnosticLogical?: number;
   diagnosticTrigger?: string;
+  diagnosticCaller?: string;
   diagnosticCause?: NavigationDiagnosticCause;
   diagnosticInvalidations?: number;
   requestKey: string;
@@ -282,6 +283,7 @@ export class NavigationWindowQueries {
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
       if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
       resource.diagnosticTrigger ??= trigger;
+      resource.diagnosticCaller ??= safeNavigationDiagnosticTrigger(trigger);
       // An unscoped refresh can discover membership missed while hidden or
       // between provider observations. A scoped row refresh already knows
       // exactly why its baseline is stale.
@@ -607,9 +609,10 @@ export class NavigationWindowQueries {
         resource.refreshAfterPending = false;
         const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
           cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
-          invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger };
+          invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger, caller: resource.diagnosticCaller };
         resource.diagnosticLogical = diagnostic.logical;
         resource.diagnosticTrigger = undefined;
+        resource.diagnosticCaller = undefined;
         resource.diagnosticCause = undefined;
         resource.diagnosticInvalidations = 0;
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
@@ -635,7 +638,7 @@ export class NavigationWindowQueries {
               budget.reads -= 1;
             }
             diagnostic.attempt += 1;
-            navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispatch", logical: diagnostic.logical, attempt: diagnostic.attempt, cause: diagnostic.cause });
+            navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispatch", logical: diagnostic.logical, attempt: diagnostic.attempt, cause: diagnostic.cause, caller: diagnostic.caller });
             const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
               ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
               readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,

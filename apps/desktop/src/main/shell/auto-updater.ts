@@ -201,7 +201,15 @@ type GitHubReleaseAsset = {
 
 const MAC_UPDATE_CHANNEL_FILE = "latest-mac.yml";
 
+let updateStateGeneration = 0;
+
+/** Process-local revision, including selection changes that leave the same version. */
+export function readAppUpdateStateToken(): string {
+  return JSON.stringify([updateStateGeneration, currentUpdateSelectionKey()]);
+}
+
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
+  updateStateGeneration += 1;
   nextStatus = withLinuxUpdateHelp(nextStatus, activeDownload?.releaseTag ?? lastDownloadReleaseTag);
   updateStatus = nextStatus;
   for (const window of BrowserWindow.getAllWindows()) {
@@ -862,13 +870,13 @@ function awaitSquirrelStage(next: HeldDownloadedUpdate): void {
 
 type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu" | "selection" | "discovery";
 
-// A track change must outlive an old track's check/download, not merely join
-// it. Coalesce rapid changes and keep electron-updater on one feed at a time.
+// A track change must outlive an old track's check/download or reserved quit,
+// not merely join it. Coalesce changes and keep the updater on one feed at a time.
 let selectionCheckGeneration = 0;
 async function checkChangedUpdateSelection(): Promise<void> {
   const generation = ++selectionCheckGeneration;
-  while (updateCheckInFlight || activeDownload?.settled || pendingSquirrelStage) {
-    await (updateCheckInFlight ?? activeDownload?.settled ?? pendingSquirrelStage?.settled);
+  while (updateInstallReserved || updateCheckInFlight || activeDownload?.settled || pendingSquirrelStage) {
+    await (updateInstallReserved ?? updateCheckInFlight ?? activeDownload?.settled ?? pendingSquirrelStage?.settled);
     if (generation !== selectionCheckGeneration) return;
   }
   if (generation === selectionCheckGeneration) {
@@ -920,6 +928,9 @@ export async function checkForAppUpdatesNow(
 async function runAppUpdateCheck(
   trigger: UpdateCheckTrigger,
 ): Promise<AppUpdateCheckResult> {
+  if (updateInstallReserved) {
+    return { status: "skipped", reason: "An update restart is already in progress." };
+  }
   if (!productionUpdatesEnabled()) {
     if (devFakeUpdateCheckEnabled()) {
       return await simulateDevUpdateCheck(trigger);
@@ -1984,7 +1995,48 @@ export function initAutoUpdater(): void {
   void checkForAppUpdatesNow("startup");
 }
 
+// Reserve the updater before opening any asynchronous confirmation. A check
+// may replace electron-updater's single installer cache, even on another track.
+let updateInstallReserved: Promise<void> | undefined;
+
+/** Hold the single updater payload stable during an ordinary restart or quit. */
+export function reserveAppUpdateQuit(): () => void {
+  if (updateInstallReserved || updateCheckInFlight || activeDownload || pendingSquirrelStage || supersedingDownload) {
+    throw new Error("An update check, download, staging, or lifecycle request is in progress. Read status and retry.");
+  }
+  let release!: () => void;
+  const reservation = new Promise<void>((resolve) => { release = resolve; });
+  updateInstallReserved = reservation;
+  return () => {
+    if (updateInstallReserved !== reservation) return;
+    updateInstallReserved = undefined;
+    release();
+  };
+}
+
 export async function installDownloadedAppUpdate(options?: {
+  expectedVersion?: string;
+  requestQuit?: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean>;
+}): Promise<AppUpdateInstallResult> {
+  if (updateInstallReserved) {
+    return { status: "error", message: "An update restart is already in progress." };
+  }
+  if (updateCheckInFlight || activeDownload || pendingSquirrelStage || supersedingDownload) {
+    return { status: "error", message: "An update check, download, or staging operation is still in progress. Retry when it finishes." };
+  }
+  const release = reserveAppUpdateQuit();
+  let accepted = false;
+  try {
+    const result = await runDownloadedAppUpdateInstall(options);
+    accepted = result.status === "restarting";
+    return result;
+  } finally {
+    if (!accepted) release();
+  }
+}
+
+async function runDownloadedAppUpdateInstall(options?: {
+  expectedVersion?: string;
   requestQuit?: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean>;
 }): Promise<AppUpdateInstallResult> {
   const eligibleDownload = downloadedUpdateMatchesChannel(
@@ -1999,6 +2051,12 @@ export async function installDownloadedAppUpdate(options?: {
         : "No downloaded update is ready to install.",
     };
   }
+  if (options?.expectedVersion !== undefined && options.expectedVersion !== version) {
+    return { status: "error", message: "The downloaded update changed. Read update status and request the intended version again." };
+  }
+  const selectedDownload = heldDownloadedUpdate;
+  const stillEligible = (): boolean => heldDownloadedUpdate === selectedDownload
+    && downloadedUpdateMatchesChannel(currentUpdateSelectionKey())?.version === version;
   // Nothing was downloaded: this offer is the dev/QA fake, and there is no
   // payload for Squirrel to apply. Say so rather than quitting the app the
   // operator is previewing in. Keyed on the fake's own version rather than on
@@ -2017,6 +2075,10 @@ export async function installDownloadedAppUpdate(options?: {
     let installFailure: Extract<AppUpdateInstallResult, { status: "error" }> | undefined;
     const linuxUpdater = linuxPackageUpdater();
     const beforeQuit = (): boolean => {
+      if (!stillEligible()) {
+        installFailure = { status: "error", message: "The downloaded update or selected channel changed. Restart cancelled." };
+        return false;
+      }
       if (!linuxUpdater) return true;
       let installError: Error | undefined;
       const captureError = (error: Error): void => { installError = error; };
