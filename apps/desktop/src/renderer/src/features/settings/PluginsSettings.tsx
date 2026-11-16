@@ -24,6 +24,7 @@ import {
   describeMcpAuthStatus,
   describeMcpConnectionAuth,
   formatMcpCommandLine,
+  groupManagedMcpConnections,
   isMcpIpcUrl,
   mcpConnectionIdsForNewThread,
   resolveMcpConnectionSetup,
@@ -76,7 +77,6 @@ import {
   sandboxerNeedsSetup,
 } from "./SandboxerConnectionSetup";
 import { McpProjectToolApprovals } from "./McpProjectToolApprovals";
-import { groupManagedMcpConnections } from "./managed-mcp-connection-groups";
 import {
   GithubCompactRow,
   GithubConnectionFields,

@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { McpConnectionKind, McpConnectionStatus } from "@pwragent/shared";
-import { groupManagedMcpConnections } from "../managed-mcp-connection-groups";
+import type { McpConnectionKind, McpConnectionStatus } from "../contracts/mcp-connections";
+import { groupManagedMcpConnections, orderManagedMcpConnections } from "../mcp-connection-order";
 
 const KINDS: McpConnectionKind[] = ["remote", "pwrsnap", "pwrgit", "sandboxer", "stdio", "github"];
 
@@ -37,7 +37,7 @@ function oracle(connections: McpConnectionStatus[]): string[] {
     .map(({ item }) => item.id);
 }
 
-describe("groupManagedMcpConnections properties", () => {
+describe("managed MCP connection order properties", () => {
   it("lists PwrSuite, then GitHub, then the rest, keeping registry order within each", () => {
     fc.assert(fc.property(connectionLists, (connections) => {
       const groups = groupManagedMcpConnections(connections);
@@ -46,6 +46,7 @@ describe("groupManagedMcpConnections properties", () => {
       expect(groups.github.every((item) => item.kind === "github")).toBe(true);
       expect(groups.rest.some((item) => item.kind === "github" || item.kind === "pwrsnap" || item.kind === "pwrgit"))
         .toBe(false);
+      expect(orderManagedMcpConnections(connections).map((item) => item.id)).toEqual(drawn);
     }));
   });
 

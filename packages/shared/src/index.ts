@@ -66,6 +66,7 @@ export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
 export * from "./github-mcp";
 export * from "./mcp-auth-status";
+export * from "./mcp-connection-order";
 export * from "./mcp-ipc-url";
 export * from "./profile-menu";
 export * from "./profile-names";

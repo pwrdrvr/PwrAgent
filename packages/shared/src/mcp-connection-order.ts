@@ -1,7 +1,8 @@
-import type { McpConnectionStatus } from "@pwragent/shared";
+import type { McpConnectionStatus } from "./contracts/mcp-connections";
 
 /**
- * The PwrAgent-managed connection list in the order Settings draws it.
+ * The PwrAgent-managed connection list in the order every surface draws it:
+ * Settings → Plugins and a thread's MCP access panel.
  *
  * PwrSnap and PwrGit, PwrAgent's own apps, come first. GitHub's connections
  * follow as one group, because GitHub is a known server set up from its own
@@ -28,4 +29,12 @@ export function groupManagedMcpConnections(
     }
   }
   return groups;
+}
+
+/** The connections in that order, as one list. */
+export function orderManagedMcpConnections<T extends McpConnectionStatus>(
+  connections: readonly T[],
+): T[] {
+  const groups = groupManagedMcpConnections(connections);
+  return [...groups.pwrSuite, ...groups.github, ...groups.rest] as T[];
 }
