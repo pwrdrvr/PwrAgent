@@ -74,6 +74,27 @@ const mathos: DesktopCodexModelProvider = {
   hasApiKey: true,
 };
 
+it("lets the operator verify portable discovery, save it with native support false, and use normal provider settings", async () => {
+  const { testCodexModelProvider, onSave } = renderSettings([{ ...refuseless, modelMetadata: [{ id: "glm-5.3-abliterated", supportsSearchTool: false }] }]);
+  testCodexModelProvider.mockResolvedValue({
+    models: { ok: true, count: 1 }, responses: { ok: true, model: "glm-5.3-abliterated" },
+    discovery: { ok: false, model: "glm-5.3-abliterated", requests: 1, error: "Native search unsupported" },
+    portableDiscovery: { ok: true, model: "glm-5.3-abliterated", requests: 3 },
+  } as never);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Tool discovery" }));
+  fireEvent.click(screen.getByRole("option", { name: "Portable" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+  expect(onSave).not.toHaveBeenCalled();
+  await screen.findByText(/verify portable discovery before saving/);
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+  await screen.findByText(/Verified through Codex for glm-5.3-abliterated/);
+  fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({
+    toolDiscovery: "portable", modelMetadata: [{ id: "glm-5.3-abliterated", supportsSearchTool: false, supportsPortableDiscovery: true }],
+  })]));
+});
+
 /** The owner's Codex summary after it read MathOS's `GET /models`. */
 function codexSummary(
   models: BackendModelOption[],

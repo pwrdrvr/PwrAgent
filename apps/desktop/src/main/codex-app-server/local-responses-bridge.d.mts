@@ -1,4 +1,7 @@
-import type { Server } from "node:http";
+import type { Server, IncomingHttpHeaders, IncomingMessage } from "node:http";
+
+export function postUpstream(url: string, headers: Record<string, string>, body: string, signal: AbortSignal, idleTimeoutMs: number): Promise<IncomingMessage>;
+export function providerRequestHeaders(incoming: IncomingHttpHeaders): Record<string, string>;
 
 export type LocalModelCatalog = {
   models: Array<{ slug: string; input_modalities: string[]; [key: string]: unknown }>;
@@ -36,6 +39,7 @@ export function summarizeRequest(request: Record<string, unknown>, wireBytes?: n
 export function startBridge(upstream: string, apiKey?: string, options?: {
   idleTimeoutMs?: number;
   onDiagnostic?: (event: LocalRequestDiagnostic) => void;
+  forwardHeaders?: boolean;
 }): Promise<Server>;
 export function translateRequest(request: Record<string, unknown>): {
   body: Record<string, unknown>;

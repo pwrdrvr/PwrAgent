@@ -48,6 +48,7 @@ type ProviderDraft = {
   /** The Codex config provider this draft was prefilled from. */
   imported?: CodexModelProviderImportCandidate;
   compatibility?: "bonsai";
+  toolDiscovery?: "portable";
   catalogPath?: string;
   modelMetadata?: CodexProviderCatalogModel[];
   testModel?: string;
@@ -145,6 +146,9 @@ export function CodexModelProvidersSettings(props: {
     let next: CodexModelProviderSettings[];
     try {
       const provider = providerFromDraft(draft, providerModelSource(draft, editingCatalog, test).models);
+      if (provider.toolDiscovery === "portable" && !provider.modelMetadata?.some(model => model.supportsPortableDiscovery)) {
+        throw new Error("Choose a model and run Test connection to verify portable discovery before saving.");
+      }
       const others = props.providers
         .filter((entry) => entry.id !== draft.existingId)
         .map(stripKeyState);
@@ -233,21 +237,30 @@ export function CodexModelProvidersSettings(props: {
       const result = await props.desktopApi.testCodexModelProvider({
         provider,
         ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+        ...(draft.removeKey ? { useStoredApiKey: false } : {}),
       });
       if (generation !== testGeneration.current) return;
       setTest({ running: false, result, baseUrl: testedUrl });
-      if ((result.models.ok && result.models.items) || result.discovery) {
+      if ((result.models.ok && result.models.items) || result.discovery || result.portableDiscovery) {
         setDraft((current) => {
           if (!current || current.id !== draft.id || !sameBaseUrl(current.baseUrl, testedUrl)
-            || current.apiKey !== draft.apiKey || current.removeKey !== draft.removeKey) return current;
+            || current.apiKey !== draft.apiKey || current.removeKey !== draft.removeKey
+            || current.toolDiscovery !== draft.toolDiscovery) return current;
           const previous = new Map((current.modelMetadata ?? []).map((model) => [model.id, model]));
           for (const model of result.models.ok ? result.models.items ?? [] : []) previous.set(model.id, {
             ...model, ...(previous.get(model.id)?.supportsSearchTool === undefined ? {} : {
               supportsSearchTool: previous.get(model.id)!.supportsSearchTool,
             }),
+            ...(previous.get(model.id)?.supportsPortableDiscovery === undefined ? {} : {
+              supportsPortableDiscovery: previous.get(model.id)!.supportsPortableDiscovery,
+            }),
           });
           if (result.discovery) previous.set(result.discovery.model, {
             ...(previous.get(result.discovery.model) ?? { id: result.discovery.model }), supportsSearchTool: result.discovery.ok,
+          });
+          if (result.portableDiscovery) previous.set(result.portableDiscovery.model, {
+            ...(previous.get(result.portableDiscovery.model) ?? { id: result.portableDiscovery.model }),
+            supportsPortableDiscovery: result.portableDiscovery.ok,
           });
           return { ...current, modelMetadata: [...previous.values()] };
         });
@@ -297,7 +310,7 @@ export function CodexModelProvidersSettings(props: {
       refresh={refresh}
       error={error}
       onChange={(patch) => {
-        if (patch.baseUrl !== undefined || patch.apiKey !== undefined || patch.removeKey !== undefined) {
+        if (patch.baseUrl !== undefined || patch.apiKey !== undefined || patch.removeKey !== undefined || "toolDiscovery" in patch) {
           testGeneration.current += 1;
           setTest(undefined);
         }
@@ -538,6 +551,18 @@ function ProviderEditor(props: {
         }
       />
       <SettingsField
+        label="Tool discovery"
+        sub="Portable loads tool definitions as needed through ordinary function calls. Test each model before using it. Start a new thread when changing discovery mode."
+        control={<Select
+          aria-label="Tool discovery"
+          className="settings-input"
+          disabled={props.disabled || props.test?.running}
+          value={draft.toolDiscovery ?? "default"}
+          options={[{ value: "default", label: "Provider default" }, { value: "portable", label: "Portable" }]}
+          onChange={(value) => props.onChange({ toolDiscovery: value === "portable" ? "portable" : undefined })}
+        />}
+      />
+      <SettingsField
         label="API key"
         sub={keyHelp}
         control={
@@ -590,9 +615,12 @@ function ProviderEditor(props: {
             {props.test && !props.test.running ? <ProviderTestResult test={props.test} /> : null}
             {props.canTest ? (
               <p className="settings-field__help">
-                The test reads /models and sends up to four short /responses requests, which the provider may bill.
-                It checks ordinary tools and discovery through a read-only fixture. Save to apply the model metadata.
-                {" "}A passing check does not validate a full PwrAgent turn.
+                The test reads /models and sends up to {draft.toolDiscovery === "portable" ? "ten" : "four"} short /responses requests, which the provider may bill.
+                {draft.toolDiscovery === "portable"
+                  ? " It also runs a read-only fixture through Codex to check portable discovery and execution."
+                  : " It checks ordinary tools and discovery through a read-only fixture."}
+                {" "}Save to apply the model metadata.
+                {draft.toolDiscovery !== "portable" ? " A passing check does not validate a full PwrAgent turn." : null}
               </p>
             ) : null}
           </>
@@ -790,7 +818,9 @@ function ProviderModels(props: {
                         {row.label ? <code>{row.id}</code> : null}
                         <span className="codex-provider-models__muted">
                           {metadata.contextWindow ? `${metadata.contextWindow.toLocaleString("en-US")} tokens advertised` : "Context unknown"}
-                          {" · "}{draft.compatibility === "bonsai" || metadata.supportsSearchTool === true ? "Tool discovery enabled" : "Tool discovery not enabled"}
+                          {" · "}{draft.toolDiscovery === "portable"
+                            ? metadata.supportsPortableDiscovery ? "Portable discovery verified" : "Portable discovery not verified"
+                            : draft.compatibility === "bonsai" || metadata.supportsSearchTool === true ? "Tool discovery enabled" : "Tool discovery not enabled"}
                         </span>
                       </span>
                     </th>
@@ -952,8 +982,17 @@ function ProviderTestResult(props: {
       </li>
       {result.discovery ? (
         <li className={result.discovery.ok ? "is-ok" : "is-err"}>
-          <strong>Tool discovery</strong>{" "}
+          <strong>Provider discovery</strong>{" "}
           {result.discovery.ok ? `Verified for ${result.discovery.model}` : result.discovery.error ?? "Not verified"}
+        </li>
+      ) : null}
+      {result.portableDiscovery ? (
+        <li className={result.portableDiscovery.ok ? "is-ok" : "is-err"}>
+          <strong>Portable discovery</strong>{" "}
+          {result.portableDiscovery.ok ? `Verified through Codex for ${result.portableDiscovery.model}` : result.portableDiscovery.error ?? "Not verified"}
+          {result.portableDiscovery.ok ? ` · ${result.portableDiscovery.requests} requests` : null}
+          {result.portableDiscovery.initialToolBytes === undefined ? null : ` · ${(result.portableDiscovery.initialToolBytes / 1024).toFixed(1)} KiB initial tool definitions`}
+          {result.portableDiscovery.initialRequestBytes === undefined ? null : ` · ${(result.portableDiscovery.initialRequestBytes / 1024).toFixed(1)} KiB initial request`}
         </li>
       ) : null}
       <li className={responses.ok ? "is-ok" : responses.skipped ? "is-skip" : "is-err"}>
@@ -1104,6 +1143,7 @@ function draftFromProvider(provider: DesktopCodexModelProvider): ProviderDraft {
     contextWindowCap: provider.contextWindowCap?.toString() ?? "",
     rates,
     compatibility: provider.compatibility,
+    toolDiscovery: provider.toolDiscovery,
     catalogPath: provider.catalogPath,
     modelMetadata: provider.modelMetadata,
   };
@@ -1163,6 +1203,7 @@ function providerFromDraft(draft: ProviderDraft, discovered: readonly CodexProvi
     ...(draft.local ? { local: true } : {}),
     ...(rates.length ? { rates } : {}),
     ...(draft.compatibility ? { compatibility: draft.compatibility } : {}),
+    ...(draft.toolDiscovery ? { toolDiscovery: draft.toolDiscovery } : {}),
     ...(draft.catalogPath ? { catalogPath: draft.catalogPath } : {}),
     ...(draft.modelMetadata?.length ? { modelMetadata: draft.modelMetadata } : {}),
     ...(contextWindowCap === undefined ? {} : { contextWindowCap }),

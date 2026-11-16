@@ -4,6 +4,7 @@ import { CodexAppServerClient } from "../../codex-app-server/desktop-client";
 import { validateGlabCommand } from "../../settings/glab-discovery";
 import { validateCodexModelProviders } from "@pwragent/shared";
 import { CodexModelProviderCatalog } from "../../app-server/codex-model-provider-catalog";
+import { verifyPortableProvider } from "../../codex-app-server/portable-provider-probe";
 import {
   codexConfigHomesFromProfiles,
   scanCodexModelProviderImports,
@@ -1891,12 +1892,14 @@ export function registerSettingsIpcHandlers(
       const saved = activeService.resolveCodexModelProviders()
         .find((entry) => entry.id === provider.id);
       const apiKey = request.apiKey?.trim()
-        || (saved?.baseUrl === provider.baseUrl
+        || (request.useStoredApiKey !== false && saved?.baseUrl === provider.baseUrl
           ? (await activeService.resolveCodexModelProviderKeys())[provider.id]
           : undefined);
       return await new CodexModelProviderCatalog({
         resolveProviders: () => [provider],
         resolveKeys: async () => (apiKey ? { [provider.id]: apiKey } : {}),
+        verifyPortable: async (draft, key) => await verifyPortableProvider(draft, key,
+          await resolveCodexCommandForProfileWorkflow(activeService)),
       }).test(provider, apiKey);
     },
   );

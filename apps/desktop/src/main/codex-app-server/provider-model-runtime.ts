@@ -11,7 +11,10 @@ export async function prepareProviderModelRuntime(provider: CodexModelProviderSe
   const metadata = new Map((provider.modelMetadata ?? []).map((model) => [model.id, model]));
   const ids = [...new Set([...(provider.models ?? []), ...metadata.keys()])];
   if (!ids.length) throw new Error("Provider execution metadata needs at least one model.");
-  const models = ids.map((id) => modelDescriptor(metadata.get(id) ?? { id }, provider));
+  const models = ids.map((id) => ({
+    ...modelDescriptor(metadata.get(id) ?? { id }, provider),
+    ...(provider.toolDiscovery === "portable" ? { tool_mode: "code_mode_only", supports_search_tool: true } : {}),
+  }));
   const contextWindow = Math.max(...models.map((model) => model.context_window));
   // Codex process overrides apply to every model in this provider. Reserve
   // 25% of its smallest working set, so changing models cannot overrun it.

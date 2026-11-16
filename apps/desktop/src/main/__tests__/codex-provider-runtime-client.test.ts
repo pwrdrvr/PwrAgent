@@ -92,6 +92,22 @@ describe("provider-specific Codex runtimes", () => {
     return { primary, local, create, client, providers };
   }
 
+  it("routes verified portable models to their owner independently of native search and rejects unverified models", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (native, verified) => {
+      const { primary, local, create, client, providers } = setup();
+      const configured: CodexModelProviderSettings = { id: "flint", name: "Flint", baseUrl: "https://fixture.example/v1",
+        toolDiscovery: "portable", modelMetadata: [{ id: "fixture", supportsSearchTool: native, supportsPortableDiscovery: verified }] };
+      providers.push(configured);
+      if (verified) {
+        await client.startThread({ model: "@flint/fixture" });
+        expect(create).toHaveBeenCalledWith(configured);
+        expect(local.raw.startThread).toHaveBeenCalledOnce();
+      } else await expect(client.startThread({ model: "@flint/fixture" })).rejects.toThrow("Test portable discovery");
+      expect(primary.raw.startThread).not.toHaveBeenCalled();
+      await expect(client.startThread({ model: "@flint/other" })).rejects.toThrow("Test portable discovery");
+    }), { numRuns: 20 });
+  });
+
   it("routes Bonsai starts and subsequent operations to one lazy client while OpenAI stays on the primary", async () => {
     const { primary, local, create, client } = setup();
     expect(create).not.toHaveBeenCalled();

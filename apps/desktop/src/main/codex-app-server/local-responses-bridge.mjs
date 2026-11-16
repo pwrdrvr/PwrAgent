@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { once } from "node:events";
 
 /**
@@ -21,10 +22,11 @@ class UpstreamIdleTimeoutError extends Error {
  * 300 s without headers or body bytes. Node's HTTP client has no response
  * deadline, so the socket idle timer below is the only one.
  */
-function postUpstream(url, headers, body, signal, idleTimeoutMs) {
+export function postUpstream(url, headers, body, signal, idleTimeoutMs) {
   return new Promise((resolve, reject) => {
     let response;
-    const req = httpRequest(url, {
+    const request = new URL(url).protocol === "https:" ? httpsRequest : httpRequest;
+    const req = request(url, {
       method: "POST",
       agent: false,
       signal,
@@ -47,6 +49,21 @@ function postUpstream(url, headers, body, signal, idleTimeoutMs) {
     req.on("error", reject);
     req.end(body);
   });
+}
+
+/** Preserve provider/account headers, but rebuild framing for the translated body. */
+export function providerRequestHeaders(incoming) {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(incoming)) {
+    if (Array.isArray(value)) for (const part of value) headers.append(name, part);
+    else if (value !== undefined) headers.append(name, value);
+  }
+  const omitted = new Set(["host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "transfer-encoding", "upgrade", "content-length", "content-encoding", "accept-encoding", "expect"]);
+  for (const name of (headers.get("connection") ?? "").split(",")) omitted.add(name.trim().toLowerCase());
+  for (const name of omitted) if (name) headers.delete(name);
+  headers.set("content-type", "application/json");
+  return Object.fromEntries(headers);
 }
 
 async function readText(stream) {
@@ -315,7 +332,7 @@ function contextTokenCounts(value) {
   return counts;
 }
 
-export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS, onDiagnostic } = {}) {
+export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS, onDiagnostic, forwardHeaders = false } = {}) {
   const target = loopbackUpstream(upstream);
   // Node truncates a socket timer above 2^31 - 1 ms and warns on every request.
   if (!Number.isInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 2 ** 31 - 1) {
@@ -356,7 +373,7 @@ export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UP
       });
       const response = await postUpstream(
         `${target.href.replace(/\/$/, "")}/responses`,
-        { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        { ...(forwardHeaders ? providerRequestHeaders(req.headers) : { "content-type": "application/json" }), ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
         upstreamBody,
         abort.signal,
         idleTimeoutMs,

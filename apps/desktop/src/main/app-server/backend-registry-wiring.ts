@@ -16,6 +16,8 @@ import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-runtime";
+import { preparePortableProviderRuntime } from "../codex-app-server/portable-provider-runtime";
+import { verifyPortableProvider } from "../codex-app-server/portable-provider-probe";
 import { codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
@@ -564,6 +566,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       assertOwnerAdmission: () => ports.assertThreadOwnership(),
       args: settingsService ? undefined : buildCodexClientArgs(codexEnv, [], [], getOwnerHostServices().runtimePolicy),
       command: codexCommand,
+      portableDiscovery: provider?.toolDiscovery === "portable",
       connectionObserver: codexObserver,
       env: codexSpawnEnv,
       resolveArgs: async (env) => {
@@ -576,12 +579,14 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         if (!provider) return args;
         await cleanup;
         resources ??= ports.codexModelProviderCatalog.resolveRuntimeProvider(provider).then((configured) =>
-          configured.compatibility === "bonsai"
+          configured.toolDiscovery === "portable"
+            ? preparePortableProviderRuntime(configured, env?.[codexModelProviderApiKeyEnv(configured.id)])
+            : configured.compatibility === "bonsai"
             ? prepareBonsaiRuntime(configured, env?.[codexModelProviderApiKeyEnv(configured.id)])
             : prepareProviderModelRuntime(configured));
         try {
           const prepared = await resources;
-          const nativeMcpNames = provider.compatibility === "bonsai"
+          const nativeMcpNames = provider.compatibility === "bonsai" && provider.toolDiscovery !== "portable"
             ? await ports.codexClient.readConfiguredMcpServerNames?.() ?? [] : [];
           return [
             ...args,
@@ -1176,6 +1181,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const codexModelProviderCatalog = new CodexModelProviderCatalog({
     resolveProviders: () => ports.resolveCodexModelProvidersFn(),
     resolveKeys: () => ports.resolveCodexModelProviderKeysFn(),
+    verifyPortable: async (provider, key) => {
+      const command = settingsService ? (await settingsService.resolveCodexCommand()).command : codexCommand ?? "codex";
+      return await verifyPortableProvider(provider, key, command);
+    },
     ...(options?.codexModelProviderFetch ? { fetch: options.codexModelProviderFetch } : {}),
     ...(options?.codexModelProviderNow ? { now: options.codexModelProviderNow } : {}),
   });

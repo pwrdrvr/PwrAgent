@@ -2180,6 +2180,8 @@ export type TestCodexModelProviderRequest = {
   provider: CodexModelProviderSettings;
   /** A key typed but not saved yet. Without it, the stored key is used. */
   apiKey?: string;
+  /** False when the draft removes the saved key; test the resulting anonymous connection. */
+  useStoredApiKey?: boolean;
 };
 
 export type CreateDesktopCodexAuthProfileRequest = {
