@@ -9,6 +9,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // a bundler would defer their initializer inside a giant startup file.
 const optionalInput = /messaging\/providers\/|node_modules\/(?:@anthropic-ai\/claude-agent-sdk|@modelcontextprotocol\/sdk|@agentclientprotocol\/sdk|@napi-rs\/canvas|pdfjs-dist|sigstore|zod|ajv)\//;
 
+/** Assert the daemon's own load trace at readiness, before feature requests. */
+export function assertPortableStartupLoads(directory, urls) {
+  const root = realpathSync(directory);
+  const manifest = JSON.parse(readFileSync(path.join(root, "chunks.json"), "utf8"));
+  assert.ok(urls.includes(pathToFileURL(path.join(root, "index.mjs")).href), "Trace must observe the real owner entry");
+  for (const url of urls) {
+    assert.ok(!optionalInput.test(url.replaceAll("\\", "/")), `Daemon startup loaded optional package: ${url}`);
+    if (!url.startsWith("file:")) continue;
+    const file = fileURLToPath(url);
+    if (path.dirname(file) !== root) continue;
+    for (const input of manifest.chunks[path.basename(file)]?.inputs ?? []) {
+      assert.ok(!optionalInput.test(input), `Daemon startup parsed optional code: ${input}`);
+    }
+  }
+}
+
 /** Run in a fresh process so both CJS and ESM module caches start empty. */
 export async function checkPortableRuntime(directory) {
   const root = realpathSync(directory);
@@ -53,6 +69,11 @@ export async function checkPortableRuntime(directory) {
       const url = pathToFileURL(path.join(root, file)).href;
       const feature = await import(url);
       assert.ok(Object.keys(feature).length > 0, `First use returned no exports: ${file}`);
+      const provider = manifest.chunks[file].entryPoint.match(/messaging\/providers\/([^/]+)\//)?.[1];
+      if (provider) {
+        const adapter = `create${provider[0].toUpperCase()}${provider.slice(1)}Adapter`;
+        assert.equal(typeof feature[adapter], "function", `First use did not expose ${adapter}`);
+      }
       assert.ok(loaded.has(url), `First use did not load ${file}`);
     }
     // Native and ESM-only external dependencies resolve from the installed

@@ -60,7 +60,7 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
     // the CJS shim. require(esm) is synchronous on our supported Node >=24;
     // optional asynchronous graphs remain behind their original import().
     const shim = [
-      `const runtime = require("./${name}.mjs");`,
+      entry.exports.length ? `const runtime = require("./${name}.mjs");` : `require("./${name}.mjs");`,
       ...entry.exports.map(key => `exports.${key} = runtime.${key};`),
       "",
     ].join("\n");
