@@ -1,4 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
+import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { once } from "node:events";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { type CodexModelProviderSettings, validateCodexModelProviders } from "@pwragent/shared";
@@ -8,10 +10,102 @@ import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-
 import { preparePortableProviderRuntime } from "../codex-app-server/portable-provider-runtime";
 import { portableThreadRequest } from "../codex-app-server/portable-code-mode-transport.mjs";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
+import { normalizeConfigDomains } from "../settings/config-store/config-domains";
 
 const provider: CodexModelProviderSettings = {
   id: "flint", name: "Flint", baseUrl: "https://fixture.example/v1", models: ["fixture"], toolDiscovery: "portable",
 };
+
+it("invalidates the launch in both discovery-mode directions without invalidating executable discovery", () => {
+  fc.assert(fc.property(fc.boolean(), fc.boolean(), (native, verified) => {
+    const configured = { ...provider, modelMetadata: [{ id: "fixture", supportsSearchTool: native, supportsPortableDiscovery: verified }] };
+    const project = (entry: CodexModelProviderSettings) => normalizeConfigDomains({ config: { models: { codex: { providers: [entry] } } } }).providers;
+    const portable = project(configured);
+    const direct = project({ ...configured, toolDiscovery: undefined });
+    expect(portable.codex.runtimeFingerprint).not.toBe(direct.codex.runtimeFingerprint);
+    expect(portable.codex.dependencyFingerprint).toBe(direct.codex.dependencyFingerprint);
+    expect(project({ ...configured, toolDiscovery: "portable" })).toEqual(portable);
+    expect(portable.gemini).toEqual(direct.gemini);
+  }));
+});
+
+it("forwards configured provider headers while rebuilding HTTP framing after translation", async () => {
+  await fc.assert(fc.asyncProperty(fc.uuid(), fc.uuid(), async (project, token) => {
+    const send = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      return new Response(JSON.stringify({ status: "completed", output: [] }));
+    });
+    const runtime = await preparePortableProviderRuntime(provider, "fixture-key", { fetch: send });
+    try {
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const request = httpRequest(`${runtime.baseUrl}/responses`, { method: "POST", headers: {
+          Authorization: "Bearer fixture-key", "OpenAI-Project": project, "X-API-Key": token,
+          "X-Account": "fixture-account", Connection: "x-local-only", "X-Local-Only": "private",
+        } }, response => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode));
+          response.on("error", reject);
+        });
+        request.on("error", reject);
+        request.end(JSON.stringify({ tools: [{ type: "custom", name: "exec", format: { type: "grammar", syntax: "lark" } }] }));
+      });
+      expect(status).toBe(200);
+      expect(send).toHaveBeenCalledOnce();
+      const headers = new Headers(send.mock.calls[0][1]?.headers);
+      expect(headers.get("openai-project")).toBe(project);
+      expect(headers.get("x-api-key")).toBe(token);
+      expect(headers.get("x-account")).toBe("fixture-account");
+      expect(headers.get("authorization")).toBe("Bearer fixture-key");
+      expect(headers.get("host")).toBeNull();
+      expect(headers.get("connection")).toBeNull();
+      expect(headers.get("x-local-only")).toBeNull();
+      expect(headers.get("content-length")).toBeNull();
+      expect(headers.get("content-type")).toBe("application/json");
+    } finally { await runtime.close(); }
+  }), { numRuns: 5 });
+});
+
+it("preserves header authentication and account selection through the real Responses and Bonsai forwarding paths", async () => {
+  for (const compatibility of [undefined, "bonsai"] as const) for (const streaming of [false, true]) {
+    const received: Array<{ headers: IncomingHttpHeaders; body: string }> = [];
+    const upstream = createServer(async (request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      if (request.url !== "/v1/responses") {
+        response.end(JSON.stringify(request.url === "/v1/models" ? { data: [{ id: "fixture" }] }
+          : { model_alias: "fixture", modalities: { vision: false } }));
+        return;
+      }
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      received.push({ headers: request.headers, body });
+      const value = { status: "completed", output: [] };
+      if (streaming) {
+        response.setHeader("Content-Type", "text/event-stream");
+        response.end(`data: ${JSON.stringify({ type: "response.completed", response: value })}\n\n`);
+      } else response.end(JSON.stringify(value));
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing fixture address");
+    let runtime: Awaited<ReturnType<typeof preparePortableProviderRuntime>> | undefined;
+    try {
+      runtime = await preparePortableProviderRuntime({ ...provider, compatibility, baseUrl: `http://127.0.0.1:${address.port}/v1` });
+      const result = await fetch(`${runtime.baseUrl}/responses`, { method: "POST", headers: {
+        Authorization: "Bearer configured-header", "X-API-Key": "fixture-header-key", "OpenAI-Project": "fixture-project",
+      }, body: JSON.stringify({ stream: streaming, tools: [{ type: "custom", name: "exec", format: { type: "grammar", syntax: "lark" } }] }) });
+      expect(result.status).toBe(200);
+      expect(await result.text()).toContain("completed");
+      expect(received).toHaveLength(1);
+      expect(received[0].headers).toMatchObject({ authorization: "Bearer configured-header", "x-api-key": "fixture-header-key", "openai-project": "fixture-project" });
+      expect(Number(received[0].headers["content-length"])).toBe(Buffer.byteLength(received[0].body));
+      expect(received[0].headers.host).toBe(`127.0.0.1:${address.port}`);
+    } finally {
+      await runtime?.close();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  }
+});
 
 it("round-trips portable selection and its verification independently of native support", () => {
   fc.assert(fc.property(fc.boolean(), fc.boolean(), (native, portable) => {

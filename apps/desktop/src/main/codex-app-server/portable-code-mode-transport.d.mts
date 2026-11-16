@@ -1,4 +1,4 @@
-import type { Server } from "node:http";
+import type { IncomingHttpHeaders, Server } from "node:http";
 
 export type PortableDiagnostic = {
   stage: string;
@@ -11,10 +11,12 @@ export type PortableDiagnostic = {
   toolCount?: number;
 };
 export function startPortableCodeModeTransport(options: {
-  send: (body: Record<string, unknown>, signal: AbortSignal) => Promise<Response>;
+  send: (body: Record<string, unknown>, signal: AbortSignal, headers: IncomingHttpHeaders) => Promise<Response>;
   onDiagnostic?: (event: PortableDiagnostic) => void;
   clientApiKey?: string;
   requireNestedDiscovery?: boolean;
+  idleTimeoutMs?: number;
+  scheduleTimeout?: (callback: () => void, delay: number) => () => void;
 }): Promise<Server>;
 export function translateCodeModeRequest(request: Record<string, unknown>): {
   body: Record<string, unknown>;

@@ -108,6 +108,7 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
     // Codex and the bridge wait the same time on a silent prefill.
     bridge = await startBridge(provider.baseUrl, apiKey, {
       idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+      ...(provider.toolDiscovery === "portable" ? { forwardHeaders: true } : {}),
       // One bounded JSON record bypasses structured-log depth/field compaction.
       onDiagnostic: (event) => diagnosticsLog.info(`local model request diagnostics ${JSON.stringify({ providerId: provider.id, ...event })}`),
     });

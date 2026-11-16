@@ -120,10 +120,11 @@ export function translateCodeModeRequest(request) {
   return { body, translateResponse: translate, translateEvent };
 }
 
-async function readBounded(stream) {
+async function readBounded(stream, onProgress) {
   const chunks = [];
   let size = 0;
   for await (const chunk of stream) {
+    if (chunk.length) onProgress?.();
     size += chunk.length;
     if (size > MAX_BYTES) throw new Error("Portable response exceeds 16 MiB");
     chunks.push(Buffer.from(chunk));
@@ -132,10 +133,24 @@ async function readBounded(stream) {
 }
 
 /** Opt-in only. The owner supplies an authenticated upstream request closure. */
-export async function startPortableCodeModeTransport({ send, onDiagnostic, clientApiKey, requireNestedDiscovery = false }) {
+export async function startPortableCodeModeTransport({ send, onDiagnostic, clientApiKey, requireNestedDiscovery = false,
+  idleTimeoutMs, scheduleTimeout = (callback, delay) => {
+    const timer = setTimeout(callback, delay);
+    timer.unref();
+    return () => clearTimeout(timer);
+  } }) {
   const server = createServer(async (req, res) => {
     const abort = new AbortController();
-    res.on("close", () => abort.abort());
+    let cancelIdle;
+    let timedOut = false;
+    const progress = () => {
+      cancelIdle?.();
+      if (idleTimeoutMs !== undefined && !abort.signal.aborted) cancelIdle = scheduleTimeout(() => {
+        timedOut = true;
+        abort.abort(new Error("Portable upstream idle timeout"));
+      }, idleTimeoutMs);
+    };
+    res.on("close", () => { cancelIdle?.(); abort.abort(); });
     const diagnose = (value) => { try { onDiagnostic?.(value); } catch { /* Diagnostics cannot change delivery. */ } };
     let phase = "request_parse";
     try {
@@ -156,7 +171,9 @@ export async function startPortableCodeModeTransport({ send, onDiagnostic, clien
       diagnose({ stage: "request", inputBytes: Buffer.byteLength(raw), outputBytes: bytes(body), toolBytes: bytes(body.tools), toolCount: body.tools.length });
       // Exactly one send. No retries of possibly accepted invocations.
       phase = "upstream_request";
-      const response = await send(body, abort.signal);
+      progress();
+      const response = await send(body, abort.signal, req.headers);
+      progress();
       if (!response.ok) {
         diagnose({ stage: "upstream_error", status: response.status });
         await response.body?.cancel();
@@ -170,7 +187,7 @@ export async function startPortableCodeModeTransport({ send, onDiagnostic, clien
         if (!res.write(`data: ${JSON.stringify(event)}\n\n`)) await once(res, "drain", { signal: abort.signal });
       };
       if (!streaming) {
-        const value = translateResponse(JSON.parse(await readBounded(response.body)));
+        const value = translateResponse(JSON.parse(await readBounded(response.body, progress)));
         if (request.stream) {
           await emit({ type: "response.created", response: { ...value, status: "in_progress", output: [] } });
           for (const [output_index, item] of (value.output ?? []).entries()) {
@@ -190,6 +207,7 @@ export async function startPortableCodeModeTransport({ send, onDiagnostic, clien
           if (event) await emit(event);
         };
         for await (const chunk of response.body) {
+          if (chunk.length) progress();
           pending += decoder.decode(chunk, { stream: true });
           pending = pending.replace(/\r\n/g, "\n");
           if (Buffer.byteLength(pending) > MAX_BYTES) throw new Error("Portable SSE frame exceeds 16 MiB");
@@ -206,12 +224,12 @@ export async function startPortableCodeModeTransport({ send, onDiagnostic, clien
       diagnose({ stage: "completed" });
     } catch (error) {
       diagnose({ stage: "transport_error", phase, canceled: abort.signal.aborted });
-      if (abort.signal.aborted) return;
+      if (abort.signal.aborted && !timedOut) return;
       if (res.headersSent) res.destroy();
-      else res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: {
-        message: error instanceof Error && portableErrors.has(error.message) ? error.message : "Portable Code Mode translation failed",
+      else res.writeHead(timedOut ? 504 : 400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: {
+        message: timedOut ? "Portable upstream idle timeout" : error instanceof Error && portableErrors.has(error.message) ? error.message : "Portable Code Mode translation failed",
       } }));
-    }
+    } finally { cancelIdle?.(); }
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

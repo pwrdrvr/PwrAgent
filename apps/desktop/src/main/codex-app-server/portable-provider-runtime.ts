@@ -1,4 +1,6 @@
 import { LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS, type CodexModelProviderSettings } from "@pwragent/shared";
+import { Readable } from "node:stream";
+import { postUpstream, providerRequestHeaders } from "./local-responses-bridge.mjs";
 import { prepareBonsaiRuntime } from "./bonsai-runtime";
 import { prepareProviderModelRuntime } from "./provider-model-runtime";
 import { startPortableCodeModeTransport, type PortableDiagnostic } from "./portable-code-mode-transport.mjs";
@@ -31,15 +33,22 @@ export async function preparePortableProviderRuntime(
     let requests = 0;
     const upstream = "baseUrl" in base && typeof base.baseUrl === "string" ? base.baseUrl : provider.baseUrl;
     transport = await startPortableCodeModeTransport({
-      send: (body, signal) => {
+      send: async (body, signal, incomingHeaders) => {
         if (options.maxRequests !== undefined && ++requests > options.maxRequests) throw new Error("Portable discovery request budget exhausted.");
-        return (options.fetch ?? fetch)(`${upstream.replace(/\/+$/, "")}/responses`, {
-          method: "POST", redirect: "error",
-          headers: { "Content-Type": "application/json", ...(apiKey && provider.compatibility !== "bonsai" ? { Authorization: `Bearer ${apiKey}` } : {}) },
-          body: JSON.stringify(body),
-          signal: AbortSignal.any([signal, AbortSignal.timeout(LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS)]),
+        const url = `${upstream.replace(/\/+$/, "")}/responses`;
+        const headers = providerRequestHeaders(incomingHeaders);
+        if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+        const payload = JSON.stringify(body);
+        if (options.fetch) return options.fetch(url, { method: "POST", redirect: "error", headers, body: payload, signal });
+        // Node's socket inactivity timer also allows prefills beyond fetch's 300 s header timeout.
+        const response = await postUpstream(url, headers, payload, signal, LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS);
+        const status = response.statusCode ?? 502;
+        return new Response([204, 205, 304].includes(status) ? null : Readable.toWeb(response) as ReadableStream<Uint8Array>, {
+          status,
+          headers: { "Content-Type": response.headers["content-type"] ?? "application/json" },
         });
       },
+      idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
       onDiagnostic: options.onDiagnostic,
       clientApiKey: apiKey,
       requireNestedDiscovery: true,
@@ -53,7 +62,6 @@ export async function preparePortableProviderRuntime(
         `model_providers.${provider.id}.base_url=${JSON.stringify(baseUrl)}`,
         `model_providers.${provider.id}.supports_websockets=false`,
         "features.code_mode=true", "features.code_mode_only=true", "features.code_mode_tool_search=true",
-        'web_search="disabled"',
         'web_search="disabled"',
       ],
       close,
