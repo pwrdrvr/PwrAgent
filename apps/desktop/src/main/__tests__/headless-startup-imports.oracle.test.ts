@@ -27,12 +27,18 @@ let bundle: string;
 
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "pa-startup-imports-"));
-  await buildHeadless({ outputDirectory: path.join(root, "dist") });
+  await buildHeadless({ outputDirectory: path.join(root, "dist"), sourcemap: false, logLevel: "warning" });
   bundle = path.join(root, "dist/index.js");
 });
 
 afterAll(() => {
   if (root) fs.rmSync(root, { recursive: true, force: true });
+});
+
+it("the startup probe build emits executable bundles without debugging source maps", () => {
+  const files = fs.readdirSync(path.dirname(bundle));
+  expect(files).toContain("index.js");
+  expect(files.filter(file => file.endsWith(".map"))).toEqual([]);
 });
 
 it("loading the built headless owner defers the packages it needs only on first use", async () => {

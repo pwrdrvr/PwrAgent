@@ -16,12 +16,12 @@ export const headlessEntries = {
   "outpost-codex-sandbox": "src/main/headless/outpost-codex-sandbox.ts",
 };
 
-export async function buildHeadless({ outputDirectory = path.join(desktop, "out/headless"), plugins = [], portable = false } = {}) {
+export async function buildHeadless({ outputDirectory = path.join(desktop, "out/headless"), plugins = [], portable = false, sourcemap = "external", logLevel = "info" } = {}) {
   const outdir = outputDirectory;
   const result = await build({
     metafile: true,
     entryPoints: Object.fromEntries(Object.entries(headlessEntries).map(([name, entry]) => [name, path.join(desktop, entry)])),
-    outdir, bundle: true, platform: "node", target: "node24", format: "cjs", sourcemap: "external", logLevel: "info",
+    outdir, bundle: true, platform: "node", target: "node24", format: "cjs", sourcemap, logLevel,
     define: { "process.env.NODE_ENV": '"production"', "import.meta.url": "__pwragentModuleUrl", "import.meta.dirname": "__dirname" },
     banner: { js: 'const __pwragentModuleUrl = require("node:url").pathToFileURL(__filename).href;' },
     plugins: [...plugins, { name: "headless-host-dependencies", setup(builder) {
