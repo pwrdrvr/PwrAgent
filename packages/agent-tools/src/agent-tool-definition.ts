@@ -11,6 +11,8 @@ export type AgentToolCallContext = {
   turnId?: string;
   transport: AgentToolTransport;
   signal?: AbortSignal;
+  /** Local transport response flush; never supplied by tool arguments. */
+  responseFlushed?: Promise<void>;
 };
 
 export type AgentToolCallContentItems = NonNullable<

@@ -8255,6 +8255,11 @@ export class CodexAppServerClient {
         rpcId
       );
 
+      if (method === "item/tool/call" && helperToolCallParams?.tool === "manage_pwragent" && rpcId != null) {
+        const responseFlushed = this.transport.waitForResponseFlush?.(rpcId);
+        if (responseFlushed) Object.defineProperty(request, "responseFlushed", { value: responseFlushed });
+      }
+
       const listeners = [...this.requestListeners];
       if (listeners.length === 0) {
         logUnhandledCodexMessage(this.host.logger, {

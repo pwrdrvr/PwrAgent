@@ -350,3 +350,23 @@ describe("thread turn queue behind the restart gate (model)", () => {
     );
   });
 });
+
+it("refuses fresh admissions atomically once quiet shutdown begins", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("submit", "submitSteer", "submitGroupedSteer", "submitHeld"), { minLength: 1, maxLength: 12 }), async (methods) => {
+    let quieting = false;
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: "turn" }),
+      isDispatchHeld: () => quieting,
+      isAdmissionHeld: () => quieting,
+    });
+    quieting = true;
+    for (const method of methods) {
+      const input = { backend: "codex" as const, threadId: "t", input: [{ type: "text" as const, text: "Keep this work" }], origin: "manual" as const };
+      const result = method === "submitHeld" ? queue.submitHeld(input, "locked") : queue[method](input);
+      await expect(result).rejects.toThrow("this message was not accepted");
+      expect(queue.getAllQueuedEntries()).toEqual([]);
+      await expect(queue.submitIfIdle(input)).resolves.toEqual({ status: "busy" });
+    }
+    queue.close();
+  }), { numRuns: 20 });
+});

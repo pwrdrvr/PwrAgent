@@ -5155,18 +5155,47 @@ describe("DesktopBackendRegistry", () => {
       await emitStartedTurn(registry, "codex", threadId, started.turnId);
     };
 
+    it("restores admission after an initial checkpoint error and preserves a pending start", async () => {
+      const { store, payloads } = durableStore();
+      let finish!: () => void;
+      const delay = new Promise<void>((resolve) => { finish = resolve; });
+      const codexClient = new MockBackendClient({ startTurnDelay: delay });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+        projectHeldWakeupStore: null, restartContinuationStore: store, runtimeInstanceId: "instance-a" });
+      onTestFinished(() => registry.close());
+      const starting = registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Task") });
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+      const targets = registry.beginQuietRestart();
+      expect(targets).toContainEqual(expect.objectContaining({ threadId: "busy" }));
+      const save = vi.spyOn(store, "saveAll").mockImplementationOnce(() => { throw new Error("disk full"); });
+      expect(() => registry.saveRestartContinuations(targets, 1, true)).toThrow("disk full");
+      registry.cancelQuietRestart();
+      expect(registry.isRestartGateClosed()).toBe(false);
+      expect(payloads()).toEqual([]);
+      save.mockRestore();
+      const retry = registry.beginQuietRestart();
+      expect(registry.saveRestartContinuations(retry, 1, true)).toBe(1);
+      finish();
+      await starting;
+      registry.saveRestartContinuations(retry, 1);
+      expect(payloads()).toHaveLength(1);
+    });
+
     it("steers the running turn, then continues it first after a restart while other work waits", async () => {
       const { rows, store } = durableStore();
       const { writes } = await measureSqliteWrites(async () => {
         const first = launch(store, "instance-a");
         await startRunningTurn(first.registry, "busy");
 
+        // Work accepted before quiet begins is carried across the restart.
+        await expect(first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text("Later") }))
+          .resolves.toMatchObject({ status: "queued" });
         const targets = first.registry.beginQuietRestart();
         expect(targets).toEqual([expect.objectContaining({ backend: "codex", threadId: "busy" })]);
         expect(first.registry.isRestartGateClosed()).toBe(true);
         // Nothing new starts on the way down.
         await expect(first.registry.submitTurn({ backend: "codex", threadId: "idle", input: text("Later") }))
-          .resolves.toMatchObject({ status: "queued" });
+          .rejects.toThrow("this message was not accepted");
         expect(first.codexClient.startTurnCallCount).toBe(1);
 
         await expect(first.registry.steerTurnsForQuietRestart(targets)).resolves.toBe(1);
@@ -5177,7 +5206,7 @@ describe("DesktopBackendRegistry", () => {
         expect(first.registry.saveRestartContinuations(targets, Date.UTC(2026, 10, 4))).toBe(1);
         // A second quiet restart does not add a second continuation.
         expect(first.registry.saveRestartContinuations(targets)).toBe(0);
-        // The continuation and the message that queued on the way down.
+        // The continuation and the message accepted before shutdown.
         expect(rows()).toEqual([{ owner_instance_id: "instance-a" }, { owner_instance_id: "instance-a" }]);
         await first.registry.close();
 
@@ -5193,12 +5222,15 @@ describe("DesktopBackendRegistry", () => {
         expect(second.codexClient.startTurnCallCount).toBe(0);
 
         second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(2));
+        const resumed = second.registry.getActiveTurnForThread({ backend: "codex", threadId: "busy" });
+        await emitCompletedTurn(second.registry, "codex", "busy", resumed!.turnId);
         await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(3));
         expect(second.codexClient.startTurnCalls[0]).toMatchObject({
           threadId: "busy",
           input: [{ type: "text", text: expect.stringContaining("PwrAgent restarted. Your previous turn was stopped at 2026-11-04T00:00:00.000Z") }],
         });
-        expect(second.codexClient.startTurnCalls.slice(1).map((call) => call.threadId).sort()).toEqual(["elsewhere", "idle"]);
+        expect(second.codexClient.startTurnCalls.slice(1).map((call) => call.threadId).sort()).toEqual(["busy", "elsewhere"]);
         expect(second.registry.isRestartGateClosed()).toBe(false);
         await vi.waitFor(() => expect(rows()).toEqual([]));
       });
@@ -5225,14 +5257,14 @@ describe("DesktopBackendRegistry", () => {
       expect(second.codexClient.startTurnCallCount).toBe(0);
     });
 
-    it("queues a messaging steer while the gate is shut and lets the restart's own steer through", async () => {
+    it("refuses a messaging steer while shutdown admission is shut and lets the restart's own steer through", async () => {
       const { store } = durableStore();
       const { codexClient, registry } = launch(store, "instance-a");
       await startRunningTurn(registry, "busy");
       const [target] = registry.beginQuietRestart();
       expect(target).toBeDefined();
 
-      const deferred = await registry.steerTurn(
+      await expect(registry.steerTurn(
         {
           backend: "codex",
           threadId: "busy",
@@ -5241,11 +5273,10 @@ describe("DesktopBackendRegistry", () => {
           input: text("From Telegram"),
         },
         { kind: "messaging" },
-      );
-      expect(deferred).toMatchObject({ disposition: "queued", turnId: target!.turnId });
+      )).rejects.toThrow("this message was not accepted");
       expect(codexClient.lastSteerTurnParams).toBeUndefined();
       expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" }))
-        .toEqual([expect.objectContaining({ queueEntryId: (deferred as { queueEntryId: string }).queueEntryId })]);
+        .toEqual([]);
 
       await expect(registry.steerTurnsForQuietRestart([target!])).resolves.toBe(1);
       expect(codexClient.lastSteerTurnParams).toMatchObject({
@@ -58750,7 +58781,9 @@ script = "printf setup"
       },
     });
 
+    const responseFlushed = Promise.resolve();
     const response = await codexClient.emitRequest({
+      responseFlushed,
       method: "item/tool/call",
       params: {
         threadId: "ordinary-thread",
@@ -58774,7 +58807,7 @@ script = "printf setup"
     });
     expect(appManagementHandler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { responseFlushed },
       args: { action: "status" },
     });
 

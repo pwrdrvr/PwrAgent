@@ -361,7 +361,7 @@ describe("createQuitManager", () => {
     expect(performQuit).not.toHaveBeenCalled();
   });
 
-  it("runs a later custom quit action after an already-open prompt confirms", async () => {
+  it("keeps the original quit action when a different install races an open prompt", async () => {
     const { createQuitManager } = await import("../shell/quit-manager");
     let resolveConfirm!: (value: "manual-confirm") => void;
     const performQuit = vi.fn();
@@ -395,10 +395,10 @@ describe("createQuitManager", () => {
     resolveConfirm("manual-confirm");
 
     await expect(normalQuit).resolves.toBe(true);
-    await expect(updateQuit).resolves.toBe(true);
+    await expect(updateQuit).resolves.toBe(false);
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(performQuit).not.toHaveBeenCalled();
-    expect(installUpdateAndQuit).toHaveBeenCalledTimes(1);
+    expect(performQuit).toHaveBeenCalledTimes(1);
+    expect(installUpdateAndQuit).not.toHaveBeenCalled();
   });
 
   // A repeat quit request while the prompt is open collapses onto the same
@@ -759,12 +759,12 @@ describe("createQuitManager", () => {
       expect(performQuit).not.toHaveBeenCalled();
     });
 
-    it("still quits when the quiet restart fails", async () => {
+    it("cancels quit when the initial quiet checkpoint fails", async () => {
       const warn = vi.fn();
       const performQuit = vi.fn();
       const confirm = vi.fn(async (options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) => {
-        expect(await options.quietRestart?.()).toBe(true);
-        return "quiet-restart" as const;
+        expect(await options.quietRestart?.()).toBe(false);
+        return "manual-cancel" as const;
       });
       const manager = createQuitManager({
         getConfirmationEnabled: () => true,
@@ -774,9 +774,9 @@ describe("createQuitManager", () => {
         },
         performQuit, confirm, log: { warn },
       });
-      await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(true);
-      expect(performQuit).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledWith("quiet restart failed; quitting", { error: "registry gone" });
+      await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+      expect(performQuit).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith("quiet restart failed; cancelling quit", { error: "registry gone" });
     });
 
     it("offers no quiet restart without a handler", async () => {

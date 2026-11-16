@@ -1,25 +1,26 @@
 import type { QuietRestartTarget } from "../app-server/backend-registry-types";
 
 /**
- * "Quiet & Continue After Restart" from the quit dialog. Each step is
- * bounded and none can stop the quit: whatever is still running when this
- * resolves is interrupted by the normal shutdown, and the next launch sends
+ * "Quiet & Continue After Restart" from the quit dialog. The initial durable
+ * checkpoint must succeed before anything stops. Later cleanup is bounded:
+ * whatever is still running when this resolves is interrupted by the normal shutdown, and the next launch sends
  * each stopped thread its continuation (see `restart-continuation-gate.ts`).
  *
- * 1. Shut the restart gate, so no queued or automatic turn starts.
+ * 1. Shut restart dispatch and admission, so new work is explicitly refused.
  * 2. Save one continuation per running thread, and every message waiting
  *    in a queue, before anything is stopped, so a crash from here on still
  *    continues them.
  * 3. Steer each running turn that it is about to stop, and SIGTERM every
  *    environment action (SIGKILL after a short grace).
  * 4. Give the turns a short window to finish on their own.
- * 5. Save again, so a message that queued during the window (a deferred
- *    messaging steer, say) is carried across too.
+ * 5. Save again, covering accepted work that was still starting and any
+ *    operator edits to the checkpointed queue.
  */
 export type QuietRestartDependencies = {
   registry: {
     beginQuietRestart(): QuietRestartTarget[];
-    saveRestartContinuations(targets: readonly QuietRestartTarget[], stoppedAt?: number): number;
+    cancelQuietRestart(): void;
+    saveRestartContinuations(targets: readonly QuietRestartTarget[], stoppedAt?: number, requireCheckpoint?: boolean): number;
     steerTurnsForQuietRestart(targets: readonly QuietRestartTarget[]): Promise<number>;
     waitForQuietRestartTurns(
       targets: readonly QuietRestartTarget[],
@@ -76,10 +77,15 @@ export async function runQuietRestart(
     }
   };
 
-  const targets = await step("begin", () => dependencies.registry.beginQuietRestart()) ?? [];
-  summary.runningTurns = targets.length;
-  summary.continuations = await step("save", () =>
-    dependencies.registry.saveRestartContinuations(targets, startedAt)) ?? 0;
+  let targets: QuietRestartTarget[];
+  try {
+    targets = dependencies.registry.beginQuietRestart();
+    summary.runningTurns = targets.length;
+    summary.continuations = dependencies.registry.saveRestartContinuations(targets, startedAt, true);
+  } catch (error) {
+    dependencies.registry.cancelQuietRestart();
+    throw error;
+  }
   const [steered, actionsTerminated] = await Promise.all([
     step("steer", () => dependencies.registry.steerTurnsForQuietRestart(targets)),
     step("terminate-actions", () => dependencies.terminateActions(

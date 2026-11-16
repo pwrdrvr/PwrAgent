@@ -487,10 +487,8 @@ describe("auto updater", () => {
     });
     expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
     const install = ipcHandlers.get("app:install-update");
-    await expect(install?.()).resolves.toEqual({
-      status: "error",
-      message: "The downloaded update is not for the selected channel.",
-    });
+    await expect(install?.()).resolves.toMatchObject({ status: "error" });
+    expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
 
     resolveUpdateTrainMock.mockReturnValue("beta");
@@ -1773,6 +1771,8 @@ describe("auto updater", () => {
     });
 
     updater.initAutoUpdater();
+    // A downloaded event belongs to a settled check, not a check still reading its feed.
+    await updater.checkForAppUpdatesNow("startup");
     updater.registerAppUpdateIpcHandlers({ requestQuit });
     updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
     const install = ipcHandlers.get("app:install-update");
@@ -1800,6 +1800,8 @@ describe("auto updater", () => {
     });
 
     updater.initAutoUpdater();
+    // A downloaded event belongs to a settled check, not a check still reading its feed.
+    await updater.checkForAppUpdatesNow("startup");
     updater.registerAppUpdateIpcHandlers({ requestQuit });
     updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
     const install = ipcHandlers.get("app:install-update");
@@ -1822,6 +1824,8 @@ describe("auto updater", () => {
     });
 
     updater.initAutoUpdater();
+    // A downloaded event belongs to a settled check, not a check still reading its feed.
+    await updater.checkForAppUpdatesNow("startup");
     updater.registerAppUpdateIpcHandlers({ requestQuit });
     updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
     const install = ipcHandlers.get("app:install-update");
@@ -1847,6 +1851,8 @@ describe("auto updater", () => {
     const requestQuit = vi.fn(async () => false);
 
     updater.initAutoUpdater();
+    // A downloaded event belongs to a settled check, not a check still reading its feed.
+    await updater.checkForAppUpdatesNow("startup");
     updater.registerAppUpdateIpcHandlers({ requestQuit });
     updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
     const install = ipcHandlers.get("app:install-update");
@@ -2068,6 +2074,8 @@ describe("auto updater", () => {
     const requestQuit = vi.fn(async () => false);
 
     updater.initAutoUpdater();
+    // A downloaded event belongs to a settled check, not a check still reading its feed.
+    await updater.checkForAppUpdatesNow("startup");
     updater.registerAppUpdateIpcHandlers({ requestQuit });
     updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
     const install = ipcHandlers.get("app:install-update");

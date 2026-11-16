@@ -91,6 +91,13 @@ describe("PwrAgent app agent tools", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it.each([{ action: "restart", instanceId: "another-owner" }, { action: "stop", expectedStateToken: 123 }])("refuses unsupported targets and invalid guards rather than dropping them", async (args) => {
+    const handler = vi.fn();
+    const router = buildPwrAgentAppToolRouter(handler);
+    expect(await router.handleMcpToolCall({ backend: "codex", threadId: "fixture", tool: "manage_pwragent", args })).toMatchObject({ isError: true });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("accepts the legacy pwragent_app namespace as an invocation alias", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,

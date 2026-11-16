@@ -116,6 +116,7 @@ export class AgentToolRouter {
     backend: AppServerBackendKind;
     call: DynamicToolCallParams;
     signal?: AbortSignal;
+    responseFlushed?: Promise<void>;
   }): Promise<DynamicToolCallResponse> {
     const definition = this.findDefinition(params.call.namespace, params.call.tool);
     if (!definition) {
@@ -134,6 +135,7 @@ export class AgentToolRouter {
       turnId: params.call.turnId,
       transport: "codex_dynamic_tool",
       signal: params.signal,
+      responseFlushed: params.responseFlushed,
     };
     return toDynamicToolResponse(
       await definition.dispatch(normalizeToolArguments(params.call.arguments), context),
@@ -149,6 +151,7 @@ export class AgentToolRouter {
     callId?: string;
     turnId?: string;
     signal?: AbortSignal;
+    responseFlushed?: Promise<void>;
   }): Promise<AgentMcpToolCallResponse> {
     const definition = this.findMcpDefinition(params.namespace, params.tool);
     if (!definition) {
@@ -167,6 +170,7 @@ export class AgentToolRouter {
       turnId: params.turnId,
       transport: "mcp",
       signal: params.signal,
+      responseFlushed: params.responseFlushed,
     };
     return toMcpToolResponse(
       await definition.dispatch(normalizeToolArguments(params.args), context),

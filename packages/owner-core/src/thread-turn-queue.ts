@@ -200,6 +200,8 @@ export type ThreadTurnQueueLifecycleEvent =
     };
 
 export type ThreadTurnQueueOptions = {
+  /** Refuse new work synchronously before queue mutation during shutdown. */
+  isAdmissionHeld?: () => boolean;
   startTurn: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult>;
   canSteerThread?: (entry: ThreadTurnQueueEntry) => boolean;
   steerTurn?: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult | "retry" | undefined>;
@@ -371,6 +373,13 @@ export class ThreadTurnQueue {
 
   constructor(private readonly options: ThreadTurnQueueOptions) {}
 
+  private assertAdmission(): void {
+    if (this.options.isAdmissionHeld?.()) {
+      throw new Error("PwrAgent is restarting. Retry after it relaunches; this message was not accepted.");
+    }
+  }
+
+
   /** Suspend the entire FIFO before awaiting an edit, including queued editors. */
   async withDispatchSuspended<T>(
     params: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
@@ -408,6 +417,7 @@ export class ThreadTurnQueue {
       receivedAt: this.now(),
     };
     return await this.withDispatchSuspended(input, async () => {
+      this.assertAdmission();
       const key = this.keyFor(input);
       const queue = this.queueFor(key);
       // A paused batch keeps the messages it has; a new one starts beside it.
@@ -480,6 +490,7 @@ export class ThreadTurnQueue {
     options?: { deferStart?: boolean; onAdmission?: () => void },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     return await this.withDispatchSuspended(input, async () => {
+      this.assertAdmission();
       const key = this.keyFor(input);
       const queue = this.queueFor(key);
       const holdReason = this.holdReasonFor(key);
@@ -530,6 +541,7 @@ export class ThreadTurnQueue {
       queueIndex?: number;
     },
   ): Promise<ThreadTurnQueueSubmissionResult> {
+    this.assertAdmission();
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -588,6 +600,7 @@ export class ThreadTurnQueue {
       queueIndex?: number;
     },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    this.assertAdmission();
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -658,6 +671,7 @@ export class ThreadTurnQueue {
     hold: { reason: string; projectHold: ThreadTurnQueueProjectHold },
     options?: { onAdmission?: () => void },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    this.assertAdmission();
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -712,6 +726,7 @@ export class ThreadTurnQueue {
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
     options?: { onAdmission?: () => void },
   ): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    if (this.options.isAdmissionHeld?.()) return { status: "busy" };
     const entry: ThreadTurnQueueEntry = {
       ...input,
       id: input.id ?? `thread-turn:${randomUUID()}`,
@@ -995,6 +1010,7 @@ export class ThreadTurnQueue {
     const found = this.findQueuedEntry(entryId, sender);
     if (!found) return undefined;
     return await this.withDispatchSuspended(found.entry, async () => {
+      this.assertAdmission();
       const current = this.findQueuedEntry(entryId, sender);
       if (!current || this.closed || (current.entry.agentMessageOrigins && !current.entry.agentMessages)) return undefined;
       const owns = (source: AppServerThreadMessageOrigin["sourceThread"]) => sentBy(source, sender);

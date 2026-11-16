@@ -27,10 +27,14 @@ export type PwrAgentAppErrorCode = (typeof PWRAGENT_APP_ERROR_CODES)[number];
 
 export type PwrAgentAppManagementContext = {
   now?: number;
+  /** Trusted local transport acknowledgement, never a tool argument. */
+  responseFlushed?: Promise<void>;
 };
 
 export type ManagePwrAgentToolArgs = {
   action: PwrAgentAppManagementAction;
+  /** Opaque status token binds a mutation to the inspected owner and update state. */
+  expectedStateToken?: string;
 };
 
 export type PwrAgentAppToolArgsByOperation = {
@@ -79,6 +83,7 @@ export type PwrAgentUpdateToolStatus =
   | { status: "error"; message: string };
 
 export type PwrAgentAppRuntimeStatus = {
+  runtimeId?: string;
   currentVersion: string;
   startedAt: number;
   startedAtIso: string;
@@ -124,7 +129,17 @@ export type PwrAgentCodexAppServerStatus = {
   };
 };
 
+export type PwrAgentLifecycleOperation = {
+  id: string;
+  action: "restart" | "stop";
+  status: "waiting_for_response" | "confirming" | "preparing" | "handed_off" | "cancelled" | "failed";
+  message?: string;
+};
+
 export type PwrAgentAppManagementData = {
+  /** Read status again after a stale-state refusal. This token is process-local. */
+  stateToken?: string;
+  operation?: PwrAgentLifecycleOperation;
   action: PwrAgentAppManagementAction;
   runtime: PwrAgentAppRuntimeStatus;
   /** Present on `status` when the app server can be read. */
@@ -137,6 +152,8 @@ export type PwrAgentAppManagementData = {
   result:
     | { status: "reported" }
     | { status: "check_completed"; check: PwrAgentUpdateToolStatus }
+    | { status: "restart_scheduled"; installingDownloadedUpdate: boolean }
+    | { status: "stop_scheduled" }
     | { status: "restart_accepted"; installingDownloadedUpdate: boolean }
     | { status: "stop_accepted" }
     | { status: "cancelled"; message: string };

@@ -6,6 +6,7 @@
 // replaces it, and what each platform can still install while that happens
 // (see `supersedingDownload` in auto-updater.ts).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 
 type Handler = (...args: unknown[]) => void;
 
@@ -492,4 +493,67 @@ describe("a newer release replaces a downloaded update", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
+});
+
+
+describe("install admission", () => {
+  it("never starts another install or replacement check while confirmation owns the payload", async () => {
+    const updater = await bootWithDownloaded();
+    let finish!: (accepted: boolean) => void;
+    const pending = updater.installDownloadedAppUpdate({ requestQuit: () => new Promise((resolve) => { finish = resolve; }) });
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 12 }), async (checks) => {
+      for (const check of checks) {
+        if (check) {
+          await expect(updater.checkForAppUpdatesNow("manual")).resolves.toMatchObject({ status: "skipped" });
+        } else {
+          await expect(updater.installDownloadedAppUpdate()).resolves.toMatchObject({ status: "error" });
+        }
+      }
+      expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    }), { numRuns: 15 });
+    finish(false);
+    await expect(pending).resolves.toMatchObject({ status: "error" });
+    // Cancellation releases admission, so an intentional later request works.
+    await expect(updater.installDownloadedAppUpdate()).resolves.toMatchObject({ status: "restarting" });
+    expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an install while a replacement download is running", async () => {
+    const updater = await bootWithDownloaded();
+    const second = await supersede(updater);
+    await expect(updater.installDownloadedAppUpdate()).resolves.toMatchObject({ status: "error" });
+    expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    second.download.resolve([]);
+  });
+});
+
+it("refuses a stale requested version, then hands the intended payload off only once", async () => {
+  const updater = await bootWithDownloaded();
+  await expect(updater.installDownloadedAppUpdate({ expectedVersion: "1.0.0" })).resolves.toMatchObject({ status: "error" });
+  expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+  await expect(updater.installDownloadedAppUpdate({ expectedVersion: "1.0.1" })).resolves.toEqual({ status: "restarting" });
+  await expect(updater.installDownloadedAppUpdate({ expectedVersion: "1.0.1" })).resolves.toMatchObject({ status: "error" });
+  expect(mocks.autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+});
+
+it("keeps checks out of an ordinary restart reservation and releases on cancellation", async () => {
+  const updater = await bootWithDownloaded();
+  const release = updater.reserveAppUpdateQuit();
+  expect(() => updater.reserveAppUpdateQuit()).toThrow("in progress");
+  await expect(updater.checkForAppUpdatesNow("manual")).resolves.toMatchObject({ status: "skipped" });
+  release();
+  release();
+  await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({ status: "downloaded", version: "1.0.1" });
+  expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+});
+
+it("revalidates the exact held payload before authorization and interruption", async () => {
+  const updater = await bootWithDownloaded();
+  await expect(updater.installDownloadedAppUpdate({ requestQuit: async (_quit, beforeQuit) => {
+    mocks.updaterEvents.emit("update-downloaded", { version: "1.0.2" });
+    expect(beforeQuit?.()).toBe(false);
+    return false;
+  } })).resolves.toMatchObject({ status: "error", message: expect.stringContaining("changed") });
+  expect(mocks.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
 });

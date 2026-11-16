@@ -85,8 +85,10 @@ export interface OwnerHostServices {
   updates: {
     check(source: "manual"): Promise<AppUpdateCheckResult>;
     read(): AppUpdateStatus;
-    install(options: { requestQuit: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean> }): Promise<AppUpdateInstallResult>;
-    requestQuit(options: { performQuit: () => void; source: "agent-tool" | "update-install"; beforeQuit?: () => boolean }): Promise<boolean>;
+    stateToken?(): string;
+    reserveQuit?(): () => void;
+    install(options: { expectedVersion?: string; requestQuit: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean> }): Promise<AppUpdateInstallResult>;
+    requestQuit(options: { performQuit: () => void; source: "agent-tool" | "update-install"; quietRestart?: boolean; beforeQuit?: () => boolean }): Promise<boolean>;
   };
   workers: { forkClaudeSessionReader(path: string, env: NodeJS.ProcessEnv): Promise<ClaudeSessionReaderChild> };
   storageMaintenance: StorageMaintenanceHost;
