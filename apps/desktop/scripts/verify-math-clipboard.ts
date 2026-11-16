@@ -53,7 +53,7 @@ try {
   assert(latex);
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({ path: resolve(output, "before.png") });
-  const choose = async (name: string, inline = false) => {
+  const choose = async (name: string | RegExp, inline = false) => {
     const formula = inline ? page.locator(".math-formula:not(.math-formula--display)") : block;
     await formula.hover();
     await formula.getByRole("button", { name: "Copy formula" }).click();
@@ -62,7 +62,7 @@ try {
   await choose("Copy LaTeX");
   await page.waitForFunction((tex) => window.formulaClipboard.text === tex, latex);
   assert(!requests.some((url) => /math-clipboard-export/.test(url)), "LaTeX copy loaded the image exporter");
-  await choose("Copy formatted HTML");
+  await choose(/Copy formatted HTML/);
   await page.waitForFunction(() => Boolean(window.formulaClipboard.html) || Boolean(document.querySelector('[role="alert"]')));
   const html = await page.evaluate(() => window.formulaClipboard.html);
   assert(html, await page.locator("body").innerText());
@@ -72,7 +72,7 @@ try {
 
   async function copyPng(inline = false) {
     await page.evaluate(() => { window.formulaClipboard = {}; });
-    await choose("Copy transparent PNG", inline);
+    await choose(/Copy PNG/, inline);
     await page.waitForFunction(() => Boolean(window.formulaClipboard.png) || Boolean(document.querySelector('[role="alert"]')));
     const png = await page.evaluate(() => window.formulaClipboard.png);
     assert(png, await page.locator("body").innerText());
@@ -145,6 +145,99 @@ try {
   await block.hover();
   await block.getByRole("button", { name: "Copy formula" }).click();
   await page.screenshot({ path: resolve(output, "after.png") });
+
+  async function setOptions(color: "Dark" | "Light" | "App theme", scale: 1 | 2 | 4) {
+    await page.keyboard.press("Escape");
+    await block.hover();
+    await block.getByRole("button", { name: "Copy formula" }).click();
+    await page.getByRole("menuitem", { name: "Export options…" }).click();
+    assert(await page.getByRole("menuitem", { name: "Back to copy" }).evaluate((element) => element === document.activeElement));
+    await page.getByRole("menuitemradio", { name: color, exact: true }).click();
+    await page.getByRole("menuitemradio", { name: `${scale}×`, exact: true }).click();
+    assert.equal(await page.getByRole("menuitemradio", { name: color, exact: true }).getAttribute("aria-checked"), "true");
+    const menuBounds = await page.getByRole("menu").boundingBox();
+    const viewport = page.viewportSize()!;
+    assert(menuBounds && menuBounds.x >= 8 && menuBounds.y >= 8
+      && menuBounds.x + menuBounds.width <= viewport.width - 8 && menuBounds.y + menuBounds.height <= viewport.height - 8);
+    await page.getByRole("menuitem", { name: "Back to copy" }).click();
+    assert(await page.getByRole("menuitem", { name: `Copy PNG · ${scale}× · ${color}` }).isVisible());
+    await page.keyboard.press("Escape");
+  }
+  async function copyHtml() {
+    await page.evaluate(() => { window.formulaClipboard = {}; });
+    await choose(/Copy formatted HTML/);
+    await page.waitForFunction(() => Boolean(window.formulaClipboard.html) || Boolean(document.querySelector('[role="alert"]')));
+    const html = await page.evaluate(() => window.formulaClipboard.html);
+    assert(html, await page.locator("body").innerText());
+    return html;
+  }
+  async function assertInk(source: string, color: string) {
+    return await page.evaluate(async ({ source, color }) => {
+      const image = new Image();
+      image.src = source;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const expected = context.getImageData(0, 0, 1, 1).data;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0);
+      const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let solid = 0;
+      let transparent = 0;
+      for (let index = 0; index < rgba.length; index += 4) {
+        if (rgba[index + 3] === 0) transparent++;
+        if (rgba[index + 3] < 250) continue;
+        solid++;
+        for (let channel = 0; channel < 3; channel++) {
+          if (Math.abs(rgba[index + channel] - expected[channel]) > 1) throw new Error(`Unexpected export ink for ${color}`);
+        }
+      }
+      if (solid < 30 || transparent === 0) throw new Error("Expected ink on a transparent background");
+      return { width: image.width, height: image.height };
+    }, { source, color });
+  }
+  await setOptions("Light", 4);
+  assert.deepEqual(await assertInk(await copyPng(), "white"), { width: pixels.width * 2, height: pixels.height * 2 });
+  await page.reload();
+  await page.locator(".katex").nth(1).waitFor();
+  const lightHtml = await copyHtml();
+  const htmlInk = await page.evaluate((html) => {
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    return { color: container.querySelector<HTMLElement>(".katex")?.style.color,
+      preferences: localStorage.getItem("pwragent.math.exportOptions") };
+  }, lightHtml);
+  assert.equal(htmlInk.color, "white", `HTML must use the selected text color: ${JSON.stringify(htmlInk)}`);
+  await page.waitForFunction(() => document.querySelectorAll('.math-formula__copy[data-status="copied"]').length === 0);
+  await block.hover();
+  await block.getByRole("button", { name: "Copy formula" }).click();
+  assert(await page.getByRole("menuitem", { name: "Copy PNG · 4× · Light" }).isVisible(), "Export options must survive reloads");
+  await page.screenshot({ path: resolve(output, "export-copy-menu.png") });
+  await page.getByRole("menuitem", { name: "Export options…" }).click();
+  await page.screenshot({ path: resolve(output, "export-options.png") });
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 360, height: 260 });
+  await setOptions("Light", 4);
+  await page.setViewportSize({ width: 1120, height: 620 });
+  await setOptions("Light", 1);
+  assert.equal(await copyHtml(), lightHtml, "PNG scale must not change HTML");
+  assert.deepEqual(await assertInk(await copyPng(), "white"), { width: pixels.width / 2, height: pixels.height / 2 });
+  await setOptions("App theme", 2);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);
+    const color = await block.locator(".katex").evaluate((element) => getComputedStyle(element).color);
+    await assertInk(await copyPng(), color);
+  }
+  await block.locator(".katex-html").evaluate((element) => { (element as HTMLElement).style.color = "red"; });
+  await assertInk(await copyPng(), "red");
+  await block.locator(".katex-html").evaluate((element) => { (element as HTMLElement).style.removeProperty("color"); });
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  await setOptions("Dark", 2);
+  console.log(JSON.stringify({ stickyExportOptions: true, scalesChecked: [1, 2, 4], colorsChecked: ["dark", "light", "theme"] }));
   assert.deepEqual(errors, []);
   const evidence = { latex, pngBytes: Buffer.from(png.split(",")[1], "base64").length, ...pixels, errors };
   await writeFile(resolve(output, "evidence.json"), JSON.stringify(evidence, null, 2));
@@ -173,7 +266,7 @@ try {
     await page.evaluate(() => { window.formulaClipboard = {}; });
     await formula.hover();
     await formula.getByRole("button", { name: "Copy formula" }).click();
-    await page.getByRole("menuitem", { name: "Copy formatted HTML" }).click();
+    await page.getByRole("menuitem", { name: /Copy formatted HTML/ }).click();
     await page.waitForFunction(() => Boolean(window.formulaClipboard.html));
     const exported = await page.evaluate(() => window.formulaClipboard.html!);
     const isolated = await browser.newPage();
@@ -206,7 +299,7 @@ try {
       await page.evaluate(() => { window.formulaClipboard = {}; });
       await formula.hover();
       await formula.getByRole("button", { name: "Copy formula" }).click();
-      await page.getByRole("menuitem", { name: "Copy transparent PNG" }).click();
+      await page.getByRole("menuitem", { name: /Copy PNG/ }).click();
       await page.waitForFunction(() => Boolean(window.formulaClipboard.png));
       const imagePixels = await page.evaluate(async (tags) => {
         const image = new Image();

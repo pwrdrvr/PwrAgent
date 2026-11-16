@@ -1,10 +1,14 @@
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText, copyTextWithHtml } from "../../lib/copy-text";
 import { copyImage } from "../../lib/copy-image";
 import { MathClipboardApiContext } from "../../lib/math-clipboard-context";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import {
+  DEFAULT_MATH_EXPORT_OPTIONS, MATH_EXPORT_COLOR_LABELS,
+  readMathExportOptions, writeMathExportOptions, type MathExportOptions,
+} from "../../lib/math-export-options";
 
 type CopyFormat = "png" | "latex" | "html";
 
@@ -27,10 +31,25 @@ function MathFormulaContent({ latex, display, children }: {
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number }>();
+  const [options, setOptions] = useState(DEFAULT_MATH_EXPORT_OPTIONS);
+  const [showOptions, setShowOptions] = useState(false);
   const [status, setStatus] = useState<"idle" | "pending" | "copied" | "failed">("idle");
   const timer = useRef<number | undefined>(undefined);
   const mounted = useRef(true);
   useMenuNavigation({ open: Boolean(position), menuRef: menu, triggerRef: trigger, onClose: () => setPosition(undefined) });
+
+  useLayoutEffect(() => {
+    if (!position || !menu.current) return;
+    const rect = menu.current.getBoundingClientRect();
+    const anchor = trigger.current?.getBoundingClientRect();
+    const left = Math.max(8, Math.min(anchor?.left ?? position.left, window.innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(anchor ? anchor.bottom + 4 : position.top, window.innerHeight - rect.height - 8));
+    if (left !== position.left || top !== position.top) setPosition({ left, top });
+  }, [position, showOptions]);
+
+  useEffect(() => {
+    menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [showOptions]);
 
   useEffect(() => {
     mounted.current = true;
@@ -44,7 +63,10 @@ function MathFormulaContent({ latex, display, children }: {
         setPosition(undefined);
       }
     };
-    const close = (): void => setPosition(undefined);
+    const close = (event: Event): void => {
+      if (event.target instanceof Node && menu.current?.contains(event.target)) return;
+      setPosition(undefined);
+    };
     document.addEventListener("pointerdown", dismiss);
     window.addEventListener("resize", close);
     window.addEventListener("scroll", close, true);
@@ -67,9 +89,9 @@ function MathFormulaContent({ latex, display, children }: {
         if (!formula) throw new Error("Formula is unavailable");
         const exporter = await import("../../lib/math-clipboard-export");
         if (format === "png") {
-          await copyImage(await exporter.formulaToPng(formula));
+          await copyImage(await exporter.formulaToPng(formula, options));
         } else {
-          await copyTextWithHtml(latex, await exporter.formulaToHtml(formula), api);
+          await copyTextWithHtml(latex, await exporter.formulaToHtml(formula, options), api);
         }
       }
       if (!mounted.current) return;
@@ -79,6 +101,13 @@ function MathFormulaContent({ latex, display, children }: {
       console.error("Failed to copy formula", error);
       if (mounted.current) setStatus("failed");
     }
+  };
+
+  const chooseOptions = (patch: Partial<MathExportOptions>): void => {
+    const next = { ...options, ...patch };
+    if (next.color === options.color && next.scale === options.scale) return;
+    writeMathExportOptions(next);
+    setOptions(next);
   };
 
   return <span ref={root} className={`math-formula${display ? " math-formula--display" : ""}`}>
@@ -91,10 +120,12 @@ function MathFormulaContent({ latex, display, children }: {
         event.stopPropagation();
         if (status === "pending") return;
         if (position) { setPosition(undefined); return; }
+        setOptions(readMathExportOptions());
+        setShowOptions(false);
         const rect = event.currentTarget.getBoundingClientRect();
         setPosition({
-          left: Math.max(8, Math.min(rect.left, window.innerWidth - 208)),
-          top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 112)),
+          left: rect.left,
+          top: rect.bottom + 4,
         });
       }}>
       {status === "copied" ? <CheckIcon size={12} aria-hidden="true" /> : <CopyIcon size={12} aria-hidden="true" />}
@@ -105,10 +136,29 @@ function MathFormulaContent({ latex, display, children }: {
       </span>, document.body,
     ) : null}
     {position ? createPortal(<div ref={menu} className="thread-context-menu math-formula__menu"
-      role="menu" aria-label="Copy formula" style={position} onClick={(event) => event.stopPropagation()}>
-      <button type="button" role="menuitem" onClick={() => { void copy("png"); }}>Copy transparent PNG</button>
-      <button type="button" role="menuitem" onClick={() => { void copy("latex"); }}>Copy LaTeX</button>
-      <button type="button" role="menuitem" onClick={() => { void copy("html"); }}>Copy formatted HTML</button>
+      role="menu" aria-label={showOptions ? "Formula export options" : "Copy formula"} style={position} onClick={(event) => event.stopPropagation()}>
+      {showOptions ? <>
+        <button type="button" role="menuitem" onClick={() => setShowOptions(false)}>Back to copy</button>
+        <div role="group" aria-label="Text color">
+          <div className="math-formula__option-label">Text color</div>
+          {(["dark", "light", "theme"] as const).map((color) => <button key={color} type="button"
+            role="menuitemradio" aria-checked={options.color === color} onClick={() => chooseOptions({ color })}>
+            {MATH_EXPORT_COLOR_LABELS[color]}{options.color === color ? <CheckIcon size={12} aria-hidden="true" /> : null}
+          </button>)}
+        </div>
+        <div role="group" aria-label="PNG scale">
+          <div className="math-formula__option-label">PNG scale</div>
+          {([1, 2, 4] as const).map((scale) => <button key={scale} type="button"
+            role="menuitemradio" aria-checked={options.scale === scale} onClick={() => chooseOptions({ scale })}>
+            {scale}×{options.scale === scale ? <CheckIcon size={12} aria-hidden="true" /> : null}
+          </button>)}
+        </div>
+      </> : <>
+        <button type="button" role="menuitem" onClick={() => { void copy("png"); }}>Copy PNG · {options.scale}× · {MATH_EXPORT_COLOR_LABELS[options.color]}</button>
+        <button type="button" role="menuitem" onClick={() => { void copy("latex"); }}>Copy LaTeX</button>
+        <button type="button" role="menuitem" onClick={() => { void copy("html"); }}>Copy formatted HTML · {MATH_EXPORT_COLOR_LABELS[options.color]}</button>
+        <button type="button" role="menuitem" onClick={() => setShowOptions(true)}>Export options…</button>
+      </>}
     </div>, document.body) : null}
   </span>;
 }
