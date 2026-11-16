@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@pwragent/shared";
 import type { RegistryContext } from "../../app-server/registry-context";
+import { RegistryTurnState } from "../../app-server/registry-turn-state";
 
 /**
  * A RegistryContext for an extracted module built outside the composition
@@ -12,6 +13,7 @@ export function registryContextStandIn(params: {
   providers?: { codex?: object; claude?: object; acp?: object };
   lifecycle?: { readonly closed: boolean };
   emit?: (event: AgentEvent) => Promise<void>;
+  turnState?: RegistryTurnState;
 } = {}): RegistryContext {
   const store = params.overlayStore ?? {};
   const stores: Record<keyof RegistryContext["stores"], object> = {
@@ -19,6 +21,7 @@ export function registryContextStandIn(params: {
     pullRequests: store, reviews: store, archive: store, messaging: store, launchpads: store, directories: store,
   };
   return {
+    turnState: params.turnState ?? new RegistryTurnState(),
     stores,
     providers: params.providers ?? {},
     lifecycle: params.lifecycle ?? { closed: false },

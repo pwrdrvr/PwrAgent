@@ -44,8 +44,6 @@ describe("backend MCP gateway dispatch", () => {
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
-    activeTurnKeys: Set<string>;
-    activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     claudeAgentToolMcpServer: AgentToolMcpServerLike;
     acpBackend: AcpBackendAdapter;
     headlessAutomationTurns: Map<string, {
@@ -107,7 +105,7 @@ describe("backend MCP gateway dispatch", () => {
   function createRegistry(service?: McpConnectionGatewayService) {
     registry = buildRegistry(store, service);
     internals = registry as unknown as typeof internals;
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
   }
 
   it("uses the native thread bridge for search resources and describe_thread across reconnects", async () => {
@@ -262,7 +260,7 @@ describe("backend MCP gateway dispatch", () => {
     registry.setForgeReadHandlers(read, read);
     registry.setForgePrToolHandler(pr);
     const call = await createMonitor();
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
     for (const [tool, arguments_] of [
       ["get_ci_run", { runId: 42 }],
       ["list_ci_artifacts", { runId: 42 }],
@@ -282,7 +280,7 @@ describe("backend MCP gateway dispatch", () => {
     registry.setForgeReadHandlers(read, read);
     registry.setForgePrToolHandler(pr);
     registry.setForgeToolPolicyResolver(() => policy);
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     const call = await createMonitor();
     policy.access.read = "off";
     expect((await call("get_ci_run", { runId: 42 })).success).toBe(false);
@@ -337,10 +335,10 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   it("lets the delegated monitor discover and invoke only its parent's selected connections", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     const call = await createMonitor();
     // The worker has no saved overlay and the parent may finish its turn.
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
     expect((await call("search_mcp_tools", { query: "lookup", connectionId: "one" })).success).toBe(true);
     expect((await call("call_mcp_tool", args)).success).toBe(true);
     expect(operation).toHaveBeenCalledWith(expect.objectContaining({
@@ -357,7 +355,7 @@ describe("backend MCP gateway dispatch", () => {
 
   it("uses the selected Sandboxer connection to inspect a detached cloud verification", async () => {
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
       ? [{ connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: "read_file", schemaRevision: "sandboxer-r1", definition: {
           name: "read_file", inputSchema: { type: "object", properties: { sandboxId: { type: "string" }, path: { type: "string" } }, required: ["sandboxId", "path"] },
@@ -379,7 +377,7 @@ describe("backend MCP gateway dispatch", () => {
       listConnections: async () => [{ id: "one", toolApproval: "prompt" }],
     } as unknown as McpConnectionGatewayService);
     const call = await createMonitor();
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
     const events: AgentEvent[] = [];
     registry.onEvent(async (event) => {
       if (event.notification.method !== "mcpServer/elicitation/request") return;
@@ -408,7 +406,7 @@ describe("backend MCP gateway dispatch", () => {
       });
       expect((await call("call_mcp_tool", args)).success).toBe(false);
       expect(events).toHaveLength(1);
-      internals.activeTurnKeys.add("codex:thread-1:turn-1");
+      registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
       expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "parent-mutation"))).success).toBe(true);
       expect(events).toHaveLength(2);
     }
@@ -459,7 +457,7 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   it("rechecks the delegating actor, worker turn and exact tool schema", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     const call = await createMonitor();
     expect((await call("call_mcp_tool", { ...args, schemaRevision: "stale" })).success).toBe(false);
     operation.mockClear();
@@ -471,13 +469,13 @@ describe("backend MCP gateway dispatch", () => {
     expect((await call("call_mcp_tool", args)).success).toBe(false);
     expect(operation).not.toHaveBeenCalled();
     checkDynamicToolPermission.mockReturnValue({ allowed: true, permission: "tools.instance_management" });
-    internals.activeTurnKeys.delete("codex:headless-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:headless-1:turn-1");
     expect((await call("call_mcp_tool", args)).success).toBe(false);
     expect(operation).not.toHaveBeenCalled();
   });
 
   it.each(["lookup", "other"])("preserves automation tool limits in a Full Access monitor: %s", async (allowedTool) => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
       agentThreadId: "agent-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
       executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
@@ -496,7 +494,7 @@ describe("backend MCP gateway dispatch", () => {
     await registry.close();
     registry = buildRegistry(store, { registerBridge } as unknown as McpConnectionGatewayService);
     internals = registry as unknown as typeof internals;
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
     const response = await internals.handleServerRequest("codex", request("create_monitor_delegation", { task: "Inspect cloud status." }));
     expect(response.success).toBe(false);
     expect(JSON.stringify(response)).toContain("MCP gateway is unavailable");
@@ -504,7 +502,7 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   it.each([undefined, false, true])("restricts Full Access monitors to explicitly read-only tools (readOnlyHint=%s)", async (readOnlyHint) => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
       ? [{ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", definition: {
           name: "lookup", annotations: { readOnlyHint }, inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
@@ -520,7 +518,7 @@ describe("backend MCP gateway dispatch", () => {
 
   it.each(["full-access", "connection-approval", "automation"])("hides Sandboxer exec and denies guessed monitor calls under %s", async (authority) => {
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     if (authority === "connection-approval") {
       await registry.close();
       createRegistry({ registerBridge, requestGatewayToolOperation: operation,
@@ -801,7 +799,7 @@ select_for_new_threads = true
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first))).success).toBe(true);
     f.changeSchema("number");
     if (mode === "full-access") {
-      internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+      registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     } else {
       internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
         agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "default",
@@ -812,7 +810,7 @@ select_for_new_threads = true
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", await f.readArgs(), "call-2"))).success).toBe(true);
     f.changeSchema("string");
     internals.headlessAutomationTurns.delete("codex:thread-1:turn-1");
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "default");
     expect((await f.readArgs()).schemaRevision).toBe(first.schemaRevision);
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first, "call-3"))).success).toBe(false);
     expect(events).toHaveLength(2);
@@ -904,7 +902,7 @@ select_for_new_threads = true
 
     beforeEach(async () => {
       await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
-      internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+      registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     });
 
     it("shows the form exactly and waits for the person, even in Full Access", async () => {
@@ -1108,7 +1106,7 @@ select_for_new_threads = true
   });
 
   it("uses the active turn's Full Access when the saved mode differs", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     const events = declineUnexpectedApproval();
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
     expect(events).toEqual([]);
@@ -1116,7 +1114,7 @@ select_for_new_threads = true
 
   it.each(["default", "auto"] as const)("keeps gateway confirmation for an active %s turn even with a saved Full Access mode", async (mode) => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
-    internals.activeCodexTurnModes.set("thread-1:turn-1", mode);
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", mode);
     const events = declineUnexpectedApproval();
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(false);
     expect(events).toHaveLength(1);
@@ -1137,7 +1135,7 @@ select_for_new_threads = true
   it.each(["default", "auto"] as const)("pre-approves selected automation tools during turn startup in %s", async (executionMode) => {
     const events = declineUnexpectedApproval();
     startTurn.mockImplementation(async () => {
-      internals.activeTurnKeys.add("codex:headless-1:turn-1");
+      registryModules(registry).turnState.registerTurn("codex:headless-1:turn-1");
       const call = request("call_mcp_tool", args);
       const result = await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } });
       expect(result.success).toBe(true);
@@ -1171,7 +1169,7 @@ select_for_new_threads = true
       mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
     });
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
-    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:headless-1:turn-1");
     const call = request("call_mcp_tool", args);
     expect((await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } })).success).toBe(false);
     expect(operation).not.toHaveBeenCalled();
@@ -1192,7 +1190,7 @@ select_for_new_threads = true
       mcpAllowlist: [allowed], input: [{ type: "text", text: "Look up the fixture." }],
     });
     expect(registerBridge).toHaveBeenCalledWith("one", undefined, undefined, "codex");
-    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:headless-1:turn-1");
     const call = request("call_mcp_tool", args);
     expect((await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } })).success).toBe(true);
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
@@ -1582,7 +1580,7 @@ select_for_new_threads = true
       // Through the gateway service, as Claude's MCP server reaches it after
       // the permission handler let the call through unasked.
       it("refuses a write through the gateway before the upstream call", async () => {
-        internals.activeTurnKeys.add("claude:thread-1:turn-1");
+        registryModules(registry).turnState.registerTurn("claude:thread-1:turn-1");
         await store.setThreadMcpConnectionIds({ backend: "claude", threadId: "thread-1", connectionIds: ["one"] });
         const gateway = (registry as unknown as { mcpGatewayTools: { call(args: unknown, context: AgentToolCallContext): Promise<unknown> } }).mcpGatewayTools;
         await expect(gateway.call(args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" }))
@@ -1665,7 +1663,7 @@ select_for_new_threads = true
       : { content: [{ type: "text", text: "sandbox result" }] });
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
     createRegistry({ registerBridge, requestGatewayToolOperation: operation, listConnections: async () => connections.list() } as never);
-    internals.activeCodexTurnModes.set("thread-1:turn-1", executionMode);
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", executionMode);
     const unexpected = declineUnexpectedApproval();
     for (const toolName of names) {
       expect((await internals.handleServerRequest("codex", request("call_mcp_tool", {
@@ -1713,7 +1711,7 @@ select_for_new_threads = true
         listConnections: async () => {
           if (scenario === "policy-error") throw new Error("Fixture unavailable");
           if (scenario === "deselected") await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
-          if (scenario === "ended") internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+          if (scenario === "ended") registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
           return [{ id: "one", enabled: scenario !== "disabled", configured: scenario !== "signed-out", toolApproval: "approve" }];
         },
       };
@@ -1952,7 +1950,7 @@ select_for_new_threads = true
     expect(modes).toEqual(["session", "server-session"]);
 
     const unexpected = declineUnexpectedApproval();
-    internals.activeTurnKeys.add("codex:thread-1:turn-2");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-2");
     const next = request("call_mcp_tool", { ...args, arguments: { id: "another record" } }, "call-2");
     expect((await internals.handleServerRequest("codex", { ...next, params: { ...next.params, turnId: "turn-2" } })).success).toBe(true);
     expect(unexpected).toEqual([]);
@@ -2227,9 +2225,9 @@ select_for_new_threads = true
     });
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
     operation.mockClear();
-    internals.activeTurnKeys.clear();
+    registryModules(registry).turnState.registeredTurnKeys().forEach(key => registryModules(registry).turnState.unregisterTurn(key));
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).success).toBe(false);
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
     Object.assign(registry, { messagingAgentToolService: { checkDynamicToolPermission: vi.fn(() => ({ allowed: false, permission: "tools.instance_management" })) } });
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-3"))).success).toBe(false);
     expect(operation).not.toHaveBeenCalled();
@@ -2265,9 +2263,9 @@ select_for_new_threads = true
 
   it.each(["default", "full-access"] as const)("rejects idle-thread and messaging-policy violations in %s before reading tools", async (executionMode) => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode });
-    internals.activeTurnKeys.clear();
+    registryModules(registry).turnState.registeredTurnKeys().forEach(key => registryModules(registry).turnState.unregisterTurn(key));
     expect((await internals.handleServerRequest("codex", request("search_mcp_tools", { query: "lookup" }))).success).toBe(false);
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
     Object.assign(registry, { messagingAgentToolService: { checkDynamicToolPermission: vi.fn(() => ({ allowed: false, permission: "tools.instance_management" })) } });
     expect((await internals.handleServerRequest("codex", request("search_mcp_tools", { query: "lookup" }, "call-2"))).success).toBe(false);
     expect(operation).not.toHaveBeenCalled();
@@ -2298,7 +2296,7 @@ select_for_new_threads = true
       backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
       mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
     });
-    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    registryModules(registry).turnState.registerTurn("codex:headless-1:turn-1");
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
     const { writes } = await measureSqliteWrites(async () => {
       for (const call of [request("search_mcp_tools", { query: "lookup" }), request("call_mcp_tool", args, "call-2")]) {

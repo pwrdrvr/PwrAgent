@@ -1,3 +1,4 @@
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { ThreadExecutionMode, ThreadOverlayState } from "@pwragent/shared";
@@ -19,6 +20,7 @@ function createConnections(options: {
 } = {}) {
   const getThreadOverlayState = vi.fn(async ({ threadId }: { threadId: string }) => options.overlays?.[threadId]);
   const context = {
+    ...registryContextStandIn(),
     stores: { threads: { getThreadOverlayState } },
     providers: { acp: options.acp ?? { getSession: () => undefined, getInstalledAgent: () => undefined } },
     lifecycle: { closed: false },
@@ -48,6 +50,7 @@ describe("ThreadMcpConnections", () => {
   it("reads neither its host nor its stores until a tool runs", async () => {
     let bound = false;
     const context = {
+      ...registryContextStandIn(),
       get stores() {
         if (!bound) throw new Error("store read while constructing");
         return { threads: { getThreadOverlayState: async () => ({ mcpConnectionIds: ["pwrgit"] }) } };

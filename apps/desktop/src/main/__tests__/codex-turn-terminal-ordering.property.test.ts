@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, ThreadExecutionMode } from "@pwragent/shared";
@@ -18,9 +18,6 @@ vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
 
 type TerminalMethod = "turn/completed" | "turn/failed" | "turn/cancelled";
 type RegistryState = {
-  activeTurnKeys: Set<string>;
-  activeCodexTurnModes: Map<string, ThreadExecutionMode>;
-  activeCodexTurnCollaborationModes: Map<string, "default" | "plan">;
   threadHasActiveTurn(threadId: string): boolean;
   resolveCodexThreadExecutionModeForActiveTurn(threadId: string): Promise<ThreadExecutionMode>;
 };
@@ -57,16 +54,17 @@ function fixture() {
     resolveLiveProfileRuntimeInstanceIds: () => [],
   });
   const state = registry as unknown as RegistryState;
-  return { registry, state, client, overlayStore,
+  const activity = registryModules(registry).turnState;
+  return { registry, state, activity, client, overlayStore,
     // Invoke the subscribed production listener independently, like the transport.
     notify: async (notification: AppServerNotification) => { await notify(notification); },
     assertEnded: (threadId = "thread") => {
       // Provider terminal ownership wins over every delayed start continuation.
       expect({
         busy: state.threadHasActiveTurn(threadId),
-        modes: [...state.activeCodexTurnModes.keys()].filter(key => key.startsWith(`${threadId}:`)),
-        turns: [...state.activeTurnKeys].filter(key => key.startsWith(`codex:${threadId}:`)),
-        collaboration: [...state.activeCodexTurnCollaborationModes.keys()].filter(key => key.startsWith(`codex:${threadId}:`)),
+        modes: activity.executionKeys().filter(key => key.startsWith(`${threadId}:`)),
+        turns: activity.registeredTurnKeys().filter(key => key.startsWith(`codex:${threadId}:`)),
+        collaboration: activity.codex(threadId).turns.filter(turn => turn.collaboration).map(turn => turn.turnId),
       }).toEqual({ busy: false, modes: [], turns: [], collaboration: [] });
     },
     close: async () => {
@@ -101,7 +99,7 @@ async function exerciseTerminalDuringModeLookup(
     if (pending) {
       // A local submission installs collaboration ownership before its synthetic
       // started event. The real notification may arrive before that lookup ends.
-      f.state.activeCodexTurnCollaborationModes.set("codex:thread:pending:thread", "plan");
+      f.activity.setCollaboration("codex:thread:pending:thread", "plan");
       started.push(f.notify({ method: "turn/started", params: {
         threadId: "thread", turnId: "pending:thread", turn: { id: "pending:thread", status: "in_progress" },
       } }));
@@ -171,7 +169,118 @@ async function exerciseNativeReviewInnerLookup(method: TerminalMethod, separateT
   }
 }
 
+async function exerciseTerminalBeforeStartRegistration(method: TerminalMethod, terminalFirst: boolean, stage: "review-forward" | "headless" = "review-forward") {
+  const f = fixture();
+  const entered = deferred(), release = deferred();
+  const reviews = registryModules(f.registry).managedReviewService;
+  const forward = reviews.forwardManagedReviewActivity.bind(reviews);
+  if (stage === "review-forward") {
+    vi.spyOn(reviews, "forwardManagedReviewActivity").mockImplementation(async event => {
+      await forward(event);
+      if (event.notification.method === "turn/started") { entered.resolve(); await release.promise; }
+    });
+  } else {
+    // This hook still belongs to the registry. It precedes emit() and the
+    // event hub; capturing a receipt only in emit() would already be too late.
+    const early = f.registry as unknown as { emitHeadlessAutomationLifecycle(backend: string, notification: AppServerNotification): Promise<void> };
+    const original = early.emitHeadlessAutomationLifecycle.bind(early);
+    vi.spyOn(early, "emitHeadlessAutomationLifecycle").mockImplementation(async (backend, notification) => {
+      await original(backend, notification);
+      if (notification.method === "turn/started") { entered.resolve(); await release.promise; }
+    });
+  }
+  const started = f.notify({ method: "turn/started", params: {
+    threadId: "thread", turnId: "turn", turn: { id: "turn", status: "in_progress" },
+  } });
+  try {
+    await entered.promise;
+    if (!terminalFirst) { release.resolve(); await started; }
+    await f.notify(terminal(method));
+    release.resolve();
+    await started;
+    f.assertEnded();
+    expect(f.activity.codex("thread").deliveries).toEqual([]);
+  } finally {
+    release.resolve();
+    await started;
+    await f.close();
+  }
+}
+
+async function exerciseNativeReviewPendingInnerDelivery(method: TerminalMethod, separateThread: boolean) {
+  const f = fixture();
+  const entered = deferred(), release = deferred();
+  const reviewThreadId = separateThread ? "review-thread" : "thread";
+  const reviews = registryModules(f.registry).managedReviewService;
+  const forward = reviews.forwardManagedReviewActivity.bind(reviews);
+  vi.spyOn(reviews, "forwardManagedReviewActivity").mockImplementation(async event => {
+    await forward(event);
+    if (event.notification.method === "turn/started" && event.notification.params.turnId === "inner") {
+      entered.resolve(); await release.promise;
+    }
+  });
+  const initializeResult = { userAgent: "fixture", methods: ["turn/start", "review/start"] };
+  vi.spyOn(f.client, "getInitializeResult").mockResolvedValue(initializeResult);
+  let inner: Promise<void> | undefined;
+  vi.spyOn(f.client, "startReview").mockImplementation(async () => {
+    inner = f.notify({ method: "turn/started", params: {
+      threadId: reviewThreadId, turnId: "inner", turn: { id: "inner", status: "in_progress" },
+    } });
+    await entered.promise;
+    return { threadId: "thread", reviewThreadId, turnId: "turn" };
+  });
+  const review = f.registry.startReview({ ...identity, target: { type: "uncommittedChanges" } });
+  try {
+    await review;
+    expect(f.state.threadHasActiveTurn("thread")).toBe(true);
+    await f.notify(terminal(method, reviewThreadId));
+    release.resolve();
+    await inner;
+    f.assertEnded();
+    f.assertEnded(reviewThreadId);
+    expect(f.activity.codex(reviewThreadId).deliveries).toEqual([]);
+  } finally {
+    release.resolve();
+    await review;
+    await inner;
+    await f.close();
+  }
+}
+
 describe("Codex turn terminal ownership", () => {
+  it("retains a native review's inner delivery before registration", async () => {
+    await exerciseNativeReviewPendingInnerDelivery("turn/completed", false);
+  });
+
+  it("native review terminal owns a pending inner start delivery", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
+      exerciseNativeReviewPendingInnerDelivery,
+    ), { numRuns: 12 });
+  });
+
+  it("captures start ownership before the first listener await", async () => {
+    await exerciseTerminalBeforeStartRegistration("turn/completed", true, "headless");
+  });
+
+  it("terminal ownership survives listener bookkeeping before emit", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
+      async (method, terminalFirst) => await exerciseTerminalBeforeStartRegistration(method, terminalFirst, "headless"),
+    ), { numRuns: 12 });
+  });
+
+  it("does not restore a turn that finished during awaited start bookkeeping", async () => {
+    await exerciseTerminalBeforeStartRegistration("turn/completed", true);
+  });
+
+  it("terminal ownership survives interleaved start bookkeeping before registration", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
+      async (method, terminalFirst) => await exerciseTerminalBeforeStartRegistration(method, terminalFirst),
+    ), { numRuns: 12 });
+  });
+
   it("does not restore a completed turn's mode after its pending lookup returns", async () => {
     await exerciseTerminalDuringModeLookup("turn/completed", "default", false, true, fc.schedulerFor([1]));
   });

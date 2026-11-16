@@ -1,3 +1,4 @@
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -47,6 +48,7 @@ function line(index: number, overrides: Partial<ThreadUsageLineRecord> = {}): Th
 function fixture(db = openInMemoryStateDb()) {
   const store = new SqliteOverlayStore(db);
   const ledger = new ThreadUsageLedger({
+    ...registryContextStandIn(),
     stores: { usage: store, subAgents: store, toolAccounting: store }, lifecycle: { closed: false },
     emit: async () => {},
   } as unknown as RegistryContext, {} as never, () => ({

@@ -120,7 +120,6 @@ import {
 } from "./backend-registry-runtime-helpers";
 import { executionModeSettings } from "./execution-mode-settings";
 import {
-  buildActiveTurnModeKey,
   buildPendingRequestKey,
 } from "./thread-turn-keys";
 import {
@@ -179,7 +178,6 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
   | "startThread" | "startTurn"
 > {
   readonly acceptedHandoffTaskRequests: Map<string, AcceptedThreadControlRequest>;
-  readonly activeCodexTurnModes: ReadonlyMap<string, ThreadExecutionMode>;
   readonly gitDirectoryService: GitDirectoryService;
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
   readonly pendingStartedThreads: ReadonlyMap<string, AppServerThreadSummary>;
@@ -1631,8 +1629,8 @@ export class ThreadWorkspaceService {
     if (pendingResult) return pendingResult;
 
     if (targetPath) {
-      const executionMode = this.host().activeCodexTurnModes.get(
-        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+      const executionMode = this.context.turnState.executionMode(
+        { threadId: sourceThreadId, turnId: sourceTurnId },
       ) ?? sourceOverlay?.executionMode ?? (backend === "codex"
         ? await this.host().resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
         : "default");

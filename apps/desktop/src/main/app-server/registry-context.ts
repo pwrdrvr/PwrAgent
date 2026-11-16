@@ -2,6 +2,7 @@ import type { AgentEvent } from "@pwragent/shared";
 import type { ClaudeBackend } from "../claude/claude-backend";
 import type { AcpBackendAdapter } from "./acp-backend-adapter";
 import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-registry-types";
+import type { RegistryTurnState } from "./registry-turn-state";
 
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
@@ -86,6 +87,7 @@ export type RegistryHost<Host> = () => Host;
  * that rule for every module.
  */
 export interface RegistryContext {
+  readonly turnState: RegistryTurnState;
   readonly stores: {
     readonly threads: RegistryThreadStore;
     readonly usage: RegistryUsageStore;

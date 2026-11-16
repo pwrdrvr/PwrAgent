@@ -1,4 +1,5 @@
 import { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
+import { RegistryTurnState } from "./registry-turn-state";
 import { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
 import type { RegistryContext } from "./registry-context";
 import { getMainLogger } from "../log";
@@ -125,6 +126,7 @@ const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
 /** The domain modules the composition root built for one registry. */
 export interface RegistryModules {
+  readonly turnState: RegistryTurnState;
   readonly forgeToolBridge: ForgeToolBridge;
   readonly threadInspectionTools: ThreadInspectionTools;
   readonly threadMcpConnections: ThreadMcpConnections;
@@ -187,9 +189,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let createScheduledThreadActionFn: RegistryDependencies["createScheduledThreadActionFn"];
   let threadTitleGenerationService: RegistryDependencies["threadTitleGenerationService"];
   ownerAdmission = options?.ownerAdmission;
-  initialize.push(() => {
-    ports.activeTurnKeys.onDelete((key) => { ports.activeCodexTurnCollaborationModes.delete(key); });
-  });
   const managedMaintenanceRoots = options?.managedWorktreeRoots
     ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
   const readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
@@ -1341,6 +1340,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   // Optional store methods are read on each access, as the registry's own
   // `this.overlayStore.method?.(...)` reads were, never captured once here.
   const context: RegistryContext = {
+    turnState: new RegistryTurnState(),
     stores: {
       threads: {
         getThreadOverlayState: (...args) => overlayStore.getThreadOverlayState(...args),
@@ -1621,6 +1621,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     for (const run of initialize) run();
   });
   registryModulesByRegistry.set(registry, {
+    turnState: context.turnState,
     forgeToolBridge,
     threadInspectionTools,
     threadMcpConnections,
