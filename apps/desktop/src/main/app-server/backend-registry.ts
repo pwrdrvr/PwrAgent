@@ -16240,13 +16240,20 @@ export class DesktopBackendRegistry {
               threadId: notification.params.threadId,
             });
           }
-          const headlessErrorNoticeContext =
-            notification.method === "turn/failed"
+          const noticeThreadId = "threadId" in notification.params
+            ? readOptionalString(notification.params.threadId)
+            : undefined;
+          const headlessErrorNoticeContext = noticeThreadId && (
+            notification.method === "error"
+            || notification.method === "warning"
+            || notification.method === "turn/completed"
+            || notification.method === "turn/cancelled"
+            || notification.method === "turn/failed"
             || (notification.method === "thread/status/changed"
-              && readStatusType(notification.params.status) === "systemError")
+              && readStatusType(notification.params.status) === "systemError"))
               ? this.headlessAutomationErrorNoticeContext(
                   backend,
-                  notification.params.threadId,
+                  noticeThreadId,
                 )
               : undefined;
           if (backend === "codex" && notification.method === "item/completed") {
@@ -21117,33 +21124,41 @@ export class DesktopBackendRegistry {
     // Capture ownership before terminal handling removes the monitor record.
     // Keep protocol IDs intact for accounting, recovery, and lifecycle consumers.
     if (
-      event.notification.method === "turn/failed"
+      event.notification.method === "error"
+      || event.notification.method === "warning"
+      || event.notification.method === "turn/completed"
+      || event.notification.method === "turn/cancelled"
+      || event.notification.method === "turn/failed"
       || (event.notification.method === "thread/status/changed"
         && readStatusType(event.notification.params.status) === "systemError")
     ) {
-      const threadId = event.notification.params.threadId;
-      const monitor = this.subAgentMonitorService.taskMonitorForThread({ backend: event.backend, threadId })
-        ?? this.subAgentMonitorService.completedTaskMonitorRecords.get(taskMonitorThreadKey(event.backend, threadId));
-      const backend = event.errorNoticeContext?.backend
-        ?? monitor?.parentBackend ?? event.backend;
-      const ownerThreadId = event.errorNoticeContext?.threadId
-        ?? monitor?.parentThreadId ?? threadId;
-      const title = event.errorNoticeContext?.title
-        ?? this.getCachedThreadSummary({ backend, threadId: ownerThreadId })?.title;
-      event = {
-        ...event,
-        errorNoticeContext: {
-          backend,
-          threadId: ownerThreadId,
-          ...(title ? { title } : {}),
-          ...(event.errorNoticeContext?.taskMonitor || monitor
-            ? { taskMonitor: true }
-            : {}),
-          ...(event.errorNoticeContext?.automationName
-            ? { automationName: event.errorNoticeContext.automationName }
-            : {}),
-        },
-      };
+      const threadId = readOptionalString(event.notification.params.threadId);
+      if (threadId) {
+        const monitor = this.subAgentMonitorService.taskMonitorForThread({ backend: event.backend, threadId })
+          ?? this.subAgentMonitorService.completedTaskMonitorRecords.get(taskMonitorThreadKey(event.backend, threadId));
+        const owner = this.subAgentMonitorService.resolveSubAgentThreadOwner({
+          backend: event.errorNoticeContext?.backend ?? event.backend,
+          threadId: event.errorNoticeContext?.threadId ?? threadId,
+        });
+        const automation = this.headlessAutomationErrorNoticeContext(owner.backend, owner.threadId);
+        const backend = automation?.backend ?? owner.backend;
+        const ownerThreadId = automation?.threadId ?? owner.threadId;
+        const title = automation?.title ?? event.errorNoticeContext?.title
+          ?? this.getCachedThreadSummary({ backend, threadId: ownerThreadId })?.title;
+        const automationName = automation?.automationName ?? event.errorNoticeContext?.automationName;
+        event = {
+          ...event,
+          errorNoticeContext: {
+            backend,
+            threadId: ownerThreadId,
+            ...(title ? { title } : {}),
+            ...(event.errorNoticeContext?.taskMonitor || monitor
+              ? { taskMonitor: true }
+              : {}),
+            ...(automationName ? { automationName } : {}),
+          },
+        };
+      }
     }
     this.threadUsageLedger.trackRecentThreadUsageTurn(event);
     const isLiveThreadUsage =

@@ -504,11 +504,8 @@ export class SubAgentMonitorService {
       }
       visited.add(key);
 
-      const taskMonitor = [...this.taskMonitorDelegations.values()].find(
-        (record) =>
-          record.backend === backend
-          && record.monitorThreadId === threadId,
-      );
+      const taskMonitor = this.taskMonitorForThread({ backend, threadId })
+        ?? this.completedTaskMonitorsByThread.get(taskMonitorThreadKey(backend, threadId));
       const reviewSubAgentCandidate = !taskMonitor
         ? [...this.managedReviewService.activeReviewSubAgentRecords.values()].find(
             (record) =>

@@ -42388,7 +42388,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("routes headless automation failure notices to the visible Agent thread", async () => {
+  it("routes headless automation retry and failure notices to the visible Agent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
@@ -42409,6 +42409,13 @@ command = "pnpm dev"
     });
 
     await codexClient.emit({
+      method: "error",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", willRetry: true,
+        error: { message: "Reconnecting" },
+      },
+    });
+    await codexClient.emit({
       method: "thread/status/changed",
       params: { threadId: "thread-1", status: { type: "systemError" } },
     });
@@ -42422,9 +42429,14 @@ command = "pnpm dev"
     });
 
     expect(events.filter((event) =>
-      event.notification.method === "thread/status/changed"
+      event.notification.method === "error"
+      || event.notification.method === "thread/status/changed"
       || event.notification.method === "turn/failed"
     )).toEqual([
+      expect.objectContaining({ errorNoticeContext: {
+        backend: "codex", threadId: "agent-thread-1", title: "Check email",
+        automationName: "Check email",
+      } }),
       expect.objectContaining({ errorNoticeContext: {
         backend: "codex", threadId: "agent-thread-1", title: "Check email",
         automationName: "Check email",

@@ -1534,7 +1534,7 @@ export type AgentEvent = {
    * or to membership changes. Owners omit the field when it exceeds bounds.
    */
   navigationDirectoryScope?: { version: 1; directoryKeys: string[] };
-  /** Navigable owner of a failure, captured before a private helper is finalized. */
+  /** Navigable owner of a stream notice, captured before a private helper is finalized. */
   errorNoticeContext?: {
     backend: AppServerBackendKind;
     threadId: string;
