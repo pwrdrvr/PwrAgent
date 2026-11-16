@@ -128,6 +128,12 @@ async function fixture(n: number) {
   const idle = () => [...queries.getSnapshot().resources.values()].every((r) => !r.loading);
   const reset = () => { read.mockClear(); resolve.mockClear(); snapshots.mockClear(); materialize.mockClear(); provider.mockClear(); };
   return { db, store, cache, resolve, snapshots, materialize, provider, requests, queries, read, emit, idle, reset,
+    disconnect: () => {
+      connected = false;
+      cache.invalidate("peer");
+      emit({ backend: "codex", federationTarget: { scope: "remote", instanceId: "peer" },
+        notification: { method: "federation/peerStatus/changed", params: { instanceId: "peer", status: "disconnected" } } });
+    },
     remote: async (i: number, title: string, active: boolean) => {
       connected = true;
       ownerRows = ownerRows.map((row, j) => j === i ? { ...row, title, threadStatus: active ? "active" : "idle" } : row);
@@ -172,6 +178,89 @@ it("shares the physical owner scan with viewers while retaining separate invento
     expect(f.provider).toHaveBeenCalledTimes(1);
     expect(f.resolve).toHaveBeenCalledTimes(1);
   } finally { f.close(); }
+});
+
+async function expectDisconnectedViewer(n: number, selected: number) {
+  vi.useFakeTimers();
+  const f = await fixture(n);
+  const i = selected % n;
+  const exact: NavigationQueryRequest = { protocol: 2, inventory: "viewer", consumer: "main-sidebar",
+    query: { kind: "exact", identities: Array.from({ length: n }, (_, j) => ({ backend: "codex", threadId: `remote-${j}`, ownerInstanceId: "peer" })) } };
+  try {
+    f.queries.setDemand(f.requests); await until(f.idle);
+    await f.remote(i, "Live owner", true);
+    await f.queries.refresh(); await until(f.idle);
+    // Warm the post-snapshot-write source generation before disconnecting.
+    await f.queries.refresh(); await until(f.idle);
+    const warm = await f.read(exact);
+    expect(warm.entries.find(({ row }) => row.id === `remote-${i}`)?.row)
+      .toMatchObject({ threadStatus: "active", federation: { peerStatus: "connected" } });
+    f.reset();
+    const version = f.store.readNavigationSourceVersion();
+    const { writes } = await measureSqliteWrites(async () => {
+      f.disconnect();
+      await f.queries.refresh(); await until(f.idle);
+    });
+    const budget = { ipc: f.read.mock.calls.length, listings: f.provider.mock.calls.length,
+      materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length,
+      snapshots: f.snapshots.mock.calls.length, commits: writes.commits };
+    const disconnected = await f.read(exact);
+    // The owning peer is no longer live; saved rows preserve identity,
+    // membership and viewer rank, but never attest to a running turn.
+    expect(disconnected.entries).toHaveLength(n);
+    for (const { row } of disconnected.entries) {
+      expect(row.federation?.peerStatus).toBe("disconnected");
+      expect(row.threadStatus).not.toBe("active");
+      expect(row.ref.ownerInstanceId).toBe("peer");
+      expect(row.pinnedRank).toBe(warm.entries.find((entry) => entry.row.id === row.id)?.row.pinnedRank);
+    }
+    expect(f.store.readNavigationSourceVersion()).toBe(version);
+    expect(budget).toEqual({ ipc: 1 + 2 * n, listings: 0, materializations: 0, pins: 1, snapshots: 1, commits: 0 });
+  } finally { f.close(); vi.useRealTimers(); }
+}
+
+it("dims a warm active pin immediately when its peer disconnects", async () => {
+  await expectDisconnectedViewer(2, 0);
+});
+
+it("matches peer connectivity after a warm viewer pass without re-listing the unchanged owner", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom(2, 4, 8), fc.nat(100), expectDisconnectedViewer),
+    { numRuns: 25, examples: [[4, 0], [8, 7]] });
+});
+
+it("fences a disconnect during an active pin projection without discarding the unchanged owner scan", async () => {
+  vi.useFakeTimers();
+  const f = await fixture(2);
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const exact: NavigationQueryRequest = { protocol: 2, inventory: "viewer", consumer: "main-sidebar",
+    query: { kind: "exact", identities: [{ backend: "codex", threadId: "remote-0", ownerInstanceId: "peer" }] } };
+  try {
+    f.queries.setDemand(f.requests); await until(f.idle);
+    await f.remote(0, "Live owner", true);
+    await f.queries.refresh(); await until(f.idle);
+    await f.queries.refresh(); await until(f.idle); f.reset();
+    const original = RemoteThreadSummaryCache.prototype.resolvePinnedThreads.bind(f.cache);
+    f.resolve.mockImplementationOnce(async (pins) => { const result = await original(pins); await gate; return result; });
+    const { result: [old, fresh], writes } = await measureSqliteWrites(async () => {
+      f.emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer" } } });
+      const old = f.read(exact);
+      await until(() => f.resolve.mock.calls.length === 1);
+      f.disconnect();
+      const fresh = f.read(exact);
+      finish();
+      return await Promise.all([old, fresh]);
+    });
+    expect(old.entries[0]?.row).toMatchObject({ threadStatus: "active", federation: { peerStatus: "connected" } });
+    expect(fresh.entries[0]?.row.federation?.peerStatus).toBe("disconnected");
+    expect(fresh.entries[0]?.row.threadStatus).not.toBe("active");
+    const retained = await f.read(exact);
+    expect(retained.entries[0]?.row.federation?.peerStatus).toBe("disconnected");
+    expect({ ipc: f.read.mock.calls.length, listings: f.provider.mock.calls.length,
+      materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length,
+      snapshots: f.snapshots.mock.calls.length, commits: writes.commits })
+      .toEqual({ ipc: 3, listings: 1, materializations: 1, pins: 2, snapshots: 2, commits: 0 });
+  } finally { finish(); f.close(); vi.useRealTimers(); }
 });
 
 it("uses the complete pin and watched membership for an exact selection's project controls without repeating pin resolution", async () => {

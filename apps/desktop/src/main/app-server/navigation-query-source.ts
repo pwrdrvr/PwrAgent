@@ -74,7 +74,10 @@ export async function loadLocalNavigationQueryIndex(params: {
     // one follow-up scan. Each run owns its listener, because the pool can
     // run this same load again for a follow-up.
     const unsubscribe = registry.onEvent?.((event) => {
-      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) {
+      // Connectivity changes the liveness of retained peer pins without
+      // changing SQLite membership or the local provider inventory.
+      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)
+        || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
         indexReads.invalidate(key);
       }
