@@ -323,7 +323,7 @@ jobs:
         timeout-minutes: 10
         env:
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/unit-first.json
-        run: pnpm test --shard=${{ matrix.lane }}/2 --sequence.sequencer=./scripts/ci/linux-unit-sequencer.mjs --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs
+        run: pnpm exec vitest run --config vitest.linux-ci.ts --shard=${{ matrix.lane }}/2 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs
 
       - name: Verify the unit slice completed
         id: unit-completion

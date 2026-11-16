@@ -1,7 +1,8 @@
 # Linux unit-test allocation
 
 The Linux CI unit job runs two parallel lanes with a ten-minute test-step
-deadline. Only this job selects `scripts/ci/linux-unit-sequencer.mjs`.
+deadline. Only this job uses `vitest.linux-ci.ts`, which extends the shared
+workspace configuration with `scripts/ci/linux-unit-sequencer.mjs`.
 Desktop-main retains its fork pool and per-file isolation. Worker counts,
 test ordering within a lane, readiness checks and deadlines remain Vitest's
 existing configuration. Other projects retain Vitest's hash-based ownership.
