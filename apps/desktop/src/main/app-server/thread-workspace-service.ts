@@ -2032,10 +2032,11 @@ export class ThreadWorkspaceService {
 
   async handoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+    onCreated?: (worker: { backend: AppServerBackendKind; threadId: string }) => void,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const callId = request.context.callId?.trim();
     if (!callId || !this.host().isLiveDynamicToolCall(request.context.backend, request.context)) {
-      return await this.performHandoffTaskToThread(request);
+      return await this.performHandoffTaskToThread(request, onCreated);
     }
     const handoffId = [
       "handoff",
@@ -2061,7 +2062,7 @@ export class ThreadWorkspaceService {
     // Admit the call before the first await in the handoff path. The backend
     // can deliver the same dynamic tool call twice while workspace setup is
     // still running; both deliveries must await one child creation.
-    const promise = this.performHandoffTaskToThread(request);
+    const promise = this.performHandoffTaskToThread(request, onCreated);
     this.host().acceptedHandoffTaskRequests.set(handoffId, { promise, signature });
     return await promise;
   }
@@ -2089,6 +2090,7 @@ export class ThreadWorkspaceService {
 
   private async performHandoffTaskToThread(
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+    onCreated?: (worker: { backend: AppServerBackendKind; threadId: string }) => void,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const sourceBackend = request.context.backend;
     const sourceThreadId = request.context.threadId;
@@ -2716,6 +2718,7 @@ export class ThreadWorkspaceService {
         message:
           "Child thread exists; starting the delegated turn. Do not create a replacement handoff.",
       });
+      onCreated?.({ backend, threadId });
       const turn = await this.host().startTurn({
         backend,
         threadId,

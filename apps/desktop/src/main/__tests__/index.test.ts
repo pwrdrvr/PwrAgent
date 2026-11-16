@@ -668,6 +668,17 @@ vi.mock("../state/app-state", () => ({
   recordBootDecision: vi.fn(),
 }));
 
+vi.mock("../storage/desktop-runtime-storage", async () => ({
+  ...await vi.importActual<typeof import("../storage/desktop-runtime-storage")>("../storage/desktop-runtime-storage"),
+  createResearchStorage: () => ({
+    list: () => [],
+    get: vi.fn(),
+    findByStartKey: vi.fn(),
+    create: vi.fn(() => { throw new Error("Startup must not create research work"); }),
+    append: vi.fn(() => { throw new Error("Startup has no active research runs"); }),
+  }),
+}));
+
 vi.mock("../storage-maintenance", () => ({
   runStartupStorageMaintenance: runStartupStorageMaintenanceMock,
   interruptStartupStorageMaintenance: vi.fn(async () => {}),
@@ -693,6 +704,8 @@ vi.mock("../profile", () => ({
   PWRAGENT_PROFILE_AUTO_CREATE_ENV: "PWRAGENT_PROFILE_AUTO_CREATE",
   buildDockProfileSnapshot: buildDockProfileSnapshotMock,
   resolveActiveProfileName: resolveActiveProfileNameMock,
+  getProcessRuntimeIdentity: () => ({ instanceId: "runtime-v2-startup-fixture", startedAt: 1 }),
+  isProfileRuntimeIdentityLive: vi.fn(() => false),
   startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
   resolveProfileBootDecision: resolveProfileBootDecisionMock,
   cleanupBootstrapProfile: cleanupBootstrapProfileMock,
@@ -729,6 +742,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setThreadProjectRepositoryResolver: vi.fn(),
     setLocalPullRequestAuthorityResolver: vi.fn(),
     setThreadMaintenanceToolHandler: vi.fn(),
+    setResearchHandler: vi.fn(),
     setThreadDependencyToolHandler: vi.fn(),
     setThreadDependenciesPeerHandler: vi.fn(),
     setThreadPrWatchesPeerHandler: vi.fn(),
@@ -910,7 +924,10 @@ describe("bootstrapApp", () => {
     const isHandler = (name: string) => /^(registry|federation)\.set/.test(name)
       || ["setBundledGitLfsAdvisory", "setNavigationDetailPendingWakesProjector", "setManagedGrokSignatureRejectionReporter",
         "setFederationMessagingPlatformStatusReader", "setInboundPreviewSink"].includes(name);
-    const handlers = legacy.filter(isHandler);
+    const legacyHandlers = legacy.filter(isHandler);
+    // Preserve the recorded bindings and include the additive research tools.
+    const handlers = legacyHandlers.flatMap((name) => name === "registry.setPwrAgentOpenAIDecisionsHandler"
+      ? [name, "registry.setResearchHandler"] : [name]);
     expect(events.filter(isHandler)).toEqual(handlers);
     // Subscriber order is unchanged; the maintenance job waits for all bindings.
     const coreSubscriber = /^(maintenance|working|renderer)\.subscribe$/;
@@ -927,14 +944,15 @@ describe("bootstrapApp", () => {
     };
     const originalStarts = legacyOwnerBoot.events.flatMap((name) => starts[name.replace(/\s+/g, "")] ?? []);
     expect(events.filter((name) => name.endsWith(".start"))).toEqual(originalStarts);
-    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe"]);
+    // Research observes its experiment gate in addition to the existing config owners.
+    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe", "config.subscribe"]);
     expect(events.filter((name) => name.startsWith("federation.on"))).toEqual(["federation.onRemoteBackendEvent"]);
     expect(events.filter((name) => name.startsWith("registry.on"))).toEqual([
       "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",
     ]);
-    assertOwnerHooksBeforeWork(events, handlers, ["maintenance.start", "navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
+    assertOwnerHooksBeforeWork(events, [...handlers, "research.subscribe"], ["maintenance.start", "navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
     // The unmodified boot recording exposes the ordering defect this extraction fixes.
-    expect(() => assertOwnerHooksBeforeWork(legacy, handlers, ["federation.restart"]))
+    expect(() => assertOwnerHooksBeforeWork(legacy, legacyHandlers, ["federation.restart"]))
       .toThrow(/setMessagingArchiveCleaner/);
     advisorySpy.mockRestore();
     projectorSpy.mockRestore();

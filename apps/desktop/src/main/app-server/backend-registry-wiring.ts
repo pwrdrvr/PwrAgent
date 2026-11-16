@@ -936,6 +936,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               starMapHandler: ports.starMapHandler,
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
+              researchHandler: ports.researchHandler,
             }, { taskMonitorRole: "all" }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),

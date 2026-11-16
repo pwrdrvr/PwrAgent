@@ -91,6 +91,98 @@ in the thread request: no Codex config, plugin files, signatures or installed
 helpers are changed. Disabled plugins, custom MCP commands, helper threads,
 headless hosts and other platforms retain their existing launch behavior.
 
+## Research runs
+
+Research runs attach an objective, approaches, shared findings and submissions
+to a coordinating thread. The owner composition root constructs
+`ResearchService` from `packages/owner-core` with desktop execution ports and a
+profile-scoped `ResearchStore`. Workers are ordinary managed Codex handoffs;
+their identities are journaled before their first model turn starts. The
+owner admits at most the operator's requested one to eight concurrent workers
+and enforces a deadline of one to 120 minutes. Completed workers free slots
+for explicit item assignments within the original deadline. A research worker
+cannot create another research run or delegate additional managed workers
+through `handoff_task`.
+
+The Research panel binds its exact objective, worker count, deadline and
+workspace choice to an in-memory request before submitting it to the
+coordinator. That request is caller-scoped, single-use and expires after five
+minutes without admission. It is neither persisted nor federated. Research is
+an opt-in, default-off experiment stored as `experimental.research_enabled`.
+Its context-rail tab, native/MCP catalogs, IPC and dispatch require this flag
+and Codex Tool Discovery. The five ordinary functions `research_start`,
+`research_read`, `research_update`, `research_search` and `research_assign`
+remain deferred and are discovered on demand; they have no eager exemption.
+Providers without native tool search can use the existing portable discovery
+transport. Disabling the feature or discovery fences admissions immediately
+and stops owned active runs through the existing cancellation lifecycle.
+Retained evidence is preserved for re-enabling. Missing or malformed flags
+remain off, and stale loaded schemas cannot bypass the live gate.
+Disabling a three-worker run uses the existing five-commit stop budget,
+127,720 WAL bytes (approximately 0.128 MB/day at one active disable per day).
+Unchanged disabled settings and idle checks introduce no research writes.
+
+`research_runs`, `research_events` and `research_workers` retain PwrAgent-owned
+structured state, not provider transcripts. Each mutation compares the
+journal revision and appends its command identity in one transaction. Reads
+and duplicate deliveries write nothing. Worker start/end events, explicit
+research operations and run boundaries write; streamed tokens do not. The
+checked-in SQLite budgets cover those boundaries. Recovery validates the
+owner's PID, runtime instance ID and start time against the existing profile
+marker. A dead owner becomes interrupted without replaying model work; a
+different live process retains authority. Older journals without a process
+start time cannot prove live ownership and become interrupted. Revision
+queue receipts identify exactly which pending sends a
+run may cancel. An unknown cancellation outcome keeps the run stopping.
+Synthetic pending turn notifications do not establish worker identity. A
+caught start error cannot establish non-admission: its worker stays unknown,
+retaining capacity and deadline enforcement until trusted evidence arrives.
+
+Revision requests reserve capacity before delivery. Pending, queued and
+unresolved revisions retain their approach's slot even after its current
+turn ends; exact queue admission and terminal receipts reconcile that work.
+The reservation is projected with the approach in the journal transaction,
+so reconstruction and focused headers enforce the same worker limit.
+Overlapping revision requests for one worker are rejected until its prior
+delivery settles. Cancelling a focused approach settles the selected item as
+well as any source item awaiting that assignment's cancellation.
+
+`research_items` projects approaches, findings and candidates in the same
+transaction as each journal event. Existing journals are backfilled once at
+schema initialization. Search, summaries and single-item reads query these
+records without replaying the run journal; search pages share a SQLite read
+snapshot and use revision-bound cursors. Search returns at most twenty compact
+IDs and excerpts. Single-item reads include only the selected record, its
+source approach and focused assignment. Mutations return compact receipts.
+
+The coordinator can assign an open item to a new managed child. Its durable
+intent reserves a worker slot, and membership is recorded before its first
+turn. The child receives IDs and loads the item itself. Claims and progress
+require the item's current version; stale updates cannot overwrite another
+claim. Work completion leaves evidence and candidate review unchanged.
+Cancellation remains requested until the exact assigned turn has ended or
+acknowledged interruption; unknown starts or stops retain their slot. An
+exhausted run can be explicitly continued within its original deadline.
+
+The checked-in budgets measure one commit for a finding or progress update,
+including its item projection, and zero commits for focused reads/search or
+redelivery. A small finding measured 37,080 observed WAL bytes: approximately
+53.4 MB/day at one aggregate finding per minute; a progress change measured
+28,840 bytes (41.5 MB/day at one per minute). No per-token or idle writes are
+introduced. Actual WAL volume depends on payload size and page layout.
+A queued revision measured three commits and 86,520 WAL bytes for review,
+intent and receipt; its two exact queue boundaries add two commits and
+57,680 bytes. At one revision per ten minutes across all workers that is
+approximately 20.8 MB/day, including 13.1 MB/day added by reservation tracking
+and queue reconciliation. Repeated or unrelated queue events write nothing.
+
+The renderer reads research through IPC. This first integration serves local
+Codex threads; federation viewers must use the owning instance. Graph edges
+represent recorded assignments and contributions, and finding relationships
+identify their source explicitly. Review acceptance is a coordinator or
+operator judgment, never formal verification. Open Math Harness execution
+and Lean verification remain separate adapter milestones.
+
 ## Git information reads
 
 Navigation Git information goes through main-process stores. Directory enrichment

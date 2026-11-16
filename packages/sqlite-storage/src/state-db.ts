@@ -1,4 +1,5 @@
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
+import { RESEARCH_SCHEMA, backfillResearchItems } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
 import fs from "node:fs";
 import path from "node:path";
@@ -2936,6 +2937,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_REVIEW_SCHEMA);
     ensureThreadReviewFindingStatusNames(db);
     db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
+    db.exec(RESEARCH_SCHEMA);
+    backfillResearchItems(db);
     // Profiles that created the table before decisions could run on Jev or a
     // local model. Every row they hold ran on OpenAI.
     if (!tableColumnExists(db, "openai_decision_versions", "provider")) {

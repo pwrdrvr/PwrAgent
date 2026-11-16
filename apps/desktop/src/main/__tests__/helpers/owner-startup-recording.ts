@@ -19,6 +19,7 @@ export function recordOwnerCalls(getter: unknown, prefix: string, names: RegExp)
           const source = typeof listener === "function" ? listener.toString() : "";
           label = source.includes("interruptStartupStorageMaintenance") ? "maintenance.subscribe"
             : source.includes("handleAgentEventForWorkingState") ? "working.subscribe"
+            : source.includes("research.observeStart") ? "research.subscribe"
             : "renderer.subscribe";
         }
         records.push({ name: label, order });

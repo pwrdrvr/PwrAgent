@@ -212,6 +212,7 @@ type PanelOverrides = Partial<
     | "pricingDisplayOptions"
     | "threadPricingSummaryEnabled"
     | "threadToolAccountingEnabled"
+    | "researchEnabled"
   >
 >;
 
@@ -251,6 +252,21 @@ const mockRailRect = (rail: HTMLElement): void => {
 };
 
 describe("ThreadContextPanel", () => {
+  it("does not mount or query Research when its experiment is disabled, even for a saved Research tab", () => {
+    const researchSnapshot = vi.fn(async () => ({ runs: [], writableRunIds: [] }));
+    renderPanel({ activeTab: "research", pinned: true, desktopApi: { researchSnapshot } });
+    expect(screen.queryByRole("tab", { name: "Research" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Research" })).not.toBeInTheDocument();
+    expect(researchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("shows Research only after opting in on a local Codex thread", () => {
+    const panel = renderPanel({ researchEnabled: true });
+    expect(screen.getByRole("tab", { name: "Research" })).toBeInTheDocument();
+    panel.rerender(<ThreadContextPanel activeTab="info" backends={[baseBackend]} pinned={false} thread={baseThread} onActiveTabChange={panel.onActiveTabChange} researchEnabled={false} />);
+    expect(screen.queryByRole("tab", { name: "Research" })).not.toBeInTheDocument();
+  });
+
   it("waits for hover intent before revealing the rail", async () => {
     vi.useFakeTimers();
     renderPanel();
@@ -810,23 +826,19 @@ describe("ThreadContextPanel", () => {
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
     renderPanel({ pinned: true });
-
-    const info = screen.getByRole("tab", { name: "Thread info" });
-    info.focus();
-    expect(document.activeElement).toBe(info);
-
-    fireEvent.keyDown(info, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Waiting for" }),
-    );
-
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
-    expect(document.activeElement).toBe(info);
-
-    fireEvent.keyDown(info, { key: "End" });
-    expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "AI provider info" }),
-    );
+    // The rendered order is the accessibility oracle, including optional tabs.
+    const tabs = screen.getAllByRole("tab");
+    for (const [index, tab] of tabs.entries()) {
+      tab.focus();
+      fireEvent.keyDown(tab, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(tabs[(index + 1) % tabs.length]);
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(tab);
+    }
+    fireEvent.keyDown(tabs[0]!, { key: "End" });
+    expect(document.activeElement).toBe(tabs.at(-1));
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(tabs[0]);
   });
 
   it("shows the Pricing tab by default", () => {
