@@ -216,11 +216,11 @@ test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter ex
       if (!paste) throw new Error("Paste Without Formatting menu item missing");
       paste.click();
     });
-    await expect(textbox).toHaveText(literal);
+    await expect(app.window.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", literal);
     await expect(textbox.locator("h1, strong")).toHaveCount(0);
     await textbox.fill("");
     await app.window.keyboard.press(process.platform === "darwin" ? "Meta+Shift+V" : "Control+Shift+V");
-    await expect(textbox).toHaveText(literal);
+    await expect(app.window.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", literal);
     await expect(textbox.locator("h1, strong")).toHaveCount(0);
   } finally {
     await app.close();
