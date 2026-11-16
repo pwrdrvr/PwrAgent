@@ -81,7 +81,7 @@ export function buildPwrAgentAppToolDefinitions(
 function descriptionForOperation(operation: PwrAgentAppOperationName): string {
   switch (operation) {
     case "manage_pwragent":
-      return "Manage this local desktop owner only (no Federation routing). Status is read-only; upgrade_check may download/stage. Restart uses Quiet & Continue After Restart after acknowledgement and any quit confirmation; stop uses ordinary quit. Restart/stop require an explicit user request. Scheduled means pending acknowledgement/confirmation; accepted means handed to shutdown, never proof of installed-version completion.";
+      return "Manage this local desktop owner only (no Federation routing). Status is read-only. upgrade_check may download/stage. Restart uses Quiet & Continue After Restart after acknowledgement and any quit confirmation. Stop uses ordinary quit. Restart/stop require an explicit user request. Scheduled means pending acknowledgement or confirmation. Accepted means handed to shutdown. It does not confirm installation completed.";
   }
 }
 
@@ -98,13 +98,13 @@ function inputSchemaForOperation(
           expectedStateToken: {
             type: "string",
             minLength: 1,
-            description: "For upgrade_check, restart or stop, copy stateToken from status to bind the request to that exact owner process and update state. A mismatch refuses the action. Omit only to act on the currently serving owner.",
+            description: "Copy stateToken from status to bind upgrade_check, restart or stop to that owner process and update state. A mismatch refuses the action. Omit only to act on the currently serving owner.",
           },
           action: {
             type: "string",
             enum: PWRAGENT_APP_MANAGEMENT_ACTIONS,
             description:
-              "`status` gets version, start time, uptime, update state, and the Codex app server's uptime, child-process count, and last idle recycle. `upgrade_check` checks and may automatically download/stage; it never installs or restarts. `restart` installs a ready upgrade if present, otherwise relaunches, using bounded quiet/checkpoint-and-continue (not idle draining). Quiet steers turns, terminates environment actions and may interrupt unfinished work after 15s; the operator can override with Quit Now. `stop` requests ordinary quit; staged updates may apply under the platform quit policy. Read status for the asynchronous operation outcome. Headless owners do not support desktop lifecycle actions.",
+              "`status` gets version, start time, uptime and update state. It also includes Codex app-server uptime, child-process count and last idle recycle. `upgrade_check` checks and may automatically download/stage. It never installs or restarts. `restart` installs a ready upgrade or relaunches the current version. It uses bounded Quiet & Continue After Restart. Quiet checkpoints and steers turns, terminates environment actions and may interrupt unfinished work after 15s. It does not wait indefinitely for idle. The operator can override with Quit Now. `stop` requests ordinary quit. Staged updates may apply under the platform quit policy. Read status for the asynchronous operation outcome. Headless owners do not support desktop lifecycle actions.",
           },
         },
       };
