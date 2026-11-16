@@ -22,7 +22,9 @@ creates a PwrAgent review or formal-verification result.
 internal configuration has `command` (absolute executable), literal `args`, and
 optional `endpoint`, `model`, `api_key_env` (an environment-variable name).
 No existing setting changes shape; no conversion or dual write is needed.
-Configuration is captured per connection. A malformed argument list fails closed.
+Configuration comes from the owner's watched config-store research domain and is
+captured per connection. Invalid profile edits block new adapter use, including
+when the store retains a last-known-good snapshot. A malformed argument list fails closed.
 Neither model text nor IPC selects an executable, endpoint, model or workspace.
 The form discloses the configured execution model and endpoint origin; the owner
 retains that selection before paid probing, separately from any source model name.
@@ -137,9 +139,13 @@ The checked-in SQLite budgets measure the feature after database setup:
 | Fifty repeated pages | 0 | 0 |
 | Confirmed cancellation | 2 | 74,160 |
 | Execution admission with model provenance and an initial source page | 4 | 156,592 |
+| Changed Harness configuration revision | 1 | 4,120 |
+| One thousand adapter configuration reads | 0 | 0 |
 
 At one six-record page per minute across the owner, the measured rate is
 `(1/60 commits/s) × 57,680 bytes/commit × 86,400 s = 83.06 MB/day`.
 Idle polling and token streaming add zero writes. Four imports/hour at the measured
 size add approximately 15.03 MB/day. WAL bytes vary with payload/page layout and
 are recorded, not asserted; commit/statement/row budgets fail in either direction.
+Configuration reads add zero MB/day. One configuration edit/hour at the measured
+commit size adds approximately 0.10 MB/day through the existing config snapshot.

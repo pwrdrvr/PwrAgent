@@ -1,4 +1,6 @@
 {
+  "research-harness-config-reads": {"commits": 0, "note": "1000 adapter status/admission config reads use the immutable owner snapshot without filesystem or SQLite work", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "research-harness-config-revision": {"commits": 1, "note": "one existing config snapshot commit per changed Harness configuration revision", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "research-harness-model-admission": {"commits": 4, "note": "Intent, owner-selected model provenance before the paid probe, dispatch and one initial source page. No per-token writes.", "observedWalBytes": 156592, "rowsChanged": 17, "statements": 17},
   "research-harness-finish": {"commits": 1, "note": "Explicit local completion after local acceptance; does not infer or request source cancellation.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "research-harness-shutdown": {"commits": 1, "note": "One durable unknown-outcome boundary before owned process cleanup; no remote stop is inferred.", "observedWalBytes": 20600, "rowsChanged": 3, "statements": 3},

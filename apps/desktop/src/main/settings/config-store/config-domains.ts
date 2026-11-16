@@ -120,6 +120,7 @@ export type ConfigDomainMap = Readonly<{
   messaging: ConfigSection<"messaging">;
   federation: ConfigSection<"federation">;
   models: ConfigSection<"models">;
+  research: ConfigSection<"research">;
   providers: Readonly<Record<ProviderId, ProviderProjection>>;
   applications: ConfigSection<"applications">;
   git: ConfigSection<"git">;
@@ -137,6 +138,7 @@ export const CONFIG_DOMAIN_KEYS = [
   "messaging",
   "federation",
   "models",
+  "research",
   "providers",
   "applications",
   "git",
@@ -301,6 +303,7 @@ export function normalizeConfigDomains(params: {
     messaging: config.messaging ?? {},
     federation: config.federation ?? {},
     models: config.models ?? {},
+    research: config.research ?? {},
     providers,
     applications: config.applications ?? {},
     git: config.git ?? {},

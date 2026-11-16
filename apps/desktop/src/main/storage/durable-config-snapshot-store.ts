@@ -147,6 +147,7 @@ function parseConfigDomains(payload: string): ConfigDomainMap | undefined {
     || !isRecord(parsed.ui)
     || !isRecord(parsed.integratedTerminal)
     || !isRecord(parsed.imageUploads)
+    || (parsed.research !== undefined && !isRecord(parsed.research))
     || !isRecord(parsed.general.appearance)
     || !isRecord(parsed.general.settings)
     || typeof parsed.onboarding.completed !== "boolean"
@@ -159,7 +160,8 @@ function parseConfigDomains(payload: string): ConfigDomainMap | undefined {
       return undefined;
     }
   }
-  return deepFreeze(parsed as ConfigDomainMap);
+  // Schema-v1 snapshots written before Harness settings have no research domain.
+  return deepFreeze({ ...parsed, research: parsed.research ?? {} } as ConfigDomainMap);
 }
 
 function parseProviderProjection(payload: string): ProviderProjection | undefined {
