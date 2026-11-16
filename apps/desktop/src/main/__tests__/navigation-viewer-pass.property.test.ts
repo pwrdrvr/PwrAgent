@@ -271,6 +271,34 @@ it("matches the owning peer and viewer pin model after generated publications an
     }), { numRuns: 25 });
 });
 
+it.each([4, 8])("bounds an automatic completion overtaken during listing with %i projects", async (n) => {
+  const f = await fixture(n);
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    f.queries.setDemand(f.requests); await until(f.idle); f.reset(); f.change(0);
+    const original = f.provider.getMockImplementation()!;
+    f.provider.mockImplementationOnce(async () => { await gate; return original(); });
+    const { writes } = await measureSqliteWrites(async () => {
+      f.emit({ backend: "codex", notification: { method: "thread/subAgents/updated", params: { threadId: "root-0", subAgents: [] } } } as AgentEvent);
+      const first = f.queries.refresh(undefined, undefined, true);
+      await until(() => f.provider.mock.calls.length === 1);
+      f.emit({ backend: "codex", notification: { method: "turn/completed", params: { threadId: "root-0", turn: { id: "turn", status: "completed" } } } } as AgentEvent);
+      f.emit({ backend: "codex", notification: { method: "thread/status/changed", params: { threadId: "root-0", status: { type: "idle" } } } });
+      const second = f.queries.refresh(undefined, undefined, true);
+      finish(); await Promise.all([first, second]); await until(f.idle);
+    });
+    expectSqliteWriteBudget({ scenario: "navigation-viewer-pending-turn-end", writes,
+      note: "A completion/status boundary overtakes a pending listing across 4/8 projects: zero query commits, 0 MB/day added WAL." });
+    expect({ ipc: f.read.mock.calls.length, listings: f.provider.mock.calls.length,
+      materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length, snapshots: f.snapshots.mock.calls.length })
+      .toEqual({ ipc: 6, listings: 2, materializations: 2, pins: 2, snapshots: 2 });
+    const exact = await f.read({ protocol: 2, inventory: "viewer", consumer: "main-sidebar",
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "root-0" }] } });
+    expect(exact.entries[0]?.row.threadStatus).toBe("idle");
+  } finally { finish(); f.close(); }
+});
+
 it("fences a pin membership edit during a pending projection and retains the old cursor's inventory", async () => {
   const f = await fixture(4);
   let finish!: () => void;
