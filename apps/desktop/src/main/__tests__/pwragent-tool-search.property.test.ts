@@ -26,6 +26,26 @@ function syntheticCatalog(sizes: number[]): DynamicToolSpec[] {
 }
 
 describe("PwrAgent tool search relevance and delivery properties", () => {
+  // The thread-search schema owns model filtering. Mentioning that criterion
+  // must not turn a request for threads into runtime-model enumeration.
+  it("keeps thread search discoverable when models are search criteria", () => {
+    const threadSearch = searchPwrAgentTools(catalog, "search_threads", 1)[0];
+    expect(threadSearch.inputSchema).toMatchObject({ properties: { models: { type: "array" } } });
+    fc.assert(fc.property(
+      fc.constantFrom("list", "find", "search", "show"),
+      fc.constantFrom("", "my ", "all ", "recent "),
+      fc.constantFrom("by model", "using model", "with model", "running models", "by available models"),
+      (action, modifier, criterion) => {
+        const results = searchPwrAgentTools(catalog, `${action} ${modifier}threads ${criterion}`);
+        expect(results.map((tool) => tool.name)).toContain("search_threads");
+      },
+    ));
+  });
+
+  it("finds threads by model for the reported query", () => {
+    expect(searchPwrAgentTools(catalog, "list threads by model").map((tool) => tool.name)).toContain("search_threads");
+  });
+
   // No tool in this catalog lists runtime models. Thread operations and
   // registered decisions cannot answer that request, regardless of context.
   it("abstains from unrelated tools for runtime model discovery", () => {

@@ -24,6 +24,7 @@ In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thre
 // Small domain vocabulary supplies words users use that need not appear in a
 // tool's literal name. Ranking otherwise follows the live catalog, not a copy.
 const SEARCH_ALIASES: Record<string, string> = {
+  search_threads: "find list model models filter criteria",
   get_forge_status: "forge cache cached github gitlab pr mr pull merge request status checks freshness",
   list_ci_runs: "github actions gitlab ci pipelines workflow runs branch head",
   get_ci_run: "github actions gitlab ci failure pipeline jobs summary",
@@ -99,8 +100,16 @@ function hasAnyWord(terms: ReadonlySet<string>, text: string): boolean {
   return words(text).some((word) => terms.has(word));
 }
 
-function isRuntimeModelDiscoveryQuery(terms: ReadonlySet<string>): boolean {
-  return (
+function isRuntimeModelDiscoveryQuery(query: string): boolean {
+  const normalized = query.toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  const terms = new Set(words(query));
+  // Threads can be the requested objects, with models as their filter. Keep
+  // that distinct from model enumeration, including when availability is
+  // mentioned in the criterion. A singular "current thread" can still be
+  // context for the original request to inspect available runtime models.
+  const requestsThreads = /\b(?:list|find|search|show|get|read|inspect|discover|enumerate)\s+(?:(?:all|my|our|the|current|recent|running|archived|coding|agent)\s+)*threads\b/.test(normalized)
+    || /\bthreads?\s+(?:by|using|with|running|on|matching|filtered)\b/.test(normalized);
+  return !requestsThreads && (
     hasAnyWord(terms, "model models")
     || (hasAnyWord(terms, "provider providers") && hasAnyWord(terms, "agent agents runtime subscription subscriptions"))
   )
@@ -124,7 +133,7 @@ function describesRuntimeModelDiscovery(tool: { name: string; description: strin
 
 export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, limit = 3) {
   const terms = [...new Set(words(query))];
-  const runtimeModelDiscovery = isRuntimeModelDiscoveryQuery(new Set(terms));
+  const runtimeModelDiscovery = isRuntimeModelDiscoveryQuery(query);
   const tools = catalog.flatMap((spec) =>
     spec.type === "namespace" && spec.name === PWRAGENT_TOOL_NAMESPACE
       ? spec.tools.filter((tool) => tool.name !== "tool_search")
@@ -200,7 +209,7 @@ export function buildPwrAgentToolSearchDefinition(
       const result = {
         tools,
         ...(!tools.length ? {
-          noMatchReason: isRuntimeModelDiscoveryQuery(new Set(words(args.query)))
+          noMatchReason: isRuntimeModelDiscoveryQuery(args.query)
             ? "No tool in this thread's catalog lists available runtime models or subscription providers. Thread settings and registered decisions do not provide that capability."
             : "No matching tool in this thread's catalog. Try a more specific action or an exact tool name.",
         } : {}),
