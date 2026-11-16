@@ -33,7 +33,7 @@ try {
   const files = new Set(packed.files.map((file) => file.path));
   for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js", "dist/index.js", "dist/runtime.json",
     "dist/storage-maintenance-worker.js", "dist/claude-session-reader-worker.js", "dist/mcp-connection-bridge.js", "dist/token-miser-hook.js", "dist/outpost-codex-sandbox.js",
-    "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
+    "dist/chunks.json", "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
   for (const file of files) assert.ok(!file.split("/").includes(".."), `Packed path escapes package: ${file}`);
@@ -44,6 +44,11 @@ try {
   mkdirSync(extracted);
   run("tar", ["-xf", tarball, "-C", extracted]);
   const unpacked = file => readFileSync(path.join(extracted, "package", file), "utf8");
+  const graph = JSON.parse(unpacked("dist/chunks.json"));
+  for (const chunk of Object.keys(graph.chunks)) {
+    assert.ok(files.has(`dist/${chunk}`), `Missing packed chunk: ${chunk}`);
+    assert.ok(!/require\(["'](?:\/|[A-Za-z]:)/.test(unpacked(`dist/${chunk}`)), `Chunk requires a build-host path: ${chunk}`);
+  }
   const packedPackage = JSON.parse(unpacked("package.json"));
   assert.deepEqual(releaseMetadata(packedPackage), releaseMetadata(pkg));
   assert.deepEqual(packedPackage.pwragentRelease, source);
@@ -66,6 +71,8 @@ try {
   // Install the tarball away from the checkout. npm selects target-native packages.
   run("npm", ["install", "--global", "--prefix", prefix, "--no-audit", "--no-fund", tarball],
     { cwd: temporary, env });
+  run(process.execPath, [path.join(root, "scripts/portable-oracle.mjs"), path.join(prefix, "lib/node_modules/pwragent/dist")],
+    { cwd: temporary, env, stdio: "inherit" });
   const fixture = path.join(temporary, "codex.mjs");
   copyFileSync(path.join(root, "test/fixtures/codex.js"), fixture);
   chmodSync(fixture, 0o755);
