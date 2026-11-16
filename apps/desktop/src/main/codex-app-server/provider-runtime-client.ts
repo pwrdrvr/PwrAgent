@@ -161,13 +161,16 @@ export function createProviderRuntimeClient(
     }] : subscription.args;
     subscription.stops.set(client, invoke(client, subscription.method, args) as () => void);
   };
-  const runtime = (providerId: string | undefined): CodexAppServerClient => {
+  const runtime = (providerId: string | undefined, selectedModel?: string): CodexAppServerClient => {
     // Settings changes defer shutdown while turns are active; their owner stays live.
     const existing = providerId ? runtimes.get(providerId) : undefined;
     if (existing) return existing;
     const provider = options.resolveProviders().find((entry) => entry.id === providerId);
-    if (!provider || (provider.compatibility !== "bonsai" && !provider.modelMetadata?.length)) return primary;
-    const client = options.create(provider);
+    if (!provider) return primary;
+    const selected = selectedModel && !provider.models?.includes(selectedModel)
+      && !provider.modelMetadata?.some((model) => model.id === selectedModel)
+      ? { ...provider, models: [...(provider.models ?? []), selectedModel] } : provider;
+    const client = options.create(selected);
     runtimes.set(provider.id, client);
     attach(client, provider.id);
     for (const subscription of subscriptions) subscribe(subscription, client, provider.id);
@@ -198,7 +201,8 @@ export function createProviderRuntimeClient(
     if (generation !== startedAtGeneration) throw new Error("Codex runtime pool closed during routing.");
     const provider = method === "forkThread" ? requested ?? owner : owner ?? requested;
     // Persisted history remains readable when the local inference server is offline.
-    const client = provider && READ_ONLY.has(method) && !runtimes.has(provider) ? primary : runtime(provider);
+    const model = typeof params?.model === "string" ? parseCodexProviderModelId(params.model).model : undefined;
+    const client = provider && READ_ONLY.has(method) && !runtimes.has(provider) ? primary : runtime(provider, model);
     const result = await invoke(client, method, args);
     observe(result, client === primary ? undefined : provider);
     return result;

@@ -25,6 +25,19 @@ afterEach(async () => {
 });
 
 describe("isolated Bonsai launch resources", () => {
+  it.each([32768, 65536, 131072])("honors a manual cap of %s within the Bonsai adapter ceiling", async (contextWindowCap) => {
+    const runtime = await prepareBonsaiRuntime({ ...provider, contextWindowCap });
+    try {
+      const context = Math.min(contextWindowCap, 65536);
+      expect(runtime.overrides).toContain(`model_context_window=${context}`);
+      expect(runtime.overrides).toContain(`model_auto_compact_token_limit=${Math.floor(context * 0.75)}`);
+      const file = JSON.parse(runtime.overrides.find((arg) => arg.startsWith("model_catalog_json="))!.slice("model_catalog_json=".length));
+      expect(JSON.parse(await readFile(file, "utf8")).models[0]).toMatchObject({
+        context_window: context, max_context_window: context, auto_compact_token_limit: Math.floor(context * 0.75),
+      });
+    } finally { await runtime.close(); }
+  });
+
   it("disables native MCPs in one table override, including names the CLI dotted-key parser would misparse", () => {
     expect(bonsaiNativeMcpOverrides(["awsdocs", "computer-use", "server.with.dots"])).toEqual([
       'mcp_servers={"awsdocs"={enabled=false},"computer-use"={enabled=false},"server.with.dots"={enabled=false}}',
@@ -96,7 +109,8 @@ describe("isolated Bonsai launch resources", () => {
       const runtimePath = JSON.parse(catalogArg.slice("model_catalog_json=".length)) as string;
       expect(runtimePath).not.toBe(catalogPath);
       expect(JSON.parse(await readFile(runtimePath, "utf8"))).toEqual({
-        models: [{ ...template.models[0], supports_search_tool: true }],
+        models: [{ ...template.models[0], supports_search_tool: true,
+          max_context_window: 65536, auto_compact_token_limit: 49152 }],
       });
       expect(await readFile(catalogPath, "utf8")).toBe(original);
     } finally { await runtime.close(); }
