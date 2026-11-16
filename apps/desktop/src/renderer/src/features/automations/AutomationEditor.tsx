@@ -44,6 +44,8 @@ import {
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
 import { Select, type SelectOption } from "../../components/Select";
 import { copyText } from "../../lib/copy-text";
@@ -254,12 +256,36 @@ export function AutomationEditor(props: AutomationEditorProps) {
     initialAutomation?.backlogPolicy ?? "coalesce",
   );
   const [threadKey, setThreadKey] = useState(initialThreadKey);
+  const [chosenAgentOption, setChosenAgentOption] = useState<AgentThreadOption>();
   const [promotedAgentOptions, setPromotedAgentOptions] = useState<AgentThreadOption[]>(
     [],
   );
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [agentPickerTab, setAgentPickerTab] = useState<AgentPickerTab>("agents");
   const [agentQuery, setAgentQuery] = useState("");
+  // Sidebar rows are a retained viewport, not the owner's Agent inventory.
+  // Filter before paging so an old Agent is reachable without browsing there.
+  const agentInventory = useNavigationQueryResource({
+    desktopApi: props.desktopApi,
+    active: agentPickerOpen,
+    request: props.desktopApi?.getNavigationQueryPage ? {
+      protocol: 2,
+      consumer: "settings",
+      federationTarget: readRendererFederationTarget(),
+      query: { kind: "messaging-threads", agentOnly: agentPickerTab === "agents", filter: agentQuery },
+      pageSize: 100,
+    } : undefined,
+  });
+  const pickerThreads = useMemo(
+    () => props.desktopApi?.getNavigationQueryPage
+      ? (agentInventory.state?.page?.entries ?? []).map(({ row }) => row)
+      : (props.threads ?? []),
+    [props.desktopApi, agentInventory.state?.page, props.threads],
+  );
+  const pickerError = agentInventory.state?.error
+    ?? (agentInventory.state?.stale ? "The Agent list changed. Reload to continue." : undefined);
+  const pickerIncomplete = agentInventory.state?.page?.coverage.state !== undefined
+    && agentInventory.state.page.coverage.state !== "complete";
   const [agentHelpOpen, setAgentHelpOpen] = useState(false);
   const [agentPromotionError, setAgentPromotionError] = useState<string>();
   const [promotingThreadKey, setPromotingThreadKey] = useState<string>();
@@ -1329,7 +1355,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
   const agentOptions = useMemo(
     () => {
-      const options: AgentThreadOption[] = (props.threads ?? [])
+      const options: AgentThreadOption[] = pickerThreads
         .filter((thread) => thread.agent)
         .map((thread) => buildAgentOption(thread));
       for (const promoted of promotedAgentOptions) {
@@ -1361,17 +1387,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
       initialAssignment?.threadId,
       initialThreadKey,
       props.threads,
+      pickerThreads,
     ],
   );
   const threadOptions = useMemo(
     () =>
-      (props.threads ?? [])
+      pickerThreads
         .filter(
           (thread) =>
             !thread.agent,
         )
         .map((thread) => buildAgentOption(thread)),
-    [props.threads],
+    [pickerThreads],
   );
   const visibleAgentOptions = useMemo(
     () => filterAgentPickerOptions(agentOptions, agentQuery),
@@ -1381,7 +1408,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
     () => filterAgentPickerOptions(threadOptions, agentQuery),
     [agentQuery, threadOptions],
   );
-  const selectedAgent = agentOptions.find((thread) => thread.key === threadKey);
+  const selectedAgent = agentOptions.find((thread) => thread.key === threadKey)
+    ?? (chosenAgentOption?.key === threadKey ? chosenAgentOption : undefined);
 
   // Execution settings resolve against the Agent chosen in the Deliver stage.
   // "Inherit" is a symbolic reference applied at run time, so it is valid to
@@ -1393,14 +1421,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
   );
   const agentThreadSummary = useMemo(
     () =>
-      agentAssignment
+      selectedAgent?.thread ?? (agentAssignment
         ? (props.threads ?? []).find(
             (thread) =>
               thread.id === agentAssignment.threadId
               && thread.source === agentAssignment.backend,
           )
-        : undefined,
-    [agentAssignment, props.threads],
+        : undefined),
+    [agentAssignment, props.threads, selectedAgent?.thread],
   );
   const effectiveBackendKind = profileBackend || agentAssignment?.backend;
   const effectiveBackend = backendCatalog?.find(
@@ -2885,6 +2913,15 @@ export function AutomationEditor(props: AutomationEditorProps) {
                             value={agentQuery}
                             onChange={(event) => setAgentQuery(event.currentTarget.value)}
                           />
+                          <div
+                            className="automation-agent-picker__results"
+                            onScroll={(event) => {
+                              const list = event.currentTarget;
+                              if (list.scrollHeight - list.scrollTop - list.clientHeight < 40 && !pickerError) {
+                                void agentInventory.loadMore();
+                              }
+                            }}
+                          >
                           {agentPickerTab === "agents" ? (
                             <div role="listbox" aria-label="Agent threads">
                               {canDeferAgent ? (
@@ -2918,6 +2955,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                     aria-selected={thread.key === threadKey}
                                     onClick={() => {
                                       setThreadKey(thread.key);
+                                      setChosenAgentOption(thread);
                                       setAgentPickerOpen(false);
                                       setValidationError(undefined);
                                     }}
@@ -2930,11 +2968,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                     </span>
                                   </button>
                                 ))
-                              ) : (
+                              ) : !agentInventory.loading && !pickerError && !pickerIncomplete ? (
                                 <p className="automation-agent-picker__empty">
                                   No Agent threads match.
                                 </p>
-                              )}
+                              ) : null}
                             </div>
                           ) : (
                             <div role="listbox" aria-label="Threads to promote">
@@ -2962,13 +3000,39 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                     </span>
                                   </button>
                                 ))
-                              ) : (
+                              ) : !agentInventory.loading && !pickerError && !pickerIncomplete ? (
                                 <p className="automation-agent-picker__empty">
                                   No regular threads match.
                                 </p>
-                              )}
+                              ) : null}
                             </div>
                           )}
+                          {agentInventory.loading ? (
+                            <p className="automation-agent-picker__empty" role="status">Loading threads...</p>
+                          ) : null}
+                          {pickerError || pickerIncomplete ? (
+                            <div className="automation-agent-picker__empty">
+                              <p role="alert">{pickerError ?? "The thread inventory is still loading. Reload to check for more threads."}</p>
+                              <button
+                                className="automation-agent-picker__option"
+                                type="button"
+                                onClick={() => void agentInventory.refresh()}
+                              >
+                                Reload threads
+                              </button>
+                            </div>
+                          ) : null}
+                          {!pickerError && agentInventory.state?.page?.nextCursor ? (
+                            <button
+                              className="automation-agent-picker__option"
+                              disabled={agentInventory.loading}
+                              type="button"
+                              onClick={() => void agentInventory.loadMore()}
+                            >
+                              {agentPickerTab === "agents" ? "Load more Agents" : "Load more threads"}
+                            </button>
+                          ) : null}
+                          </div>
                           {agentPromotionError ? (
                             <p className="automation-editor__error" role="alert">
                               {agentPromotionError}
