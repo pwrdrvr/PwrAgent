@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createResponseFlush } from "../util/response-flush";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 import { codexAuthState, isCodexAuthenticationFailure } from "../codex-auth-state";
 import {
@@ -113,6 +114,7 @@ function isJsonRpcResponseEnvelope(message: string): boolean {
 }
 
 export class StdioJsonRpcTransport implements JsonRpcTransport {
+  private readonly responseFlushes = new Map<string | number, ReturnType<typeof createResponseFlush>>();
   private codexHome?: string;
   private requestMethods = new Map<string | number, string>();
   private unsubscribeAuth?: () => void;
@@ -135,6 +137,22 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
   setCloseHandler(handler: (error?: Error) => void): void {
     this.closeHandler = handler;
+  }
+
+  waitForResponseFlush(id: string | number): Promise<void> {
+    const existing = this.responseFlushes.get(id);
+    if (existing) return existing.promise;
+    const flush = createResponseFlush();
+    this.responseFlushes.set(id, flush);
+    void flush.promise.finally(() => {
+      if (this.responseFlushes.get(id) === flush) this.responseFlushes.delete(id);
+    }).catch(() => undefined);
+    return flush.promise;
+  }
+
+  private failResponseFlushes(): void {
+    for (const flush of this.responseFlushes.values()) flush.finish(new Error("App server transport closed before acknowledgement."));
+    this.responseFlushes.clear();
   }
 
   async connect(): Promise<void> {
@@ -336,6 +354,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       if (this.childProcess === child) {
         this.childProcess = null;
       }
+      if (generation === this.lifecycleGeneration) this.failResponseFlushes();
       this.closeHandler();
       if (!this.closeRequested && generation === this.lifecycleGeneration) {
         const exit: CodexAppServerExit = {
@@ -359,6 +378,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     this.unsubscribeAuth?.();
     this.unsubscribeAuth = undefined;
     this.closeRequested = true;
+    this.failResponseFlushes();
     this.requestMethods.clear();
     this.lifecycleGeneration += 1;
     if (this.closePromise) {
@@ -499,6 +519,16 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       }
       this.requestMethods.set(envelope.id, envelope.method);
     }
-    child.stdin.write(`${message}\n`);
+    const flush = envelope.method === undefined ? this.responseFlushes.get(envelope.id) : undefined;
+    if (flush) {
+      try {
+        child.stdin.write(`${message}\n`, (error) => flush.finish(error ?? undefined));
+      } catch (error) {
+        flush.finish(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      }
+    } else {
+      child.stdin.write(`${message}\n`);
+    }
   }
 }

@@ -1049,6 +1049,7 @@ export class DesktopBackendRegistry {
   private readonly durableRestartContinuations = new Map<string, StoredRestartContinuation>();
   /** See `restart-continuation-gate.ts`. */
   private restartGate: RestartGateState = OPEN_RESTART_GATE;
+  private beforeQuietRestartGate?: RestartGateState;
   private readonly restartGateTimers = new Set<ReturnType<typeof setTimeout>>();
   private readonly restartGateListeners = new Set<(closed: boolean) => void>();
   private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
@@ -9558,8 +9559,16 @@ export class DesktopBackendRegistry {
    * and returns the running turns it will stop. Nothing is stopped yet.
    */
   beginQuietRestart(): QuietRestartTarget[] {
+    if (this.restartGate.phase !== "quieting") this.beforeQuietRestartGate = this.restartGate;
     this.applyRestartGate({ type: "quiet", at: Date.now() });
     return this.listQuietRestartTargets();
+  }
+
+  /** Only used when the initial atomic checkpoint failed, before stopping work. */
+  cancelQuietRestart(): void {
+    const previous = this.beforeQuietRestartGate ?? OPEN_RESTART_GATE;
+    this.beforeQuietRestartGate = undefined;
+    this.applyRestartGate({ type: "cancel-quiet", previous: transitionRestartGate(previous, { type: "deadline", at: Date.now() }) });
   }
 
   /**
@@ -9633,9 +9642,12 @@ export class DesktopBackendRegistry {
    * follows interrupts the turns; the next launch continues them. Returns
    * how many threads will be continued.
    */
-  saveRestartContinuations(targets: readonly QuietRestartTarget[], stoppedAt = Date.now()): number {
+  saveRestartContinuations(targets: readonly QuietRestartTarget[], stoppedAt = Date.now(), requireCheckpoint = false): number {
     const store = this.restartContinuationStore;
-    if (!store) return 0;
+    if (!store) {
+      if (requireCheckpoint) throw new Error("Restart continuation storage is unavailable; quiet restart cancelled.");
+      return 0;
+    }
     const threads = new Map<string, QuietRestartTarget>();
     for (const target of [...targets, ...this.listQuietRestartTargets()]) {
       threads.set(buildThreadIdentityKey(target.backend, target.threadId), target);
@@ -9665,6 +9677,7 @@ export class DesktopBackendRegistry {
       backendRegistryLog.warn("restart continuations could not be saved", {
         error: error instanceof Error ? error.message : String(error),
       });
+      if (requireCheckpoint) throw error;
       return 0;
     }
   }
@@ -12714,6 +12727,10 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<ThreadSteeringSubmission> {
+    // Accepted requests replay before reaching this admission boundary.
+    if (this.restartGate.phase === "quieting" && messageOrigin?.systemReason !== "app-restart") {
+      throw new Error("PwrAgent is restarting. Retry after it relaunches; this message was not accepted.");
+    }
     return await this.threadSteerSubmission.submit(params, messageOrigin);
   }
 
@@ -18816,7 +18833,7 @@ export class DesktopBackendRegistry {
           id: "app_management" as const,
           accepts: isPwrAgentAppDynamicToolCall,
           dispatch: async () => await handlePwrAgentAppDynamicToolCall({
-            backend, call: hostToolCall, handler: this.appManagementHandler,
+            backend, call: hostToolCall, handler: this.appManagementHandler, responseFlushed: request.responseFlushed,
           }),
         },
         {
@@ -18829,7 +18846,7 @@ export class DesktopBackendRegistry {
       ] : [];
       const route = catalog ? {
         id: catalog.id,
-        dispatch: async () => await catalog.router.handleDynamicToolCall({ backend, call: hostToolCall, signal }),
+        dispatch: async () => await catalog.router.handleDynamicToolCall({ backend, call: hostToolCall, signal, responseFlushed: request.responseFlushed }),
       } : legacyRoutes.find(({ accepts }) => accepts(hostToolCall));
       if (route) {
         if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {

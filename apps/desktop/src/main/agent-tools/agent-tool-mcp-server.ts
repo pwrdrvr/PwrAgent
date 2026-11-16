@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { createResponseFlush } from "../util/response-flush";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -348,6 +349,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     request: Request;
     token: string;
     clientContext: AgentToolMcpClientContext;
+    responseFlushed?: Promise<void>;
   }): Promise<Response> {
     // A tool call can wait for the operator, a renderer or long work, so it
     // is answered as a stream whose headers go out at once. Every other
@@ -444,7 +446,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         // A client that stopped reading no longer needs progress.
         const stopHeartbeat = () => clearInterval(heartbeat);
         clientGone.signal.addEventListener("abort", stopHeartbeat, { once: true });
-        const call = this.callTool(request, extra);
+        const call = this.callTool(request, extra, params.responseFlushed);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
@@ -488,6 +490,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private async callTool(
     request: CallToolRequest,
     extra: CallToolExtra,
+    responseFlushed?: Promise<void>,
   ): Promise<AgentMcpToolCallResponse> {
     const token = extra.authInfo?.token;
     const clientContext = token
@@ -552,6 +555,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       tool: request.params.name,
       args: request.params.arguments,
       signal: extra.signal,
+      responseFlushed,
     });
     try {
       // Resolve after dispatch using the original turn identity. A reminder
@@ -620,10 +624,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       });
       return;
     }
+    const flush = createResponseFlush();
+    response.once("finish", () => flush.finish());
+    response.once("close", () => { if (!response.writableFinished) flush.finish(new Error("MCP client disconnected before acknowledgement.")); });
     const webResponse = await this.handleMcpProtocolRequest({
       request: await toWebRequest(request, requestUrl),
       token,
       clientContext,
+      responseFlushed: flush.promise,
     });
     if (!webResponse.body) {
       response.writeHead(
@@ -657,6 +665,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         response.write(value);
       }
     } catch (error) {
+      flush.finish(error instanceof Error ? error : new Error(String(error)));
       cancel();
       throw error;
     } finally {

@@ -10,6 +10,7 @@ export type CodexAppServerExit = {
 };
 export type CodexAppServerProcessInfo = { pid: number; startedAt: number };
 export type CodexClientTransport = JsonRpcTransport & {
+  waitForResponseFlush?: (id: string | number) => Promise<void>;
   getProcessInfo?: () => CodexAppServerProcessInfo | undefined;
   takeLastStopReport?: () => { descendants: number; orphansReaped: number } | undefined;
 };

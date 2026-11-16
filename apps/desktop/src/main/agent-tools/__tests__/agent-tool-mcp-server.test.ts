@@ -15,7 +15,7 @@ import {
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
 } from "../agent-tool-mcp-server";
-import { agentToolSuccess } from "../agent-tool-definition";
+import { agentToolSuccess, type AgentToolDefinition } from "../agent-tool-definition";
 import { resolveAgentToolCatalogs, type ResolvedAgentToolCatalog } from "../agent-tool-catalog-registry";
 import { buildPwrAgentMessagingPdfToolRouter } from "../pwragent-messaging-agent-tools";
 import { buildPwrAgentToolGuideDefinition, PWRAGENT_TOOL_GUIDE } from "../pwragent-tool-guide";
@@ -270,7 +270,7 @@ describe("AgentToolMcpServer", () => {
   });
 
   it("serves and dispatches the dynamic-tool catalog over loopback MCP", async () => {
-    const dispatch = vi.fn(() => agentToolSuccess({ status: "ok" }));
+    const dispatch = vi.fn<AgentToolDefinition["dispatch"]>(() => agentToolSuccess({ status: "ok" }));
     const catalog = buildCatalog(
       new AgentToolRouter([
         {
@@ -333,6 +333,7 @@ describe("AgentToolMcpServer", () => {
           status: "ok",
         },
       });
+      await expect(dispatch.mock.calls[0]?.[1].responseFlushed).resolves.toBeUndefined();
     } finally {
       await client.close();
     }
@@ -342,6 +343,7 @@ describe("AgentToolMcpServer", () => {
       {
         backend: "acp:kimi",
         callId: expect.any(String),
+        responseFlushed: expect.any(Promise),
         signal: expect.any(AbortSignal),
         threadId: "thread-1",
         transport: "mcp",
