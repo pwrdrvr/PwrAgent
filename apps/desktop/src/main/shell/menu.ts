@@ -56,7 +56,7 @@ export type ApplicationMenuActions = {
   /** The Search All screen (⇧⌘F) in the focused main window. */
   openThreadSearch: () => void;
   openWebsite: () => void | Promise<void>;
-  pasteWithoutFormatting: () => void;
+  pasteWithoutFormatting: () => void | Promise<void>;
   quit: () => void | Promise<void>;
   replayOnboarding: () => void;
   /** Settings → About, on every platform. */

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const writeMock = vi.fn(async (_items: unknown[]) => {});
 const writeTextMock = vi.fn(async (_text: string) => {});
-const readTextMock = vi.fn(() => "Clipboard text");
+const readTextMock = vi.fn(async () => "Clipboard text");
 const focusedWebContentsMock = vi.fn();
 const listeners = new Map<string, (event: unknown) => void>();
 
@@ -53,15 +53,15 @@ describe("clipboard ipc", () => {
   it("sends plain clipboard text only to the focused web contents and restricts native fallback to that focus", async () => {
     const { registerClipboardIpcHandlers, requestPasteWithoutFormatting } = await import("../shell/ipc/clipboard");
     const { PASTE_WITHOUT_FORMATTING_CHANNEL, PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL } = await import("../../shared/plain-text-paste");
-    const focused = { send: vi.fn(), pasteAndMatchStyle: vi.fn() };
+    const focused = { send: vi.fn(), pasteAndMatchStyle: vi.fn(), isDestroyed: () => false };
     const inactive = { pasteAndMatchStyle: vi.fn() };
     focusedWebContentsMock.mockReturnValue(focused);
     registerClipboardIpcHandlers();
-    requestPasteWithoutFormatting();
+    await requestPasteWithoutFormatting();
     expect(focused.send).toHaveBeenCalledExactlyOnceWith(PASTE_WITHOUT_FORMATTING_CHANNEL, "Clipboard text");
-    listeners.get(PASTE_WITHOUT_FORMATTING_CHANNEL)?.({ sender: inactive });
+    await listeners.get(PASTE_WITHOUT_FORMATTING_CHANNEL)?.({ sender: inactive });
     expect(focused.send).toHaveBeenCalledTimes(1);
-    listeners.get(PASTE_WITHOUT_FORMATTING_CHANNEL)?.({ sender: focused });
+    await listeners.get(PASTE_WITHOUT_FORMATTING_CHANNEL)?.({ sender: focused });
     expect(focused.send).toHaveBeenCalledTimes(2);
     listeners.get(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL)?.({ sender: inactive });
     expect(inactive.pasteAndMatchStyle).not.toHaveBeenCalled();
