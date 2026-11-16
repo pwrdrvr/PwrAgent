@@ -974,7 +974,7 @@ Apache-2.0
 ~~~~~~~~~~
 - @agentclientprotocol/sdk@1.3.0 | https://github.com/agentclientprotocol/typescript-sdk
 - @chevrotain/types@11.1.2 | https://github.com/Chevrotain/chevrotain
-- @discordjs/builders@1.14.1 | https://github.com/discordjs/discord.js
+- @discordjs/builders@1.15.0 | https://github.com/discordjs/discord.js
 - @discordjs/collection@1.5.3 | https://github.com/discordjs/discord.js
 - @discordjs/collection@2.1.1 | https://github.com/discordjs/discord.js
 - @discordjs/formatters@0.6.2 | https://github.com/discordjs/discord.js
@@ -994,7 +994,7 @@ Apache-2.0
 - bare-path@3.1.2 | https://github.com/holepunchto/bare-path
 - bare-stream@2.13.4 | https://github.com/holepunchto/bare-stream
 - bare-url@2.5.4 | https://github.com/holepunchto/bare-url
-- discord.js@14.27.0 | https://github.com/discordjs/discord.js
+- discord.js@14.28.1 | https://github.com/discordjs/discord.js
 - events-universal@1.0.1 | https://github.com/holepunchto/events-universal
 - long@5.3.2 | https://github.com/dcodeIO/long.js
 - pdfjs-dist@6.5.438 | https://github.com/mozilla/pdf.js
@@ -1266,7 +1266,7 @@ MIT
 - @types/unist@2.0.11 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/unist@3.0.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/use-sync-external-store@0.0.6 | https://github.com/DefinitelyTyped/DefinitelyTyped
-- @types/ws@8.18.1 | https://github.com/DefinitelyTyped/DefinitelyTyped
+- @types/ws@8.18.2 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @upsetjs/venn.js@2.0.0 | https://github.com/upsetjs/venn.js
 - @vladfrangu/async_event_emitter@2.4.7 | https://github.com/vladfrangu/async_event_emitter
 - @xterm/addon-fit@0.11.0 | https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit
@@ -1441,7 +1441,7 @@ MIT
 - magic-bytes.js@1.13.0 | https://github.com/LarsKoelpin/magic-bytes
 - markdown-table@3.0.4 | wooorm/markdown-table
 - marked@16.4.2 | https://github.com/markedjs/marked
-- marked@18.1.2 | https://github.com/markedjs/marked
+- marked@18.1.3 | https://github.com/markedjs/marked
 - math-intrinsics@1.1.0 | https://github.com/es-shims/math-intrinsics
 - mdast-squeeze-paragraphs@6.0.0 | syntax-tree/mdast-squeeze-paragraphs
 - mdast-util-definition-list@2.0.1 | https://github.com/wataru-chocola/mdast-util-definition-list
@@ -1630,7 +1630,7 @@ MIT
 - tuf-js@6.0.0 | https://github.com/theupdateframework/tuf-js
 - type-is@2.1.0 | jshttp/type-is
 - undici@6.29.1 | https://github.com/nodejs/undici
-- undici@8.12.3 | https://github.com/nodejs/undici
+- undici@8.12.4 | https://github.com/nodejs/undici
 - undici-types@7.24.6 | https://github.com/nodejs/undici
 - unicode-emoji-modifier-base@1.0.0 | https://github.com/mathiasbynens/unicode-emoji-modifier-base
 - unified@11.0.5 | unifiedjs/unified
@@ -2381,13 +2381,13 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
-@discordjs/builders@1.14.1 (Apache-2.0)
+@discordjs/builders@1.15.0 (Apache-2.0)
 ---------------------------------------
 
 Applies to:
-- @discordjs/builders@1.14.1 (Apache-2.0)
+- @discordjs/builders@1.15.0 (Apache-2.0)
 
-Representative file: @discordjs/builders@1.14.1/LICENSE
+Representative file: @discordjs/builders@1.15.0/LICENSE
 
 Apache License
                            Version 2.0, January 2004
@@ -2587,7 +2587,7 @@ Apache License
 Applies to:
 - @discordjs/collection@1.5.3 (Apache-2.0)
 - @discordjs/collection@2.1.1 (Apache-2.0)
-- discord.js@14.27.0 (Apache-2.0)
+- discord.js@14.28.1 (Apache-2.0)
 
 Representative file: @discordjs/collection@1.5.3/LICENSE
 
@@ -5452,7 +5452,7 @@ Applies to:
 - @types/unist@2.0.11 (MIT)
 - @types/unist@3.0.3 (MIT)
 - @types/use-sync-external-store@0.0.6 (MIT)
-- @types/ws@8.18.1 (MIT)
+- @types/ws@8.18.2 (MIT)
 
 Representative file: @types/d3@7.4.3/LICENSE
 
@@ -10401,7 +10401,7 @@ marked@16.4.2 (MIT)
 
 Applies to:
 - marked@16.4.2 (MIT)
-- marked@18.1.2 (MIT)
+- marked@18.1.3 (MIT)
 
 Representative file: marked@16.4.2/LICENSE.md
 
@@ -13540,7 +13540,7 @@ undici@6.29.1 (MIT)
 
 Applies to:
 - undici@6.29.1 (MIT)
-- undici@8.12.3 (MIT)
+- undici@8.12.4 (MIT)
 - undici-types@7.24.6 (MIT)
 
 Representative file: undici@6.29.1/LICENSE

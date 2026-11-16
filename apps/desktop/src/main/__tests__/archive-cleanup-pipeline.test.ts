@@ -1165,35 +1165,71 @@ describe("archive cleanup pipeline", () => {
     }
   });
 
-  it("rejects admission when a pre-existing lifecycle mutation settles after its provider row was read", async () => {
+  it.each([
+    { target: "first", otherFinishesFirst: false },
+    { target: "first", otherFinishesFirst: true },
+    { target: "second", otherFinishesFirst: false },
+    { target: "second", otherFinishesFirst: true },
+  ])("rejects admission when a pre-existing lifecycle mutation settles after its provider row was read ($target, other finishes first: $otherFinishesFirst)", async ({ target, otherFinishesFirst }) => {
     vi.useFakeTimers();
     const fixture = buildRepair();
+    const targetPath = `/contrived/${target}`;
+    const otherPath = `/contrived/${target === "first" ? "second" : "first"}`;
     let finish!: () => void;
     let started!: () => void;
     const entered = new Promise<void>((resolve) => { started = resolve; });
     const gate = new Promise<void>((resolve) => { finish = resolve; });
+    let recordFirstResult!: () => void;
+    const firstResultRecorded = new Promise<void>((resolve) => { recordFirstResult = resolve; });
+    let releaseOther!: () => void;
+    const mutationSettled = new Promise<void>((resolve) => { releaseOther = resolve; });
     let mutation: Promise<void> | undefined;
     const archive = fixture.archiveWorktree.getMockImplementation()!;
-    fixture.archiveWorktree.mockImplementationOnce(async (params) => {
+    fixture.archiveWorktree.mockImplementation(async (params) => {
+      // Model both completion orders explicitly. Snapshot preparation and
+      // result publication can race independently on native Windows too.
+      if (params.threadId !== target) {
+        await mutationSettled;
+        if (!otherFinishesFirst) await firstResultRecorded;
+        return await archive(params);
+      }
       mutation = fixture.registry.withThreadLifecycleMutation({ backend: "codex", threadId: "moving-owner" }, async () => {
         started();
         await gate;
       });
       await entered;
-      return await archive(params);
+      try {
+        return await archive(params);
+      } catch (error) {
+        if (otherFinishesFirst) await firstResultRecorded;
+        throw error;
+      }
     });
     const read = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
     fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
       const page = await read(params);
-      if (mutation && params.archived) { finish(); await mutation; mutation = undefined; }
+      if (mutation && params.archived) {
+        finish();
+        await mutation;
+        mutation = undefined;
+        releaseOther();
+      }
       return page;
     });
-    const repair = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
+    const repair = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({
+      onProgress: (completed) => { if (completed === 1) recordFirstResult(); },
+    });
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await drivePacer(fixture.registry, repair);
-    expect(result.cleanup[0]?.removedWorktree).toBe(false);
-    expect(fixture.removed.has("/contrived/first")).toBe(false);
-    expect(result.cleanup[0]?.error).toContain("workspace state changed");
+    expect(result.cleanup.map((item) => item.worktreePath)).toEqual(otherFinishesFirst
+      ? [otherPath, targetPath] : [targetPath, otherPath]);
+    // The oracle is the checkout identity and the removal boundary, never
+    // report position or whichever snapshot happened to start first.
+    const affected = result.cleanup.find((item) => item.worktreePath === targetPath);
+    expect(affected?.removedWorktree).toBe(false);
+    expect(affected?.error).toContain("workspace state changed");
+    expect(fixture.removed.has(targetPath)).toBe(false);
+    expect(fixture.removed.has(otherPath)).toBe(true);
   });
 
   it("discovers more than 500 archived worktrees while excluding live Codex, Claude, and overlay checkout users", async () => {
