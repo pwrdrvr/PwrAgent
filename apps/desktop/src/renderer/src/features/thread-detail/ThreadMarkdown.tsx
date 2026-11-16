@@ -330,16 +330,19 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
     const canPreview = target.previewable && markdownProps.desktopApi?.readMarkdownFile;
     return (
       <span className="thread-markdown__file-link">
-        {canPreview ? (
-          // A file chip, not inline code: the glyph and accent say a click
-          // opens the preview, where plain inline code copies.
+        {canPreview || markdownProps.desktopApi?.openPath ? (
+          // A resolved file is actionable; unresolved inline code still copies.
           <a
             className="thread-markdown__file-chip tooltip-target"
             href={`file://${encodeURI(target.path)}`}
-            data-tooltip={`Preview ${tildifyPath(target.path)}`}
+            data-tooltip={`${canPreview ? "Preview" : "Open"} ${tildifyPath(target.path)}`}
             onClick={(event) => {
               event.preventDefault();
-              viewLocalFile({ ...target, label: props.text });
+              if (canPreview) {
+                viewLocalFile({ ...target, label: props.text });
+              } else {
+                openLocalFileWithOsDefault(markdownProps.desktopApi, target.path);
+              }
             }}
           >
             {/* The word joiner keeps the glyph on the line with the name. */}
@@ -361,7 +364,7 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
             <code className="transcript-message__code">{props.children}</code>
           </TranscriptCopyButton>
         )}
-        {editorApplication && markdownProps.desktopApi?.openApplication ? (
+        {isKnownTextFile(target.path) && editorApplication && markdownProps.desktopApi?.openApplication ? (
           <button
             type="button"
             className="thread-markdown__editor-link"
@@ -593,7 +596,7 @@ const markdownComponents: Components = {
       </a>
     );
 
-    if (isLocalPreviewFile && localTarget) {
+    if (localTarget && isKnownTextFile(localTarget.path)) {
       return (
         <span className="thread-markdown__file-link">
           {link}
@@ -924,25 +927,10 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return;
       }
 
-      if (prefersSystemFileOpener(target.path)) {
-        event.preventDefault();
-        void props.desktopApi?.openPath?.({ path: target.path })
-          .then((response) => {
-            if (!response.opened) {
-              console.error("Failed to open transcript file link", response.error);
-            }
-          })
-          .catch((error: unknown) => {
-            console.error("Failed to open transcript file link", error);
-          });
-        return;
-      }
-
-      if (openLocalFileInEditor(target)) {
-        event.preventDefault();
-      }
+      event.preventDefault();
+      openLocalFileWithOsDefault(props.desktopApi, target.path);
     },
-    [openLocalFileInEditor, props.desktopApi]
+    [props.desktopApi]
   );
 
   const viewSkillMarkdown = useCallback(
@@ -1380,18 +1368,41 @@ function skillNameFromPath(filePath: string, label: string): string {
   return label.replace(/^\$/, "") || segments.at(-1) || "skill";
 }
 
-// These artifacts are normally viewed or played in their registered app.
-// Keep source files and unknown extensions on the selected-editor path.
-const SYSTEM_FILE_EXTENSIONS = new Set([
-  "avif", "bmp", "gif", "heic", "heif", "ico", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp",
-  "avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm", "wmv",
-  "aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav",
-  "doc", "docx", "dvi", "epub", "odp", "ods", "odt", "pdf", "ppt", "pptx", "ps", "rtf", "tex", "xls", "xlsx",
+function openLocalFileWithOsDefault(
+  desktopApi: Pick<DesktopApi, "openPath"> | undefined,
+  path: string,
+): void {
+  void desktopApi?.openPath?.({ path })
+    .then((response) => {
+      if (!response.opened) {
+        console.error("Failed to open transcript file link", response.error);
+      }
+    })
+    .catch((error: unknown) => {
+      console.error("Failed to open transcript file link", error);
+    });
+}
+
+// This only controls the optional editor button. File opens always use the
+// OS default unless an in-app preview is available.
+const TEXT_FILE_EXTENSIONS = new Set([
+  "c", "cc", "cpp", "cs", "css", "csv", "cxx", "fish", "go", "graphql", "h", "hpp",
+  "htm", "html", "ini", "java", "js", "json", "jsonc", "jsonl", "jsx", "kt", "kts", "less",
+  "log", "lua", "m", "markdown", "md", "mdx", "mm", "ndjson", "php", "pl", "ps1", "py", "r",
+  "rb", "rs", "rst", "sass", "scala", "scss", "sh", "sql", "svelte", "swift", "tex",
+  "toml", "ts", "tsv", "tsx", "txt", "vue", "xml", "yaml", "yml", "zsh",
+]);
+const TEXT_FILE_NAMES = new Set([
+  ".bashrc", ".bash_profile", ".editorconfig", ".env", ".gitattributes", ".gitignore",
+  ".npmrc", ".zprofile", ".zshrc", "dockerfile", "gemfile", "license", "makefile", "readme",
 ]);
 
-function prefersSystemFileOpener(filePath: string): boolean {
-  const extension = /\.([^./\\]+)$/.exec(filePath)?.[1]?.toLowerCase();
-  return extension !== undefined && SYSTEM_FILE_EXTENSIONS.has(extension);
+function isKnownTextFile(filePath: string): boolean {
+  const name = filePath.split(/[/\\]/).at(-1)?.toLowerCase() ?? "";
+  const extension = /\.([^.]+)$/.exec(name)?.[1];
+  return TEXT_FILE_NAMES.has(name)
+    || name.startsWith(".env.")
+    || (extension !== undefined && TEXT_FILE_EXTENSIONS.has(extension));
 }
 
 function localFileTargetFromHref(

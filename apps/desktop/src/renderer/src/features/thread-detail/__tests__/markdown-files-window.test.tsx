@@ -91,7 +91,7 @@ describe("MarkdownFilesWindow", () => {
     if (kind === "JSON") {
       screen.getByRole("button", { name: `Open file in VS Code: docs/${fileName}` }).click();
     } else {
-      screen.getByRole("link", { name: "source" }).click();
+      screen.getByRole("button", { name: "Open file in VS Code: source" }).click();
     }
 
     await waitFor(() => {
