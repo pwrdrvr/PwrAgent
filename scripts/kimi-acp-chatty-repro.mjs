@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
+import { readJsonRpcLines } from "../apps/desktop/scripts/json-rpc-lines.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 
 const DEFAULT_FIRST_PROMPT = "does this build?";
@@ -80,8 +80,7 @@ async function main() {
     process.stderr.write(`[kimi stderr] ${chunk.toString("utf8")}`);
   });
 
-  const reader = createInterface({ input: child.stdout });
-  reader.on("line", (line) => {
+  readJsonRpcLines(child.stdout, (line) => {
     handleLine(line);
   });
 
