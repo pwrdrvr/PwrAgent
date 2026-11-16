@@ -218,6 +218,7 @@ const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
 /** Wire method Codex uses to invoke a dynamic tool the client advertised. */
 const CODEX_DYNAMIC_TOOL_CALL_METHOD = "item/tool/call";
 const CODEX_CONNECTION_MCP_CONFIG_READ_REASON = "connection-mcp-inventory";
+const CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON = "thread-mcp-runtime-preparation";
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
   "pwragent",
@@ -892,6 +893,7 @@ function createCodexObserverWithConfigReadRedaction(
         && (
           redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
           || redactedEvent.diagnostics?.callerReason === CODEX_CONNECTION_MCP_CONFIG_READ_REASON
+          || redactedEvent.diagnostics?.callerReason === CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON
         )
         && requestKey
       ) {
@@ -8038,7 +8040,7 @@ export class CodexAppServerClient {
             method,
             params,
             request: (name, value) => requestBeforeSubscriptionTracking(name, value, timeoutMs, {
-              callerReason: "thread-mcp-runtime-preparation",
+              callerReason: CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON,
             }),
           })
           : params;

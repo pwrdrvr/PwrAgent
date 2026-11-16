@@ -95,7 +95,20 @@ export class ComputerUseRuntime {
       || explicit?.args !== undefined) return input.params;
 
     try {
-      const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
+      let cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd : undefined;
+      if (!cwd && input.method !== "thread/start") {
+        // Resume callers can omit cwd. Discover plugins in the saved project
+        // rather than inheriting the App Server's default project context.
+        const threadId = typeof params.threadId === "string" && params.threadId.trim()
+          ? params.threadId : undefined;
+        if (!threadId) return input.params;
+        const thread = record(record(await input.request("thread/read", {
+          threadId,
+          includeTurns: false,
+        }))?.thread);
+        if (typeof thread?.cwd !== "string" || !thread.cwd.trim()) return input.params;
+        cwd = thread.cwd;
+      }
       // Codex owns config precedence and plugin activation, including project
       // config. Never infer activation from cache directories or read its DB.
       const effective = record(record(await input.request("config/read", {

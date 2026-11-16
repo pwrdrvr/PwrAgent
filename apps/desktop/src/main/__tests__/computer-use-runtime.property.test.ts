@@ -13,7 +13,8 @@ const vendor = {
 function fixture(options: { enabled?: boolean; platform?: NodeJS.Platform; configured?: unknown } = {}) {
   let version = "26.1111.21308";
   const readManifest = vi.fn(async (_file: string) => JSON.stringify({ mcpServers: { cua_repl: vendor } }));
-  const request = vi.fn(async (method: string) => method === "config/read"
+  const request = vi.fn(async (method: string) => method === "thread/read"
+    ? { thread: { cwd: "/fixture/project" } } : method === "config/read"
     ? { config: { mcp_servers: options.configured ?? {} } }
     : { marketplaces: [{ plugins: [{
       id: "unified-computer-use@openai-bundled",
@@ -142,7 +143,7 @@ describe("Computer Use launcher parent", () => {
         const f = fixture();
         for (const version of versions) {
           f.setVersion(`26.${version}`);
-          const result = await f.runtime.prepare({ method: "thread/fork", params: {}, request: f.request });
+          const result = await f.runtime.prepare({ method: "thread/fork", params: { threadId: "fixture" }, request: f.request });
           expect(result).toMatchObject({ config: { mcp_servers: { cua_repl: { command: `${bin}/node` } } } });
         }
         expect(f.readManifest).toHaveBeenCalledTimes(new Set(versions).size);
@@ -151,6 +152,61 @@ describe("Computer Use launcher parent", () => {
         }
       },
     ), { numRuns: 25 });
+  });
+
+  it("uses the protocol's saved project context for resumes and forks without cwd", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("thread/resume", "thread/fork"),
+      fc.constantFrom("disabled", "custom", "enabled"),
+      fc.constantFrom("/fixture/project", "/fixture/project with spaces", "/fixture/📎"),
+      async (method, policy, savedCwd) => {
+        const f = fixture();
+        const request = vi.fn(async (name: string, value: unknown) => {
+          const args = value as { cwd?: string; cwds?: string[] };
+          if (name === "thread/read") return { thread: { cwd: savedCwd } };
+          if (name === "config/read") return { config: { mcp_servers:
+            args.cwd === savedCwd && policy === "custom" ? { cua_repl: { command: "project-custom" } } : {},
+          } };
+          // The default context enables Computer Use. The saved project's
+          // configuration is authoritative even when the caller omits cwd.
+          return { marketplaces: [{ plugins: [{
+            id: "unified-computer-use@openai-bundled", installed: true,
+            enabled: args.cwds?.[0] === savedCwd ? policy !== "disabled" : true,
+            localVersion: "26.1111.21308",
+          }] }] };
+        });
+        const params = { threadId: "saved-thread", config: { features: { hooks: false } } };
+        const result = await f.runtime.prepare({ method, params, request });
+        expect(request.mock.calls[0]).toEqual(["thread/read", { threadId: "saved-thread", includeTurns: false }]);
+        expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false, cwd: savedCwd });
+        if (policy === "enabled") {
+          expect(result).toMatchObject({ config: { mcp_servers: { cua_repl: { command: `${bin}/node` } } } });
+          expect(result).not.toHaveProperty("cwd");
+        } else {
+          expect(result).toBe(params);
+          expect(f.readManifest).not.toHaveBeenCalled();
+        }
+        if (policy !== "custom") expect(request).toHaveBeenCalledWith("plugin/list", {
+          cwds: [savedCwd], forceRefetch: false, marketplaceKinds: ["local"],
+        });
+      },
+    ));
+  });
+
+  it("does not use the default project when saved cwd cannot be resolved", async () => {
+    for (const saved of [{ thread: {} }, { thread: { cwd: "" } }, { thread: { cwd: "  " } }]) {
+      const f = fixture();
+      const request = vi.fn(async () => saved);
+      const params = { threadId: "saved-thread" };
+      expect(await f.runtime.prepare({ method: "thread/resume", params, request })).toBe(params);
+      expect(request).toHaveBeenCalledExactlyOnceWith("thread/read", { threadId: "saved-thread", includeTurns: false });
+      expect(f.readManifest).not.toHaveBeenCalled();
+    }
+    const f = fixture();
+    const params = { threadId: "saved-thread" };
+    const request = vi.fn(async () => { throw new Error("thread unavailable"); });
+    expect(await f.runtime.prepare({ method: "thread/resume", params, request })).toBe(params);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("retains the original request and logs no config values when preparation fails", async () => {

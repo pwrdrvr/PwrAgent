@@ -8,6 +8,14 @@ describe("Host thread request preparation", () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("start", "resume", "fork"), { minLength: 3, maxLength: 6 }),
       async (operations) => {
+        const credentials = {
+          config: { mcp_servers: {
+            unrelated: { env: { API_KEY: "fixture-runtime-env-credential" }, http_headers: {
+              Authorization: "Bearer fixture-runtime-header-credential",
+            } },
+          } },
+        };
+        const observedMessages: string[] = [];
         let receive: (message: string) => void = () => undefined;
         const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
         const transport: CodexClientTransport = {
@@ -23,6 +31,7 @@ describe("Host thread request preparation", () => {
             if (request.method === "initialize") result = {
               userAgent: "fixture", codexHome: "/fixture", platformFamily: "unix", platformOs: "macos",
             };
+            if (request.method === "config/read") result = credentials;
             if (request.method.startsWith("thread/")) result = {
               thread: { id: request.params.threadId ?? "created", status: { type: "idle" }, turns: [] },
             };
@@ -44,12 +53,16 @@ describe("Host thread request preparation", () => {
           sampleAppServerProcessTree: async () => ({}),
           prepareThreadRequest: async ({ method, params, request }) => {
             prepared.push(method);
-            await request("config/read", { includeLayers: false });
+            // Diagnostics must redact both raw bytes and the parsed envelope,
+            // while preparation still receives the complete protocol response.
+            expect(await request("config/read", { includeLayers: false })).toEqual(credentials);
             const original = params as { config?: Record<string, unknown> };
             return { ...original, config: { ...original.config, host_prepared: true } };
           },
         };
-        const client = new CodexAppServerClient({}, host);
+        const client = new CodexAppServerClient({
+          connectionObserver: { onMessage: (event) => { observedMessages.push(JSON.stringify(event)); } },
+        }, host);
         const config = { sentinel: "preserved" };
         try {
           for (const operation of ["start", "resume", "fork", ...operations]) {
@@ -67,6 +80,10 @@ describe("Host thread request preparation", () => {
             expect(request.params.config).toMatchObject({ sentinel: "preserved", host_prepared: true });
           }
           expect(config).toEqual({ sentinel: "preserved" });
+          const captured = observedMessages.join("\n");
+          expect(captured).toContain("unrelated");
+          expect(captured).not.toContain("fixture-runtime-env-credential");
+          expect(captured).not.toContain("fixture-runtime-header-credential");
         } finally {
           await client.close();
         }
