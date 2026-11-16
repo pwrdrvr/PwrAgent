@@ -33475,7 +33475,14 @@ command = "pnpm dev"
       const steer = vi.spyOn(registry, "steerTurn");
       if (scenario.monitor) {
         (registryModules(registry).subAgentMonitorService as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
-          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {});
+          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {
+            backend, monitorThreadId: threadId, monitorTurnId: turn.turnId,
+            monitorId: "finished-monitor", parentBackend: backend, parentThreadId: "parent-session",
+            parentTurnId: "parent-turn", activeCommandCount: 0,
+            createdAt: 1, lastActivityAt: 1, task: "Wait for CI",
+            heartbeatIntervalSeconds: 30, pollIntervalSeconds: 30, startupTimeoutSeconds: 45,
+            preferredModel: "fixture", preferredReasoningEffort: "low",
+          });
       }
       const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
       const registration = await server.registerClient({ backend, threadId });
@@ -42460,7 +42467,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("routes headless automation failure notices to the visible Agent thread", async () => {
+  it("routes headless automation retry and failure notices to the visible Agent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
@@ -42481,6 +42488,13 @@ command = "pnpm dev"
     });
 
     await codexClient.emit({
+      method: "error",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", willRetry: true,
+        error: { message: "Reconnecting" },
+      },
+    });
+    await codexClient.emit({
       method: "thread/status/changed",
       params: { threadId: "thread-1", status: { type: "systemError" } },
     });
@@ -42494,9 +42508,14 @@ command = "pnpm dev"
     });
 
     expect(events.filter((event) =>
-      event.notification.method === "thread/status/changed"
+      event.notification.method === "error"
+      || event.notification.method === "thread/status/changed"
       || event.notification.method === "turn/failed"
     )).toEqual([
+      expect.objectContaining({ errorNoticeContext: {
+        backend: "codex", threadId: "agent-thread-1", title: "Check email",
+        automationName: "Check email",
+      } }),
       expect.objectContaining({ errorNoticeContext: {
         backend: "codex", threadId: "agent-thread-1", title: "Check email",
         automationName: "Check email",
@@ -42638,6 +42657,9 @@ command = "pnpm dev"
               output: [{ type: "text", text: "Automation finished." }],
             },
           },
+        },
+        errorNoticeContext: {
+          backend: "codex", threadId: "agent-thread-1", title: "Check email", automationName: "Check email",
         },
       },
     ]);
