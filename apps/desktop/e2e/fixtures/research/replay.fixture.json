@@ -81,6 +81,20 @@
             "reason": "new-thread"
           },
           "updatedAt": 1760000000000
+        },
+        {
+          "id": "thread-research-focused",
+          "title": "Check independent holds",
+          "titleSource": "explicit",
+          "summary": "Focused research item worker",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
         }
       ]
     },

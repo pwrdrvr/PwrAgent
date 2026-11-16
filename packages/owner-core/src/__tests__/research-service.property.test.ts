@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { projectResearchRun, RESEARCH_MAX_EVENTS, sameResearchThread, type ResearchActor, type ResearchEvent, type ResearchThread, type StartResearchRequest } from "@pwragent/shared/research";
+import { projectResearchRun, RESEARCH_MAX_EVENTS, sameResearchThread, searchResearchItems, type ResearchActor, type ResearchEvent, type ResearchThread, type StartResearchRequest, type ResearchSearchQuery } from "@pwragent/shared/research";
 import { ResearchService, validateStartResearch, type ResearchPorts } from "../research-service";
 import type { ResearchStorage } from "../research-storage";
 
@@ -10,6 +10,13 @@ class MemoryResearchStorage implements ResearchStorage {
   findByStartKey(key: string) { const id = this.keys.get(key); return id ? this.get(id) : undefined; }
   get(id: string) { const records = this.records.get(id); return records ? projectResearchRun(id, structuredClone(records)) : undefined; }
   list(thread?: ResearchThread) { return [...this.records.keys()].map((id) => this.get(id)!).filter((r) => !thread || sameResearchThread(r.coordinator, thread) || r.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread))); }
+  header(id: string) { return this.get(id); }
+  summaries(thread: ResearchThread) { return this.list(thread); }
+  members(id: string) { const run = this.get(id)!; return [run.coordinator, ...run.approaches.flatMap((a) => a.worker ? [a.worker] : [])]; }
+  isMember(id: string, thread: ResearchThread) { const run = this.get(id); return Boolean(run && (sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread)))); }
+  readItem(id: string, itemId: string) { return this.get(id)?.items.find((item) => item.id === itemId); }
+  search(id: string, query: ResearchSearchQuery) { const run = this.get(id)!; return searchResearchItems(id, run.items, run.revision, query); }
+  findCommand(id: string, commandId: string) { return this.records.get(id)?.find((e) => e.commandId === commandId); }
   create(id: string, key: string, event: ResearchEvent) { if (this.keys.has(key)) throw new Error("duplicate start"); this.keys.set(key, id); this.records.set(id, [structuredClone(event)]); }
   append(id: string, revision: number, event: ResearchEvent) {
     const records = this.records.get(id)!;
@@ -36,6 +43,160 @@ function fixture(overrides: Partial<ResearchPorts> = {}, storage = new MemoryRes
 }
 
 describe("research lifecycle model", () => {
+  it("supports search, a focused child, optimistic progress and compact item identity", async () => {
+    const { service, ports } = fixture();
+    const run = await service.start(request, context);
+    const posted = await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "counterexample", text: "A reversed queue needs investigation", paths: [] }, context);
+    const source = posted.findings[0]!;
+    const hits = service.search(run.id, { query: "REVERSED", kind: "counterexample", limit: 1 }, context);
+    expect(hits.items.map((item) => item.id)).toEqual([source.id]);
+    expect(JSON.stringify(hits)).not.toContain("events");
+    const focused = service.readItem(run.id, source.id, context);
+    await expect(service.assign({ runId: run.id, itemId: source.id, expectedVersion: focused.item.version, task: "Investigate this counterexample" }, context)).rejects.toThrow("worker limit");
+    expect(ports.spawn).toHaveBeenCalledTimes(3);
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const assignmentContext = { ...context, callId: "assign" };
+    const assignment = { runId: run.id, itemId: source.id, expectedVersion: focused.item.version, task: "Investigate this counterexample" };
+    const [first, duplicate] = await Promise.all([service.assign(assignment, assignmentContext), service.assign(assignment, assignmentContext)]);
+    expect(first.assignmentId).toBe(duplicate.assignmentId);
+    expect(ports.spawn).toHaveBeenCalledTimes(4);
+    const child: ResearchActor = { ...first.worker!, kind: "agent", callId: "claim" };
+    const item = service.readItem(run.id, source.id, child);
+    expect(item.item.work).toMatchObject({ state: "assigned", assignmentId: first.assignmentId, assignee: { threadId: child.threadId } });
+    const claims = await Promise.allSettled(["one", "two"].map((id) => service.update(run.id, id, { action: "work", itemId: source.id, expectedVersion: item.item.version, state: "claimed", reason: "Taking this item" }, child)));
+    expect(claims.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(claims.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const claimed = service.readItem(run.id, source.id, child).item;
+    await expect(service.work(run.id, "stale-progress", { action: "work", itemId: source.id, expectedVersion: item.item.version, state: "in_progress", reason: "An outdated reader must not overwrite a claim" }, child)).rejects.toThrow("changed");
+    expect(service.readItem(run.id, source.id, child).item).toEqual(claimed);
+    await service.update(run.id, "working", { action: "work", itemId: source.id, expectedVersion: claimed.version, state: "in_progress", reason: "Reproducing the failure" }, child);
+    const current = service.readItem(run.id, source.id, child).item;
+    await service.update(run.id, "complete", { action: "work", itemId: source.id, expectedVersion: current.version, state: "completed", reason: "Reproduced and recorded the cause" }, child);
+    expect(service.search(run.id, { state: "completed" }, context).items.map((item) => item.id)).toEqual([source.id]);
+    await expect(service.update(run.id, "wrong-approach", { action: "finding", approachId: "a1", kind: "note", text: "Outside the child assignment", paths: [] }, child)).rejects.toThrow();
+    expect(() => service.readItem(run.id, source.id, { ...child, threadId: "stranger" })).toThrow("member");
+    service.close();
+  });
+
+  it("search agrees with a simple filter oracle and cursors reject a changed board", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("queue", "owner", "counterexample"), { minLength: 1, maxLength: 15 }), async (texts) => {
+      const { service } = fixture();
+      const run = await service.start(request, context);
+      for (const [i, text] of texts.entries()) await service.update(run.id, `post-${i}`, { action: "finding", approachId: "a1", kind: "note", text, paths: [] }, context);
+      const expected = service.read(run.id, context).findings.filter((f) => f.text.includes("queue")).reverse().map((f) => f.id);
+      const actual: string[] = [];
+      let page = service.search(run.id, { query: "queue", type: "finding", limit: 2 }, context);
+      actual.push(...page.items.map((item) => item.id));
+      while (page.nextCursor) { page = service.search(run.id, { query: "queue", type: "finding", limit: 2, cursor: page.nextCursor }, context); actual.push(...page.items.map((item) => item.id)); }
+      expect(actual).toEqual(expected);
+      const first = service.search(run.id, { type: "finding", limit: 1 }, context);
+      await service.update(run.id, "extra", { action: "finding", approachId: "a1", kind: "note", text: "New evidence", paths: [] }, context);
+      if (first.nextCursor) expect(() => service.search(run.id, { type: "finding", limit: 1, cursor: first.nextCursor }, context)).toThrow("restart");
+      service.close();
+    }), { numRuns: 15 });
+  });
+
+  it.each(["before_binding", "after_binding", "after_admission"] as const)("item cancellation fences a delayed child %s", async (stage) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let admissions = 0;
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Focused work", paths: [] }, context);
+    const source = service.read(run.id, context).findings[0]!;
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    expect(service.read(run.id, context).status).toBe("exhausted");
+    ports.spawn = async (_c, _task, _title, _mode, created) => {
+      const worker = { backend: "codex" as const, threadId: "focused-child", turnId: "focused-turn" };
+      if (stage !== "before_binding") created({ backend: worker.backend, threadId: worker.threadId });
+      if (stage === "after_admission") { admissions++; await service.observeStart(worker, worker.turnId); }
+      await gate;
+      if (stage === "before_binding") created({ backend: worker.backend, threadId: worker.threadId });
+      return worker;
+    };
+    const initial = service.readItem(run.id, source.id, context).item;
+    const assigning = service.assign({ runId: run.id, itemId: source.id, expectedVersion: initial.version, task: "Handle this ID" }, { ...context, callId: "focused" });
+    const pending = service.readItem(run.id, source.id, context).item;
+    const cancellation = await service.work(run.id, "cancel", { action: "work", itemId: source.id, expectedVersion: pending.version, state: "cancelled", reason: "Operator cancellation" }, context);
+    expect(cancellation.work.state).toBe(stage === "after_admission" ? "cancelled" : "cancel_requested");
+    release();
+    const assignment = await assigning;
+    expect(service.readItem(run.id, source.id, context).item.work.state).toBe("cancelled");
+    expect(admissions).toBe(stage === "after_admission" ? 1 : 0);
+    if (stage === "after_admission") expect(ports.stop).toHaveBeenCalledWith({ backend: "codex", threadId: "focused-child", turnId: "focused-turn" });
+    expect(["failed", "stopped"]).toContain(assignment.state);
+    service.close();
+  });
+
+  it("unknown item cancellation retains ownership until exact evidence and rejects stale assignees", async () => {
+    const { service, ports } = fixture({ stop: async () => { throw new Error("Lost acknowledgement"); } });
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Focused work", paths: [] }, context);
+    const source = service.read(run.id, context).findings[0]!;
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const item = service.readItem(run.id, source.id, context).item;
+    const assignment = await service.assign({ runId: run.id, itemId: item.id, expectedVersion: item.version, task: "Investigate" }, { ...context, callId: "first" });
+    const current = service.readItem(run.id, source.id, context).item;
+    const unknown = await service.work(run.id, "cancel", { action: "work", itemId: source.id, expectedVersion: current.version, state: "cancelled", reason: "Cancel" }, context);
+    expect(unknown.work.state).toBe("cancel_requested");
+    await expect(service.work(run.id, "unsafe-release", { action: "work", itemId: source.id, expectedVersion: unknown.version, state: "open", reason: "Try again" }, context)).rejects.toThrow();
+    service.observeEnd(assignment.worker!, "unrelated-turn");
+    expect(service.readItem(run.id, source.id, context).item.work.state).toBe("cancel_requested");
+    service.observeEnd(assignment.worker!, assignment.worker!.turnId!);
+    const settled = service.readItem(run.id, source.id, context).item;
+    expect(settled.work.state).toBe("cancelled");
+    const opened = await service.work(run.id, "release", { action: "work", itemId: source.id, expectedVersion: settled.version, state: "open", reason: "Assign another worker" }, context);
+    ports.stop = async () => {};
+    await service.assign({ runId: run.id, itemId: source.id, expectedVersion: opened.version, task: "Fresh attempt" }, { ...context, callId: "second" });
+    const fresh = service.readItem(run.id, source.id, context).item;
+    await expect(service.work(run.id, "old-worker", { action: "work", itemId: source.id, expectedVersion: fresh.version, state: "claimed", reason: "Old assignment" }, { ...assignment.worker!, kind: "agent" })).rejects.toThrow("assignee");
+    service.close();
+  });
+
+  it("cancels an original approach by ID and keeps a reopened old turn inside the worker limit", async () => {
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    const item = service.readItem(run.id, "a1", context).item;
+    const cancelled = await service.work(run.id, "cancel-original", { action: "work", itemId: item.id, expectedVersion: item.version, state: "cancelled", reason: "Use this slot for focused work" }, context);
+    expect(cancelled.work.state).toBe("cancelled");
+    expect(ports.stop).toHaveBeenCalledExactlyOnceWith(run.approaches[0]!.worker);
+    const opened = await service.work(run.id, "open", { action: "work", itemId: item.id, expectedVersion: cancelled.version, state: "open", reason: "New focused assignment" }, context);
+    const child = await service.assign({ runId: run.id, itemId: item.id, expectedVersion: opened.version, task: "Focus on this approach" }, { ...context, callId: "child" });
+    await service.observeStart(run.approaches[0]!.worker!, "old-thread-restarted");
+    expect(ports.stop).toHaveBeenLastCalledWith({ ...run.approaches[0]!.worker!, turnId: "old-thread-restarted" });
+    expect(service.read(run.id, context).approaches.find((a) => a.id === child.assignmentId)?.state).toBe("running");
+    service.close();
+  });
+
+  it("reserves the last worker slot before concurrent assignment side effects", async () => {
+    const { service, ports } = fixture();
+    const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+    for (const text of ["First", "Second"]) await service.update(run.id, text, { action: "finding", approachId: "a1", kind: "note", text, paths: [] }, context);
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const items = service.search(run.id, { type: "finding" }, context).items;
+    const outcomes = await Promise.allSettled(items.map((item) => service.assign({ runId: run.id, itemId: item.id, expectedVersion: item.version, task: "Investigate" }, { ...context, callId: item.id })));
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(ports.spawn).toHaveBeenCalledTimes(2);
+    expect(service.read(run.id, context).activeWorkers).toBe(1);
+    service.close();
+  });
+
+  it("work-state input cannot rewrite evidence, review or assignee provenance", async () => {
+    const { service } = fixture();
+    const run = await service.start(request, context);
+    await service.update(run.id, "source", { action: "submit", approachId: "a1", text: "Original candidate", paths: [] }, context);
+    const source = service.read(run.id, context).submissions[0]!;
+    await service.update(run.id, "review", { action: "review", submissionId: source.id, decision: "rejected", reason: "Counterexample remains" }, context);
+    const before = service.readItem(run.id, source.id, context).item;
+    const result = await service.work(run.id, "claim", { action: "work", itemId: before.id, expectedVersion: before.version, state: "claimed", reason: "Revise it",
+      assignee: { backend: "codex", threadId: "forged" }, record: { text: "Replacement", review: { decision: "accepted" } },
+    } as never, context);
+    expect(result.record).toEqual(before.record);
+    expect(result.work.assignee).toEqual({ backend: context.backend, threadId: context.threadId });
+    service.close();
+  });
+
   it("matches a board model under generated posts, redeliveries, and cancellation", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("post", "duplicate", "stop"), { size: "max", maxLength: 35 }), async (operations) => {
       const { service } = fixture();

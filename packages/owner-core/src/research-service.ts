@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, sameResearchThread,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
+  type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
+  type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork,
 } from "@pwragent/shared/research";
 import type { ResearchStorage } from "./research-storage";
 
 export type ResearchExecutionContext = ResearchActor & { kind: "agent"; turnId: string; callId: string };
+export type ResearchAssignmentReceipt = { runId: string; itemId: string; version: number; assignmentId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"] };
 /** The adapter has confirmed that no model turn was admitted. */
 export class ResearchAdmissionRefused extends Error {}
 export type ResearchPorts = {
@@ -36,6 +39,7 @@ export type ResearchPorts = {
  */
 export class ResearchService {
   private readonly starts = new Map<string, { signature: string; promise: Promise<ResearchRun> }>();
+  private readonly assignments = new Map<string, { signature: string; promise: Promise<ResearchAssignmentReceipt> }>();
   private readonly deadlines = new Map<string, () => void>();
   private readonly pendingStarts = new Set<string>();
   private readonly pendingDeliveries = new Set<string>();
@@ -65,11 +69,144 @@ export class ResearchService {
     const runs = this.storage.list(thread);
     return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id) };
   }
+  summaries(thread: ResearchThread) {
+    return this.storage.summaries(thread).map((run) => ({ id: run.id, objective: run.objective.slice(0, 200), status: run.status, deadlineAt: run.deadlineAt, workerLimit: run.workerLimit, activeWorkers: run.activeWorkers }));
+  }
 
   read(id: string, actor: ResearchActor): ResearchRun {
     const run = this.requireRun(id);
     this.requireMember(run, actor);
     return run;
+  }
+
+  private accessibleHeader(id: string, actor: ResearchActor): ResearchRunHeader {
+    const header = this.storage.header(id);
+    if (!header) throw new Error("Research run not found");
+    if (!this.storage.isMember(id, actor)) throw new Error("The calling thread is not a member of this research run");
+    return header;
+  }
+
+  search(id: string, query: ResearchSearchQuery, actor: ResearchActor): ResearchSearchPage {
+    this.accessibleHeader(id, actor);
+    return this.storage.search(id, query);
+  }
+
+  readItem(id: string, itemId: string, actor: ResearchActor): ResearchItemContext {
+    const header = this.accessibleHeader(id, actor);
+    const run = { id: header.id, revision: header.revision, objective: header.objective, coordinator: header.coordinator,
+      deadlineAt: header.deadlineAt, workspaceMode: header.workspaceMode, status: header.status, workerLimit: header.workerLimit, activeWorkers: header.activeWorkers };
+    const item = this.storage.readItem(id, itemId);
+    if (!item) throw new Error("Research item not found");
+    const approach = this.storage.readItem(id, item.approachId);
+    const assignment = item.work.assignmentId ? this.storage.readItem(id, item.work.assignmentId) : undefined;
+    return { run, item, ...(approach?.type === "approach" ? { approach: approach.record } : {}),
+      ...(assignment?.type === "approach" ? { assignment: assignment.record } : {}) };
+  }
+
+  assign(request: ResearchAssignRequest, context: ResearchExecutionContext): Promise<ResearchAssignmentReceipt> {
+    const key = `assign:${context.backend}:${context.threadId}:${context.turnId}:${context.callId}`;
+    const signature = JSON.stringify(request);
+    const pending = this.assignments.get(key);
+    if (pending) return pending.signature === signature ? pending.promise : Promise.reject(new Error("Assignment command key was reused"));
+    const promise = this.performAssignment(request, context, key, signature);
+    this.assignments.set(key, { signature, promise });
+    void promise.finally(() => this.assignments.delete(key)).catch(() => {});
+    return promise;
+  }
+
+  private async performAssignment(request: ResearchAssignRequest, context: ResearchExecutionContext, key: string, signature: string): Promise<ResearchAssignmentReceipt> {
+    this.requireOpen();
+    const run = this.read(request.runId, context);
+    if (!sameResearchThread(run.coordinator, context)) throw new Error("Only the coordinating thread can assign research items");
+    if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
+    const duplicate = this.storage.findCommand(run.id, key);
+    if (duplicate) {
+      if (duplicate.signature !== signature || duplicate.data.type !== "assignment") throw new Error("Assignment command key was reused");
+      return this.assignmentReceipt(run.id, duplicate.data.approach.id, request.itemId);
+    }
+    if (!["running", "exhausted"].includes(run.status) || this.now() >= run.deadlineAt) throw new Error("Research run is no longer accepting assignments");
+    if (run.revision + (run.status === "exhausted" ? 1 : 0) >= RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; finish this run before starting another");
+    boundedText(request.task, "assignment task", 2000);
+    const item = this.requireItemVersion(run.id, request.itemId, request.expectedVersion);
+    this.requireReleasedAssignment(run, item);
+    if (!["open", "blocked"].includes(item.work.state) || item.work.assignee) throw new Error("Release or reopen the item before assigning it");
+    if (run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length >= run.workerLimit) throw new Error("Research worker limit reached; wait for or cancel an existing worker");
+    if (run.status === "exhausted") {
+      this.append(run, `reopen:${key}`, context, { type: "status", status: "running", reason: "The coordinator explicitly assigned retained evidence within the original deadline." });
+      this.scheduleDeadline(this.requireRun(run.id));
+    }
+    const title = `Investigate: ${item.type === "approach" ? item.record.title : item.record.text}`.slice(0, 160);
+    const approach: ResearchApproach = { id: `work-${randomUUID()}`, title, task: request.task, state: "pending", itemId: item.id };
+    this.append(this.requireRun(run.id), key, context, { type: "assignment", itemId: item.id, approach, task: request.task }, signature);
+    await this.admitApproach(run.id, approach, context);
+    if (this.requireRun(run.id).status === "stopping") this.finishStopping(this.requireRun(run.id));
+    else this.finishExploration(this.requireRun(run.id));
+    return this.assignmentReceipt(run.id, approach.id, item.id);
+  }
+
+  private assignmentReceipt(id: string, assignmentId: string, itemId: string): ResearchAssignmentReceipt {
+    const assignment = this.storage.readItem(id, assignmentId);
+    if (assignment?.type !== "approach") throw new Error("Assignment is unavailable");
+    const item = this.storage.readItem(id, itemId)!;
+    return { runId: id, itemId, version: item.version, assignmentId, state: assignment.record.state, worker: assignment.record.worker };
+  }
+
+  async work(id: string, requestId: string, command: ResearchWorkCommand, actor: ResearchActor): Promise<ResearchItem> {
+    this.requireOpen();
+    const header = this.accessibleHeader(id, actor);
+    if (header.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
+    const signature = JSON.stringify(command);
+    const duplicate = this.storage.findCommand(id, requestId);
+    if (duplicate) {
+      if (duplicate.signature !== signature || !sameResearchThread(duplicate.actor, actor) || duplicate.actor.kind !== actor.kind) throw new Error("Research command key was reused");
+      return this.storage.readItem(id, command.itemId)!;
+    }
+    const coordinator = actor.kind === "operator" || sameResearchThread(header.coordinator, actor);
+    if ((header.status !== "running" && !(coordinator && header.status === "exhausted")) || this.now() >= header.deadlineAt) throw new Error("Research run is no longer accepting work");
+    boundedText(requestId, "requestId", 300);
+    boundedText(command.reason, "reason", 2000);
+    const item = this.requireItemVersion(id, command.itemId, command.expectedVersion);
+    const approach = this.storage.readItem(id, item.approachId);
+    const originalWorker = approach?.type === "approach" ? approach.record.worker : undefined;
+    const assigned = item.work.assignee;
+    if (!coordinator && (assigned ? !sameResearchThread(assigned, actor) : !originalWorker || !sameResearchThread(originalWorker, actor))) throw new Error("Only the item's assignee or coordinator may change its work state");
+    if (["open", "cancelled"].includes(command.state) && !coordinator) throw new Error("Only the coordinator may release or cancel an item");
+    if (!RESEARCH_WORK_TRANSITIONS[item.work.state].includes(command.state)) throw new Error("Invalid item work-state transition");
+    if (command.state === "open") this.requireReleasedAssignment(this.requireRun(id), item);
+    const cancellation = command.state === "cancelled" ? item.work.assignmentId ?? (item.type === "approach" ? item.id : undefined) : undefined;
+    const work: ResearchItemWork = command.state === "open" ? { state: "open", note: command.reason }
+      : { ...item.work, state: cancellation ? "cancel_requested" : command.state, note: command.reason,
+        ...(cancellation ? { assignmentId: cancellation, assignee: assigned ?? originalWorker } : {}),
+        ...(command.state === "claimed" ? { assignee: assigned ?? { backend: actor.backend, threadId: actor.threadId } } : {}) };
+    if (header.revision >= RESEARCH_MAX_EVENTS && command.state !== "cancelled") throw new Error("Research event limit reached; finish this run before starting another");
+    this.storage.append(id, header.revision, { seq: header.revision + 1, commandId: requestId, signature, at: this.now(), actor, data: { type: "item_work", itemId: item.id, work } });
+    this.publish(id);
+    if (cancellation) {
+      await this.stopWorker(id, cancellation, actor);
+      this.settleItemCancellation(id, cancellation);
+    }
+    return this.storage.readItem(id, item.id)!;
+  }
+
+  private requireItemVersion(id: string, itemId: string, version: number): ResearchItem {
+    const item = this.storage.readItem(id, itemId);
+    if (!item) throw new Error("Research item not found");
+    if (!Number.isSafeInteger(version) || item.version !== version) throw new Error("Research item changed; read its current version before updating");
+    return item;
+  }
+
+  private requireReleasedAssignment(run: ResearchRun, item: ResearchItem): void {
+    const assignment = item.work.assignmentId ? run.approaches.find((a) => a.id === item.work.assignmentId) : undefined;
+    if (assignment && !["ended", "failed", "stopped"].includes(assignment.state)) throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
+  }
+
+  private settleItemCancellation(id: string, assignmentId: string): void {
+    const run = this.requireRun(id);
+    const assignment = run.approaches.find((a) => a.id === assignmentId);
+    if (!assignment || !["ended", "failed", "stopped"].includes(assignment.state)) return;
+    const item = this.storage.readItem(id, assignment.itemId ?? assignment.id);
+    if (item?.work.assignmentId !== assignmentId || item.work.state !== "cancel_requested") return;
+    this.append(run, `item-cancelled:${assignmentId}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
   }
 
   isWorker(thread: ResearchThread): boolean {
@@ -123,36 +260,7 @@ export class ResearchService {
     this.scheduleDeadline(this.requireRun(id));
     for (const approach of approaches) {
       if (!this.canDispatch(this.requireRun(id))) break;
-      this.pendingStarts.add(`${id}:${approach.id}`);
-      this.append(this.requireRun(id), `starting:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting" });
-      try {
-        const worker = await this.ports.spawn({ ...context, callId: `${context.callId}:${approach.id}` },
-          researchWorkerPrompt(id, request.objective, approach), approach.title, request.workspaceMode,
-          (created) => {
-            const current = this.requireRun(id);
-            this.append(current, `bound:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting", worker: created });
-            if (!this.canDispatch(this.requireRun(id))) throw new ResearchAdmissionRefused("Research run stopped before worker admission");
-          });
-        const current = this.requireRun(id);
-        const prior = current.approaches.find((a) => a.id === approach.id)!;
-        // A trusted provider event can precede the handoff reply. It already
-        // owns this transition; do not rewrite it or regress its outcome.
-        if (!prior.worker?.turnId || (prior.state === "starting" && prior.worker.turnId === worker.turnId)) {
-          this.append(current, `started:${approach.id}`, context, { type: "worker", approachId: approach.id, worker,
-            state: worker.failure ? "failed" : ["ended", "stopped", "failed"].includes(prior.state) ? prior.state : "running", note: worker.failure });
-        }
-        const admitted = this.requireApproach(this.requireRun(id), approach.id);
-        if (!this.canDispatch(this.requireRun(id)) && !["ended", "stopped", "failed"].includes(admitted.state)) await this.stopWorker(id, approach.id, context);
-      } catch (error) {
-        const current = this.requireRun(id);
-        const observed = this.requireApproach(current, approach.id);
-        const state = observed.worker?.turnId && ["running", "ended", "stopped", "failed"].includes(observed.state)
-          ? observed.state : error instanceof ResearchAdmissionRefused ? "failed" : "unknown";
-        this.append(current, `start-failed:${approach.id}`, context, { type: "worker", approachId: approach.id, state, note: message(error) });
-        if (!this.canDispatch(this.requireRun(id)) && state === "running") await this.stopWorker(id, approach.id, context);
-      } finally {
-        this.pendingStarts.delete(`${id}:${approach.id}`);
-      }
+      await this.admitApproach(id, approach, context);
     }
     const current = this.requireRun(id);
     if (current.status === "stopping") this.finishStopping(current);
@@ -161,8 +269,49 @@ export class ResearchService {
     return this.requireRun(id);
   }
 
+  private async admitApproach(id: string, approach: ResearchApproach, context: ResearchExecutionContext): Promise<void> {
+    const run = this.requireRun(id);
+    if (!this.canAdmitApproach(run, approach)) {
+      this.append(run, `unadmitted:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "stopped" });
+      this.settleItemCancellation(id, approach.id);
+      return;
+    }
+    this.pendingStarts.add(`${id}:${approach.id}`);
+    this.append(this.requireRun(id), `starting:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting" });
+    try {
+      const worker = await this.ports.spawn({ ...context, callId: `${context.callId}:${approach.id}` },
+        approach.itemId ? researchItemWorkerPrompt(id, approach) : researchWorkerPrompt(id, run.objective, approach), approach.title, run.workspaceMode,
+        (created) => {
+          const current = this.requireRun(id);
+          this.append(current, `bound:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting", worker: created });
+          if (!this.canAdmitApproach(this.requireRun(id), approach)) throw new ResearchAdmissionRefused("Research assignment stopped before worker admission");
+        });
+      const current = this.requireRun(id);
+      const prior = current.approaches.find((a) => a.id === approach.id)!;
+      // A trusted provider event can precede the handoff reply. It already
+      // owns this transition; do not rewrite it or regress its outcome.
+      if (!prior.worker?.turnId || (prior.state === "starting" && prior.worker.turnId === worker.turnId)) {
+        this.append(current, `started:${approach.id}`, context, { type: "worker", approachId: approach.id, worker,
+          state: worker.failure ? "failed" : ["ended", "stopped", "failed"].includes(prior.state) ? prior.state : "running", note: worker.failure });
+      }
+      const admitted = this.requireApproach(this.requireRun(id), approach.id);
+      if (!this.canAdmitApproach(this.requireRun(id), approach) && !["ended", "stopped", "failed"].includes(admitted.state)) await this.stopWorker(id, approach.id, context);
+    } catch (error) {
+      const current = this.requireRun(id);
+      const observed = this.requireApproach(current, approach.id);
+      const state = observed.worker?.turnId && ["running", "ended", "stopped", "failed"].includes(observed.state)
+        ? observed.state : error instanceof ResearchAdmissionRefused ? "failed" : "unknown";
+      this.append(current, `start-failed:${approach.id}`, context, { type: "worker", approachId: approach.id, state, note: message(error) });
+      if (!this.canAdmitApproach(this.requireRun(id), approach) && state === "running") await this.stopWorker(id, approach.id, context);
+    } finally {
+      this.pendingStarts.delete(`${id}:${approach.id}`);
+      this.settleItemCancellation(id, approach.id);
+    }
+  }
+
   async update(id: string, requestId: string, command: ResearchCommand, actor: ResearchActor): Promise<ResearchRun> {
     this.requireOpen();
+    if (command?.action === "work") { await this.work(id, requestId, command, actor); return this.requireRun(id); }
     if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
     let run = this.read(id, actor);
@@ -267,6 +416,9 @@ export class ResearchService {
 
   private async performStop(id: string, actor: ResearchActor): Promise<ResearchRun> {
     const run = this.requireRun(id);
+    for (const item of run.items) {
+      if (item.work.assignmentId && !["open", "completed", "cancelled", "cancel_requested"].includes(item.work.state)) this.append(this.requireRun(id), `cancel-item:${item.id}:${run.revision}`, actor, { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancel_requested", note: "Research run stopped" } });
+    }
     for (const delivery of run.deliveries) {
       if (["queued", "started"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
     }
@@ -327,6 +479,7 @@ export class ResearchService {
       const current = this.requireRun(id);
       if (this.requireApproach(current, approachId).worker?.turnId !== worker.turnId) return;
       this.append(current, `stopped:${approachId}:${worker.turnId}`, actor, { type: "worker", approachId, state: "stopped" });
+      this.settleItemCancellation(id, approachId);
     } catch (error) {
       const current = this.requireRun(id);
       const latest = this.requireApproach(current, approachId);
@@ -346,7 +499,7 @@ export class ResearchService {
       this.append(run, `observed-start:${approach.id}:${turnId}`, this.operator(run), {
         type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId },
       });
-      if (!this.canDispatch(this.requireRun(run.id))) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
+      if (!this.canAdmitApproach(this.requireRun(run.id), approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
         if (!this.closed) this.finishStopping(this.requireRun(run.id));
       }));
     }
@@ -370,6 +523,7 @@ export class ResearchService {
       }
       this.append(current, `ended:${approach.id}:${turnId}`, this.operator(run), { type: "worker", approachId: approach.id,
         state: outcome.failed ? "failed" : "ended", ...(outcome.note ? { note: outcome.note.slice(0, 2000) } : {}) });
+      this.settleItemCancellation(run.id, approach.id);
       if (run.status === "stopping") this.finishStopping(this.requireRun(run.id));
       else this.finishExploration(this.requireRun(run.id));
     }
@@ -410,13 +564,21 @@ export class ResearchService {
 
   private append(run: ResearchRun, commandId: string, actor: ResearchActor, data: ResearchEventData, signature = JSON.stringify(data)): void {
     // Contribution limits cannot block receipts or cancellation settlement.
-    if (run.revision >= RESEARCH_MAX_EVENTS && !["status", "worker", "delivery", "delivery_failed"].includes(data.type)) throw new Error("Research event limit reached; finish this run before starting another");
+    if (run.revision >= RESEARCH_MAX_EVENTS && !["status", "worker", "delivery", "delivery_failed"].includes(data.type)
+      && !(data.type === "item_work" && ["cancel_requested", "cancelled"].includes(data.work.state))) throw new Error("Research event limit reached; finish this run before starting another");
     this.storage.append(run.id, run.revision, { seq: run.revision + 1, commandId, signature, at: this.now(), actor, data });
-    this.ports.changed(run.coordinator);
-    for (const approach of run.approaches) if (approach.worker) this.ports.changed(approach.worker);
+    this.publish(run.id);
   }
+  private publish(id: string): void { for (const thread of this.storage.members(id)) this.ports.changed(thread); }
   private requireOpen(): void { if (this.closed) throw new Error("Research service is closed"); }
   private canDispatch(run: ResearchRun): boolean { return !this.closed && run.status === "running" && this.now() < run.deadlineAt; }
+  private canAdmitApproach(run: ResearchRun, approach: ResearchApproach): boolean {
+    if (!this.canDispatch(run)) return false;
+    if (run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length > run.workerLimit) return false;
+    const item = this.storage.readItem(run.id, approach.itemId ?? approach.id);
+    if (!approach.itemId) return Boolean(item && !["completed", "cancel_requested", "cancelled"].includes(item.work.state));
+    return item?.work.assignmentId === approach.id && !["open", "completed", "cancel_requested", "cancelled"].includes(item.work.state);
+  }
   private requireRun(id: string): ResearchRun { const run = this.storage.get(id); if (!run) throw new Error("Research run not found"); return run; }
   private requireApproach(run: ResearchRun, id: string): ResearchApproach { const approach = run.approaches.find((a) => a.id === id); if (!approach) throw new Error("Research approach not found"); return approach; }
   private operator(run: ResearchRun): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
@@ -450,4 +612,7 @@ function validatePaths(paths: string[]): void {
 function message(error: unknown): string { return (error instanceof Error ? error.message : String(error)).slice(0, 2000); }
 function researchWorkerPrompt(id: string, objective: string, approach: ResearchApproach): string {
   return `Participate in research run ${id}, approach ${approach.id}: ${approach.title}.\nObjective: ${objective}\nAssignment: ${approach.task}\nUse research_read to inspect the shared board. Use research_update to post typed findings under approachId=${approach.id}, cite evidence paths relative to your workspace, and link other findings explicitly. Record counterexamples and dead ends. Submit a concise candidate with action=submit. Findings are proposals, not verified facts. The coordinator reviews submissions and may request revision. Do not start additional workers, change the objective, or claim formal verification. Stop when the run stops or its deadline is reached.`;
+}
+function researchItemWorkerPrompt(id: string, approach: ResearchApproach): string {
+  return `Handle one research item. Run ID: ${id}. Item ID: ${approach.itemId}. Your approach/assignment ID: ${approach.id}.\nTask: ${approach.task}\nCall research_read with runId=${id}, itemId=${approach.itemId} to load this item's context and current version. Claim it using research_update action=work, itemId, expectedVersion, state=claimed and a reason. Update to in_progress, blocked or completed as appropriate, reading the latest version before each change. Post evidence or a candidate under approachId=${approach.id}; link the source finding when applicable. Use research_search only for additional evidence you need. Do not load the entire board or start other workers. A work item marked completed is not formally verified. The run's original deadline and cancellation apply to you.`;
 }

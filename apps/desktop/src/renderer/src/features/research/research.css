@@ -40,3 +40,10 @@
 .research-activity { display: flex; flex-direction: column; gap: 12px; padding: 0 0 0 18px; color: var(--text-secondary); font-size: 11px; }
 .research-activity span { font-family: var(--font-mono); font-size: 10px; }
 .research-activity p { margin-top: 4px; white-space: pre-wrap; }
+.research-items, .research-item-results { display: flex; flex-direction: column; gap: 10px; }
+.research-item-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.research-item-filters > div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.research-panel select { min-width: 0; width: 100%; padding: 6px; border: 1px solid var(--border-strong); border-radius: 5px; color: var(--text-primary); background: var(--bg-input); font: inherit; }
+.research-panel select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.research-item-id { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; overflow-wrap: anywhere; }
+.research-item-results button[aria-pressed="true"] { border-color: var(--accent-border); background: var(--bg-row-active); }

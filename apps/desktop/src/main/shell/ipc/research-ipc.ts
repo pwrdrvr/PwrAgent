@@ -1,6 +1,6 @@
 import { ipcMain, shell } from "electron";
-import type { ResearchThread, ResearchUpdateRequest, ResearchEvidenceRequest, PrepareResearchRequest } from "@pwragent/shared";
-import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL } from "../../../shared/ipc";
+import type { ResearchThread, ResearchUpdateRequest, ResearchEvidenceRequest, PrepareResearchRequest, ResearchSearchRequest, ResearchItemReadRequest, ResearchWorkRequest } from "@pwragent/shared";
+import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL } from "../../../shared/ipc";
 import { getResearchService } from "../../research/research-runtime";
 import { resolveResearchEvidencePath } from "../../research/research-evidence-path";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
@@ -9,6 +9,24 @@ import { isLocalMainWindowWebContents } from "../window-channels";
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
 export function registerResearchIpcHandlers(): void {
   disposeResearchIpcHandlers();
+  ipcMain.handle(RESEARCH_SEARCH_CHANNEL, (event, request: ResearchSearchRequest) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateThread(request);
+    return getResearchService().search(request.runId, request.query, { backend: request.backend, threadId: request.threadId, kind: "operator" });
+  });
+  ipcMain.handle(RESEARCH_ITEM_CHANNEL, (event, request: ResearchItemReadRequest) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateThread(request);
+    return getResearchService().readItem(request.runId, request.itemId, { backend: request.backend, threadId: request.threadId, kind: "operator" });
+  });
+  ipcMain.handle(RESEARCH_WORK_CHANNEL, async (event, request: ResearchWorkRequest) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateThread(request);
+    if (!request.command || request.command.action !== "work") throw new Error("Supply an item work command");
+    const actor = { backend: request.backend, threadId: request.threadId, kind: "operator" } as const;
+    await getResearchService().work(request.runId, `operator:${request.requestId}`, request.command, actor);
+    return getResearchService().readItem(request.runId, request.command.itemId, actor);
+  });
   ipcMain.handle(RESEARCH_PREPARE_CHANNEL, (event, request: PrepareResearchRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
@@ -43,7 +61,7 @@ export function registerResearchIpcHandlers(): void {
   });
 }
 export function disposeResearchIpcHandlers(): void {
-  for (const channel of [RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL]) ipcMain.removeHandler(channel);
+  for (const channel of [RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL]) ipcMain.removeHandler(channel);
 }
 function validateThread(request: ResearchThread): void {
   if (!request || request.backend !== "codex" || typeof request.threadId !== "string" || !request.threadId.trim()) throw new Error("Choose a local Codex thread");

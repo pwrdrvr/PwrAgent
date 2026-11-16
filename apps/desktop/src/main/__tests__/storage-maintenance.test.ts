@@ -202,6 +202,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The compaction recovery guard table and its primary-key index add two more.
     // Research adds eleven table/index pages and one additional schema page:
     // twelve more VACUUM frames, with the same two commits and deletion budget.
+    // The focused item projection and its five indexes add six more pages.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

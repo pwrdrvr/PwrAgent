@@ -34,6 +34,14 @@ export function seedResearchState(stateDbPath: string): void {
     append({ type: "review", submissionId: "candidate-1", decision: "revision_requested", reason: "Include evidence that independent hold reasons remain intact." });
     append({ type: "submission", submission: { id: "candidate-2", approachId: "a1", text: "Preserve insertion order and retain each reply’s independent hold reasons. The queue model agrees across generated release sequences.", paths: [] } });
     append({ type: "review", submissionId: "candidate-2", decision: "accepted", reason: "The reproducer and queue model support the revised candidate. This is an engineering review, not a formal proof." });
+    append({ type: "assignment", itemId: "ordering", task: "Check that both independent hold reasons survive release.", approach: {
+      id: "work-fixture", itemId: "ordering", title: "Check independent holds", task: "Check that both independent hold reasons survive release.", state: "pending",
+    } });
+    append({ type: "worker", approachId: "work-fixture", state: "ended", worker: { backend: "codex", threadId: "thread-research-focused", turnId: "focused-turn" } });
+    append({ type: "finding", finding: { id: "focused-result", approachId: "work-fixture", kind: "experiment", text: "Both independent hold reasons remain intact in the focused reproduction.", paths: [], relatesTo: "ordering", relation: "supports" } }, { ...actor, threadId: "thread-research-focused" });
+    append({ type: "item_work", itemId: "ordering", work: { state: "completed", assignmentId: "work-fixture", assignee: { backend: "codex", threadId: "thread-research-focused" }, note: "The focused child reproduced the queue behavior and checked both hold reasons." } });
+    append({ type: "item_work", itemId: "owner", work: { state: "cancelled", note: "This direction was ruled out by the counterexample." } });
+    append({ type: "item_work", itemId: "durable", work: { state: "blocked", note: "Retain this partial result for the next investigation." } });
     append({ type: "status", status: "completed", reason: "Completed after reviewing the queue model and reproduction." });
   } finally { db.close(); }
 }

@@ -2,11 +2,12 @@ import { useState, type FormEvent } from "react";
 import { sameResearchThread, type NavigationThreadSummary, type ResearchCommand, type ResearchRun, type ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { useThreadLinks } from "../../lib/thread-links";
+import { ResearchThreadButton } from "./ResearchThreadButton";
+import { ResearchItemsPanel } from "./ResearchItemsPanel";
 import { useResearchSnapshot } from "./useResearchSnapshot";
 import "./research.css";
 
-type View = "graph" | "board" | "review" | "activity";
+type View = "graph" | "board" | "review" | "activity" | "items";
 
 export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
@@ -98,7 +99,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     </div>}
     {run && <>
       <div className="research-summary"><strong>{run.objective}</strong><span className="research-state">{awaitingReview ? "Awaiting review" : label(run.status)}</span></div>
-      <p className="research-muted">{run.approaches.length} workers · deadline {new Date(run.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+      <p className="research-muted">{run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length} active · {run.approaches.length} total workers · limit {run.workerLimit} · deadline {new Date(run.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
       <p className="research-muted">{run.findings.length} findings · {run.submissions.length} submissions · usage in each worker’s Pricing panel</p>
       {run.reason && <p className="research-muted">{run.reason}</p>}
       {!writable && (active || run.status === "interrupted") && <p className="research-muted">This run’s owner is unavailable in this process. Evidence is retained. Inspect the worker threads before requesting a new run.</p>}
@@ -107,8 +108,9 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         <button type="button" className="research-button" disabled={busy} onClick={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}>Stop run</button>
         <button type="button" className="research-button" disabled={busy || !run.submissions.some((s) => s.review?.decision === "accepted")} onClick={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}>Finish run</button>
       </div>}
-      <div className="research-switch" role="group" aria-label="Research view">{(["graph", "board", "review", "activity"] as const).map((v) => <button type="button" key={v} aria-pressed={view === v} onClick={() => { setView(v); setFilter(""); }}>{label(v)}</button>)}</div>
-      <input className="research-filter" type="search" aria-label="Filter research by approach, finding, or state" placeholder="Filter approaches, findings, states…" value={filter} onChange={(event) => setFilter(event.target.value)} />
+      <div className="research-switch" role="group" aria-label="Research view">{(["graph", "items", "board", "review", "activity"] as const).map((v) => <button type="button" key={v} aria-pressed={view === v} onClick={() => { setView(v); setFilter(""); }}>{label(v)}</button>)}</div>
+      {view !== "items" && <input className="research-filter" type="search" aria-label="Filter research by approach, finding, or state" placeholder="Filter approaches, findings, states…" value={filter} onChange={(event) => setFilter(event.target.value)} />}
+      {view === "items" && <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run} writable={writable} coordinator={coordinator} />}
       {view === "graph" && <div className="research-graph" aria-label="Recorded research graph">
         <div className="research-graph__root">{run.objective}</div>
         {run.approaches.filter((a) => matches(`${a.title} ${a.state} ${a.note ?? ""}`)).map((a) => <div className="research-graph__branch" key={a.id}>
@@ -147,11 +149,6 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   </section>;
 }
 
-function ResearchThreadButton({ thread, title }: { thread: ResearchThread; title: string }) {
-  const links = useThreadLinks();
-  const link = links?.resolve(thread);
-  return <button type="button" className="research-link" disabled={!link} onClick={() => { if (link) links?.show(link); }}>{title}</button>;
-}
 function label(value: string): string { return value.replaceAll("_", " ").replace(/^./, (s) => s.toUpperCase()); }
 function excerpt(text: string): string { return text.length > 100 ? `${text.slice(0, 100)}…` : text; }
 function message(error: unknown): string { return error instanceof Error ? error.message : "Research operation failed"; }
@@ -167,5 +164,7 @@ function eventDescription(data: ResearchRun["events"][number]["data"]): string {
     case "status": return `${label(data.status)}: ${data.reason}`;
     case "delivery_failed": return `Message delivery was not confirmed: ${data.reason}`;
     case "delivery": return `Revision feedback ${label(data.delivery.state)}`;
+    case "assignment": return `Assigned item ${data.itemId}: ${data.task}`;
+    case "item_work": return `${data.itemId}: ${label(data.work.state)} · ${data.work.note ?? ""}`;
   }
 }

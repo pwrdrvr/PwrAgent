@@ -1,8 +1,9 @@
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { ResearchService, type ResearchPorts } from "@pwragent/owner-core/research-service";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import type { ResearchActor, ResearchEvent } from "@pwragent/shared";
+import { searchResearchItems, type ResearchActor, type ResearchEvent, type ResearchSearchQuery } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -23,9 +24,9 @@ beforeEach(() => {
 });
 afterEach(() => { db.close(); rmSync(fixture.tempDir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 
-function createService(overrides: Partial<ResearchPorts> = {}) {
+function createService(overrides: Partial<ResearchPorts> = {}, storage = new ResearchStore(db)) {
   let worker = 0;
-  const service = new ResearchService(new ResearchStore(db), {
+  const service = new ResearchService(storage, {
     ownerId: "owner", ownerPid: 123, ownerStartedAt: 500, isOwnerAlive: () => false, now: () => 1000,
     schedule: () => () => {}, changed: () => {}, onError: (error) => { throw error; },
     stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
@@ -41,6 +42,120 @@ function createService(overrides: Partial<ResearchPorts> = {}) {
 }
 
 describe("research journal storage", () => {
+  it("matches indexed filters and cursor pages to an independent journal projection", async () => {
+    const service = createService();
+    const run = await service.start(mutableRequest(), actor);
+    for (const [i, text] of ["Queue reversal", "OWNER lifetime", "100%_literal", "ÉTUDE α", "quoted ' evidence"].entries()) {
+      await service.update(run.id, `query-${i}`, { action: "finding", approachId: i % 2 ? "a2" : "a1", kind: i % 2 ? "counterexample" : "note", text, paths: [] }, actor);
+    }
+    for (let i = 0; i < 3; i++) await service.update(run.id, `candidate-${i}`, { action: "submit", approachId: "a1", text: `Candidate ${i}`, paths: [] }, actor);
+    const initial = service.read(run.id, actor);
+    await service.update(run.id, "verdict", { action: "review", submissionId: initial.submissions[0]!.id, decision: "accepted", reason: "Informal review" }, actor);
+    const item = service.readItem(run.id, initial.findings[0]!.id, actor).item;
+    await service.work(run.id, "claim", { action: "work", itemId: item.id, expectedVersion: item.version, state: "claimed", reason: "Investigating" }, actor);
+    const journal = service.read(run.id, actor);
+    const store = new ResearchStore(db);
+    fc.assert(fc.property(fc.record({ query: fc.constantFrom(undefined, "queue", "owner", "%_", "étude", "'", "no match"),
+      type: fc.constantFrom(undefined, "approach", "finding", "submission"), kind: fc.constantFrom(undefined, "note", "counterexample"),
+      review: fc.constantFrom(undefined, "unreviewed", "accepted"), state: fc.constantFrom(undefined, "open", "claimed"),
+      approachId: fc.constantFrom(undefined, "a1", "a2"), limit: fc.integer({ min: 1, max: 3 }),
+    }), (query) => {
+      const filters = query as ResearchSearchQuery;
+      let expected = searchResearchItems(run.id, journal.items, journal.revision, filters);
+      let actual = store.search(run.id, filters);
+      expect(actual).toEqual(expected);
+      while (expected.nextCursor) {
+        expected = searchResearchItems(run.id, journal.items, journal.revision, { ...filters, cursor: expected.nextCursor });
+        actual = store.search(run.id, { ...filters, cursor: actual.nextCursor });
+        expect(actual).toEqual(expected);
+      }
+    }), { numRuns: 60 });
+  });
+
+  it("focuses reads, search and progress without loading a run journal or writing on reads", async () => {
+    const store = new ResearchStore(db);
+    const service = createService({}, store);
+    const run = await service.start(mutableRequest(), actor);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Focused evidence", paths: [] }, actor);
+    const source = service.read(run.id, actor).findings[0]!;
+    const journal = vi.spyOn(store, "get").mockImplementation(() => { throw new Error("Focused operations must not load the journal"); });
+    try {
+      const reads = await measureSqliteWrites(() => {
+        for (let i = 0; i < 50; i++) {
+          expect(service.readItem(run.id, source.id, actor).item.record).toMatchObject({ text: "Focused evidence" });
+          expect(service.search(run.id, { query: "Focused", type: "finding" }, actor).items).toHaveLength(1);
+          expect(service.summaries(actor).map((entry) => entry.id)).toContain(run.id);
+        }
+      });
+      expectSqliteWriteBudget({ scenario: "research-item-focused-reads", note: "Fifty direct item/context reads and indexed searches. No journal replay, repair writes or polling commits.", writes: reads.writes });
+      const item = service.readItem(run.id, source.id, actor).item;
+      const command = { action: "work", itemId: item.id, expectedVersion: item.version, state: "claimed", reason: "Taking this item" } as const;
+      const claim = await measureSqliteWrites(async () => await service.work(run.id, "claim", command, actor));
+      expectSqliteWriteBudget({ scenario: "research-item-claim", note: "One optimistic claim, journal and item projection in the same commit.", writes: claim.writes });
+      const duplicate = await measureSqliteWrites(async () => {
+        await service.work(run.id, "claim", command, actor);
+        await expect(service.work(run.id, "stale", command, actor)).rejects.toThrow("changed");
+      });
+      expectSqliteWriteBudget({ scenario: "research-item-redelivery-and-stale", note: "A duplicate claim and a rejected stale version cause zero commits.", writes: duplicate.writes });
+      expect(journal).not.toHaveBeenCalled();
+    } finally { journal.mockRestore(); }
+  });
+
+  it("keeps search metadata and results on one SQLite snapshot during a concurrent append", async () => {
+    const service = createService();
+    const run = await service.start(mutableRequest(), actor);
+    const reader = new ResearchStore(db);
+    const second = StateDb.open(fixture.dbPath);
+    const writer = new ResearchStore(second);
+    const original = reader.header.bind(reader);
+    let append = true;
+    const observation = vi.spyOn(reader, "header").mockImplementation((id) => {
+      const header = original(id)!;
+      if (append) {
+        append = false;
+        writer.append(id, header.revision, { seq: header.revision + 1, commandId: "concurrent", signature: "concurrent", at: 1000, actor,
+          data: { type: "finding", finding: { id: "concurrent-item", approachId: "a1", kind: "note", text: "Concurrent evidence", paths: [] } } });
+      }
+      return header;
+    });
+    try {
+      expect(reader.search(run.id, { type: "finding" })).toMatchObject({ revision: run.revision, total: 0, items: [] });
+      expect(reader.search(run.id, { type: "finding" })).toMatchObject({ revision: run.revision + 1, total: 1, items: [{ id: "concurrent-item" }] });
+    } finally { observation.mockRestore(); second.close(); }
+  });
+
+  it("rebuilds item projections from retained journals once, and reopening stays read-only", async () => {
+    const service = createService();
+    const run = await service.start(mutableRequest(), actor);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "experiment", text: "Retained evidence", paths: [] }, actor);
+    const before = service.read(run.id, actor);
+    db.raw.exec("DROP TABLE research_items");
+    db.close();
+    db = StateDb.open(fixture.dbPath);
+    const store = new ResearchStore(db);
+    expect(store.search(run.id, { limit: 20 })).toEqual(searchResearchItems(run.id, before.items, before.revision, { limit: 20 }));
+    expect(store.get(run.id)).toEqual(before);
+    db.close();
+    const reopened = await measureSqliteWrites(() => StateDb.open(fixture.dbPath));
+    db = reopened.result;
+    expect(reopened.writes.commits).toBe(0);
+  });
+
+  it("budgets one focused child admission and exact item cancellation", async () => {
+    const service = createService();
+    const run = await service.start(mutableRequest(), actor);
+    await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Investigate this item", paths: [] }, actor);
+    const source = service.read(run.id, actor).findings[0]!;
+    service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
+    const item = service.readItem(run.id, source.id, actor).item;
+    const assignment = await measureSqliteWrites(async () => await service.assign({ runId: run.id, itemId: item.id, expectedVersion: item.version, task: "Investigate only this evidence" }, { ...actor, callId: "assign" }));
+    expect(assignment.result.worker?.threadId).toBe("worker-4");
+    expectSqliteWriteBudget({ scenario: "research-item-assignment", note: "One child intent, starting boundary, durable binding and provider admission; projection updates share each journal commit.", writes: assignment.writes });
+    const current = service.readItem(run.id, item.id, actor).item;
+    const cancelled = await measureSqliteWrites(async () => await service.work(run.id, "cancel", { action: "work", itemId: item.id, expectedVersion: current.version, state: "cancelled", reason: "Stop this assignment" }, actor));
+    expect(cancelled.result.work.state).toBe("cancelled");
+    expectSqliteWriteBudget({ scenario: "research-item-cancel", note: "Durable cancellation request, exact worker acknowledgement and item settlement. An unknown outcome would retain cancel_requested.", writes: cancelled.writes });
+  });
   it("retains the board and exact review provenance after reopening a real database", async () => {
     const service = createService();
     const run = await service.start(mutableRequest(), actor);

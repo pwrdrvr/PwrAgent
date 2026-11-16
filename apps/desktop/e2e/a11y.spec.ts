@@ -792,6 +792,11 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await panel.getByRole("button", { name: "Review", exact: true }).click();
         await expect(panel.getByText(/Formal verification has not been performed/)).toBeVisible();
         await runAxe(app.window, "research review");
+        await panel.getByRole("button", { name: "Items", exact: true }).click();
+        await expect(panel.getByLabel("Research items")).toBeVisible();
+        await panel.getByRole("button", { name: /^Finding · Completed A deterministic replay/ }).click();
+        await expect(panel.getByRole("article", { name: "Selected research item" })).toBeVisible();
+        await runAxe(app.window, "research item search and detail");
         await panel.getByRole("button", { name: "New run", exact: true }).click();
         await expect(panel.getByRole("textbox", { name: "Objective", exact: true })).toBeVisible();
         await runAxe(app.window, "research request form");
