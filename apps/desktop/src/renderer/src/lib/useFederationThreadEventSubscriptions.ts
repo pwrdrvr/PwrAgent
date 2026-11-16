@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   buildThreadIdentityKey,
   isRemoteFederationTarget,
@@ -107,6 +107,79 @@ export function buildFederationThreadEventSubscriptions(params: {
     });
 }
 
+type SubscriptionThreads = Parameters<typeof buildFederationThreadEventSubscriptions>[0];
+type ThreadSubscriptionInput = {
+  backend: NavigationThreadSummary["source"];
+  threadId: string;
+  refBackend?: NavigationThreadSummary["source"];
+  refThreadId?: string;
+  targetScope?: "local" | "remote";
+  instanceId?: string;
+  eventCapabilities: number;
+};
+type SubscriptionInputSnapshot = {
+  selectedThread?: ThreadSubscriptionInput;
+  threads: ThreadSubscriptionInput[];
+  retainedRemoteThreads: ThreadSubscriptionInput[];
+};
+type SubscriptionProjection = {
+  inputs?: SubscriptionInputSnapshot;
+  subscriptionsJson: string;
+};
+const DISABLED_PROJECTION: SubscriptionProjection = { subscriptionsJson: "[]" };
+
+function subscriptionEventCapabilities(federation: NavigationThreadSummary["federation"]): number {
+  if (!federation || !isRemoteFederationTarget(federation.ref.target)
+    || (federation.peerStatus !== undefined && federation.peerStatus !== "connected")
+    || !federation.capabilities?.includes("event_subscriptions")) return 0;
+  return (federation.capabilities.includes("thread_navigation") ? 1 : 0)
+    | (federation.capabilities.includes("thread_detail") ? 2 : 0)
+    | (federation.capabilities.includes("pending_request_control") ? 4 : 0)
+    | (federation.capabilities.includes("scheduled_actions") ? 8 : 0);
+}
+
+function snapshotThreadSubscriptionInput(thread: NavigationThreadSummary): ThreadSubscriptionInput {
+  const federation = thread.federation;
+  const target = federation?.ref.target;
+  return {
+    backend: thread.source,
+    threadId: thread.id,
+    refBackend: federation?.ref.backend,
+    refThreadId: federation?.ref.threadId,
+    targetScope: target?.scope,
+    instanceId: target?.scope === "remote" ? target.instanceId : undefined,
+    eventCapabilities: subscriptionEventCapabilities(federation),
+  };
+}
+
+function threadSubscriptionInputMatches(thread: NavigationThreadSummary, previous: ThreadSubscriptionInput): boolean {
+  const federation = thread.federation;
+  const target = federation?.ref.target;
+  return thread.id === previous.threadId
+    && thread.source === previous.backend
+    && federation?.ref.backend === previous.refBackend
+    && federation?.ref.threadId === previous.refThreadId
+    && target?.scope === previous.targetScope
+    && (target?.scope === "remote" ? target.instanceId : undefined) === previous.instanceId
+    && subscriptionEventCapabilities(federation) === previous.eventCapabilities;
+}
+
+function subscriptionThreadListMatches(threads: NavigationThreadSummary[] | undefined, previous: ThreadSubscriptionInput[]): boolean {
+  if ((threads?.length ?? 0) !== previous.length) return false;
+  for (let index = 0; index < previous.length; index++) {
+    if (!threadSubscriptionInputMatches(threads![index]!, previous[index]!)) return false;
+  }
+  return true;
+}
+
+function subscriptionInputsMatch(params: SubscriptionThreads, previous: SubscriptionInputSnapshot): boolean {
+  if (params.selectedThread
+    ? !previous.selectedThread || !threadSubscriptionInputMatches(params.selectedThread, previous.selectedThread)
+    : previous.selectedThread !== undefined) return false;
+  return subscriptionThreadListMatches(params.threads, previous.threads)
+    && subscriptionThreadListMatches(params.retainedRemoteThreads, previous.retainedRemoteThreads);
+}
+
 export function useFederationThreadEventSubscriptions(params: {
   desktopApi?: DesktopApi;
   enabled: boolean;
@@ -114,11 +187,29 @@ export function useFederationThreadEventSubscriptions(params: {
   threads: NavigationThreadSummary[];
   retainedRemoteThreads?: NavigationThreadSummary[];
 }): FederationRemoteTarget[] {
-  const subscriptionsJson = JSON.stringify(
-    params.enabled
-      ? buildFederationThreadEventSubscriptions(params)
-      : [],
-  );
+  const committed = useRef<SubscriptionProjection | undefined>(undefined);
+  let projection = DISABLED_PROJECTION;
+  if (params.enabled) {
+    const previous = committed.current;
+    if (previous?.inputs && subscriptionInputsMatch(params, previous.inputs)) {
+      projection = previous;
+    } else {
+      // Copy only the scalars the builder reads. Summary objects, nested refs,
+      // and capability arrays can change in place; their identities are unsafe.
+      // Preserve list order too: the builder deliberately lets later duplicates win.
+      projection = {
+        inputs: {
+          selectedThread: params.selectedThread ? snapshotThreadSubscriptionInput(params.selectedThread) : undefined,
+          threads: params.threads.map(snapshotThreadSubscriptionInput),
+          retainedRemoteThreads: (params.retainedRemoteThreads ?? []).map(snapshotThreadSubscriptionInput),
+        },
+        subscriptionsJson: JSON.stringify(buildFederationThreadEventSubscriptions(params)),
+      };
+    }
+  }
+  // An abandoned render must not replace the last committed input snapshot.
+  useLayoutEffect(() => { committed.current = projection; }, [projection]);
+  const subscriptionsJson = projection.subscriptionsJson;
 
   useEffect(() => {
     if (!params.desktopApi?.setFederationEventSubscriptions) {
