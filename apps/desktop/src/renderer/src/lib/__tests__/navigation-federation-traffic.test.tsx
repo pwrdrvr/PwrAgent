@@ -78,10 +78,10 @@ it.each([1, 10, 101])("budgets federation navigation traffic for %s visible moun
   await settled();
   const selection = measure();
   samples = [];
-  await act(() => result.current.refresh());
+  await act(() => result.current.refresh(undefined, false, undefined, "navigation/refresh"));
   const refresh = measure();
   samples = [];
-  await act(() => result.current.refresh());
+  await act(() => result.current.refresh(undefined, false, undefined, "navigation/refresh"));
   expect(measure()).toEqual(refresh);
   // A rerender with identical demand must never initiate another owner read.
   samples = [];

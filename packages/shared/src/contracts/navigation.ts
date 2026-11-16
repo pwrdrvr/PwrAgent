@@ -2376,6 +2376,8 @@ export type NavigationQueryRequest = {
     attempt: number;
     cause: "demand" | "refresh" | "continuation" | "rebaseline" | "pins" | "turn" | "thread" | "metadata" | "federation" | "messaging-bindings" | "timer" | "visibility" | "event";
     invalidations: number;
+    /** Refresh entry point, separate from the event that invalidated this read. */
+    caller?: string;
     trigger?: string;
   };
   backend?: AppServerBackendScope;

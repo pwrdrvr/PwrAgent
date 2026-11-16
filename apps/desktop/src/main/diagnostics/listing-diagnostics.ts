@@ -39,6 +39,14 @@ const LABELS = new Set([
   "demand", "refresh", "continuation", "rebaseline", "pins", "turn", "thread", "metadata", "federation", "messaging-bindings", "timer", "visibility", "event", "cursor-expired", "page-budget", "owner-invalidated", "provider-fallback",
   "thread-list", "renderer-navigation-query", "federation-navigation-query", "navigation-snapshot", "startup-prewarm", "startup-provider-refresh", "authentication-recovery", "archive-cleanup", "thread-id-lookup", "agent-thread-inspection", "notification-context", "title-generation", "federation-thread-search",
 ]);
+/** Caller suffixes are fixed code vocabulary, not arbitrary request text. */
+function safeListingCaller(caller: string): string {
+  if (caller.length > 100) return "unknown";
+  if (LABELS.has(caller) || safeNavigationDiagnosticTrigger(caller) === caller) return caller;
+  const suffix = ":archived-metadata";
+  return caller.endsWith(suffix) && LABELS.has(caller.slice(0, -suffix.length)) ? caller : "unknown";
+}
+
 const NUMBER_FIELDS = ["targetId", "view", "effect", "logical", "attempt", "invalidations", "sender", "rows", "page", "durationMs"] as const;
 
 /** O(1) append, fixed storage, no timers, stack captures, logging or persistence. */
@@ -60,9 +68,10 @@ export class ListingDiagnostics {
       const value = fields[key];
       if (typeof value === "number" && Number.isFinite(value) && value >= 0) event[key] = value;
     }
-    for (const key of ["consumer", "query", "reason", "caller"] as const) {
+    for (const key of ["consumer", "query", "reason"] as const) {
       if (fields[key] !== undefined) event[key] = LABELS.has(fields[key]!) ? fields[key] : "unknown";
     }
+    if (typeof fields.caller === "string") event.caller = safeListingCaller(fields.caller);
     if (typeof fields.origin === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fields.origin)) event.origin = fields.origin;
     event.trigger = safeNavigationDiagnosticTrigger(fields.trigger);
     if (["codex", "acp", "all"].includes(fields.provider ?? "")) event.provider = fields.provider;
@@ -127,7 +136,7 @@ export function listingRequestFields(request: NavigationQueryRequest): ListingFi
   const diagnostic = request.diagnostic;
   return { consumer: request.consumer, query: request.query.kind, reason: diagnostic?.cause ?? request.readReason,
     source: request.federationTarget?.scope === "remote" ? "remote" : "local", inventory: request.inventory ?? "owner",
-    trigger: diagnostic?.trigger, cursor: Boolean(request.cursor), rows: request.pageSize,
+    caller: diagnostic?.caller, trigger: diagnostic?.trigger, cursor: Boolean(request.cursor), rows: request.pageSize,
     origin: diagnostic?.origin, view: diagnostic?.view, effect: diagnostic?.effect, logical: diagnostic?.logical,
     attempt: diagnostic?.attempt, invalidations: diagnostic?.invalidations };
 }

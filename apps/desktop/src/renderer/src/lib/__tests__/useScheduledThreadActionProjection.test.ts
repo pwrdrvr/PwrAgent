@@ -194,6 +194,7 @@ describe("scheduled thread action projections", () => {
     });
 
     expect(onThreadLifecycleChanged).toHaveBeenCalledTimes(1);
+    expect(onThreadLifecycleChanged).toHaveBeenCalledWith("scheduled/thread-lifecycle");
     projection.unmount();
   });
 
