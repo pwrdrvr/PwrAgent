@@ -28,6 +28,7 @@ import {
   useState,
   type ComponentType,
   type CSSProperties,
+  type Dispatch,
   type PointerEvent,
   type RefObject,
   type SetStateAction,
@@ -481,125 +482,43 @@ function DesktopAppShell(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
 }) {
-  const [sidebarWidth, setSidebarWidth] = useState(408);
-  // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
-  // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
-  // (→ Sidebar → every un-virtualized ThreadRow) that used to fire on each
-  // pointermove is gone. The `.app-shell` CSS var is rendered from the ref so
-  // an incidental rerender mid-drag (e.g. an agent event) re-applies the live
-  // dragged width instead of snapping back to the stale committed state.
-  //
-  // INVARIANT: the rendered width reads from this ref, so it must track state.
-  // Write the width through `commitSidebarWidth` (below); never call
-  // `setSidebarWidth` directly, or the rendered width diverges from state.
-  const sidebarWidthRef = useRef(sidebarWidth);
-  const appShellRef = useRef<HTMLDivElement>(null);
-  // Hardcoded sidebar resize bounds — mirrored in clampSidebarWidth() below.
-  // Exposed as constants so both the clamp and the aria-valuemin/max
-  // attributes on the resize handle stay in sync.
-  const sidebarMinWidth = 280;
-  const sidebarMaxWidth = 560;
-  // Window-level layout preferences (persisted to config — see the
-  // `ui` settings section). The left sidebar can be hidden entirely and
-  // the right context rail pinned open; the active rail tab is also
-  // remembered.
-  //
-  // Seeded from the main-process bootstrap hint rather than from a
-  // hard-coded default corrected by the settings snapshot below. Both of
-  // these move layout: the rail reserves 428px when pinned, so correcting
-  // it after first paint reflows the whole transcript under the operator.
-  // `activeContextTab` and the dock prefs keep adopting from the snapshot,
-  // because none of them change the transcript's width.
-  const [sidebarHidden, setSidebarHidden] = useState(
-    () => readBootstrapLayoutPreferences().sidebarHidden,
-  );
+  const {
+    sidebarWidth,
+    sidebarWidthRef,
+    appShellRef,
+    sidebarMinWidth,
+    sidebarMaxWidth,
+    sidebarHidden,
+    contextRailPinned,
+    projectIndexHidden,
+    projectIndexWidth,
+    activeContextTab,
+    editedFilesDock,
+    actionRunsDock,
+    launchpadConnectionsDock,
+    threadJump,
+    closeThreadJump,
+    setSidebarHiddenPersisted,
+    setContextRailPinnedPersisted,
+    setProjectIndexHiddenPersisted,
+    setProjectIndexWidthPersisted,
+    setActiveContextTabPersisted,
+    setEditedFilesDockPersisted,
+    setActionRunsDockPersisted,
+    setLaunchpadConnectionsDockPersisted,
+    resizeSidebar,
+    startSidebarResize,
+  } = useShellLayout(props.settings);
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
   // The open thread whose title strip holds a rename field.
   const [titleRenameKey, setTitleRenameKey] = useState<string>();
   const [projectRevealRequest, setProjectRevealRequest] =
     useState<ProjectRevealRequest>();
-  const [contextRailPinned, setContextRailPinned] = useState(
-    () => readBootstrapLayoutPreferences().contextRailPinned,
-  );
-  // The sidebar's project index splits the sidebar's width, so it moves the
-  // list's width and is seeded before first paint like the two above.
-  const [projectIndexHidden, setProjectIndexHidden] = useState(
-    () => readBootstrapLayoutPreferences().projectIndexHidden,
-  );
-  const [projectIndexWidth, setProjectIndexWidth] = useState(
-    () => readBootstrapLayoutPreferences().projectIndexWidth,
-  );
-  const [activeContextTab, setActiveContextTab] =
-    useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
-  const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
-    DEFAULT_EDITED_FILES_DOCK,
-  );
-  const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
-    DEFAULT_ACTION_RUNS_DOCK,
-  );
-  // "pending" until the snapshot says where the cards live, so cards the
-  // operator moved to the rail never flash on the launchpad at launch.
-  const [launchpadConnectionsDock, setLaunchpadConnectionsDock] =
-    useState<LaunchpadConnectionsDock | "pending">("pending");
-  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
-  const mainViewRef = useRef<MainView>(mainView);
-  // The control that opened Settings or Automations. The layer covers the
-  // sidebar and main, which go inert under it, so focus returns here on
-  // close rather than dropping to <body>.
-  const layerOpenerRef = useRef<HTMLElement | null>(null);
-  const layerRef = useRef<HTMLDivElement>(null);
-  // Settings can hold edits the operator has not saved. Every way out of the
-  // overlay (Exit, a menu command, a notification, history) asks Settings
-  // first, so those edits get a Save / Discard prompt instead of vanishing.
-  const settingsLeaveGuardRef = useRef<ConfirmSettingsLeave | undefined>(
-    undefined,
-  );
-  const registerSettingsLeaveGuard = useCallback(
-    (confirmLeave: ConfirmSettingsLeave | undefined) => {
-      settingsLeaveGuardRef.current = confirmLeave;
-    },
-    [],
-  );
-  // `onShown` runs with the switch, not before it. A caller that pairs the
-  // two — open a thread, create one, restore a history entry — would
-  // otherwise act on a window the operator is still deciding whether to
-  // leave, and "Keep editing" would cancel only half of it.
-  const setMainView = useCallback(
-    (next: SetStateAction<MainView>, onShown?: () => void) => {
-      const current = mainViewRef.current;
-      const target = typeof next === "function" ? next(current) : next;
-      const show = () => {
-        if (!isLayerView(current) && isLayerView(target)) {
-          const opener = document.activeElement;
-          layerOpenerRef.current =
-            opener instanceof HTMLElement && opener !== document.body ? opener : null;
-        }
-        mainViewRef.current = target;
-        setMainViewState(target);
-        onShown?.();
-      };
-      const confirmLeave = settingsLeaveGuardRef.current;
-      if (current === "settings" && target !== "settings" && confirmLeave) {
-        confirmLeave(show);
-        return;
-      }
-      show();
-    },
-    [setMainViewState],
-  );
-  // The opener went inert with the sidebar or main, so focus moves onto the
-  // layer, and Tab starts at its first control. On close, or on a switch
-  // between the two layers, focus that fell with the layer goes back.
-  const layerView = isLayerView(mainView) ? mainView : undefined;
-  useEffect(() => {
-    if (!layerView) return;
-    const layer = layerRef.current;
-    if (layer && !layer.contains(document.activeElement)) {
-      layer.focus({ preventScroll: true });
-    }
-    return () => restoreFocusIfDropped(layerOpenerRef.current, layer);
-  }, [layerView]);
+  const {
+    mainView, layerRef, layerView, setMainView, registerSettingsLeaveGuard,
+    settingsInitialSection, settingsInitialSubsection, profileCreateRequested, setProfileCreateRequested, clearProfileCreateRequest, openSettingsSection,
+  } = useMainView();
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -617,37 +536,6 @@ function DesktopAppShell(props: {
   const messageLinkNonceRef = useRef(0);
   // Bumped on every ⌘F so an already-open find bar takes focus back.
   const [findFocusNonce, setFindFocusNonce] = useState(0);
-  // Initial section for SettingsScreen — non-undefined when navigation
-  // came from a deep-link to a specific section. Resets when the user
-  // switches mainView. The Messaging Activity surface is its own
-  // dedicated BrowserWindow, NOT a settings section, so it never
-  // appears through this slot.
-  const [settingsInitialSection, setSettingsInitialSection] = useState<
-    SettingsSection | undefined
-  >(undefined);
-  // Sub-screen within `settingsInitialSection` (a provider registry id under
-  // "models", a platform kind under "messaging"). Always written together with
-  // the section through `openSettingsSection` so a deep link can never carry a
-  // previous link's sub-screen into a different section.
-  const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
-    string | undefined
-  >(undefined);
-  // Profiles → New Profile… asks Settings → Profiles to open its create form.
-  // A one-shot flag rather than a route: ProfilesSettings clears it once the
-  // form is open, so a second click opens it again and a later visit to the
-  // pane does not.
-  const [profileCreateRequested, setProfileCreateRequested] = useState(false);
-  const clearProfileCreateRequest = useCallback(() => {
-    setProfileCreateRequested(false);
-  }, []);
-  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
-  // prompt kept another pane open, then Exit Settings). The request goes with
-  // it, or a later visit to Profiles would open a form nobody asked for.
-  useEffect(() => {
-    if (mainView !== "settings") {
-      setProfileCreateRequested(false);
-    }
-  }, [mainView]);
   const [threadViewReady, setThreadViewReady] = useState(false);
   // Onboarding wizard overlay state. Three paths into it:
   //  (1) auto-launch on first snapshot if `onboarding.completed` is
@@ -678,102 +566,18 @@ function DesktopAppShell(props: {
   // This is intentionally a queue rather than one slot per producer: backend
   // failures can arrive while another safety notice is already visible, and
   // every failure must remain individually reviewable and dismissible.
-  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
   const [appNotices, dispatchAppNotice] = useReducer(
     appNoticeReducer,
     INITIAL_APP_NOTICE_STATE,
   );
-  const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
-    dispatchAppNotice({ type: "show", notice });
-  }, []);
-  useEffect(() => turnFailureAcknowledgements.subscribeDismissals((id) => {
-    dispatchAppNotice({ type: "dismiss", id });
-  }), []);
-  const codexProfiles = props.settings.snapshot?.models?.codex?.profiles;
-  const activeCodexProfileRef = useRef(codexProfiles);
-  activeCodexProfileRef.current = codexProfiles;
-  const openCodexLogin = useCallback(() => {
-    const discovery = activeCodexProfileRef.current;
-    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
-    if (profile) setCodexLoginProfile(profile);
-  }, []);
-  const rejectedCodexHomes = useRef(new Set<string>());
-  useEffect(() => {
-    const rejected = codexProfiles?.profiles.filter((profile) => profile.authenticationRequired) ?? [];
-    const nextHomes = new Set(rejected.map((profile) => profile.codexHome));
-    for (const profile of rejected) {
-      if (rejectedCodexHomes.current.has(profile.codexHome)) continue;
-      showAppNotice({
-        id: `codex-auth:${profile.codexHome}`,
-        title: "Codex login required",
-        message: `${profile.displayName} is logged out. Codex operations are paused until you sign in again.`,
-        autoDismiss: false,
-        actions: [{ label: "Login", onClick: () => setCodexLoginProfile(profile) }],
-      });
-    }
-    for (const home of rejectedCodexHomes.current) {
-      if (!nextHomes.has(home)) dispatchAppNotice({ type: "dismiss", id: `codex-auth:${home}` });
-    }
-    rejectedCodexHomes.current = nextHomes;
-  }, [codexProfiles, showAppNotice]);
-  const dismissAppNotice = useCallback((id: string): void => {
-    dispatchAppNotice({ type: "dismiss", id });
-  }, []);
-  const configError =
-    props.bootstrapConfig.snapshot?.configError
-    ?? props.settings.snapshot?.configError;
-  useEffect(() => {
-    if (!configError) {
-      dispatchAppNotice({ type: "dismiss", id: "config-file-invalid" });
-      return;
-    }
-    showAppNotice({
-      autoDismiss: false,
-      id: "config-file-invalid",
-      title: "Settings config did not load",
-      message:
-        `${configError} PwrAgent is using the last known good configuration.`,
-    });
-  }, [configError, showAppNotice]);
-  const settingsRefreshError =
-    props.desktopApi?.readSettings && props.bootstrapConfig.snapshot
-      ? props.settings.error
-      : undefined;
-  useEffect(() => {
-    if (!settingsRefreshError) {
-      dispatchAppNotice({ type: "dismiss", id: "settings-refresh-failed" });
-      return;
-    }
-    showAppNotice({
-      autoDismiss: false,
-      id: "settings-refresh-failed",
-      title: "Settings refresh failed",
-      message:
-        `${settingsRefreshError} PwrAgent is continuing with its startup configuration.`,
-    });
-  }, [settingsRefreshError, showAppNotice]);
-  /* Thread create / rename / archive failures. The originating control is
-     always gone by the time these resolve — the rename dialog closes on
-     submit, the context menu closes on click, and a failed create has no
-     thread to point at — so they land in the durable stack rather than a
-     static slot. An empty message means the producer cleared it. */
-  const handleThreadActionError = useCallback((event: ThreadActionErrorEvent): void => {
-    if (!event.message) {
-      dispatchAppNotice({
-        type: "dismiss",
-        id: threadActionErrorNoticeId(event.kind),
-      });
-      return;
-    }
-    dispatchAppNotice({
-      type: "show",
-      notice: resolveThreadActionErrorNotice({
-        ...event,
-        kind: event.kind,
-        message: event.message,
-      }),
-    });
-  }, []);
+  const {
+    codexLoginProfile,
+    setCodexLoginProfile,
+    showAppNotice,
+    dismissAppNotice,
+    openCodexLogin,
+    handleThreadActionError,
+  } = useAppNoticeProducers(props, dispatchAppNotice);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
     useState<GithubPrSamlEnforcementEvent[]>([]);
   const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
@@ -943,14 +747,6 @@ function DesktopAppShell(props: {
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
-  const openSettingsSection = useCallback(
-    (section: SettingsSection | undefined, subsection?: string) => {
-      setSettingsInitialSection(section);
-      setSettingsInitialSubsection(section ? subsection : undefined);
-      setMainView("settings");
-    },
-    [setMainView],
-  );
   const openMessagingSettings = useCallback(() => {
     openSettingsSection("messaging");
   }, [openSettingsSection]);
@@ -1846,158 +1642,10 @@ function DesktopAppShell(props: {
     autoOpen: interactiveSvgAutoOpen,
     save: (patch) => writeConfig({ general: patch }),
   }), [interactiveSvgAutoOpen, interactiveSvgSkipNotice, writeConfig]);
-  // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
-  // its own open state and the sidebar peek a jump's landing scroll needs.
-  const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
-  const endSidebarPeek = threadJump.endPeek;
-  const closeThreadJump = threadJump.closeJump;
   const toggleGlobalThreadSearch = () => {
     threadJump.closeJump();
     setMainView((current) => current === "search" ? "thread" : "search");
   };
-  // Layout prefs the operator has set in this window. The startup snapshot
-  // never adopts one of these: see the adoption effect below.
-  const layoutPrefsChosenRef = useRef(
-    new Set<keyof DesktopSettingsSnapshot["ui"]>(),
-  );
-  const setSidebarHiddenPersisted = useCallback(
-    (next: boolean) => {
-      // An explicit toggle (⌘B, the chips) is the operator stating a preference,
-      // so it ends any jump-landing peek in flight.
-      endSidebarPeek();
-      layoutPrefsChosenRef.current.add("sidebarHidden");
-      setSidebarHidden(next);
-      void writeConfig({ ui: { sidebarHidden: next } });
-    },
-    [endSidebarPeek, writeConfig],
-  );
-  const setContextRailPinnedPersisted = useCallback(
-    (next: boolean) => {
-      layoutPrefsChosenRef.current.add("contextRailPinned");
-      setContextRailPinned(next);
-      void writeConfig({ ui: { contextRailPinned: next } });
-    },
-    [writeConfig],
-  );
-
-  const setProjectIndexHiddenPersisted = useCallback(
-    (next: boolean) => {
-      layoutPrefsChosenRef.current.add("projectIndexHidden");
-      setProjectIndexHidden(next);
-      void writeConfig({ ui: { projectIndexHidden: next } });
-    },
-    [writeConfig],
-  );
-  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
-  // PanelToggleButtons chip — so it fires exactly once regardless of how many
-  // chips are mounted.
-  useLayoutChordHotkeys({
-    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
-  });
-  // Called once per drag and once per arrow-key run, on release.
-  const setProjectIndexWidthPersisted = useCallback(
-    (next: number | null) => {
-      layoutPrefsChosenRef.current.add("projectIndexWidth");
-      setProjectIndexWidth(next);
-      void writeConfig({ ui: { projectIndexWidth: next } });
-    },
-    [writeConfig],
-  );
-  const setActiveContextTabPersisted = useCallback(
-    (tab: ContextTabId) => {
-      layoutPrefsChosenRef.current.add("activeContextTab");
-      setActiveContextTab(tab);
-      void writeConfig({ ui: { activeContextTab: tab } });
-    },
-    [writeConfig],
-  );
-  const setEditedFilesDockPersisted = useCallback(
-    (dock: EditedFilesDock) => {
-      layoutPrefsChosenRef.current.add("editedFilesDock");
-      setEditedFilesDock(dock);
-      void writeConfig({ ui: { editedFilesDock: dock } });
-    },
-    [writeConfig],
-  );
-  const setActionRunsDockPersisted = useCallback(
-    (dock: ActionRunsDock) => {
-      layoutPrefsChosenRef.current.add("actionRunsDock");
-      setActionRunsDock(dock);
-      void writeConfig({ ui: { actionRunsDock: dock } });
-    },
-    [writeConfig],
-  );
-  const setLaunchpadConnectionsDockPersisted = useCallback(
-    (dock: LaunchpadConnectionsDock) => {
-      layoutPrefsChosenRef.current.add("launchpadConnectionsDock");
-      setLaunchpadConnectionsDock(dock);
-      void writeConfig({ ui: { launchpadConnectionsDock: dock } });
-    },
-    [writeConfig],
-  );
-
-  // Adopt the persisted layout prefs once the settings snapshot arrives.
-  // Guarded so later snapshot refreshes never clobber an in-session toggle.
-  // `sidebarHidden` and `contextRailPinned` are normally already correct here
-  // — the bootstrap hint read the same file before first paint — so these two
-  // set what they already hold. They stay because a window that somehow got
-  // no hint would otherwise never see the operator's stored layout.
-  //
-  // The bootstrap projection opens navigation before this snapshot arrives,
-  // so the operator can already have toggled a pref. Their choice wins over
-  // the stored value, even when the read resolved first: this effect runs
-  // only after the snapshot's render commits, and a click in that gap would
-  // otherwise be reset (Windows Desktop E2E lost a Pricing tab click to it).
-  const uiPrefsSeededRef = useRef(false);
-  const uiPrefs = settings.snapshot?.ui;
-  useEffect(() => {
-    if (!uiPrefs || uiPrefsSeededRef.current) {
-      return;
-    }
-    uiPrefsSeededRef.current = true;
-    const chosen = layoutPrefsChosenRef.current;
-    if (!chosen.has("sidebarHidden")) {
-      setSidebarHidden(uiPrefs.sidebarHidden.value);
-    }
-    if (!chosen.has("contextRailPinned")) {
-      setContextRailPinned(uiPrefs.contextRailPinned.value);
-    }
-    if (!chosen.has("projectIndexHidden") && uiPrefs.projectIndexHidden) {
-      setProjectIndexHidden(uiPrefs.projectIndexHidden.value);
-    }
-    if (!chosen.has("projectIndexWidth") && uiPrefs.projectIndexWidth) {
-      setProjectIndexWidth(uiPrefs.projectIndexWidth.value);
-    }
-    if (
-      !chosen.has("activeContextTab")
-      && isContextTabId(uiPrefs.activeContextTab.value)
-    ) {
-      setActiveContextTab(uiPrefs.activeContextTab.value);
-    }
-    const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
-    if (
-      !chosen.has("editedFilesDock")
-      && isEditedFilesDock(editedFilesDockPref)
-    ) {
-      setEditedFilesDock(editedFilesDockPref);
-    }
-    const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
-    if (
-      !chosen.has("actionRunsDock")
-      && isActionRunsDock(actionRunsDockPref)
-    ) {
-      setActionRunsDock(actionRunsDockPref);
-    }
-    if (!chosen.has("launchpadConnectionsDock")) {
-      const connectionsDockPref = uiPrefs.launchpadConnectionsDock?.value;
-      setLaunchpadConnectionsDock(
-        isLaunchpadConnectionsDock(connectionsDockPref) ? connectionsDockPref : "launchpad",
-      );
-    }
-  }, [uiPrefs]);
 
   const normalAppEnabled = resolveNormalAppEnabled({
     bootstrapCompleted:
@@ -3172,7 +2820,7 @@ function DesktopAppShell(props: {
         subsection,
       );
     });
-  }, [desktopApi, openSettingsSection]);
+  }, [desktopApi, openSettingsSection, setProfileCreateRequested]);
   useEffect(() => {
     // View → Search Threads / View → Automations. The menu opens rather than
     // toggles: the row names a screen, so choosing it again keeps it up.
@@ -4665,76 +4313,6 @@ function DesktopAppShell(props: {
   const threadDetailPending =
     mainView === "thread" && (!ThreadViewComponent || selectedThreadPending);
 
-  const clampSidebarWidth = (nextWidth: number): number =>
-    Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth));
-
-  // The single writer of the sidebar width: keeps `sidebarWidthRef` (which the
-  // rendered `--sidebar-width` reads from) and React state in lockstep. The
-  // per-frame drag path writes the ref + DOM directly for speed and calls this
-  // only once on pointerup; every other caller goes through here.
-  const commitSidebarWidth = (width: number): void => {
-    sidebarWidthRef.current = width;
-    setSidebarWidth(width);
-  };
-
-  // Keyboard / commit path: a discrete, low-frequency width change.
-  const resizeSidebar = (nextWidth: number): void => {
-    commitSidebarWidth(clampSidebarWidth(nextWidth));
-  };
-
-  const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = sidebarWidthRef.current;
-    let frame = 0;
-
-    const flush = (): void => {
-      frame = 0;
-      appShellRef.current?.style.setProperty(
-        "--sidebar-width",
-        `${sidebarWidthRef.current}px`,
-      );
-    };
-    const move = (moveEvent: globalThis.PointerEvent): void => {
-      // Update the live width synchronously so any incidental rerender reads
-      // the current value, but coalesce the actual DOM write to one per frame.
-      sidebarWidthRef.current = clampSidebarWidth(
-        startWidth + moveEvent.clientX - startX,
-      );
-      if (frame === 0) {
-        frame = window.requestAnimationFrame(flush);
-      }
-    };
-    const stop = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-      if (frame !== 0) {
-        window.cancelAnimationFrame(frame);
-        frame = 0;
-      }
-      // Make sure the DOM is at the final width before the transcript
-      // re-syncs (the last move's rAF flush may have been cancelled above).
-      flush();
-      // Commit the final width to React state exactly once so it survives
-      // future rerenders and drives `aria-valuenow` — a single reconcile in
-      // place of one per pointermove.
-      commitSidebarWidth(sidebarWidthRef.current);
-      // Release the transcript's resize/scroll sync, which re-syncs once now
-      // that the pane has settled at its final width.
-      setSidebarResizing(false);
-    };
-
-    // Pause the transcript's per-frame ResizeObserver/onScroll re-sync for the
-    // duration of the drag — the main pane reflows on every frame, and the
-    // un-virtualized transcript responding to each reflow is the dominant cost
-    // (see lib/sidebar-resize-signal.ts).
-    setSidebarResizing(true);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-  };
-
   // Compile JSX separately from setup so both functions stay optimizable by V8.
   function renderAppLayout() {
     return (
@@ -5557,4 +5135,522 @@ export function inferReplayCodexProfileModel(
   profiles: readonly DesktopPwrAgentProfileSummary[],
 ): DesktopCodexProfileModel {
   return inferReplayCodexProfileSetup(persisted, profiles).model;
+}
+
+// Own window layout, including live drag width and startup preference adoption.
+function useShellLayout(settings: DesktopSettingsState) {
+  const [sidebarWidth, setSidebarWidth] = useState(408);
+  // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
+  // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
+  // (→ Sidebar → every un-virtualized ThreadRow) that used to fire on each
+  // pointermove is gone. The `.app-shell` CSS var is rendered from the ref so
+  // an incidental rerender mid-drag (e.g. an agent event) re-applies the live
+  // dragged width instead of snapping back to the stale committed state.
+  //
+  // INVARIANT: the rendered width reads from this ref, so it must track state.
+  // Write the width through `commitSidebarWidth` (below); never call
+  // `setSidebarWidth` directly, or the rendered width diverges from state.
+  const sidebarWidthRef = useRef(sidebarWidth);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  // Hardcoded sidebar resize bounds — mirrored in clampSidebarWidth() below.
+  // Exposed as constants so both the clamp and the aria-valuemin/max
+  // attributes on the resize handle stay in sync.
+  const sidebarMinWidth = 280;
+  const sidebarMaxWidth = 560;
+  // Window-level layout preferences (persisted to config — see the
+  // `ui` settings section). The left sidebar can be hidden entirely and
+  // the right context rail pinned open; the active rail tab is also
+  // remembered.
+  //
+  // Seeded from the main-process bootstrap hint rather than from a
+  // hard-coded default corrected by the settings snapshot below. Both of
+  // these move layout: the rail reserves 428px when pinned, so correcting
+  // it after first paint reflows the whole transcript under the operator.
+  // `activeContextTab` and the dock prefs keep adopting from the snapshot,
+  // because none of them change the transcript's width.
+  const [sidebarHidden, setSidebarHidden] = useState(
+    () => readBootstrapLayoutPreferences().sidebarHidden,
+  );
+  const [contextRailPinned, setContextRailPinned] = useState(
+    () => readBootstrapLayoutPreferences().contextRailPinned,
+  );
+  // The sidebar's project index splits the sidebar's width, so it moves the
+  // list's width and is seeded before first paint like the two above.
+  const [projectIndexHidden, setProjectIndexHidden] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexHidden,
+  );
+  const [projectIndexWidth, setProjectIndexWidth] = useState(
+    () => readBootstrapLayoutPreferences().projectIndexWidth,
+  );
+  const [activeContextTab, setActiveContextTab] =
+    useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
+  const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
+    DEFAULT_EDITED_FILES_DOCK,
+  );
+  const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
+    DEFAULT_ACTION_RUNS_DOCK,
+  );
+  // "pending" until the snapshot says where the cards live, so cards the
+  // operator moved to the rail never flash on the launchpad at launch.
+  const [launchpadConnectionsDock, setLaunchpadConnectionsDock] =
+    useState<LaunchpadConnectionsDock | "pending">("pending");
+  const writeConfig = settings.writeConfig;
+  // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
+  // its own open state and the sidebar peek a jump's landing scroll needs.
+  const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
+  const endSidebarPeek = threadJump.endPeek;
+  const closeThreadJump = threadJump.closeJump;
+  // Layout prefs the operator has set in this window. The startup snapshot
+  // never adopts one of these: see the adoption effect below.
+  const layoutPrefsChosenRef = useRef(
+    new Set<keyof DesktopSettingsSnapshot["ui"]>(),
+  );
+  const setSidebarHiddenPersisted = useCallback(
+    (next: boolean) => {
+      // An explicit toggle (⌘B, the chips) is the operator stating a preference,
+      // so it ends any jump-landing peek in flight.
+      endSidebarPeek();
+      layoutPrefsChosenRef.current.add("sidebarHidden");
+      setSidebarHidden(next);
+      void writeConfig({ ui: { sidebarHidden: next } });
+    },
+    [endSidebarPeek, writeConfig],
+  );
+  const setContextRailPinnedPersisted = useCallback(
+    (next: boolean) => {
+      layoutPrefsChosenRef.current.add("contextRailPinned");
+      setContextRailPinned(next);
+      void writeConfig({ ui: { contextRailPinned: next } });
+    },
+    [writeConfig],
+  );
+
+  const setProjectIndexHiddenPersisted = useCallback(
+    (next: boolean) => {
+      layoutPrefsChosenRef.current.add("projectIndexHidden");
+      setProjectIndexHidden(next);
+      void writeConfig({ ui: { projectIndexHidden: next } });
+    },
+    [writeConfig],
+  );
+  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
+  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
+  // PanelToggleButtons chip — so it fires exactly once regardless of how many
+  // chips are mounted.
+  useLayoutChordHotkeys({
+    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
+  });
+  // Called once per drag and once per arrow-key run, on release.
+  const setProjectIndexWidthPersisted = useCallback(
+    (next: number | null) => {
+      layoutPrefsChosenRef.current.add("projectIndexWidth");
+      setProjectIndexWidth(next);
+      void writeConfig({ ui: { projectIndexWidth: next } });
+    },
+    [writeConfig],
+  );
+  const setActiveContextTabPersisted = useCallback(
+    (tab: ContextTabId) => {
+      layoutPrefsChosenRef.current.add("activeContextTab");
+      setActiveContextTab(tab);
+      void writeConfig({ ui: { activeContextTab: tab } });
+    },
+    [writeConfig],
+  );
+  const setEditedFilesDockPersisted = useCallback(
+    (dock: EditedFilesDock) => {
+      layoutPrefsChosenRef.current.add("editedFilesDock");
+      setEditedFilesDock(dock);
+      void writeConfig({ ui: { editedFilesDock: dock } });
+    },
+    [writeConfig],
+  );
+  const setActionRunsDockPersisted = useCallback(
+    (dock: ActionRunsDock) => {
+      layoutPrefsChosenRef.current.add("actionRunsDock");
+      setActionRunsDock(dock);
+      void writeConfig({ ui: { actionRunsDock: dock } });
+    },
+    [writeConfig],
+  );
+  const setLaunchpadConnectionsDockPersisted = useCallback(
+    (dock: LaunchpadConnectionsDock) => {
+      layoutPrefsChosenRef.current.add("launchpadConnectionsDock");
+      setLaunchpadConnectionsDock(dock);
+      void writeConfig({ ui: { launchpadConnectionsDock: dock } });
+    },
+    [writeConfig],
+  );
+
+  // Adopt the persisted layout prefs once the settings snapshot arrives.
+  // Guarded so later snapshot refreshes never clobber an in-session toggle.
+  // `sidebarHidden` and `contextRailPinned` are normally already correct here
+  // — the bootstrap hint read the same file before first paint — so these two
+  // set what they already hold. They stay because a window that somehow got
+  // no hint would otherwise never see the operator's stored layout.
+  //
+  // The bootstrap projection opens navigation before this snapshot arrives,
+  // so the operator can already have toggled a pref. Their choice wins over
+  // the stored value, even when the read resolved first: this effect runs
+  // only after the snapshot's render commits, and a click in that gap would
+  // otherwise be reset (Windows Desktop E2E lost a Pricing tab click to it).
+  const uiPrefsSeededRef = useRef(false);
+  const uiPrefs = settings.snapshot?.ui;
+  useEffect(() => {
+    if (!uiPrefs || uiPrefsSeededRef.current) {
+      return;
+    }
+    uiPrefsSeededRef.current = true;
+    const chosen = layoutPrefsChosenRef.current;
+    if (!chosen.has("sidebarHidden")) {
+      setSidebarHidden(uiPrefs.sidebarHidden.value);
+    }
+    if (!chosen.has("contextRailPinned")) {
+      setContextRailPinned(uiPrefs.contextRailPinned.value);
+    }
+    if (!chosen.has("projectIndexHidden") && uiPrefs.projectIndexHidden) {
+      setProjectIndexHidden(uiPrefs.projectIndexHidden.value);
+    }
+    if (!chosen.has("projectIndexWidth") && uiPrefs.projectIndexWidth) {
+      setProjectIndexWidth(uiPrefs.projectIndexWidth.value);
+    }
+    if (
+      !chosen.has("activeContextTab")
+      && isContextTabId(uiPrefs.activeContextTab.value)
+    ) {
+      setActiveContextTab(uiPrefs.activeContextTab.value);
+    }
+    const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
+    if (
+      !chosen.has("editedFilesDock")
+      && isEditedFilesDock(editedFilesDockPref)
+    ) {
+      setEditedFilesDock(editedFilesDockPref);
+    }
+    const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
+    if (
+      !chosen.has("actionRunsDock")
+      && isActionRunsDock(actionRunsDockPref)
+    ) {
+      setActionRunsDock(actionRunsDockPref);
+    }
+    if (!chosen.has("launchpadConnectionsDock")) {
+      const connectionsDockPref = uiPrefs.launchpadConnectionsDock?.value;
+      setLaunchpadConnectionsDock(
+        isLaunchpadConnectionsDock(connectionsDockPref) ? connectionsDockPref : "launchpad",
+      );
+    }
+  }, [uiPrefs]);
+
+  const clampSidebarWidth = (nextWidth: number): number =>
+    Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth));
+
+  // The single writer of the sidebar width: keeps `sidebarWidthRef` (which the
+  // rendered `--sidebar-width` reads from) and React state in lockstep. The
+  // per-frame drag path writes the ref + DOM directly for speed and calls this
+  // only once on pointerup; every other caller goes through here.
+  const commitSidebarWidth = (width: number): void => {
+    sidebarWidthRef.current = width;
+    setSidebarWidth(width);
+  };
+
+  // Keyboard / commit path: a discrete, low-frequency width change.
+  const resizeSidebar = (nextWidth: number): void => {
+    commitSidebarWidth(clampSidebarWidth(nextWidth));
+  };
+
+  const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidthRef.current;
+    let frame = 0;
+
+    const flush = (): void => {
+      frame = 0;
+      appShellRef.current?.style.setProperty(
+        "--sidebar-width",
+        `${sidebarWidthRef.current}px`,
+      );
+    };
+    const move = (moveEvent: globalThis.PointerEvent): void => {
+      // Update the live width synchronously so any incidental rerender reads
+      // the current value, but coalesce the actual DOM write to one per frame.
+      sidebarWidthRef.current = clampSidebarWidth(
+        startWidth + moveEvent.clientX - startX,
+      );
+      if (frame === 0) {
+        frame = window.requestAnimationFrame(flush);
+      }
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      // Make sure the DOM is at the final width before the transcript
+      // re-syncs (the last move's rAF flush may have been cancelled above).
+      flush();
+      // Commit the final width to React state exactly once so it survives
+      // future rerenders and drives `aria-valuenow` — a single reconcile in
+      // place of one per pointermove.
+      commitSidebarWidth(sidebarWidthRef.current);
+      // Release the transcript's resize/scroll sync, which re-syncs once now
+      // that the pane has settled at its final width.
+      setSidebarResizing(false);
+    };
+
+    // Pause the transcript's per-frame ResizeObserver/onScroll re-sync for the
+    // duration of the drag — the main pane reflows on every frame, and the
+    // un-virtualized transcript responding to each reflow is the dominant cost
+    // (see lib/sidebar-resize-signal.ts).
+    setSidebarResizing(true);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  };
+
+  return {
+    sidebarWidth,
+    sidebarWidthRef,
+    appShellRef,
+    sidebarMinWidth,
+    sidebarMaxWidth,
+    sidebarHidden,
+    contextRailPinned,
+    projectIndexHidden,
+    projectIndexWidth,
+    activeContextTab,
+    editedFilesDock,
+    actionRunsDock,
+    launchpadConnectionsDock,
+    threadJump,
+    closeThreadJump,
+    setSidebarHiddenPersisted,
+    setContextRailPinnedPersisted,
+    setProjectIndexHiddenPersisted,
+    setProjectIndexWidthPersisted,
+    setActiveContextTabPersisted,
+    setEditedFilesDockPersisted,
+    setActionRunsDockPersisted,
+    setLaunchpadConnectionsDockPersisted,
+    resizeSidebar,
+    startSidebarResize,
+  };
+}
+
+// Keep layer navigation, the Settings leave guard and focus restoration together.
+function useMainView() {
+  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
+  const mainViewRef = useRef<MainView>(mainView);
+  // The control that opened Settings or Automations. The layer covers the
+  // sidebar and main, which go inert under it, so focus returns here on
+  // close rather than dropping to <body>.
+  const layerOpenerRef = useRef<HTMLElement | null>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
+  // Settings can hold edits the operator has not saved. Every way out of the
+  // overlay (Exit, a menu command, a notification, history) asks Settings
+  // first, so those edits get a Save / Discard prompt instead of vanishing.
+  const settingsLeaveGuardRef = useRef<ConfirmSettingsLeave | undefined>(
+    undefined,
+  );
+  const registerSettingsLeaveGuard = useCallback(
+    (confirmLeave: ConfirmSettingsLeave | undefined) => {
+      settingsLeaveGuardRef.current = confirmLeave;
+    },
+    [],
+  );
+  // `onShown` runs with the switch, not before it. A caller that pairs the
+  // two — open a thread, create one, restore a history entry — would
+  // otherwise act on a window the operator is still deciding whether to
+  // leave, and "Keep editing" would cancel only half of it.
+  const setMainView = useCallback(
+    (next: SetStateAction<MainView>, onShown?: () => void) => {
+      const current = mainViewRef.current;
+      const target = typeof next === "function" ? next(current) : next;
+      const show = () => {
+        if (!isLayerView(current) && isLayerView(target)) {
+          const opener = document.activeElement;
+          layerOpenerRef.current =
+            opener instanceof HTMLElement && opener !== document.body ? opener : null;
+        }
+        mainViewRef.current = target;
+        setMainViewState(target);
+        onShown?.();
+      };
+      const confirmLeave = settingsLeaveGuardRef.current;
+      if (current === "settings" && target !== "settings" && confirmLeave) {
+        confirmLeave(show);
+        return;
+      }
+      show();
+    },
+    [setMainViewState],
+  );
+  // The opener went inert with the sidebar or main, so focus moves onto the
+  // layer, and Tab starts at its first control. On close, or on a switch
+  // between the two layers, focus that fell with the layer goes back.
+  const layerView = isLayerView(mainView) ? mainView : undefined;
+  useEffect(() => {
+    if (!layerView) return;
+    const layer = layerRef.current;
+    if (layer && !layer.contains(document.activeElement)) {
+      layer.focus({ preventScroll: true });
+    }
+    return () => restoreFocusIfDropped(layerOpenerRef.current, layer);
+  }, [layerView]);
+  // Initial section for SettingsScreen — non-undefined when navigation
+  // came from a deep-link to a specific section. Resets when the user
+  // switches mainView. The Messaging Activity surface is its own
+  // dedicated BrowserWindow, NOT a settings section, so it never
+  // appears through this slot.
+  const [settingsInitialSection, setSettingsInitialSection] = useState<
+    SettingsSection | undefined
+  >(undefined);
+  // Sub-screen within `settingsInitialSection` (a provider registry id under
+  // "models", a platform kind under "messaging"). Always written together with
+  // the section through `openSettingsSection` so a deep link can never carry a
+  // previous link's sub-screen into a different section.
+  const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
+    string | undefined
+  >(undefined);
+  // Profiles → New Profile… asks Settings → Profiles to open its create form.
+  // A one-shot flag rather than a route: ProfilesSettings clears it once the
+  // form is open, so a second click opens it again and a later visit to the
+  // pane does not.
+  const [profileCreateRequested, setProfileCreateRequested] = useState(false);
+  const clearProfileCreateRequest = useCallback(() => {
+    setProfileCreateRequested(false);
+  }, []);
+  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
+  // prompt kept another pane open, then Exit Settings). The request goes with
+  // it, or a later visit to Profiles would open a form nobody asked for.
+  useEffect(() => {
+    if (mainView !== "settings") {
+      setProfileCreateRequested(false);
+    }
+  }, [mainView]);
+  const openSettingsSection = useCallback(
+    (section: SettingsSection | undefined, subsection?: string) => {
+      setSettingsInitialSection(section);
+      setSettingsInitialSubsection(section ? subsection : undefined);
+      setMainView("settings");
+    },
+    [setMainView],
+  );
+  return { mainView, layerRef, layerView, setMainView, registerSettingsLeaveGuard,
+    settingsInitialSection, settingsInitialSubsection, profileCreateRequested, setProfileCreateRequested, clearProfileCreateRequest, openSettingsSection,
+  };
+}
+
+// Own the authentication/configuration notice producers and login dialog state.
+function useAppNoticeProducers(props: {
+  desktopApi?: DesktopApi;
+  settings: DesktopSettingsState;
+  bootstrapConfig: DesktopConfigBootstrapState;
+}, dispatchAppNotice: Dispatch<Parameters<typeof appNoticeReducer>[1]>) {
+  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
+  const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
+    dispatchAppNotice({ type: "show", notice });
+  }, [dispatchAppNotice]);
+  useEffect(() => turnFailureAcknowledgements.subscribeDismissals((id) => {
+    dispatchAppNotice({ type: "dismiss", id });
+  }), [dispatchAppNotice]);
+  const codexProfiles = props.settings.snapshot?.models?.codex?.profiles;
+  const activeCodexProfileRef = useRef(codexProfiles);
+  activeCodexProfileRef.current = codexProfiles;
+  const openCodexLogin = useCallback(() => {
+    const discovery = activeCodexProfileRef.current;
+    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
+    if (profile) setCodexLoginProfile(profile);
+  }, []);
+  const rejectedCodexHomes = useRef(new Set<string>());
+  useEffect(() => {
+    const rejected = codexProfiles?.profiles.filter((profile) => profile.authenticationRequired) ?? [];
+    const nextHomes = new Set(rejected.map((profile) => profile.codexHome));
+    for (const profile of rejected) {
+      if (rejectedCodexHomes.current.has(profile.codexHome)) continue;
+      showAppNotice({
+        id: `codex-auth:${profile.codexHome}`,
+        title: "Codex login required",
+        message: `${profile.displayName} is logged out. Codex operations are paused until you sign in again.`,
+        autoDismiss: false,
+        actions: [{ label: "Login", onClick: () => setCodexLoginProfile(profile) }],
+      });
+    }
+    for (const home of rejectedCodexHomes.current) {
+      if (!nextHomes.has(home)) dispatchAppNotice({ type: "dismiss", id: `codex-auth:${home}` });
+    }
+    rejectedCodexHomes.current = nextHomes;
+  }, [codexProfiles, dispatchAppNotice, showAppNotice]);
+  const dismissAppNotice = useCallback((id: string): void => {
+    dispatchAppNotice({ type: "dismiss", id });
+  }, [dispatchAppNotice]);
+  const configError =
+    props.bootstrapConfig.snapshot?.configError
+    ?? props.settings.snapshot?.configError;
+  useEffect(() => {
+    if (!configError) {
+      dispatchAppNotice({ type: "dismiss", id: "config-file-invalid" });
+      return;
+    }
+    showAppNotice({
+      autoDismiss: false,
+      id: "config-file-invalid",
+      title: "Settings config did not load",
+      message:
+        `${configError} PwrAgent is using the last known good configuration.`,
+    });
+  }, [configError, dispatchAppNotice, showAppNotice]);
+  const settingsRefreshError =
+    props.desktopApi?.readSettings && props.bootstrapConfig.snapshot
+      ? props.settings.error
+      : undefined;
+  useEffect(() => {
+    if (!settingsRefreshError) {
+      dispatchAppNotice({ type: "dismiss", id: "settings-refresh-failed" });
+      return;
+    }
+    showAppNotice({
+      autoDismiss: false,
+      id: "settings-refresh-failed",
+      title: "Settings refresh failed",
+      message:
+        `${settingsRefreshError} PwrAgent is continuing with its startup configuration.`,
+    });
+  }, [settingsRefreshError, dispatchAppNotice, showAppNotice]);
+  /* Thread create / rename / archive failures. The originating control is
+     always gone by the time these resolve — the rename dialog closes on
+     submit, the context menu closes on click, and a failed create has no
+     thread to point at — so they land in the durable stack rather than a
+     static slot. An empty message means the producer cleared it. */
+  const handleThreadActionError = useCallback((event: ThreadActionErrorEvent): void => {
+    if (!event.message) {
+      dispatchAppNotice({
+        type: "dismiss",
+        id: threadActionErrorNoticeId(event.kind),
+      });
+      return;
+    }
+    dispatchAppNotice({
+      type: "show",
+      notice: resolveThreadActionErrorNotice({
+        ...event,
+        kind: event.kind,
+        message: event.message,
+      }),
+    });
+  }, [dispatchAppNotice]);
+  return {
+    codexLoginProfile,
+    setCodexLoginProfile,
+    showAppNotice,
+    dismissAppNotice,
+    openCodexLogin,
+    handleThreadActionError,
+  };
 }

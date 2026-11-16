@@ -222,12 +222,25 @@ export function AutomationEditor(props: AutomationEditorProps) {
     ? buildThreadKey(initialAssignment.backend, initialAssignment.threadId)
     : "";
   const [name, setName] = useState(initialAutomation?.name ?? "");
-  const [taskPrompt, setTaskPrompt] = useState(initialAutomation?.taskPrompt ?? "");
-  const [promptHelpOpen, setPromptHelpOpen] = useState(false);
-  const [promptDraftOpen, setPromptDraftOpen] = useState(false);
-  const [promptDescription, setPromptDescription] = useState("");
-  const [promptDrafting, setPromptDrafting] = useState(false);
-  const [promptDraftError, setPromptDraftError] = useState<string>();
+  const {
+    taskPrompt,
+    setTaskPrompt,
+    promptHelpOpen,
+    setPromptHelpOpen,
+    promptDraftOpen,
+    setPromptDraftOpen,
+    promptDescription,
+    setPromptDescription,
+    promptDrafting,
+    promptDraftError,
+    setPromptDraftError,
+    draftPrompt,
+    canDraftPrompt,
+  } = useAutomationPromptDraft(
+    props.desktopApi,
+    initialAutomation?.taskPrompt ?? "",
+    () => setValidationError(undefined),
+  );
   const [gateEnabled, setGateEnabled] = useState(Boolean(initialAutomation?.gate));
   const [gateCommand, setGateCommand] = useState(initialAutomation?.gate?.command ?? "");
   const [gateCwd, setGateCwd] = useState(initialAutomation?.gate?.cwd ?? "");
@@ -279,7 +292,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const promptLabelId = useId();
   const promptHelpId = useId();
   const canDeferAgent = props.mode.kind === "create";
-  const canDraftPrompt = Boolean(props.desktopApi?.draftAutomationPrompt);
   const errorRef = useRef<HTMLParagraphElement>(null);
   // The error lives in the actions bar. On the Automations screen that bar is
   // pinned to the pane's bottom edge, so it is already on screen and "nearest"
@@ -1504,39 +1516,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
       setAgentPromotionError(error instanceof Error ? error.message : String(error));
     } finally {
       setPromotingThreadKey(undefined);
-    }
-  };
-
-  const draftPrompt = async (): Promise<void> => {
-    const draft = props.desktopApi?.draftAutomationPrompt;
-    if (!draft) return;
-    const description = promptDescription.trim();
-    if (!description) {
-      setPromptDraftError("Describe what you want the automation to do.");
-      return;
-    }
-    setPromptDrafting(true);
-    setPromptDraftError(undefined);
-    try {
-      const result = await draft({ description });
-      if (result.status === "generated") {
-        setTaskPrompt(result.prompt);
-        setPromptDraftOpen(false);
-        setPromptDescription("");
-        setValidationError(undefined);
-      } else if (result.status === "unavailable") {
-        setPromptDraftError(
-          "Prompt drafting isn't available for your configured agent backend. Write the prompt manually or see the example.",
-        );
-      } else {
-        setPromptDraftError(
-          "Couldn't draft a prompt. Try rephrasing your description.",
-        );
-      }
-    } catch (error) {
-      setPromptDraftError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPromptDrafting(false);
     }
   };
 
@@ -4352,4 +4331,67 @@ function parseTimeOfDay(value: string): { hour: number; minute: number } | undef
     return undefined;
   }
   return { hour, minute };
+}
+
+// The prompt editor retains its draft description and request state independently of triggers.
+function useAutomationPromptDraft(
+  desktopApi: DesktopApi | undefined,
+  initialPrompt: string,
+  onDrafted: () => void,
+) {
+  const [taskPrompt, setTaskPrompt] = useState(initialPrompt);
+  const [promptHelpOpen, setPromptHelpOpen] = useState(false);
+  const [promptDraftOpen, setPromptDraftOpen] = useState(false);
+  const [promptDescription, setPromptDescription] = useState("");
+  const [promptDrafting, setPromptDrafting] = useState(false);
+  const [promptDraftError, setPromptDraftError] = useState<string>();
+  const canDraftPrompt = Boolean(desktopApi?.draftAutomationPrompt);
+  const draftPrompt = async (): Promise<void> => {
+    const draft = desktopApi?.draftAutomationPrompt;
+    if (!draft) return;
+    const description = promptDescription.trim();
+    if (!description) {
+      setPromptDraftError("Describe what you want the automation to do.");
+      return;
+    }
+    setPromptDrafting(true);
+    setPromptDraftError(undefined);
+    try {
+      const result = await draft({ description });
+      if (result.status === "generated") {
+        setTaskPrompt(result.prompt);
+        setPromptDraftOpen(false);
+        setPromptDescription("");
+        onDrafted();
+      } else if (result.status === "unavailable") {
+        setPromptDraftError(
+          "Prompt drafting isn't available for your configured agent backend. Write the prompt manually or see the example.",
+        );
+      } else {
+        setPromptDraftError(
+          "Couldn't draft a prompt. Try rephrasing your description.",
+        );
+      }
+    } catch (error) {
+      setPromptDraftError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPromptDrafting(false);
+    }
+  };
+
+  return {
+    taskPrompt,
+    setTaskPrompt,
+    promptHelpOpen,
+    setPromptHelpOpen,
+    promptDraftOpen,
+    setPromptDraftOpen,
+    promptDescription,
+    setPromptDescription,
+    promptDrafting,
+    promptDraftError,
+    setPromptDraftError,
+    draftPrompt,
+    canDraftPrompt,
+  };
 }
