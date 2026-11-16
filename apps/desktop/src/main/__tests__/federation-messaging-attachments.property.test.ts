@@ -16,7 +16,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(data: Uint8Array) {
+async function fixture(data: Uint8Array, receiverClockOffsetMs = 0) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-reverse-export-"));
   roots.push(root);
   let now = Date.now();
@@ -45,7 +45,7 @@ async function fixture(data: Uint8Array) {
       await intercept?.(String(params.method), params);
       return await destination.handle("provider-owner", params, false) as T;
     } }) });
-  const createDestination = () => new FederationMessagingAttachmentExports({ directory: destinationRoot, now: () => now,
+  const createDestination = () => new FederationMessagingAttachmentExports({ directory: destinationRoot, now: () => now + receiverClockOffsetMs,
     receiveAllowed: () => receiveAllowed, sendAllowed: () => false,
     rpc: () => ({ request: async <T>(call: { params?: unknown }): Promise<T> => await owner.handle("execution-owner", call.params, false) as T }) });
   destination = createDestination();
@@ -78,6 +78,41 @@ async function fixture(data: Uint8Array) {
     advance: (ms: number) => { now += ms; },
   };
 }
+
+async function assertClockSkewRoundTrip(ownerAheadMs: number, data: Uint8Array): Promise<void> {
+  const f = await fixture(data, -ownerAheadMs);
+  const listed = await f.destination().request("provider-owner", { ...f.request, operation: "list_messaging_attachments", args: {} });
+  expect(listed).toMatchObject({ ok: true, data: { attachments: [f.attachment] } });
+  const response = await f.destination().request("provider-owner", f.request);
+  expect(response).toMatchObject({ ok: true, data: { attachment: f.attachment } });
+  if (!response.ok || !("path" in response.data)) throw new Error("Expected a destination-local original despite clock skew");
+  expect(await readFile(response.data.path)).toEqual(Buffer.from(data));
+  await rm(f.root, { recursive: true, force: true });
+}
+
+it("lists and exports a fresh original when the messaging owner's clock is ten seconds ahead", async () => {
+  await assertClockSkewRoundTrip(10_000, Buffer.from("synthetic original"));
+});
+
+it("owner clock offsets do not change listing or verified original bytes before expiry", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 60_000 }), fc.uint8Array({ maxLength: 128 }),
+    assertClockSkewRoundTrip), { numRuns: 8 });
+});
+
+it("still rejects originals at the receiver's expiry boundary", async () => {
+  const f = await fixture(Buffer.from("expired on receiver"), ORIGINAL_ATTACHMENT_RETENTION_MS);
+  expect(await f.destination().request("provider-owner", { ...f.request, operation: "list_messaging_attachments", args: {} }))
+    .toMatchObject({ ok: false });
+  await expect(f.destination().request("provider-owner", f.request)).rejects.toThrow("metadata");
+});
+
+it.each([-1, 1])("still rejects an original with a retention interval changed by %s ms", async (delta) => {
+  const f = await fixture(Buffer.from("invalid retention"), -10_000);
+  f.intercept(async (method, params) => {
+    if (method === "file.push.begin") (params.attachment as { expiresAt: number }).expiresAt += delta;
+  });
+  await expect(f.destination().request("provider-owner", f.request)).rejects.toThrow("metadata");
+});
 
 it("exports arbitrary original bytes to the execution owner without transferring paths or changing previews", async () => {
   await fc.assert(fc.asyncProperty(fc.uint8Array({ maxLength: 512 }), async (data) => {

@@ -28,13 +28,15 @@ function metadata(a: PwrAgentMessagingAttachmentSummary): PwrAgentMessagingAttac
 
 function validAttachment(value: unknown, now: number): value is PwrAgentMessagingAttachmentSummary {
   const a = value as PwrAgentMessagingAttachmentSummary | undefined;
+  // receivedAt belongs to the owner's clock, which may be ahead of ours.
+  // Keep validating its retention interval and the receiver's expiry boundary.
   return !!a && typeof a.attachmentId === "string" && /^[a-f0-9]{64}$/u.test(a.attachmentId)
     && typeof a.sha256 === "string" && /^[a-f0-9]{64}$/u.test(a.sha256)
     && typeof a.name === "string" && a.name.length <= 255
     && typeof a.mimeType === "string" && a.mimeType.length <= 127
     && Number.isSafeInteger(a.sizeBytes) && a.sizeBytes >= 0 && a.sizeBytes <= MAX_BYTES
     && Number.isSafeInteger(a.receivedAt) && Number.isSafeInteger(a.expiresAt)
-    && a.receivedAt <= now && a.expiresAt > now
+    && a.expiresAt > now
     && a.expiresAt === a.receivedAt + 7 * 24 * 60 * 60_000;
 }
 
