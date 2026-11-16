@@ -322,11 +322,12 @@ import {
 import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import {
   DEFAULT_MESSAGING_ATTACHMENT_POLICY,
+  formatOriginalAttachmentGuidance,
   processMessagingAttachments,
   type MessagingAttachmentPolicy,
   type MessagingAttachmentRejection,
 } from "./messaging-attachment-processor.js";
-import { MessagingOriginalAttachmentStore, OriginalAttachmentError } from "./messaging-original-attachment-store.js";
+import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentInput } from "./messaging-original-attachment-store.js";
 import {
   PdfAttachmentStore,
   type PendingPdfAttachment,
@@ -4886,6 +4887,7 @@ export class MessagingController {
   ): Promise<
     | {
         input: AppServerTurnInputItem[];
+        pendingOriginals: { original: OriginalAttachmentInput; event: MessagingTurnInputEvent; attachmentKey: string }[];
         pdfAttachments: PendingPdfAttachment[];
         privateResponseRequested: boolean;
         preview: string;
@@ -4893,6 +4895,7 @@ export class MessagingController {
     | undefined
   > {
     const input: AppServerTurnInputItem[] = [];
+    const pendingOriginals: { original: OriginalAttachmentInput; event: MessagingTurnInputEvent; attachmentKey: string }[] = [];
     const pdfAttachments: PendingPdfAttachment[] = [];
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
@@ -4971,19 +4974,28 @@ export class MessagingController {
         },
         pdfHandling,
         deferSinglePagePdf: binding?.federatedThread?.target.scope === "remote",
-        retainOriginal: binding && this.options.originalAttachmentStore
-          ? (original, attachment) => this.options.originalAttachmentStore!.retain({
-              ...original,
-              scope: {
-                backend: binding.backend, threadId: binding.threadId, provider: this.options.channel,
-                ...(binding.federatedThread?.target.scope === "remote"
-                  ? { instanceId: binding.federatedThread.target.instanceId } : {}),
-              },
-              actorKey: originalAttachmentActorKey(turnEvent),
-              eventId: turnEvent.id,
-              attachmentKey: attachment.id,
-              receivedAt: turnEvent.receivedAt,
-            })
+        retainOriginal: this.options.originalAttachmentStore
+          ? async (original, attachment) => {
+              if (!binding) {
+                // No cache identity exists until the new thread is created.
+                // Keep this bounded download in memory, without a provisional
+                // manifest or another provider download.
+                pendingOriginals.push({ original, event: turnEvent, attachmentKey: attachment.id });
+                return { pendingThread: true };
+              }
+              return this.options.originalAttachmentStore!.retain({
+                ...original,
+                scope: {
+                  backend: binding.backend, threadId: binding.threadId, provider: this.options.channel,
+                  ...(binding.federatedThread?.target.scope === "remote"
+                    ? { instanceId: binding.federatedThread.target.instanceId } : {}),
+                },
+                actorKey: originalAttachmentActorKey(turnEvent),
+                eventId: turnEvent.id,
+                attachmentKey: attachment.id,
+                receivedAt: turnEvent.receivedAt,
+              });
+            }
           : undefined,
         text: turnEvent.text,
       });
@@ -5004,7 +5016,7 @@ export class MessagingController {
       }
     }
 
-    if (input.length === 0) {
+    if (input.length === 0 && pendingOriginals.length === 0) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("unsupported-media"),
@@ -5046,6 +5058,7 @@ export class MessagingController {
 
     return {
       input,
+      pendingOriginals,
       pdfAttachments,
       privateResponseRequested,
       preview,
@@ -11816,7 +11829,7 @@ export class MessagingController {
               ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
               agent: agentForNewThreadSession(session),
               launchpad,
-              ...(startFirstTurnAfterEnvironmentSetup
+              ...(startFirstTurnAfterEnvironmentSetup || prepared.pendingOriginals.length > 0
                 ? {}
                 : { input: prepared.input }),
             },
@@ -11863,6 +11876,21 @@ export class MessagingController {
       binding: updatedBinding,
       navigation: optimisticNavigation,
     } = await bindStartedThread(started);
+    for (const pending of prepared.pendingOriginals) {
+      const original = await this.options.originalAttachmentStore!.retain({
+        ...pending.original,
+        scope: {
+          backend: updatedBinding.backend, threadId: updatedBinding.threadId, provider: this.options.channel,
+          ...(updatedBinding.federatedThread?.target.scope === "remote"
+            ? { instanceId: updatedBinding.federatedThread.target.instanceId } : {}),
+        },
+        actorKey: originalAttachmentActorKey(pending.event),
+        eventId: pending.event.id,
+        attachmentKey: pending.attachmentKey,
+        receivedAt: pending.event.receivedAt,
+      });
+      prepared.input.push({ type: "text", text: formatOriginalAttachmentGuidance(original) });
+    }
     await retireBrowseSession();
     if (startFirstTurnAfterEnvironmentSetup && materialized) {
       await this.deliverMessagingEnvironmentSetupFinal({
@@ -20271,16 +20299,18 @@ export class MessagingController {
       agentMessagingTurnKey(request.context.backend, request.context.threadId, request.context.turnId),
     ) : undefined;
     const source = this.retainedRequestSource(request.context);
-    if (!active && !source && request.context.messagingTurn) {
-      return { ok: false, error: { code: "forbidden", message:
+    const event = source?.event ?? active?.event;
+    // The request store is shared by every provider. An unrelated controller
+    // must yield before actor authorization, so the owner can decide access.
+    if (event && !this.isChannelInScope(event.channel)) {
+      return { ok: false, error: { code: "not_found", message: "No original attachments for this messaging provider." } };
+    }
+    if (!event && (request.context.messagingTurn || request.context.causalMessagingSource)) {
+      return { ok: false, error: { code: "not_found", message:
         "This messaging turn's actor cannot be reauthorized after restart. Send a new message in the original conversation, or request the save in a local desktop turn on this thread." } };
     }
     if (!active && request.context.causalMessagingSource && (!source || !await this.retainedSourceIsAuthorized(source))) {
       return this.retainedSourceUnavailable(request.context);
-    }
-    const event = source?.event ?? active?.event;
-    if (event && !this.isChannelInScope(event.channel)) {
-      return { ok: false, error: { code: "not_found", message: "No original attachments for this messaging provider." } };
     }
     const permission = this.checkDynamicToolPermission({ ...request.context,
       category: "messaging_context", tool: request.operation, arguments: request.args,

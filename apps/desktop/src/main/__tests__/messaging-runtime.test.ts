@@ -1799,6 +1799,72 @@ describe("DesktopMessagingRuntime", () => {
     expect(createManagedConversation).toHaveBeenCalledTimes(operation === "attach_thread_to_surface" ? 1 : 0);
   });
 
+  it.each([false, true])("original-file authority follows the owner independently of adapter order (Slack first: %s)", async (slackFirst) => {
+    await prepareRuntimeStore();
+    let authorized = true;
+    const data = Buffer.from([0, 255, 42, 7]);
+    const telegramAuthorization = vi.fn(() => true);
+    const telegram = createAdapter("telegram", {
+      retainedSourceConnectionId: () => "telegram-fixture",
+      authorizeRetainedSource: telegramAuthorization,
+    });
+    const slack = createAdapter("slack", {
+      retainedSourceConnectionId: () => "slack-fixture",
+      authorizeRetainedSource: () => authorized,
+      downloadAttachment: async ({ attachment }) => ({ data, fileName: attachment.name,
+        mimeType: "application/zip", sizeBytes: data.length }),
+    });
+    const bridge = createBackendBridge();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.agent = { name: "Manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
+    bridge.readNavigationFixturePopulation = vi.fn(async () => navigation);
+    const event = { ...buildTextEvent("Save the original"), kind: "media" as const, text: "Save the original",
+      botMention: true, receivedAt: Date.now(), disposition: "available" as const,
+      channel: { channel: "slack" as const, conversation: { id: "C4", kind: "channel" as const, workspaceId: "T1" } },
+      attachments: [{ id: "private-provider-id", name: "archive.zip", kind: "file" as const,
+        mimeType: "application/zip", disposition: "available" as const }] };
+    const { getDesktopMessagingStore } = await import("../messaging/desktop-messaging-store");
+    await getDesktopMessagingStore().upsertBinding({ id: "slack-originals", backend: "codex", threadId: "thread-1",
+      targetKind: "agent_thread", channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const runtime = trackRuntime(new Runtime({ adapterFactory: () => slackFirst ? [slack, telegram] : [telegram, slack], backendBridge: bridge,
+      config: { inputDebounceMs: 0,
+        telegram: { channel: "telegram", botToken: "synthetic-token", authorizedActorIds: [{ id: "user-1", displayName: "" }] },
+        slack: { channel: "slack", appToken: "synthetic-app", botToken: "synthetic-bot", signingSecret: "synthetic-secret",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }] } } }));
+    await runtime.start();
+    await slack.listener!(event);
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    const source = vi.mocked(bridge.startTurn).mock.calls[0]![0].messageOrigin?.causalMessagingSource;
+    expect(source).toBeDefined();
+    // Finite owner oracle: both adapter permutations must return the same
+    // original for live fallback, retained provenance, and restarted history.
+    const live = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1", messagingTurn: true };
+    const retained = { ...live, turnId: "completion", causalMessagingSource: source };
+    for (const context of [live, retained]) {
+      const listed = await runtime.handlePwrAgentMessagingRequest({ operation: "list_messaging_attachments", context, args: {} });
+      expect(listed).toMatchObject({ ok: true, data: { attachments: [{ name: "archive.zip" }] } });
+    }
+    await runtime.stop();
+    await runtime.start();
+    const listed = await runtime.handlePwrAgentMessagingRequest({ operation: "list_messaging_attachments", context: retained, args: {} });
+    expect(listed).toMatchObject({ ok: true, data: { attachments: [{ name: "archive.zip" }] } });
+    if (!listed.ok || !("attachments" in listed.data)) throw new Error("Expected original metadata");
+    const args = { attachmentId: listed.data.attachments[0]!.attachmentId };
+    const exported = await runtime.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment", context: retained, args });
+    if (!exported.ok || !("path" in exported.data)) throw new Error("Expected original export");
+    expect(await readFile(exported.data.path)).toEqual(data);
+    authorized = false;
+    for (const request of [
+      { operation: "list_messaging_attachments", context: retained, args: {} },
+      { operation: "export_messaging_attachment", context: retained, args },
+    ] as const) {
+      expect(await runtime.handlePwrAgentMessagingRequest(request))
+        .toMatchObject({ ok: false, error: { code: "forbidden" } });
+    }
+    expect(telegramAuthorization).not.toHaveBeenCalled();
+  });
+
   it("clears resolved approval buttons through the owning channel adapter only", async () => {
     await prepareRuntimeStore();
     const telegramAdapter = createAdapter("telegram");

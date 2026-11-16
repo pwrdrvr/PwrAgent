@@ -17085,13 +17085,130 @@ describe("MessagingController", () => {
     })).toMatchObject({ ok: true, data: { attachment: { attachmentId } } });
     expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
       context: { backend: "codex", threadId: "thread-1", turnId: "old-messaging-turn", messagingTurn: true }, args: { attachmentId },
-    })).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    })).toMatchObject({ ok: false, error: { code: "not_found", message: expect.stringContaining("cannot be reauthorized") } });
     expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
       context: { backend: "codex", threadId: "unrelated" }, args: { attachmentId },
     })).toMatchObject({ ok: false, error: { code: "not_found" } });
     expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
       context: { backend: "codex", threadId: "thread-1", requestingInstanceId: "other-owner" }, args: { attachmentId },
     })).toMatchObject({ ok: false, error: { code: "unsupported_operation" } });
+  });
+
+  it.each([{ kinds: ["pdf"] }, { kinds: ["image"] }, { kinds: ["zip"] }, { kinds: ["pdf", "image", "zip"] }])("initial $kinds originals are bound before first-turn admission and survive restart", async ({ kinds }) => {
+    await fc.assert(fc.asyncProperty(fc.uint8Array({ minLength: 1, maxLength: 128 }), async (payload) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-initial-originals-"));
+      tempDirs.push(root);
+      const cache = path.join(root, "cache");
+      const originals = new MessagingOriginalAttachmentStore(cache);
+      const fixtures = kinds.map((kind) => {
+        const fixture = kind === "pdf"
+          ? { name: "report.pdf", mimeType: "application/pdf", prefix: Buffer.from("%PDF-1.7\n") }
+          : kind === "image"
+            ? { name: "photo.png", mimeType: "image/png", prefix: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }
+            : { name: "archive.zip", mimeType: "application/zip", prefix: Buffer.from([0x50, 0x4b, 3, 4]) };
+        return { name: fixture.name, mimeType: fixture.mimeType, data: Buffer.concat([fixture.prefix, payload]) };
+      });
+      if (kinds.includes("pdf")) {
+        vi.mocked(renderPdfPages).mockResolvedValueOnce([{ pageNumber: 1, base64: "AQID", mimeType: "image/png",
+          encodedBytes: 3, width: 1, height: 1 }]);
+      }
+      const download = vi.fn(async ({ attachment }: Parameters<NonNullable<MessagingAdapter["downloadAttachment"]>>[0]) => {
+        const fixture = fixtures.find((item) => item.name === attachment.name)!;
+        return { ...fixture, fileName: fixture.name, sizeBytes: fixture.data.length };
+      });
+      const admitted: AppServerTurnInputItem[][] = [];
+      const assertAdmission = async (input: AppServerTurnInputItem[]) => {
+        const listed = await originals.list({ backend: "codex", threadId: "new-thread-1", provider: "telegram" });
+        expect(listed.attachments).toHaveLength(fixtures.length);
+        const prompt = input.filter((item) => item.type === "text").map((item) => item.text).join("\n");
+        for (const original of listed.attachments) expect(prompt).toContain(original.attachmentId);
+        expect(prompt).not.toContain("private-provider-");
+        expect(input.filter((item) => item.type === "image")).toHaveLength(kinds.filter((kind) => kind !== "zip").length);
+        admitted.push(input);
+      };
+      const harness = await createHarness({ channel: "telegram", originalAttachmentStore: originals, downloadAttachment: download,
+        materializeDirectoryLaunchpad: async (request, options) => {
+          const started = { backend: "codex" as const, threadId: "new-thread-1", executionMode: "default" as const, workMode: "local" as const };
+          await options?.onThreadMaterialized?.(started);
+          if (request.input?.length) {
+            await assertAdmission(request.input);
+            return { ...started, turnId: "turn-1" };
+          }
+          return started;
+        },
+        startTurn: async (request) => {
+          await assertAdmission(request.input);
+          return { backend: request.backend, threadId: request.threadId, turnId: "turn-1" };
+        },
+      });
+      await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project",
+        value: { directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent" } }));
+      await harness.controller.handleInboundEvent({ ...buildTextEvent(""), kind: "media", text: "",
+        receivedAt: Date.now(), disposition: "available",
+        attachments: fixtures.map((fixture, index) => ({ id: `private-provider-${index}`, name: fixture.name,
+          mimeType: fixture.mimeType, kind: "file", disposition: "available" })) });
+      expect(admitted, JSON.stringify(harness.delivered.filter((intent) => intent.kind === "error"))).toHaveLength(1);
+      expect(download).toHaveBeenCalledTimes(fixtures.length);
+      // Disk is the oracle: a new cache instance must export the exact
+      // downloaded bytes, while neither an old nor another thread owns them.
+      const restarted = await createHarness({ channel: "telegram", originalAttachmentStore: new MessagingOriginalAttachmentStore(cache) });
+      const context = { backend: "codex" as const, threadId: "new-thread-1" };
+      const listed = await restarted.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_attachments", context, args: {} });
+      expect(listed).toMatchObject({ ok: true });
+      if (!listed.ok || !("attachments" in listed.data)) throw new Error("Expected initial originals");
+      expect(new Set(listed.data.attachments.map((item) => item.attachmentId)).size).toBe(fixtures.length);
+      for (const original of listed.data.attachments) {
+        if (!("sha256" in original)) throw new Error("Expected original-file metadata");
+        const fixture = fixtures.find((item) => item.name === original.name)!;
+        const result = await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment", context,
+          args: { attachmentId: original.attachmentId } });
+        if (!result.ok || !("path" in result.data)) throw new Error("Expected export");
+        expect(await readFile(result.data.path)).toEqual(fixture.data);
+        expect(original.sha256).toBe(createHash("sha256").update(fixture.data).digest("hex"));
+        expect(await restarted.controller.handlePwrAgentMessagingRequest({ operation: "export_messaging_attachment",
+          context: { ...context, threadId: "thread-1" }, args: { attachmentId: original.attachmentId } }))
+          .toMatchObject({ ok: false, error: { code: "not_found" } });
+      }
+    }), { numRuns: 3, examples: [[Uint8Array.of(0)]] });
+  });
+
+  it("budgets initial original-file admission through the startThread fallback", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const { tempDir } = createTempStateDb("pwragent-initial-original-budget-");
+    tempDirs.push(tempDir);
+    const db = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const data = Buffer.from([0x50, 0x4b, 3, 4, 0]);
+      const harness = await createHarness({ channel: "telegram", store: new SqliteMessagingStore(db),
+        originalAttachmentStore: new MessagingOriginalAttachmentStore(path.join(tempDir, "cache")),
+        requestStore: new SqliteMessagingRequestStore(db.raw), authorizeRetainedSource: () => true,
+        backendOverrides: { materializeDirectoryLaunchpad: undefined },
+        downloadAttachment: async ({ attachment }) => ({ data, fileName: attachment.name,
+          mimeType: "application/zip", sizeBytes: data.length }),
+      });
+      await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project",
+        value: { directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent" } }));
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent({ ...buildTextEvent(""), kind: "media", text: "",
+          receivedAt: Date.now(), disposition: "available", attachments: [
+            { id: "provider-id", kind: "file", name: "archive.zip", disposition: "available" },
+          ] });
+      });
+      expect(harness.startThread).toHaveBeenCalledTimes(1);
+      expect(harness.startTurn).toHaveBeenCalledTimes(1);
+      const request = harness.startTurn.mock.calls[0]![0] as StartTurnRequest;
+      expect(request.input).toContainEqual({ type: "text", text: expect.stringContaining("export_messaging_attachment") });
+      expectSqliteWriteBudget({ scenario: "messaging-initial-original-admission",
+        note: "One initial ZIP via new-thread admission: 15 commits, ~0.218 MB/start or ~21.8 MB/day at 100 starts/day, including binding, retained actor source and status delivery. Original bytes/manifest add no SQLite or idle writes.", writes });
+    } finally {
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
   });
 
   it("keeps PDFs local and exposes bounded page tools to model-directed Codex turns", async () => {
