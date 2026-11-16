@@ -8,10 +8,10 @@ must not frame protocol stdout.
 The owning source of `@pwrdrvr/agent-transport` is
 `pwrdrvr/agent-kit`, `packages/agent-transport` (confirmed by its package
 repository metadata and Git origin). The source fix exports
-`readJsonRpcLines`. The checked-in pnpm patch for installed 0.1.7 contains
-the source-built JavaScript, declarations and matching source map. It also
-protects transitive agent-client/discovery consumers. Replace the patch with
-the fixed published release when available; do not edit node_modules by hand.
+`readJsonRpcLines`, released in `@pwrdrvr/agent-transport@0.1.8`. Desktop and
+owner-core require that release; the workspace override keeps transitive
+agent-client/discovery consumers on the same version. The release-age
+exception is scoped to first-party version 0.1.8. No dependency patch is needed.
 
 ## Callers
 
@@ -20,7 +20,7 @@ the fixed published release when available; do not edit node_modules by hand.
 | Desktop Codex stdout | Shared LF reader; auth-envelope inspection unchanged |
 | Desktop ACP stdout | Shared LF reader; stderr preview and owned process tree teardown unchanged |
 | Outpost | Its build bundles the same desktop owner/transports through `buildHeadless`; no separate stdout framer |
-| Shared transport | pnpm patch applies to desktop, owner-core and transitive consumers |
+| Shared transport | Published 0.1.8 applies to desktop, owner-core and transitive consumers |
 | Kimi chatty probe, portable-discovery probe, live camera probe | Shared LF reader |
 | Renderer bytecode checker | Shared LF reader for JSON stdin and stdout marker/disassembly records |
 | Windows native pipe diagnostics probe | Shared LF reader for watcher JSON stdout |
