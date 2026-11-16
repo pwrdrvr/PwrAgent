@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { DismissOperatorQuestionRequest, TodoUnavailableInstance } from "@pwragent/shared";
 import { operatorQuestionItemKey } from "@pwragent/shared";
+import { useThreadItemGroups } from "../../lib/thread-item-groups";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { buildOperatorWaits, type OperatorWait } from "./operator-waits";
 
@@ -48,7 +49,7 @@ type OperatorRequestsApi = Pick<
 >;
 
 const EMPTY_WAITS: OperatorWait[] = [];
-const EMPTY_MAP: ReadonlyMap<string, OperatorWait[]> = new Map();
+const waitThreadKey = (wait: OperatorWait): string => wait.threadKey;
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const EMPTY_UNAVAILABLE: TodoUnavailableInstance[] = [];
 
@@ -175,16 +176,7 @@ export function useOperatorRequests(
     setDismissedQuestionKeys((current) => current.has(key) ? current : new Set([...current, key]));
   }, [api]);
 
-  const waitsByThreadKey = useMemo(() => {
-    if (waits.length === 0) return EMPTY_MAP;
-    const map = new Map<string, OperatorWait[]>();
-    for (const wait of waits) {
-      const list = map.get(wait.threadKey);
-      if (list) list.push(wait);
-      else map.set(wait.threadKey, [wait]);
-    }
-    return map;
-  }, [waits]);
+  const waitsByThreadKey = useThreadItemGroups(waits, waitThreadKey, sameWait);
 
   return useMemo(
     () => ({
@@ -204,8 +196,11 @@ export function useOperatorRequests(
 /** Request contents are immutable, but their owner-cached thread title can change. */
 function sameWaits(left: readonly OperatorWait[], right: readonly OperatorWait[]): boolean {
   return left.length === right.length
-    && left.every((wait, index) => wait.key === right[index]!.key
-      && wait.threadTitle === right[index]!.threadTitle);
+    && left.every((wait, index) => sameWait(wait, right[index]!));
+}
+
+function sameWait(left: OperatorWait, right: OperatorWait): boolean {
+  return left.key === right.key && left.threadTitle === right.threadTitle;
 }
 
 export type OperatorWaitsContextValue = {

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { AppServerBackendKind, FederationTarget, NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
 import { buildThreadIdentityKey, THREAD_DEPENDENCY_CONDITION_PHRASES, threadDependencyDeliveryTarget } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -33,6 +33,15 @@ export type ThreadDependencyIndicatorsValue = {
 };
 
 export const ThreadDependencyIndicatorsContext = createContext<ThreadDependencyIndicatorsValue | undefined>(undefined);
+
+/** The dialog action depends on its owner, independently of indicator refreshes. */
+export function useThreadDependencyIndicatorsValue(
+  byThreadKey: ReadonlyMap<string, ThreadDependencyIndicator>,
+  show: ((request: { thread: NavigationThreadSummary }) => void) | undefined,
+): ThreadDependencyIndicatorsValue {
+  const open = useCallback((thread: NavigationThreadSummary) => show?.({ thread }), [show]);
+  return useMemo(() => ({ byThreadKey, ...(show ? { open } : {}) }), [byThreadKey, show, open]);
+}
 
 const EMPTY: ReadonlyMap<string, ThreadDependencyIndicator> = new Map();
 // Evaluation publishes one update per changed registration; a PR poll can
@@ -102,7 +111,15 @@ export function useThreadDependencyIndicators(desktopApi?: DesktopApi): Readonly
         const next = summarizeThreadDependencies(response.dependencies, response.peerActive);
         // Rows read this through context; an equal list keeps its identity so
         // an update that changes no chip re-renders no row.
-        setIndicators((current) => sameIndicators(current, next) ? current : next);
+        setIndicators((current) => {
+          if (sameIndicators(current, next)) return current;
+          const shared = new Map<string, ThreadDependencyIndicator>();
+          for (const [key, indicator] of next) {
+            const old = current.get(key);
+            shared.set(key, old && sameIndicator(old, indicator) ? old : indicator);
+          }
+          return shared;
+        });
       } catch {
         // Keep the last list; the next update event retries.
       }
@@ -162,10 +179,14 @@ function sameIndicators(
   if (left.size !== right.size) return false;
   for (const [key, indicator] of right) {
     const other = left.get(key);
-    if (!other || other.count !== indicator.count || other.alert !== indicator.alert || other.mergeHeld !== indicator.mergeHeld
-      || other.label !== indicator.label || other.tooltip !== indicator.tooltip) return false;
+    if (!other || !sameIndicator(other, indicator)) return false;
   }
   return true;
+}
+
+function sameIndicator(left: ThreadDependencyIndicator, right: ThreadDependencyIndicator): boolean {
+  return left.count === right.count && left.alert === right.alert && left.mergeHeld === right.mergeHeld
+    && left.label === right.label && left.tooltip === right.tooltip;
 }
 
 const holdsMerge = (dependency: ThreadDependency): boolean =>

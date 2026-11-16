@@ -103,6 +103,7 @@ import { useThreadMaintenanceSession } from "./features/maintenance/thread-maint
 import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
+  useThreadDependencyIndicatorsValue,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
 import {
   buildWatchCiRequestText,
@@ -3153,14 +3154,8 @@ function DesktopAppShell(props: {
   const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
   // A peer's thread is managed on its owner, from any window.
   const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies);
-  const threadDependencyContext = useMemo(
-    () => ({
-      byThreadKey: threadDependencyIndicators,
-      ...(canContinueAfter
-        ? { open: (thread: NavigationThreadSummary) => setContinueAfter({ thread }) }
-        : {}),
-    }),
-    [threadDependencyIndicators, canContinueAfter],
+  const threadDependencyContext = useThreadDependencyIndicatorsValue(
+    threadDependencyIndicators, canContinueAfter ? setContinueAfter : undefined,
   );
   // PR watches that wake threads. A federation window lists none of this
   // instance's. A peer's thread is stopped and armed on its owner, where

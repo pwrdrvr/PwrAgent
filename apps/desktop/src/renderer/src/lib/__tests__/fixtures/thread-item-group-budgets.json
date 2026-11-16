@@ -1,0 +1,4 @@
+{
+  "20": { "changedArrays": 20, "keyReads": 840, "comparisons": 839 },
+  "40": { "changedArrays": 20, "keyReads": 1640, "comparisons": 1639 }
+}
