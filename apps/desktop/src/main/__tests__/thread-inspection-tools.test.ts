@@ -1,3 +1,4 @@
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, PwrAgentThreadInspectionRequest } from "@pwragent/shared";
@@ -34,6 +35,7 @@ function createTools(options: {
     },
   }) as unknown as ThreadInspectionToolsHost;
   const context = {
+    ...registryContextStandIn(),
     stores: { threads: { getThreadOverlayState: async () => undefined } },
     lifecycle: { closed: false },
     emit: async (event: AgentEvent) => { events.push(event); },
@@ -65,7 +67,8 @@ describe("ThreadInspectionTools", () => {
         return { getThreadOverlayState: async () => undefined };
       },
     };
-    const context = { stores, emit: async () => {} } as unknown as RegistryContext;
+    const context = {
+      ...registryContextStandIn(), stores, emit: async () => {} } as unknown as RegistryContext;
     const tools = new ThreadInspectionTools(context, {}, {
       forgeToolBridge: {} as ForgeToolBridge,
       threadInspectionSearchService: null,

@@ -62,10 +62,6 @@ import {
   isCodexInvalidIdRecoveryCooldownActive,
 } from "./backend-registry-runtime-helpers";
 import {
-  buildActiveTurnKey,
-  buildActiveTurnModeKey,
-} from "./thread-turn-keys";
-import {
   resolveThreadMessageOrigin,
 } from "./thread-transcript-helpers";
 import {
@@ -86,17 +82,13 @@ export interface CodexRuntimeSupervisorDependencies {
   readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
 }
 
-/** Turn activity remains registry-owned until phase 4 of the split. */
+/** Runtime operations outside the activity owner, read lazily at call time. */
 export interface CodexRuntimeSupervisorHost extends Pick<RegistryHostPorts,
   "liveSubAgentMonitorIds"
   | "prepareTokenMiserRuntime"
   | "threadHasActiveTurn"
   | "withCodexThreadClient"
 > {
-  readonly activeCodexTurnModes: ReadonlyMap<string, ThreadExecutionMode>;
-  readonly activeTurnKeys: ReadonlySet<string>;
-  readonly backendActiveCodexThreadIds: ReadonlySet<string>;
-  readonly codexRetryableOperations: Map<string, CodexRetryableOperation>;
   compactThreadNow(params: {
     backend: "codex";
     threadId: string;
@@ -110,7 +102,6 @@ export interface CodexRuntimeSupervisorHost extends Pick<RegistryHostPorts,
   hasActiveCodexWork(): boolean;
   listActiveCodexWorkThreadIds(): string[];
   readonly nativeVoiceLeases: number;
-  readonly reservedCodexStartThreadIds: ReadonlySet<string>;
   readonly resolveTokenMiserEnabledFn: () => boolean;
   readonly shutdownRequested: boolean;
   startTurnNow(params: {
@@ -395,7 +386,7 @@ export class CodexRuntimeSupervisor {
   private codexThreadNeedsLiveEvents(threadId: string): boolean {
     if (this.host().threadHasActiveTurn(threadId, "codex")) return true;
     const turnPrefix = `codex:${threadId}:`;
-    for (const key of this.host().activeTurnKeys) {
+    for (const key of this.context.turnState.registeredTurnKeys()) {
       if (key.startsWith(turnPrefix)) return true;
     }
     const identityKey = buildThreadIdentityKey("codex", threadId);
@@ -405,7 +396,7 @@ export class CodexRuntimeSupervisor {
       || this.host().threadStarts.hasPending({ backend: "codex", threadId })
       || this.codexBackgroundTerminals.has(threadId)
       || this.liveCodexToolItemsByThread.has(threadId)
-      || this.host().codexRetryableOperations.has(threadId)
+      || this.context.turnState.hasRetry(threadId)
       || this.host().threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0
       || this.pendingCodexInvalidIdRecoveries.some((recovery) => recovery.params.threadId === threadId);
   }
@@ -543,7 +534,7 @@ export class CodexRuntimeSupervisor {
   ): Promise<void> {
     const threadId = notification.params.threadId;
     const turnId = turnIdFromTerminalNotification(notification);
-    const candidate = this.host().codexRetryableOperations.get(threadId);
+    const candidate = this.context.turnState.retryOperation(threadId);
     if (
       candidate
       && (
@@ -553,11 +544,11 @@ export class CodexRuntimeSupervisor {
         || candidate.turnId === turnId
       )
     ) {
-      if (turnId && (!candidate.turnId || candidate.turnId.startsWith("pending:"))) {
-        candidate.turnId = turnId;
-      }
-      candidate.terminalObserved = true;
-      this.host().codexRetryableOperations.delete(threadId);
+      const completedCandidate = this.context.turnState.updateRetry(candidate, {
+        ...(turnId && (!candidate.turnId || candidate.turnId.startsWith("pending:")) ? { turnId } : {}),
+        terminalObserved: true,
+      });
+      this.context.turnState.forgetRetry(threadId);
       if (
         notification.method === "turn/failed"
         && !(candidate.kind === "compact" && candidate.invalidIdRecoveryAttempted)
@@ -568,7 +559,7 @@ export class CodexRuntimeSupervisor {
         if (this.context.providers.codex.recoverInvalidPersistedResponseMessageIds) {
           try {
             const recovery = await this.queueCodexInvalidIdRecovery(
-              candidate,
+              completedCandidate,
               errorMessageFromTerminalNotification(notification)!,
             );
             void recovery.completion.catch(() => undefined);
@@ -719,7 +710,7 @@ export class CodexRuntimeSupervisor {
       reportedWaiting: waitingForThreadIds.length > 0,
       resolve,
     };
-    this.host().codexRetryableOperations.delete(candidate.params.threadId);
+    if (this.context.turnState.ownsRetry(candidate.params.threadId, candidate)) this.context.turnState.forgetRetry(candidate.params.threadId);
     this.pendingCodexInvalidIdRecoveries.push(recovery);
     if (!this.codexInvalidIdRecoveryBarrier) {
       this.codexInvalidIdRecoveryBarrier = new Promise<void>((barrierResolve) => {
@@ -1045,15 +1036,15 @@ export class CodexRuntimeSupervisor {
   private hasActiveCodexRuntimeWork(): boolean {
     if (
       this.host().nativeVoiceLeases > 0
-      || this.host().reservedCodexStartThreadIds.size > 0
-      || this.host().backendActiveCodexThreadIds.size > 0
+      || this.context.turnState.startReservationCount > 0
+      || this.context.turnState.providerActiveCount > 0
       || this.codexBackgroundTerminals.size > 0
       || this.liveCodexToolItemsByThread.size > 0
-      || this.host().activeCodexTurnModes.size > 0
+      || this.context.turnState.executionCount > 0
     ) {
       return true;
     }
-    for (const key of this.host().activeTurnKeys) {
+    for (const key of this.context.turnState.registeredTurnKeys()) {
       if (key.startsWith("codex:")) return true;
     }
     return false;
@@ -1132,7 +1123,7 @@ export class CodexRuntimeSupervisor {
       if (item.itemType === "commandexecution" && !interrupted) {
         // Set this at notification ingress, before asynchronous lifecycle
         // bookkeeping. An immediate list response can then prune the ended
-        // command even while activeTurnKeys still contains its parent turn.
+        // command even while its parent turn remains registered.
         item.turnEnded = true;
       } else {
         items.delete(itemId);
@@ -1174,8 +1165,8 @@ export class CodexRuntimeSupervisor {
       } else if (status === "idle") {
         this.settleCodexToolItems(threadId, (item) =>
           !this.host().threadHasActiveCodexReviewTurn(threadId)
-          || (!this.host().activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
-            && !this.host().activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId))),
+          || (!this.context.turnState.hasRegisteredTurn({ backend: "codex", threadId: threadId, turnId: item.turnId })
+            && !this.context.turnState.ownsExecution({ threadId: threadId, turnId: item.turnId })),
         );
       }
     }
@@ -1188,8 +1179,8 @@ export class CodexRuntimeSupervisor {
       const turnId = turnIdFromTerminalNotification(notification);
       this.settleCodexToolItems(threadId, (item) => turnId
         ? item.turnId === turnId
-        : !this.host().activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
-          && !this.host().activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId)),
+        : !this.context.turnState.hasRegisteredTurn({ backend: "codex", threadId: threadId, turnId: item.turnId })
+          && !this.context.turnState.ownsExecution({ threadId: threadId, turnId: item.turnId }),
         notification.method !== "turn/completed",
       );
       return;
@@ -1226,12 +1217,12 @@ export class CodexRuntimeSupervisor {
     // The client synthesizes terminal failures only for turns it saw start.
     // Settle accepted compactions it cannot know about at this same boundary.
     const pendingCompactions: CodexRetryableCompaction[] = [];
-    for (const [threadId, candidate] of this.host().codexRetryableOperations) {
+    for (const [threadId, candidate] of this.context.turnState.retryEntries()) {
       if (affected && !affected.has(threadId)) continue;
       if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
-      candidate.terminalObserved = true;
-      this.host().codexRetryableOperations.delete(threadId);
-      pendingCompactions.push(candidate);
+      const completedCandidate = this.context.turnState.updateRetry(candidate, { terminalObserved: true });
+      this.context.turnState.forgetRetry(threadId);
+      pendingCompactions.push(completedCandidate);
     }
     const threadIds = [...new Set([
       ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),

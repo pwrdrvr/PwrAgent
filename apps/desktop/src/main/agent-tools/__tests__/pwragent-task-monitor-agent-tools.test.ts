@@ -49,9 +49,15 @@ describe("PwrAgent task monitor agent tools", () => {
     // 91 with rerun_failed_ci_jobs, 94 with the three thread maintenance tools
     // (explicit merge holds, briefly 92, folded into manage_thread_dependencies),
     // 95 with explicit register_thread_worktree, 100 with the five
-    // OpenAI Decisions tools.
-    expect(dynamicTools).toHaveLength(100);
-    for (const name of ["scan_thread_maintenance", "apply_thread_maintenance", "open_thread_maintenance"]) {
+    // OpenAI Decisions tools, 102 with original attachment listing and export.
+    expect(dynamicTools).toHaveLength(102);
+    for (const name of [
+      "scan_thread_maintenance",
+      "apply_thread_maintenance",
+      "open_thread_maintenance",
+      "list_messaging_attachments",
+      "export_messaging_attachment",
+    ]) {
       expect(dynamicTools.map((tool) => tool.name)).toContain(name);
       expect(mcpTools.map((tool) => tool.name)).toContain(name);
     }

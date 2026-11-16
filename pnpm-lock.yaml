@@ -163,6 +163,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@pwrdrvr/agent-transport': 0.1.8
   '@babel/core': 7.29.6
   '@hono/node-server': 2.1.3
   '@types/node': ^24.12.4
@@ -334,8 +335,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0
       '@pwrdrvr/agent-transport':
-        specifier: ^0.1.7
-        version: 0.1.7
+        specifier: 0.1.8
+        version: 0.1.8
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.164.0
         version: 0.164.0
@@ -677,8 +678,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
       '@pwrdrvr/agent-transport':
-        specifier: ^0.1.7
-        version: 0.1.7
+        specifier: 0.1.8
+        version: 0.1.8
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.164.0
         version: 0.164.0
@@ -1912,8 +1913,8 @@ packages:
   '@pwrdrvr/agent-core@0.2.0':
     resolution: {integrity: sha512-zTo7vJGekyZX2h9xWYiZfQvt+qKTPhuciWyCouow1shaKgg0Bn6B8S5lTRvMzxvT7feKOZ7zy/To2Cu6+1i1+A==}
 
-  '@pwrdrvr/agent-transport@0.1.7':
-    resolution: {integrity: sha512-91LJLC+jdWO6v3WIqoWI/CLHkMJebF4hEqk0vOkgK6DlawrA926EP7kHQ1VOE/iQRo5LCRqFqxjtWn6mQcs/EQ==}
+  '@pwrdrvr/agent-transport@0.1.8':
+    resolution: {integrity: sha512-pTXRXU3QdzaFw6nngPaZ9KYBVTW5tIxzsxcO6uyUQuS0Z8WLwZvhDaEyKBv4x5EQx4fsPoVQsRcMuu3blmnsNA==}
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0':
     resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
@@ -7151,21 +7152,21 @@ snapshots:
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.6.7)
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.7
+      '@pwrdrvr/agent-transport': 0.1.8
     transitivePeerDependencies:
       - zod
 
   '@pwrdrvr/agent-client@0.8.2':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.7
+      '@pwrdrvr/agent-transport': 0.1.8
       '@pwrdrvr/codex-app-server-protocol': 0.144.0
       '@pwrdrvr/codex-discovery': 0.4.0
       zod: 4.6.7
 
   '@pwrdrvr/agent-core@0.2.0': {}
 
-  '@pwrdrvr/agent-transport@0.1.7':
+  '@pwrdrvr/agent-transport@0.1.8':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
 
@@ -7176,7 +7177,7 @@ snapshots:
   '@pwrdrvr/codex-discovery@0.4.0':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.7
+      '@pwrdrvr/agent-transport': 0.1.8
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     optional: true

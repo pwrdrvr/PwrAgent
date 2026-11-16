@@ -102,9 +102,6 @@ import {
 } from "./backend-registry-runtime-helpers";
 import { executionModeSettings } from "./execution-mode-settings";
 import {
-  ActiveTurnKeySet,
-  buildActiveTurnKey,
-  buildActiveTurnModeKey,
   buildReviewSubAgentKey,
   reviewSubAgentId,
   taskMonitorThreadKey,
@@ -201,13 +198,10 @@ export interface SubAgentMonitorServiceHost extends Pick<RegistryHostPorts,
   | "startAcpTurn" | "submitTurn" | "withArchiveWorkspaceWrite"
   | "withCodexThreadClient"
 > {
-  readonly activeCodexTurnModes: Map<string, ThreadExecutionMode>;
-  readonly activeTurnKeys: ActiveTurnKeySet;
   readonly mcpGatewayTools: McpGatewayToolService | undefined;
   readonly recentlyCompletedThreadUsageTurns: ReadonlyMap<string, RecentlyCompletedThreadUsageTurn>;
   readonly registrySessionId: string;
   readonly registrySessionStartedAt: number;
-  readonly reservedCodexStartThreadIds: Set<string>;
   readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
   readonly resolveTaskMonitorModelsFn: () => Record<string, DesktopTaskMonitorModelChoice>;
   readonly runtimeInstanceId: string;
@@ -3346,8 +3340,8 @@ export class SubAgentMonitorService {
     });
     const executionMode =
       (params.context.backend === "codex"
-        ? this.host().activeCodexTurnModes.get(
-            buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
+        ? this.context.turnState.executionMode(
+            { threadId: params.context.threadId, turnId: params.context.turnId },
           )
         : undefined) ??
       sourceOverlay?.executionMode ??
@@ -3516,12 +3510,12 @@ export class SubAgentMonitorService {
         : {}),
     }));
     this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
-    this.host().reservedCodexStartThreadIds.add(thread.threadId);
+    const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     let ownsStartReservation = true;
     const releaseStartReservation = () => {
       if (!ownsStartReservation) return;
       ownsStartReservation = false;
-      this.host().reservedCodexStartThreadIds.delete(thread.threadId);
+      this.context.turnState.releaseStart(thread.threadId, startReservation);
     };
     let turn: { threadId: string; turnId: string };
     try {
@@ -3547,11 +3541,11 @@ export class SubAgentMonitorService {
             : {}),
         }),
         afterStart: (startedTurn) => {
-          this.host().activeTurnKeys.add(
-            buildActiveTurnKey("codex", startedTurn.threadId, startedTurn.turnId),
+          this.context.turnState.registerTurn(
+            { backend: "codex", threadId: startedTurn.threadId, turnId: startedTurn.turnId },
           );
-          this.host().activeCodexTurnModes.set(
-            buildActiveTurnModeKey(startedTurn.threadId, startedTurn.turnId),
+          this.context.turnState.acceptExecution(
+            { threadId: startedTurn.threadId, turnId: startedTurn.turnId },
             executionMode,
           );
           releaseStartReservation();

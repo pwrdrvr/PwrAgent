@@ -2551,7 +2551,11 @@ describe("TelegramAdapter", () => {
     expect(harness.api.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("normalizes inbound media as unsupported without downloading it", async () => {
+  it.each([
+    ["secret.txt", "text/plain"],
+    ["archive.zip", "application/zip"],
+    ["unknown.bin", "application/octet-stream"],
+  ])("admits an original document %s without downloading before controller authorization", async (filename, mimeType) => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
@@ -2576,8 +2580,8 @@ describe("TelegramAdapter", () => {
         },
         document: {
           file_id: "file-1",
-          file_name: "secret.txt",
-          mime_type: "text/plain",
+          file_name: filename,
+          mime_type: mimeType,
         },
         from: {
           id: 42,
@@ -2594,11 +2598,11 @@ describe("TelegramAdapter", () => {
         expect.objectContaining({
           disposition: "available",
           kind: "file",
-          name: "secret.txt",
+          name: filename,
         }),
       ],
       media: {
-        name: "secret.txt",
+        name: filename,
       },
     });
     expect(api.getFile).not.toHaveBeenCalled();

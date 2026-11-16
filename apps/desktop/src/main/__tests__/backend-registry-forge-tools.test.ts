@@ -39,9 +39,6 @@ describe("backend forge tool dispatch", () => {
   let codexNotification: (notification: AppServerNotification) => Promise<void>;
   let lifecycleTurnSequence: number;
   let internals: {
-    activeTurnKeys: Set<string>;
-    activeCodexTurnModes: Map<string, ThreadExecutionMode>;
-    activeCodexTurnCollaborationModes: Map<string, "default" | "plan">;
     claudeBackend: {
       sessions: Map<string, { config: { permissionMode: "plan" } }>;
       executionMode(threadId: string): Promise<ThreadExecutionMode>;
@@ -79,8 +76,8 @@ describe("backend forge tool dispatch", () => {
     });
     internals = registry as unknown as typeof internals;
     bridge = registryModules(registry).forgeToolBridge;
-    internals.activeTurnKeys.add("codex:thread-1:turn-1");
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
+    registryModules(registry).turnState.registerTurn("codex:thread-1:turn-1");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "default");
     policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
     forgeRead = vi.fn<ForgeReadHandler>(async () => ({ source: "cache", observations: [] }));
     github = vi.fn<ForgePrToolHandler>(async (operation) => operation === "create_pull_request"
@@ -410,7 +407,7 @@ describe("backend forge tool dispatch", () => {
   });
 
   it("runs Auto writes without asking in a Full Access turn, but still asks for Ask", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     const auto = await internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-full"));
     expect(auto.success).toBe(true);
     const prompt = nextApproval();
@@ -422,7 +419,7 @@ describe("backend forge tool dispatch", () => {
   });
 
   it("runs Auto writes without asking in a Codex Auto turn, except approve and merge", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "auto");
     const prompts = vi.fn();
     registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
     const created = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-auto-pr"));
@@ -447,7 +444,7 @@ describe("backend forge tool dispatch", () => {
   });
 
   it("refuses Auto writes from an Auto-mode automation, which no one can review", async () => {
-    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "auto");
     (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("codex:thread-1:turn-1", {
       agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
     });
@@ -487,7 +484,7 @@ describe("backend forge tool dispatch", () => {
     beforeEach(() => {
       // Plan mode must win over the turn's approval mode.
       if (backend === "codex") {
-        internals.activeCodexTurnCollaborationModes.set("codex:thread-1:turn-1", "plan");
+        registryModules(registry).turnState.setCollaboration("codex:thread-1:turn-1", "plan");
       } else {
         internals.claudeBackend.sessions.set("thread-1", { config: { permissionMode: "plan" } });
         vi.spyOn(internals.claudeBackend, "executionMode").mockResolvedValue("full-access");
@@ -500,7 +497,7 @@ describe("backend forge tool dispatch", () => {
 
     it.each(["allow", "auto", "ask"] as const)("refuses every write without a card at %s", async (level) => {
       for (const group of ["pull_requests", "comments", "issues", "ci", "approve_merge"] as const) policy.access[group] = level;
-      internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+      registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
       for (const operation of FORGE_PR_WRITE_OPERATIONS) {
         for (const event of operation === "submit_pull_request_review" ? ["COMMENT", "APPROVE", "REQUEST_CHANGES"] as const : ["COMMENT"] as const) {
           await refusesWrite(operation, event);
@@ -520,7 +517,7 @@ describe("backend forge tool dispatch", () => {
         fc.constantFrom("COMMENT", "APPROVE", "REQUEST_CHANGES"),
         async (operation, level, mode, event) => {
           for (const group of ["pull_requests", "comments", "issues", "ci", "approve_merge"] as const) policy.access[group] = level;
-          internals.activeCodexTurnModes.set("thread-1:turn-1", mode);
+          registryModules(registry).turnState.acceptExecution("thread-1:turn-1", mode);
           await refusesWrite(operation, event);
         },
       ), { numRuns: 25 });
@@ -532,8 +529,8 @@ describe("backend forge tool dispatch", () => {
     terminal: "completed" | "idle";
     pendingResponse?: boolean;
   }) {
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
-    internals.activeCodexTurnModes.delete("thread-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
+    registryModules(registry).turnState.forgetExecution("thread-1:turn-1");
     policy.access.pull_requests = "allow";
     const turnId = `lifecycle-turn-${++lifecycleTurnSequence}`;
     const nextTurnId = `lifecycle-turn-${++lifecycleTurnSequence}`;
@@ -558,16 +555,16 @@ describe("backend forge tool dispatch", () => {
     await registry.startTurn({ backend: "codex", threadId: "thread-1", collaborationMode: { mode: "plan" }, input: [{ type: "text", text: "Plan the fix" }] });
     await refused();
     if (pendingResponse && !startNotification) {
-      expect(internals.activeTurnKeys.has("codex:thread-1:pending:thread-1")).toBe(true);
+      expect(registryModules(registry).turnState.hasRegisteredTurn("codex:thread-1:pending:thread-1")).toBe(true);
       await codexNotification({
         method: "turn/started", params: { threadId: "thread-1", turnId, turn: { id: turnId } },
       });
       await refused();
     }
-    expect(internals.activeCodexTurnCollaborationModes.get(`codex:thread-1:${turnId}`)).toBe("plan");
-    expect(internals.activeCodexTurnCollaborationModes.has("codex:thread-1:pending:thread-1")).toBe(false);
-    expect(internals.activeCodexTurnModes.has("thread-1:pending:thread-1")).toBe(false);
-    expect(internals.activeTurnKeys.has("codex:thread-1:pending:thread-1")).toBe(false);
+    expect(registryModules(registry).turnState.collaborationMode(`codex:thread-1:${turnId}`)).toBe("plan");
+    expect((registryModules(registry).turnState.collaborationMode("codex:thread-1:pending:thread-1") !== undefined)).toBe(false);
+    expect(registryModules(registry).turnState.ownsExecution("thread-1:pending:thread-1")).toBe(false);
+    expect(registryModules(registry).turnState.hasRegisteredTurn("codex:thread-1:pending:thread-1")).toBe(false);
     expect(registry.getActiveTurnForThread(context)?.turnId).toBe(turnId);
     expect(github).toHaveBeenCalledTimes(writesBefore);
     await bridge.gatedForgePrToolHandler("get_pull_request", { number: 9 }, context);
@@ -575,7 +572,7 @@ describe("backend forge tool dispatch", () => {
     await codexNotification(terminal === "idle"
       ? { method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } }
       : { method: "turn/completed", params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] } } });
-    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+    expect(registryModules(registry).turnState.collaborationKeys().length).toBe(0);
     startCodexTurn.mockResolvedValueOnce({ threadId: "thread-1", turnId: nextTurnId });
     await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Implement the fix" }] });
     await bridge.gatedForgePrToolHandler("create_pull_request", args, { ...context, turnId: nextTurnId });
@@ -583,7 +580,7 @@ describe("backend forge tool dispatch", () => {
     await codexNotification({
       method: "turn/completed", params: { threadId: "thread-1", turnId: nextTurnId, turn: { id: nextTurnId, status: "completed", output: [] } },
     });
-    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+    expect(registryModules(registry).turnState.collaborationKeys().length).toBe(0);
   }
 
   it.each([
@@ -611,18 +608,18 @@ describe("backend forge tool dispatch", () => {
   });
 
   it("forgets Codex plan mode when turn start fails", async () => {
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
-    internals.activeCodexTurnModes.delete("thread-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
+    registryModules(registry).turnState.forgetExecution("thread-1:turn-1");
     startCodexTurn.mockRejectedValueOnce(new Error("Fixture start failure"));
     await expect(registry.startTurn({
       backend: "codex", threadId: "thread-1", collaborationMode: { mode: "plan" }, input: [{ type: "text", text: "Plan the fix" }],
     })).rejects.toThrow("Fixture start failure");
-    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+    expect(registryModules(registry).turnState.collaborationKeys().length).toBe(0);
   });
 
   it.each([false, true])("does not resurrect Codex plan mode when the turn completes before its start response (pending response: %s)", async (pendingResponse) => {
-    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
-    internals.activeCodexTurnModes.delete("thread-1:turn-1");
+    registryModules(registry).turnState.unregisterTurn("codex:thread-1:turn-1");
+    registryModules(registry).turnState.forgetExecution("thread-1:turn-1");
     startCodexTurn.mockImplementationOnce(async ({ threadId }) => {
       await codexNotification({
         method: "turn/started", params: { threadId, turnId: "turn-2", turn: { id: "turn-2" } },
@@ -635,7 +632,7 @@ describe("backend forge tool dispatch", () => {
     await registry.startTurn({
       backend: "codex", threadId: "thread-1", collaborationMode: { mode: "plan" }, input: [{ type: "text", text: "Plan the fix" }],
     });
-    expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
+    expect(registryModules(registry).turnState.collaborationKeys().length).toBe(0);
   });
 
   describe("in a Claude thread", () => {

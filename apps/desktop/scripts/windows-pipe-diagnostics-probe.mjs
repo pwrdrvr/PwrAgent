@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
+import { readJsonRpcLines } from "./json-rpc-lines.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,7 @@ async function exec(...args) {
     }));
   }
 }
-let watcher, child, lines, sourceClosed, watcherClosed, debuggerProcess, debuggerClosed;
+let watcher, child, stopReading, sourceClosed, watcherClosed, debuggerProcess, debuggerClosed;
 export let probeResult;
 // When imported by the controller, these are its directly owned leaf children.
 // Never put a kill deadline around an intermediate probe process.
@@ -67,8 +67,7 @@ try {
   watcher = spawn(executable, ["watch", stop], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   watcherClosed = once(watcher, "close");
   void watcherClosed.catch(() => {});
-  lines = createInterface({ input: watcher.stdout });
-  lines.on("line", (line) => {
+  stopReading = readJsonRpcLines(watcher.stdout, (line) => {
     try { const row = JSON.parse(line); records.push(row); if (row.kind === "ready") ready.resolve(); }
     catch (error) { ready.reject(error); }
   });
@@ -176,7 +175,7 @@ try {
     finally {
       try { await stopOwned(watcher, watcherClosed, stop); }
       finally {
-        lines?.close();
+        stopReading?.();
         assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
         assert(path.basename(directory).startsWith("pwragent-native-pipe-proof-"));
         rmSync(directory, { recursive: true, force: true });

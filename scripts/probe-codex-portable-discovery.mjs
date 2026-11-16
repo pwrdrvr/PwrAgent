@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { createInterface } from "node:readline";
+import { readJsonRpcLines } from "../apps/desktop/scripts/json-rpc-lines.mjs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -112,7 +112,7 @@ export async function probePortableDiscovery({ binary, count = 100, streaming = 
     child.on("error", failRequests);
     child.on("exit", code => failRequests(new Error(`Codex exited ${code}`)));
     const notifications = [];
-    createInterface({ input: child.stdout }).on("line", line => {
+    readJsonRpcLines(child.stdout, line => {
       const value = JSON.parse(line);
       if (value.id && pending.has(value.id)) {
         const [resolve, reject] = pending.get(value.id); pending.delete(value.id);
