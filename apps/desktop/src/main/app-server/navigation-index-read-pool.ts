@@ -32,6 +32,7 @@ export type NavigationIndexCheckpoint = () => void;
 type Load = (signal: AbortSignal, checkpoint: NavigationIndexCheckpoint) => Promise<NavigationQueryIndex>;
 type Member = { pending: Pending };
 type Pending = {
+  projection: boolean;
   controller: AbortController;
   members: Set<Member>;
   version?: string;
@@ -105,13 +106,14 @@ export class NavigationIndexReadPool {
   private start(key: string, slot: Slot, owned: Pending): void {
     owned.started = true;
     slot.current = owned;
-    this.physical.add(owned);
+    if (!owned.projection) this.physical.add(owned);
     const settle = owned.settle!;
     owned.settle = undefined;
     const checkpoint = (): void => {
       if (owned.stale && !owned.inherited && slot.next?.members.size) throw new HandOff();
     };
-    const traced = listingDiagnostics.trace("index", {}, () => owned.load(owned.controller.signal, checkpoint));
+    const stage = owned.projection ? "viewer-index" : "index";
+    const traced = listingDiagnostics.trace(stage, {}, () => owned.load(owned.controller.signal, checkpoint));
     listingDiagnostics.remember(owned.promise, traced);
     traced.then((index) => {
       try {
@@ -123,7 +125,7 @@ export class NavigationIndexReadPool {
     }, (error: unknown) => {
       if (!(error instanceof HandOff) || !owned.members.size) return settle.reject(error);
       // The follow-up's own readers may have left since the checkpoint.
-      const next = slot.next ??= this.create(owned.load, owned.version);
+      const next = slot.next ??= this.create(owned.load, owned.version, owned.projection);
       for (const member of owned.members) {
         member.pending = next;
         next.members.add(member);
@@ -134,7 +136,7 @@ export class NavigationIndexReadPool {
       owned.controller.abort();
       next.inherited = true;
       next.promise.then(settle.resolve, settle.reject);
-      listingDiagnostics.link("index", "coalesced", next.promise);
+      listingDiagnostics.link(stage, "coalesced", next.promise);
     }).finally(() => {
       this.physical.delete(owned);
       if (slot.current === owned) slot.current = undefined;
@@ -145,8 +147,8 @@ export class NavigationIndexReadPool {
     });
   }
 
-  private create(load: Load, version: string | undefined): Pending {
-    const owned: Pending = { controller: new AbortController(), members: new Set(), version, stale: false, inherited: false,
+  private create(load: Load, version: string | undefined, projection: boolean): Pending {
+    const owned: Pending = { projection, controller: new AbortController(), members: new Set(), version, stale: false, inherited: false,
       started: false, load, promise: undefined as unknown as Promise<NavigationQueryIndex> };
     owned.promise = new Promise<NavigationQueryIndex>((resolve, reject) => { owned.settle = { resolve, reject }; });
     // A reader that leaves sees its own rejection; no one else awaits this.
@@ -154,11 +156,16 @@ export class NavigationIndexReadPool {
     return owned;
   }
 
-  read(key: string, load: Load, signal?: AbortSignal, version?: string): Promise<NavigationQueryIndex> {
+  /** Derived viewer work shares reader/retention budgets but consumes no
+   * physical source slot: its nested owner read owns that admission.
+   */
+  read(key: string, load: Load, signal?: AbortSignal, version?: string, kind: "source" | "projection" = "source"): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
+    const projection = kind === "projection";
+    const stage = projection ? "viewer-index" : "index";
     const retained = this.retained.get(key);
     if (retained && retained.owner.version === version && retained.expires > Date.now()) {
-      listingDiagnostics.link("index", "cache-hit", retained.owner.promise);
+      listingDiagnostics.link(stage, "cache-hit", retained.owner.promise);
       return Promise.resolve(retained.index);
     }
     if (retained) this.evict(key);
@@ -168,20 +175,20 @@ export class NavigationIndexReadPool {
     const current = slot?.current;
     if (slot && current && !current.stale && current.version === version) {
       owned = current;
-      listingDiagnostics.link("index", "coalesced", owned.promise);
+      listingDiagnostics.link(stage, "coalesced", owned.promise);
     } else if (slot && current) {
       // The running scan predates this reader's changes, durable or evented.
       // Share the one follow-up; it has not read anything yet, so it takes
       // the latest version.
       current.stale = true;
-      owned = slot.next ??= this.create(load, version);
+      owned = slot.next ??= this.create(load, version, projection);
       owned.version = version;
-      listingDiagnostics.link("index", "coalesced", owned.promise);
+      listingDiagnostics.link(stage, "coalesced", owned.promise);
     } else {
-      if (this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
+      if (!projection && this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
       slot = {};
       this.slots.set(key, slot);
-      owned = this.create(load, version);
+      owned = this.create(load, version, projection);
       this.start(key, slot, owned);
     }
     const ownedSlot = slot;
@@ -209,7 +216,7 @@ export class NavigationIndexReadPool {
         return true;
       };
       const abort = (): void => { if (release()) {
-        listingDiagnostics.link("index", "cancel", member.pending.promise);
+        listingDiagnostics.link(stage, "cancel", member.pending.promise);
         reject(signal?.reason ?? new Error("Navigation index read cancelled."));
       } };
       signal?.addEventListener("abort", abort, { once: true });

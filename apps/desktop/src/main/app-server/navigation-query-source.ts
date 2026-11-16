@@ -47,6 +47,11 @@ export async function loadLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
+  /** Viewer projection shares this pass's fences, lifetime and byte budget.
+   * The source identity separates viewer and owner inventories. Changes to
+   * that source must publish a navigation invalidation through the registry.
+   */
+  viewer?: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> };
 }): Promise<NavigationQueryIndex> {
   params.signal?.throwIfAborted();
   const registry = params.registry ?? getDesktopBackendRegistry();
@@ -55,6 +60,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
+    ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
@@ -76,6 +82,16 @@ export async function loadLocalNavigationQueryIndex(params: {
     // The pool owns this listener through its bounded completed reuse window.
     // Eviction/expiry/cancellation aborts the lifetime and releases it.
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
+    if (params.viewer) {
+      // Owner consumers and viewers still share the physical local scan.
+      // The derived inventory uses this same pool's byte/admission budget;
+      // it adds no unbounded or separately timed snapshot cache.
+      const local = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
+      checkpoint();
+      const projected = await params.viewer.project(local);
+      signal.throwIfAborted();
+      return projected;
+    }
     // Taken before listing. The registry drops its cached and pending
     // listings for a boundary before it tells listeners, so this listing
     // reflects every boundary observed before this value.
@@ -102,7 +118,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return index;
-  }, params.signal, version);
+  }, params.signal, version, params.viewer ? "projection" : "source");
 }
 
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
