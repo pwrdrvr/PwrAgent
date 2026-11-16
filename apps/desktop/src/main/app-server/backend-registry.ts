@@ -21146,18 +21146,24 @@ export class DesktopBackendRegistry {
         const title = automation?.title ?? event.errorNoticeContext?.title
           ?? this.getCachedThreadSummary({ backend, threadId: ownerThreadId })?.title;
         const automationName = automation?.automationName ?? event.errorNoticeContext?.automationName;
-        event = {
-          ...event,
-          errorNoticeContext: {
-            backend,
-            threadId: ownerThreadId,
-            ...(title ? { title } : {}),
-            ...(event.errorNoticeContext?.taskMonitor || monitor
-              ? { taskMonitor: true }
-              : {}),
-            ...(automationName ? { automationName } : {}),
-          },
-        };
+        // Ordinary retries and successful terminal events retain their provider
+        // envelope. Failure surfaces already used same-thread notice context.
+        if (owner.isSubAgent || automation || event.errorNoticeContext
+          || event.notification.method === "turn/failed"
+          || event.notification.method === "thread/status/changed") {
+          event = {
+            ...event,
+            errorNoticeContext: {
+              backend,
+              threadId: ownerThreadId,
+              ...(title ? { title } : {}),
+              ...(event.errorNoticeContext?.taskMonitor || monitor
+                ? { taskMonitor: true }
+                : {}),
+              ...(automationName ? { automationName } : {}),
+            },
+          };
+        }
       }
     }
     this.threadUsageLedger.trackRecentThreadUsageTurn(event);

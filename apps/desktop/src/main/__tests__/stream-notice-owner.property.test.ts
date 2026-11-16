@@ -8,6 +8,53 @@ import { taskMonitorThreadKey } from "../app-server/thread-turn-keys";
 import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
 
 describe("stream notice owner context", () => {
+  it("leaves visible-thread retry, warning and terminal events without helper owner metadata", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.constantFrom("error", "warning"), { minLength: 1, maxLength: 4 }),
+      fc.constantFrom("turn/completed", "turn/cancelled"),
+      async (methods, terminal) => {
+        const databases: StateDb[] = [];
+        const registry = registryWithInMemoryStore(databases);
+        const events: AgentEvent[] = [];
+        registry.onEvent((event) => { events.push(event); });
+        try {
+          await registry.publishLocalEvent({
+            backend: "codex",
+            notification: { method: "turn/started", params: {
+              threadId: "visible", turnId: "turn", turn: { id: "turn" },
+            } },
+          });
+          for (const method of methods) {
+            await registry.publishLocalEvent({
+              backend: "codex",
+              notification: method === "error"
+                ? { method, params: { threadId: "visible", turnId: "turn", willRetry: true, error: { message: "Reconnecting" } } }
+                : { method: "warning", params: { threadId: "visible", message: "Provider warning" } },
+            });
+          }
+          await registry.publishLocalEvent({
+            backend: "codex",
+            notification: terminal === "turn/completed"
+              ? { method: terminal, params: {
+                  threadId: "visible", turnId: "turn", turn: { id: "turn", status: "completed", output: [] },
+                } }
+              : { method: terminal, params: {
+                  threadId: "visible", turnId: "turn", turn: { id: "turn", status: "cancelled" },
+                } },
+          });
+          const notices = events.filter((event) => event.notification.method === "error"
+            || event.notification.method === "warning"
+            || event.notification.method === terminal);
+          expect(notices).toHaveLength(methods.length + 1);
+          expect(notices.every((event) => event.errorNoticeContext === undefined)).toBe(true);
+        } finally {
+          await registry.close();
+          for (const db of databases) db.close();
+        }
+      },
+    ), { numRuns: 25 });
+  });
+
   it("resolves every retry through nested native, review, live and finishing monitor ownership", async () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("native", "review", "monitor", "finishing"), { minLength: 1, maxLength: 6 }),

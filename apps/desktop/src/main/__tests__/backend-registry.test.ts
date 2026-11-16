@@ -33403,7 +33403,14 @@ command = "pnpm dev"
       const steer = vi.spyOn(registry, "steerTurn");
       if (scenario.monitor) {
         (registryModules(registry).subAgentMonitorService as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
-          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {});
+          .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {
+            backend, monitorThreadId: threadId, monitorTurnId: turn.turnId,
+            monitorId: "finished-monitor", parentBackend: backend, parentThreadId: "parent-session",
+            parentTurnId: "parent-turn", activeCommandCount: 0,
+            createdAt: 1, lastActivityAt: 1, task: "Wait for CI",
+            heartbeatIntervalSeconds: 30, pollIntervalSeconds: 30, startupTimeoutSeconds: 45,
+            preferredModel: "fixture", preferredReasoningEffort: "low",
+          });
       }
       const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
       const registration = await server.registerClient({ backend, threadId });
@@ -42578,6 +42585,9 @@ command = "pnpm dev"
               output: [{ type: "text", text: "Automation finished." }],
             },
           },
+        },
+        errorNoticeContext: {
+          backend: "codex", threadId: "agent-thread-1", title: "Check email", automationName: "Check email",
         },
       },
     ]);
