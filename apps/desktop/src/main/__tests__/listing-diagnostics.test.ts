@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import { ListingDiagnostics, listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -7,7 +8,7 @@ import { readRendererListingDiagnostics } from "../diagnostics/renderer-listing-
 import type { HotCpuTarget } from "../shell/diagnostics/hot-cpu-profiler";
 
 const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
-  diagnostic: { origin: "68ca84ce-8d32-4230-a10f-76bc96eb2f33", view: 1, effect: 2, logical: 3, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 } };
+  diagnostic: { origin: "68ca84ce-8d32-4230-a10f-76bc96eb2f33", view: 1, effect: 2, logical: 3, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2, caller: "scheduled/thread-lifecycle" } };
 const page: NavigationQueryPage = { protocol: 2, queryKey: "q", generation: "g", ownerEpoch: "o", countsRevision: "r",
   coverage: { state: "complete" }, counts: { total: 0, active: 0, unread: 0, review: 0 }, entries: [], complete: true };
 const eventsSince = (before: number) => {
@@ -36,6 +37,32 @@ describe("bounded listing diagnostics", () => {
     expect(diagnostics.snapshot().events[0]!.view).toBe(5904);
     now += 120_001;
     expect(diagnostics.snapshot().events).toEqual([]);
+  });
+
+  it("preserves bounded refresh callers and archived metadata attribution without retaining arbitrary text", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("navigation/refresh", "scheduled/thread-lifecycle", "action/materialize-launchpad",
+        "action/pr-detach", "action/messaging-unbind", "action/remote-pin-add", "action/remote-pin-remove",
+        "action/reply-refresh", "action/automation-refresh",
+        "renderer-navigation-query:archived-metadata", "federation-navigation-query:archived-metadata"),
+      fc.string({ maxLength: 100 }),
+      (caller, text) => {
+        const diagnostics = new ListingDiagnostics();
+        const next = { ...request, diagnostic: { ...request.diagnostic!, caller } };
+        diagnostics.record("ipc", "start", listingRequestFields(next));
+        diagnostics.record("provider-rpc", "start", { caller });
+        diagnostics.record("ipc", "start", { caller: `PRIVATE/${text}` });
+        diagnostics.record("ipc", "start", { caller: "PRIVATE/requestApproval" });
+        diagnostics.record("provider-rpc", "start", { caller: "PRIVATE:archived-metadata" });
+        const events = diagnostics.snapshot().events;
+        expect(events[0]).toMatchObject({ caller, reason: "turn", trigger: "turn/completed" });
+        expect(events[1]).toMatchObject({ caller });
+        expect(events[2]).toMatchObject({ caller: "unknown" });
+        expect(JSON.stringify(events)).not.toContain("PRIVATE/");
+        expect(events.slice(2).every((event) => event.caller === "unknown")).toBe(true);
+        expect(events).toHaveLength(5);
+      },
+    ));
   });
 
   it("keeps async causes isolated and links reused promises without retaining them", async () => {
@@ -70,7 +97,8 @@ describe("bounded listing diagnostics", () => {
     const loadIndex = vi.fn(async () => { await gate; return index; });
     const load = vi.fn(async () => { await indexPool.read("fixture", loadIndex); return page; });
     const read = (consumerId: string, logical: number) => {
-      const next = { ...request, diagnostic: { ...request.diagnostic!, logical } };
+      const next = { ...request, diagnostic: { ...request.diagnostic!, logical,
+        caller: logical === 2 ? "navigation/refresh" : request.diagnostic!.caller } };
       return listingDiagnostics.trace("ipc", { ...listingRequestFields(next), sender: 7 }, () => pool.read({ consumerId, request: next, load }));
     };
     const first = read("one", 1);
@@ -88,7 +116,7 @@ describe("bounded listing diagnostics", () => {
     const indexStart = events.find((event) => event.stage === "index" && event.phase === "start")!;
     expect(events.find((event) => event.stage === "index" && event.phase === "cache-hit")).toMatchObject({ targetId: indexStart.id });
     expect(events.filter((event) => event.phase === "start" && event.stage === "navigation").map((event) => event.logical)).toEqual([1, 2, 3]);
-    expect(events.find((event) => event.stage === "ipc")).toMatchObject({ origin: request.diagnostic!.origin, view: 1, effect: 2, reason: "turn", trigger: "turn/completed", invalidations: 2 });
+    expect(events.find((event) => event.stage === "ipc")).toMatchObject({ origin: request.diagnostic!.origin, view: 1, effect: 2, reason: "turn", trigger: "turn/completed", invalidations: 2, caller: "scheduled/thread-lifecycle" });
     // Exact deterministic operation budget, independent of rows in the fixture.
     expect(events).toHaveLength(24);
     pool.release("one"); pool.release("two"); indexPool.invalidate("fixture");

@@ -1691,7 +1691,7 @@ function DesktopAppShell(props: {
         threadId: thread.id,
         pr,
       });
-      await navigation.refresh?.();
+      await navigation.refresh?.("action/pr-detach");
     },
   );
   const unbindMessagingBinding = useEventCallback(
@@ -1701,7 +1701,7 @@ function DesktopAppShell(props: {
     ) => {
       if (!desktopApi?.unbindMessagingThread) return;
       await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
-      await navigation.refresh?.();
+      await navigation.refresh?.("action/messaging-unbind");
     },
   );
   const pendingSpendAlertCapacity = Math.max(0, 10 - appNotices.durable.filter((notice) =>
@@ -2342,6 +2342,9 @@ function DesktopAppShell(props: {
       scheduledActionFederationTargets,
     ],
   );
+  const refreshReplyNavigation = useEventCallback(() => navigation.refresh("action/reply-refresh"));
+  const refreshAutomationNavigation = useEventCallback(() => navigation.refresh("action/automation-refresh"));
+
   useScheduledThreadActionProjection({
     composerDraftStore,
     desktopApi,
@@ -4281,7 +4284,7 @@ function DesktopAppShell(props: {
           handoffLaunchpadComposer(composerDraftStore, composerScopeKey, thread, desktopApi),
       ),
     onPendingStatusChange: session.setPendingStatusText,
-    onRefreshNavigation: navigation.refresh,
+    onRefreshNavigation: refreshReplyNavigation,
     onUserRepliedToThread: reportUserRepliedToThread,
     onSetExecutionMode: navigation.selectedThread ? handleSetExecutionMode : undefined,
     onSetAcpRuntimeOption: navigation.selectedThread ? handleSetAcpRuntimeOption : undefined,
@@ -4603,7 +4606,7 @@ function DesktopAppShell(props: {
                 } catch (error) {
                   console.warn("Pinning the remote thread failed.", error);
                 }
-                await navigation.refresh();
+                await navigation.refresh("action/remote-pin-add");
                 setMainView("thread");
                 navigation.selectThread(thread);
                 requestAnimationFrame(() =>
@@ -4621,7 +4624,7 @@ function DesktopAppShell(props: {
               } catch (error) {
                 console.warn("Removing the remote thread pin failed.", error);
               }
-              await navigation.refresh();
+              await navigation.refresh("action/remote-pin-remove");
             }}
             onArchiveThread={navigation.archiveThread}
             onArchiveThreads={navigation.archiveThreads}
@@ -4877,7 +4880,7 @@ function DesktopAppShell(props: {
                 onClose={() => setMainView("thread")}
                 onOpenMessagingActivity={openMessagingActivityWindow}
                 onOpenMessagingSettings={openMessagingSettings}
-                onRefreshNavigation={navigation.refresh}
+                onRefreshNavigation={refreshAutomationNavigation}
                 onSelectThread={(thread) => {
                   setMainView("thread");
                   navigation.selectThread(thread);
