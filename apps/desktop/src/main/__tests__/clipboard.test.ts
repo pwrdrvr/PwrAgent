@@ -59,6 +59,10 @@ describe("clipboard ipc", () => {
     registerClipboardIpcHandlers();
     requestPasteWithoutFormatting();
     expect(focused.send).toHaveBeenCalledExactlyOnceWith(PASTE_WITHOUT_FORMATTING_CHANNEL, "Clipboard text");
+    listeners.get(PASTE_WITHOUT_FORMATTING_CHANNEL)?.({ sender: inactive });
+    expect(focused.send).toHaveBeenCalledTimes(1);
+    listeners.get(PASTE_WITHOUT_FORMATTING_CHANNEL)?.({ sender: focused });
+    expect(focused.send).toHaveBeenCalledTimes(2);
     listeners.get(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL)?.({ sender: inactive });
     expect(inactive.pasteAndMatchStyle).not.toHaveBeenCalled();
     listeners.get(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL)?.({ sender: focused });

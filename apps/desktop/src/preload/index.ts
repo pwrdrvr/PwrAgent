@@ -38,6 +38,7 @@ import {
 } from "../shared/ipc";
 import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
 import { createPlainTextPasteSubscription } from "./plain-text-paste";
+import { PASTE_WITHOUT_FORMATTING_CHANNEL } from "../shared/plain-text-paste";
 import type {
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -1329,6 +1330,7 @@ const desktopApi = Object.freeze({
   },
   ping: () => "pong",
   onPasteWithoutFormattingRequested: createPlainTextPasteSubscription(ipcRenderer),
+  pasteWithoutFormatting: (): void => { ipcRenderer.send(PASTE_WITHOUT_FORMATTING_CHANNEL); },
   replayFixtureActive: Boolean(process.env.PWRAGENT_REPLAY_FIXTURE_PATH),
   // Clipboard writes go through the main process: the sandboxed preload's
   // `electron` module does not expose `clipboard`.

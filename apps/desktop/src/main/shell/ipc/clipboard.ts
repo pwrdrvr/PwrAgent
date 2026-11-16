@@ -53,6 +53,12 @@ async function writeRichText(
 }
 
 export function registerClipboardIpcHandlers(): void {
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_CHANNEL);
+  ipcMain.on(PASTE_WITHOUT_FORMATTING_CHANNEL, (event) => {
+    if (event.sender === webContents.getFocusedWebContents()) {
+      requestPasteWithoutFormatting();
+    }
+  });
   ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL);
   ipcMain.on(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL, (event) => {
     if (event.sender === webContents.getFocusedWebContents()) {
@@ -93,6 +99,7 @@ export function registerClipboardIpcHandlers(): void {
 }
 
 export function disposeClipboardIpcHandlers(): void {
+  ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_CHANNEL);
   ipcMain.removeAllListeners(PASTE_WITHOUT_FORMATTING_FALLBACK_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_TEXT_CHANNEL);
   ipcMain.removeHandler(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL);

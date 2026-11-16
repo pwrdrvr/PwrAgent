@@ -5,9 +5,10 @@ import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
 
-const bridge = vi.hoisted(() => ({ paste: undefined as ((text: string) => boolean) | undefined }));
+const bridge = vi.hoisted(() => ({ paste: undefined as ((text: string) => boolean) | undefined, request: vi.fn() }));
 vi.mock("../../../lib/desktop-api", () => ({
   getDesktopApi: () => ({
+    pasteWithoutFormatting: bridge.request,
     onPasteWithoutFormattingRequested: (callback: (text: string) => boolean) => {
       bridge.paste = callback;
       return () => { bridge.paste = undefined; };
@@ -49,6 +50,17 @@ it("Shift+Enter leaves all inline formatting behind at the end of pasted prose",
       expect(editor.state.doc.firstChild?.firstChild?.marks.map((mark) => mark.type.name).sort()).toEqual([...marks].sort());
     } finally { view.unmount(); }
   }), { numRuns: 15 });
+});
+
+it.each(["MacIntel", "Win32", "Linux x86_64"])("claims the plain-paste shortcut in a focused %s composer", (platform) => {
+  const { view, textbox } = mount("");
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue(platform);
+  bridge.request.mockClear();
+  try {
+    const mac = platform === "MacIntel";
+    expect(fireEvent.keyDown(textbox, { key: "V", shiftKey: true, metaKey: mac, ctrlKey: !mac })).toBe(false);
+    expect(bridge.request).toHaveBeenCalledOnce();
+  } finally { view.unmount(); vi.restoreAllMocks(); }
 });
 
 // The clipboard's plain text is the oracle. Markdown-looking source must

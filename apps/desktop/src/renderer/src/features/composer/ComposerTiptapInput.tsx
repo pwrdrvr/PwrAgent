@@ -3776,6 +3776,18 @@ export const ComposerTiptapInput = forwardRef<
         if (!editor || event.defaultPrevented || propsRef.current.readOnly) {
           return;
         }
+        if (
+          event.key.toLowerCase() === "v" && event.shiftKey && !event.altKey
+          && (isMacPlatform() ? event.metaKey : event.ctrlKey)
+        ) {
+          const paste = getDesktopApi()?.pasteWithoutFormatting;
+          if (paste) {
+            event.preventDefault();
+            event.stopPropagation();
+            paste();
+            return;
+          }
+        }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           if (
             props.markdownConversion &&
