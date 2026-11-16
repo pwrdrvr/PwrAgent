@@ -83,6 +83,14 @@ belong in environment variables referenced by Codex's `env_key` or
 
 ## Research runs
 
+An optional Open Math Harness process adapter imports versioned swarm records or
+dispatches execution through an explicitly configured, separately managed bridge.
+The owner probes ordinary model functions before dispatch, journals intent before
+effects, commits each bounded source page with its cursor, and retains unknown
+outcomes without replay. Source identities and verdicts cannot create PwrAgent
+threads or reviews. See [the process contract](docs/research-harness-adapter.md)
+for capability separation, provenance, workspace confinement and measured budgets.
+
 Research runs attach an objective, approaches, shared findings and submissions
 to a coordinating thread. The owner composition root constructs
 `ResearchService` from `packages/owner-core` with desktop execution ports and a

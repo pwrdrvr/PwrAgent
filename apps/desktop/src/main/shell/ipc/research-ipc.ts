@@ -2,13 +2,28 @@ import { ipcMain, shell } from "electron";
 import type { ResearchThread, ResearchUpdateRequest, ResearchEvidenceRequest, PrepareResearchRequest, ResearchSearchRequest, ResearchItemReadRequest, ResearchWorkRequest } from "@pwragent/shared";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL } from "../../../shared/ipc";
 import { getResearchService } from "../../research/research-runtime";
-import { resolveResearchEvidencePath } from "../../research/research-evidence-path";
+import { resolveHarnessEvidencePath, resolveResearchEvidencePath } from "../../research/research-evidence-path";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { isLocalMainWindowWebContents } from "../window-channels";
+import { realpath } from "node:fs/promises";
+import type { ResearchHarnessRequest } from "@pwragent/shared";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL } from "../../../shared/ipc";
+import { getResearchHarnessService, researchHarnessConfigured } from "../../research/research-runtime";
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
 export function registerResearchIpcHandlers(): void {
   disposeResearchIpcHandlers();
+  ipcMain.handle(RESEARCH_HARNESS_STATUS_CHANNEL, (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    return { configured: researchHarnessConfigured() };
+  });
+  ipcMain.handle(RESEARCH_HARNESS_START_CHANNEL, async (event, request: ResearchHarnessRequest) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateThread(request);
+    const cwd = await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(request.backend, request.threadId);
+    if (!cwd) throw new Error("Harness research requires this thread's originating workspace");
+    return await getResearchHarnessService().start(request, await realpath(cwd));
+  });
   ipcMain.handle(RESEARCH_SEARCH_CHANNEL, (event, request: ResearchSearchRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
@@ -53,14 +68,18 @@ export function registerResearchIpcHandlers(): void {
     const source = run.events.find((entry) => (entry.data.type === "finding" && entry.data.finding.id === request.itemId)
       || (entry.data.type === "submission" && entry.data.submission.id === request.itemId))?.actor;
     if (!relativePath || !source) throw new Error("Evidence source is unavailable");
-    const cwd = await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(source.backend, source.threadId);
+    const imported = run.harness && run.events.some((entry) => entry.provenance && ((entry.data.type === "finding" && entry.data.finding.id === request.itemId)
+      || (entry.data.type === "submission" && entry.data.submission.id === request.itemId)));
+    const cwd = imported ? run.harness!.workspace : await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(source.backend, source.threadId);
     if (!cwd) throw new Error("The worker workspace is unavailable");
-    const resolved = await resolveResearchEvidencePath(cwd, relativePath);
+    const resolved = imported ? await resolveHarnessEvidencePath(cwd, relativePath) : await resolveResearchEvidencePath(cwd, relativePath);
     const error = await shell.openPath(resolved);
     return { opened: !error, ...(error ? { error } : {}) };
   });
 }
 export function disposeResearchIpcHandlers(): void {
+  ipcMain.removeHandler(RESEARCH_HARNESS_STATUS_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_HARNESS_START_CHANNEL);
   for (const channel of [RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL]) ipcMain.removeHandler(channel);
 }
 function validateThread(request: ResearchThread): void {

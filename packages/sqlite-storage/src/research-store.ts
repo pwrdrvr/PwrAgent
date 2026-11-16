@@ -77,8 +77,12 @@ export class ResearchStore implements ResearchStorage {
     const event = JSON.parse(row.payload) as ResearchEvent;
     if (event.data.type !== "created") throw new Error("Invalid research header");
     const data = event.data;
+    const latestHarness = data.harness ? this.stateDb.raw.prepare(`SELECT payload FROM research_events
+      WHERE run_id = ? AND json_extract(payload, '$.data.type') = 'harness' ORDER BY seq DESC LIMIT 1`).get(id) as { payload: string } | undefined : undefined;
+    const harnessEvent = latestHarness ? JSON.parse(latestHarness.payload) as ResearchEvent : undefined;
     return { id, revision: row.revision, objective: data.objective, coordinator: data.coordinator, ownerId: data.ownerId, ownerPid: data.ownerPid,
-      ownerStartedAt: data.ownerStartedAt, createdAt: event.at, deadlineAt: data.deadlineAt, workspaceMode: data.workspaceMode, status: row.status, workerLimit: data.approaches.length, activeWorkers: row.active_workers };
+      ownerStartedAt: data.ownerStartedAt, createdAt: event.at, deadlineAt: data.deadlineAt, workspaceMode: data.workspaceMode, status: row.status, workerLimit: data.approaches.length, activeWorkers: row.active_workers,
+      harness: harnessEvent?.data.type === "harness" ? harnessEvent.data.state : data.harness };
   }
   isMember(id: string, thread: ResearchThread): boolean {
     return Boolean(this.stateDb.raw.prepare(`SELECT 1 FROM research_runs WHERE run_id = ? AND
@@ -173,6 +177,11 @@ export class ResearchStore implements ResearchStorage {
         db.prepare("INSERT OR IGNORE INTO research_workers (run_id, backend, thread_id) VALUES (?, ?, ?)")
           .run(id, event.data.worker.backend, event.data.worker.threadId);
       }
+    }).immediate();
+  }
+  appendBatch(id: string, revision: number, events: ResearchEvent[]): void {
+    this.stateDb.raw.transaction(() => {
+      for (const event of events) this.append(id, revision++, event);
     }).immediate();
   }
   private insertEvent(id: string, event: ResearchEvent): void {

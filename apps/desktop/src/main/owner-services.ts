@@ -109,8 +109,8 @@ let mainProcessShutdownPromise: Promise<void> | undefined;
 let ownerShutdownStarted = false;
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
-function closeResearchOwner(): void {
-  try { closeResearchRuntime(); }
+async function closeResearchOwner(): Promise<void> {
+  try { await closeResearchRuntime(); }
   catch (error) { mainLog.warn("research shutdown failed", { error: String(error) }); }
 }
 const navigationQueryPool = getDesktopNavigationQueryPool();
@@ -318,7 +318,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         name: "running-turns",
         timeoutMs: RUNNING_TURNS_SHUTDOWN_TIMEOUT_MS,
         run: async () => {
-          closeResearchOwner();
+          await closeResearchOwner();
           await getExistingDesktopBackendRegistry()?.stopRunningTurnsForShutdown({
             timeoutMs: RUNNING_TURNS_STOP_TIMEOUT_MS,
           });
@@ -825,7 +825,7 @@ wireOwnerRendererEvents();
 }
 
 export async function disposeAppServerOwnerServices(): Promise<void> {
-  closeResearchOwner();
+  await closeResearchOwner();
   disposeOwnerRendererEvents();
   setNavigationDetailPendingWakesProjector(undefined);
   setBundledGitLfsAdvisory(undefined);
@@ -883,7 +883,7 @@ export function prepareOwnerShutdown(): void {
 }
 
 export function disposeOwnerServicesSync(options: { releaseFederationLease?: boolean } = {}): void {
-  closeResearchOwner();
+  void closeResearchOwner();
   disposeDesktopAutomationService();
   if (options.releaseFederationLease !== false) releaseOwnerFederationLeaseSync();
   // Detached env-action trees (`pnpm dev` and friends) were previously just

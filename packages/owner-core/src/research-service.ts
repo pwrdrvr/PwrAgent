@@ -13,6 +13,7 @@ export type ResearchAssignmentReceipt = { runId: string; itemId: string; version
 /** The adapter has confirmed that no model turn was admitted. */
 export class ResearchAdmissionRefused extends Error {}
 export type ResearchPorts = {
+  stopHarness?: (id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string) => Promise<ResearchRun>;
   spawn: (context: ResearchExecutionContext, task: string, title: string, workspaceMode: StartResearchRequest["workspaceMode"],
     onCreated: (worker: ResearchThread) => void) => Promise<ResearchThread & { turnId?: string }>;
   stop: (worker: NonNullable<ResearchApproach["worker"]>) => Promise<void>;
@@ -118,6 +119,7 @@ export class ResearchService {
   private async performAssignment(request: ResearchAssignRequest, context: ResearchExecutionContext, key: string, signature: string): Promise<ResearchAssignmentReceipt> {
     this.requireOpen();
     const run = this.read(request.runId, context);
+    if (run.harness) throw new Error("Harness member admission belongs to the configured bridge");
     if (!sameResearchThread(run.coordinator, context)) throw new Error("Only the coordinating thread can assign research items");
     if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
     const duplicate = this.storage.findCommand(run.id, key);
@@ -155,6 +157,7 @@ export class ResearchService {
   async work(id: string, requestId: string, command: ResearchWorkCommand, actor: ResearchActor): Promise<ResearchItem> {
     this.requireOpen();
     const header = this.accessibleHeader(id, actor);
+    if (header.harness) throw new Error("Harness observations do not support native worker assignments");
     if (header.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
     const signature = JSON.stringify(command);
     const duplicate = this.storage.findCommand(id, requestId);
@@ -321,6 +324,8 @@ export class ResearchService {
     if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
     let run = this.read(id, actor);
+    if (run.harness && !["review", "stop", "finish"].includes(command.action)) throw new Error("Harness records are immutable source observations");
+    if (run.harness && command.action === "review" && command.decision === "revision_requested") throw new Error("Bridge revision delivery is unavailable; record rejection or acceptance locally");
     if (run.ownerId !== this.ports.ownerId) throw new Error("This run belongs to another process. Open its worker threads to inspect interrupted work.");
     const signature = JSON.stringify(command);
     const duplicate = run.events.find((e) => e.commandId === requestId);
@@ -426,6 +431,10 @@ export class ResearchService {
 
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRun> {
     const run = this.read(id, actor);
+    if (run.harness) {
+      if (!this.ports.stopHarness) throw new Error("Harness cancellation is unavailable");
+      return await this.ports.stopHarness(id, actor, outcome, reason);
+    }
     if (actor.kind !== "operator" && !sameResearchThread(actor, run.coordinator)) throw new Error("Only the coordinator or operator may stop a run");
     if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
     const pending = this.stops.get(id);

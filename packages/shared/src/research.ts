@@ -1,4 +1,5 @@
 import type { AppServerBackendKind } from "./contracts/normalized-app-server";
+import type { ResearchHarnessState, ResearchProvenance } from "./research-harness";
 
 export type ResearchThread = { backend: AppServerBackendKind; threadId: string };
 export type ResearchActor = ResearchThread & { kind: "agent" | "operator"; turnId?: string; callId?: string };
@@ -73,7 +74,7 @@ export type ResearchSearchHit = Pick<ResearchItem, "id" | "type" | "approachId" 
 };
 export type ResearchSearchPage = { runId: string; revision: number; total: number; items: ResearchSearchHit[]; nextCursor?: NonNullable<ResearchSearchQuery["cursor"]> };
 export type ResearchAssignRequest = { runId: string; itemId: string; expectedVersion: number; task: string };
-export type ResearchRunHeader = Pick<ResearchRun, "id" | "revision" | "objective" | "coordinator" | "ownerId" | "ownerPid" | "ownerStartedAt" | "createdAt" | "deadlineAt" | "workspaceMode" | "status" | "workerLimit" | "activeWorkers">;
+export type ResearchRunHeader = Pick<ResearchRun, "id" | "revision" | "objective" | "coordinator" | "ownerId" | "ownerPid" | "ownerStartedAt" | "createdAt" | "deadlineAt" | "workspaceMode" | "status" | "workerLimit" | "activeWorkers" | "harness">;
 export type ResearchItemContext = { run: Pick<ResearchRunHeader, "id" | "revision" | "objective" | "coordinator" | "deadlineAt" | "workspaceMode" | "status" | "workerLimit" | "activeWorkers">; item: ResearchItem; approach?: ResearchApproach; assignment?: ResearchApproach };
 export type ResearchCommand =
   | ({ action: "finding" } & Omit<ResearchFinding, "id" | "author">)
@@ -87,7 +88,9 @@ export type ResearchCommand =
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
 export type ResearchEventData =
-  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[] }
+  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
+  | { type: "harness"; state: ResearchHarnessState }
+  | { type: "harness_observation"; event: string; text: string }
   | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string }
   | { type: "finding"; finding: ResearchFinding }
   | { type: "submission"; submission: ResearchSubmission }
@@ -107,8 +110,10 @@ export type ResearchEvent = {
   at: number;
   actor: ResearchActor;
   data: ResearchEventData;
+  provenance?: ResearchProvenance;
 };
 export type ResearchRun = {
+  harness?: ResearchHarnessState;
   id: string;
   revision: number;
   objective: string;
@@ -157,14 +162,15 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
     ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, deadlineAt: initial.deadlineAt,
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
-    findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [],
+    findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [], harness: initial.harness,
   };
   const items = new Map<string, ResearchItem>();
   for (const item of applyResearchItemEvent((key) => items.get(key), first)) items.set(item.id, item);
   for (const event of events.slice(1)) {
     for (const item of applyResearchItemEvent((key) => items.get(key), event)) items.set(item.id, item);
     const data = event.data;
-    if (data.type === "worker") {
+    if (data.type === "harness") run.harness = data.state;
+    else if (data.type === "worker") {
       const approach = run.approaches.find((a) => a.id === data.approachId);
       if (!approach) throw new Error("Unknown research approach");
       Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});

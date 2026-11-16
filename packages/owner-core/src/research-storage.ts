@@ -14,4 +14,6 @@ export interface ResearchStorage {
   create(id: string, startKey: string, event: ResearchEvent): void;
   /** Compare-and-append atomically. A conflicting duplicate command is refused. */
   append(id: string, revision: number, event: ResearchEvent): void;
+  /** A bounded service-record page and its cursor commit together. */
+  appendBatch(id: string, revision: number, events: ResearchEvent[]): void;
 }

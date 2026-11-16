@@ -31,6 +31,10 @@ describe("ordinary research tools", () => {
         if (records.length !== revision) throw new Error("Conflict");
         records.push(structuredClone(event));
       },
+      appendBatch: (id, revision, events) => {
+        if (journals.get(id)!.length !== revision) throw new Error("Conflict");
+        journals.get(id)!.push(...structuredClone(events));
+      },
     };
     let spawned = 0;
     const service = new ResearchService(storage, {

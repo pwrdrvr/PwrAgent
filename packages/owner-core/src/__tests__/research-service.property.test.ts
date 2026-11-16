@@ -25,6 +25,9 @@ class MemoryResearchStorage implements ResearchStorage {
     if (records.length !== revision) throw new Error("conflict");
     records.push(structuredClone(event));
   }
+  appendBatch(id: string, revision: number, events: ResearchEvent[]) {
+    for (const event of events) this.append(id, revision++, event);
+  }
 }
 
 const context = { kind: "agent", backend: "codex", threadId: "coordinator", turnId: "parent-turn", callId: "start" } as const;

@@ -9,3 +9,9 @@ export async function resolveResearchEvidencePath(workspace: string, relativePat
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("Evidence is outside its worker workspace");
   return file;
 }
+
+/** Imported paths retain the canonical root captured at admission, even after thread navigation. */
+export async function resolveHarnessEvidencePath(originWorkspace: string, relativePath: string): Promise<string> {
+  if (await realpath(originWorkspace) !== originWorkspace) throw new Error("The originating Harness workspace moved");
+  return await resolveResearchEvidencePath(originWorkspace, relativePath);
+}
