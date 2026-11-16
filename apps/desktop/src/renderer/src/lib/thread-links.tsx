@@ -371,6 +371,49 @@ function useThreadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
   return next.key;
 }
 
+type ThreadLinkMembershipInput = Pick<ThreadLinkMetadataInput, "backend" | "instanceId" | "threadId">;
+
+function threadLinkMembershipInputsMatch(
+  inputs: ThreadLinkMembershipInput[],
+  threads: NavigationThreadSummary[],
+): boolean {
+  if (inputs.length !== threads.length) return false;
+  for (let index = 0; index < threads.length; index++) {
+    const thread = threads[index]!;
+    const previous = inputs[index]!;
+    const target = thread.federation?.ref.target;
+    if (previous.backend !== thread.source
+      || previous.instanceId !== (target?.scope === "remote" ? target.instanceId : undefined)
+      || previous.threadId !== thread.id) return false;
+  }
+  return true;
+}
+
+/** One committed inventory; metadata churn must not rebuild membership keys. */
+function useThreadLinkMembershipKey(threads: NavigationThreadSummary[]): string {
+  const cache = useRef<{ inputs: ThreadLinkMembershipInput[]; key: string } | null>(null);
+  const previous = cache.current;
+  const next = previous && threadLinkMembershipInputsMatch(previous.inputs, threads)
+    ? previous
+    : {
+        inputs: threads.map((thread) => {
+          const target = thread.federation?.ref.target;
+          return {
+            backend: thread.source,
+            instanceId: target?.scope === "remote" ? target.instanceId : undefined,
+            threadId: thread.id,
+          };
+        }),
+        // Recheck changed input order, retaining the canonical signature's
+        // ordering and duplicate multiplicity rather than caching a Set.
+        key: threads.map((thread) => threadLinkKey(threadSummaryLink(thread)))
+          .sort()
+          .join("\u0000"),
+      };
+  useLayoutEffect(() => { cache.current = next; }, [next]);
+  return next.key;
+}
+
 /**
  * A narrowly-scoped external store for mutable thread-link metadata.
  *
@@ -762,12 +805,7 @@ export function ThreadLinkProvider(props: {
   // and plain text. Title/branch churn within a stable membership is not
   // reflected in the context value. The per-thread metadata store above
   // updates only chips that reference the changed thread.
-  const membershipKey = useMemo(
-    () => threads.map((thread) => threadLinkKey(threadSummaryLink(thread)))
-      .sort()
-      .join("\u0000"),
-    [threads],
-  );
+  const membershipKey = useThreadLinkMembershipKey(threads);
 
   // Read the latest inputs through refs so the value can be rebuilt from
   // current data at each membership change without listing them as deps.
