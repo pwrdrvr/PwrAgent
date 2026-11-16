@@ -25,7 +25,7 @@ test("1,000 contributions across ten workers stay navigable within the Research 
     await expect(panel.locator(".research-node--finding")).toHaveCount(60);
     const itemsStart = performance.now();
     await panel.getByRole("button", { name: "Items", exact: true }).click();
-    await panel.getByLabel("Search items").fill("contribution 999");
+    await panel.getByRole("searchbox", { name: "Search items", exact: true }).fill("contribution 999");
     await panel.getByRole("button", { name: "Search", exact: true }).click();
     await panel.getByRole("button", { name: /Invented contribution 999/ }).click();
     await expect(panel.getByLabel("Selected research item")).toContainText("finding-999");
