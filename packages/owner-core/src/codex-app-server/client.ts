@@ -8032,8 +8032,18 @@ export class CodexAppServerClient {
     this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
       if (!PASSIVE_CODEX_REQUESTS.has(method)) this.options.assertOwnerAdmission?.();
       try {
-        const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
-        this.observeThreadSubscription(method, params, result);
+        const prepared = this.host.prepareThreadRequest
+          && (method === "thread/start" || method === "thread/resume" || method === "thread/fork")
+          ? await this.host.prepareThreadRequest({
+            method,
+            params,
+            request: (name, value) => requestBeforeSubscriptionTracking(name, value, timeoutMs, {
+              callerReason: "thread-mcp-runtime-preparation",
+            }),
+          })
+          : params;
+        const result = await requestBeforeSubscriptionTracking(method, prepared, timeoutMs, diagnostics);
+        this.observeThreadSubscription(method, prepared, result);
         return result;
       } catch (error) {
         this.host.onRequestFailure?.(error);
