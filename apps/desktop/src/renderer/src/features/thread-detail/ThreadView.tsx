@@ -2008,6 +2008,9 @@ export function ThreadView(props: ThreadViewProps) {
       title: `Files - ${selectedThread.title}`,
       thread: { backend: selectedThread.source, threadId: selectedThread.id },
       threadTitle: selectedThread.title,
+      ...(selectedThread.federation?.ref.target
+        ? { federationTarget: selectedThread.federation.ref.target }
+        : {}),
       ...(projectPath ? { projectPath } : {}),
     };
   }, [selectedThread, selectedThreadKey]);

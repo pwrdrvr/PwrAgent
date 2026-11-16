@@ -244,12 +244,18 @@ describe("ThreadView", () => {
     cleanup();
   });
 
-  it("preserves the document viewer when navigation replaces the selected thread summary", async () => {
+  it.each([false, true])("preserves the document viewer across navigation refreshes and connection changes (remote: %s)", async (remote) => {
     const readMarkdownFile = vi.fn(async () => ({
       path: "/repo/report.md",
       content: "# Report\n\nKeep this paragraph selected.",
     }));
     const selectedThread = buildTimestampTargetThread("reader", "Document reader");
+    if (remote) {
+      selectedThread.federation = {
+        instanceLabel: "Owner",
+        ref: { backend: "codex", threadId: "reader", target: { scope: "remote", instanceId: "owner" } },
+      };
+    }
     const props: Omit<ThreadViewProps, "terminals"> = {
       addOptimisticUserMessage: (_text) => "optimistic-1",
       backends: [],
@@ -273,6 +279,11 @@ describe("ThreadView", () => {
     const view = render(<ThreadView {...props} />);
     fireEvent.click(screen.getByRole("link", { name: "report" }));
     await screen.findByRole("heading", { name: "Report" });
+    expect(readMarkdownFile).toHaveBeenCalledWith({
+      path: "/repo/report.md",
+      thread: { backend: "codex", threadId: "reader" },
+      ...(remote ? { federationTarget: { scope: "remote", instanceId: "owner" } } : {}),
+    });
     const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
     const paragraph = within(dialog).getByText("Keep this paragraph selected.");
     const range = document.createRange();
@@ -290,7 +301,27 @@ describe("ThreadView", () => {
       expect(scroll.scrollTop).toBe(640);
       expect(readMarkdownFile).toHaveBeenCalledTimes(1);
     }
+    for (const connected of [false, true, false, true]) {
+      await act(async () => view.rerender(<ThreadView {...props} desktopApi={connected ? props.desktopApi : undefined} />));
+      expect(paragraph).toBeInTheDocument();
+      expect(selection.toString()).toBe("Keep this paragraph selected.");
+      expect(scroll.scrollTop).toBe(640);
+      expect(readMarkdownFile).toHaveBeenCalledTimes(1);
+    }
     selection.removeAllRanges();
+    if (remote) {
+      await act(async () => view.rerender(<ThreadView {...props} selectedThread={{
+        ...selectedThread,
+        federation: {
+          instanceLabel: "Another owner",
+          ref: { backend: "codex", threadId: "reader", target: { scope: "remote", instanceId: "another-owner" } },
+        },
+      }} />));
+      expect(readMarkdownFile).toHaveBeenCalledTimes(2);
+      expect(readMarkdownFile).toHaveBeenLastCalledWith(expect.objectContaining({
+        federationTarget: { scope: "remote", instanceId: "another-owner" },
+      }));
+    }
   });
 
   it("offers async question answers only when the composer is ready", () => {

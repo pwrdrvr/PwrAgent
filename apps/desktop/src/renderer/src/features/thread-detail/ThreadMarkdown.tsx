@@ -17,7 +17,6 @@ import {
   memo,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
   type ClipboardEvent,
@@ -53,6 +52,7 @@ import {
 } from "../../lib/pull-request-links";
 import { expandTildePath, tildifyPath } from "../../lib/tildify-path";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { useFilePreviewRead } from "./useFilePreviewRead";
 import { SkillChip } from "../composer/SkillChip";
 import {
   PullRequestLinkChip,
@@ -1058,61 +1058,13 @@ function MarkdownDocumentModal(props: {
   // The HTML preview renders its permissions into the header row.
   const [headerControls, setHeaderControls] = useState<HTMLDivElement | null>(null);
   const previewKind = filePreviewKind(props.target.path) ?? "markdown";
-  const [loadState, setLoadState] = useState<
-    | { status: "loading" }
-    | { status: "loaded"; content: string }
-    | { status: "error"; error: string }
-  >({ status: "loading" });
   const readMarkdownFile = props.desktopApi?.readMarkdownFile;
   const { thread, federationTarget } = useMarkdownFileSource(props.fileViewerContext);
+  const loadState = useFilePreviewRead(readMarkdownFile, props.target.path, thread, federationTarget);
   const onOpenTarget = props.onOpenTarget;
   const openLinkedFile = useCallback((path: string) => {
     onOpenTarget({ path, label: fileNameFromPath(path) });
   }, [onOpenTarget]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoadState({ status: "loading" });
-
-    if (!readMarkdownFile) {
-      setLoadState({
-        status: "error",
-        error: "File preview is unavailable.",
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void readMarkdownFile({
-      path: props.target.path,
-      thread,
-      federationTarget,
-    })
-      .then((response) => {
-        if (cancelled) return;
-        if (response.error || response.content === undefined) {
-          setLoadState({
-            status: "error",
-            error: response.error ?? "File could not be read.",
-          });
-          return;
-        }
-
-        setLoadState({ status: "loaded", content: response.content });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setLoadState({
-          status: "error",
-          error: error instanceof Error ? error.message : "File could not be read.",
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [readMarkdownFile, props.target.path, thread, federationTarget]);
 
   if (typeof document === "undefined") {
     return null;
