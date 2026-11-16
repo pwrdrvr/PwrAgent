@@ -105,9 +105,12 @@ structured state, not provider transcripts. Each mutation compares the
 journal revision and appends its command identity in one transaction. Reads
 and duplicate deliveries write nothing. Worker start/end events, explicit
 research operations and run boundaries write; streamed tokens do not. The
-checked-in SQLite budgets cover those boundaries. A dead owner becomes
-interrupted without replaying model work; a different live process retains
-authority. Revision queue receipts identify exactly which pending sends a
+checked-in SQLite budgets cover those boundaries. Recovery validates the
+owner's PID, runtime instance ID and start time against the existing profile
+marker. A dead owner becomes interrupted without replaying model work; a
+different live process retains authority. Older journals without a process
+start time cannot prove live ownership and become interrupted. Revision
+queue receipts identify exactly which pending sends a
 run may cancel. An unknown cancellation outcome keeps the run stopping.
 
 The renderer reads research through IPC. This first integration serves local

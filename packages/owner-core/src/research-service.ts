@@ -18,7 +18,8 @@ export type ResearchPorts = {
   changed: (thread: ResearchThread) => void;
   ownerId: string;
   ownerPid: number;
-  isOwnerAlive: (pid: number) => boolean;
+  ownerStartedAt: number;
+  isOwnerAlive: (owner: Pick<ResearchRun, "ownerId" | "ownerPid" | "ownerStartedAt">) => boolean;
   now?: () => number;
   schedule?: (callback: () => void, delay: number) => () => void;
   onError: (error: unknown) => void;
@@ -52,7 +53,7 @@ export class ResearchService {
     for (const run of this.storage.list()) {
       if (!["running", "stopping"].includes(run.status)) continue;
       if (run.ownerId === this.ports.ownerId) this.scheduleDeadline(run);
-      else if (!this.ports.isOwnerAlive(run.ownerPid)) {
+      else if (!this.ports.isOwnerAlive(run)) {
         this.append(run, `recovery:${this.ports.ownerId}`, this.operator(run), {
           type: "status", status: "interrupted", reason: "The owning process ended. Inspect the retained worker threads before starting a new run.",
         });
@@ -116,7 +117,7 @@ export class ResearchService {
     const approaches: ResearchApproach[] = request.approaches.map((a, index) => ({ title: a.title, task: a.task, id: `a${index + 1}`, state: "pending" }));
     this.storage.create(id, key, { seq: 1, commandId: "start", signature: JSON.stringify(request), at: this.now(), actor: context,
       data: { type: "created", objective: request.objective, coordinator: { backend: context.backend, threadId: context.threadId }, approaches, ownerId: this.ports.ownerId,
-        ownerPid: this.ports.ownerPid, deadlineAt: this.now() + request.minutes * 60_000, workspaceMode: request.workspaceMode } });
+        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, deadlineAt: this.now() + request.minutes * 60_000, workspaceMode: request.workspaceMode } });
     if (intent) this.intents.delete(intentKey);
     this.ports.changed(context);
     this.scheduleDeadline(this.requireRun(id));
@@ -136,11 +137,12 @@ export class ResearchService {
         const prior = current.approaches.find((a) => a.id === approach.id)!;
         // A trusted provider event can precede the handoff reply. It already
         // owns this transition; do not rewrite it or regress its outcome.
-        if (worker.failure || prior.worker?.turnId !== worker.turnId || prior.state === "starting") {
+        if (!prior.worker?.turnId || (prior.state === "starting" && prior.worker.turnId === worker.turnId)) {
           this.append(current, `started:${approach.id}`, context, { type: "worker", approachId: approach.id, worker,
             state: worker.failure ? "failed" : ["ended", "stopped", "failed"].includes(prior.state) ? prior.state : "running", note: worker.failure });
         }
-        if (!this.canDispatch(this.requireRun(id)) && !worker.failure && !["ended", "stopped", "failed"].includes(prior.state)) await this.stopWorker(id, approach.id, context);
+        const admitted = this.requireApproach(this.requireRun(id), approach.id);
+        if (!this.canDispatch(this.requireRun(id)) && !["ended", "stopped", "failed"].includes(admitted.state)) await this.stopWorker(id, approach.id, context);
       } catch (error) {
         const current = this.requireRun(id);
         const observed = this.requireApproach(current, approach.id);

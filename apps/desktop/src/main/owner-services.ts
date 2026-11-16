@@ -1,7 +1,7 @@
 import { createDesktopBackendRegistry } from "./app-server/backend-registry-wiring";
 import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { ResearchAdmissionRefused } from "@pwragent/owner-core/research-service";
-import { randomUUID } from "node:crypto";
+import { createResearchOwnerIdentity } from "./research/research-owner-identity";
 import type { HandoffTaskResult, SendMessageToThreadResult } from "@pwragent/shared";
 import { initializeResearchRuntime, createResearchAgentHandler, closeResearchRuntime } from "./research/research-runtime";
 import { isAcpBackendId } from "@pwragent/shared";
@@ -445,11 +445,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   );
   const researchRegistry = getDesktopBackendRegistry();
   const research = initializeResearchRuntime({
-    ownerId: randomUUID(), ownerPid: process.pid,
-    isOwnerAlive: (pid) => {
-      try { process.kill(pid, 0); return true; }
-      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
-    },
+    ...createResearchOwnerIdentity(),
     onError: (error) => mainLog.warn("research operation failed", { error: String(error) }),
     changed: (thread) => {
       for (const target of rendererSubscribers(RESEARCH_CHANGED_EVENT_CHANNEL)) {

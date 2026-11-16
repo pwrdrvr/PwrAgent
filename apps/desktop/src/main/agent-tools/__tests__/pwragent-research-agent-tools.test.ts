@@ -26,7 +26,7 @@ describe("ordinary research tools", () => {
     };
     let spawned = 0;
     const service = new ResearchService(storage, {
-      ownerId: "owner", ownerPid: 1, isOwnerAlive: () => false, schedule: () => () => {}, changed: () => {}, onError: () => {},
+      ownerId: "owner", ownerPid: 1, ownerStartedAt: 500, isOwnerAlive: () => false, schedule: () => () => {}, changed: () => {}, onError: () => {},
       spawn: async (_c, _task, _title, _mode, created) => {
         const worker = { backend: "codex" as const, threadId: `worker-${++spawned}`, turnId: `turn-${spawned}` };
         created(worker);

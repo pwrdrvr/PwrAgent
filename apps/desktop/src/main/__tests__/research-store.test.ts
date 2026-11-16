@@ -26,7 +26,7 @@ afterEach(() => { db.close(); rmSync(fixture.tempDir, { recursive: true, force: 
 function createService(overrides: Partial<ResearchPorts> = {}) {
   let worker = 0;
   const service = new ResearchService(new ResearchStore(db), {
-    ownerId: "owner", ownerPid: 123, isOwnerAlive: () => false, now: () => 1000,
+    ownerId: "owner", ownerPid: 123, ownerStartedAt: 500, isOwnerAlive: () => false, now: () => 1000,
     schedule: () => () => {}, changed: () => {}, onError: (error) => { throw error; },
     stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
     spawn: async (_context, _task, _title, _mode, created) => {

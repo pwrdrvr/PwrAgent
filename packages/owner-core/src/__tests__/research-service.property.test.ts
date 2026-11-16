@@ -27,7 +27,7 @@ const request: StartResearchRequest = { objective: "Investigate a queue race", m
 function fixture(overrides: Partial<ResearchPorts> = {}, storage = new MemoryResearchStorage()) {
   let counter = 0;
   const ports: ResearchPorts = {
-    ownerId: "owner", ownerPid: 123, isOwnerAlive: () => false, now: () => 1000,
+    ownerId: "owner", ownerPid: 123, ownerStartedAt: 500, isOwnerAlive: () => false, now: () => 1000,
     schedule: () => () => {}, changed: vi.fn(), onError: vi.fn(), stop: vi.fn(async () => {}), notify: vi.fn(async () => ({})), cancelQueued: vi.fn(async () => ({})),
     spawn: vi.fn(async (_context, _task, _title, _mode, created) => { const worker = { backend: "codex" as const, threadId: `worker-${++counter}`, turnId: `turn-${counter}` }; created(worker); return worker; }),
     ...overrides,
@@ -152,6 +152,30 @@ describe("research lifecycle model", () => {
     viewer.service.initialize();
     expect(viewer.service.read(run.id, context).status).toBe("running");
     await expect(viewer.service.update(run.id, "stop", { action: "stop", reason: "Cancel" }, context)).rejects.toThrow();
+  });
+
+  it("recovery follows the complete process identity rather than a reused PID", async () => {
+    const owner = { ownerId: "runtime-v2-owner", ownerPid: 123, ownerStartedAt: 500 };
+    for (const changed of ["none", "instance", "pid", "start"] as const) {
+      const { service, storage } = fixture(owner);
+      const run = await service.start(request, context);
+      const marker = { ...owner,
+        ...(changed === "instance" ? { ownerId: "runtime-v2-unrelated" } : {}),
+        ...(changed === "pid" ? { ownerPid: 124 } : {}),
+        ...(changed === "start" ? { ownerStartedAt: 501 } : {}),
+      };
+      const viewer = fixture({ ownerId: "viewer", isOwnerAlive: (value: unknown) => {
+        // Model the old PID-only adapter as well as the identity-aware port.
+        if (typeof value === "number") return value === marker.ownerPid;
+        const candidate = value as typeof owner;
+        return candidate.ownerId === marker.ownerId && candidate.ownerPid === marker.ownerPid && candidate.ownerStartedAt === marker.ownerStartedAt;
+      } }, storage);
+      viewer.service.initialize();
+      expect(viewer.service.read(run.id, context).status).toBe(changed === "none" ? "running" : "interrupted");
+      expect(viewer.ports.spawn).not.toHaveBeenCalled();
+      service.close();
+      viewer.service.close();
+    }
   });
 
   it("cancels a revision accepted by the queue after cancellation began", async () => {
@@ -330,5 +354,34 @@ describe("research lifecycle model", () => {
     newGate.resolve();
     await replacement;
     expect(service.read(run.id, context).status).toBe("stopped");
+  });
+
+  it("handoff receipts cannot replace the latest provider-observed turn", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), fc.boolean(), fc.boolean(), async (followups, terminal, cancel) => {
+      let current!: ResearchService;
+      const worker = { backend: "codex" as const, threadId: "worker", turnId: "initial" };
+      const latest = `followup-${followups}`;
+      const { service, ports } = fixture({ spawn: async (_c, _task, _title, _mode, created) => {
+        created({ backend: worker.backend, threadId: worker.threadId });
+        await current.observeStart(worker, worker.turnId);
+        current.observeEnd(worker, worker.turnId);
+        for (let i = 1; i <= followups; i++) {
+          await current.observeStart(worker, `followup-${i}`);
+          if (i < followups || terminal) current.observeEnd(worker, `followup-${i}`);
+        }
+        return worker;
+      } });
+      current = service;
+      const run = await service.start({ ...request, approaches: [request.approaches[0]!] }, context);
+      expect(run.approaches[0]).toMatchObject({ worker: { turnId: latest }, state: terminal ? "ended" : "running" });
+      if (!terminal && cancel) {
+        await service.stop(run.id, context, "stopped", "Cancel");
+        expect(ports.stop).toHaveBeenCalledExactlyOnceWith({ ...worker, turnId: latest });
+      } else {
+        if (!terminal) service.observeEnd(worker, latest);
+        expect(service.read(run.id, context).status).toBe("exhausted");
+      }
+      service.close();
+    }), { numRuns: 30 });
   });
 });

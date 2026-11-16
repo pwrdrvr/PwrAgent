@@ -51,7 +51,7 @@ export type ResearchCommand =
   | { action: "finish"; reason: string };
 
 export type ResearchEventData =
-  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[] }
+  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[] }
   | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string }
   | { type: "finding"; finding: ResearchFinding }
   | { type: "submission"; submission: ResearchSubmission }
@@ -77,6 +77,8 @@ export type ResearchRun = {
   coordinator: ResearchThread;
   ownerId: string;
   ownerPid: number;
+  /** Absent in older journals, whose process identity cannot be validated. */
+  ownerStartedAt?: number;
   createdAt: number;
   deadlineAt: number;
   workspaceMode: StartResearchRequest["workspaceMode"];
@@ -109,7 +111,7 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   const initial = first.data;
   const run: ResearchRun = {
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
-    ownerId: initial.ownerId, ownerPid: initial.ownerPid, createdAt: first.at, deadlineAt: initial.deadlineAt,
+    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, deadlineAt: initial.deadlineAt,
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
     findings: [], submissions: [], events, deliveries: [],
   };
