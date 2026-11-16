@@ -16,12 +16,15 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry and compaction
-  // recovery guard migrations that followed it.
+  // recovery guard and research migrations that followed it.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_compaction_recovery_guards"
     && row.tbl_name !== "thread_search_fts_rows"
+    && row.tbl_name !== "research_runs"
+    && row.tbl_name !== "research_events"
+    && row.tbl_name !== "research_workers"
     && row.name !== "idx_thread_usage_lines_identity"
   ) : rows;
   return {

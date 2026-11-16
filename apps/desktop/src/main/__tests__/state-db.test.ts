@@ -880,7 +880,7 @@ describe("StateDb", () => {
   describe("ensureIncrementalAutoVacuum", () => {
     // Rows written, then 90% deleted, to leave the fragmentation a converting
     // VACUUM has to reclaim. Sized to the assertion, not to a round number:
-    // `StateDb.open` lays its own ~254-page schema over this file first, and
+    // `StateDb.open` lays its own schema over this file first, and
     // it fills the freelist while doing so, so the shrink is only observable
     // while the legacy payload still outweighs that floor. Measured here, the
     // conversion goes 2.7 MB -> 1.2 MB at 6,000 rows and 1.06 MB -> 1.06 MB
@@ -899,10 +899,16 @@ describe("StateDb", () => {
       legacy.pragma("auto_vacuum = INCREMENTAL");
       legacy.exec("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)");
       if (!fragmented) return legacy;
+      const schemaFloorBytes =
+        (stateDb.raw.pragma("page_count", { simple: true }) as number)
+        * (stateDb.raw.pragma("page_size", { simple: true }) as number);
+      // Keep the deleted payload larger than two current schema floors as
+      // additive tables grow, without adding more rows to the costly DELETE.
+      const payload = "x".repeat(Math.max(400, Math.ceil(schemaFloorBytes * 2.5 / FRAGMENTED_ROWS)));
       const insert = legacy.prepare("INSERT INTO bulk(blob) VALUES (?)");
       legacy.transaction(() => {
         for (let index = 0; index < FRAGMENTED_ROWS; index += 1) {
-          insert.run("x".repeat(400));
+          insert.run(payload);
         }
       })();
       legacy.prepare("DELETE FROM bulk WHERE id % 10 != 0").run();
