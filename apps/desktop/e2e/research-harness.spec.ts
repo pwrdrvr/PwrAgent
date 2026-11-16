@@ -29,6 +29,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(panel.getByText(/Formal verification has not been performed/)).toBeVisible();
       await testInfo.attach(`harness-review-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
       await panel.getByRole("button", { name: "Activity", exact: true }).click();
+      await panel.getByText(/Source coordinator accepted this informal candidate/).scrollIntoViewIfNeeded();
       await expect(panel.getByText(/Source coordinator accepted this informal candidate/)).toBeVisible();
       await testInfo.attach(`harness-activity-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
     } finally { await app.close(); }

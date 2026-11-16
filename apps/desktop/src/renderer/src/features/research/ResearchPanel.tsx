@@ -113,7 +113,9 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         <p className="research-muted">{run.harness.calls === undefined ? "Model calls unknown" : `${run.harness.calls} source model calls reported`} · token and dollar usage unknown · no hard spend cap</p>
       </div>}
       {run.reason && <p className="research-muted">{run.reason}</p>}
-      {!writable && (active || run.status === "interrupted") && <p className="research-muted">This run’s owner is unavailable in this process. Evidence is retained. Inspect the worker threads before requesting a new run.</p>}
+      {!writable && (active || run.status === "interrupted") && <p className="research-muted">{run.harness
+        ? "This run’s owner is unavailable in this process. Evidence is retained. Reconcile source records before requesting a new run."
+        : "This run’s owner is unavailable in this process. Evidence is retained. Inspect the worker threads before requesting a new run."}</p>}
       {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
       {coordinator && writable && (active || (run.harness && ["ended", "imported"].includes(run.harness.state))) && run.status !== "completed" && <div className="research-actions">
         {active && <button type="button" className="research-button" disabled={busy} onClick={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}>Stop run</button>}

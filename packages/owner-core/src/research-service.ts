@@ -61,7 +61,9 @@ export class ResearchService {
       if (run.ownerId === this.ports.ownerId) this.scheduleDeadline(run);
       else if (!this.ports.isOwnerAlive(run)) {
         this.append(run, `recovery:${this.ports.ownerId}`, this.operator(run), {
-          type: "status", status: "interrupted", reason: "The owning process ended. Inspect the retained worker threads before starting a new run.",
+          type: "status", status: "interrupted", reason: run.harness
+            ? "The owning process ended. Reconcile the retained Harness source records before starting a new run."
+            : "The owning process ended. Inspect the retained worker threads before starting a new run.",
         });
       }
     }
