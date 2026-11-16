@@ -6,8 +6,8 @@
  * Codex App Server as a `model_providers.<id>` table and pins a thread to it
  * with `thread/start.modelProvider`. Codex then reports `Thread.modelProvider`
  * on every read.
- * Ordinary providers share the primary runtime. Bonsai compatibility runs in
- * a separate client and process so its catalog and feature limits stay local.
+ * Providers with execution metadata and Bonsai compatibility use independent
+ * clients/processes so their model catalogs stay off the default provider.
  *
  * Every PwrAgent surface names one of these models with a qualified id,
  * `@<provider>/<model>`. Codex model ids never start with `@`, so the prefix
@@ -61,6 +61,8 @@ export type CodexModelProviderSettings = {
   compatibility?: "bonsai";
   /** Optional user-authored catalog template; never a Codex session or database. */
   catalogPath?: string;
+  /** Provider-scoped execution metadata saved by the explicit connection test. */
+  modelMetadata?: CodexProviderCatalogModel[];
 };
 
 /** Settings snapshot form: whether a key is stored, never the key. */
@@ -82,6 +84,10 @@ export type CodexProviderCatalogModel = {
   defaultReasoningEffort?: string;
   /** From `input_modalities`; absent when the endpoint did not say. */
   supportsImage?: boolean;
+  /** Declared by the endpoint; absent when unknown. */
+  contextWindow?: number;
+  /** Enabled only by a complete discovery test or explicit configuration. */
+  supportsSearchTool?: boolean;
 };
 
 /** What Settings shows after Test connection. */
@@ -100,6 +106,7 @@ export type CodexModelProviderTestResult = {
   };
   /** A completed text response to a short request with instructions and namespaced tools. */
   responses: { ok: boolean; model?: string; skipped?: boolean; error?: string };
+  discovery?: { ok: boolean; model: string; requests: number; error?: string };
   latencyMs?: number;
 };
 
@@ -373,7 +380,27 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       ...(rates?.length ? { rates } : {}),
       ...(compatibility ? { compatibility: "bonsai" as const } : {}),
       ...(typeof entry.catalogPath === "string" ? { catalogPath: entry.catalogPath.trim() } : {}),
+      ...(entry.modelMetadata === undefined ? {} : { modelMetadata: validateProviderModelMetadata(entry.modelMetadata, label) }),
     };
+  });
+}
+
+function validateProviderModelMetadata(value: unknown, label: string): CodexProviderCatalogModel[] {
+  if (!Array.isArray(value) || value.length > 2000) throw new Error(`${label}.modelMetadata must contain at most 2000 models.`);
+  const seen = new Set<string>();
+  return value.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${label}.modelMetadata needs model objects.`);
+    const model = entry as Record<string, unknown>;
+    const parsed = parseCodexProviderCatalogModel({
+      id: model.id, display_name: model.label, input_modalities: model.supportsImage === undefined ? undefined : model.supportsImage ? ["text", "image"] : ["text"],
+      context_window: model.contextWindow, supported_reasoning_efforts: model.reasoningEfforts, default_reasoning_effort: model.defaultReasoningEffort,
+    });
+    if (!parsed || seen.has(parsed.id)) throw new Error(`${label}.modelMetadata needs distinct valid model ids.`);
+    if (model.contextWindow !== undefined && parsed.contextWindow === undefined) throw new Error(`${label}.modelMetadata has an invalid context window.`);
+    if (model.supportsSearchTool !== undefined && typeof model.supportsSearchTool !== "boolean") throw new Error(`${label}.modelMetadata search support must be a boolean.`);
+    if (model.supportsImage !== undefined && typeof model.supportsImage !== "boolean") throw new Error(`${label}.modelMetadata image support must be a boolean.`);
+    seen.add(parsed.id);
+    return { ...parsed, ...(model.supportsSearchTool === undefined ? {} : { supportsSearchTool: model.supportsSearchTool as boolean }) };
   });
 }
 
@@ -681,11 +708,13 @@ export function parseCodexProviderCatalogModel(entry: unknown): CodexProviderCat
     ? item.default_reasoning_effort.trim()
     : undefined;
   const modalities = Array.isArray(item.input_modalities) ? item.input_modalities : undefined;
+  const contextWindow = item.context_window ?? item.context_length;
   return {
     id,
     ...(label && label !== id ? { label } : {}),
     ...(efforts.length ? { reasoningEfforts: efforts } : {}),
     ...(defaultEffort && efforts.includes(defaultEffort) ? { defaultReasoningEffort: defaultEffort } : {}),
     ...(modalities ? { supportsImage: modalities.includes("image") } : {}),
+    ...(typeof contextWindow === "number" && Number.isInteger(contextWindow) && contextWindow >= 1024 && contextWindow <= 2_000_000 ? { contextWindow } : {}),
   };
 }

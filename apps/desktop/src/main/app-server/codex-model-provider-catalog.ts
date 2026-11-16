@@ -10,6 +10,7 @@ import {
   type CodexProviderCatalogModel,
 } from "@pwragent/shared";
 import { prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
+import { verifyProviderToolDiscovery } from "./provider-tool-discovery-probe";
 
 const DISCOVERY_TTL_MS = 10 * 60_000;
 const DISCOVERY_FAILURE_TTL_MS = 60_000;
@@ -29,6 +30,9 @@ function providerModelOptions(
   discovered: readonly CodexProviderCatalogModel[],
 ): BackendModelOption[] {
   const byId = new Map(discovered.map((model) => [model.id, model]));
+  for (const metadata of provider.modelMetadata ?? []) {
+    byId.set(metadata.id, { ...byId.get(metadata.id), ...metadata });
+  }
   const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
   return ids.map((model): BackendModelOption => {
     const found = byId.get(model);
@@ -270,6 +274,9 @@ export class CodexModelProviderCatalog {
       };
     }
     let responsesError: string | undefined;
+    let discovery: CodexModelProviderTestResult["discovery"];
+    const effort = models.find((model) => model.id === probeModel)?.reasoningEfforts?.[0]
+      ?? provider.modelMetadata?.find((model) => model.id === probeModel)?.reasoningEfforts?.[0];
     let runtime: Awaited<ReturnType<typeof prepareBonsaiRuntime>> | undefined;
     try {
       if (provider.compatibility === "bonsai") {
@@ -280,6 +287,7 @@ export class CodexModelProviderCatalog {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           model: probeModel,
+          ...(effort ? { reasoning: { effort } } : {}),
           instructions: "You are checking compatibility with a coding assistant. Reply with OK.",
           input: [
             { role: "developer", content: "Do not call tools for this check." },
@@ -304,6 +312,18 @@ export class CodexModelProviderCatalog {
       if (!hasCompletedTextResponse(response)) {
         throw new Error("The endpoint did not return a completed text response. Compatibility with Codex was not confirmed.");
       }
+      let requests = 0;
+      try {
+        await verifyProviderToolDiscovery(probeModel, async (body) => {
+          requests += 1;
+          return await this.requestJson(`${runtime?.baseUrl ?? provider.baseUrl}/responses`, {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+          }, apiKey);
+        }, effort);
+        discovery = { ok: true, model: probeModel, requests };
+      } catch (error) {
+        discovery = { ok: false, model: probeModel, requests, error: redactSecret(errorMessage(error), apiKey) };
+      }
     } catch (error) {
       responsesError = redactSecret(errorMessage(error), apiKey);
     } finally {
@@ -312,6 +332,7 @@ export class CodexModelProviderCatalog {
     return {
       models: modelsTestResult(models, modelPages, modelsError),
       responses: { ok: !responsesError, model: probeModel, ...(responsesError ? { error: responsesError } : {}) },
+      ...(discovery ? { discovery } : {}),
       latencyMs: reachedAfterMs,
     };
   }

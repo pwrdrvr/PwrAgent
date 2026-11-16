@@ -20,7 +20,10 @@ export function bonsaiNativeMcpOverrides(names: readonly string[]): string[] {
     : [];
 }
 
-export async function readBonsaiCatalog(provider: CodexModelProviderSettings): Promise<LocalModelCatalog> {
+export async function readBonsaiCatalog(
+  provider: CodexModelProviderSettings,
+  options: { verifyAliasWithServer?: boolean } = {},
+): Promise<LocalModelCatalog> {
   const slug = provider.models?.[0];
   if (provider.compatibility !== "bonsai" || provider.models?.length !== 1 || !slug) {
     throw new Error("Bonsai compatibility requires exactly one configured model.");
@@ -29,16 +32,21 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
     const info = await stat(provider.catalogPath);
     if (!info.isFile() || info.size > 1024 * 1024) throw new Error("The Bonsai catalog must be a JSON file smaller than 1 MiB.");
     const catalog = JSON.parse(await readFile(provider.catalogPath, "utf8")) as LocalModelCatalog;
-    if (!Array.isArray(catalog?.models) || catalog.models.length !== 1 || catalog.models[0]?.slug !== slug) {
+    if (!Array.isArray(catalog?.models) || catalog.models.length !== 1
+      || typeof catalog.models[0]?.slug !== "string" || !catalog.models[0].slug
+      || (!options.verifyAliasWithServer && catalog.models[0].slug !== slug)) {
       throw new Error("The Bonsai catalog must describe exactly the configured model.");
     }
     const model = catalog.models[0];
     if (model.context_window !== 65536 || model.apply_patch_tool_type !== null
-      || model.supports_search_tool === true || model.supports_reasoning_summaries === true
+      || model.supports_reasoning_summaries === true
       || !Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length !== 0) {
-      throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no search or reasoning support.");
+      throw new Error("The Bonsai catalog needs a 65536-token context, function tools, and no reasoning support.");
     }
-    return catalog;
+    // The compatibility bridge supplies Codex's search protocol through
+    // ordinary function calls. Its capability supersedes stale model metadata;
+    // preserve the caller's catalog and materialize the effective copy privately.
+    return { ...catalog, models: [{ ...model, supports_search_tool: true }] };
   }
   return { models: [{
     slug,
@@ -65,7 +73,7 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
     context_window: 65536,
     experimental_supported_tools: [],
     input_modalities: ["text"],
-    supports_search_tool: false,
+    supports_search_tool: true,
   }] };
 }
 
@@ -75,7 +83,10 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
   baseUrl: string;
   close: () => Promise<void>;
 }> {
-  const catalog = await discoverModelCatalog(provider.baseUrl, await readBonsaiCatalog(provider), apiKey);
+  // Alias changes may reuse a path-based catalog only after live metadata
+  // identifies both names as the same loaded model.
+  const catalog = await discoverModelCatalog(provider.baseUrl,
+    await readBonsaiCatalog(provider, { verifyAliasWithServer: true }), apiKey, provider.models![0]);
   const root = resolveActiveProfilePath("runtime");
   await mkdir(root, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(path.join(root, "bonsai-"));

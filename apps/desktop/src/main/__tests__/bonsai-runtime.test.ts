@@ -41,7 +41,7 @@ describe("isolated Bonsai launch resources", () => {
       expect(catalog.models[0]).toMatchObject({
         slug: model, context_window: 65536, apply_patch_tool_type: null,
         display_name: model === "bonsai2-27b" ? "PrismML Bonsai 2 27B" : "PrismML Bonsai",
-        supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: false,
+        supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: true,
       });
       if (process.platform !== "win32") {
         expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
@@ -53,7 +53,7 @@ describe("isolated Bonsai launch resources", () => {
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
         "features.goals=false", "features.multi_agent=false", "features.image_generation=false", 'web_search="disabled"',
       ]));
-      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key");
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key", model);
       // The bridge waits on a silent prefill exactly as long as Codex does.
       expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key", { idleTimeoutMs: 900_000, onDiagnostic: expect.any(Function) });
       await runtime.close();
@@ -79,5 +79,39 @@ describe("isolated Bonsai launch resources", () => {
     template.models[0].context_window = 131072;
     await writeFile(catalogPath, JSON.stringify(template));
     await expect(readBonsaiCatalog({ ...selectedProvider, catalogPath })).rejects.toThrow("65536-token context");
+  });
+
+  it("materializes discovery for a legacy catalog without rewriting the source file", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-search-catalog-"));
+    directories.push(directory);
+    const catalogPath = path.join(directory, "models.json");
+    const template = await readBonsaiCatalog(provider);
+    template.models[0].supports_search_tool = false;
+    template.models[0].base_instructions = "User-authored coding instructions";
+    const original = JSON.stringify(template);
+    await writeFile(catalogPath, original);
+    const runtime = await prepareBonsaiRuntime({ ...provider, catalogPath });
+    try {
+      const catalogArg = runtime.overrides.find((value) => value.startsWith("model_catalog_json="))!;
+      const runtimePath = JSON.parse(catalogArg.slice("model_catalog_json=".length)) as string;
+      expect(runtimePath).not.toBe(catalogPath);
+      expect(JSON.parse(await readFile(runtimePath, "utf8"))).toEqual({
+        models: [{ ...template.models[0], supports_search_tool: true }],
+      });
+      expect(await readFile(catalogPath, "utf8")).toBe(original);
+    } finally { await runtime.close(); }
+  });
+
+  it("verifies an old catalog's path against live metadata when switching to the alias", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-alias-catalog-"));
+    directories.push(directory);
+    const catalogPath = path.join(directory, "models.json");
+    const template = await readBonsaiCatalog(provider);
+    await writeFile(catalogPath, JSON.stringify(template));
+    const runtime = await prepareBonsaiRuntime({ ...provider, models: ["bonsai2-27b"], catalogPath });
+    try {
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, template, undefined, "bonsai2-27b");
+      expect(JSON.parse(await readFile(catalogPath, "utf8"))).toEqual(template);
+    } finally { await runtime.close(); }
   });
 });

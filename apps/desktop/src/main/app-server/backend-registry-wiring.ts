@@ -15,6 +15,7 @@ import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
+import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-runtime";
 import { codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
@@ -548,7 +549,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const clientVersion =
     typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
   const createCodexClient = (provider?: CodexModelProviderSettings): CodexAppServerClient => {
-    let resources: Promise<Awaited<ReturnType<typeof prepareBonsaiRuntime>>> | undefined;
+    let resources: Promise<Awaited<ReturnType<typeof prepareProviderModelRuntime>>> | undefined;
     let cleanup = Promise.resolve();
     const releaseResources = (): Promise<void> => {
       const previous = resources;
@@ -574,10 +575,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           );
         if (!provider) return args;
         await cleanup;
-        resources ??= prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)]);
+        resources ??= provider.compatibility === "bonsai"
+          ? prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)])
+          : prepareProviderModelRuntime(provider);
         try {
           const prepared = await resources;
-          const nativeMcpNames = await ports.codexClient.readConfiguredMcpServerNames?.() ?? [];
+          const nativeMcpNames = provider.compatibility === "bonsai"
+            ? await ports.codexClient.readConfiguredMcpServerNames?.() ?? [] : [];
           return [
             ...args,
             ...bonsaiNativeMcpOverrides(nativeMcpNames).flatMap((override) => ["-c", override]),
@@ -633,7 +637,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         try { await close(); } finally { await releaseResources(); }
       };
       client.onAppServerUnexpectedExit(() => {
-        void releaseResources().catch((error) => backendRegistryLog.warn("Bonsai runtime cleanup failed", { error: String(error) }));
+        void releaseResources().catch((error) => backendRegistryLog.warn("Provider runtime cleanup failed", { error: String(error) }));
       });
     }
     return client;
