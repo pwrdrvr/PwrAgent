@@ -7,12 +7,18 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { LOADED_ON_FIRST_USE } from "./helpers/headless-first-use-packages";
 
-// Loading the bundle in a child gives it a fresh require cache, so the
+// Loading the bundle in a child gives it fresh CJS and ESM caches, so the
 // result is what an Outpost process loads, whatever this worker already has.
 const PROBE = `
+  const files = new Set();
+  const hook = require("node:module").registerHooks({ load(url, context, nextLoad) {
+    if (url.startsWith("file:")) files.add(require("node:url").fileURLToPath(url));
+    return nextLoad(url, context);
+  } });
   require(process.argv[1]);
+  hook.deregister();
   const packages = new Set();
-  for (const file of Object.keys(require.cache)) {
+  for (const file of files) {
     const parts = file.split(require("node:path").sep);
     const at = parts.lastIndexOf("node_modules");
     if (at < 0) continue;
