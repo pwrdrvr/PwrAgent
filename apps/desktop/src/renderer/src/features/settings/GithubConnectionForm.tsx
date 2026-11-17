@@ -188,6 +188,12 @@ function cliStatus(
  * selected account, and switching to a token stays one click away.
  */
 export function GithubConnectionFields(props: {
+  /**
+   * The GitHub connections that already use the CLI sign-in, when adding
+   * another. Picking it again only makes sense for different toolsets or
+   * access, so the choice says so.
+   */
+  cliUsedBy?: readonly string[];
   draft: GithubConnectionDraft;
   disabled: boolean;
   /** The CLI sign-in and the local server, as last inspected. */
@@ -250,6 +256,12 @@ export function GithubConnectionFields(props: {
                   applies on the next connect.
                   {cli?.state === "ready" && cli.scopes?.length ? (
                     <> Scopes: <b>{cli.scopes.join(", ")}</b>.</>
+                  ) : null}
+                  {props.cliUsedBy?.length ? (
+                    <>
+                      {" "}Already used by <b>{props.cliUsedBy.join(", ")}</b>. Choose it again only
+                      for different toolsets or access.
+                    </>
                   ) : null}
                 </>
               )}

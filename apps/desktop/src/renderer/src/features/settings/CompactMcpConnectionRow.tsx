@@ -8,6 +8,8 @@ import type { ReactNode } from "react";
 export function CompactMcpConnectionRow(props: {
   /** Lets Settings find the row to bring it into view. */
   connectionId?: string;
+  /** A line under the row, such as why a sign-in failed. */
+  error?: string;
   name: string;
   meta: ReactNode;
   children: ReactNode;
@@ -24,6 +26,11 @@ export function CompactMcpConnectionRow(props: {
         </span>
         <div className="settings-mcp-row__actions">{props.children}</div>
       </div>
+      {props.error ? (
+        <p className="settings-mcp-row__error settings-mcp-row__error--sign-in" role="alert">
+          {props.error}
+        </p>
+      ) : null}
     </article>
   );
 }

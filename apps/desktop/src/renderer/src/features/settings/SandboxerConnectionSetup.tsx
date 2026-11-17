@@ -344,6 +344,8 @@ export function SandboxerDrawerDetail(props: {
 export function SandboxerCompactRow(props: {
   connectionId?: string;
   disabled?: boolean;
+  /** Why the last sign-in failed, under the row. */
+  error?: string;
   onConnect?: () => void;
   desktopApi?: DesktopApi;
   onNotice: (notice: Notice) => void;
@@ -352,6 +354,7 @@ export function SandboxerCompactRow(props: {
   return (
     <CompactMcpConnectionRow
       {...(props.connectionId ? { connectionId: props.connectionId } : {})}
+      {...(props.error ? { error: props.error } : {})}
       meta={<>Cloud Linux machines for your agent &middot; paid service</>}
       name="Sandboxer"
     >

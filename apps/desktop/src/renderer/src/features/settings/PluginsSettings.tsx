@@ -25,6 +25,7 @@ import {
   describeMcpAuthStatus,
   describeMcpConnectionAuth,
   formatMcpCommandLine,
+  describeGithubMcpConnection,
   isMcpIpcUrl,
   isSuggestedMcpConnection,
   mcpConnectionIdsForNewThread,
@@ -137,15 +138,34 @@ type ConnectionAddKind = "remote" | "local";
 
 /**
  * Which page of the plugin store is open: the catalog of known servers,
- * GitHub's setup form, or the custom-server form.
+ * GitHub's or Sandboxer's setup, or the custom-server form.
  */
-type PluginStoreView = "catalog" | "github" | "custom";
+type PluginStoreView = "catalog" | "github" | "sandboxer" | "custom";
 
 /** One line on what each PwrSuite app gives an agent, for its suggestion and tile. */
 const PWRSUITE_PLUGIN_SUMMARY: Record<"PwrSnap" | "PwrGit", string> = {
   PwrSnap: "Screenshots and recordings your agent can read \u00b7 PwrDrvr app",
   PwrGit: "Repositories and live Git status \u00b7 PwrDrvr app",
 };
+
+/** What each service tile in the plugin store says, and what search matches. */
+const STORE_TILE_TEXT = {
+  github: {
+    by: "GitHub's MCP server",
+    description: "Issues, repositories, discussions and workflow skills. Signs in with your GitHub CLI or a token. Add one per account.",
+  },
+  sandboxer: {
+    by: "Paid service",
+    description: "Cloud Linux machines for your agent. Sign in to Sandboxer in your browser, or use its CLI.",
+  },
+  custom: {
+    by: "Any MCP server",
+    description: "A server URL that signs in with OAuth, a local unix:// or pipe:// server, or a program PwrAgent runs, such as npx or uvx.",
+  },
+} as const;
+
+/** How long a row the store pointed at keeps its highlight. */
+const REVEAL_HIGHLIGHT_MS = 2_400;
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -342,6 +362,9 @@ export function PluginsSettings(props: {
   const storeTitleId = useId();
   /** A row to scroll to and focus once the store has closed. */
   const [revealConnectionId, setRevealConnectionId] = useState<string>();
+  /** The row the store last pointed at, outlined for a moment. */
+  const [highlightConnectionId, setHighlightConnectionId] = useState<string>();
+  const [storeQuery, setStoreQuery] = useState("");
   const connectionListRef = useRef<HTMLDivElement>(null);
   const githubSetupOpen = storeView === "github";
   const [githubName, setGithubName] = useState("");
@@ -1179,6 +1202,25 @@ export function PluginsSettings(props: {
     void inspectGithub();
   }, [inspectGithub, showGithubForm]);
 
+  /**
+   * The Sandboxer suggestion's Connect: switch to the hosted service and
+   * start its browser sign-in, as the full row's Connect Sandboxer does.
+   */
+  const connectSandboxerHosted = async (connection: McpConnectionStatus) => {
+    const change = props.desktopApi?.setSandboxerTransport;
+    if (!change || connectionPending) return;
+    try {
+      await change({ transport: "hosted" });
+      await loadConnections();
+      void authorizeConnection(connection);
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   /** Open the plugin store at GitHub's setup form. */
   const openGithubSetup = (name = "") => {
     setGithubSetupFocusRequest((current) => current + 1);
@@ -1204,6 +1246,7 @@ export function PluginsSettings(props: {
 
   const openPluginStore = (view: PluginStoreView = "catalog") => {
     setConnectionNotice(undefined);
+    setStoreQuery("");
     setStoreView(view);
   };
 
@@ -1235,7 +1278,7 @@ export function PluginsSettings(props: {
   // focus goes to the new page's first control. GitHub's form has its own
   // request above, which lands on its Name field.
   useEffect(() => {
-    if (storeView !== "catalog" && storeView !== "custom") return;
+    if (storeView === undefined || storeView === "github") return;
     pluginStoreDialogRef.current
       ?.querySelector<HTMLElement>(".plugin-store__body button:not(:disabled), .plugin-store__body input")
       ?.focus();
@@ -1252,9 +1295,16 @@ export function PluginsSettings(props: {
     ).find((element) => element.dataset.connectionId === revealConnectionId);
     if (!row) return;
     setRevealConnectionId(undefined);
+    setHighlightConnectionId(revealConnectionId);
     row.scrollIntoView?.({ block: "nearest" });
     row.querySelector<HTMLElement>("button")?.focus();
   }, [connections, revealConnectionId, storeView]);
+
+  useEffect(() => {
+    if (!highlightConnectionId) return;
+    const timer = window.setTimeout(() => setHighlightConnectionId(undefined), REVEAL_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [highlightConnectionId]);
 
   /** Sign in, read the tools and skills, and disconnect. Saves nothing. */
   const testGithubConnection = async () => {
@@ -1676,9 +1726,14 @@ export function PluginsSettings(props: {
         ? `Waiting for ${pendingAction.name}.`
         : undefined;
 
-  const renderConnectionRow = (connection: McpConnectionStatus) => (
+  const renderConnectionRow = (
+    connection: McpConnectionStatus,
+    options: { sandboxerSetupOpen?: boolean } = {},
+  ) => (
     <ManagedMcpConnectionRow
       key={connection.id}
+      highlighted={highlightConnectionId === connection.id}
+      sandboxerSetupInitiallyOpen={options.sandboxerSetupOpen === true}
       authorizationError={authorizationErrors[connection.id]}
       authorizing={authorizing.has(connection.id)}
       busy={connectionPending?.connectionId === connection.id}
@@ -1771,6 +1826,31 @@ export function PluginsSettings(props: {
   const pwrSuiteConnection = (kind: "pwrsnap" | "pwrgit") =>
     connections.find((connection) => connection.kind === kind);
   const sandboxerConnection = connections.find((connection) => connection.kind === "sandboxer");
+  // Search matches every word of the query against a tile's name and text.
+  const storeQueryTerms = storeQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const storeMatches = (...fields: string[]) => {
+    const text = fields.join(" ").toLowerCase();
+    return storeQueryTerms.every((term) => text.includes(term));
+  };
+  const storePwrSuite = (["pwrsnap", "pwrgit"] as const)
+    .map(pwrSuiteConnection)
+    .filter((connection): connection is McpConnectionStatus => connection !== undefined)
+    .filter((connection) => {
+      const app = connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap";
+      return storeMatches(app, PWRSUITE_PLUGIN_SUMMARY[app]);
+    });
+  const storeGithub = githubAvailable
+    && storeMatches("GitHub", STORE_TILE_TEXT.github.by, STORE_TILE_TEXT.github.description);
+  const storeSandboxer = sandboxerConnection
+    && storeMatches("Sandboxer", STORE_TILE_TEXT.sandboxer.by, STORE_TILE_TEXT.sandboxer.description)
+    ? sandboxerConnection
+    : undefined;
+  const storeTiles = {
+    pwrSuite: storePwrSuite,
+    github: storeGithub,
+    sandboxer: storeSandboxer,
+    none: storeQueryTerms.length > 0 && !storePwrSuite.length && !storeGithub && !storeSandboxer,
+  };
 
   /*
    * GitHub's setup opens in the plugin store, not as a third type in the
@@ -1791,9 +1871,13 @@ export function PluginsSettings(props: {
       {githubConnections.length ? (
         <div className="plugin-store__existing">
           <span className="plugin-store__existing-label">Already added</span>
-          <span>
-            {githubConnections.map((connection) => connection.displayName).join(" \u00b7 ")}
-          </span>
+          <ul className="plugin-store__existing-list">
+            {githubConnections.map((connection) => (
+              <li key={connection.id}>
+                <b>{connection.displayName}</b> {describeGithubMcpConnection(connection)}
+              </li>
+            ))}
+          </ul>
           <span className="plugin-store__existing-hint">
             Add another for a second account, or a token with less access than your own.
           </span>
@@ -1819,6 +1903,9 @@ export function PluginsSettings(props: {
         </label>
       </div>
       <GithubConnectionFields
+        cliUsedBy={githubConnections
+          .filter((connection) => connection.github?.account === "gh_cli")
+          .map((connection) => connection.displayName)}
         disabled={Boolean(connectionPending)}
         draft={githubDraft}
         inspect={githubInspect}
@@ -1989,7 +2076,7 @@ export function PluginsSettings(props: {
             <p className="settings-empty">Loading connections...</p>
           ) : installedConnections.length ? (
             <div className="settings-mcp-list">
-              {installedConnections.map(renderConnectionRow)}
+              {installedConnections.map((connection) => renderConnectionRow(connection))}
             </div>
           ) : (
             <p className="settings-empty">
@@ -2025,7 +2112,22 @@ export function PluginsSettings(props: {
                 ) : null}
                 {suggestedConnections
                   .filter((connection) => connection.kind !== "pwrsnap" && connection.kind !== "pwrgit")
-                  .map(renderConnectionRow)}
+                  .map((connection) => connection.kind === "sandboxer" ? (
+                    <SuggestedSandboxerRow
+                      key={connection.id}
+                      authorizationError={authorizationErrors[connection.id]}
+                      authorizing={authorizing.has(connection.id)}
+                      connection={connection}
+                      desktopApi={props.desktopApi}
+                      disabled={Boolean(connectionPending)}
+                      onCancelAuthorization={() => void cancelAuthorization(connection)}
+                      onConnect={props.desktopApi?.setSandboxerTransport
+                        ? () => void connectSandboxerHosted(connection)
+                        : undefined}
+                      onNotice={setConnectionNotice}
+                      onSetUp={() => openPluginStore("sandboxer")}
+                    />
+                  ) : renderConnectionRow(connection))}
               </div>
             </>
           ) : null}
@@ -2221,7 +2323,11 @@ export function PluginsSettings(props: {
                 </button>
               )}
               <h2 id={storeTitleId}>
-                {storeView === "github" ? "GitHub" : storeView === "custom" ? "Custom server" : "Plugin store"}
+                {storeView === "github"
+                  ? "GitHub"
+                  : storeView === "sandboxer"
+                    ? "Sandboxer"
+                    : storeView === "custom" ? "Custom server" : "Plugin store"}
               </h2>
               <button
                 className="button button--ghost plugin-store__close"
@@ -2241,7 +2347,13 @@ export function PluginsSettings(props: {
                   <span>{connectionNotice.text}</span>
                 </div>
               ) : null}
-              {storeView === "github" ? githubSetupForm : storeView === "custom" ? (
+              {storeView === "github" ? githubSetupForm : storeView === "sandboxer" ? (
+                sandboxerConnection ? (
+                  <div className="settings-mcp-list">
+                    {renderConnectionRow(sandboxerConnection, { sandboxerSetupOpen: true })}
+                  </div>
+                ) : null
+              ) : storeView === "custom" ? (
               <form
                 aria-labelledby={storeTitleId}
                 className="settings-mcp-create"
@@ -2467,73 +2579,103 @@ export function PluginsSettings(props: {
               </form>
               ) : (
                 <>
-                  <h3 className="plugin-store__group">PwrSuite</h3>
-                  <div className="plugin-store__grid">
-                    {(["pwrsnap", "pwrgit"] as const).map((kind) => {
-                      const connection = pwrSuiteConnection(kind);
-                      return connection ? (
-                        <PwrSuiteStoreTile
-                          key={kind}
-                          connection={connection}
-                          desktopApi={props.desktopApi}
-                          disabled={Boolean(connectionPending)}
-                          onChanged={loadConnections}
-                          onNotice={setConnectionNotice}
-                          onShow={() => revealConnection(connection.id)}
-                        />
-                      ) : null;
-                    })}
-                  </div>
-                  <h3 className="plugin-store__group">Services</h3>
-                  <div className="plugin-store__grid">
-                    {githubAvailable ? (
-                      <PluginStoreTile
-                        by="GitHub's MCP server"
-                        description="Issues, repositories, discussions and workflow skills. Signs in with your GitHub CLI or a token. Add one per account."
-                        name="GitHub"
-                        status={githubConnections.length ? (
-                          <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>
-                            {githubConnections.length} added
-                          </span>
+                  <input
+                    aria-label="Search plugins"
+                    className="settings-input plugin-store__search"
+                    placeholder="Search plugins"
+                    type="search"
+                    value={storeQuery}
+                    onChange={(event) => setStoreQuery(event.target.value)}
+                  />
+                  {storeTiles.pwrSuite.length ? (
+                    <>
+                      <h3 className="plugin-store__group">PwrSuite</h3>
+                      <div className="plugin-store__grid">
+                        {storeTiles.pwrSuite.map((connection) => (
+                          <PwrSuiteStoreTile
+                            key={connection.id}
+                            connection={connection}
+                            desktopApi={props.desktopApi}
+                            disabled={Boolean(connectionPending)}
+                            onChanged={loadConnections}
+                            onNotice={setConnectionNotice}
+                            onShow={() => revealConnection(connection.id)}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                  {storeTiles.github || storeTiles.sandboxer ? (
+                    <>
+                      <h3 className="plugin-store__group">Services</h3>
+                      <div className="plugin-store__grid">
+                        {storeTiles.github ? (
+                          <PluginStoreTile
+                            by={STORE_TILE_TEXT.github.by}
+                            description={STORE_TILE_TEXT.github.description}
+                            name="GitHub"
+                            status={githubConnections.length ? (
+                              <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>
+                                {githubConnections.length} added
+                              </span>
+                            ) : null}
+                          >
+                            <button
+                              aria-label={githubConnections.length ? "Add another GitHub connection" : "Add GitHub"}
+                              className="button button--secondary"
+                              disabled={Boolean(connectionPending)}
+                              type="button"
+                              onClick={() => openGithubSetup()}
+                            >
+                              {githubConnections.length ? "Add another" : "Add"}
+                            </button>
+                          </PluginStoreTile>
                         ) : null}
-                      >
-                        <button
-                          aria-label={githubConnections.length ? "Add another GitHub connection" : "Add GitHub"}
-                          className="button button--secondary"
-                          disabled={Boolean(connectionPending)}
-                          type="button"
-                          onClick={() => openGithubSetup()}
-                        >
-                          {githubConnections.length ? "Add another" : "Add"}
-                        </button>
-                      </PluginStoreTile>
-                    ) : null}
-                    {sandboxerConnection ? (
-                      <PluginStoreTile
-                        by="Paid service"
-                        description="Cloud Linux machines for your agent. Sign in to Sandboxer in your browser, or use its CLI."
-                        name="Sandboxer"
-                        status={sandboxerConnection.configured ? (
-                          <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>Connected</span>
+                        {storeTiles.sandboxer ? (
+                          <PluginStoreTile
+                            by={STORE_TILE_TEXT.sandboxer.by}
+                            description={STORE_TILE_TEXT.sandboxer.description}
+                            name="Sandboxer"
+                            status={storeTiles.sandboxer.configured ? (
+                              <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>Connected</span>
+                            ) : null}
+                          >
+                            {storeTiles.sandboxer.configured ? (
+                              <button
+                                aria-label="Show Sandboxer"
+                                className="button button--secondary"
+                                disabled={Boolean(connectionPending)}
+                                type="button"
+                                onClick={() => revealConnection(storeTiles.sandboxer!.id)}
+                              >
+                                Show
+                              </button>
+                            ) : (
+                              <button
+                                aria-label="Set up Sandboxer"
+                                className="button button--secondary"
+                                disabled={Boolean(connectionPending)}
+                                type="button"
+                                onClick={() => setStoreView("sandboxer")}
+                              >
+                                Set up
+                              </button>
+                            )}
+                          </PluginStoreTile>
                         ) : null}
-                      >
-                        <button
-                          aria-label={sandboxerConnection.configured ? "Show Sandboxer" : "Show Sandboxer setup"}
-                          className="button button--secondary"
-                          disabled={Boolean(connectionPending)}
-                          type="button"
-                          onClick={() => revealConnection(sandboxerConnection.id)}
-                        >
-                          {sandboxerConnection.configured ? "Show" : "Show setup"}
-                        </button>
-                      </PluginStoreTile>
-                    ) : null}
-                  </div>
+                      </div>
+                    </>
+                  ) : null}
+                  {storeTiles.none ? (
+                    <p className="plugin-store__no-match" role="status">
+                      No plugin matches &ldquo;{storeQuery.trim()}&rdquo;. Add it as a custom server.
+                    </p>
+                  ) : null}
                   <h3 className="plugin-store__group">Anything else</h3>
                   <PluginStoreTile
-                    by="Any MCP server"
+                    by={STORE_TILE_TEXT.custom.by}
                     custom
-                    description="A server URL that signs in with OAuth, a local unix:// or pipe:// server, or a program PwrAgent runs, such as npx or uvx."
+                    description={STORE_TILE_TEXT.custom.description}
                     name="Custom server"
                   >
                     <button
@@ -2996,6 +3138,10 @@ function ManagedMcpConnectionRow(props: {
   ) => Promise<boolean>;
   /** Sandboxer only. */
   onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
+  /** Sandboxer only: open its setup at once, as the plugin store's page does. */
+  sandboxerSetupInitiallyOpen?: boolean;
+  /** Outlined for a moment after the plugin store pointed at it. */
+  highlighted?: boolean;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -3007,7 +3153,9 @@ function ManagedMcpConnectionRow(props: {
   const toolApprovalLabelId = useId();
   const toolApprovalHintId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(false);
+  const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(
+    props.sandboxerSetupInitiallyOpen === true,
+  );
   const toolApproval = connection.toolApproval ?? "auto";
   const sandboxer = connection.kind === "sandboxer";
   const localSandboxer = sandboxer && connection.authMode === "local_cli";
@@ -3130,7 +3278,7 @@ function ManagedMcpConnectionRow(props: {
   const toolsMeta = describeManagedMcpConnectionTools(setup, inventory);
   return (
     <article
-      className="settings-mcp-row settings-mcp-row--managed"
+      className={`settings-mcp-row settings-mcp-row--managed${props.highlighted ? " settings-mcp-row--revealed" : ""}`}
       data-connection-id={connection.id}
       data-health={health}
     >
@@ -3622,6 +3770,50 @@ function SuggestedPwrSuiteRow(props: {
         onNotice={props.onNotice}
       />
     </CompactMcpConnectionRow>
+  );
+}
+
+/**
+ * Sandboxer before it is signed in: one line with Connect (the hosted
+ * service, in the browser) and Set up, which opens its full setup in the
+ * plugin store. While a sign-in waits, the line holds the wait instead.
+ */
+function SuggestedSandboxerRow(props: {
+  authorizationError?: string;
+  authorizing: boolean;
+  connection: McpConnectionStatus;
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  onCancelAuthorization: () => void;
+  onConnect?: () => void;
+  onNotice: (notice: ActionNotice) => void;
+  onSetUp: () => void;
+}) {
+  if (props.authorizing) {
+    return (
+      <CompactMcpConnectionRow
+        connectionId={props.connection.id}
+        meta="Finish signing in to Sandboxer in your browser."
+        name={props.connection.displayName}
+      >
+        <SignInWait
+          name={props.connection.displayName}
+          title="Stop waiting for Sandboxer. The sign-in page already open in your browser stops working; start again for a fresh one."
+          onCancel={props.onCancelAuthorization}
+        />
+      </CompactMcpConnectionRow>
+    );
+  }
+  return (
+    <SandboxerCompactRow
+      connectionId={props.connection.id}
+      desktopApi={props.desktopApi}
+      disabled={props.disabled}
+      {...(props.authorizationError ? { error: `Sign-in failed: ${props.authorizationError}` } : {})}
+      {...(props.onConnect ? { onConnect: props.onConnect } : {})}
+      onNotice={props.onNotice}
+      onSetUp={props.onSetUp}
+    />
   );
 }
 

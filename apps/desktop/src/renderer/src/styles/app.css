@@ -19337,6 +19337,49 @@ a.button {
   font-size: 11.5px;
 }
 
+.plugin-store__existing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.plugin-store__existing-list b {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.plugin-store__search {
+  width: 100%;
+}
+
+.settings-confirm-dialog p.plugin-store__no-match {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* The row the plugin store pointed at, outlined for a moment. */
+.settings-mcp-row {
+  transition: border-color 600ms ease, box-shadow 600ms ease;
+}
+
+.settings-mcp-row--revealed {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-mcp-row {
+    transition: none;
+  }
+}
+
 .settings-sandboxer-about {
   display: flex;
   flex-direction: column;
