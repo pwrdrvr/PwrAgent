@@ -8787,9 +8787,6 @@ export function useThreadNavigation(
       }
 
       const threadKey = threadSummaryIdentityKey(thread);
-      const optimisticThreadKey = optimisticThread
-        ? threadSummaryIdentityKey(optimisticThread)
-        : undefined;
       let targetThreads: readonly NavigationArchiveMember[];
       try {
         targetThreads = Object.freeze(options?.includeSubthreads
@@ -8808,6 +8805,12 @@ export function useThreadNavigation(
         )
       );
       const deferRemoval = !options?.includeSubthreads && deferNestedArchiveRemoval(thread);
+      // Discovery and the operator's confirmation can take minutes. Choose the
+      // fallback selection from the rows and launch on screen now.
+      const optimisticThreadKey = optimisticThreadRef.current
+        ? threadSummaryIdentityKey(optimisticThreadRef.current)
+        : undefined;
+      const rowsAtRemoval = stateRef.current.rows;
 
       for (const targetKey of targetThreadKeys) {
         updateArchivedThreadKey(targetKey, true);
@@ -8842,7 +8845,7 @@ export function useThreadNavigation(
         : undefined;
       setSelectedItemKey((current) =>
         current && targetThreadKeys.has(current)
-          ? nextSelectionKey ?? getFallbackSelectionAfterRemoval(state.rows, {
+          ? nextSelectionKey ?? getFallbackSelectionAfterRemoval(rowsAtRemoval, {
               backend: thread.source,
               federationTarget: thread.federation?.ref.target
                 ?? readRendererFederationTarget(),
@@ -8876,13 +8879,12 @@ export function useThreadNavigation(
       }
       const refreshOptions = { owners: [...refreshOwners.values()] };
       let archiveTarget: NavigationArchiveMember | undefined;
-      let cleanupContextKey: string | undefined;
       const failures: Array<{ target: NavigationArchiveMember; error: unknown }> = [];
       try {
         const archiveMember = async (target: NavigationArchiveMember): Promise<void> => {
           const federationTarget = target.federationTarget ?? target.federation?.ref.target
             ?? readRendererFederationTarget();
-          cleanupContextKey = federationTarget?.scope === "remote"
+          const cleanupContextKey = federationTarget?.scope === "remote"
             ? federatedThreadIdentityKey({ backend: target.source, threadId: target.id, target: federationTarget })
             : buildThreadIdentityKey(target.source, target.id);
           const context = threadActionErrorContext(target, federationTarget);
@@ -8890,16 +8892,23 @@ export function useThreadNavigation(
           // Optional display metadata must stay bounded if a peer never sends
           // its completion. The event still carries its authoritative id.
           if (archiveCleanupContexts.current.size > 1024) archiveCleanupContexts.current.delete(archiveCleanupContexts.current.keys().next().value!);
-          const response = await archiveThreadRequest({
-            backend: target.source,
-            threadId: target.id,
-            // Remote viewers may drop their last event subscription with the
-            // archived pin. Retain the response's completion/errors there.
-            ...(federationTarget?.scope === "remote" ? {} : { backgroundCleanup: true }),
-            // The operator selected identities, not parent relationships.
-            // Group changes after confirmation cannot invalidate that list.
-            ...(federationTarget ? { federationTarget } : {}),
-          });
+          let response: Awaited<ReturnType<typeof archiveThreadRequest>>;
+          try {
+            response = await archiveThreadRequest({
+              backend: target.source,
+              threadId: target.id,
+              // Remote viewers may drop their last event subscription with the
+              // archived pin. Retain the response's completion/errors there.
+              ...(federationTarget?.scope === "remote" ? {} : { backgroundCleanup: true }),
+              // The operator selected identities, not parent relationships.
+              // Group changes after confirmation cannot invalidate that list.
+              ...(federationTarget ? { federationTarget } : {}),
+            });
+          } catch (error) {
+            // No archive started, so no completion will ever claim the context.
+            archiveCleanupContexts.current.delete(cleanupContextKey);
+            throw error;
+          }
           if (!response.cleanupPending) archiveCleanupContexts.current.delete(cleanupContextKey);
           const cleanupNotice = formatArchiveCleanupNotice(response.cleanup, context);
           archivedKeys.add(threadSummaryIdentityKey(target));
@@ -8922,11 +8931,9 @@ export function useThreadNavigation(
         };
         for (const target of targetThreads) {
           archiveTarget = target;
-          cleanupContextKey = undefined;
           try {
             await archiveMember(target);
           } catch (error) {
-            if (cleanupContextKey && !archivedKeys.has(threadSummaryIdentityKey(target))) archiveCleanupContexts.current.delete(cleanupContextKey);
             failures.push({ target, error });
           }
         }
@@ -8957,10 +8964,8 @@ export function useThreadNavigation(
       updateArchivedThreadKey,
       deferNestedArchiveRemoval,
       desktopApi,
-      optimisticThread,
       refresh,
       removeRemoteThreadPinRequest,
-      state.rows,
       setSelectedItemKey,
     ]
   );

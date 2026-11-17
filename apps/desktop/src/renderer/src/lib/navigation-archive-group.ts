@@ -33,12 +33,30 @@ export async function readNavigationArchiveGroup(params: {
   const authoritative = new Map<string, Member>();
   const queried = new Set<string>();
   const token = `archive-group:${++nextGroupRead}`;
-  const admit = (ref: NavigationIdentity): void => {
-    discovered.set(key(ref), normalize(ref));
-    if (discovered.size > 1000 || new TextEncoder().encode(JSON.stringify([...discovered.values(), ...authoritative.values()])).byteLength > 1024 * 1024) {
+  // The budget is the size of the serialized plan: every discovered identity
+  // and every owner row. Charge each entry once, when it first enters, so a
+  // 1,000-member group costs one pass rather than one re-encode per row.
+  const encoder = new TextEncoder();
+  const charged = new Set<string>();
+  let plannedBytes = 2;
+  const charge = (entry: string, value: unknown): void => {
+    if (charged.has(entry)) return;
+    charged.add(entry);
+    plannedBytes += encoder.encode(JSON.stringify(value)).byteLength + (charged.size > 1 ? 1 : 0);
+  };
+  const admit = (ref: NavigationIdentity, owned?: Member): void => {
+    const id = key(ref);
+    if (owned) {
+      authoritative.set(id, owned);
+      charge(`owner:${id}`, owned);
+    }
+    discovered.set(id, normalize(ref));
+    charge(`discovered:${id}`, normalize(ref));
+    if (discovered.size > 1000 || plannedBytes > 1024 * 1024) {
       throw new Error("Thread group exceeds the 1,000-member or 1 MiB archive planning budget. Archive a smaller subgroup.");
     }
   };
+  charge(`discovered:${key(root)}`, root);
   const read = async (roots: NavigationIdentity[], owner: string | undefined, viewer: boolean): Promise<void> => {
     let cursor: string | undefined;
     let generation: string | undefined;
@@ -66,8 +84,7 @@ export async function readNavigationArchiveGroup(params: {
         if (!viewer && owner && !entry.row.federation?.capabilities?.includes("turn_control")) {
           throw new Error(`The owner ${owner} has not granted thread control. No threads were archived.`);
         }
-        if (!viewer) authoritative.set(key(ref), member(entry, ref));
-        admit(ref);
+        admit(ref, viewer ? undefined : member(entry, ref));
       }
       cursor = page.nextCursor;
       if (!cursor && !page.complete) throw new Error("Thread group membership is incomplete. No threads were archived.");

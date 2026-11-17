@@ -10572,12 +10572,13 @@ a.button {
 }
 
 .rename-thread-backdrop {
+  --dialog-backdrop-inset: 24px;
   position: fixed;
   inset: 0;
   z-index: 60;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: var(--dialog-backdrop-inset);
   background: var(--surface-row-tint);
 }
 
@@ -10646,7 +10647,7 @@ a.button {
 .archive-group-dialog {
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 48px);
+  max-height: calc(100vh - 2 * var(--dialog-backdrop-inset));
   overflow-y: auto;
 }
 

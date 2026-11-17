@@ -33,9 +33,9 @@ describe("archive group dialog layout contract", () => {
     const dialog = cssRuleBody(".archive-group-dialog");
     expect(dialog).toMatch(/display:\s*flex;/);
     expect(dialog).toMatch(/flex-direction:\s*column;/);
-    // 48px is the backdrop's 24px padding on both edges.
-    expect(cssRuleBody(".rename-thread-backdrop")).toMatch(/padding:\s*24px;/);
-    expect(dialog).toMatch(/max-height:\s*calc\(100vh - 48px\);/);
+    // The cap and the backdrop's padding read one inset, so they cannot drift.
+    expect(cssRuleBody(".rename-thread-backdrop")).toMatch(/padding:\s*var\(--dialog-backdrop-inset\);/);
+    expect(dialog).toMatch(/max-height:\s*calc\(100vh - 2 \* var\(--dialog-backdrop-inset\)\);/);
     // Below the list's peek the dialog itself scrolls; the shared backdrop
     // is fixed, and the rename and lock dialogs keep it as it was.
     expect(dialog).toMatch(/overflow-y:\s*auto;/);

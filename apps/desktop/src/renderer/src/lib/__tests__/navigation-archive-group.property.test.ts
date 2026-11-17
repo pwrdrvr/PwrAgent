@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { readNavigationArchiveGroup } from "../navigation-archive-group";
@@ -76,4 +76,26 @@ it("archives every selected identity once in descendant order across three owner
       expect(member.source).toBe(nodes[index]!.backend);
     }
   }), { numRuns: 25 });
+});
+
+// The 1 MiB budget measures the plan, so measuring it must cost about one
+// encode of the plan. Re-encoding every member on each admitted row made a
+// large group quadratic on the renderer thread.
+it("checks the planning budget in time linear in the group", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 40, max: 240 }), async (size) => {
+    const row = (id: string, parent?: string): NavigationThreadSummary => ({ id, source: "codex", title: `Thread ${id}`,
+      titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
+      ...(parent ? { parentThreadId: parent, parentThreadBackend: "codex" as const } : {}) });
+    const threads = [row("root"), ...Array.from({ length: size }, (_, index) => row(`child-${index}`, "root"))];
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      const members = await readNavigationArchiveGroup({ thread: threads[0]!, api: {
+        getNavigationQueryPage: async (request) => navigationQueryFixture(request, { threads }),
+      } });
+      expect(members).toHaveLength(size + 1);
+      const encodedBytes = encode.mock.results.reduce((total, result) => total + (result.value as Uint8Array).byteLength, 0);
+      // Each member's identity and owner row together serialize to well under 1 KiB.
+      expect(encodedBytes).toBeLessThan((size + 1) * 1024);
+    } finally { encode.mockRestore(); }
+  }), { numRuns: 6 });
 });

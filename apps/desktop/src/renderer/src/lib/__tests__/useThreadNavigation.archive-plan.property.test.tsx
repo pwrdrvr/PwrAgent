@@ -83,3 +83,46 @@ it("continues to the local parent after the selected peer child fails", async ()
 it("cancels without archiving or optimistically removing any selected thread", async () => {
   await executePlan(false, false, "codex");
 });
+
+// Confirmation can stay open for minutes while the sidebar keeps refreshing.
+// The selection that replaces an archived thread must come from the rows on
+// screen when the operator confirms, never from rows that have since gone.
+it("falls back to a thread still on screen after a long confirmation", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 1, max: 4 }), async (before, after) => {
+    const thread = (id: string, updatedAt: number): NavigationThreadSummary => ({ id, source: "codex", title: id,
+      titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false }, updatedAt });
+    const root = thread("root", 10_000);
+    let rows = [root, ...Array.from({ length: before }, (_, index) => thread(`gone-${index}`, 5_000 - index))];
+    const archived = new Set<string>();
+    let resolve!: (value: boolean) => void;
+    const confirm = vi.fn(() => new Promise<boolean>((done) => { resolve = done; }));
+    const api: DesktopApi = {
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, {
+        threads: rows.filter((candidate) => !archived.has(candidate.id)) }),
+      getNavigationSelectedDetail: async ({ ref }) => ({ protocol: 2, ref, revision: "fixture", readiness: "ready", identity: "present",
+        thread: rows.find((candidate) => candidate.id === ref.threadId) }),
+      releaseNavigationQuery: async () => undefined,
+      archiveThread: async (request) => {
+        archived.add(request.threadId);
+        return { backend: request.backend, threadId: request.threadId, archivedAt: 1000, cleanup: [] };
+      },
+      onAgentEvent: () => () => undefined,
+    };
+    const hook = renderHook(() => useThreadNavigation(api, { confirmArchiveGroup: confirm }));
+    try {
+      await waitFor(() => expect(hook.result.current.loading).toBe(false));
+      act(() => { hook.result.current.selectThread(root); });
+      await waitFor(() => expect(hook.result.current.selectedItemKey).toBe(threadSummaryIdentityKey(root)));
+      let operation!: ReturnType<typeof hook.result.current.archiveThread>;
+      await act(async () => { operation = hook.result.current.archiveThread(root, { includeSubthreads: true }); });
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      // While the dialog is open, every neighbour is archived elsewhere and
+      // new threads arrive.
+      rows = [root, ...Array.from({ length: after }, (_, index) => thread(`arrived-${index}`, 4_000 - index))];
+      await act(async () => { await hook.result.current.refresh(); });
+      await act(async () => { resolve(true); await operation; });
+      const selected = hook.result.current.selectedItemKey;
+      expect(selected).toBe(threadSummaryIdentityKey(rows[1]!));
+    } finally { hook.unmount(); }
+  }), { numRuns: 8 });
+});
