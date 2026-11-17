@@ -204,7 +204,7 @@ posixDescribe("downloading a PwrDrvr Git release", () => {
 });
 
 posixDescribe("build tracks", () => {
-  const FLAGS = [true, false, undefined, "false"] as const;
+  const FLAGS = [true, false] as const;
   let pool: ReturnType<typeof buildRelease>[] | undefined;
   const releases = () => (pool ??= ["5", "6", "7", "8"].map((n) => buildRelease(`2.56.0-dev-pwrgit.${n}`)));
   const listed = (flags: readonly unknown[]) =>
@@ -213,8 +213,9 @@ posixDescribe("build tracks", () => {
     gh.calls.filter((url) => url.endsWith("/SHA256SUMS")).map((url) => /dev-pwrgit\.(\d+)\//u.exec(url)?.[1]).sort();
 
   it("answers both tracks in one check, and reads only the releases a track still needs", async () => {
-    // Oracle: Prerelease is the newest release, Latest the newest whose flag
-    // is exactly false. Every assignment of four flags to four releases.
+    // Oracle: Prerelease is the newest release, Latest the newest promoted
+    // release. Persist each of the 16 promotion states once; normalization of
+    // all 256 raw flag assignments lives in managed-git-tracks.property.test.ts.
     for (let mask = 0; mask < FLAGS.length ** 4; mask += 1) {
       const flags = [0, 1, 2, 3].map((index) => FLAGS[Math.floor(mask / FLAGS.length ** index) % FLAGS.length]);
       const gh = fakeGithub(releases(), listed(flags));
