@@ -120,6 +120,7 @@ function createFakeAdapter(
   oracle: Oracle,
   generation: number,
   startMs: number,
+  onStart: () => void,
 ): FakeAdapter {
   const adapter: FakeAdapter = {
     authorizedActorIds: ["user-1"],
@@ -146,6 +147,7 @@ function createFakeAdapter(
       }
       adapter.startCalled = true;
       oracle.starts += 1;
+      onStart();
       if (startMs === NEVER) {
         await new Promise<never>(() => {});
       }
@@ -175,6 +177,7 @@ async function runScenario(
   ops: readonly Op[],
 ): Promise<{ oracle: Oracle; runtime: DesktopMessagingRuntime }> {
   const oracle: Oracle = { adapters: [], starts: 0, violations: [] };
+  const firstStart = Promise.withResolvers<void>();
   let debounce = 0;
   const { DesktopMessagingRuntime: Runtime } = await import(
     "../messaging/messaging-runtime"
@@ -186,6 +189,7 @@ async function runScenario(
         oracle,
         generation,
         startDurations[generation] ?? 0,
+        firstStart.resolve,
       );
       oracle.adapters.push(adapter);
       return [adapter];
@@ -197,8 +201,15 @@ async function runScenario(
   // A start waits on its deadline, which passes only as the fake clock
   // moves, so lifecycle operations are fired and left running; the runtime
   // queues them, and the `advance` ops move time.
-  const pending: Promise<unknown>[] = [runtime.start()];
-  await vi.advanceTimersByTimeAsync(0);
+  const start = runtime.start();
+  const pending: Promise<unknown>[] = [start];
+  // A cold controller import performs real I/O. Start simulated provider time
+  // only once the adapter and its deadline are registered; draining fake timers
+  // cannot establish that readiness and can exhaust the clock before it loads.
+  await Promise.race([
+    firstStart.promise,
+    start.then(() => { throw new Error("Runtime startup completed before any adapter began"); }),
+  ]);
   for (const op of ops) {
     if (op.kind === "advance") {
       await vi.advanceTimersByTimeAsync(op.ms);
