@@ -704,517 +704,650 @@ function DesktopAppShell(props: {
       refreshFederationHealth();
     });
   }, [desktopApi, refreshFederationHealth]);
-  const resumePrAutoDispatchBudget = useCallback(() => {
-    void desktopApi?.resumePrAutoDispatchBudget?.()
-      .then((status) => {
-        if (!status.paused) {
-          dispatchAppNotice({
-            type: "dismiss-prefix",
-            prefix: "pr-auto-dispatch-budget-paused:",
-          });
-        }
-      })
-      .catch(() => {
-        // Keep the safety notice visible when acknowledgement cannot reach the
-        // main process; the operator can try again without losing the stop.
-      });
-  }, [desktopApi]);
-  const showPrAutoDispatchBudgetNotice = useCallback(
-    (status: PrAutoDispatchBudgetStatus) => {
-      const notice = buildPrAutoDispatchBudgetNotice({
-        onLeaveDisabled: () => {
-          dispatchAppNotice({
-            type: "dismiss-prefix",
-            prefix: "pr-auto-dispatch-budget-paused:",
-          });
-        },
-        onResume: resumePrAutoDispatchBudget,
-        status,
-      });
-      if (notice) {
-        showAppNotice(notice);
-      } else {
-        dispatchAppNotice({
-          type: "dismiss-prefix",
-          prefix: "pr-auto-dispatch-budget-paused:",
-        });
-      }
-    },
-    [resumePrAutoDispatchBudget, showAppNotice],
-  );
-  // Spawning / focusing the Messaging Activity window is fire-and-forget
-  // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
-  // main window stays where it was; the activity surface gets its own
-  // OS window with its own lifecycle.
-  const openMessagingActivityWindow = useCallback(() => {
-    void desktopApi?.openMessagingActivityWindow?.();
-  }, [desktopApi]);
-  const openMessagingSettings = useCallback(() => {
-    openSettingsSection("messaging");
-  }, [openSettingsSection]);
-  const openPluginSettings = useCallback(() => {
-    openSettingsSection("plugins");
-  }, [openSettingsSection]);
-  const handleEditEnvironments = useCallback((workspacePath: string) => {
-    openSettingsSection("environments", encodeEnvironmentsRoute({ project: workspacePath }));
-  }, [openSettingsSection]);
-  const dismissGithubPrSamlNotice = useCallback(() => {
-    dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
-    setGithubPrSamlEvents((current) => current.slice(1));
-  }, []);
-  const openGitSettings = useCallback(() => {
-    dismissGithubPrSamlNotice();
-    dispatchAppNotice({
-      type: "dismiss-prefix",
-      prefix: "github-pr-authentication-failure",
-    });
-    setGithubPrAuthenticationFailure(undefined);
-    dispatchAppNotice({ type: "dismiss-prefix", prefix: "bundled-git-lfs-advisory" });
-    setBundledGitLfsAdvisory(undefined);
-    openSettingsSection("git");
-  }, [dismissGithubPrSamlNotice, openSettingsSection]);
-  const githubPrSamlNotice = useMemo(() => {
-    const event = githubPrSamlEvents[0];
-    return event
-      ? buildGithubPrSamlEnforcementNotice({
-          event,
-          onDismiss: dismissGithubPrSamlNotice,
-          onOpenGitSettings: openGitSettings,
-        })
-      : undefined;
-  }, [dismissGithubPrSamlNotice, githubPrSamlEvents, openGitSettings]);
+  const {
+    openMessagingActivityWindow,
+    openMessagingSettings,
+    openPluginSettings,
+    handleEditEnvironments,
+    syncFederationShutdownNotice,
+    syncCloudflareSignInNotice,
+    syncMessagingErrorNotice,
+    syncGrokCliUpdateNotice,
+    syncCodexVersionNotice,
+    syncRestartGateNotice,
+    syncCodexRestartNotice,
+    openCodexSettings,
+    syncCodexLaunchNotice,
+    changeCodexManagedBuilds,
+    checkCodexManagedBuildUpdates,
+  } = useAppOwnerNotifications();
 
-  useEffect(() => {
-    if (githubPrSamlNotice) showAppNotice(githubPrSamlNotice);
-  }, [githubPrSamlNotice, showAppNotice]);
-
-  const dismissGithubPrAuthenticationNotice = useCallback(() => {
-    dispatchAppNotice({
-      type: "dismiss-prefix",
-      prefix: "github-pr-authentication-failure",
-    });
-    setGithubPrAuthenticationFailure(undefined);
-  }, []);
-  const githubPrAuthenticationNotice = useMemo(() => {
-    return githubPrAuthenticationFailure
-      ? buildGithubPrAuthenticationNotice({
-          event: githubPrAuthenticationFailure,
-          onDismiss: dismissGithubPrAuthenticationNotice,
-          onOpenGitSettings: openGitSettings,
-        })
-      : undefined;
-  }, [
-    dismissGithubPrAuthenticationNotice,
-    githubPrAuthenticationFailure,
-    openGitSettings,
-  ]);
-
-  useEffect(() => {
-    if (githubPrAuthenticationNotice) {
-      showAppNotice(githubPrAuthenticationNotice);
-    }
-  }, [githubPrAuthenticationNotice, showAppNotice]);
-
-  const dismissBundledGitLfsNotice = useCallback(() => {
-    dispatchAppNotice({ type: "dismiss-prefix", prefix: "bundled-git-lfs-advisory" });
-    setBundledGitLfsAdvisory(undefined);
-  }, []);
-  const bundledGitLfsNotice = useMemo(() => {
-    return bundledGitLfsAdvisory
-      ? buildBundledGitLfsNotice({
-          event: bundledGitLfsAdvisory,
-          onDismiss: dismissBundledGitLfsNotice,
-          onOpenGitSettings: openGitSettings,
-        })
-      : undefined;
-  }, [bundledGitLfsAdvisory, dismissBundledGitLfsNotice, openGitSettings]);
-
-  useEffect(() => {
-    if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
-  }, [bundledGitLfsNotice, showAppNotice]);
-
-  // The upgrade that moved new Codex and Claude threads to Auto says so once.
-  // The state DB keeps it pending across restarts until the operator closes it.
-  // A window fronting a peer shows the peer's threads, not this profile's.
-  const [autoAccessUpgradePending, setAutoAccessUpgradePending] = useState(false);
-  useEffect(() => {
-    if (readRendererFederationTarget()) return;
-    let cancelled = false;
-    void desktopApi?.readLaunchpadAccessNoticePending?.()
-      .then((pending) => {
-        if (!cancelled && pending) setAutoAccessUpgradePending(true);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [desktopApi]);
-  const dismissAutoAccessUpgradeNotice = useCallback(() => {
-    dispatchAppNotice({ type: "dismiss", id: AUTO_ACCESS_UPGRADE_NOTICE_ID });
-    setAutoAccessUpgradePending(false);
-    void desktopApi?.dismissLaunchpadAccessNotice?.().catch(() => undefined);
-  }, [desktopApi]);
-  const autoAccessUpgradeNotice = useMemo(() => {
-    return autoAccessUpgradePending
-      ? buildAutoAccessUpgradeNotice({
-          onDismiss: dismissAutoAccessUpgradeNotice,
-          onReviewAccess: () => {
-            dismissAutoAccessUpgradeNotice();
-            openSettingsSection("models");
-          },
-        })
-      : undefined;
-  }, [autoAccessUpgradePending, dismissAutoAccessUpgradeNotice, openSettingsSection]);
-  useEffect(() => {
-    if (autoAccessUpgradeNotice) showAppNotice(autoAccessUpgradeNotice);
-  }, [autoAccessUpgradeNotice, showAppNotice]);
-
-  const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
-    if (notice) showAppNotice(notice);
-    else dispatchAppNotice({ type: "dismiss", id: `federation-shutdown:${instanceId}` });
-  }, [showAppNotice]);
-
-  const syncCloudflareSignInNotice = useCallback((notice: AppNoticeToastNotice | undefined): void => {
-    if (notice) showAppNotice(notice);
-    else dispatchAppNotice({ type: "dismiss", id: CLOUDFLARE_SIGN_IN_NOTICE_ID });
-  }, [showAppNotice]);
-
-  const syncMessagingErrorNotice = useCallback((
-    platform: MessagingChannelKind,
-    notice: AppNoticeToastNotice | undefined,
-  ): void => {
-    if (notice) {
-      showAppNotice(notice);
-      return;
-    }
-    dispatchAppNotice({
-      type: "dismiss-prefix",
-      prefix: `messaging-platform-error:${platform}:`,
-    });
-  }, [showAppNotice]);
-  const syncGrokCliUpdateNotice = useCallback((
-    notice: AppNoticeToastNotice | undefined,
-  ): void => {
-    // Sweep every id family this producer can emit, not just the vendor one:
-    // both its notices are durable, so one left standing after its condition
-    // cleared would sit on screen until the window reloaded.
-    for (const prefix of GROK_UPDATE_NOTICE_ID_PREFIXES) {
-      dispatchAppNotice({ type: "dismiss-prefix", prefix });
-    }
-    if (notice) {
-      showAppNotice(notice);
-    }
-  }, [showAppNotice]);
-
-  const syncCodexVersionNotice = useCallback((
-    notice: AppNoticeToastNotice | undefined,
-  ): void => {
-    // A notice whose condition cleared (Codex updated, or the managed build
-    // took over) must leave the screen, so sweep before showing the current one.
-    for (const prefix of CODEX_VERSION_NOTICE_ID_PREFIXES) {
-      dispatchAppNotice({ type: "dismiss-prefix", prefix });
-    }
-    if (notice) {
-      showAppNotice(notice);
-    }
-  }, [showAppNotice]);
-  const syncRestartGateNotice = useCallback((
-    notice: AppNoticeToastNotice | undefined,
-  ): void => {
-    dispatchAppNotice({ type: "dismiss", id: RESTART_GATE_NOTICE_ID });
-    if (notice) {
-      showAppNotice(notice);
-    }
-  }, [showAppNotice]);
-  const syncCodexRestartNotice = useCallback((
-    notice: AppNoticeToastNotice | undefined,
-  ): void => {
-    for (const prefix of CODEX_RESTART_NOTICE_ID_PREFIXES) {
-      dispatchAppNotice({ type: "dismiss-prefix", prefix });
-    }
-    if (notice) {
-      showAppNotice(notice);
-    }
-  }, [showAppNotice]);
-  const openCodexSettings = useCallback(() => {
-    openSettingsSection("models", "codex");
-  }, [openSettingsSection]);
-  const continueClaudeThreadInNewSession = useCallback((threadId: string, failureNoticeId: string) => {
-    const noticeId = `claude-new-session:${threadId}`;
-    void (async () => {
-      try {
-        if (!desktopApi?.continueClaudeThreadInNewSession) throw new Error("This window cannot continue the thread.");
-        await desktopApi.continueClaudeThreadInNewSession({ threadId });
-        dispatchAppNotice({ type: "dismiss", id: failureNoticeId });
-        showAppNotice({
-          id: noticeId,
-          title: "Ready for a new Claude session",
-          message: "The next message starts a new Claude session with this thread's earlier messages. Earlier tool output is not included.",
-          autoDismiss: true,
-        });
-      } catch (error) {
-        showAppNotice({
-          id: noticeId,
-          title: "Could not continue in a new session",
-          message: error instanceof Error ? error.message : String(error),
-          autoDismiss: false,
-        });
-      }
-    })();
-  }, [desktopApi, showAppNotice]);
-  const syncCodexLaunchNotice = useCallback((
-    notice: AppNoticeToastNotice | undefined,
-  ): void => {
-    dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
-    if (notice) showAppNotice(notice);
-  }, [showAppNotice]);
-  const { writeConfig: writeSettingsConfig, refresh: refreshSettings } = props.settings;
-  const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
-    const saved = await writeSettingsConfig({ models: { codex: { managedBuilds } } });
-    if (saved) {
-      await refreshSettings();
-      await refreshManagedCodexModelCatalog(desktopApi);
-    }
-    return saved;
-  }, [desktopApi, writeSettingsConfig, refreshSettings]);
-  const checkCodexManagedBuildUpdates = useCallback(async () => {
-    await checkForManagedCodexUpdates(desktopApi);
-    await refreshSettings();
-  }, [desktopApi, refreshSettings]);
-
-  useEffect(() => {
-    return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
-      setGithubPrSamlEvents((current) => {
-        const eventKey = githubPrAccessTargetKey(event.target);
-        return current.some(
-          (queued) => githubPrAccessTargetKey(queued.target) === eventKey,
-        )
-          ? current
-          : [...current, event];
-      });
-    });
-  }, [desktopApi]);
-
-  useEffect(() => {
-    return desktopApi?.onGithubPrAuthenticationFailure?.((event) => {
-      setGithubPrAuthenticationFailure(event);
-    });
-  }, [desktopApi]);
-
-  // Raised where it happens rather than in Settings: the operator's own shell
-  // is where the push fails, and nothing takes them past Settings first.
-  useEffect(() => {
-    return desktopApi?.onBundledGitLfsAdvisory?.((event) => {
-      setBundledGitLfsAdvisory(event);
-    });
-  }, [desktopApi]);
-
-  // A rejected Grok download has no screen of its own: whatever triggered the
-  // discovery may already be closed, so the notice is raised here and stays
-  // until the operator dismisses it.
-  useEffect(() => {
-    return desktopApi?.onManagedGrokSignatureRejected?.((event) => {
-      showAppNotice(
-        buildManagedGrokSignatureRejectedNotice({
-          event,
-          onDismiss: () => {
+  function useAppOwnerNotifications() {
+    const resumePrAutoDispatchBudget = useCallback(() => {
+      void desktopApi?.resumePrAutoDispatchBudget?.()
+        .then((status) => {
+          if (!status.paused) {
             dispatchAppNotice({
               type: "dismiss-prefix",
-              prefix: "managed-grok-signature:",
+              prefix: "pr-auto-dispatch-budget-paused:",
+            });
+          }
+        })
+        .catch(() => {
+          // Keep the safety notice visible when acknowledgement cannot reach the
+          // main process; the operator can try again without losing the stop.
+        });
+    }, [desktopApi]);
+    const showPrAutoDispatchBudgetNotice = useCallback(
+      (status: PrAutoDispatchBudgetStatus) => {
+        const notice = buildPrAutoDispatchBudgetNotice({
+          onLeaveDisabled: () => {
+            dispatchAppNotice({
+              type: "dismiss-prefix",
+              prefix: "pr-auto-dispatch-budget-paused:",
             });
           },
-        }),
-      );
-    });
-  }, [desktopApi, showAppNotice]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const unsubscribe = desktopApi?.onPrAutoDispatchBudgetChanged?.((status) => {
-      if (!cancelled) showPrAutoDispatchBudgetNotice(status);
-    });
-    void desktopApi?.getPrAutoDispatchBudgetStatus?.()
-      .then((status) => {
-        if (!cancelled) showPrAutoDispatchBudgetNotice(status);
-      })
-      .catch(() => {
-        // Best effort only. A later budget event will still surface the stop.
-      });
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  }, [desktopApi, showPrAutoDispatchBudgetNotice]);
-
-  useEffect(() => {
-    return desktopApi?.onHotCpuProfileCaptured?.((event) => {
-      const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
-      const heapSnapshotSummary =
-        heapSnapshotCount > 0
-          ? ` ${heapSnapshotCount} heap snapshots captured.`
-          : "";
-      showAppNotice({
-        autoDismiss: false,
-        copyText: buildHotCpuProfileHandoffMessage(event),
-        facts: [
-          {
-            label: "Source",
-            value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
-          },
-          {
-            label: "Captured",
-            value: new Date(event.capturedAt).toLocaleString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-              hour: "numeric",
-              minute: "2-digit",
-              second: "2-digit",
-              timeZoneName: "short",
-            }),
-          },
-          { label: "Session", value: event.sessionDirectoryName },
-        ],
-        dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
-        id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
-        title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
-        message: [
-          `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
-          heapSnapshotSummary,
-        ].join(""),
-      });
-    });
-  }, [desktopApi, showAppNotice]);
-
-  // On-demand heap snapshots. The capture (and its countdown) run in main, so
-  // the result can land here even if Settings was closed to stage the scenario.
-  useEffect(() => {
-    return desktopApi?.onHeapSnapshotCaptured?.((result) => {
-      const failed = result.artifacts.length === 0;
-      // A capture can half-succeed (main written, renderer window gone). Saying
-      // "captured" and hiding the errors would send someone off to analyze a
-      // snapshot that is missing the half they cared about.
-      const partial = !failed && result.errors.length > 0;
-      const title = failed
-        ? "Heap snapshot failed"
-        : partial
-          ? "Heap snapshot partially captured"
-          : "Heap snapshot captured";
-      const message = failed
-        ? result.errors.join("; ")
-        : [
-            describeHeapSnapshotResult(result),
-            partial ? ` Not captured: ${result.errors.join("; ")}.` : "",
-            ` ${HEAP_SNAPSHOT_SECRET_WARNING}`,
-          ].join("");
-      showAppNotice({
-        autoDismiss: false,
-        copyText: buildHeapSnapshotHandoffMessage(result),
-        facts: failed
-          ? undefined
-          : [{ label: "Session", value: result.sessionDirectoryName }],
-        id: `heap-snapshot:${result.capturedAt}`,
-        title,
-        message,
-      });
-    });
-  }, [desktopApi, showAppNotice]);
-
-  // On startup, ask the main process whether it skipped any automations it
-  // couldn't load. Startup reconciliation runs before this window exists, so a
-  // pushed event would be missed — we pull the result once the renderer is up.
-  useEffect(() => {
-    if (!desktopApi?.listAutomationLoadIssues) {
-      return;
-    }
-    let cancelled = false;
-    void desktopApi
-      .listAutomationLoadIssues()
-      .then((response) => {
-        if (cancelled || response.issues.length === 0) {
-          return;
-        }
-        const issues = response.issues;
-        const names = issues.map((issue) => issue.name).filter(Boolean);
-        const namesSummary =
-          names.length > 0 ? names.slice(0, 5).join(", ") : undefined;
-        showAppNotice({
-          autoDismiss: false,
-          id: `automation-load-issues:${issues.map((issue) => issue.id).join(",")}`,
-          title:
-            issues.length === 1
-              ? "1 automation was skipped"
-              : `${issues.length} automations were skipped`,
-          message:
-            "PwrAgent couldn't load some automations, so they did not run this session. They were left unchanged — open them in the newer version of PwrAgent that created them.",
-          detail: namesSummary,
+          onResume: resumePrAutoDispatchBudget,
+          status,
         });
-      })
-      .catch(() => {
-        // Best-effort warning; never let it interfere with startup.
+        if (notice) {
+          showAppNotice(notice);
+        } else {
+          dispatchAppNotice({
+            type: "dismiss-prefix",
+            prefix: "pr-auto-dispatch-budget-paused:",
+          });
+        }
+      },
+      [resumePrAutoDispatchBudget, showAppNotice],
+    );
+    // Spawning / focusing the Messaging Activity window is fire-and-forget
+    // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
+    // main window stays where it was; the activity surface gets its own
+    // OS window with its own lifecycle.
+    const openMessagingActivityWindow = useCallback(() => {
+      void desktopApi?.openMessagingActivityWindow?.();
+    }, [desktopApi]);
+    const openMessagingSettings = useCallback(() => {
+      openSettingsSection("messaging");
+    }, [openSettingsSection]);
+    const openPluginSettings = useCallback(() => {
+      openSettingsSection("plugins");
+    }, [openSettingsSection]);
+    const handleEditEnvironments = useCallback((workspacePath: string) => {
+      openSettingsSection("environments", encodeEnvironmentsRoute({ project: workspacePath }));
+    }, [openSettingsSection]);
+    const dismissGithubPrSamlNotice = useCallback(() => {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
+      setGithubPrSamlEvents((current) => current.slice(1));
+    }, []);
+    const openGitSettings = useCallback(() => {
+      dismissGithubPrSamlNotice();
+      dispatchAppNotice({
+        type: "dismiss-prefix",
+        prefix: "github-pr-authentication-failure",
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [desktopApi, showAppNotice]);
-
-  // Surface backend turn failures + system errors as a durable toast. The
-  // matching transcript entry (rendered from the thread overlay's
-  // turnFailureLog) is the in-context record; this toast is the window-scoped
-  // "something just broke" signal that has to be acknowledged.
-  // Notices are keyed by thread and queued so a failure on one thread can't
-  // suppress a signal from another.
-  useEffect(() => {
-    const labelForThread = (backend: string, threadId?: string): string => {
-      const match = threadId
-        ? backendErrorThreadsRef.current.find(
-            (thread) => thread.source === backend && thread.id === threadId,
-          )
+      setGithubPrAuthenticationFailure(undefined);
+      dispatchAppNotice({ type: "dismiss-prefix", prefix: "bundled-git-lfs-advisory" });
+      setBundledGitLfsAdvisory(undefined);
+      openSettingsSection("git");
+    }, [dismissGithubPrSamlNotice, openSettingsSection]);
+    const githubPrSamlNotice = useMemo(() => {
+      const event = githubPrSamlEvents[0];
+      return event
+        ? buildGithubPrSamlEnforcementNotice({
+            event,
+            onDismiss: dismissGithubPrSamlNotice,
+            onOpenGitSettings: openGitSettings,
+          })
         : undefined;
-      const title = match?.title?.trim();
-      if (title) {
-        return title;
+    }, [dismissGithubPrSamlNotice, githubPrSamlEvents, openGitSettings]);
+
+    useEffect(() => {
+      if (githubPrSamlNotice) showAppNotice(githubPrSamlNotice);
+    }, [githubPrSamlNotice, showAppNotice]);
+
+    const dismissGithubPrAuthenticationNotice = useCallback(() => {
+      dispatchAppNotice({
+        type: "dismiss-prefix",
+        prefix: "github-pr-authentication-failure",
+      });
+      setGithubPrAuthenticationFailure(undefined);
+    }, []);
+    const githubPrAuthenticationNotice = useMemo(() => {
+      return githubPrAuthenticationFailure
+        ? buildGithubPrAuthenticationNotice({
+            event: githubPrAuthenticationFailure,
+            onDismiss: dismissGithubPrAuthenticationNotice,
+            onOpenGitSettings: openGitSettings,
+          })
+        : undefined;
+    }, [
+      dismissGithubPrAuthenticationNotice,
+      githubPrAuthenticationFailure,
+      openGitSettings,
+    ]);
+
+    useEffect(() => {
+      if (githubPrAuthenticationNotice) {
+        showAppNotice(githubPrAuthenticationNotice);
       }
-      return backend === "codex"
-        ? `Codex thread${threadId ? ` ${threadId}` : ""}`
-        : `${formatBackendLabel(backend as AppServerBackendKind)} thread${threadId ? ` ${threadId}` : ""}`;
-    };
-    return desktopApi?.onAgentEvent?.(async (event) => {
-      if (
-        !federationTargetsEqual(
-          event.federationTarget,
-          readRendererFederationTarget(),
-        )
-      ) {
+    }, [githubPrAuthenticationNotice, showAppNotice]);
+
+    const dismissBundledGitLfsNotice = useCallback(() => {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix: "bundled-git-lfs-advisory" });
+      setBundledGitLfsAdvisory(undefined);
+    }, []);
+    const bundledGitLfsNotice = useMemo(() => {
+      return bundledGitLfsAdvisory
+        ? buildBundledGitLfsNotice({
+            event: bundledGitLfsAdvisory,
+            onDismiss: dismissBundledGitLfsNotice,
+            onOpenGitSettings: openGitSettings,
+          })
+        : undefined;
+    }, [bundledGitLfsAdvisory, dismissBundledGitLfsNotice, openGitSettings]);
+
+    useEffect(() => {
+      if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
+    }, [bundledGitLfsNotice, showAppNotice]);
+
+    // The upgrade that moved new Codex and Claude threads to Auto says so once.
+    // The state DB keeps it pending across restarts until the operator closes it.
+    // A window fronting a peer shows the peer's threads, not this profile's.
+    const [autoAccessUpgradePending, setAutoAccessUpgradePending] = useState(false);
+    useEffect(() => {
+      if (readRendererFederationTarget()) return;
+      let cancelled = false;
+      void desktopApi?.readLaunchpadAccessNoticePending?.()
+        .then((pending) => {
+          if (!cancelled && pending) setAutoAccessUpgradePending(true);
+        })
+        .catch(() => undefined);
+      return () => {
+        cancelled = true;
+      };
+    }, [desktopApi]);
+    const dismissAutoAccessUpgradeNotice = useCallback(() => {
+      dispatchAppNotice({ type: "dismiss", id: AUTO_ACCESS_UPGRADE_NOTICE_ID });
+      setAutoAccessUpgradePending(false);
+      void desktopApi?.dismissLaunchpadAccessNotice?.().catch(() => undefined);
+    }, [desktopApi]);
+    const autoAccessUpgradeNotice = useMemo(() => {
+      return autoAccessUpgradePending
+        ? buildAutoAccessUpgradeNotice({
+            onDismiss: dismissAutoAccessUpgradeNotice,
+            onReviewAccess: () => {
+              dismissAutoAccessUpgradeNotice();
+              openSettingsSection("models");
+            },
+          })
+        : undefined;
+    }, [autoAccessUpgradePending, dismissAutoAccessUpgradeNotice, openSettingsSection]);
+    useEffect(() => {
+      if (autoAccessUpgradeNotice) showAppNotice(autoAccessUpgradeNotice);
+    }, [autoAccessUpgradeNotice, showAppNotice]);
+
+    const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
+      if (notice) showAppNotice(notice);
+      else dispatchAppNotice({ type: "dismiss", id: `federation-shutdown:${instanceId}` });
+    }, [showAppNotice]);
+
+    const syncCloudflareSignInNotice = useCallback((notice: AppNoticeToastNotice | undefined): void => {
+      if (notice) showAppNotice(notice);
+      else dispatchAppNotice({ type: "dismiss", id: CLOUDFLARE_SIGN_IN_NOTICE_ID });
+    }, [showAppNotice]);
+
+    const syncMessagingErrorNotice = useCallback((
+      platform: MessagingChannelKind,
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      if (notice) {
+        showAppNotice(notice);
         return;
       }
-      const instanceId = event.federationTarget?.scope === "remote"
-        ? event.federationTarget.instanceId
-        : undefined;
-      if (isStreamNoticeEvent(event.backend, event.notification.method)) {
-        const params = event.notification.params as Record<string, unknown>;
-        dispatchAppNotice({
-          type: "codex-stream-event",
-          backend: event.backend,
-          notification: { method: event.notification.method, params },
-          errorNoticeContext: event.errorNoticeContext,
-          ...(instanceId ? { instanceId } : {}),
-          skillQuestionsWarningDismissed:
-            props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
-          dismissedWarningIds: codexConfigWarningsDismissedRef.current,
-          threadLabel: labelForThread(
-            event.errorNoticeContext?.backend ?? event.backend,
-            event.errorNoticeContext?.threadId
-              ?? (typeof params.threadId === "string" ? params.threadId : undefined),
-          ),
-        });
+      dispatchAppNotice({
+        type: "dismiss-prefix",
+        prefix: `messaging-platform-error:${platform}:`,
+      });
+    }, [showAppNotice]);
+    const syncGrokCliUpdateNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      // Sweep every id family this producer can emit, not just the vendor one:
+      // both its notices are durable, so one left standing after its condition
+      // cleared would sit on screen until the window reloaded.
+      for (const prefix of GROK_UPDATE_NOTICE_ID_PREFIXES) {
+        dispatchAppNotice({ type: "dismiss-prefix", prefix });
       }
-      if (event.notification.method === "thread/pricing/updated") {
-        const params = event.notification.params;
-        const spendAlerts = params.triggeredSpendAlerts as
-          | ThreadSpendAlert[]
-          | undefined;
-        if (spendAlerts?.length) {
+      if (notice) {
+        showAppNotice(notice);
+      }
+    }, [showAppNotice]);
+
+    const syncCodexVersionNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      // A notice whose condition cleared (Codex updated, or the managed build
+      // took over) must leave the screen, so sweep before showing the current one.
+      for (const prefix of CODEX_VERSION_NOTICE_ID_PREFIXES) {
+        dispatchAppNotice({ type: "dismiss-prefix", prefix });
+      }
+      if (notice) {
+        showAppNotice(notice);
+      }
+    }, [showAppNotice]);
+    const syncRestartGateNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      dispatchAppNotice({ type: "dismiss", id: RESTART_GATE_NOTICE_ID });
+      if (notice) {
+        showAppNotice(notice);
+      }
+    }, [showAppNotice]);
+    const syncCodexRestartNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      for (const prefix of CODEX_RESTART_NOTICE_ID_PREFIXES) {
+        dispatchAppNotice({ type: "dismiss-prefix", prefix });
+      }
+      if (notice) {
+        showAppNotice(notice);
+      }
+    }, [showAppNotice]);
+    const openCodexSettings = useCallback(() => {
+      openSettingsSection("models", "codex");
+    }, [openSettingsSection]);
+    const continueClaudeThreadInNewSession = useCallback((threadId: string, failureNoticeId: string) => {
+      const noticeId = `claude-new-session:${threadId}`;
+      void (async () => {
+        try {
+          if (!desktopApi?.continueClaudeThreadInNewSession) throw new Error("This window cannot continue the thread.");
+          await desktopApi.continueClaudeThreadInNewSession({ threadId });
+          dispatchAppNotice({ type: "dismiss", id: failureNoticeId });
+          showAppNotice({
+            id: noticeId,
+            title: "Ready for a new Claude session",
+            message: "The next message starts a new Claude session with this thread's earlier messages. Earlier tool output is not included.",
+            autoDismiss: true,
+          });
+        } catch (error) {
+          showAppNotice({
+            id: noticeId,
+            title: "Could not continue in a new session",
+            message: error instanceof Error ? error.message : String(error),
+            autoDismiss: false,
+          });
+        }
+      })();
+    }, [desktopApi, showAppNotice]);
+    const syncCodexLaunchNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
+      if (notice) showAppNotice(notice);
+    }, [showAppNotice]);
+    const { writeConfig: writeSettingsConfig, refresh: refreshSettings } = props.settings;
+    const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
+      const saved = await writeSettingsConfig({ models: { codex: { managedBuilds } } });
+      if (saved) {
+        await refreshSettings();
+        await refreshManagedCodexModelCatalog(desktopApi);
+      }
+      return saved;
+    }, [desktopApi, writeSettingsConfig, refreshSettings]);
+    const checkCodexManagedBuildUpdates = useCallback(async () => {
+      await checkForManagedCodexUpdates(desktopApi);
+      await refreshSettings();
+    }, [desktopApi, refreshSettings]);
+
+    useEffect(() => {
+      return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
+        setGithubPrSamlEvents((current) => {
+          const eventKey = githubPrAccessTargetKey(event.target);
+          return current.some(
+            (queued) => githubPrAccessTargetKey(queued.target) === eventKey,
+          )
+            ? current
+            : [...current, event];
+        });
+      });
+    }, [desktopApi]);
+
+    useEffect(() => {
+      return desktopApi?.onGithubPrAuthenticationFailure?.((event) => {
+        setGithubPrAuthenticationFailure(event);
+      });
+    }, [desktopApi]);
+
+    // Raised where it happens rather than in Settings: the operator's own shell
+    // is where the push fails, and nothing takes them past Settings first.
+    useEffect(() => {
+      return desktopApi?.onBundledGitLfsAdvisory?.((event) => {
+        setBundledGitLfsAdvisory(event);
+      });
+    }, [desktopApi]);
+
+    // A rejected Grok download has no screen of its own: whatever triggered the
+    // discovery may already be closed, so the notice is raised here and stays
+    // until the operator dismisses it.
+    useEffect(() => {
+      return desktopApi?.onManagedGrokSignatureRejected?.((event) => {
+        showAppNotice(
+          buildManagedGrokSignatureRejectedNotice({
+            event,
+            onDismiss: () => {
+              dispatchAppNotice({
+                type: "dismiss-prefix",
+                prefix: "managed-grok-signature:",
+              });
+            },
+          }),
+        );
+      });
+    }, [desktopApi, showAppNotice]);
+
+    useEffect(() => {
+      let cancelled = false;
+      const unsubscribe = desktopApi?.onPrAutoDispatchBudgetChanged?.((status) => {
+        if (!cancelled) showPrAutoDispatchBudgetNotice(status);
+      });
+      void desktopApi?.getPrAutoDispatchBudgetStatus?.()
+        .then((status) => {
+          if (!cancelled) showPrAutoDispatchBudgetNotice(status);
+        })
+        .catch(() => {
+          // Best effort only. A later budget event will still surface the stop.
+        });
+      return () => {
+        cancelled = true;
+        unsubscribe?.();
+      };
+    }, [desktopApi, showPrAutoDispatchBudgetNotice]);
+
+    useEffect(() => {
+      return desktopApi?.onHotCpuProfileCaptured?.((event) => {
+        const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
+        const heapSnapshotSummary =
+          heapSnapshotCount > 0
+            ? ` ${heapSnapshotCount} heap snapshots captured.`
+            : "";
+        showAppNotice({
+          autoDismiss: false,
+          copyText: buildHotCpuProfileHandoffMessage(event),
+          facts: [
+            {
+              label: "Source",
+              value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
+            },
+            {
+              label: "Captured",
+              value: new Date(event.capturedAt).toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+                second: "2-digit",
+                timeZoneName: "short",
+              }),
+            },
+            { label: "Session", value: event.sessionDirectoryName },
+          ],
+          dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
+          id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
+          title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
+          message: [
+            `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
+            heapSnapshotSummary,
+          ].join(""),
+        });
+      });
+    }, [desktopApi, showAppNotice]);
+
+    // On-demand heap snapshots. The capture (and its countdown) run in main, so
+    // the result can land here even if Settings was closed to stage the scenario.
+    useEffect(() => {
+      return desktopApi?.onHeapSnapshotCaptured?.((result) => {
+        const failed = result.artifacts.length === 0;
+        // A capture can half-succeed (main written, renderer window gone). Saying
+        // "captured" and hiding the errors would send someone off to analyze a
+        // snapshot that is missing the half they cared about.
+        const partial = !failed && result.errors.length > 0;
+        const title = failed
+          ? "Heap snapshot failed"
+          : partial
+            ? "Heap snapshot partially captured"
+            : "Heap snapshot captured";
+        const message = failed
+          ? result.errors.join("; ")
+          : [
+              describeHeapSnapshotResult(result),
+              partial ? ` Not captured: ${result.errors.join("; ")}.` : "",
+              ` ${HEAP_SNAPSHOT_SECRET_WARNING}`,
+            ].join("");
+        showAppNotice({
+          autoDismiss: false,
+          copyText: buildHeapSnapshotHandoffMessage(result),
+          facts: failed
+            ? undefined
+            : [{ label: "Session", value: result.sessionDirectoryName }],
+          id: `heap-snapshot:${result.capturedAt}`,
+          title,
+          message,
+        });
+      });
+    }, [desktopApi, showAppNotice]);
+
+    // On startup, ask the main process whether it skipped any automations it
+    // couldn't load. Startup reconciliation runs before this window exists, so a
+    // pushed event would be missed — we pull the result once the renderer is up.
+    useEffect(() => {
+      if (!desktopApi?.listAutomationLoadIssues) {
+        return;
+      }
+      let cancelled = false;
+      void desktopApi
+        .listAutomationLoadIssues()
+        .then((response) => {
+          if (cancelled || response.issues.length === 0) {
+            return;
+          }
+          const issues = response.issues;
+          const names = issues.map((issue) => issue.name).filter(Boolean);
+          const namesSummary =
+            names.length > 0 ? names.slice(0, 5).join(", ") : undefined;
+          showAppNotice({
+            autoDismiss: false,
+            id: `automation-load-issues:${issues.map((issue) => issue.id).join(",")}`,
+            title:
+              issues.length === 1
+                ? "1 automation was skipped"
+                : `${issues.length} automations were skipped`,
+            message:
+              "PwrAgent couldn't load some automations, so they did not run this session. They were left unchanged — open them in the newer version of PwrAgent that created them.",
+            detail: namesSummary,
+          });
+        })
+        .catch(() => {
+          // Best-effort warning; never let it interfere with startup.
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [desktopApi, showAppNotice]);
+
+    // Surface backend turn failures + system errors as a durable toast. The
+    // matching transcript entry (rendered from the thread overlay's
+    // turnFailureLog) is the in-context record; this toast is the window-scoped
+    // "something just broke" signal that has to be acknowledged.
+    // Notices are keyed by thread and queued so a failure on one thread can't
+    // suppress a signal from another.
+    useEffect(() => {
+      const labelForThread = (backend: string, threadId?: string): string => {
+        const match = threadId
+          ? backendErrorThreadsRef.current.find(
+              (thread) => thread.source === backend && thread.id === threadId,
+            )
+          : undefined;
+        const title = match?.title?.trim();
+        if (title) {
+          return title;
+        }
+        return backend === "codex"
+          ? `Codex thread${threadId ? ` ${threadId}` : ""}`
+          : `${formatBackendLabel(backend as AppServerBackendKind)} thread${threadId ? ` ${threadId}` : ""}`;
+      };
+      return desktopApi?.onAgentEvent?.(async (event) => {
+        if (
+          !federationTargetsEqual(
+            event.federationTarget,
+            readRendererFederationTarget(),
+          )
+        ) {
+          return;
+        }
+        const instanceId = event.federationTarget?.scope === "remote"
+          ? event.federationTarget.instanceId
+          : undefined;
+        if (isStreamNoticeEvent(event.backend, event.notification.method)) {
+          const params = event.notification.params as Record<string, unknown>;
+          dispatchAppNotice({
+            type: "codex-stream-event",
+            backend: event.backend,
+            notification: { method: event.notification.method, params },
+            errorNoticeContext: event.errorNoticeContext,
+            ...(instanceId ? { instanceId } : {}),
+            skillQuestionsWarningDismissed:
+              props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
+            dismissedWarningIds: codexConfigWarningsDismissedRef.current,
+            threadLabel: labelForThread(
+              event.errorNoticeContext?.backend ?? event.backend,
+              event.errorNoticeContext?.threadId
+                ?? (typeof params.threadId === "string" ? params.threadId : undefined),
+            ),
+          });
+        }
+        if (event.notification.method === "thread/pricing/updated") {
+          const params = event.notification.params;
+          const spendAlerts = params.triggeredSpendAlerts as
+            | ThreadSpendAlert[]
+            | undefined;
+          if (spendAlerts?.length) {
+            const matchingThread = backendErrorThreadsRef.current.find(
+              (thread) =>
+                thread.source === event.backend
+                && thread.id === params.threadId
+                && federationTargetsEqual(
+                  thread.federation?.ref.target,
+                  event.federationTarget,
+                ),
+            );
+            const threadLink = matchingThread
+              ? {
+                  backend: matchingThread.source,
+                  inThreadList: true,
+                  ...(instanceId ? { instanceId } : {}),
+                  threadId: matchingThread.id,
+                  title: matchingThread.title,
+                  titleSource: matchingThread.titleSource,
+                  gitBranch: matchingThread.gitBranch,
+                  linkedDirectories: matchingThread.linkedDirectories,
+                }
+              : undefined;
+            for (const alert of spendAlerts) {
+              dispatchAppNotice({
+                type: "show",
+                notice: buildSpendAlertNotice({
+                  alert,
+                  backend: event.backend,
+                  ...(instanceId ? { instanceId } : {}),
+                  ...(threadLink ? { threadLink } : {}),
+                }),
+              });
+              if (!event.federationTarget) {
+                acknowledgeThreadSpendAlert({
+                  alert,
+                  backend: event.backend,
+                });
+              }
+            }
+          }
+        }
+        if (event.notification.method === "thread/toolAccounting/updated") {
+          const params = event.notification.params as {
+            threadId: string;
+            incidentNotice?: ThreadToolIncidentNoticeState;
+            toolAccounting?: ThreadToolAccounting;
+            displayInvalidated?: true;
+            incidentSummary?: import("@pwragent/shared").ThreadIncidentSummary;
+            triggeredAlerts?: ThreadToolInvocationAlert[];
+          };
+          /* One card per thread, folded from the whole accounting snapshot,
+             rather than one per triggered alert. The per-alert loop this
+             replaces minted a durable notice per turn — a busy thread reached
+             "1 of 41" in the stack with no way to clear them in bulk. */
+          if (!params.toolAccounting) return;
+          /* Only a freshly tripped threshold raises the card. Folding on every
+             accounting update would re-alert on last week's calls the first
+             time an old thread runs anything, which is history, not an
+             incident. The fold still summarizes the whole thread once a new
+             alert makes it worth showing. */
+          if (!params.triggeredAlerts?.length) return;
+          const noticeId = scopeThreadCostNoticeId({
+            id: threadIncidentNoticeId({
+              backend: event.backend,
+              threadId: params.threadId,
+            }),
+            ...(instanceId ? { instanceId } : {}),
+          });
+          /* Persisted disposition wins over anything this session inferred: it
+             may predate this renderer entirely. Only for a local thread, though:
+             the notification is filled from the overlay of whichever instance
+             owns the thread, and a peer's dismissal is the peer operator's
+             preference, not this viewer's. Adopting it would silently stop
+             warning a viewer who never asked to stop being warned. */
+          if (params.incidentNotice && !event.federationTarget) {
+            toolIncidentStateRef.current.set(noticeId, {
+              ...toolIncidentStateRef.current.get(noticeId),
+              ...params.incidentNotice,
+            });
+          }
+          let incidentState = toolIncidentStateRef.current.get(noticeId);
+          let summary = params.displayInvalidated ? params.incidentSummary : buildThreadIncidentSummary({
+            accounting: params.toolAccounting,
+            backend: event.backend,
+            ...(incidentState?.firstWarningAt !== undefined
+              ? { firstWarningAt: incidentState.firstWarningAt }
+              : {}),
+            largeOutputThresholdChars: largeOutputThresholdCharsRef.current,
+            threadId: params.threadId,
+            usageLines: threadUsageLinesRef.current.get(
+              buildThreadIdentityKey(event.backend, params.threadId),
+            ),
+          });
+          if (params.displayInvalidated && desktopApi?.readThread) {
+            try {
+              const detail = await desktopApi.readThread({
+                backend: event.backend, threadId: params.threadId, federationTarget: event.federationTarget,
+                display: { resource: "incident", firstWarningAt: incidentState?.firstWarningAt, largeOutputThresholdChars: largeOutputThresholdCharsRef.current },
+                includeTurns: false, viewOnly: true,
+              });
+              summary = detail.display?.incident ?? summary;
+            } catch {
+              // The event's owner-computed counts still warn when detail cannot be read.
+            }
+          }
+          if (!summary) return;
+          incidentState = toolIncidentStateRef.current.get(noticeId);
+          if (
+            resolveToolIncidentVisibility({
+              severity: summary.severity,
+              ...(incidentState ? { state: incidentState } : {}),
+            }) === "suppress"
+          ) {
+            return;
+          }
           const matchingThread = backendErrorThreadsRef.current.find(
             (thread) =>
               thread.source === event.backend
@@ -1236,369 +1369,274 @@ function DesktopAppShell(props: {
                 linkedDirectories: matchingThread.linkedDirectories,
               }
             : undefined;
-          for (const alert of spendAlerts) {
-            dispatchAppNotice({
-              type: "show",
-              notice: buildSpendAlertNotice({
-                alert,
-                backend: event.backend,
-                ...(instanceId ? { instanceId } : {}),
-                ...(threadLink ? { threadLink } : {}),
-              }),
-            });
-            if (!event.federationTarget) {
-              acknowledgeThreadSpendAlert({
-                alert,
-                backend: event.backend,
-              });
-            }
-          }
-        }
-      }
-      if (event.notification.method === "thread/toolAccounting/updated") {
-        const params = event.notification.params as {
-          threadId: string;
-          incidentNotice?: ThreadToolIncidentNoticeState;
-          toolAccounting?: ThreadToolAccounting;
-          displayInvalidated?: true;
-          incidentSummary?: import("@pwragent/shared").ThreadIncidentSummary;
-          triggeredAlerts?: ThreadToolInvocationAlert[];
-        };
-        /* One card per thread, folded from the whole accounting snapshot,
-           rather than one per triggered alert. The per-alert loop this
-           replaces minted a durable notice per turn — a busy thread reached
-           "1 of 41" in the stack with no way to clear them in bulk. */
-        if (!params.toolAccounting) return;
-        /* Only a freshly tripped threshold raises the card. Folding on every
-           accounting update would re-alert on last week's calls the first
-           time an old thread runs anything, which is history, not an
-           incident. The fold still summarizes the whole thread once a new
-           alert makes it worth showing. */
-        if (!params.triggeredAlerts?.length) return;
-        const noticeId = scopeThreadCostNoticeId({
-          id: threadIncidentNoticeId({
-            backend: event.backend,
-            threadId: params.threadId,
-          }),
-          ...(instanceId ? { instanceId } : {}),
-        });
-        /* Persisted disposition wins over anything this session inferred: it
-           may predate this renderer entirely. Only for a local thread, though:
-           the notification is filled from the overlay of whichever instance
-           owns the thread, and a peer's dismissal is the peer operator's
-           preference, not this viewer's. Adopting it would silently stop
-           warning a viewer who never asked to stop being warned. */
-        if (params.incidentNotice && !event.federationTarget) {
-          toolIncidentStateRef.current.set(noticeId, {
-            ...toolIncidentStateRef.current.get(noticeId),
-            ...params.incidentNotice,
-          });
-        }
-        let incidentState = toolIncidentStateRef.current.get(noticeId);
-        let summary = params.displayInvalidated ? params.incidentSummary : buildThreadIncidentSummary({
-          accounting: params.toolAccounting,
-          backend: event.backend,
-          ...(incidentState?.firstWarningAt !== undefined
-            ? { firstWarningAt: incidentState.firstWarningAt }
-            : {}),
-          largeOutputThresholdChars: largeOutputThresholdCharsRef.current,
-          threadId: params.threadId,
-          usageLines: threadUsageLinesRef.current.get(
-            buildThreadIdentityKey(event.backend, params.threadId),
-          ),
-        });
-        if (params.displayInvalidated && desktopApi?.readThread) {
-          try {
-            const detail = await desktopApi.readThread({
-              backend: event.backend, threadId: params.threadId, federationTarget: event.federationTarget,
-              display: { resource: "incident", firstWarningAt: incidentState?.firstWarningAt, largeOutputThresholdChars: largeOutputThresholdCharsRef.current },
-              includeTurns: false, viewOnly: true,
-            });
-            summary = detail.display?.incident ?? summary;
-          } catch {
-            // The event's owner-computed counts still warn when detail cannot be read.
-          }
-        }
-        if (!summary) return;
-        incidentState = toolIncidentStateRef.current.get(noticeId);
-        if (
-          resolveToolIncidentVisibility({
-            severity: summary.severity,
-            ...(incidentState ? { state: incidentState } : {}),
-          }) === "suppress"
-        ) {
-          return;
-        }
-        const matchingThread = backendErrorThreadsRef.current.find(
-          (thread) =>
-            thread.source === event.backend
-            && thread.id === params.threadId
-            && federationTargetsEqual(
-              thread.federation?.ref.target,
-              event.federationTarget,
-            ),
-        );
-        const threadLink = matchingThread
-          ? {
-              backend: matchingThread.source,
-              inThreadList: true,
-              ...(instanceId ? { instanceId } : {}),
-              threadId: matchingThread.id,
-              title: matchingThread.title,
-              titleSource: matchingThread.titleSource,
-              gitBranch: matchingThread.gitBranch,
-              linkedDirectories: matchingThread.linkedDirectories,
-            }
-          : undefined;
-        const persistIncident = (
-          patch: Omit<SetThreadToolIncidentNoticeRequest, "backend" | "threadId">,
-        ): void => {
-          const next: ThreadToolIncidentNoticeState = {
-            ...toolIncidentStateRef.current.get(noticeId),
-            ...(summary.firstWarningAt !== undefined
-              ? { firstWarningAt: summary.firstWarningAt }
-              : {}),
-            ...(patch.dismissedSeverity
-              ? { dismissedSeverity: patch.dismissedSeverity }
-              : {}),
-            ...(patch.mutedSeverity ? { mutedSeverity: patch.mutedSeverity } : {}),
-          };
-          toolIncidentStateRef.current.set(noticeId, next);
-          /* A remote dismissal belongs to this viewer session. The peer does
-             not own that preference, and an unscoped write here could mutate
-             a local thread that happens to share its backend/thread id. */
-          if (!event.federationTarget) {
-            void desktopApi?.setThreadToolIncidentNotice?.({
-              backend: event.backend,
+          const persistIncident = (
+            patch: Omit<SetThreadToolIncidentNoticeRequest, "backend" | "threadId">,
+          ): void => {
+            const next: ThreadToolIncidentNoticeState = {
+              ...toolIncidentStateRef.current.get(noticeId),
               ...(summary.firstWarningAt !== undefined
                 ? { firstWarningAt: summary.firstWarningAt }
                 : {}),
-              ...patch,
-              threadId: params.threadId,
-            }).catch(() => undefined);
-          }
-        };
-        const dismiss = (): void => {
-          persistIncident({ dismissedSeverity: summary.severity });
-          dispatchAppNotice({ type: "dismiss", id: noticeId });
-        };
-        const mute = (): void => {
-          persistIncident({
-            dismissedSeverity: summary.severity,
-            mutedSeverity: summary.severity,
-          });
-          dispatchAppNotice({ type: "dismiss", id: noticeId });
-        };
-        const examine = (): void => {
-          const matchingDirectory =
-            backendErrorDirectoriesRef.current.find(
-              (directory) =>
-                directory.kind === "directory"
-                && matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
-            )
-            ?? backendErrorDirectoriesRef.current.find((directory) =>
-              matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)
-            );
-          const projectLabel =
-            matchingDirectory?.label
-            ?? matchingThread?.linkedDirectories[0]?.label;
-          void desktopApi?.openToolOutputIncidentExplorerWindow?.({
-            backend: event.backend,
-            /* The event names the owning instance; without it a viewer's
-               explorer reads the peer's thread id locally and finds nothing. */
-            ...(event.federationTarget
-              ? { federationTarget: event.federationTarget }
-              : {}),
-            ...(projectLabel ? { projectLabel } : {}),
-            threadId: params.threadId,
-            title: matchingThread?.title ?? labelForThread(
-              event.backend,
-              params.threadId,
-            ),
-          });
-        };
-        /* Anchor the cost window the first time this thread warns. Recording
-           it only on dismissal would date the window to whenever the operator
-           happened to click, not to the first warning. */
-        if (
-          incidentState?.firstWarningAt === undefined
-          && summary.firstWarningAt !== undefined
-        ) {
-          persistIncident({});
-        }
-        dispatchAppNotice({
-          type: "show",
-          notice: buildToolAccountingNotice({
-            ...(instanceId ? { instanceId } : {}),
-            onDismiss: dismiss,
-            onExamine: examine,
-            onMute: mute,
-            showCost: showIncidentCostRef.current,
-            summary,
-            threadLink,
-          }),
-        });
-        return;
-      }
-      if (event.notification.method === "codex/missingThreads/updated") {
-        const signal = event.notification.params as CodexMissingThreadsSignal;
-        const resolve = (action: "archive" | "keep") => {
-          dispatchAppNotice({
-            type: "dismiss",
-            id: CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
-          });
-          void desktopApi
-            .resolveMissingCodexThreads?.({
-              action,
-              threadIds: signal.threadIds,
-            })
-            .catch(() => {
-              // The main process logs the failure. Re-showing the prompt here
-              // would fight the operator's answer; the audit runs again on the
-              // next launch if the threads are still missing.
+              ...(patch.dismissedSeverity
+                ? { dismissedSeverity: patch.dismissedSeverity }
+                : {}),
+              ...(patch.mutedSeverity ? { mutedSeverity: patch.mutedSeverity } : {}),
+            };
+            toolIncidentStateRef.current.set(noticeId, next);
+            /* A remote dismissal belongs to this viewer session. The peer does
+               not own that preference, and an unscoped write here could mutate
+               a local thread that happens to share its backend/thread id. */
+            if (!event.federationTarget) {
+              void desktopApi?.setThreadToolIncidentNotice?.({
+                backend: event.backend,
+                ...(summary.firstWarningAt !== undefined
+                  ? { firstWarningAt: summary.firstWarningAt }
+                  : {}),
+                ...patch,
+                threadId: params.threadId,
+              }).catch(() => undefined);
+            }
+          };
+          const dismiss = (): void => {
+            persistIncident({ dismissedSeverity: summary.severity });
+            dispatchAppNotice({ type: "dismiss", id: noticeId });
+          };
+          const mute = (): void => {
+            persistIncident({
+              dismissedSeverity: summary.severity,
+              mutedSeverity: summary.severity,
             });
-        };
-        const notice = buildCodexMissingThreadsNotice({
-          onArchive: () => resolve("archive"),
-          onKeep: () => resolve("keep"),
-          signal,
-        });
-        if (notice) {
-          dispatchAppNotice({ type: "show", notice });
-        }
-        return;
-      }
-      // Params are cast explicitly: the AppServerNotification union is too
-      // wide for the discriminant to narrow `params` reliably here.
-      if (event.notification.method === "turn/failed") {
-        const params = event.notification.params as {
-          threadId?: string;
-          turnId?: string;
-          turn?: { error?: { message?: unknown; recovery?: unknown; block?: unknown } };
-        };
-        const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
-        // A peer on an older build forwards the text without the tag.
-        const block = detectProviderResponseBlock(params.turn?.error);
-        const rawMessage = params.turn?.error?.message;
-        const errorMessage =
-          typeof rawMessage === "string" && rawMessage.trim()
-            ? rawMessage
-            : "The agent turn failed.";
-        const identity = {
-          backend: event.backend,
-          threadId: params.threadId ?? "unknown",
-          turnId: params.turnId ?? "unknown",
-          ...(instanceId ? { instanceId } : {}),
-        };
-        const noticeId = turnFailureNoticeId(identity);
-        const scope = turnFailureScopeKey(identity.backend, identity.threadId, instanceId);
-        if (!turnFailureAcknowledgements.report(scope, noticeId, errorMessage)) return;
-        dispatchAppNotice({
-          type: "backend-error",
-          signal: {
-            kind: "turn-failed",
-            onDismiss: () => {
-              if (!turnFailureAcknowledgements.dismiss(noticeId)) {
-                dispatchAppNotice({ type: "dismiss", id: noticeId });
-              }
-            },
-            errorNoticeContext: event.errorNoticeContext,
-            originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
-            onCodexLogin: openCodexLogin,
-            onOpenCodexSettings: openCodexSettings,
-            ...(recovery && params.threadId ? {
-              recovery,
-              onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
-            } : {}),
-            ...(block ? { block } : {}),
-            backend: event.backend,
-            threadId: params.threadId ?? "unknown",
-            turnId: params.turnId ?? "unknown",
-            errorMessage,
-            ...(instanceId ? { instanceId } : {}),
-            threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
-              event.errorNoticeContext?.backend ?? event.backend,
-              event.errorNoticeContext?.threadId ?? params.threadId,
-            ),
-          },
-        });
-        return;
-      }
-      if (event.notification.method === "thread/turnQueue/updated") {
-        const params = event.notification.params;
-        if ((params.status === "blocked" || params.status === "failed")
-          && typeof params.errorMessage === "string") {
-          turnFailureAcknowledgements.reportQueueFailure(
-            turnFailureScopeKey(event.backend, params.threadId, instanceId),
-            params.errorMessage,
-          );
-        }
-        return;
-      }
-      if (
-        event.notification.method
-        === "thread/codexInvalidIdRecovery/updated"
-      ) {
-        const params = event.notification.params as {
-          threadId: string;
-          turnId?: string;
-          status: "waiting" | "repairing" | "succeeded" | "failed";
-          failureMessage: string;
-          recoveryError?: string;
-          waitingForThreadIds?: string[];
-        };
-        dispatchAppNotice({
-          type: "backend-error",
-          signal: {
-            kind: "codex-invalid-id-recovery",
-            failureMessage: params.failureMessage,
-            ...(instanceId ? { instanceId } : {}),
-            recoveryError: params.recoveryError,
-            status: params.status,
-            ...(params.waitingForThreadIds
-              ? { waitingForThreadCount: params.waitingForThreadIds.length }
-              : {}),
-            threadId: params.threadId,
-            threadLabel: labelForThread("codex", params.threadId),
-            turnId: params.turnId ?? "unknown",
-          },
-        });
-        return;
-      }
-      if (event.notification.method === "thread/status/changed") {
-        const params = event.notification.params as {
-          threadId?: string;
-          status?: { type?: string };
-        };
-        if (params.status?.type !== "systemError") {
+            dispatchAppNotice({ type: "dismiss", id: noticeId });
+          };
+          const examine = (): void => {
+            const matchingDirectory =
+              backendErrorDirectoriesRef.current.find(
+                (directory) =>
+                  directory.kind === "directory"
+                  && matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
+              )
+              ?? backendErrorDirectoriesRef.current.find((directory) =>
+                matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)
+              );
+            const projectLabel =
+              matchingDirectory?.label
+              ?? matchingThread?.linkedDirectories[0]?.label;
+            void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+              backend: event.backend,
+              /* The event names the owning instance; without it a viewer's
+                 explorer reads the peer's thread id locally and finds nothing. */
+              ...(event.federationTarget
+                ? { federationTarget: event.federationTarget }
+                : {}),
+              ...(projectLabel ? { projectLabel } : {}),
+              threadId: params.threadId,
+              title: matchingThread?.title ?? labelForThread(
+                event.backend,
+                params.threadId,
+              ),
+            });
+          };
+          /* Anchor the cost window the first time this thread warns. Recording
+             it only on dismissal would date the window to whenever the operator
+             happened to click, not to the first warning. */
+          if (
+            incidentState?.firstWarningAt === undefined
+            && summary.firstWarningAt !== undefined
+          ) {
+            persistIncident({});
+          }
+          dispatchAppNotice({
+            type: "show",
+            notice: buildToolAccountingNotice({
+              ...(instanceId ? { instanceId } : {}),
+              onDismiss: dismiss,
+              onExamine: examine,
+              onMute: mute,
+              showCost: showIncidentCostRef.current,
+              summary,
+              threadLink,
+            }),
+          });
           return;
         }
-        dispatchAppNotice({
-          type: "backend-error",
-          signal: {
-            kind: "system-error",
-            errorNoticeContext: event.errorNoticeContext,
-            originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
+        if (event.notification.method === "codex/missingThreads/updated") {
+          const signal = event.notification.params as CodexMissingThreadsSignal;
+          const resolve = (action: "archive" | "keep") => {
+            dispatchAppNotice({
+              type: "dismiss",
+              id: CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
+            });
+            void desktopApi
+              .resolveMissingCodexThreads?.({
+                action,
+                threadIds: signal.threadIds,
+              })
+              .catch(() => {
+                // The main process logs the failure. Re-showing the prompt here
+                // would fight the operator's answer; the audit runs again on the
+                // next launch if the threads are still missing.
+              });
+          };
+          const notice = buildCodexMissingThreadsNotice({
+            onArchive: () => resolve("archive"),
+            onKeep: () => resolve("keep"),
+            signal,
+          });
+          if (notice) {
+            dispatchAppNotice({ type: "show", notice });
+          }
+          return;
+        }
+        // Params are cast explicitly: the AppServerNotification union is too
+        // wide for the discriminant to narrow `params` reliably here.
+        if (event.notification.method === "turn/failed") {
+          const params = event.notification.params as {
+            threadId?: string;
+            turnId?: string;
+            turn?: { error?: { message?: unknown; recovery?: unknown; block?: unknown } };
+          };
+          const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
+          // A peer on an older build forwards the text without the tag.
+          const block = detectProviderResponseBlock(params.turn?.error);
+          const rawMessage = params.turn?.error?.message;
+          const errorMessage =
+            typeof rawMessage === "string" && rawMessage.trim()
+              ? rawMessage
+              : "The agent turn failed.";
+          const identity = {
             backend: event.backend,
-            ...(instanceId ? { instanceId } : {}),
             threadId: params.threadId ?? "unknown",
-            threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
-              event.errorNoticeContext?.backend ?? event.backend,
-              event.errorNoticeContext?.threadId ?? params.threadId,
-            ),
-          },
-        });
-        return;
-      }
-    });
-  }, [
-    acknowledgeThreadSpendAlert,
-    desktopApi,
-    continueClaudeThreadInNewSession,
-    openCodexLogin,
-    openCodexSettings,
-    props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
-  ]);
+            turnId: params.turnId ?? "unknown",
+            ...(instanceId ? { instanceId } : {}),
+          };
+          const noticeId = turnFailureNoticeId(identity);
+          const scope = turnFailureScopeKey(identity.backend, identity.threadId, instanceId);
+          if (!turnFailureAcknowledgements.report(scope, noticeId, errorMessage)) return;
+          dispatchAppNotice({
+            type: "backend-error",
+            signal: {
+              kind: "turn-failed",
+              onDismiss: () => {
+                if (!turnFailureAcknowledgements.dismiss(noticeId)) {
+                  dispatchAppNotice({ type: "dismiss", id: noticeId });
+                }
+              },
+              errorNoticeContext: event.errorNoticeContext,
+              originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
+              onCodexLogin: openCodexLogin,
+              onOpenCodexSettings: openCodexSettings,
+              ...(recovery && params.threadId ? {
+                recovery,
+                onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
+              } : {}),
+              ...(block ? { block } : {}),
+              backend: event.backend,
+              threadId: params.threadId ?? "unknown",
+              turnId: params.turnId ?? "unknown",
+              errorMessage,
+              ...(instanceId ? { instanceId } : {}),
+              threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
+                event.errorNoticeContext?.backend ?? event.backend,
+                event.errorNoticeContext?.threadId ?? params.threadId,
+              ),
+            },
+          });
+          return;
+        }
+        if (event.notification.method === "thread/turnQueue/updated") {
+          const params = event.notification.params;
+          if ((params.status === "blocked" || params.status === "failed")
+            && typeof params.errorMessage === "string") {
+            turnFailureAcknowledgements.reportQueueFailure(
+              turnFailureScopeKey(event.backend, params.threadId, instanceId),
+              params.errorMessage,
+            );
+          }
+          return;
+        }
+        if (
+          event.notification.method
+          === "thread/codexInvalidIdRecovery/updated"
+        ) {
+          const params = event.notification.params as {
+            threadId: string;
+            turnId?: string;
+            status: "waiting" | "repairing" | "succeeded" | "failed";
+            failureMessage: string;
+            recoveryError?: string;
+            waitingForThreadIds?: string[];
+          };
+          dispatchAppNotice({
+            type: "backend-error",
+            signal: {
+              kind: "codex-invalid-id-recovery",
+              failureMessage: params.failureMessage,
+              ...(instanceId ? { instanceId } : {}),
+              recoveryError: params.recoveryError,
+              status: params.status,
+              ...(params.waitingForThreadIds
+                ? { waitingForThreadCount: params.waitingForThreadIds.length }
+                : {}),
+              threadId: params.threadId,
+              threadLabel: labelForThread("codex", params.threadId),
+              turnId: params.turnId ?? "unknown",
+            },
+          });
+          return;
+        }
+        if (event.notification.method === "thread/status/changed") {
+          const params = event.notification.params as {
+            threadId?: string;
+            status?: { type?: string };
+          };
+          if (params.status?.type !== "systemError") {
+            return;
+          }
+          dispatchAppNotice({
+            type: "backend-error",
+            signal: {
+              kind: "system-error",
+              errorNoticeContext: event.errorNoticeContext,
+              originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
+              backend: event.backend,
+              ...(instanceId ? { instanceId } : {}),
+              threadId: params.threadId ?? "unknown",
+              threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
+                event.errorNoticeContext?.backend ?? event.backend,
+                event.errorNoticeContext?.threadId ?? params.threadId,
+              ),
+            },
+          });
+          return;
+        }
+      });
+    }, [
+      acknowledgeThreadSpendAlert,
+      desktopApi,
+      continueClaudeThreadInNewSession,
+      openCodexLogin,
+      openCodexSettings,
+      props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
+    ]);
+    return {
+      openMessagingActivityWindow,
+      openMessagingSettings,
+      openPluginSettings,
+      handleEditEnvironments,
+      syncFederationShutdownNotice,
+      syncCloudflareSignInNotice,
+      syncMessagingErrorNotice,
+      syncGrokCliUpdateNotice,
+      syncCodexVersionNotice,
+      syncRestartGateNotice,
+      syncCodexRestartNotice,
+      openCodexSettings,
+      syncCodexLaunchNotice,
+      changeCodexManagedBuilds,
+      checkCodexManagedBuildUpdates,
+    };
+  }
+
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
   // a smooth scroll is animated over several frames, and hiding the sidebar
   // mid-animation abandons it wherever it got to. An instant scroll lands in one
@@ -4018,299 +4056,305 @@ function DesktopAppShell(props: {
     if (thread) await navigation.sendThreadPrAutoDispatchNow(thread, fingerprint);
   });
 
-  const threadViewProps = {
-    titleRename,
-    onForkThread: navigation.forkThread,
-    onCreateSubthread: navigation.createSubthread,
-    readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
-    pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
-      (creation) => creation.selectionKey === navigation.selectedItemKey,
-    ),
-    activeFederationOwnerLabel,
-    activeFederationTarget,
-    activeTurnId: session.activeTurnId,
-    activeTurnStartedAt: session.activeTurnStartedAt,
-    terminals,
-    addOptimisticReviewEntry: session.addOptimisticReviewEntry,
-    addOptimisticUserMessage: session.addOptimisticUserMessage,
-    bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
-    backendError: backendSummaries.error,
-    backends: backendSummaries.backends,
-    applications,
-    codexFastAllowed:
-      settings.snapshot?.models?.codex.allowFast?.value ?? true,
-    providerModelDefaults: settings.snapshot?.models?.providerDefaults,
-    providerThreadMigrations:
-      settings.snapshot?.models?.providerThreadMigrations,
-    clearPendingRequest: session.clearPendingRequest,
-    launchpadConfigurationReady: navigation.selectedLaunchpadConfigurationReady,
-    launchpadConfigurationError: navigation.selectedLaunchpadConfigurationError,
-    onReloadLaunchpadConfiguration: navigation.refreshSelectedLaunchpadConfiguration,
-    composerDisabled:
-      !navigation.selectedThread ||
-      !navigation.selectedThreadConfigurationReady ||
-      selectedQueue.readiness !== "ready" ||
-      // A remote thread cannot accept input while its owning instance is
-      // unreachable — typing would only queue into a dead RPC.
-      remoteReadsSuspended ||
-      // A locked thread refuses every turn; its lock card says why.
-      Boolean(navigation.selectedThread?.lock) ||
-      !backendSummaries.backends.some(
-        (backend) =>
-          backend.kind === navigation.selectedThread?.source &&
-          backend.available
-      ),
-    composerImplementation: settings.composerImplementation,
-    composerDraftStore,
-    desktopApi: remoteReadsSuspended ? undefined : threadDesktopApi,
-    launchpadError: navigation.launchpadError,
-    onProviderSelected: refreshSelectedAcpProvider,
-    onShowNotice: showAppNotice,
-    onReloadThread: async () => {
-      await Promise.all([session.reload(), navigation.refreshSelectedThreadConfiguration(), selectedQueue.refresh()]);
-    },
-    initialLoadDurationMs: session.initialLoadDurationMs,
-    loading: session.loading,
-    loadingMore: session.loadingMore,
-    messageCount: session.messages.length,
-    contextWindow: session.contextWindow,
-    pricing: session.response?.pricing,
-    toolAccounting:
-      settings.snapshot?.experimental.threadToolAccounting?.value === true
-        ? session.response?.toolAccounting
-        : undefined,
-    threadToolAccountingEnabled:
-      settings.snapshot?.experimental.threadToolAccounting?.value === true,
-    researchEnabled:
-      settings.snapshot?.experimental.researchEnabled?.value === true
-      && settings.snapshot?.experimental.codexToolDiscovery?.value !== false,
-    threadPricingSummaryEnabled:
-      settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
-    pricingDisplayOptions: {
-      codexCredits:
-        settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value ??
-        false,
-      usd: settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true,
-    },
-    pendingAssistantMessage: session.pendingAssistantMessage,
-    transientMessage: session.transientMessage,
-    transientMessages: session.transientMessages,
-    pendingMcpInteraction: session.pendingMcpInteraction,
-    pendingRequest: session.pendingRequest,
-    pendingUserInput: session.pendingUserInput,
-    pendingStatusText: session.pendingStatusText,
-    runningTurnUsageText: session.runningTurnUsageText,
-    threadBusy: session.threadBusy,
-    agentCommandsStatus: session.agentCommandsStatus,
-    backgroundTerminals: {
-      terminals: session.backgroundTerminals,
-      error: session.backgroundTerminalsError,
-      stopping: session.stoppingBackgroundTerminal,
-      onStop: session.stopBackgroundTerminal,
-    },
-    pastedImageMaxPatches:
-      settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
-    pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
-    reviewAutoFixDefault: settings.snapshot?.general.autoFixReviews?.value,
-    tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
-    monitorJobSuggestionsDefaultEnabled:
-      settings.snapshot?.general.toolOutputAlerts?.monitorJobSuggestionsEnabled?.value ?? true,
-    tokenMiserDefaultEnabled:
-      settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
-    platform: threadOwnerPlatform({
-      target: selectedThreadFederationTarget ?? readRendererFederationTarget(),
-      peers: liveFederationHealth?.peers,
-      localPlatform: desktopApi?.platform,
-    }),
-    ...(navigation.creatingThread?.pendingForkEnvironmentSetup
-      ? {
-          pendingForkEnvironmentSetup:
-            navigation.creatingThread.pendingForkEnvironmentSetup,
-        }
-      : {}),
-    selectedDirectory: navigation.selectedDirectory,
-    selectedLaunchpad: navigation.selectedLaunchpad,
-    launchpadMachine,
-    threadMachine,
-    selectedThread: navigation.selectedThread,
-    threads: navigation.threads,
-    suppressBranchDriftDialog: mainView === "settings",
-    directories: navigation.launchpadDirectories,
-    fullAccessRiskWarningDismissed:
-      settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
-    backgroundPrPollingEnabled:
-      settings.snapshot
-        ? settings.snapshot.git?.backgroundPrPolling?.value
-          ?? DEFAULT_BACKGROUND_PR_POLLING
-        : false,
-    prAutoDispatchAllowed:
-      settings.snapshot
-        ? settings.snapshot.git?.prAutoDispatchAllowed?.value
-          ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED
-        : false,
-    pickDirectoryError: navigation.pickDirectoryError,
-    pickingDirectory: navigation.pickingDirectory,
-    onSelectDirectoryFromPicker: handleSelectDirectoryFromPicker,
-    onSelectNoDirectoryFromPicker: handleSelectNoDirectoryFromPicker,
-    onPickAndRegisterDirectory: handlePickAndRegisterDirectory,
-    onPickAndAttachDirectoryToThread: handlePickAndAttachDirectoryToThread,
-    onPickDirectoryForReference: handlePickDirectoryForReference,
-    onAttachDirectoryReferences: handleAttachDirectoryReferences,
-    onClearPickDirectoryError: navigation.clearPickDirectoryError,
-    setExecutionModeError: navigation.setThreadExecutionModeError,
-    setThreadModelSettingsError: navigation.setThreadModelSettingsError,
-    skillError: skills.error,
-    skillLoading: skills.loading,
-    providerCommands: skills.providerCommands,
-    skills: skills.skills,
-    transcriptEntries: session.entries,
-    // The connection banner owns expected peer outages. Independent detail
-    // and queue readiness still gate actions without replacing the transcript.
-    transcriptError: session.error ?? (remoteReadsSuspended ? undefined
-      : navigation.selectedThreadConfigurationError ?? selectedQueue.error),
-    expandedTranscriptActivityIds: session.expandedTranscriptActivityIds,
-    expandedTranscriptWorkPhaseGroupIds:
-      session.expandedTranscriptWorkPhaseGroupIds,
-    renderedTranscriptEntryLimit: session.renderedTranscriptEntryLimit,
-    transcriptPagination: session.response?.replay.pagination,
-    updatingExecutionMode: navigation.updatingThreadExecutionMode,
-    worktreeArchiveError: navigation.worktreeArchiveError,
-    onActiveTurnIdChange: session.setActiveTurnId,
-    onArchiveThread: navigation.archiveThread,
-    onArchiveWorktree: navigation.archiveWorktree,
-    onEnsureSkillsLoaded: skills.ensureLoaded,
-    onDismissFullAccessRiskWarning: handleDismissFullAccessRiskWarning,
-    onOpenAutomations: () => {
-      setMainView("automations");
-    },
-    onOpenMessagingActivity: openMessagingActivityWindow,
-    onOpenMessagingSettings: openMessagingSettings,
-    onOpenPluginSettings: openPluginSettings,
-    onRevealSelectedThreadInList: revealSelectedThreadInList,
-    onRevealSelectedProjectInList: revealSelectedProjectInList,
-    projectThreadActions: {
-      onCreateThread: (directory) => {
-        setMainView("thread");
-        void navigation.openDirectoryLaunchpad(directory, directory.launchpad?.backend);
-      },
-      federationTargets: listedNewThreadFederationTargets,
-      checkFederationTargetProject,
-      onCreateThreadOnFederationTarget: (instanceId, directory) => {
-        void createThreadOnFederationTarget(instanceId, directory);
-      },
-    },
-    contextRailPinned,
-    onContextRailPinnedChange: setContextRailPinnedPersisted,
-    activeContextTab,
-    onActiveContextTabChange: setActiveContextTabPersisted,
-    editedFilesDock,
-    onEditedFilesDockChange: setEditedFilesDockPersisted,
-    actionRunsDock,
-    onActionRunsDockChange: setActionRunsDockPersisted,
-    // A settings read that failed never delivers the stored choice; show the
-    // cards where they live by default rather than nowhere.
-    launchpadConnectionsDock:
-      launchpadConnectionsDock === "pending" && settings.error
-        ? "launchpad"
-        : launchpadConnectionsDock,
-    onLaunchpadConnectionsDockChange: setLaunchpadConnectionsDockPersisted,
-    sidebarHidden,
-    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-    mastheadActions,
-    historyNav,
-    starMap: starMapControls,
-    threadTodos: threadTodosView,
-    threadTodoRevealRequest,
-    findOpen: threadFindOpen,
-    findInitialQuery: threadFindInitialQuery,
-    findTurnId: threadFindTurnId,
-    findFocusNonce,
-    linkedMessageId:
-      messageLinkRequest?.threadKey === navigation.selectedThreadKey
-        ? messageLinkRequest?.messageId
-        : undefined,
-    linkedMessageRequestKey:
-      messageLinkRequest?.threadKey === navigation.selectedThreadKey
-        ? messageLinkRequest?.nonce
-        : undefined,
-    onLinkedMessageHandled: () => {
-      setMessageLinkRequest(undefined);
-    },
-    onFindOpenChange: (open: boolean) => {
-      // The bar only ever calls this to close itself (Escape / ✕). Clear both
-      // the manual toggle and any deep-link request so it stays closed.
-      if (!open) {
-        setManualFindOpen(false);
-        setFindRequest(undefined);
-      }
-    },
-    workspaceActionsBlocked: navigation.selectedWorkspaceHandoffPending,
-    onEditEnvironments: handleEditEnvironments,
-    onHandoffThreadWorkspace: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
-      ? handleHandoffThreadWorkspace : undefined,
-    onRecreateThreadWorktree: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
-      ? handleRecreateThreadWorktree : undefined,
-    onMoveThreadToMainCheckout: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
-      ? handleMoveThreadToMainCheckout : undefined,
-    onSetThreadCheckoutHibernation: navigation.selectedThread && navigation.setThreadCheckoutHibernation
-      ? handleSetThreadCheckoutHibernation : undefined,
-    onLoadOlder: session.loadOlder,
-    onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
-    onCancelLaunchpad: handleCancelLaunchpad,
-    launchpadCancelRequest,
-    composerFocusRequest,
-    onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
-    composerInsertRequest,
-    onComposerInsertRequestHandled: handleComposerInsertRequestHandled,
-    onDetachLaunchpadParent: handleDetachLaunchpadParent,
-    onSelectLaunchpadParent: handleSelectLaunchpadParent,
-    // The composer's 5th argument is `extraDirectoryPaths` (draft
-    // `@`-references); the hook's 5th is `parentThreadId` (resolved from
-    // the launchpad draft internally), so map positions explicitly.
-    onMaterializeLaunchpad: (
-      directoryKey,
-      input,
-      collaborationMode,
-      reviewTarget,
-      extraDirectoryPaths,
-      scheduledFor,
-    ) =>
-      navigation.materializeDirectoryLaunchpad(
-        directoryKey,
-        input,
-        collaborationMode,
-        reviewTarget,
-        undefined,
-        extraDirectoryPaths,
-        scheduledFor,
-        (thread, composerScopeKey) =>
-          handoffLaunchpadComposer(composerDraftStore, composerScopeKey, thread, desktopApi),
-      ),
-    onPendingStatusChange: session.setPendingStatusText,
-    onRefreshNavigation: refreshReplyNavigation,
-    onUserRepliedToThread: reportUserRepliedToThread,
-    onSetExecutionMode: navigation.selectedThread ? handleSetExecutionMode : undefined,
-    onSetAcpRuntimeOption: navigation.selectedThread ? handleSetAcpRuntimeOption : undefined,
-    onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
-    onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
-    onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
-    onSetThreadLock: navigation.selectedThread ? handleSetThreadLock : undefined,
-    onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
-    onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,
-    onRestoreWorktree: navigation.restoreWorktree,
-    onTranscriptViewportChange: session.setViewport,
-    onExpandedTranscriptActivityIdsChange:
-      session.setExpandedTranscriptActivityIds,
-    onExpandedTranscriptWorkPhaseGroupIdsChange:
-      session.setExpandedTranscriptWorkPhaseGroupIds,
-    onRenderedTranscriptEntryLimitChange:
-      session.setRenderedTranscriptEntryLimit,
-    onUpdateLaunchpad: navigation.updateDirectoryLaunchpad,
-    onUpdatePendingMcpInteraction: session.updatePendingMcpInteraction,
-    onUpdatePendingUserInput: session.updatePendingUserInput,
-    removeOptimisticMessage: session.removeOptimisticMessage,
-    transcriptViewport: session.viewport,
-  } satisfies ThreadViewProps;
+  const threadViewProps = buildThreadViewProps();
+
+  function buildThreadViewProps() {
+    return (
+      {
+        titleRename,
+        onForkThread: navigation.forkThread,
+        onCreateSubthread: navigation.createSubthread,
+        readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
+        pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
+          (creation) => creation.selectionKey === navigation.selectedItemKey,
+        ),
+        activeFederationOwnerLabel,
+        activeFederationTarget,
+        activeTurnId: session.activeTurnId,
+        activeTurnStartedAt: session.activeTurnStartedAt,
+        terminals,
+        addOptimisticReviewEntry: session.addOptimisticReviewEntry,
+        addOptimisticUserMessage: session.addOptimisticUserMessage,
+        bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
+        backendError: backendSummaries.error,
+        backends: backendSummaries.backends,
+        applications,
+        codexFastAllowed:
+          settings.snapshot?.models?.codex.allowFast?.value ?? true,
+        providerModelDefaults: settings.snapshot?.models?.providerDefaults,
+        providerThreadMigrations:
+          settings.snapshot?.models?.providerThreadMigrations,
+        clearPendingRequest: session.clearPendingRequest,
+        launchpadConfigurationReady: navigation.selectedLaunchpadConfigurationReady,
+        launchpadConfigurationError: navigation.selectedLaunchpadConfigurationError,
+        onReloadLaunchpadConfiguration: navigation.refreshSelectedLaunchpadConfiguration,
+        composerDisabled:
+          !navigation.selectedThread ||
+          !navigation.selectedThreadConfigurationReady ||
+          selectedQueue.readiness !== "ready" ||
+          // A remote thread cannot accept input while its owning instance is
+          // unreachable — typing would only queue into a dead RPC.
+          remoteReadsSuspended ||
+          // A locked thread refuses every turn; its lock card says why.
+          Boolean(navigation.selectedThread?.lock) ||
+          !backendSummaries.backends.some(
+            (backend) =>
+              backend.kind === navigation.selectedThread?.source &&
+              backend.available
+          ),
+        composerImplementation: settings.composerImplementation,
+        composerDraftStore,
+        desktopApi: remoteReadsSuspended ? undefined : threadDesktopApi,
+        launchpadError: navigation.launchpadError,
+        onProviderSelected: refreshSelectedAcpProvider,
+        onShowNotice: showAppNotice,
+        onReloadThread: async () => {
+          await Promise.all([session.reload(), navigation.refreshSelectedThreadConfiguration(), selectedQueue.refresh()]);
+        },
+        initialLoadDurationMs: session.initialLoadDurationMs,
+        loading: session.loading,
+        loadingMore: session.loadingMore,
+        messageCount: session.messages.length,
+        contextWindow: session.contextWindow,
+        pricing: session.response?.pricing,
+        toolAccounting:
+          settings.snapshot?.experimental.threadToolAccounting?.value === true
+            ? session.response?.toolAccounting
+            : undefined,
+        threadToolAccountingEnabled:
+          settings.snapshot?.experimental.threadToolAccounting?.value === true,
+        researchEnabled:
+          settings.snapshot?.experimental.researchEnabled?.value === true
+          && settings.snapshot?.experimental.codexToolDiscovery?.value !== false,
+        threadPricingSummaryEnabled:
+          settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
+        pricingDisplayOptions: {
+          codexCredits:
+            settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value ??
+            false,
+          usd: settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true,
+        },
+        pendingAssistantMessage: session.pendingAssistantMessage,
+        transientMessage: session.transientMessage,
+        transientMessages: session.transientMessages,
+        pendingMcpInteraction: session.pendingMcpInteraction,
+        pendingRequest: session.pendingRequest,
+        pendingUserInput: session.pendingUserInput,
+        pendingStatusText: session.pendingStatusText,
+        runningTurnUsageText: session.runningTurnUsageText,
+        threadBusy: session.threadBusy,
+        agentCommandsStatus: session.agentCommandsStatus,
+        backgroundTerminals: {
+          terminals: session.backgroundTerminals,
+          error: session.backgroundTerminalsError,
+          stopping: session.stoppingBackgroundTerminal,
+          onStop: session.stopBackgroundTerminal,
+        },
+        pastedImageMaxPatches:
+          settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
+        pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
+        reviewAutoFixDefault: settings.snapshot?.general.autoFixReviews?.value,
+        tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
+        monitorJobSuggestionsDefaultEnabled:
+          settings.snapshot?.general.toolOutputAlerts?.monitorJobSuggestionsEnabled?.value ?? true,
+        tokenMiserDefaultEnabled:
+          settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
+        platform: threadOwnerPlatform({
+          target: selectedThreadFederationTarget ?? readRendererFederationTarget(),
+          peers: liveFederationHealth?.peers,
+          localPlatform: desktopApi?.platform,
+        }),
+        ...(navigation.creatingThread?.pendingForkEnvironmentSetup
+          ? {
+              pendingForkEnvironmentSetup:
+                navigation.creatingThread.pendingForkEnvironmentSetup,
+            }
+          : {}),
+        selectedDirectory: navigation.selectedDirectory,
+        selectedLaunchpad: navigation.selectedLaunchpad,
+        launchpadMachine,
+        threadMachine,
+        selectedThread: navigation.selectedThread,
+        threads: navigation.threads,
+        suppressBranchDriftDialog: mainView === "settings",
+        directories: navigation.launchpadDirectories,
+        fullAccessRiskWarningDismissed:
+          settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+        backgroundPrPollingEnabled:
+          settings.snapshot
+            ? settings.snapshot.git?.backgroundPrPolling?.value
+              ?? DEFAULT_BACKGROUND_PR_POLLING
+            : false,
+        prAutoDispatchAllowed:
+          settings.snapshot
+            ? settings.snapshot.git?.prAutoDispatchAllowed?.value
+              ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED
+            : false,
+        pickDirectoryError: navigation.pickDirectoryError,
+        pickingDirectory: navigation.pickingDirectory,
+        onSelectDirectoryFromPicker: handleSelectDirectoryFromPicker,
+        onSelectNoDirectoryFromPicker: handleSelectNoDirectoryFromPicker,
+        onPickAndRegisterDirectory: handlePickAndRegisterDirectory,
+        onPickAndAttachDirectoryToThread: handlePickAndAttachDirectoryToThread,
+        onPickDirectoryForReference: handlePickDirectoryForReference,
+        onAttachDirectoryReferences: handleAttachDirectoryReferences,
+        onClearPickDirectoryError: navigation.clearPickDirectoryError,
+        setExecutionModeError: navigation.setThreadExecutionModeError,
+        setThreadModelSettingsError: navigation.setThreadModelSettingsError,
+        skillError: skills.error,
+        skillLoading: skills.loading,
+        providerCommands: skills.providerCommands,
+        skills: skills.skills,
+        transcriptEntries: session.entries,
+        // The connection banner owns expected peer outages. Independent detail
+        // and queue readiness still gate actions without replacing the transcript.
+        transcriptError: session.error ?? (remoteReadsSuspended ? undefined
+          : navigation.selectedThreadConfigurationError ?? selectedQueue.error),
+        expandedTranscriptActivityIds: session.expandedTranscriptActivityIds,
+        expandedTranscriptWorkPhaseGroupIds:
+          session.expandedTranscriptWorkPhaseGroupIds,
+        renderedTranscriptEntryLimit: session.renderedTranscriptEntryLimit,
+        transcriptPagination: session.response?.replay.pagination,
+        updatingExecutionMode: navigation.updatingThreadExecutionMode,
+        worktreeArchiveError: navigation.worktreeArchiveError,
+        onActiveTurnIdChange: session.setActiveTurnId,
+        onArchiveThread: navigation.archiveThread,
+        onArchiveWorktree: navigation.archiveWorktree,
+        onEnsureSkillsLoaded: skills.ensureLoaded,
+        onDismissFullAccessRiskWarning: handleDismissFullAccessRiskWarning,
+        onOpenAutomations: () => {
+          setMainView("automations");
+        },
+        onOpenMessagingActivity: openMessagingActivityWindow,
+        onOpenMessagingSettings: openMessagingSettings,
+        onOpenPluginSettings: openPluginSettings,
+        onRevealSelectedThreadInList: revealSelectedThreadInList,
+        onRevealSelectedProjectInList: revealSelectedProjectInList,
+        projectThreadActions: {
+          onCreateThread: (directory) => {
+            setMainView("thread");
+            void navigation.openDirectoryLaunchpad(directory, directory.launchpad?.backend);
+          },
+          federationTargets: listedNewThreadFederationTargets,
+          checkFederationTargetProject,
+          onCreateThreadOnFederationTarget: (instanceId, directory) => {
+            void createThreadOnFederationTarget(instanceId, directory);
+          },
+        },
+        contextRailPinned,
+        onContextRailPinnedChange: setContextRailPinnedPersisted,
+        activeContextTab,
+        onActiveContextTabChange: setActiveContextTabPersisted,
+        editedFilesDock,
+        onEditedFilesDockChange: setEditedFilesDockPersisted,
+        actionRunsDock,
+        onActionRunsDockChange: setActionRunsDockPersisted,
+        // A settings read that failed never delivers the stored choice; show the
+        // cards where they live by default rather than nowhere.
+        launchpadConnectionsDock:
+          launchpadConnectionsDock === "pending" && settings.error
+            ? "launchpad"
+            : launchpadConnectionsDock,
+        onLaunchpadConnectionsDockChange: setLaunchpadConnectionsDockPersisted,
+        sidebarHidden,
+        onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+        mastheadActions,
+        historyNav,
+        starMap: starMapControls,
+        threadTodos: threadTodosView,
+        threadTodoRevealRequest,
+        findOpen: threadFindOpen,
+        findInitialQuery: threadFindInitialQuery,
+        findTurnId: threadFindTurnId,
+        findFocusNonce,
+        linkedMessageId:
+          messageLinkRequest?.threadKey === navigation.selectedThreadKey
+            ? messageLinkRequest?.messageId
+            : undefined,
+        linkedMessageRequestKey:
+          messageLinkRequest?.threadKey === navigation.selectedThreadKey
+            ? messageLinkRequest?.nonce
+            : undefined,
+        onLinkedMessageHandled: () => {
+          setMessageLinkRequest(undefined);
+        },
+        onFindOpenChange: (open: boolean) => {
+          // The bar only ever calls this to close itself (Escape / ✕). Clear both
+          // the manual toggle and any deep-link request so it stays closed.
+          if (!open) {
+            setManualFindOpen(false);
+            setFindRequest(undefined);
+          }
+        },
+        workspaceActionsBlocked: navigation.selectedWorkspaceHandoffPending,
+        onEditEnvironments: handleEditEnvironments,
+        onHandoffThreadWorkspace: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+          ? handleHandoffThreadWorkspace : undefined,
+        onRecreateThreadWorktree: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+          ? handleRecreateThreadWorktree : undefined,
+        onMoveThreadToMainCheckout: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+          ? handleMoveThreadToMainCheckout : undefined,
+        onSetThreadCheckoutHibernation: navigation.selectedThread && navigation.setThreadCheckoutHibernation
+          ? handleSetThreadCheckoutHibernation : undefined,
+        onLoadOlder: session.loadOlder,
+        onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
+        onCancelLaunchpad: handleCancelLaunchpad,
+        launchpadCancelRequest,
+        composerFocusRequest,
+        onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
+        composerInsertRequest,
+        onComposerInsertRequestHandled: handleComposerInsertRequestHandled,
+        onDetachLaunchpadParent: handleDetachLaunchpadParent,
+        onSelectLaunchpadParent: handleSelectLaunchpadParent,
+        // The composer's 5th argument is `extraDirectoryPaths` (draft
+        // `@`-references); the hook's 5th is `parentThreadId` (resolved from
+        // the launchpad draft internally), so map positions explicitly.
+        onMaterializeLaunchpad: (
+          directoryKey,
+          input,
+          collaborationMode,
+          reviewTarget,
+          extraDirectoryPaths,
+          scheduledFor,
+        ) =>
+          navigation.materializeDirectoryLaunchpad(
+            directoryKey,
+            input,
+            collaborationMode,
+            reviewTarget,
+            undefined,
+            extraDirectoryPaths,
+            scheduledFor,
+            (thread, composerScopeKey) =>
+              handoffLaunchpadComposer(composerDraftStore, composerScopeKey, thread, desktopApi),
+          ),
+        onPendingStatusChange: session.setPendingStatusText,
+        onRefreshNavigation: refreshReplyNavigation,
+        onUserRepliedToThread: reportUserRepliedToThread,
+        onSetExecutionMode: navigation.selectedThread ? handleSetExecutionMode : undefined,
+        onSetAcpRuntimeOption: navigation.selectedThread ? handleSetAcpRuntimeOption : undefined,
+        onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
+        onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
+        onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
+        onSetThreadLock: navigation.selectedThread ? handleSetThreadLock : undefined,
+        onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
+        onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,
+        onRestoreWorktree: navigation.restoreWorktree,
+        onTranscriptViewportChange: session.setViewport,
+        onExpandedTranscriptActivityIdsChange:
+          session.setExpandedTranscriptActivityIds,
+        onExpandedTranscriptWorkPhaseGroupIdsChange:
+          session.setExpandedTranscriptWorkPhaseGroupIds,
+        onRenderedTranscriptEntryLimitChange:
+          session.setRenderedTranscriptEntryLimit,
+        onUpdateLaunchpad: navigation.updateDirectoryLaunchpad,
+        onUpdatePendingMcpInteraction: session.updatePendingMcpInteraction,
+        onUpdatePendingUserInput: session.updatePendingUserInput,
+        removeOptimisticMessage: session.removeOptimisticMessage,
+        transcriptViewport: session.viewport,
+      } satisfies ThreadViewProps
+    );
+  }
   const selectedThreadPending =
     Boolean(navigation.selectedThreadKey) &&
     !navigation.selectedThread &&

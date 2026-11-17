@@ -3129,201 +3129,91 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 });
 
 function useComposerController(props: ComposerProps) {
-  const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
-  // Composer voice entry points stay hidden until dictation can edit only the
-  // draft. Keep the bar so an already-open session or failed stop can be ended.
-  const { threadId: nativeVoiceThreadId } = threadVoiceTarget(props.thread, props.launchpad);
-  const threadLinks = useThreadLinks();
-  const pullRequestLinks = usePullRequestLinks();
-  const rendererFederationTarget = readRendererFederationTarget();
-  const filesystemFederationTarget =
-    props.thread?.federation?.ref.target
-    ?? props.launchpad?.federationTarget
-    ?? rendererFederationTarget;
-  const filesystemAuthorityKey = filesystemFederationTarget?.scope === "remote"
-    ? `remote:${filesystemFederationTarget.instanceId}`
-    : "local";
-  const recentFileAuthorityKeyRef = useRef(filesystemAuthorityKey);
-  recentFileAuthorityKeyRef.current = filesystemAuthorityKey;
-  const inputRef = useRef<ComposerInputHandle>(null);
-  // A queued thumbnail's lightbox can close after its row has gone (the
-  // message was sent); focus then comes back to the input.
-  const focusComposerInput = (): void => inputRef.current?.focus();
-  const inputWrapRef = useRef<HTMLDivElement>(null);
-  const autocompleteListRef = useRef<HTMLDivElement>(null);
-  const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
-  const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
-  const terminalTurnKeysRef = useRef(new Set<string>());
-  // Queued rows with an owner-side Edit or Delete in flight. A second click
-  // would cancel an entry the first already took and report it as no longer
-  // waiting.
-  const queuedRowActionIdsRef = useRef(new Set<string>());
-  const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
-  const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
-  const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
-  const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const reviewPullRequestSelectRef = useRef<HTMLSelectElement | null>(null);
-  const skillListboxId = useId();
-  const slashListboxId = useId();
-  const directoryRefListboxId = useId();
-  const hashReferenceListboxId = useId();
-  const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
-  const activeAcpLaunchpadRefreshKeyRef = useRef<string | undefined>(undefined);
-  const pendingProviderSelectionKeyRef = useRef<string | undefined>(undefined);
-  const latestLaunchpadRef =
-    useRef<NavigationLaunchpadDraft | undefined>(props.launchpad);
-  latestLaunchpadRef.current = props.launchpad;
-  const desktopApiRef = useRef(props.desktopApi);
-  desktopApiRef.current = props.desktopApi;
-  const referenceInspector = props.desktopApi?.inspectPdfReferencePaths;
-  const pendingProgrammaticComposerChangeRef =
-    useRef<PendingProgrammaticComposerChange | undefined>(undefined);
-  const composerScopeKey = props.launchpad
-    ? props.launchpadComposerScopeKey ?? buildLaunchpadComposerScopeKey(
-        props.launchpad.directoryKey,
-        props.launchpad.federationTarget ?? rendererFederationTarget,
-      )
-    : props.thread
-      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
-      : "empty";
-  const failureTarget = props.thread?.federation?.ref.target ?? rendererFederationTarget;
-  const failureScope = props.thread
-    ? turnFailureScopeKey(props.thread.source, props.thread.id,
-        failureTarget?.scope === "remote" ? failureTarget.instanceId : undefined)
-    : undefined;
-  const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
-  const localDraftStore = useComposerDraftStore();
-  const draftStore = useOwnedComposerDraftStore(
-    props.draftStore ?? localDraftStore,
-    composerScopeKey,
-    props.thread ? {
-      backend: props.thread.source,
-      threadId: props.thread.id,
-      target: props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" },
-    } : undefined,
-  );
-  const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
-  const savedInitialDraft = draftStore.get(composerScopeKey);
-  // The one-shot restore request can be retired while the draft's origin
-  // survives in its snapshot, including across composer remounts.
-  const [rewoundPromptScope, setRewoundPromptScope] = useState<string | undefined>(
-    savedInitialDraft?.rewoundPrompt ? composerScopeKey : undefined,
-  );
-  const rewoundPromptShownRef = useRef(Boolean(savedInitialDraft?.rewoundPrompt));
-  const savedInitialQueuedTurns = props.thread || props.launchpad
-    ? draftStore.getQueuedTurns(composerScopeKey)
-    : undefined;
-  const savedInitialPendingSteer = props.thread
-    ? draftStore.getPendingSteer(composerScopeKey)
-    : undefined;
-  // A starting launchpad carries the submitted message as startup context.
-  // None of it is an unsent draft. In particular, mounting Tiptap with its
-  // old document and an empty value publishes that document back as an edit
-  // before the launchpad hydration effect can clear it.
-  const initialLaunchpad = props.launchpadMaterializing ? undefined : props.launchpad;
-  const hydratedInitialLaunchpad =
-    savedInitialDraft || !initialLaunchpad
-      ? undefined
-      : hydrateComposerDraft(
-          initialLaunchpad.prompt ?? "",
-          props.skills,
-          threadLinks,
-          pullRequestLinks,
-        );
-  const activeComposerScopeKeyRef = useRef(composerScopeKey);
-  const [editorScope, setEditorScope] = useState({ key: composerScopeKey, scopeKey: composerScopeKey });
-  const editorScopeKey = editorScope.key;
-  useLaunchpadComposerFocusHandoff(draftStore, composerScopeKey, editorScopeKey, inputRef, inputWrapRef);
-  const editorRemountSequenceRef = useRef(0);
-  const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
-  const pendingDraftRetargetRef = useRef<
-    | {
-        snapshot: ComposerDraftSnapshot;
-        sourceScopeKey: string;
-        targetScopeKey: string;
-      }
-    | undefined
-  >(undefined);
-  const launchpadMaterializingRef = useRef(props.launchpadMaterializing);
-  launchpadMaterializingRef.current = props.launchpadMaterializing;
-  const recoveryCycleRef = useRef<{
-    activeIndex?: number;
-    candidates: ComposerDraftSnapshot[];
-    scopeKey: string;
-  } | undefined>(undefined);
-  const recoveryEligibilityVersionRef = useRef(0);
-  const recoveryLookupSequenceRef = useRef(0);
-  const recoveringDraftRef = useRef(false);
-  const composerSelectionRequestSequenceRef = useRef(0);
-  const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
-  const latestDraftSnapshotRef = useRef<{
-    scopeKey: string;
-    snapshot: ComposerDraftSnapshot;
-  }>({
-    scopeKey: composerScopeKey,
-    snapshot: {
-      draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
-      editorDocument:
-        savedInitialDraft?.editorDocument ??
-        (initialLaunchpad?.editorDocument as JSONContent | undefined),
-      imageAttachments:
-        savedInitialDraft?.imageAttachments ??
-        initialLaunchpad?.imageAttachments ??
-        [],
-      fileAttachments:
-        savedInitialDraft?.fileAttachments ??
-        initialLaunchpad?.fileAttachments ??
-        [],
-      skillTokens:
-        savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? [],
-    },
-  });
-  const launchpadUpdateRef = useRef(props.onUpdateLaunchpad);
-  const [draft, setDraft] = useState(
-    latestDraftSnapshotRef.current.snapshot.draft
-  );
-  const [editorDocument, setEditorDocument] = useState(
-    latestDraftSnapshotRef.current.snapshot.editorDocument
-  );
-  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
-  const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
-    workspaceMenuOpen,
-    () => setWorkspaceMenuOpen(false),
-  );
+  // These unconditional local hooks keep the original controller lifetime
+  // and hook order. Their snapshots belong to this render; JSX runs after
+  // the controller returns.
   const {
+    nativeVoiceApi,
+    nativeVoiceThreadId,
+    threadLinks,
+    pullRequestLinks,
+    rendererFederationTarget,
+    filesystemFederationTarget,
+    filesystemAuthorityKey,
+    recentFileAuthorityKeyRef,
+    inputRef,
+    focusComposerInput,
+    inputWrapRef,
+    autocompleteListRef,
+    activeTurnIdRef,
+    confirmedActiveTurnIdRef,
+    terminalTurnKeysRef,
+    queuedRowActionIdsRef,
+    activeReviewTurnIdRef,
+    inFlightReviewSubmissionKeyRef,
+    autocompleteOptionRefs,
+    reviewOptionRefs,
+    reviewCommitInputRef,
+    reviewCustomTextareaRef,
+    reviewPullRequestSelectRef,
+    skillListboxId,
+    slashListboxId,
+    directoryRefListboxId,
+    hashReferenceListboxId,
+    hydratedLaunchpadKeyRef,
+    activeAcpLaunchpadRefreshKeyRef,
+    pendingProviderSelectionKeyRef,
+    latestLaunchpadRef,
+    desktopApiRef,
+    referenceInspector,
+    pendingProgrammaticComposerChangeRef,
+    composerScopeKey,
+    failureScope,
+    prAutoDispatchPending,
+    draftStore,
+    draftStoreHydrationVersion,
+    rewoundPromptScope,
+    setRewoundPromptScope,
+    rewoundPromptShownRef,
+    activeComposerScopeKeyRef,
+    editorScope,
+    setEditorScope,
+    editorScopeKey,
+    editorRemountSequenceRef,
+    pasteScopeRef,
+    pendingDraftRetargetRef,
+    launchpadMaterializingRef,
+    recoveryCycleRef,
+    recoveryEligibilityVersionRef,
+    recoveryLookupSequenceRef,
+    recoveringDraftRef,
+    composerSelectionRequestSequenceRef,
+    deletedSkillTokenHistoryRef,
+    latestDraftSnapshotRef,
+    launchpadUpdateRef,
+    draft,
+    setDraft,
+    editorDocument,
+    setEditorDocument,
+    workspaceMenuOpen,
+    setWorkspaceMenuOpen,
+    workspaceMenuRef,
     scheduleMenuOpen,
     setScheduleMenuOpen,
     scheduleMenuRef,
     scheduleMenuListRef,
     scheduleMenuTriggerRef,
-  } = useComposerScheduleMenu();
-  const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
-  // Recently referenced files for the reference picker's Files tab —
-  // loaded lazily from the main process each time the picker opens.
-  const [recentFileReferenceState, setRecentFileReferenceState] = useState<{
-    authorityKey: string;
-    files: ReferencePickerFile[];
-  }>({ authorityKey: filesystemAuthorityKey, files: [] });
-  const recentFileReferences =
-    recentFileReferenceState.authorityKey === filesystemAuthorityKey
-      ? recentFileReferenceState.files
-      : [];
-  // The state only schedules the next countdown render. It must not be used as
-  // the clock itself: a newly received schedule can arrive long after the
-  // previous tick, briefly making its first countdown look much too long.
-  const [scheduleTick, setScheduleTick] = useState(0);
-  const scheduleNow = Date.now();
-  const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
-    number | undefined
-  >();
-  // Whether the pending draft schedule (when one exists, e.g. after editing a
-  // scheduled item) is "armed". Armed → Send keeps the schedule (send later);
-  // unarmed → Send sends now. Defaults armed so a freshly-loaded schedule is
-  // preserved unless the operator explicitly unchecks it.
-  const [scheduleArmed, setScheduleArmed] = useState(true);
-  const {
+    addReferenceMenuOpen,
+    setAddReferenceMenuOpen,
+    setRecentFileReferenceState,
+    recentFileReferences,
+    scheduleTick,
+    setScheduleTick,
+    scheduleNow,
+    scheduledDraftSendAt,
+    setScheduledDraftSendAt,
+    scheduleArmed,
+    setScheduleArmed,
     handoffDialog,
     setHandoffDialog,
     localHandoffStrategy,
@@ -3349,8 +3239,6 @@ function useComposerController(props: ComposerProps) {
     setHandoffError,
     handoffSubmitting,
     setHandoffSubmitting,
-  } = useComposerWorkspaceHandoffState({ desktopApi: props.desktopApi, filesystemFederationTarget, filesystemAuthorityKey });
-  const {
     sending,
     sendingRef,
     updateSending,
@@ -3358,285 +3246,810 @@ function useComposerController(props: ComposerProps) {
     setPreparingSend,
     sendPreparationRef,
     cancelSendPreparation,
-  } = useComposerSendPreparation(composerScopeKey);
-  const [interrupting, setInterrupting] = useState(false);
-  const [steering, setSteering] = useState(false);
-  // React state only drives presentation. This ref synchronously suppresses
-  // duplicate renderer calls; the registry request ID provides the durable
-  // idempotency boundary shared with messaging.
-  const steeringRequestIdRef = useRef<string | undefined>(undefined);
-  const pendingSteerAutoAdmissionAttemptIdRef = useRef<string | undefined>(
-    undefined,
-  );
-  const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
-    savedInitialQueuedTurns ?? []
-  );
-  const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
-  const queueCurrentDraftInFlightRef = useRef(false);
-  const pendingSteerCreationInFlightRef = useRef(false);
-  const turnPayloadPreparationInFlightRef = useRef(false);
-  const [pendingSteer, setPendingSteerState] = useState<
-    PendingSteerDraft | undefined
-  >(
-    savedInitialPendingSteer
-      ? { ...savedInitialPendingSteer, status: "pending" }
-      : undefined
-  );
-  const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
-    props.activeTurnId
-  );
-  // Each report is a new occurrence even when the text repeats, so a rail row
-  // the operator dismissed shows again when a synchronous validation failure
-  // ("Choose a project to review.") fires twice: React would otherwise bail
-  // out of `undefined` -> same string inside one handler and never re-render.
-  const [sendErrorState, setSendErrorState] = useState<{
-    message?: string;
-    occurrence: number;
-  }>({ occurrence: 0 });
-  const sendError = sendErrorState.message;
-  const setSendError = useCallback((message?: string) => {
-    setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
-  }, []);
-  const [forkingScopeKey, setForkingScopeKey] = useState<string>();
-  const forking = forkingScopeKey === composerScopeKey;
-  const forkSubmissionInFlightRef = useRef(false);
-  const [agentThreadError, setAgentThreadError] = useState<string>();
-  // `selectedEnvironmentId` marks a failed environment selection, so the
-  // setup row can claim the one failure it already reports.
-  const [environmentError, setEnvironmentError] = useState<{
-    message: string;
-    selectedEnvironmentId?: string;
-  }>();
-  const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
-  const [threadEnvSelecting, setThreadEnvSelecting] =
-    useState<ThreadEnvSelecting>();
-  const [agentThreadSaving, setAgentThreadSaving] = useState(false);
-  const [applicationOpenError, setApplicationOpenError] = useState<string>();
-  const [threadEnvActionStarting, setThreadEnvActionStartingState] =
-    useState<ThreadEnvActionStartingKey>();
-  const threadEnvActionStartingRef =
-    useRef<ThreadEnvActionStartingKey | undefined>(undefined);
-  const threadEnvActionStartingTimeoutRef = useRef<number | undefined>(undefined);
-  const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
-    latestDraftSnapshotRef.current.snapshot.imageAttachments
-  );
-  const pendingImageBatchesRef = useRef(new Map<{ scopeKey: string }, number>());
-  const [pendingImageBatches, setPendingImageBatches] = useState(
-    pendingImageBatchesRef.current,
-  );
-  const preparingImages = Array.from(pendingImageBatches.keys()).some(
-    (destination) => destination.scopeKey === composerScopeKey,
-  );
-  const updatePendingImageBatches = (destination: { scopeKey: string }, delta: number): void => {
-    const next = new Map(pendingImageBatchesRef.current);
-    const count = (next.get(destination) ?? 0) + delta;
-    if (count > 0) next.set(destination, count);
-    else next.delete(destination);
-    pendingImageBatchesRef.current = next;
-    setPendingImageBatches(next);
-  };
-  const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
-    latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
-  );
-  // A remote thread's owner reads attachments from its own disk, so a file
-  // from this machine is first copied there over federation file push.
-  const remoteFileTarget = filesystemFederationTarget?.scope === "remote"
-    ? filesystemFederationTarget
-    : undefined;
-  const { health: remoteFileTargetHealth } = useFederationHealth({
-    desktopApi: props.desktopApi,
-    enabled: remoteFileTarget !== undefined,
-    suspended: remoteFileTarget === undefined,
-  });
-  const remoteFileTargetInstanceId = remoteFileTarget?.instanceId;
-  const remoteFilePushTarget = useMemo(
-    () => remoteFileTargetInstanceId
-      ? resolveRemoteFilePushTarget(remoteFileTargetHealth, remoteFileTargetInstanceId)
-      : undefined,
-    [remoteFileTargetHealth, remoteFileTargetInstanceId],
-  );
-  // Owner path → the local file it was copied from, so dropping the same
-  // file again reuses the copy that is already in the tray.
-  const remoteCopySourcesRef = useRef(new Map<string, string>());
-  const canPushRemoteFiles = Boolean(
-    remoteFilePushTarget
-      && props.desktopApi?.pushComposerFile
-      && canPushToRemoteTarget(remoteFilePushTarget),
-  );
-  const remoteFileUploads = useRemoteFileUploads({
-    desktopApi: props.desktopApi,
-    target: remoteFileTarget,
-    scopeKey: composerScopeKey,
-    onUploaded: (files) => {
-      for (const file of files) {
-        remoteCopySourcesRef.current.set(file.path, file.sourcePath);
-      }
-      attachFilePaths(files.map((file) => file.path));
-    },
-  });
-  // Why the native file actions are off here, or undefined when they work.
-  const nativeFilePickerBlockedReason = !filesystemFederationTarget
-    ? undefined
-    : canPushRemoteFiles
+    interrupting,
+    setInterrupting,
+    steering,
+    setSteering,
+    steeringRequestIdRef,
+    pendingSteerAutoAdmissionAttemptIdRef,
+    queuedTurns,
+    setQueuedTurnsState,
+    queuedAutoReleaseAttemptIdRef,
+    queueCurrentDraftInFlightRef,
+    pendingSteerCreationInFlightRef,
+    turnPayloadPreparationInFlightRef,
+    pendingSteer,
+    setPendingSteerState,
+    activeTurnId,
+    setActiveTurnId,
+    sendErrorState,
+    sendError,
+    setSendError,
+    setForkingScopeKey,
+    forking,
+    forkSubmissionInFlightRef,
+    agentThreadError,
+    setAgentThreadError,
+    environmentError,
+    setEnvironmentError,
+    environmentSetupRetrying,
+    setEnvironmentSetupRetrying,
+    threadEnvSelecting,
+    setThreadEnvSelecting,
+    agentThreadSaving,
+    setAgentThreadSaving,
+    applicationOpenError,
+    setApplicationOpenError,
+    threadEnvActionStarting,
+    imageAttachments,
+    setImageAttachments,
+    pendingImageBatchesRef,
+    preparingImages,
+    updatePendingImageBatches,
+    fileAttachments,
+    setFileAttachments,
+    remoteFilePushTarget,
+    remoteCopySourcesRef,
+    canPushRemoteFiles,
+    remoteFileUploads,
+    nativeFilePickerBlockedReason,
+    getImageSignature,
+    expandedStripItemKey,
+    setExpandedStripItemKey,
+    planModeEnabled,
+    setPlanModeEnabled,
+    skillTokens,
+    setSkillTokens,
+    referenceInspectionCacheRef,
+    referenceInspectionInFlightRef,
+    inspectedPdfReferencePaths,
+    setInspectedPdfReferencePaths,
+    composerPdfPreviewStates,
+    setComposerPdfPreviewStates,
+    composerPdfPreviewStatesRef,
+    composerPdfPreviewRequestIdsRef,
+    composerSelectionRequest,
+    setComposerSelectionRequest,
+    activeSkillIndex,
+    setActiveSkillIndex,
+    activeSlashIndex,
+    setActiveSlashIndex,
+    activeDirectoryRefIndex,
+    setActiveDirectoryRefIndex,
+    activeHashReferenceIndex,
+    setActiveHashReferenceIndex,
+    dismissedAutocompleteKey,
+    setDismissedAutocompleteKey,
+    clearThreadEnvActionStarting,
+    showThreadEnvActionStarting,
+    finishThreadEnvActionStarting,
+    autocompleteLayout,
+    setAutocompleteLayout,
+    activeOptimisticMessageId,
+    setActiveOptimisticMessageId,
+    reviewConfig,
+    setReviewConfig,
+    reviewerRecentsState,
+    setReviewerRecentsState,
+    reviewerAuthorityKeyRef,
+    isLaunchpad,
+    launchpad,
+  } = useComposerSessionState();
+
+  function useComposerSessionState() {
+    const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
+    // Composer voice entry points stay hidden until dictation can edit only the
+    // draft. Keep the bar so an already-open session or failed stop can be ended.
+    const { threadId: nativeVoiceThreadId } = threadVoiceTarget(props.thread, props.launchpad);
+    const threadLinks = useThreadLinks();
+    const pullRequestLinks = usePullRequestLinks();
+    const rendererFederationTarget = readRendererFederationTarget();
+    const filesystemFederationTarget =
+      props.thread?.federation?.ref.target
+      ?? props.launchpad?.federationTarget
+      ?? rendererFederationTarget;
+    const filesystemAuthorityKey = filesystemFederationTarget?.scope === "remote"
+      ? `remote:${filesystemFederationTarget.instanceId}`
+      : "local";
+    const recentFileAuthorityKeyRef = useRef(filesystemAuthorityKey);
+    recentFileAuthorityKeyRef.current = filesystemAuthorityKey;
+    const inputRef = useRef<ComposerInputHandle>(null);
+    // A queued thumbnail's lightbox can close after its row has gone (the
+    // message was sent); focus then comes back to the input.
+    const focusComposerInput = (): void => inputRef.current?.focus();
+    const inputWrapRef = useRef<HTMLDivElement>(null);
+    const autocompleteListRef = useRef<HTMLDivElement>(null);
+    const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
+    const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
+    const terminalTurnKeysRef = useRef(new Set<string>());
+    // Queued rows with an owner-side Edit or Delete in flight. A second click
+    // would cancel an entry the first already took and report it as no longer
+    // waiting.
+    const queuedRowActionIdsRef = useRef(new Set<string>());
+    const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
+    const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
+    const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+    const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+    const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
+    const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const reviewPullRequestSelectRef = useRef<HTMLSelectElement | null>(null);
+    const skillListboxId = useId();
+    const slashListboxId = useId();
+    const directoryRefListboxId = useId();
+    const hashReferenceListboxId = useId();
+    const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
+    const activeAcpLaunchpadRefreshKeyRef = useRef<string | undefined>(undefined);
+    const pendingProviderSelectionKeyRef = useRef<string | undefined>(undefined);
+    const latestLaunchpadRef =
+      useRef<NavigationLaunchpadDraft | undefined>(props.launchpad);
+    latestLaunchpadRef.current = props.launchpad;
+    const desktopApiRef = useRef(props.desktopApi);
+    desktopApiRef.current = props.desktopApi;
+    const referenceInspector = props.desktopApi?.inspectPdfReferencePaths;
+    const pendingProgrammaticComposerChangeRef =
+      useRef<PendingProgrammaticComposerChange | undefined>(undefined);
+    const composerScopeKey = props.launchpad
+      ? props.launchpadComposerScopeKey ?? buildLaunchpadComposerScopeKey(
+          props.launchpad.directoryKey,
+          props.launchpad.federationTarget ?? rendererFederationTarget,
+        )
+      : props.thread
+        ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
+        : "empty";
+    const failureTarget = props.thread?.federation?.ref.target ?? rendererFederationTarget;
+    const failureScope = props.thread
+      ? turnFailureScopeKey(props.thread.source, props.thread.id,
+          failureTarget?.scope === "remote" ? failureTarget.instanceId : undefined)
+      : undefined;
+    const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
+    const localDraftStore = useComposerDraftStore();
+    const draftStore = useOwnedComposerDraftStore(
+      props.draftStore ?? localDraftStore,
+      composerScopeKey,
+      props.thread ? {
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        target: props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" },
+      } : undefined,
+    );
+    const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
+    const savedInitialDraft = draftStore.get(composerScopeKey);
+    // The one-shot restore request can be retired while the draft's origin
+    // survives in its snapshot, including across composer remounts.
+    const [rewoundPromptScope, setRewoundPromptScope] = useState<string | undefined>(
+      savedInitialDraft?.rewoundPrompt ? composerScopeKey : undefined,
+    );
+    const rewoundPromptShownRef = useRef(Boolean(savedInitialDraft?.rewoundPrompt));
+    const savedInitialQueuedTurns = props.thread || props.launchpad
+      ? draftStore.getQueuedTurns(composerScopeKey)
+      : undefined;
+    const savedInitialPendingSteer = props.thread
+      ? draftStore.getPendingSteer(composerScopeKey)
+      : undefined;
+    // A starting launchpad carries the submitted message as startup context.
+    // None of it is an unsent draft. In particular, mounting Tiptap with its
+    // old document and an empty value publishes that document back as an edit
+    // before the launchpad hydration effect can clear it.
+    const initialLaunchpad = props.launchpadMaterializing ? undefined : props.launchpad;
+    const hydratedInitialLaunchpad =
+      savedInitialDraft || !initialLaunchpad
+        ? undefined
+        : hydrateComposerDraft(
+            initialLaunchpad.prompt ?? "",
+            props.skills,
+            threadLinks,
+            pullRequestLinks,
+          );
+    const activeComposerScopeKeyRef = useRef(composerScopeKey);
+    const [editorScope, setEditorScope] = useState({ key: composerScopeKey, scopeKey: composerScopeKey });
+    const editorScopeKey = editorScope.key;
+    useLaunchpadComposerFocusHandoff(draftStore, composerScopeKey, editorScopeKey, inputRef, inputWrapRef);
+    const editorRemountSequenceRef = useRef(0);
+    const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
+    const pendingDraftRetargetRef = useRef<
+      | {
+          snapshot: ComposerDraftSnapshot;
+          sourceScopeKey: string;
+          targetScopeKey: string;
+        }
+      | undefined
+    >(undefined);
+    const launchpadMaterializingRef = useRef(props.launchpadMaterializing);
+    launchpadMaterializingRef.current = props.launchpadMaterializing;
+    const recoveryCycleRef = useRef<{
+      activeIndex?: number;
+      candidates: ComposerDraftSnapshot[];
+      scopeKey: string;
+    } | undefined>(undefined);
+    const recoveryEligibilityVersionRef = useRef(0);
+    const recoveryLookupSequenceRef = useRef(0);
+    const recoveringDraftRef = useRef(false);
+    const composerSelectionRequestSequenceRef = useRef(0);
+    const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
+    const latestDraftSnapshotRef = useRef<{
+      scopeKey: string;
+      snapshot: ComposerDraftSnapshot;
+    }>({
+      scopeKey: composerScopeKey,
+      snapshot: {
+        draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
+        editorDocument:
+          savedInitialDraft?.editorDocument ??
+          (initialLaunchpad?.editorDocument as JSONContent | undefined),
+        imageAttachments:
+          savedInitialDraft?.imageAttachments ??
+          initialLaunchpad?.imageAttachments ??
+          [],
+        fileAttachments:
+          savedInitialDraft?.fileAttachments ??
+          initialLaunchpad?.fileAttachments ??
+          [],
+        skillTokens:
+          savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? [],
+      },
+    });
+    const launchpadUpdateRef = useRef(props.onUpdateLaunchpad);
+    const [draft, setDraft] = useState(
+      latestDraftSnapshotRef.current.snapshot.draft
+    );
+    const [editorDocument, setEditorDocument] = useState(
+      latestDraftSnapshotRef.current.snapshot.editorDocument
+    );
+    const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+    const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
+      workspaceMenuOpen,
+      () => setWorkspaceMenuOpen(false),
+    );
+    const {
+      scheduleMenuOpen,
+      setScheduleMenuOpen,
+      scheduleMenuRef,
+      scheduleMenuListRef,
+      scheduleMenuTriggerRef,
+    } = useComposerScheduleMenu();
+    const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
+    // Recently referenced files for the reference picker's Files tab —
+    // loaded lazily from the main process each time the picker opens.
+    const [recentFileReferenceState, setRecentFileReferenceState] = useState<{
+      authorityKey: string;
+      files: ReferencePickerFile[];
+    }>({ authorityKey: filesystemAuthorityKey, files: [] });
+    const recentFileReferences =
+      recentFileReferenceState.authorityKey === filesystemAuthorityKey
+        ? recentFileReferenceState.files
+        : [];
+    // The state only schedules the next countdown render. It must not be used as
+    // the clock itself: a newly received schedule can arrive long after the
+    // previous tick, briefly making its first countdown look much too long.
+    const [scheduleTick, setScheduleTick] = useState(0);
+    const scheduleNow = Date.now();
+    const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
+      number | undefined
+    >();
+    // Whether the pending draft schedule (when one exists, e.g. after editing a
+    // scheduled item) is "armed". Armed → Send keeps the schedule (send later);
+    // unarmed → Send sends now. Defaults armed so a freshly-loaded schedule is
+    // preserved unless the operator explicitly unchecks it.
+    const [scheduleArmed, setScheduleArmed] = useState(true);
+    const {
+      handoffDialog,
+      setHandoffDialog,
+      localHandoffStrategy,
+      setLocalHandoffStrategy,
+      worktreeHandoffStrategy,
+      setWorktreeHandoffStrategy,
+      leaveLocalBranch,
+      setLeaveLocalBranch,
+      newLocalBranch,
+      setNewLocalBranch,
+      pickedFreshBaseRef,
+      setFreshBaseRef,
+      freshBranchName,
+      setFreshBranchName,
+      projectTargetPath,
+      setProjectTargetPath,
+      setProjectSearch,
+      projectDestinations,
+      projectDestinationsLoaded,
+      projectDirectories,
+      projectDestinationInputId,
+      handoffError,
+      setHandoffError,
+      handoffSubmitting,
+      setHandoffSubmitting,
+    } = useComposerWorkspaceHandoffState({ desktopApi: props.desktopApi, filesystemFederationTarget, filesystemAuthorityKey });
+    const {
+      sending,
+      sendingRef,
+      updateSending,
+      preparingSend,
+      setPreparingSend,
+      sendPreparationRef,
+      cancelSendPreparation,
+    } = useComposerSendPreparation(composerScopeKey);
+    const [interrupting, setInterrupting] = useState(false);
+    const [steering, setSteering] = useState(false);
+    // React state only drives presentation. This ref synchronously suppresses
+    // duplicate renderer calls; the registry request ID provides the durable
+    // idempotency boundary shared with messaging.
+    const steeringRequestIdRef = useRef<string | undefined>(undefined);
+    const pendingSteerAutoAdmissionAttemptIdRef = useRef<string | undefined>(
+      undefined,
+    );
+    const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
+      savedInitialQueuedTurns ?? []
+    );
+    const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
+    const queueCurrentDraftInFlightRef = useRef(false);
+    const pendingSteerCreationInFlightRef = useRef(false);
+    const turnPayloadPreparationInFlightRef = useRef(false);
+    const [pendingSteer, setPendingSteerState] = useState<
+      PendingSteerDraft | undefined
+    >(
+      savedInitialPendingSteer
+        ? { ...savedInitialPendingSteer, status: "pending" }
+        : undefined
+    );
+    const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
+      props.activeTurnId
+    );
+    // Each report is a new occurrence even when the text repeats, so a rail row
+    // the operator dismissed shows again when a synchronous validation failure
+    // ("Choose a project to review.") fires twice: React would otherwise bail
+    // out of `undefined` -> same string inside one handler and never re-render.
+    const [sendErrorState, setSendErrorState] = useState<{
+      message?: string;
+      occurrence: number;
+    }>({ occurrence: 0 });
+    const sendError = sendErrorState.message;
+    const setSendError = useCallback((message?: string) => {
+      setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
+    }, []);
+    const [forkingScopeKey, setForkingScopeKey] = useState<string>();
+    const forking = forkingScopeKey === composerScopeKey;
+    const forkSubmissionInFlightRef = useRef(false);
+    const [agentThreadError, setAgentThreadError] = useState<string>();
+    // `selectedEnvironmentId` marks a failed environment selection, so the
+    // setup row can claim the one failure it already reports.
+    const [environmentError, setEnvironmentError] = useState<{
+      message: string;
+      selectedEnvironmentId?: string;
+    }>();
+    const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
+    const [threadEnvSelecting, setThreadEnvSelecting] =
+      useState<ThreadEnvSelecting>();
+    const [agentThreadSaving, setAgentThreadSaving] = useState(false);
+    const [applicationOpenError, setApplicationOpenError] = useState<string>();
+    const [threadEnvActionStarting, setThreadEnvActionStartingState] =
+      useState<ThreadEnvActionStartingKey>();
+    const threadEnvActionStartingRef =
+      useRef<ThreadEnvActionStartingKey | undefined>(undefined);
+    const threadEnvActionStartingTimeoutRef = useRef<number | undefined>(undefined);
+    const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
+      latestDraftSnapshotRef.current.snapshot.imageAttachments
+    );
+    const pendingImageBatchesRef = useRef(new Map<{ scopeKey: string }, number>());
+    const [pendingImageBatches, setPendingImageBatches] = useState(
+      pendingImageBatchesRef.current,
+    );
+    const preparingImages = Array.from(pendingImageBatches.keys()).some(
+      (destination) => destination.scopeKey === composerScopeKey,
+    );
+    const updatePendingImageBatches = (destination: { scopeKey: string }, delta: number): void => {
+      const next = new Map(pendingImageBatchesRef.current);
+      const count = (next.get(destination) ?? 0) + delta;
+      if (count > 0) next.set(destination, count);
+      else next.delete(destination);
+      pendingImageBatchesRef.current = next;
+      setPendingImageBatches(next);
+    };
+    const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
+      latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
+    );
+    // A remote thread's owner reads attachments from its own disk, so a file
+    // from this machine is first copied there over federation file push.
+    const remoteFileTarget = filesystemFederationTarget?.scope === "remote"
+      ? filesystemFederationTarget
+      : undefined;
+    const { health: remoteFileTargetHealth } = useFederationHealth({
+      desktopApi: props.desktopApi,
+      enabled: remoteFileTarget !== undefined,
+      suspended: remoteFileTarget === undefined,
+    });
+    const remoteFileTargetInstanceId = remoteFileTarget?.instanceId;
+    const remoteFilePushTarget = useMemo(
+      () => remoteFileTargetInstanceId
+        ? resolveRemoteFilePushTarget(remoteFileTargetHealth, remoteFileTargetInstanceId)
+        : undefined,
+      [remoteFileTargetHealth, remoteFileTargetInstanceId],
+    );
+    // Owner path → the local file it was copied from, so dropping the same
+    // file again reuses the copy that is already in the tray.
+    const remoteCopySourcesRef = useRef(new Map<string, string>());
+    const canPushRemoteFiles = Boolean(
+      remoteFilePushTarget
+        && props.desktopApi?.pushComposerFile
+        && canPushToRemoteTarget(remoteFilePushTarget),
+    );
+    const remoteFileUploads = useRemoteFileUploads({
+      desktopApi: props.desktopApi,
+      target: remoteFileTarget,
+      scopeKey: composerScopeKey,
+      onUploaded: (files) => {
+        for (const file of files) {
+          remoteCopySourcesRef.current.set(file.path, file.sourcePath);
+        }
+        attachFilePaths(files.map((file) => file.path));
+      },
+    });
+    // Why the native file actions are off here, or undefined when they work.
+    const nativeFilePickerBlockedReason = !filesystemFederationTarget
       ? undefined
-      : (remoteFilePushTarget && describeRemoteFilePushTooltip(remoteFilePushTarget))
-        ?? REMOTE_NATIVE_PICKER_TOOLTIP;
-  // Per-attachment content signature (`<size>:<hash>`) cache used to reject
-  // exact-duplicate pastes. Computed lazily on first use and kept only in
-  // memory — signatures are never part of the persisted draft snapshot.
-  const imageSignatureCacheRef = useRef(new Map<string, string>());
-  const getImageSignature = (attachment: ComposerImageAttachment): string => {
-    const cache = imageSignatureCacheRef.current;
-    const cached = cache.get(attachment.id);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const signature = `${attachment.size}:${hashImageDataUrl(attachment.url)}`;
-    cache.set(attachment.id, signature);
-    return signature;
-  };
-  // Key of the attachment-strip item shown in the full-size lightbox
-  // (`image:<id>` or `pdf:<path>`), or undefined when it is closed. A key,
-  // not the item, so the gallery is derived from the strip as it stands and
-  // paging walks the same thumbnails the operator sees.
-  // Escape-to-close is owned by `ImageLightbox` itself.
-  const [expandedStripItemKey, setExpandedStripItemKey] = useState<string>();
-  const [planModeEnabled, setPlanModeEnabled] = useState(false);
-  const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
-    latestDraftSnapshotRef.current.snapshot.skillTokens
-  );
-  const referenceInspectionCacheRef = useRef(
-    new Map<string, ComposerReferencePathInspection>(),
-  );
-  const referenceInspectionInFlightRef = useRef(new Map<string, Promise<void>>());
-  const [inspectedPdfReferencePaths, setInspectedPdfReferencePaths] =
-    useState<string[]>([]);
-  // Preview pages are intentionally renderer-only state. Draft snapshots keep
-  // only paths, and turn payload construction never reads this map.
-  const [composerPdfPreviewStates, setComposerPdfPreviewStates] = useState(
-    () => new Map<string, ComposerPdfPreviewState>(),
-  );
-  const composerPdfPreviewStatesRef = useRef(composerPdfPreviewStates);
-  composerPdfPreviewStatesRef.current = composerPdfPreviewStates;
-  const composerPdfPreviewRequestIdsRef = useRef(new Map<string, number>());
-  const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
-    id: string;
-    index: number;
-  }>();
-  const [activeSkillIndex, setActiveSkillIndex] = useState(0);
-  const [activeSlashIndex, setActiveSlashIndex] = useState(0);
-  const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
-  const [activeHashReferenceIndex, setActiveHashReferenceIndex] = useState(0);
-  const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+      : canPushRemoteFiles
+        ? undefined
+        : (remoteFilePushTarget && describeRemoteFilePushTooltip(remoteFilePushTarget))
+          ?? REMOTE_NATIVE_PICKER_TOOLTIP;
+    // Per-attachment content signature (`<size>:<hash>`) cache used to reject
+    // exact-duplicate pastes. Computed lazily on first use and kept only in
+    // memory — signatures are never part of the persisted draft snapshot.
+    const imageSignatureCacheRef = useRef(new Map<string, string>());
+    const getImageSignature = (attachment: ComposerImageAttachment): string => {
+      const cache = imageSignatureCacheRef.current;
+      const cached = cache.get(attachment.id);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const signature = `${attachment.size}:${hashImageDataUrl(attachment.url)}`;
+      cache.set(attachment.id, signature);
+      return signature;
+    };
+    // Key of the attachment-strip item shown in the full-size lightbox
+    // (`image:<id>` or `pdf:<path>`), or undefined when it is closed. A key,
+    // not the item, so the gallery is derived from the strip as it stands and
+    // paging walks the same thumbnails the operator sees.
+    // Escape-to-close is owned by `ImageLightbox` itself.
+    const [expandedStripItemKey, setExpandedStripItemKey] = useState<string>();
+    const [planModeEnabled, setPlanModeEnabled] = useState(false);
+    const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
+      latestDraftSnapshotRef.current.snapshot.skillTokens
+    );
+    const referenceInspectionCacheRef = useRef(
+      new Map<string, ComposerReferencePathInspection>(),
+    );
+    const referenceInspectionInFlightRef = useRef(new Map<string, Promise<void>>());
+    const [inspectedPdfReferencePaths, setInspectedPdfReferencePaths] =
+      useState<string[]>([]);
+    // Preview pages are intentionally renderer-only state. Draft snapshots keep
+    // only paths, and turn payload construction never reads this map.
+    const [composerPdfPreviewStates, setComposerPdfPreviewStates] = useState(
+      () => new Map<string, ComposerPdfPreviewState>(),
+    );
+    const composerPdfPreviewStatesRef = useRef(composerPdfPreviewStates);
+    composerPdfPreviewStatesRef.current = composerPdfPreviewStates;
+    const composerPdfPreviewRequestIdsRef = useRef(new Map<string, number>());
+    const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
+      id: string;
+      index: number;
+    }>();
+    const [activeSkillIndex, setActiveSkillIndex] = useState(0);
+    const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+    const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
+    const [activeHashReferenceIndex, setActiveHashReferenceIndex] = useState(0);
+    const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
 
-  // A settled marker is dropped, so a later runtime change (another window
-  // returning the thread to its old environment) is not read as this
-  // selection still catching up.
-  useEffect(() => {
-    if (!threadEnvSelecting?.applied) {
-      return;
-    }
-    const runtimeEnvironmentId =
-      props.thread?.source === threadEnvSelecting.backend
-      && props.thread.id === threadEnvSelecting.threadId
-        ? props.thread.codexEnvironmentRuntime?.environmentId
-        : undefined;
-    if (
-      runtimeEnvironmentId === threadEnvSelecting.environmentId
-      || runtimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
-    ) {
-      setThreadEnvSelecting((current) =>
-        current === threadEnvSelecting ? undefined : current,
-      );
-    }
-  }, [props.thread, threadEnvSelecting]);
-
-  useEffect(() => {
-    setAgentThreadError(undefined);
-    setEnvironmentError(undefined);
-    setEnvironmentSetupRetrying(false);
-    setAgentThreadSaving(false);
-  }, [composerScopeKey]);
-
-  const setThreadEnvActionStarting = (
-    next: ThreadEnvActionStartingKey | undefined,
-  ): void => {
-    threadEnvActionStartingRef.current = next;
-    setThreadEnvActionStartingState(next);
-  };
-
-  const clearThreadEnvActionStarting = (
-    key?: ThreadEnvActionStartingKey,
-  ): void => {
-    if (key && !sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
-      return;
-    }
-    if (threadEnvActionStartingTimeoutRef.current !== undefined) {
-      window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
-      threadEnvActionStartingTimeoutRef.current = undefined;
-    }
-    setThreadEnvActionStarting(undefined);
-  };
-
-  const showThreadEnvActionStarting = (
-    key: ThreadEnvActionStartingKey,
-  ): void => {
-    if (threadEnvActionStartingTimeoutRef.current !== undefined) {
-      window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
-      threadEnvActionStartingTimeoutRef.current = undefined;
-    }
-    setThreadEnvActionStarting(key);
-  };
-
-  const finishThreadEnvActionStarting = (
-    key: ThreadEnvActionStartingKey,
-    elapsedMs: number,
-  ): void => {
-    if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
-      return;
-    }
-    if (threadEnvActionStartingTimeoutRef.current !== undefined) {
-      window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
-    }
-    const remainingMs = Math.max(0, ENV_ACTION_RUN_CONFIRMATION_MS - elapsedMs);
-    if (remainingMs === 0) {
-      threadEnvActionStartingTimeoutRef.current = undefined;
-      setThreadEnvActionStarting(undefined);
-      return;
-    }
-    threadEnvActionStartingTimeoutRef.current = window.setTimeout(() => {
-      if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+    // A settled marker is dropped, so a later runtime change (another window
+    // returning the thread to its old environment) is not read as this
+    // selection still catching up.
+    useEffect(() => {
+      if (!threadEnvSelecting?.applied) {
         return;
       }
-      threadEnvActionStartingTimeoutRef.current = undefined;
-      setThreadEnvActionStarting(undefined);
-    }, remainingMs);
-  };
+      const runtimeEnvironmentId =
+        props.thread?.source === threadEnvSelecting.backend
+        && props.thread.id === threadEnvSelecting.threadId
+          ? props.thread.codexEnvironmentRuntime?.environmentId
+          : undefined;
+      if (
+        runtimeEnvironmentId === threadEnvSelecting.environmentId
+        || runtimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
+      ) {
+        setThreadEnvSelecting((current) =>
+          current === threadEnvSelecting ? undefined : current,
+        );
+      }
+    }, [props.thread, threadEnvSelecting]);
 
-  useEffect(() => {
-    return () => {
+    useEffect(() => {
+      setAgentThreadError(undefined);
+      setEnvironmentError(undefined);
+      setEnvironmentSetupRetrying(false);
+      setAgentThreadSaving(false);
+    }, [composerScopeKey]);
+
+    const setThreadEnvActionStarting = (
+      next: ThreadEnvActionStartingKey | undefined,
+    ): void => {
+      threadEnvActionStartingRef.current = next;
+      setThreadEnvActionStartingState(next);
+    };
+
+    const clearThreadEnvActionStarting = (
+      key?: ThreadEnvActionStartingKey,
+    ): void => {
+      if (key && !sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+        return;
+      }
       if (threadEnvActionStartingTimeoutRef.current !== undefined) {
         window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
         threadEnvActionStartingTimeoutRef.current = undefined;
       }
+      setThreadEnvActionStarting(undefined);
     };
-  }, []);
-  const [autocompleteLayout, setAutocompleteLayout] = useState<{
-    maxHeight: number;
-    placement: "above" | "below";
-  }>({ maxHeight: 320, placement: "above" });
-  const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
-  const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
-  // Tagged with the owning instance the same way recent file references are:
-  // a combination remembered on another instance names models that instance
-  // has, so a response that lands after the thread changed must not paint.
-  const [reviewerRecentsState, setReviewerRecentsState] = useState<{
-    authorityKey: string;
-    recents: ModelSettingsRecent[];
-  }>({ authorityKey: "local", recents: [] });
-  const reviewerAuthorityKeyRef = useRef("local");
-  const isLaunchpad = Boolean(props.launchpad && props.directory);
-  const launchpad = props.launchpad;
+
+    const showThreadEnvActionStarting = (
+      key: ThreadEnvActionStartingKey,
+    ): void => {
+      if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+        window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+        threadEnvActionStartingTimeoutRef.current = undefined;
+      }
+      setThreadEnvActionStarting(key);
+    };
+
+    const finishThreadEnvActionStarting = (
+      key: ThreadEnvActionStartingKey,
+      elapsedMs: number,
+    ): void => {
+      if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+        return;
+      }
+      if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+        window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+      }
+      const remainingMs = Math.max(0, ENV_ACTION_RUN_CONFIRMATION_MS - elapsedMs);
+      if (remainingMs === 0) {
+        threadEnvActionStartingTimeoutRef.current = undefined;
+        setThreadEnvActionStarting(undefined);
+        return;
+      }
+      threadEnvActionStartingTimeoutRef.current = window.setTimeout(() => {
+        if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+          return;
+        }
+        threadEnvActionStartingTimeoutRef.current = undefined;
+        setThreadEnvActionStarting(undefined);
+      }, remainingMs);
+    };
+
+    useEffect(() => {
+      return () => {
+        if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+          window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+          threadEnvActionStartingTimeoutRef.current = undefined;
+        }
+      };
+    }, []);
+    const [autocompleteLayout, setAutocompleteLayout] = useState<{
+      maxHeight: number;
+      placement: "above" | "below";
+    }>({ maxHeight: 320, placement: "above" });
+    const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
+    const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
+    // Tagged with the owning instance the same way recent file references are:
+    // a combination remembered on another instance names models that instance
+    // has, so a response that lands after the thread changed must not paint.
+    const [reviewerRecentsState, setReviewerRecentsState] = useState<{
+      authorityKey: string;
+      recents: ModelSettingsRecent[];
+    }>({ authorityKey: "local", recents: [] });
+    const reviewerAuthorityKeyRef = useRef("local");
+    const isLaunchpad = Boolean(props.launchpad && props.directory);
+    const launchpad = props.launchpad;
+    return {
+      nativeVoiceApi,
+      nativeVoiceThreadId,
+      threadLinks,
+      pullRequestLinks,
+      rendererFederationTarget,
+      filesystemFederationTarget,
+      filesystemAuthorityKey,
+      recentFileAuthorityKeyRef,
+      inputRef,
+      focusComposerInput,
+      inputWrapRef,
+      autocompleteListRef,
+      activeTurnIdRef,
+      confirmedActiveTurnIdRef,
+      terminalTurnKeysRef,
+      queuedRowActionIdsRef,
+      activeReviewTurnIdRef,
+      inFlightReviewSubmissionKeyRef,
+      autocompleteOptionRefs,
+      reviewOptionRefs,
+      reviewCommitInputRef,
+      reviewCustomTextareaRef,
+      reviewPullRequestSelectRef,
+      skillListboxId,
+      slashListboxId,
+      directoryRefListboxId,
+      hashReferenceListboxId,
+      hydratedLaunchpadKeyRef,
+      activeAcpLaunchpadRefreshKeyRef,
+      pendingProviderSelectionKeyRef,
+      latestLaunchpadRef,
+      desktopApiRef,
+      referenceInspector,
+      pendingProgrammaticComposerChangeRef,
+      composerScopeKey,
+      failureScope,
+      prAutoDispatchPending,
+      draftStore,
+      draftStoreHydrationVersion,
+      rewoundPromptScope,
+      setRewoundPromptScope,
+      rewoundPromptShownRef,
+      activeComposerScopeKeyRef,
+      editorScope,
+      setEditorScope,
+      editorScopeKey,
+      editorRemountSequenceRef,
+      pasteScopeRef,
+      pendingDraftRetargetRef,
+      launchpadMaterializingRef,
+      recoveryCycleRef,
+      recoveryEligibilityVersionRef,
+      recoveryLookupSequenceRef,
+      recoveringDraftRef,
+      composerSelectionRequestSequenceRef,
+      deletedSkillTokenHistoryRef,
+      latestDraftSnapshotRef,
+      launchpadUpdateRef,
+      draft,
+      setDraft,
+      editorDocument,
+      setEditorDocument,
+      workspaceMenuOpen,
+      setWorkspaceMenuOpen,
+      workspaceMenuRef,
+      scheduleMenuOpen,
+      setScheduleMenuOpen,
+      scheduleMenuRef,
+      scheduleMenuListRef,
+      scheduleMenuTriggerRef,
+      addReferenceMenuOpen,
+      setAddReferenceMenuOpen,
+      setRecentFileReferenceState,
+      recentFileReferences,
+      scheduleTick,
+      setScheduleTick,
+      scheduleNow,
+      scheduledDraftSendAt,
+      setScheduledDraftSendAt,
+      scheduleArmed,
+      setScheduleArmed,
+      handoffDialog,
+      setHandoffDialog,
+      localHandoffStrategy,
+      setLocalHandoffStrategy,
+      worktreeHandoffStrategy,
+      setWorktreeHandoffStrategy,
+      leaveLocalBranch,
+      setLeaveLocalBranch,
+      newLocalBranch,
+      setNewLocalBranch,
+      pickedFreshBaseRef,
+      setFreshBaseRef,
+      freshBranchName,
+      setFreshBranchName,
+      projectTargetPath,
+      setProjectTargetPath,
+      setProjectSearch,
+      projectDestinations,
+      projectDestinationsLoaded,
+      projectDirectories,
+      projectDestinationInputId,
+      handoffError,
+      setHandoffError,
+      handoffSubmitting,
+      setHandoffSubmitting,
+      sending,
+      sendingRef,
+      updateSending,
+      preparingSend,
+      setPreparingSend,
+      sendPreparationRef,
+      cancelSendPreparation,
+      interrupting,
+      setInterrupting,
+      steering,
+      setSteering,
+      steeringRequestIdRef,
+      pendingSteerAutoAdmissionAttemptIdRef,
+      queuedTurns,
+      setQueuedTurnsState,
+      queuedAutoReleaseAttemptIdRef,
+      queueCurrentDraftInFlightRef,
+      pendingSteerCreationInFlightRef,
+      turnPayloadPreparationInFlightRef,
+      pendingSteer,
+      setPendingSteerState,
+      activeTurnId,
+      setActiveTurnId,
+      sendErrorState,
+      sendError,
+      setSendError,
+      setForkingScopeKey,
+      forking,
+      forkSubmissionInFlightRef,
+      agentThreadError,
+      setAgentThreadError,
+      environmentError,
+      setEnvironmentError,
+      environmentSetupRetrying,
+      setEnvironmentSetupRetrying,
+      threadEnvSelecting,
+      setThreadEnvSelecting,
+      agentThreadSaving,
+      setAgentThreadSaving,
+      applicationOpenError,
+      setApplicationOpenError,
+      threadEnvActionStarting,
+      imageAttachments,
+      setImageAttachments,
+      pendingImageBatchesRef,
+      preparingImages,
+      updatePendingImageBatches,
+      fileAttachments,
+      setFileAttachments,
+      remoteFilePushTarget,
+      remoteCopySourcesRef,
+      canPushRemoteFiles,
+      remoteFileUploads,
+      nativeFilePickerBlockedReason,
+      getImageSignature,
+      expandedStripItemKey,
+      setExpandedStripItemKey,
+      planModeEnabled,
+      setPlanModeEnabled,
+      skillTokens,
+      setSkillTokens,
+      referenceInspectionCacheRef,
+      referenceInspectionInFlightRef,
+      inspectedPdfReferencePaths,
+      setInspectedPdfReferencePaths,
+      composerPdfPreviewStates,
+      setComposerPdfPreviewStates,
+      composerPdfPreviewStatesRef,
+      composerPdfPreviewRequestIdsRef,
+      composerSelectionRequest,
+      setComposerSelectionRequest,
+      activeSkillIndex,
+      setActiveSkillIndex,
+      activeSlashIndex,
+      setActiveSlashIndex,
+      activeDirectoryRefIndex,
+      setActiveDirectoryRefIndex,
+      activeHashReferenceIndex,
+      setActiveHashReferenceIndex,
+      dismissedAutocompleteKey,
+      setDismissedAutocompleteKey,
+      clearThreadEnvActionStarting,
+      showThreadEnvActionStarting,
+      finishThreadEnvActionStarting,
+      autocompleteLayout,
+      setAutocompleteLayout,
+      activeOptimisticMessageId,
+      setActiveOptimisticMessageId,
+      reviewConfig,
+      setReviewConfig,
+      reviewerRecentsState,
+      setReviewerRecentsState,
+      reviewerAuthorityKeyRef,
+      isLaunchpad,
+      launchpad,
+    };
+  }
+
   const backend = useMemo(
     () =>
       props.backends?.find((candidate) =>
@@ -11028,1414 +11441,1677 @@ function useComposerController(props: ComposerProps) {
     setSendError(undefined);
     void props.onSetThreadModelSettings(patch);
   };
-
-  // Remote controls use the owner's feature gate/default, never the viewer's.
-  // Older owners omit this metadata, so the override control stays hidden.
-  const tokenMiserEnabled = filesystemFederationTarget?.scope === "remote"
-    ? backend?.tokenMiser?.enabled
-    : props.tokenMiserEnabled;
-  const tokenMiserDefaultEnabled = filesystemFederationTarget?.scope === "remote"
-    ? backend?.tokenMiser?.defaultEnabled
-    : props.tokenMiserDefaultEnabled;
-  const currentSettings = props.launchpad ?? props.thread;
-  const backgroundPrPollingEnabled =
-    props.backgroundPrPollingEnabled ?? true;
-  const prAutoDispatchAllowed = props.prAutoDispatchAllowed ?? true;
-  const prAutoDispatchAvailable =
-    backgroundPrPollingEnabled && prAutoDispatchAllowed;
-  const modelOptions = backend?.launchpadOptions?.models ?? [];
-  // Codex model providers list their models after Codex's own, one titled
-  // section each. Codex fixes a thread's provider when it starts, so an
-  // existing thread offers only its own provider's models.
-  const threadModelProvider = backend?.kind === "codex" && props.thread && !props.launchpad
-    ? codexProviderIdOfModel(props.thread.model)
-    : undefined;
-  const threadProviderLabel = threadModelProvider
-    ? modelOptions.find((model) => model.providerId === threadModelProvider)?.providerLabel
-      ?? threadModelProvider
-    : "Codex";
-  const threadModelMenuFootnote = backend?.kind === "codex"
-    && props.thread
-    && !props.launchpad
-    && (threadModelProvider || modelOptions.some((model) => model.providerId))
-    ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
-    : undefined;
-  const selectedModelOption: BackendModelOption | undefined =
-    modelOptions.find((option) => option.id === currentSettings?.model) ??
-    (currentSettings?.model
-      ? { id: currentSettings.model, label: currentSettings.model }
-      : getDefaultModelOption(backend));
-  // Image attachments are allowed unless the active model explicitly reports
-  // no image support (Codex Spark) or the ACP agent advertises
-  // `prompt.image: false`. `undefined` on either signal means "assume
-  // supported" so existing backends keep working.
-  const imagesSupported =
-    selectedModelOption?.supportsImage !== false &&
-    backend?.acp?.runtime?.agentCapabilities?.prompt?.image !== false;
-  const imagesUnsupportedLabel =
-    selectedModelOption?.label ?? currentSettings?.model ?? "This mode";
-  const supportsReasoning =
-    selectedModelOption?.supportsReasoning ??
-    Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
-  const selectedReasoningEffort = supportsReasoning
-    ? getReasoningEffortValue(
-        backend,
-        selectedModelOption,
-        currentSettings?.reasoningEffort,
-      )
-    : undefined;
-  const profileModelDefaults = backend
-    ? filesystemFederationTarget?.scope === "remote"
-      ? backend.modelDefaults
-      : props.providerModelDefaults?.[backend.kind]
-    : undefined;
-  const profileModelOption =
-    modelOptions.find((option) => option.id === profileModelDefaults?.model)
-    ?? getDefaultModelOption(backend);
-  const profileReasoningOptions = getReasoningEffortsForModel(
-    backend,
+  const {
+    tokenMiserEnabled,
+    tokenMiserDefaultEnabled,
+    currentSettings,
+    backgroundPrPollingEnabled,
+    prAutoDispatchAllowed,
+    prAutoDispatchAvailable,
+    modelOptions,
+    selectedModelOption,
+    imagesSupported,
+    imagesUnsupportedLabel,
+    supportsReasoning,
+    selectedReasoningEffort,
     profileModelOption,
-  );
-  const configuredProfileReasoning = profileModelOption
-    ? profileModelDefaults?.reasoningEffortsByModel[profileModelOption.id]
-    : undefined;
-  const profileReasoningEffort =
-    configuredProfileReasoning
-    && profileReasoningOptions.includes(configuredProfileReasoning)
-      ? configuredProfileReasoning
-      : getDefaultReasoningEffort(backend, profileModelOption);
-  const launchpadDiffersFromProfileDefaults =
-    Boolean(props.launchpad && profileModelOption)
-    && (
-      props.launchpad?.model !== profileModelOption?.id
-      || (
-        profileReasoningOptions.length > 0
-        && props.launchpad?.reasoningEffort !== profileReasoningEffort
-      )
-    );
-  const supportsFast =
-    backend?.kind === "codex"
-    && (filesystemFederationTarget?.scope === "remote"
-      ? backend?.codexFastAllowed !== false
-      : props.codexFastAllowed !== false)
-      ? selectedModelOption?.supportsFast ??
-        backend.launchpadOptions?.supportsFastMode ??
-        false
-      : false;
-  const speedOptions = backend?.kind === "codex"
-    ? codexSpeedOptions(
-        selectedModelOption,
-        filesystemFederationTarget?.scope === "remote"
-          ? backend.codexFastAllowed !== false
-          : props.codexFastAllowed !== false,
-        supportsFast,
-      )
-    : [];
-  const selectedSpeed = selectedCodexSpeed(currentSettings ?? {});
-  const selectedServiceTier =
-    currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
-  const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
-  const providerOptions = useMemo(
-    () => props.backends?.filter(
-      (candidate) => candidate.available && candidate.capabilities.createThread
-    ) ?? [],
-    [props.backends],
-  );
-  // Each Codex model provider is its own entry, named the way the owner
-  // named it. It still starts a `codex` thread; its models carry the
-  // provider in their qualified ids.
-  const providerPickerEntries = useMemo(
-    () => buildProviderPickerEntries(providerOptions),
-    [providerOptions],
-  );
-  // A new chat's Model menu offers the chosen provider's models only.
-  const launchpadModelScope = props.launchpad && backend?.kind === "codex"
-    ? { model: selectedModelOption?.id ?? props.launchpad.model }
-    : undefined;
-  const scopedCodexProviderId = backend?.kind === "codex"
-    ? codexProviderIdOfModel(launchpadModelScope?.model ?? (props.launchpad ? undefined : props.thread?.model))
-    : undefined;
-  const modelMenuFootnote = [
-    threadModelMenuFootnote,
-    scopedCodexProviderId
-      ? codexModelProviderCatalogNote(
-          backend?.codexModelProviders?.find((state) => state.id === scopedCodexProviderId),
-        )
-      : undefined,
-  ].filter(Boolean).join(" ") || undefined;
-  // Backends we can hand a review to. `reviewRunner` doubles as the feature
-  // probe for reviewer overrides: an instance that predates them never sets
-  // it, so a viewer federated to an older owner finds no eligible reviewers
-  // and keeps the row read-only rather than sending a `reviewBackend` that
-  // owner would silently ignore.
-  const reviewerBackendOptions =
-    props.backends?.filter(
-      (candidate) =>
-        candidate.available && candidate.capabilities.reviewRunner === true
-    ) ?? [];
-  // Gated on an existing thread: the launchpad's materialize path takes only
-  // a review target (`onMaterializeLaunchpad`), so a reviewer picked there
-  // would be accepted by the UI and then silently dropped on submit.
-  const reviewerOverridesSupported =
-    Boolean(props.thread) && reviewerBackendOptions.length > 0;
-  const reviewerFederationTarget =
-    props.thread?.federation?.ref.target ?? rendererFederationTarget;
-  const reviewerAuthorityKey =
-    reviewerFederationTarget?.scope === "remote"
-      ? `remote:${reviewerFederationTarget.instanceId}`
-      : "local";
-  reviewerAuthorityKeyRef.current = reviewerAuthorityKey;
-  const reviewerRecents =
-    reviewerRecentsState.authorityKey === reviewerAuthorityKey
-      ? reviewerRecentsState.recents
-      : [];
-  const reviewerSelection = resolveReviewerSelection({
-    backends: props.backends,
-    override: reviewConfig?.reviewer,
-    reviewerBackends: reviewerOverridesSupported ? reviewerBackendOptions : [],
-    threadBackend: props.thread?.source,
-    threadModel: selectedModelOption?.id,
-    threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
-  });
-  const reviewerModelOptions =
-    reviewerSelection.summary?.launchpadOptions?.models ?? [];
-  const reviewerReasoningOptions = getReasoningEffortsForModel(
-    reviewerSelection.summary,
-    reviewerSelection.model,
-  );
-  const reviewerOverridden = Boolean(reviewConfig?.reviewer);
-  const reviewOwnerSummary = props.backends?.find(
-    (candidate) => candidate.kind === props.thread?.source,
-  );
-  const reviewAutoFixSupported =
-    reviewOwnerSummary?.capabilities.reviewAutoFix === true;
-  const reviewAutoFixChecked = !reviewWaitsAfter(reviewConfig);
-  const reviewRunModeDecision = props.thread
-    ? resolveReviewRunMode({
-        ownerSummary: reviewOwnerSummary,
-        requestedRunMode: reviewConfig?.runModeChosen ? reviewConfig.runMode : undefined,
-        reviewerBackend: reviewerSelection.backend,
-        reviewerSummary: reviewerSelection.summary,
-        thread: props.thread,
-        workspaceCwd: reviewConfig?.workspaceCwd,
-      })
-    : {
-        controlDisabled: false,
-        explicitRunModeSupported: false,
-        runMode: "codex-sub-agent" as const,
-        subagentDisabled: true,
-        nativeDisabled: true,
-        submissionUnavailable: false,
-      };
-  const reviewSubmissionUnavailable =
-    reviewRunModeDecision.submissionUnavailable;
-  // A PR from another attached repository moves the review to that project
-  // and forces its run mode, and both controls sit away from the picker. Say
-  // so beside the choice, in the resolver's words, so this line and the mode
-  // chip's tooltip cannot disagree.
-  const reviewPullRequestWorkspaceNote =
-    reviewConfig?.target === "pullRequest"
-    && selectedReviewPullRequest
-    && reviewWorkspaceSelectionRequired
-    && reviewConfig.workspaceCwd
-    && props.thread
-    && !reviewWorkspacePathMatches(
-      reviewConfig.workspaceCwd,
-      findPrimaryReviewWorkspaceCwd(props.thread),
-    )
-      ? [
-          `Reviews in ${reviewWorkspaceOptions.find((option) =>
-            option.cwd === reviewConfig.workspaceCwd
-          )?.label ?? reviewConfig.workspaceCwd}.`,
-          reviewRunModeDecision.helpText,
-        ].filter(Boolean).join(" ")
-      : undefined;
-  // A remembered combination is only offered while it still resolves against
-  // the owner's current catalog. Recents are disposable, so a dead row is
-  // noise rather than a preference worth preserving.
-  const resolvableReviewerRecents = reviewerRecents.filter((recent) => {
-    const summary = reviewerBackendOptions.find(
-      (candidate) => candidate.kind === recent.backend,
-    );
-    if (!summary) {
-      return false;
-    }
-    return (
-      !recent.model
-      || (summary.launchpadOptions?.models ?? []).some(
-        (model) => model.id === recent.model,
-      )
-    );
-  });
-  // Identity is the list position, not the rendered label: the store dedupes
-  // on a wider tuple than the label shows, so two distinct entries can format
-  // identically.
-  const activeReviewerRecentIndex = resolvableReviewerRecents.findIndex(
-    (recent) =>
-      recent.backend === reviewConfig?.reviewer?.backend
-      && recent.model === reviewConfig?.reviewer?.model
-      && recent.reasoningEffort === reviewConfig?.reviewer?.reasoningEffort,
-  );
-
-  const patchReviewer = (
-    build: (current: ModelSettingsRecent | undefined) => ModelSettingsRecent | undefined,
-  ): void => {
-    setReviewConfig((current) => {
-      const base =
-        current
-        ?? createReviewConfig({
-          directory: props.directory,
-          thread: props.thread,
-        });
-      return { ...base, reviewer: build(base.reviewer) };
-    });
-    setSendError(undefined);
-  };
-  const executionModeOptions =
-    backend?.executionModes.filter((mode) =>
-      mode.available || (backend.available && mode.mode === "auto"),
-    ) ?? [];
-  const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
-  // Claude maps Plan to its own read-only plan permission mode.
-  const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
-  const supportsSteering =
-    Boolean(backend?.capabilities.steerTurn) &&
-    selectedModelOption?.supportsSteering !== false;
-  // The backend summaries describe the instance this window fronts. A
-  // peer's thread pinned into a local window is answered by an owner whose
-  // capabilities this window cannot see, and an owner that predates
-  // Interrupt would quietly deliver it as a Steer.
-  const threadOwnerTarget = props.thread?.federation?.ref.target;
-  const backendsDescribeThreadOwner =
-    threadOwnerTarget?.scope !== "remote"
-    || rendererFederationTarget?.instanceId === threadOwnerTarget.instanceId;
-  const supportsInterruptSteer =
-    supportsSteering
-    && backendsDescribeThreadOwner
-    && backend?.capabilities.interruptSteerTurn === true;
-  const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
-  // A launchpad with a parent starts a sub-thread. Detaching clears the
-  // parent, and the copy goes back to a plain new thread.
-  const subthreadParentTitle = isLaunchpad && props.launchpad?.parentThreadId
-    ? props.launchpad.parentThreadTitle || props.launchpad.parentThreadId
-    : undefined;
-  // A Discard asked from outside, run as the Cancel button runs it. Each
-  // request runs once, and only against the launchpad it names.
-  const handledLaunchpadCancelRequestIdRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    const request = props.launchpadCancelRequest;
-    if (!request || handledLaunchpadCancelRequestIdRef.current === request.id) {
-      return;
-    }
-    handledLaunchpadCancelRequestIdRef.current = request.id;
-    if (
-      !props.launchpad
-      || props.launchpad.directoryKey !== request.directoryKey
-      || launchpadSubmitting
-    ) {
-      return;
-    }
-    abandonComposerDraftSnapshot(composerScopeKey);
-    props.onCancelLaunchpad?.(request.directoryKey);
-  }, [props.launchpadCancelRequest]);
-  const backendsDescribeScheduleOwner =
-    filesystemFederationTarget?.scope !== "remote"
-    || rendererFederationTarget?.instanceId === filesystemFederationTarget.instanceId;
-  const shortTermResetAt = backendsDescribeScheduleOwner
-    ? getShortTermRateLimitResetAt({
-        rateLimits: backend?.rateLimits,
-        now: scheduleNow,
-        selectedModelOption,
-      })
-    : undefined;
-  const scheduledSendOptions: ScheduledSendMenuOption[] = [
-    ...(shortTermResetAt
-      ? [
-          {
-            label: "Send after rate limit reset",
-            description: `In ${formatScheduledSendCountdown(
-              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS,
-              scheduleNow,
-            )}–${formatScheduledSendCountdown(
-              shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS + RATE_LIMIT_RESET_JITTER_MS,
-              scheduleNow,
-            )} · 5–10m buffer`,
-            rateLimitResetAt: shortTermResetAt,
-          },
-        ]
-      : []),
-    ...SCHEDULED_SEND_OPTIONS.map((option) => ({
-      delayMs: option.delayMs,
-      label: option.label,
-    })),
-  ];
-  const sendButtonDisabled =
-    forking ||
-    preparingSend ||
-    preparingImages ||
-    props.disabled ||
-    remoteFileUploads.uploads.length > 0 ||
-    steering ||
-    (!activeTurnId && sending && !isLaunchpad) ||
-    (!hasComposerContent &&
-      imageAttachments.length === 0 &&
-      fileAttachments.length === 0);
-  const scheduleButtonDisabled =
-    sendButtonDisabled ||
-    launchpadSubmitting ||
-    (!props.thread && !props.launchpad) ||
-    Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
-    isCompactCommand || Boolean(forkCommand) ||
-    lockCommandNote !== undefined;
-  // Only surface the schedule caret where scheduling actually applies. In the
-  // compact command or a thread-less composer there is nothing to schedule,
-  // so the split collapses to a plain Send pill instead of parking a
-  // permanently-dimmed half-button next to it. A launchpad is schedulable:
-  // choosing a time materializes its workspace/thread immediately and defers
-  // only the first action.
-  const scheduleAffordanceVisible =
-    Boolean(
-      props.thread
-      || (props.launchpad && props.onMaterializeLaunchpad)
-    ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
-  // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
-  // a checkable toggle between the caret and Send rather than hijacking the
-  // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
-  // Send fires now. The toggle only shows where scheduling applies — and never
-  // while the review-config panel is open, since that panel owns its own
-  // scheduled-send button and doesn't read `scheduleArmed`; showing the toggle
-  // there would let an operator "uncheck" a schedule the review submit ignores.
-  const scheduleToggleVisible =
-    scheduleAffordanceVisible
-    && Boolean(futureScheduledDraftSendAt)
-    && !isReviewComposerOpen;
-  const effectiveScheduledSendAt = scheduleArmed
-    ? futureScheduledDraftSendAt
-    : undefined;
-  const turnSubmitButtonLabel = preparingSend
-    ? "Preparing…"
-    : launchpadSubmitting ||
-      activeTurnId ||
-      queuedTurns.some((queued) =>
-        Boolean(queued.backendQueuePending || queued.queueEntryId)
-      ) ||
-      props.threadBusy
-        ? "Queue"
-        : sending
-          ? props.launchpad
-            ? "Starting…"
-            : "Sending…"
-          : props.launchpad
-            ? subthreadParentTitle ? "Start sub-thread" : "Start thread"
-            : "Send";
-  const submitButtonLabel = forking
-    ? "Forking…"
-    : forkCommand
-      ? "Fork"
-      : turnSubmitButtonLabel;
-  // The command menu owns the "/fork" row until it closes; after that the
-  // input draws the parameters still available as muted text after the caret.
-  const forkInlineHint =
-    (supportsForkCommand || supportsSubthreadCommand)
-    && autocompleteKind !== "slash"
-    && !forking
-      ? forkCommandHint(draft)
-      : undefined;
-  const forkInlineCompletion = forkInlineHint
-    ? forkCommandCompletion(draft)
-    : undefined;
-  // Claude and ACP agents read a command from the start of the prompt, so a
-  // draft that starts with one of their commands draws it as a chip and, until
-  // an argument is typed, the arguments it takes.
-  const commandBackend = props.launchpad?.backend ?? props.thread?.source;
-  const { chip: commandChip, hint: commandInlineHint } = describeLeadingCommand({
-    commands: props.providerCommands?.filter((command) =>
-      backendDrawsCommandChips(command.backend ?? commandBackend)
-    ) ?? [],
-    draft,
-    showHint:
-      autocompleteKind !== "slash"
-      && !forkInlineHint
-      && !forking
-      && !preparingSend,
-    skillTokens,
-  });
-  // Queue is the primary mid-turn; the steer chord is its keyboard-only
-  // sibling, so the button is where it gets named.
-  const submitButtonSteerHint =
-    submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
-  const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
-  // Mid-turn the send menu also names how this message can meet the running
-  // turn. Steer and Interrupt stay listed where the provider or model cannot
-  // do them, dimmed with the reason, so the menu explains the gap.
-  const turnSendActionsVisible =
-    submitButtonLabel === "Queue"
-    && Boolean(activeTurnId)
-    && Boolean(props.thread)
-    && !isLaunchpad
-    && !parsedReviewCommand;
-  const turnBackendLabel = props.thread
-    ? formatBackendLabel(props.thread.source, props.backends)
-    : "This agent";
-  const steerUnavailableReason = supportsSteering
-    ? undefined
-    : backend?.capabilities.steerTurn
-      ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
-      : `${turnBackendLabel} can't take messages mid-turn`;
-  const interruptUnavailableReason = supportsInterruptSteer
-    ? undefined
-    : !backendsDescribeThreadOwner && supportsSteering
-      ? "Open this instance's window to interrupt"
-      : `${turnBackendLabel} can't cut in mid-response`;
-  // One steer at a time: a second would be dropped while the first waits.
-  const pendingSteerReason = pendingSteer
-    ? "Another message is already steering in"
-    : undefined;
-  const launchpadWorkspaceOptions = props.launchpad
-    ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
-    : [];
-  const launchpadWorkspaceValue =
-    props.launchpad &&
-    launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
-      ? props.launchpad.workMode
-      : "local";
-  // Pure function of the launchpad draft + directory git status; memoize so
-  // typing in the prompt (which re-renders the composer) doesn't rebuild the
-  // branch option list every keystroke.
-  const launchpadBranchPickerOptions = useMemo(
-    () =>
-      props.launchpad
-        ? buildLaunchpadBranchPickerOptions(props.launchpad.branchName, props.directory)
-        : [],
-    [props.launchpad, props.directory],
-  );
-  const launchpadBranchStatusError =
-    props.launchpad?.directoryKind === "directory" &&
-    !isSameWorktreeSubthreadLaunchpad(props.launchpad.directoryKey) &&
-    props.directory?.gitStatus?.syncState === "status-unavailable"
-      ? props.directory.gitStatus.statusUnavailableReason ??
-        "Git did not return branch information."
-      : undefined;
-  const launchpadBranchStatusDirectoryKey = props.launchpad?.directoryKey;
-  const launchpadBranchStatusDirectoryLabel = props.launchpad?.directoryLabel;
-  const showLaunchpadBranchStatusNotice = props.onShowNotice;
-  useEffect(() => {
-    if (
-      !launchpadBranchStatusError ||
-      !launchpadBranchStatusDirectoryKey ||
-      !launchpadBranchStatusDirectoryLabel ||
-      !showLaunchpadBranchStatusNotice
-    ) {
-      return;
-    }
-
-    showLaunchpadBranchStatusNotice({
-      autoDismiss: false,
-      id: `launchpad-branches-unavailable:${launchpadBranchStatusDirectoryKey}:${launchpadBranchStatusError}`,
-      title: "Branches unavailable",
-      message: `PwrAgent couldn't load branches for ${launchpadBranchStatusDirectoryLabel}.`,
-      detail: launchpadBranchStatusError,
-      tone: "warning",
-    });
-  }, [
-    launchpadBranchStatusError,
-    launchpadBranchStatusDirectoryKey,
-    launchpadBranchStatusDirectoryLabel,
-    showLaunchpadBranchStatusNotice,
-  ]);
-  const launchpadCodexEnvironmentOptions =
-    props.launchpad?.codexEnvironmentOptions ?? [];
-  const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
-    (environment) => environment.id === props.launchpad?.codexEnvironmentId,
-  );
-  const threadCodexEnvironmentOptions =
-    props.thread?.codexEnvironmentOptions ?? [];
-  const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
-    (environment) =>
-      environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
-  );
-  const runtimeThreadCodexEnvironmentActions =
-    props.thread?.codexEnvironmentRuntime?.actions ?? [];
-  const threadCodexEnvironmentActions =
-    runtimeThreadCodexEnvironmentActions.length > 0
-      ? runtimeThreadCodexEnvironmentActions
-      : selectedThreadCodexEnvironmentOption?.actions ?? [];
-  const selectedThreadCodexEnvironmentForAction =
-    selectedThreadCodexEnvironmentOption ??
-    (props.thread?.codexEnvironmentRuntime?.environmentId
-      ? {
-          id: props.thread.codexEnvironmentRuntime.environmentId,
-          name: props.thread.codexEnvironmentRuntime.environmentName
-            ?? props.thread.codexEnvironmentRuntime.environmentId,
-          sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
-          actions: threadCodexEnvironmentActions,
-        }
-      : undefined);
-  // The picker lists the environments discovered in the thread's workspace,
-  // plus the one its runtime has selected when that one is not among them.
-  // A deleted worktree, or a checkout without `.codex/environments/`, reports
-  // no options while the runtime keeps its environment and commands; without
-  // this the Run chip stayed and nothing said which environment it ran.
-  const threadCodexEnvironmentPickerOptions =
-    selectedThreadCodexEnvironmentForAction && !selectedThreadCodexEnvironmentOption
-      ? [...threadCodexEnvironmentOptions, selectedThreadCodexEnvironmentForAction]
-      : threadCodexEnvironmentOptions;
-  const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
-    environment: selectedThreadCodexEnvironmentForAction,
-    actionId:
-      props.thread?.codexEnvironmentRuntime?.environmentId
-        ? props.thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId?.[
-            props.thread.codexEnvironmentRuntime.environmentId
-          ]
-        : undefined,
-    actionIdByEnvironmentId:
-      props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
-  });
-  const selectedThreadCodexAction =
-    threadCodexEnvironmentActions.find(
-      (action) => action.id === selectedThreadCodexActionId,
-    ) ?? threadCodexEnvironmentActions[0];
-  const currentThreadEnvActionStartingKey =
-    props.thread && selectedThreadCodexAction
-      ? {
-          actionId: selectedThreadCodexAction.id,
-          backend: props.thread.source,
-          threadId: props.thread.id,
-        }
-      : undefined;
-  const currentThreadEnvActionStarting = sameThreadEnvActionStartingKey(
-    threadEnvActionStarting,
+    profileReasoningOptions,
+    profileReasoningEffort,
+    launchpadDiffersFromProfileDefaults,
+    supportsFast,
+    speedOptions,
+    selectedSpeed,
+    selectedServiceTier,
+    acpRuntimeModeControl,
+    providerOptions,
+    providerPickerEntries,
+    launchpadModelScope,
+    modelMenuFootnote,
+    reviewerBackendOptions,
+    reviewerOverridesSupported,
+    reviewerAuthorityKey,
+    reviewerSelection,
+    reviewerModelOptions,
+    reviewerReasoningOptions,
+    reviewerOverridden,
+    reviewOwnerSummary,
+    reviewAutoFixSupported,
+    reviewAutoFixChecked,
+    reviewRunModeDecision,
+    reviewSubmissionUnavailable,
+    reviewPullRequestWorkspaceNote,
+    resolvableReviewerRecents,
+    activeReviewerRecentIndex,
+    patchReviewer,
+    executionModeOptions,
+    workspaceLabel,
+    supportsPlanMode,
+    supportsSteering,
+    supportsInterruptSteer,
+    launchpadSubmitting,
+    subthreadParentTitle,
+    scheduledSendOptions,
+    sendButtonDisabled,
+    scheduleButtonDisabled,
+    scheduleAffordanceVisible,
+    scheduleToggleVisible,
+    effectiveScheduledSendAt,
+    submitButtonLabel,
+    forkInlineHint,
+    forkInlineCompletion,
+    commandChip,
+    commandInlineHint,
+    submitTooltip,
+    turnSendActionsVisible,
+    turnBackendLabel,
+    steerUnavailableReason,
+    interruptUnavailableReason,
+    pendingSteerReason,
+    launchpadWorkspaceOptions,
+    launchpadWorkspaceValue,
+    launchpadBranchPickerOptions,
+    launchpadCodexEnvironmentOptions,
+    selectedCodexEnvironment,
+    threadCodexEnvironmentOptions,
+    threadCodexEnvironmentActions,
+    threadCodexEnvironmentPickerOptions,
+    selectedThreadCodexAction,
     currentThreadEnvActionStartingKey,
-  );
-  // The Environment chip is busy while a selection is in flight here, and
-  // while any setup run streams for this thread. Main records the runtime
-  // only after setup exits, so without this the chip keeps reading the old
-  // value (often "No environment") and stays clickable beside a running
-  // setup row. The stream also covers a run this composer did not start,
-  // such as setup still finishing for a thread whose launch just created it.
-  const threadRuntimeEnvironmentId =
-    props.thread?.codexEnvironmentRuntime?.environmentId;
-  const threadEnvSelectingSettled =
-    threadEnvSelecting?.applied === true
-    && (
-      threadRuntimeEnvironmentId === threadEnvSelecting.environmentId
-      || threadRuntimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
-    );
-  const currentThreadEnvSelecting =
-    props.thread
-    && threadEnvSelecting?.backend === props.thread.source
-    && threadEnvSelecting.threadId === props.thread.id
-    && !threadEnvSelectingSettled
-      ? threadEnvSelecting
-      : undefined;
-  const runningThreadEnvSetup =
-    props.thread
-    && props.environmentSetup?.phase === "setup"
-    && props.environmentSetup.status === "running"
-      ? props.environmentSetup
-      : undefined;
-  const threadEnvironmentBusy = Boolean(
-    (currentThreadEnvSelecting && !currentThreadEnvSelecting.applied)
-    || runningThreadEnvSetup,
-  );
-  const threadEnvironmentValue = currentThreadEnvSelecting
-    ? currentThreadEnvSelecting.environmentId ?? ""
-    : runningThreadEnvSetup?.environmentId
-      ?? props.thread?.codexEnvironmentRuntime?.environmentId
-      ?? "";
-  const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
-  const showPrAutoDispatchToggle = Boolean(
-    props.thread && getPrimaryWorkspaceRepository(props.thread),
-  );
-  const hasAttachedPullRequest = props.thread
-    ? hasPrimaryWorkspacePullRequest(props.thread)
-    : false;
-  // A project's Forge Automation can only narrow Auto-fix. It mutes the
-  // control and explains itself; the thread's own value is left alone. A
-  // peer's thread is governed by its owner's projects, which this window
-  // does not hold, so a local project of the same path must not claim it.
-  const prAutoDispatchProject = props.thread && showPrAutoDispatchToggle && !props.thread.federation
-    ? findThreadProjectDirectory(props.thread, props.directories)
-    : undefined;
-  const prAutoDispatchProjectOverride = prAutoDispatchProject
-    ? describeProjectAutoFixOverride(prAutoDispatchProject.forgeAutomation, prAutoDispatchProject.label)
-    : undefined;
-  // On, but every PR it could repair has merged or closed.
-  const prAutoDispatchIdleTooltip = props.thread?.prAutoDispatchEnabled
-    ? describeEndedPullRequestAutoFix(props.thread)
-    : undefined;
-  const prAutoDispatchTooltip = !backgroundPrPollingEnabled
-    ? "Auto-fix PR paused — turn on background PR polling in Settings"
-    : !prAutoDispatchAllowed
-      ? "Auto-fix PR disabled globally — allow it in Git settings"
-      : prAutoDispatchProjectOverride?.muted
-        ? prAutoDispatchProjectOverride.tooltip
-        : prAutoDispatchIdleTooltip
-          ? prAutoDispatchIdleTooltip
-          : prAutoDispatchProjectOverride
-            ? prAutoDispatchProjectOverride.tooltip
-            : hasAttachedPullRequest
-          ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
-          : "Auto-fix PR — starts when a PR for this workspace is linked";
-  const prAutoDispatchProjectMuted = Boolean(
-    prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
-  );
-  const prAutoDispatchIdle = Boolean(
-    prAutoDispatchAvailable && !prAutoDispatchProjectMuted && prAutoDispatchIdleTooltip,
-  );
-  // Environments are edited on the machine that runs them, so a peer's
-  // thread or a remote execution workspace gets no editor here.
-  const environmentEditPath =
-    !props.onEditEnvironments
-    || filesystemFederationTarget?.scope === "remote"
-    || props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"
-      ? undefined
-      : props.launchpad
-        ? props.launchpad.directoryPath
-        : props.thread?.codexEnvironmentRuntime?.cwd ?? threadWorkspace?.sourcePath;
-  const onEditEnvironments = props.onEditEnvironments;
-  const environmentMenuAction = environmentEditPath && onEditEnvironments
-    ? {
-        label: "Edit environments…",
-        icon: PencilIcon,
-        onSelect: () => onEditEnvironments(environmentEditPath),
-      }
-    : undefined;
-  const workspaceOpenPath = props.workspaceActionsBlocked ? undefined : getComposerWorkspaceOpenPath({
-    directory: props.directory,
-    launchpad: props.launchpad,
+    currentThreadEnvActionStarting,
+    threadEnvironmentBusy,
+    threadEnvironmentValue,
     threadWorkspace,
-  });
-  const editorApplication = props.applications?.editors.find(
-    (application) =>
-      application.canOpenWorkspace &&
-      application.id === props.applications?.preferredEditorId.value,
-  ) ?? props.applications?.editors.find(
-    (application) => application.canOpenWorkspace,
-  );
-  const terminalApplication = props.applications?.terminals.find(
-    (application) =>
-      application.canOpenWorkspace &&
-      application.id === props.applications?.preferredTerminalId.value,
-  ) ?? props.applications?.terminals.find(
-    (application) => application.canOpenWorkspace,
-  );
-  const sourceBranch =
-    threadWorkspace?.mode === "worktree"
-      ? props.thread?.observedGitBranch ??
-        props.thread?.gitBranch ??
-        props.directory?.gitStatus?.currentBranch
-      : props.directory?.gitStatus?.currentBranch ??
-        props.thread?.observedGitBranch ??
-        props.thread?.gitBranch;
-  const keepLocalBranchAvailable = Boolean(props.onMoveThreadToMainCheckout)
-    && threadWorkspace?.mode === "worktree";
-  const keepLocalBranchSelected = handoffDialog === "worktree-to-local"
-    && keepLocalBranchAvailable
-    && worktreeHandoffStrategy === "keep-local-branch";
-  // The project's own status describes the main checkout, not the worktree.
-  const localCheckoutBranch = threadWorkspace?.mode === "worktree"
-    ? props.directory?.gitStatus?.currentBranch
-    : undefined;
-  const leaveLocalBranchOptions = useMemo(
-    () =>
-      buildLeaveLocalBranchPickerOptions({
-        currentBranch: sourceBranch,
-        directory: props.directory,
-      }),
-    [sourceBranch, props.directory],
-  );
-  const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
-  const freshBaseOptions = useMemo(
-    () => buildLaunchpadBranchPickerOptions(undefined, props.directory),
-    [props.directory],
-  );
-  const defaultFreshBaseRef = useMemo(
-    () => pickFreshHandoffBaseRef(freshBaseOptions, props.directory),
-    [freshBaseOptions, props.directory],
-  );
-  const freshBaseRef = pickedFreshBaseRef || defaultFreshBaseRef;
-  const canMoveThreadProject = Boolean(
-    props.thread &&
-      !props.workspaceActionsBlocked &&
-      threadWorkspace &&
-      props.onHandoffThreadWorkspace &&
-      props.thread.workspaceHandoff?.available !== false &&
-      !sending &&
-      !activeTurnId &&
-      !queuedTurns.some((queued) =>
-        Boolean(queued.backendQueuePending || queued.queueEntryId)
-      ) &&
-      !props.pendingRequestActive &&
-      !props.pendingUserInputActive &&
-      !handoffSubmitting
-  );
+    showPrAutoDispatchToggle,
+    prAutoDispatchProjectOverride,
+    prAutoDispatchIdleTooltip,
+    prAutoDispatchTooltip,
+    prAutoDispatchProjectMuted,
+    prAutoDispatchIdle,
+    environmentMenuAction,
+    workspaceOpenPath,
+    editorApplication,
+    terminalApplication,
+    sourceBranch,
+    keepLocalBranchAvailable,
+    keepLocalBranchSelected,
+    localCheckoutBranch,
+    leaveLocalBranchOptions,
+    branchOptions,
+    freshBaseOptions,
+    freshBaseRef,
+    canMoveThreadProject,
+    canHandoffThreadWorkspace,
+    toNewWorktree,
+    fromWorktreeToNew,
+    openHandoffDialog,
+    handoffDialogRef,
+    submitHandoff,
+    openWorkspaceApplication,
+    handoffDisabled,
+    dismissAutocomplete,
+    handleAutocompleteKeyDown,
+    composerDisabled,
+    launchpadMachine,
+    renderLaunchpadMachineChip,
+    composerPlaceholder,
+    handleComposerChange,
+    handleComposerClick,
+    handleTiptapComposerKeyDown,
+    visibleFileAttachments,
+    hasVisibleAttachments,
+    remoteUploadTargetLabel,
+    uploadingRemoteFileCount,
+    failedRemoteFileUploads,
+    stripLightboxItems,
+    expandedStripIndex,
+    expandedStripItem,
+    previousStripItem,
+    nextStripItem,
+    environmentSetup,
+    environmentSetupRetryId,
+    composerErrorEntries,
+  } = useComposerPresentation();
 
-  const canHandoffThreadWorkspace = canMoveThreadProject
-    && isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace });
-
-  useEffect(() => {
-    if (activeTurnId) {
-      setWorkspaceMenuOpen(false);
-    }
-  }, [activeTurnId]);
-
-  // Both directions create a new worktree and offer the same strategies.
-  const toNewWorktree = handoffDialog === "local-to-worktree"
-    || handoffDialog === "worktree-to-worktree";
-  const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
-  const openHandoffDialog = (
-    direction: HandoffThreadWorkspaceRequest["direction"]
-  ): void => {
-    setWorkspaceMenuOpen(false);
-    setHandoffError(undefined);
-    setHandoffDialog(direction);
-    setProjectTargetPath("");
-    setProjectSearch("");
-    if (direction === "worktree-to-local") {
-      setWorktreeHandoffStrategy(
-        props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
-      );
-    }
-    if (direction === "local-to-worktree" || direction === "worktree-to-worktree") {
-      setLocalHandoffStrategy("detached-changes");
-      setLeaveLocalBranch(branchOptions[0] ?? "");
-      setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
-      setFreshBaseRef("");
-      setFreshBranchName("");
-    }
-  };
-  const handoffDialogRef = useModalDialog({
-    open: Boolean(handoffDialog && threadWorkspace),
-    onClose: () => {
-      if (!handoffSubmitting) setHandoffDialog(undefined);
-    },
-  });
-
-  const submitHandoff = async (): Promise<void> => {
-    if (props.workspaceActionsBlocked || !threadWorkspace || !props.onHandoffThreadWorkspace) {
-      return;
-    }
-
-    setHandoffSubmitting(true);
-    setHandoffError(undefined);
-    try {
-      const freshFromBase = toNewWorktree && localHandoffStrategy === "fresh-from-base";
-      const handoffStrategy = !toNewWorktree
-        ? undefined
-        : freshFromBase
-          ? (freshBranchName.trim() ? "new-branch" : "detached-changes")
-          : localHandoffStrategy as ThreadWorkspaceHandoffStrategy;
-      if (handoffDialog === "to-project") {
-        await props.onHandoffThreadWorkspace({
-          direction: "to-project",
-          targetPath: projectTargetPath.trim(),
-        });
-        setHandoffDialog(undefined);
-        return;
-      }
-      if (keepLocalBranchSelected && props.onMoveThreadToMainCheckout) {
-        await props.onMoveThreadToMainCheckout(threadWorkspace.sourcePath);
-        setHandoffDialog(undefined);
-        return;
-      }
-      await props.onHandoffThreadWorkspace({
-        direction: handoffDialog!,
-        ...(handoffStrategy ? { strategy: handoffStrategy } : {}),
-        repositoryPath: threadWorkspace.repositoryPath,
-        sourcePath: threadWorkspace.sourcePath,
-        sourceBranch,
-        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
-          ? { leaveLocalBranch: leaveLocalBranch || undefined }
-          : {}),
-        ...(toNewWorktree && handoffStrategy === "new-branch"
-          ? { newBranchName: (freshFromBase ? freshBranchName.trim() : newLocalBranch) || undefined }
-          : {}),
-        ...(freshFromBase ? { baseRef: freshBaseRef } : {}),
-      });
-      setHandoffDialog(undefined);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // An owner that predates the keep-branch handoff answers
-      // method_not_found; nothing moved. The text survives IPC, the code does not.
-      const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
-      // New-worktree moves use their own method; the bridge names its refusal.
-      setHandoffError(keepLocalBranchSelected && isOutdatedOwnerError(message)
-        ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
-        : message.includes(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE)
-          ? `${owner} runs an older PwrAgent that cannot make this move. Update PwrAgent on ${owner}. Nothing moved.`
-          : message);
-    } finally {
-      setHandoffSubmitting(false);
-    }
-  };
-
-  const openWorkspaceApplication = async (
-    application: DesktopApplicationDiscoveryCandidate,
-  ): Promise<void> => {
-    if (props.workspaceActionsBlocked) return;
-    if (!props.desktopApi?.openApplication) {
-      setApplicationOpenError("Desktop bridge is missing openApplication().");
-      return;
-    }
-    if (!workspaceOpenPath) {
-      setApplicationOpenError("No workspace path is available for this thread.");
-      return;
-    }
-
-    setApplicationOpenError(undefined);
-    try {
-      await props.desktopApi.openApplication({
-        applicationId: application.id,
-        ...(props.thread?.federation?.ref.target || rendererFederationTarget
-          ? {
-              federationTarget:
-                props.thread?.federation?.ref.target ?? rendererFederationTarget,
-            }
-          : {}),
-        kind: application.kind,
-        targetPath: workspaceOpenPath,
-      });
-    } catch (error) {
-      setApplicationOpenError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const handoffDisabled =
-    handoffSubmitting ||
-    (handoffDialog === "to-project"
-      ? !projectTargetPath.trim()
-      : !keepLocalBranchSelected && !sourceBranch) ||
-    (handoffDialog === "local-to-worktree" &&
-      localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
-    (fromWorktreeToNew &&
-      localHandoffStrategy === "move-branch" && (!sourceBranch || sourceBranch === "HEAD")) ||
-    (toNewWorktree &&
-      localHandoffStrategy === "new-branch" && !newLocalBranch.trim()) ||
-    (toNewWorktree &&
-      localHandoffStrategy === "fresh-from-base" && !freshBaseRef.trim());
-
-  const commitActiveAutocomplete = (): void => {
-    if (autocompleteKind === "skills") {
-      applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
-      return;
-    }
-
-    if (autocompleteKind === "directories") {
-      applyDirectoryReference(
-        filteredDirectoryRefs[activeDirectoryRefIndex] ?? filteredDirectoryRefs[0]!,
-      );
-      return;
-    }
-
-    if (autocompleteKind === "hash-references") {
-      const option =
-        filteredHashReferenceOptions[activeHashReferenceIndex]
-        ?? filteredHashReferenceOptions[0];
-      if (option?.kind === "thread") {
-        applyHashReference((index) =>
-          createComposerThreadToken(
-            resolveThreadSummaryReference(option.thread),
-            index,
-          ),
-        );
-        return;
-      }
-      if (option?.kind === "pull-request") {
-        applyHashReference((index) =>
-          createComposerPullRequestToken(option.pullRequest, index),
-        );
-      }
-      return;
-    }
-
-    const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.toLowerCase()
+  function useComposerPresentation() {
+    // Remote controls use the owner's feature gate/default, never the viewer's.
+    // Older owners omit this metadata, so the override control stays hidden.
+    const tokenMiserEnabled = filesystemFederationTarget?.scope === "remote"
+      ? backend?.tokenMiser?.enabled
+      : props.tokenMiserEnabled;
+    const tokenMiserDefaultEnabled = filesystemFederationTarget?.scope === "remote"
+      ? backend?.tokenMiser?.defaultEnabled
+      : props.tokenMiserDefaultEnabled;
+    const currentSettings = props.launchpad ?? props.thread;
+    const backgroundPrPollingEnabled =
+      props.backgroundPrPollingEnabled ?? true;
+    const prAutoDispatchAllowed = props.prAutoDispatchAllowed ?? true;
+    const prAutoDispatchAvailable =
+      backgroundPrPollingEnabled && prAutoDispatchAllowed;
+    const modelOptions = backend?.launchpadOptions?.models ?? [];
+    // Codex model providers list their models after Codex's own, one titled
+    // section each. Codex fixes a thread's provider when it starts, so an
+    // existing thread offers only its own provider's models.
+    const threadModelProvider = backend?.kind === "codex" && props.thread && !props.launchpad
+      ? codexProviderIdOfModel(props.thread.model)
       : undefined;
-    const exactSlashCommand = currentSlashText
-      ? filteredSlashCommands.find((command) =>
-          slashCommandMatchesText(command, currentSlashText)
+    const threadProviderLabel = threadModelProvider
+      ? modelOptions.find((model) => model.providerId === threadModelProvider)?.providerLabel
+        ?? threadModelProvider
+      : "Codex";
+    const threadModelMenuFootnote = backend?.kind === "codex"
+      && props.thread
+      && !props.launchpad
+      && (threadModelProvider || modelOptions.some((model) => model.providerId))
+      ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
+      : undefined;
+    const selectedModelOption: BackendModelOption | undefined =
+      modelOptions.find((option) => option.id === currentSettings?.model) ??
+      (currentSettings?.model
+        ? { id: currentSettings.model, label: currentSettings.model }
+        : getDefaultModelOption(backend));
+    // Image attachments are allowed unless the active model explicitly reports
+    // no image support (Codex Spark) or the ACP agent advertises
+    // `prompt.image: false`. `undefined` on either signal means "assume
+    // supported" so existing backends keep working.
+    const imagesSupported =
+      selectedModelOption?.supportsImage !== false &&
+      backend?.acp?.runtime?.agentCapabilities?.prompt?.image !== false;
+    const imagesUnsupportedLabel =
+      selectedModelOption?.label ?? currentSettings?.model ?? "This mode";
+    const supportsReasoning =
+      selectedModelOption?.supportsReasoning ??
+      Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
+    const selectedReasoningEffort = supportsReasoning
+      ? getReasoningEffortValue(
+          backend,
+          selectedModelOption,
+          currentSettings?.reasoningEffort,
         )
       : undefined;
-    applySlashCommand(
-      exactSlashCommand ??
-        filteredSlashCommands[activeSlashIndex] ??
-        filteredSlashCommands[0]!
-    );
-  };
-
-  const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
-    if (command.id === "review-current") {
-      enterReviewComposer();
-      return true;
-    }
-
-    if (command.label.toLowerCase() === "/compact") {
-      void submitCompactThread();
-      return true;
-    }
-
-    if (command.id === "codex-mcp") {
-      showMcpInventory("toolsAndAuthOnly");
-      return true;
-    }
-
-    if (command.id === "codex-mcp-verbose") {
-      showMcpInventory("full");
-      return true;
-    }
-
-    return false;
-  };
-
-  const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
-    if (autocompleteKind !== "slash") {
-      return undefined;
-    }
-
-    const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.toLowerCase()
+    const profileModelDefaults = backend
+      ? filesystemFederationTarget?.scope === "remote"
+        ? backend.modelDefaults
+        : props.providerModelDefaults?.[backend.kind]
       : undefined;
-    return (
-      (currentSlashText
-        ? filteredSlashCommands.find((candidate) =>
-            slashCommandMatchesText(candidate, currentSlashText)
+    const profileModelOption =
+      modelOptions.find((option) => option.id === profileModelDefaults?.model)
+      ?? getDefaultModelOption(backend);
+    const profileReasoningOptions = getReasoningEffortsForModel(
+      backend,
+      profileModelOption,
+    );
+    const configuredProfileReasoning = profileModelOption
+      ? profileModelDefaults?.reasoningEffortsByModel[profileModelOption.id]
+      : undefined;
+    const profileReasoningEffort =
+      configuredProfileReasoning
+      && profileReasoningOptions.includes(configuredProfileReasoning)
+        ? configuredProfileReasoning
+        : getDefaultReasoningEffort(backend, profileModelOption);
+    const launchpadDiffersFromProfileDefaults =
+      Boolean(props.launchpad && profileModelOption)
+      && (
+        props.launchpad?.model !== profileModelOption?.id
+        || (
+          profileReasoningOptions.length > 0
+          && props.launchpad?.reasoningEffort !== profileReasoningEffort
+        )
+      );
+    const supportsFast =
+      backend?.kind === "codex"
+      && (filesystemFederationTarget?.scope === "remote"
+        ? backend?.codexFastAllowed !== false
+        : props.codexFastAllowed !== false)
+        ? selectedModelOption?.supportsFast ??
+          backend.launchpadOptions?.supportsFastMode ??
+          false
+        : false;
+    const speedOptions = backend?.kind === "codex"
+      ? codexSpeedOptions(
+          selectedModelOption,
+          filesystemFederationTarget?.scope === "remote"
+            ? backend.codexFastAllowed !== false
+            : props.codexFastAllowed !== false,
+          supportsFast,
+        )
+      : [];
+    const selectedSpeed = selectedCodexSpeed(currentSettings ?? {});
+    const selectedServiceTier =
+      currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
+    const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
+    const providerOptions = useMemo(
+      () => props.backends?.filter(
+        (candidate) => candidate.available && candidate.capabilities.createThread
+      ) ?? [],
+      [props.backends],
+    );
+    // Each Codex model provider is its own entry, named the way the owner
+    // named it. It still starts a `codex` thread; its models carry the
+    // provider in their qualified ids.
+    const providerPickerEntries = useMemo(
+      () => buildProviderPickerEntries(providerOptions),
+      [providerOptions],
+    );
+    // A new chat's Model menu offers the chosen provider's models only.
+    const launchpadModelScope = props.launchpad && backend?.kind === "codex"
+      ? { model: selectedModelOption?.id ?? props.launchpad.model }
+      : undefined;
+    const scopedCodexProviderId = backend?.kind === "codex"
+      ? codexProviderIdOfModel(launchpadModelScope?.model ?? (props.launchpad ? undefined : props.thread?.model))
+      : undefined;
+    const modelMenuFootnote = [
+      threadModelMenuFootnote,
+      scopedCodexProviderId
+        ? codexModelProviderCatalogNote(
+            backend?.codexModelProviders?.find((state) => state.id === scopedCodexProviderId),
           )
-        : undefined) ??
-      filteredSlashCommands[activeSlashIndex] ??
-      filteredSlashCommands[0]
-    );
-  };
-
-  const restoreDeletedSkillToken = (
-    event: ReactKeyboardEvent<HTMLElement>,
-  ): boolean => {
-    if (
-      event.key.toLowerCase() !== "z" ||
-      (!event.metaKey && !event.ctrlKey) ||
-      event.shiftKey ||
-      deletedSkillTokenHistoryRef.current.length === 0
-    ) {
-      return false;
-    }
-
-    const previous = deletedSkillTokenHistoryRef.current.pop()!;
-    event.preventDefault();
-    setDraft(previous.draft);
-    setSkillTokens(previous.skillTokens);
-    setEditorDocument(undefined);
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(
-        previous.selectionStart,
-        previous.selectionStart,
-      );
-    });
-    return true;
-  };
-
-  const dismissAutocomplete = useCallback((restoreFocus = false): void => {
-    if (!autocompleteKey) {
-      return;
-    }
-    setDismissedAutocompleteKey(autocompleteKey);
-    setActiveSkillIndex(0);
-    setActiveSlashIndex(0);
-    setActiveDirectoryRefIndex(0);
-    setActiveHashReferenceIndex(0);
-    if (restoreFocus) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
-  }, [autocompleteKey]);
-
-  const handleAutocompleteKeyDown = (
-    event: ReactKeyboardEvent<HTMLElement>,
-  ): void => {
-    if (!hasAutocompleteOptions && event.key !== "Escape") {
-      return;
-    }
-
-    const updateActiveAutocompleteIndex = (
-      updater: (current: number) => number,
-    ): void => {
-      if (autocompleteKind === "skills") {
-        setActiveSkillIndex(updater);
-      } else if (autocompleteKind === "directories") {
-        setActiveDirectoryRefIndex(updater);
-      } else if (autocompleteKind === "hash-references") {
-        setActiveHashReferenceIndex(updater);
-      } else {
-        setActiveSlashIndex(updater);
-      }
-    };
-
-    const getAutocompletePageStep = (): number => {
-      const list = autocompleteListRef.current;
-      const option = autocompleteOptionRefs.current.find(Boolean);
-      const optionHeight = option?.getBoundingClientRect().height ?? 0;
-      if (list && optionHeight > 0) {
-        return Math.max(1, Math.floor(list.clientHeight / optionHeight));
-      }
-      return Math.max(1, Math.min(6, autocompleteLength - 1));
-    };
-
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      updateActiveAutocompleteIndex((current) =>
-        Math.min(current + 1, autocompleteLength - 1)
-      );
-      return;
-    }
-
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      updateActiveAutocompleteIndex((current) => Math.max(current - 1, 0));
-      return;
-    }
-
-    if (event.key === "PageDown") {
-      event.preventDefault();
-      const pageStep = getAutocompletePageStep();
-      updateActiveAutocompleteIndex((current) =>
-        Math.min(current + pageStep, autocompleteLength - 1)
-      );
-      return;
-    }
-
-    if (event.key === "PageUp") {
-      event.preventDefault();
-      const pageStep = getAutocompletePageStep();
-      updateActiveAutocompleteIndex((current) => Math.max(current - pageStep, 0));
-      return;
-    }
-
-    if (event.key === "Escape") {
-      event.preventDefault();
-      dismissAutocomplete(true);
-      return;
-    }
-
-    const optionHasFocus = event.currentTarget instanceof HTMLButtonElement;
-    if (
-      (event.key === "Tab" && !event.shiftKey) ||
-      event.key === "Enter" ||
-      (event.key === " " && optionHasFocus)
-    ) {
-      if (event.key === "Enter" && event.shiftKey) {
-        return;
-      }
-      event.preventDefault();
-      const slashCommand =
-        event.key === "Enter" && autocompleteKind === "slash"
-          ? getActiveSlashCommand()
-          : undefined;
-      if (
-        slashCommand &&
-        runSlashCommand(slashCommand)
-      ) {
-        return;
-      }
-      commitActiveAutocomplete();
-    }
-  };
-
-  // Autocomplete stays open when focus moves into the transcript, so Escape
-  // must dismiss it at window scope instead of relying on the editor handler.
-  useEffect(() => {
-    if (!autocompleteKind) {
-      return;
-    }
-    const dismissOnEscape = (event: globalThis.KeyboardEvent): void => {
-      if (event.key !== "Escape" || event.defaultPrevented) {
-        return;
-      }
-      event.preventDefault();
-      dismissAutocomplete();
-    };
-    window.addEventListener("keydown", dismissOnEscape);
-    return () => window.removeEventListener("keydown", dismissOnEscape);
-  }, [autocompleteKind, dismissAutocomplete]);
-
-  // Backend availability gates submission and remote actions, not the draft.
-  // Keeping the editor live lets an operator inspect, copy, revise, or remove
-  // durable text and attachments while federation reconnects.
-  const composerDisabled = false;
-  const launchpadMachine = props.launchpadMachine;
-  const launchpadMachineChipHost = props.launchpadMachineChipHost;
-  const renderLaunchpadMachineChip = (chip: ReactNode): ReactNode =>
-    launchpadMachineChipHost ? createPortal(chip, launchpadMachineChipHost) : chip;
-  const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
-    ? launchpadMachine.targets.find(
-      (target) => target.instanceId === launchpadMachine.currentInstanceId,
-    )?.label ?? launchpadMachine.currentInstanceId
-    : undefined;
-  // The reply box doubles as a place to teach one feature at a time.
-  const composerTip = useComposerTip(isLaunchpad ? undefined : composerScopeKey, draft.length === 0);
-  const composerPlaceholder = launchpadSubmitting
-    ? "Queue a follow-up while this thread starts"
-    : isLaunchpad
-    ? `${subthreadParentTitle
-      ? `Start a sub-thread of ${subthreadParentTitle}`
-      : `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`}${
-      launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
-    }`
-    : composerTip ?? "Reply to this thread";
-  const handleComposerChange = (
-    nextDraft: string,
-    nextSkillTokens?: ComposerSkillToken[],
-    metadata?: ComposerInputChangeMetadata,
-  ): void => {
-    recordRendererUpdate(RendererUpdateEvent.composerChange, isLaunchpad ? "new-thread" : "reply");
-    if (!recoveringDraftRef.current) {
-      recoveryCycleRef.current = undefined;
-      recoveryEligibilityVersionRef.current += 1;
-    }
-    const pendingProgrammaticChange =
-      pendingProgrammaticComposerChangeRef.current;
-    if (pendingProgrammaticChange && nextSkillTokens) {
-      const nextSkillTokensSignature =
-        getComposerSkillTokensSignature(nextSkillTokens);
-      if (
-        nextDraft === pendingProgrammaticChange.staleDraft &&
-        nextSkillTokensSignature ===
-          pendingProgrammaticChange.staleSkillTokensSignature
-      ) {
-        return;
-      }
-      pendingProgrammaticComposerChangeRef.current = undefined;
-    }
-
-    const deletedSkillTokenHistoryEntry =
-      nextSkillTokens &&
-      nextSkillTokens.length < skillTokens.length
-        ? (() => {
-            const nextTokenIds = new Set(
-              nextSkillTokens.map((token) => token.id),
-            );
-            const deletedToken = skillTokens.find(
-              (token) => !nextTokenIds.has(token.id),
-            );
-            return deletedToken
-              ? {
-                  draft,
-                  selectionStart: deletedToken.index,
-                  skillTokens,
-                }
-              : undefined;
-          })()
-        : undefined;
-    const storedSkillTokens = nextSkillTokens ?? skillTokens;
-    const preserveRecoveryCycle =
-      !recoveringDraftRef.current &&
-      recoveryCycleRef.current?.candidates.some(
-        (candidate) =>
-          getComposerDraftSnapshotSignature(candidate) ===
-          getComposerDraftSnapshotSignature({
-            draft: nextDraft,
-            editorDocument: metadata?.editorDocument,
-            imageAttachments,
-            fileAttachments,
-            skillTokens: storedSkillTokens,
-          }),
-      ) === true;
-
-    updateVisibleDraft(nextDraft, nextSkillTokens, { preserveRecoveryCycle });
-    setEditorDocument(metadata?.editorDocument);
-    saveComposerDraftSnapshot(composerScopeKey, {
-      draft: nextDraft,
-      editorDocument: metadata?.editorDocument,
-      imageAttachments,
-      fileAttachments,
-      skillTokens: storedSkillTokens,
-      ...(rewoundPromptScope === composerScopeKey ? { rewoundPrompt: true } : {}),
-    });
-    if (deletedSkillTokenHistoryEntry) {
-      deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
-    }
-    if (nextDraft.trim() !== "/review") {
-      setReviewConfig(undefined);
-    }
-    setSendError(undefined);
-  };
-  const handleComposerClick = (): void => {
-    setActiveSkillIndex(0);
-    setActiveSlashIndex(0);
-    setActiveDirectoryRefIndex(0);
-  };
-  const handlePlainComposerKeyDown = (
-    event: ReactKeyboardEvent<HTMLElement>,
-  ): void => {
-    if (event.defaultPrevented) {
-      return;
-    }
-
-    if (!hasAutocompleteOptions) {
-      const liveHasComposerContent = Boolean(
-        (inputRef.current?.value ?? draft).trim() ||
-          (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
-      );
-      const liveHasAnyComposerContent =
-        liveHasComposerContent ||
-        imageAttachments.length > 0 ||
-        fileAttachments.length > 0;
-      const recoveryCycle = recoveryCycleRef.current;
-      const liveSelectionAtStart =
-        (inputRef.current?.selectionStart ?? 0) === 0 &&
-        (inputRef.current?.selectionEnd ?? 0) === 0;
-      const canCycleActiveRecovery =
-        recoveryCycle?.scopeKey === composerScopeKey && liveSelectionAtStart;
-      if (recoveryCycle && !canCycleActiveRecovery) {
-        recoveryCycleRef.current = undefined;
-        recoveryEligibilityVersionRef.current += 1;
-      }
-      if (
-        recoveryCycle &&
-        canCycleActiveRecovery &&
-        liveHasAnyComposerContent &&
-        event.key !== "ArrowUp" &&
-        event.key !== "ArrowDown"
-      ) {
-        recoveryCycleRef.current = undefined;
-        recoveryEligibilityVersionRef.current += 1;
-      }
-      if (
-        event.key === "ArrowUp" &&
-        (!liveHasComposerContent || canCycleActiveRecovery) &&
-        (imageAttachments.length === 0 || canCycleActiveRecovery) &&
-        (fileAttachments.length === 0 || canCycleActiveRecovery)
-      ) {
-        event.preventDefault();
-        void recoverPreviousComposerDraft();
-        return;
-      }
-      if (
-        event.key === "ArrowDown" &&
-        liveHasAnyComposerContent &&
-        canCycleActiveRecovery &&
-        (imageAttachments.length === 0 || canCycleActiveRecovery) &&
-        (fileAttachments.length === 0 || canCycleActiveRecovery)
-      ) {
-        event.preventDefault();
-        recoverNextComposerDraft();
-        return;
-      }
-
-      if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        void submitTurn(isSteerShortcut(event) ? "steer" : "default", {
-          restoreComposerFocus: true,
-        });
-      }
-      return;
-    }
-
-    handleAutocompleteKeyDown(event);
-  };
-  const handleTiptapComposerKeyDown = (
-    event: ReactKeyboardEvent<HTMLDivElement>,
-  ): void => {
-    if (event.defaultPrevented) {
-      return;
-    }
-
-    if (restoreDeletedSkillToken(event)) {
-      return;
-    }
-
-    handlePlainComposerKeyDown(event);
-  };
-
-  const pdfPreviewPathSet = new Set(
-    pdfPreviewReferences.map((reference) => reference.path),
-  );
-  const visibleFileAttachments = fileAttachments.filter(
-    (attachment) => !pdfPreviewPathSet.has(attachment.path),
-  );
-  const hasVisibleAttachments =
-    imageAttachments.length > 0
-    || visibleFileAttachments.length > 0
-    || pdfPreviewReferences.length > 0
-    || remoteFileUploads.uploads.length > 0;
-  const remoteUploadTargetLabel = remoteFilePushTarget?.label ?? "the owning machine";
-  const uploadingRemoteFileCount = remoteFileUploads.uploads.filter(
-    (upload) => upload.status === "uploading",
-  ).length;
-  const failedRemoteFileUploads = remoteFileUploads.uploads.filter(
-    (upload) => upload.status === "failed",
-  );
-  // The strip is one gallery: every thumbnail that expands, in the order it
-  // is drawn — pasted images, then PDF page previews that are ready. A sent
-  // message's images page with the arrow keys; these must too, or the same
-  // pair of screenshots behaves differently before and after Send.
-  const stripLightboxItems = expandedStripItemKey
-    ? composerStripLightboxItems(
-        imageAttachments,
-        pdfPreviewReferences,
-        composerPdfPreviewStates,
-      )
-    : [];
-  const expandedStripIndex = stripLightboxItems.findIndex(
-    (item) => item.key === expandedStripItemKey,
-  );
-  const expandedStripItem = stripLightboxItems[expandedStripIndex];
-  const previousStripItem = stripLightboxItems[expandedStripIndex - 1];
-  const nextStripItem = stripLightboxItems[expandedStripIndex + 1];
-
-  const environmentSetup = props.environmentSetup;
-  const environmentSetupRetryId =
-    environmentSetup?.status === "failed" && environmentSetup.phase === "setup"
-      ? environmentSetup.environmentId
-      : undefined;
-
-  const composerErrorEntries: readonly ComposerErrorEntry[] = [
-    { id: "skills", label: "Couldn't load skills", message: props.skillError },
-    { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
-    {
-      id: "launchpad-configuration",
-      label: "Couldn't load thread settings",
-      message: props.launchpadConfigurationError,
-      dismissible: false,
-      retry: props.onReloadLaunchpadConfiguration ? {
-        label: "Reload thread settings",
-        onClick: () => { void props.onReloadLaunchpadConfiguration?.(); },
-      } : undefined,
-    },
-    {
-      id: "action",
-      label: "Action failed",
-      message: sendError,
-      occurrence: sendErrorState.occurrence,
-    },
-    {
-      id: "environment",
-      label: "Environment error",
-      // A failed setup command rejects `setCodexThreadEnvironment`, and the
-      // setup row already shows that failure with its full output: one
-      // surface per error. Only a failure for the same environment is
-      // claimed, so a different selection's error still reports here. The
-      // row clears this error when it is dismissed, so it cannot reappear.
-      // With no row (no progress stream reached this window), the error row
-      // is the only report and stays.
-      message:
-        environmentSetup?.status === "failed"
-        && environmentError?.selectedEnvironmentId !== undefined
-        && environmentError.selectedEnvironmentId === environmentSetup.environmentId
-          ? undefined
-          : environmentError?.message,
-    },
-    { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
-    {
-      id: "agent-change",
-      label: "Agent change failed",
-      message: props.thread?.agentChange?.error
-        ? formatAgentChangeStatus(props.thread.agentChange)
         : undefined,
-    },
-    { id: "open-application", label: "Couldn't open application", message: applicationOpenError },
-    { id: "execution-mode", label: "Couldn't change access", message: props.setExecutionModeError },
-    { id: "model-settings", label: "Couldn't change model settings", message: props.threadModelSettingsError },
-    { id: "add-directory", label: "Couldn't add directory", message: props.pickDirectoryError },
-  ];
+    ].filter(Boolean).join(" ") || undefined;
+    // Backends we can hand a review to. `reviewRunner` doubles as the feature
+    // probe for reviewer overrides: an instance that predates them never sets
+    // it, so a viewer federated to an older owner finds no eligible reviewers
+    // and keeps the row read-only rather than sending a `reviewBackend` that
+    // owner would silently ignore.
+    const reviewerBackendOptions =
+      props.backends?.filter(
+        (candidate) =>
+          candidate.available && candidate.capabilities.reviewRunner === true
+      ) ?? [];
+    // Gated on an existing thread: the launchpad's materialize path takes only
+    // a review target (`onMaterializeLaunchpad`), so a reviewer picked there
+    // would be accepted by the UI and then silently dropped on submit.
+    const reviewerOverridesSupported =
+      Boolean(props.thread) && reviewerBackendOptions.length > 0;
+    const reviewerFederationTarget =
+      props.thread?.federation?.ref.target ?? rendererFederationTarget;
+    const reviewerAuthorityKey =
+      reviewerFederationTarget?.scope === "remote"
+        ? `remote:${reviewerFederationTarget.instanceId}`
+        : "local";
+    reviewerAuthorityKeyRef.current = reviewerAuthorityKey;
+    const reviewerRecents =
+      reviewerRecentsState.authorityKey === reviewerAuthorityKey
+        ? reviewerRecentsState.recents
+        : [];
+    const reviewerSelection = resolveReviewerSelection({
+      backends: props.backends,
+      override: reviewConfig?.reviewer,
+      reviewerBackends: reviewerOverridesSupported ? reviewerBackendOptions : [],
+      threadBackend: props.thread?.source,
+      threadModel: selectedModelOption?.id,
+      threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
+    });
+    const reviewerModelOptions =
+      reviewerSelection.summary?.launchpadOptions?.models ?? [];
+    const reviewerReasoningOptions = getReasoningEffortsForModel(
+      reviewerSelection.summary,
+      reviewerSelection.model,
+    );
+    const reviewerOverridden = Boolean(reviewConfig?.reviewer);
+    const reviewOwnerSummary = props.backends?.find(
+      (candidate) => candidate.kind === props.thread?.source,
+    );
+    const reviewAutoFixSupported =
+      reviewOwnerSummary?.capabilities.reviewAutoFix === true;
+    const reviewAutoFixChecked = !reviewWaitsAfter(reviewConfig);
+    const reviewRunModeDecision = props.thread
+      ? resolveReviewRunMode({
+          ownerSummary: reviewOwnerSummary,
+          requestedRunMode: reviewConfig?.runModeChosen ? reviewConfig.runMode : undefined,
+          reviewerBackend: reviewerSelection.backend,
+          reviewerSummary: reviewerSelection.summary,
+          thread: props.thread,
+          workspaceCwd: reviewConfig?.workspaceCwd,
+        })
+      : {
+          controlDisabled: false,
+          explicitRunModeSupported: false,
+          runMode: "codex-sub-agent" as const,
+          subagentDisabled: true,
+          nativeDisabled: true,
+          submissionUnavailable: false,
+        };
+    const reviewSubmissionUnavailable =
+      reviewRunModeDecision.submissionUnavailable;
+    // A PR from another attached repository moves the review to that project
+    // and forces its run mode, and both controls sit away from the picker. Say
+    // so beside the choice, in the resolver's words, so this line and the mode
+    // chip's tooltip cannot disagree.
+    const reviewPullRequestWorkspaceNote =
+      reviewConfig?.target === "pullRequest"
+      && selectedReviewPullRequest
+      && reviewWorkspaceSelectionRequired
+      && reviewConfig.workspaceCwd
+      && props.thread
+      && !reviewWorkspacePathMatches(
+        reviewConfig.workspaceCwd,
+        findPrimaryReviewWorkspaceCwd(props.thread),
+      )
+        ? [
+            `Reviews in ${reviewWorkspaceOptions.find((option) =>
+              option.cwd === reviewConfig.workspaceCwd
+            )?.label ?? reviewConfig.workspaceCwd}.`,
+            reviewRunModeDecision.helpText,
+          ].filter(Boolean).join(" ")
+        : undefined;
+    // A remembered combination is only offered while it still resolves against
+    // the owner's current catalog. Recents are disposable, so a dead row is
+    // noise rather than a preference worth preserving.
+    const resolvableReviewerRecents = reviewerRecents.filter((recent) => {
+      const summary = reviewerBackendOptions.find(
+        (candidate) => candidate.kind === recent.backend,
+      );
+      if (!summary) {
+        return false;
+      }
+      return (
+        !recent.model
+        || (summary.launchpadOptions?.models ?? []).some(
+          (model) => model.id === recent.model,
+        )
+      );
+    });
+    // Identity is the list position, not the rendered label: the store dedupes
+    // on a wider tuple than the label shows, so two distinct entries can format
+    // identically.
+    const activeReviewerRecentIndex = resolvableReviewerRecents.findIndex(
+      (recent) =>
+        recent.backend === reviewConfig?.reviewer?.backend
+        && recent.model === reviewConfig?.reviewer?.model
+        && recent.reasoningEffort === reviewConfig?.reviewer?.reasoningEffort,
+    );
+
+    const patchReviewer = (
+      build: (current: ModelSettingsRecent | undefined) => ModelSettingsRecent | undefined,
+    ): void => {
+      setReviewConfig((current) => {
+        const base =
+          current
+          ?? createReviewConfig({
+            directory: props.directory,
+            thread: props.thread,
+          });
+        return { ...base, reviewer: build(base.reviewer) };
+      });
+      setSendError(undefined);
+    };
+    const executionModeOptions =
+      backend?.executionModes.filter((mode) =>
+        mode.available || (backend.available && mode.mode === "auto"),
+      ) ?? [];
+    const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
+    // Claude maps Plan to its own read-only plan permission mode.
+    const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
+    const supportsSteering =
+      Boolean(backend?.capabilities.steerTurn) &&
+      selectedModelOption?.supportsSteering !== false;
+    // The backend summaries describe the instance this window fronts. A
+    // peer's thread pinned into a local window is answered by an owner whose
+    // capabilities this window cannot see, and an owner that predates
+    // Interrupt would quietly deliver it as a Steer.
+    const threadOwnerTarget = props.thread?.federation?.ref.target;
+    const backendsDescribeThreadOwner =
+      threadOwnerTarget?.scope !== "remote"
+      || rendererFederationTarget?.instanceId === threadOwnerTarget.instanceId;
+    const supportsInterruptSteer =
+      supportsSteering
+      && backendsDescribeThreadOwner
+      && backend?.capabilities.interruptSteerTurn === true;
+    const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
+    // A launchpad with a parent starts a sub-thread. Detaching clears the
+    // parent, and the copy goes back to a plain new thread.
+    const subthreadParentTitle = isLaunchpad && props.launchpad?.parentThreadId
+      ? props.launchpad.parentThreadTitle || props.launchpad.parentThreadId
+      : undefined;
+    // A Discard asked from outside, run as the Cancel button runs it. Each
+    // request runs once, and only against the launchpad it names.
+    const handledLaunchpadCancelRequestIdRef = useRef<number | undefined>(undefined);
+    useEffect(() => {
+      const request = props.launchpadCancelRequest;
+      if (!request || handledLaunchpadCancelRequestIdRef.current === request.id) {
+        return;
+      }
+      handledLaunchpadCancelRequestIdRef.current = request.id;
+      if (
+        !props.launchpad
+        || props.launchpad.directoryKey !== request.directoryKey
+        || launchpadSubmitting
+      ) {
+        return;
+      }
+      abandonComposerDraftSnapshot(composerScopeKey);
+      props.onCancelLaunchpad?.(request.directoryKey);
+    }, [props.launchpadCancelRequest]);
+    const backendsDescribeScheduleOwner =
+      filesystemFederationTarget?.scope !== "remote"
+      || rendererFederationTarget?.instanceId === filesystemFederationTarget.instanceId;
+    const shortTermResetAt = backendsDescribeScheduleOwner
+      ? getShortTermRateLimitResetAt({
+          rateLimits: backend?.rateLimits,
+          now: scheduleNow,
+          selectedModelOption,
+        })
+      : undefined;
+    const scheduledSendOptions: ScheduledSendMenuOption[] = [
+      ...(shortTermResetAt
+        ? [
+            {
+              label: "Send after rate limit reset",
+              description: `In ${formatScheduledSendCountdown(
+                shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS,
+                scheduleNow,
+              )}–${formatScheduledSendCountdown(
+                shortTermResetAt + RATE_LIMIT_RESET_BUFFER_MS + RATE_LIMIT_RESET_JITTER_MS,
+                scheduleNow,
+              )} · 5–10m buffer`,
+              rateLimitResetAt: shortTermResetAt,
+            },
+          ]
+        : []),
+      ...SCHEDULED_SEND_OPTIONS.map((option) => ({
+        delayMs: option.delayMs,
+        label: option.label,
+      })),
+    ];
+    const sendButtonDisabled =
+      forking ||
+      preparingSend ||
+      preparingImages ||
+      props.disabled ||
+      remoteFileUploads.uploads.length > 0 ||
+      steering ||
+      (!activeTurnId && sending && !isLaunchpad) ||
+      (!hasComposerContent &&
+        imageAttachments.length === 0 &&
+        fileAttachments.length === 0);
+    const scheduleButtonDisabled =
+      sendButtonDisabled ||
+      launchpadSubmitting ||
+      (!props.thread && !props.launchpad) ||
+      Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
+      isCompactCommand || Boolean(forkCommand) ||
+      lockCommandNote !== undefined;
+    // Only surface the schedule caret where scheduling actually applies. In the
+    // compact command or a thread-less composer there is nothing to schedule,
+    // so the split collapses to a plain Send pill instead of parking a
+    // permanently-dimmed half-button next to it. A launchpad is schedulable:
+    // choosing a time materializes its workspace/thread immediately and defers
+    // only the first action.
+    const scheduleAffordanceVisible =
+      Boolean(
+        props.thread
+        || (props.launchpad && props.onMaterializeLaunchpad)
+      ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
+    // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
+    // a checkable toggle between the caret and Send rather than hijacking the
+    // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
+    // Send fires now. The toggle only shows where scheduling applies — and never
+    // while the review-config panel is open, since that panel owns its own
+    // scheduled-send button and doesn't read `scheduleArmed`; showing the toggle
+    // there would let an operator "uncheck" a schedule the review submit ignores.
+    const scheduleToggleVisible =
+      scheduleAffordanceVisible
+      && Boolean(futureScheduledDraftSendAt)
+      && !isReviewComposerOpen;
+    const effectiveScheduledSendAt = scheduleArmed
+      ? futureScheduledDraftSendAt
+      : undefined;
+    const turnSubmitButtonLabel = preparingSend
+      ? "Preparing…"
+      : launchpadSubmitting ||
+        activeTurnId ||
+        queuedTurns.some((queued) =>
+          Boolean(queued.backendQueuePending || queued.queueEntryId)
+        ) ||
+        props.threadBusy
+          ? "Queue"
+          : sending
+            ? props.launchpad
+              ? "Starting…"
+              : "Sending…"
+            : props.launchpad
+              ? subthreadParentTitle ? "Start sub-thread" : "Start thread"
+              : "Send";
+    const submitButtonLabel = forking
+      ? "Forking…"
+      : forkCommand
+        ? "Fork"
+        : turnSubmitButtonLabel;
+    // The command menu owns the "/fork" row until it closes; after that the
+    // input draws the parameters still available as muted text after the caret.
+    const forkInlineHint =
+      (supportsForkCommand || supportsSubthreadCommand)
+      && autocompleteKind !== "slash"
+      && !forking
+        ? forkCommandHint(draft)
+        : undefined;
+    const forkInlineCompletion = forkInlineHint
+      ? forkCommandCompletion(draft)
+      : undefined;
+    // Claude and ACP agents read a command from the start of the prompt, so a
+    // draft that starts with one of their commands draws it as a chip and, until
+    // an argument is typed, the arguments it takes.
+    const commandBackend = props.launchpad?.backend ?? props.thread?.source;
+    const { chip: commandChip, hint: commandInlineHint } = describeLeadingCommand({
+      commands: props.providerCommands?.filter((command) =>
+        backendDrawsCommandChips(command.backend ?? commandBackend)
+      ) ?? [],
+      draft,
+      showHint:
+        autocompleteKind !== "slash"
+        && !forkInlineHint
+        && !forking
+        && !preparingSend,
+      skillTokens,
+    });
+    // Queue is the primary mid-turn; the steer chord is its keyboard-only
+    // sibling, so the button is where it gets named.
+    const submitButtonSteerHint =
+      submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
+    const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
+    // Mid-turn the send menu also names how this message can meet the running
+    // turn. Steer and Interrupt stay listed where the provider or model cannot
+    // do them, dimmed with the reason, so the menu explains the gap.
+    const turnSendActionsVisible =
+      submitButtonLabel === "Queue"
+      && Boolean(activeTurnId)
+      && Boolean(props.thread)
+      && !isLaunchpad
+      && !parsedReviewCommand;
+    const turnBackendLabel = props.thread
+      ? formatBackendLabel(props.thread.source, props.backends)
+      : "This agent";
+    const steerUnavailableReason = supportsSteering
+      ? undefined
+      : backend?.capabilities.steerTurn
+        ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
+        : `${turnBackendLabel} can't take messages mid-turn`;
+    const interruptUnavailableReason = supportsInterruptSteer
+      ? undefined
+      : !backendsDescribeThreadOwner && supportsSteering
+        ? "Open this instance's window to interrupt"
+        : `${turnBackendLabel} can't cut in mid-response`;
+    // One steer at a time: a second would be dropped while the first waits.
+    const pendingSteerReason = pendingSteer
+      ? "Another message is already steering in"
+      : undefined;
+    const launchpadWorkspaceOptions = props.launchpad
+      ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
+      : [];
+    const launchpadWorkspaceValue =
+      props.launchpad &&
+      launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
+        ? props.launchpad.workMode
+        : "local";
+    // Pure function of the launchpad draft + directory git status; memoize so
+    // typing in the prompt (which re-renders the composer) doesn't rebuild the
+    // branch option list every keystroke.
+    const launchpadBranchPickerOptions = useMemo(
+      () =>
+        props.launchpad
+          ? buildLaunchpadBranchPickerOptions(props.launchpad.branchName, props.directory)
+          : [],
+      [props.launchpad, props.directory],
+    );
+    const launchpadBranchStatusError =
+      props.launchpad?.directoryKind === "directory" &&
+      !isSameWorktreeSubthreadLaunchpad(props.launchpad.directoryKey) &&
+      props.directory?.gitStatus?.syncState === "status-unavailable"
+        ? props.directory.gitStatus.statusUnavailableReason ??
+          "Git did not return branch information."
+        : undefined;
+    const launchpadBranchStatusDirectoryKey = props.launchpad?.directoryKey;
+    const launchpadBranchStatusDirectoryLabel = props.launchpad?.directoryLabel;
+    const showLaunchpadBranchStatusNotice = props.onShowNotice;
+    useEffect(() => {
+      if (
+        !launchpadBranchStatusError ||
+        !launchpadBranchStatusDirectoryKey ||
+        !launchpadBranchStatusDirectoryLabel ||
+        !showLaunchpadBranchStatusNotice
+      ) {
+        return;
+      }
+
+      showLaunchpadBranchStatusNotice({
+        autoDismiss: false,
+        id: `launchpad-branches-unavailable:${launchpadBranchStatusDirectoryKey}:${launchpadBranchStatusError}`,
+        title: "Branches unavailable",
+        message: `PwrAgent couldn't load branches for ${launchpadBranchStatusDirectoryLabel}.`,
+        detail: launchpadBranchStatusError,
+        tone: "warning",
+      });
+    }, [
+      launchpadBranchStatusError,
+      launchpadBranchStatusDirectoryKey,
+      launchpadBranchStatusDirectoryLabel,
+      showLaunchpadBranchStatusNotice,
+    ]);
+    const launchpadCodexEnvironmentOptions =
+      props.launchpad?.codexEnvironmentOptions ?? [];
+    const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
+      (environment) => environment.id === props.launchpad?.codexEnvironmentId,
+    );
+    const threadCodexEnvironmentOptions =
+      props.thread?.codexEnvironmentOptions ?? [];
+    const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
+      (environment) =>
+        environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
+    );
+    const runtimeThreadCodexEnvironmentActions =
+      props.thread?.codexEnvironmentRuntime?.actions ?? [];
+    const threadCodexEnvironmentActions =
+      runtimeThreadCodexEnvironmentActions.length > 0
+        ? runtimeThreadCodexEnvironmentActions
+        : selectedThreadCodexEnvironmentOption?.actions ?? [];
+    const selectedThreadCodexEnvironmentForAction =
+      selectedThreadCodexEnvironmentOption ??
+      (props.thread?.codexEnvironmentRuntime?.environmentId
+        ? {
+            id: props.thread.codexEnvironmentRuntime.environmentId,
+            name: props.thread.codexEnvironmentRuntime.environmentName
+              ?? props.thread.codexEnvironmentRuntime.environmentId,
+            sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
+            actions: threadCodexEnvironmentActions,
+          }
+        : undefined);
+    // The picker lists the environments discovered in the thread's workspace,
+    // plus the one its runtime has selected when that one is not among them.
+    // A deleted worktree, or a checkout without `.codex/environments/`, reports
+    // no options while the runtime keeps its environment and commands; without
+    // this the Run chip stayed and nothing said which environment it ran.
+    const threadCodexEnvironmentPickerOptions =
+      selectedThreadCodexEnvironmentForAction && !selectedThreadCodexEnvironmentOption
+        ? [...threadCodexEnvironmentOptions, selectedThreadCodexEnvironmentForAction]
+        : threadCodexEnvironmentOptions;
+    const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
+      environment: selectedThreadCodexEnvironmentForAction,
+      actionId:
+        props.thread?.codexEnvironmentRuntime?.environmentId
+          ? props.thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId?.[
+              props.thread.codexEnvironmentRuntime.environmentId
+            ]
+          : undefined,
+      actionIdByEnvironmentId:
+        props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
+    });
+    const selectedThreadCodexAction =
+      threadCodexEnvironmentActions.find(
+        (action) => action.id === selectedThreadCodexActionId,
+      ) ?? threadCodexEnvironmentActions[0];
+    const currentThreadEnvActionStartingKey =
+      props.thread && selectedThreadCodexAction
+        ? {
+            actionId: selectedThreadCodexAction.id,
+            backend: props.thread.source,
+            threadId: props.thread.id,
+          }
+        : undefined;
+    const currentThreadEnvActionStarting = sameThreadEnvActionStartingKey(
+      threadEnvActionStarting,
+      currentThreadEnvActionStartingKey,
+    );
+    // The Environment chip is busy while a selection is in flight here, and
+    // while any setup run streams for this thread. Main records the runtime
+    // only after setup exits, so without this the chip keeps reading the old
+    // value (often "No environment") and stays clickable beside a running
+    // setup row. The stream also covers a run this composer did not start,
+    // such as setup still finishing for a thread whose launch just created it.
+    const threadRuntimeEnvironmentId =
+      props.thread?.codexEnvironmentRuntime?.environmentId;
+    const threadEnvSelectingSettled =
+      threadEnvSelecting?.applied === true
+      && (
+        threadRuntimeEnvironmentId === threadEnvSelecting.environmentId
+        || threadRuntimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
+      );
+    const currentThreadEnvSelecting =
+      props.thread
+      && threadEnvSelecting?.backend === props.thread.source
+      && threadEnvSelecting.threadId === props.thread.id
+      && !threadEnvSelectingSettled
+        ? threadEnvSelecting
+        : undefined;
+    const runningThreadEnvSetup =
+      props.thread
+      && props.environmentSetup?.phase === "setup"
+      && props.environmentSetup.status === "running"
+        ? props.environmentSetup
+        : undefined;
+    const threadEnvironmentBusy = Boolean(
+      (currentThreadEnvSelecting && !currentThreadEnvSelecting.applied)
+      || runningThreadEnvSetup,
+    );
+    const threadEnvironmentValue = currentThreadEnvSelecting
+      ? currentThreadEnvSelecting.environmentId ?? ""
+      : runningThreadEnvSetup?.environmentId
+        ?? props.thread?.codexEnvironmentRuntime?.environmentId
+        ?? "";
+    const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
+    const showPrAutoDispatchToggle = Boolean(
+      props.thread && getPrimaryWorkspaceRepository(props.thread),
+    );
+    const hasAttachedPullRequest = props.thread
+      ? hasPrimaryWorkspacePullRequest(props.thread)
+      : false;
+    // A project's Forge Automation can only narrow Auto-fix. It mutes the
+    // control and explains itself; the thread's own value is left alone. A
+    // peer's thread is governed by its owner's projects, which this window
+    // does not hold, so a local project of the same path must not claim it.
+    const prAutoDispatchProject = props.thread && showPrAutoDispatchToggle && !props.thread.federation
+      ? findThreadProjectDirectory(props.thread, props.directories)
+      : undefined;
+    const prAutoDispatchProjectOverride = prAutoDispatchProject
+      ? describeProjectAutoFixOverride(prAutoDispatchProject.forgeAutomation, prAutoDispatchProject.label)
+      : undefined;
+    // On, but every PR it could repair has merged or closed.
+    const prAutoDispatchIdleTooltip = props.thread?.prAutoDispatchEnabled
+      ? describeEndedPullRequestAutoFix(props.thread)
+      : undefined;
+    const prAutoDispatchTooltip = !backgroundPrPollingEnabled
+      ? "Auto-fix PR paused — turn on background PR polling in Settings"
+      : !prAutoDispatchAllowed
+        ? "Auto-fix PR disabled globally — allow it in Git settings"
+        : prAutoDispatchProjectOverride?.muted
+          ? prAutoDispatchProjectOverride.tooltip
+          : prAutoDispatchIdleTooltip
+            ? prAutoDispatchIdleTooltip
+            : prAutoDispatchProjectOverride
+              ? prAutoDispatchProjectOverride.tooltip
+              : hasAttachedPullRequest
+            ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
+            : "Auto-fix PR — starts when a PR for this workspace is linked";
+    const prAutoDispatchProjectMuted = Boolean(
+      prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
+    );
+    const prAutoDispatchIdle = Boolean(
+      prAutoDispatchAvailable && !prAutoDispatchProjectMuted && prAutoDispatchIdleTooltip,
+    );
+    // Environments are edited on the machine that runs them, so a peer's
+    // thread or a remote execution workspace gets no editor here.
+    const environmentEditPath =
+      !props.onEditEnvironments
+      || filesystemFederationTarget?.scope === "remote"
+      || props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"
+        ? undefined
+        : props.launchpad
+          ? props.launchpad.directoryPath
+          : props.thread?.codexEnvironmentRuntime?.cwd ?? threadWorkspace?.sourcePath;
+    const onEditEnvironments = props.onEditEnvironments;
+    const environmentMenuAction = environmentEditPath && onEditEnvironments
+      ? {
+          label: "Edit environments…",
+          icon: PencilIcon,
+          onSelect: () => onEditEnvironments(environmentEditPath),
+        }
+      : undefined;
+    const workspaceOpenPath = props.workspaceActionsBlocked ? undefined : getComposerWorkspaceOpenPath({
+      directory: props.directory,
+      launchpad: props.launchpad,
+      threadWorkspace,
+    });
+    const editorApplication = props.applications?.editors.find(
+      (application) =>
+        application.canOpenWorkspace &&
+        application.id === props.applications?.preferredEditorId.value,
+    ) ?? props.applications?.editors.find(
+      (application) => application.canOpenWorkspace,
+    );
+    const terminalApplication = props.applications?.terminals.find(
+      (application) =>
+        application.canOpenWorkspace &&
+        application.id === props.applications?.preferredTerminalId.value,
+    ) ?? props.applications?.terminals.find(
+      (application) => application.canOpenWorkspace,
+    );
+    const sourceBranch =
+      threadWorkspace?.mode === "worktree"
+        ? props.thread?.observedGitBranch ??
+          props.thread?.gitBranch ??
+          props.directory?.gitStatus?.currentBranch
+        : props.directory?.gitStatus?.currentBranch ??
+          props.thread?.observedGitBranch ??
+          props.thread?.gitBranch;
+    const keepLocalBranchAvailable = Boolean(props.onMoveThreadToMainCheckout)
+      && threadWorkspace?.mode === "worktree";
+    const keepLocalBranchSelected = handoffDialog === "worktree-to-local"
+      && keepLocalBranchAvailable
+      && worktreeHandoffStrategy === "keep-local-branch";
+    // The project's own status describes the main checkout, not the worktree.
+    const localCheckoutBranch = threadWorkspace?.mode === "worktree"
+      ? props.directory?.gitStatus?.currentBranch
+      : undefined;
+    const leaveLocalBranchOptions = useMemo(
+      () =>
+        buildLeaveLocalBranchPickerOptions({
+          currentBranch: sourceBranch,
+          directory: props.directory,
+        }),
+      [sourceBranch, props.directory],
+    );
+    const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
+    const freshBaseOptions = useMemo(
+      () => buildLaunchpadBranchPickerOptions(undefined, props.directory),
+      [props.directory],
+    );
+    const defaultFreshBaseRef = useMemo(
+      () => pickFreshHandoffBaseRef(freshBaseOptions, props.directory),
+      [freshBaseOptions, props.directory],
+    );
+    const freshBaseRef = pickedFreshBaseRef || defaultFreshBaseRef;
+    const canMoveThreadProject = Boolean(
+      props.thread &&
+        !props.workspaceActionsBlocked &&
+        threadWorkspace &&
+        props.onHandoffThreadWorkspace &&
+        props.thread.workspaceHandoff?.available !== false &&
+        !sending &&
+        !activeTurnId &&
+        !queuedTurns.some((queued) =>
+          Boolean(queued.backendQueuePending || queued.queueEntryId)
+        ) &&
+        !props.pendingRequestActive &&
+        !props.pendingUserInputActive &&
+        !handoffSubmitting
+    );
+
+    const canHandoffThreadWorkspace = canMoveThreadProject
+      && isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace });
+
+    useEffect(() => {
+      if (activeTurnId) {
+        setWorkspaceMenuOpen(false);
+      }
+    }, [activeTurnId]);
+
+    // Both directions create a new worktree and offer the same strategies.
+    const toNewWorktree = handoffDialog === "local-to-worktree"
+      || handoffDialog === "worktree-to-worktree";
+    const fromWorktreeToNew = handoffDialog === "worktree-to-worktree";
+    const openHandoffDialog = (
+      direction: HandoffThreadWorkspaceRequest["direction"]
+    ): void => {
+      setWorkspaceMenuOpen(false);
+      setHandoffError(undefined);
+      setHandoffDialog(direction);
+      setProjectTargetPath("");
+      setProjectSearch("");
+      if (direction === "worktree-to-local") {
+        setWorktreeHandoffStrategy(
+          props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
+        );
+      }
+      if (direction === "local-to-worktree" || direction === "worktree-to-worktree") {
+        setLocalHandoffStrategy("detached-changes");
+        setLeaveLocalBranch(branchOptions[0] ?? "");
+        setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
+        setFreshBaseRef("");
+        setFreshBranchName("");
+      }
+    };
+    const handoffDialogRef = useModalDialog({
+      open: Boolean(handoffDialog && threadWorkspace),
+      onClose: () => {
+        if (!handoffSubmitting) setHandoffDialog(undefined);
+      },
+    });
+
+    const submitHandoff = async (): Promise<void> => {
+      if (props.workspaceActionsBlocked || !threadWorkspace || !props.onHandoffThreadWorkspace) {
+        return;
+      }
+
+      setHandoffSubmitting(true);
+      setHandoffError(undefined);
+      try {
+        const freshFromBase = toNewWorktree && localHandoffStrategy === "fresh-from-base";
+        const handoffStrategy = !toNewWorktree
+          ? undefined
+          : freshFromBase
+            ? (freshBranchName.trim() ? "new-branch" : "detached-changes")
+            : localHandoffStrategy as ThreadWorkspaceHandoffStrategy;
+        if (handoffDialog === "to-project") {
+          await props.onHandoffThreadWorkspace({
+            direction: "to-project",
+            targetPath: projectTargetPath.trim(),
+          });
+          setHandoffDialog(undefined);
+          return;
+        }
+        if (keepLocalBranchSelected && props.onMoveThreadToMainCheckout) {
+          await props.onMoveThreadToMainCheckout(threadWorkspace.sourcePath);
+          setHandoffDialog(undefined);
+          return;
+        }
+        await props.onHandoffThreadWorkspace({
+          direction: handoffDialog!,
+          ...(handoffStrategy ? { strategy: handoffStrategy } : {}),
+          repositoryPath: threadWorkspace.repositoryPath,
+          sourcePath: threadWorkspace.sourcePath,
+          sourceBranch,
+          ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
+            ? { leaveLocalBranch: leaveLocalBranch || undefined }
+            : {}),
+          ...(toNewWorktree && handoffStrategy === "new-branch"
+            ? { newBranchName: (freshFromBase ? freshBranchName.trim() : newLocalBranch) || undefined }
+            : {}),
+          ...(freshFromBase ? { baseRef: freshBaseRef } : {}),
+        });
+        setHandoffDialog(undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // An owner that predates the keep-branch handoff answers
+        // method_not_found; nothing moved. The text survives IPC, the code does not.
+        const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
+        // New-worktree moves use their own method; the bridge names its refusal.
+        setHandoffError(keepLocalBranchSelected && isOutdatedOwnerError(message)
+          ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
+          : message.includes(HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE)
+            ? `${owner} runs an older PwrAgent that cannot make this move. Update PwrAgent on ${owner}. Nothing moved.`
+            : message);
+      } finally {
+        setHandoffSubmitting(false);
+      }
+    };
+
+    const openWorkspaceApplication = async (
+      application: DesktopApplicationDiscoveryCandidate,
+    ): Promise<void> => {
+      if (props.workspaceActionsBlocked) return;
+      if (!props.desktopApi?.openApplication) {
+        setApplicationOpenError("Desktop bridge is missing openApplication().");
+        return;
+      }
+      if (!workspaceOpenPath) {
+        setApplicationOpenError("No workspace path is available for this thread.");
+        return;
+      }
+
+      setApplicationOpenError(undefined);
+      try {
+        await props.desktopApi.openApplication({
+          applicationId: application.id,
+          ...(props.thread?.federation?.ref.target || rendererFederationTarget
+            ? {
+                federationTarget:
+                  props.thread?.federation?.ref.target ?? rendererFederationTarget,
+              }
+            : {}),
+          kind: application.kind,
+          targetPath: workspaceOpenPath,
+        });
+      } catch (error) {
+        setApplicationOpenError(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    const handoffDisabled =
+      handoffSubmitting ||
+      (handoffDialog === "to-project"
+        ? !projectTargetPath.trim()
+        : !keepLocalBranchSelected && !sourceBranch) ||
+      (handoffDialog === "local-to-worktree" &&
+        localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
+      (fromWorktreeToNew &&
+        localHandoffStrategy === "move-branch" && (!sourceBranch || sourceBranch === "HEAD")) ||
+      (toNewWorktree &&
+        localHandoffStrategy === "new-branch" && !newLocalBranch.trim()) ||
+      (toNewWorktree &&
+        localHandoffStrategy === "fresh-from-base" && !freshBaseRef.trim());
+
+    const commitActiveAutocomplete = (): void => {
+      if (autocompleteKind === "skills") {
+        applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+        return;
+      }
+
+      if (autocompleteKind === "directories") {
+        applyDirectoryReference(
+          filteredDirectoryRefs[activeDirectoryRefIndex] ?? filteredDirectoryRefs[0]!,
+        );
+        return;
+      }
+
+      if (autocompleteKind === "hash-references") {
+        const option =
+          filteredHashReferenceOptions[activeHashReferenceIndex]
+          ?? filteredHashReferenceOptions[0];
+        if (option?.kind === "thread") {
+          applyHashReference((index) =>
+            createComposerThreadToken(
+              resolveThreadSummaryReference(option.thread),
+              index,
+            ),
+          );
+          return;
+        }
+        if (option?.kind === "pull-request") {
+          applyHashReference((index) =>
+            createComposerPullRequestToken(option.pullRequest, index),
+          );
+        }
+        return;
+      }
+
+      const currentSlashText = slashTrigger
+        ? `/${slashTrigger.query}`.toLowerCase()
+        : undefined;
+      const exactSlashCommand = currentSlashText
+        ? filteredSlashCommands.find((command) =>
+            slashCommandMatchesText(command, currentSlashText)
+          )
+        : undefined;
+      applySlashCommand(
+        exactSlashCommand ??
+          filteredSlashCommands[activeSlashIndex] ??
+          filteredSlashCommands[0]!
+      );
+    };
+
+    const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
+      if (command.id === "review-current") {
+        enterReviewComposer();
+        return true;
+      }
+
+      if (command.label.toLowerCase() === "/compact") {
+        void submitCompactThread();
+        return true;
+      }
+
+      if (command.id === "codex-mcp") {
+        showMcpInventory("toolsAndAuthOnly");
+        return true;
+      }
+
+      if (command.id === "codex-mcp-verbose") {
+        showMcpInventory("full");
+        return true;
+      }
+
+      return false;
+    };
+
+    const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
+      if (autocompleteKind !== "slash") {
+        return undefined;
+      }
+
+      const currentSlashText = slashTrigger
+        ? `/${slashTrigger.query}`.toLowerCase()
+        : undefined;
+      return (
+        (currentSlashText
+          ? filteredSlashCommands.find((candidate) =>
+              slashCommandMatchesText(candidate, currentSlashText)
+            )
+          : undefined) ??
+        filteredSlashCommands[activeSlashIndex] ??
+        filteredSlashCommands[0]
+      );
+    };
+
+    const restoreDeletedSkillToken = (
+      event: ReactKeyboardEvent<HTMLElement>,
+    ): boolean => {
+      if (
+        event.key.toLowerCase() !== "z" ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.shiftKey ||
+        deletedSkillTokenHistoryRef.current.length === 0
+      ) {
+        return false;
+      }
+
+      const previous = deletedSkillTokenHistoryRef.current.pop()!;
+      event.preventDefault();
+      setDraft(previous.draft);
+      setSkillTokens(previous.skillTokens);
+      setEditorDocument(undefined);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(
+          previous.selectionStart,
+          previous.selectionStart,
+        );
+      });
+      return true;
+    };
+
+    const dismissAutocomplete = useCallback((restoreFocus = false): void => {
+      if (!autocompleteKey) {
+        return;
+      }
+      setDismissedAutocompleteKey(autocompleteKey);
+      setActiveSkillIndex(0);
+      setActiveSlashIndex(0);
+      setActiveDirectoryRefIndex(0);
+      setActiveHashReferenceIndex(0);
+      if (restoreFocus) {
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }
+    }, [autocompleteKey]);
+
+    const handleAutocompleteKeyDown = (
+      event: ReactKeyboardEvent<HTMLElement>,
+    ): void => {
+      if (!hasAutocompleteOptions && event.key !== "Escape") {
+        return;
+      }
+
+      const updateActiveAutocompleteIndex = (
+        updater: (current: number) => number,
+      ): void => {
+        if (autocompleteKind === "skills") {
+          setActiveSkillIndex(updater);
+        } else if (autocompleteKind === "directories") {
+          setActiveDirectoryRefIndex(updater);
+        } else if (autocompleteKind === "hash-references") {
+          setActiveHashReferenceIndex(updater);
+        } else {
+          setActiveSlashIndex(updater);
+        }
+      };
+
+      const getAutocompletePageStep = (): number => {
+        const list = autocompleteListRef.current;
+        const option = autocompleteOptionRefs.current.find(Boolean);
+        const optionHeight = option?.getBoundingClientRect().height ?? 0;
+        if (list && optionHeight > 0) {
+          return Math.max(1, Math.floor(list.clientHeight / optionHeight));
+        }
+        return Math.max(1, Math.min(6, autocompleteLength - 1));
+      };
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        updateActiveAutocompleteIndex((current) =>
+          Math.min(current + 1, autocompleteLength - 1)
+        );
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        updateActiveAutocompleteIndex((current) => Math.max(current - 1, 0));
+        return;
+      }
+
+      if (event.key === "PageDown") {
+        event.preventDefault();
+        const pageStep = getAutocompletePageStep();
+        updateActiveAutocompleteIndex((current) =>
+          Math.min(current + pageStep, autocompleteLength - 1)
+        );
+        return;
+      }
+
+      if (event.key === "PageUp") {
+        event.preventDefault();
+        const pageStep = getAutocompletePageStep();
+        updateActiveAutocompleteIndex((current) => Math.max(current - pageStep, 0));
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismissAutocomplete(true);
+        return;
+      }
+
+      const optionHasFocus = event.currentTarget instanceof HTMLButtonElement;
+      if (
+        (event.key === "Tab" && !event.shiftKey) ||
+        event.key === "Enter" ||
+        (event.key === " " && optionHasFocus)
+      ) {
+        if (event.key === "Enter" && event.shiftKey) {
+          return;
+        }
+        event.preventDefault();
+        const slashCommand =
+          event.key === "Enter" && autocompleteKind === "slash"
+            ? getActiveSlashCommand()
+            : undefined;
+        if (
+          slashCommand &&
+          runSlashCommand(slashCommand)
+        ) {
+          return;
+        }
+        commitActiveAutocomplete();
+      }
+    };
+
+    // Autocomplete stays open when focus moves into the transcript, so Escape
+    // must dismiss it at window scope instead of relying on the editor handler.
+    useEffect(() => {
+      if (!autocompleteKind) {
+        return;
+      }
+      const dismissOnEscape = (event: globalThis.KeyboardEvent): void => {
+        if (event.key !== "Escape" || event.defaultPrevented) {
+          return;
+        }
+        event.preventDefault();
+        dismissAutocomplete();
+      };
+      window.addEventListener("keydown", dismissOnEscape);
+      return () => window.removeEventListener("keydown", dismissOnEscape);
+    }, [autocompleteKind, dismissAutocomplete]);
+
+    // Backend availability gates submission and remote actions, not the draft.
+    // Keeping the editor live lets an operator inspect, copy, revise, or remove
+    // durable text and attachments while federation reconnects.
+    const composerDisabled = false;
+    const launchpadMachine = props.launchpadMachine;
+    const launchpadMachineChipHost = props.launchpadMachineChipHost;
+    const renderLaunchpadMachineChip = (chip: ReactNode): ReactNode =>
+      launchpadMachineChipHost ? createPortal(chip, launchpadMachineChipHost) : chip;
+    const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
+      ? launchpadMachine.targets.find(
+        (target) => target.instanceId === launchpadMachine.currentInstanceId,
+      )?.label ?? launchpadMachine.currentInstanceId
+      : undefined;
+    // The reply box doubles as a place to teach one feature at a time.
+    const composerTip = useComposerTip(isLaunchpad ? undefined : composerScopeKey, draft.length === 0);
+    const composerPlaceholder = launchpadSubmitting
+      ? "Queue a follow-up while this thread starts"
+      : isLaunchpad
+      ? `${subthreadParentTitle
+        ? `Start a sub-thread of ${subthreadParentTitle}`
+        : `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`}${
+        launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
+      }`
+      : composerTip ?? "Reply to this thread";
+    const handleComposerChange = (
+      nextDraft: string,
+      nextSkillTokens?: ComposerSkillToken[],
+      metadata?: ComposerInputChangeMetadata,
+    ): void => {
+      recordRendererUpdate(RendererUpdateEvent.composerChange, isLaunchpad ? "new-thread" : "reply");
+      if (!recoveringDraftRef.current) {
+        recoveryCycleRef.current = undefined;
+        recoveryEligibilityVersionRef.current += 1;
+      }
+      const pendingProgrammaticChange =
+        pendingProgrammaticComposerChangeRef.current;
+      if (pendingProgrammaticChange && nextSkillTokens) {
+        const nextSkillTokensSignature =
+          getComposerSkillTokensSignature(nextSkillTokens);
+        if (
+          nextDraft === pendingProgrammaticChange.staleDraft &&
+          nextSkillTokensSignature ===
+            pendingProgrammaticChange.staleSkillTokensSignature
+        ) {
+          return;
+        }
+        pendingProgrammaticComposerChangeRef.current = undefined;
+      }
+
+      const deletedSkillTokenHistoryEntry =
+        nextSkillTokens &&
+        nextSkillTokens.length < skillTokens.length
+          ? (() => {
+              const nextTokenIds = new Set(
+                nextSkillTokens.map((token) => token.id),
+              );
+              const deletedToken = skillTokens.find(
+                (token) => !nextTokenIds.has(token.id),
+              );
+              return deletedToken
+                ? {
+                    draft,
+                    selectionStart: deletedToken.index,
+                    skillTokens,
+                  }
+                : undefined;
+            })()
+          : undefined;
+      const storedSkillTokens = nextSkillTokens ?? skillTokens;
+      const preserveRecoveryCycle =
+        !recoveringDraftRef.current &&
+        recoveryCycleRef.current?.candidates.some(
+          (candidate) =>
+            getComposerDraftSnapshotSignature(candidate) ===
+            getComposerDraftSnapshotSignature({
+              draft: nextDraft,
+              editorDocument: metadata?.editorDocument,
+              imageAttachments,
+              fileAttachments,
+              skillTokens: storedSkillTokens,
+            }),
+        ) === true;
+
+      updateVisibleDraft(nextDraft, nextSkillTokens, { preserveRecoveryCycle });
+      setEditorDocument(metadata?.editorDocument);
+      saveComposerDraftSnapshot(composerScopeKey, {
+        draft: nextDraft,
+        editorDocument: metadata?.editorDocument,
+        imageAttachments,
+        fileAttachments,
+        skillTokens: storedSkillTokens,
+        ...(rewoundPromptScope === composerScopeKey ? { rewoundPrompt: true } : {}),
+      });
+      if (deletedSkillTokenHistoryEntry) {
+        deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
+      }
+      if (nextDraft.trim() !== "/review") {
+        setReviewConfig(undefined);
+      }
+      setSendError(undefined);
+    };
+    const handleComposerClick = (): void => {
+      setActiveSkillIndex(0);
+      setActiveSlashIndex(0);
+      setActiveDirectoryRefIndex(0);
+    };
+    const handlePlainComposerKeyDown = (
+      event: ReactKeyboardEvent<HTMLElement>,
+    ): void => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (!hasAutocompleteOptions) {
+        const liveHasComposerContent = Boolean(
+          (inputRef.current?.value ?? draft).trim() ||
+            (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
+        );
+        const liveHasAnyComposerContent =
+          liveHasComposerContent ||
+          imageAttachments.length > 0 ||
+          fileAttachments.length > 0;
+        const recoveryCycle = recoveryCycleRef.current;
+        const liveSelectionAtStart =
+          (inputRef.current?.selectionStart ?? 0) === 0 &&
+          (inputRef.current?.selectionEnd ?? 0) === 0;
+        const canCycleActiveRecovery =
+          recoveryCycle?.scopeKey === composerScopeKey && liveSelectionAtStart;
+        if (recoveryCycle && !canCycleActiveRecovery) {
+          recoveryCycleRef.current = undefined;
+          recoveryEligibilityVersionRef.current += 1;
+        }
+        if (
+          recoveryCycle &&
+          canCycleActiveRecovery &&
+          liveHasAnyComposerContent &&
+          event.key !== "ArrowUp" &&
+          event.key !== "ArrowDown"
+        ) {
+          recoveryCycleRef.current = undefined;
+          recoveryEligibilityVersionRef.current += 1;
+        }
+        if (
+          event.key === "ArrowUp" &&
+          (!liveHasComposerContent || canCycleActiveRecovery) &&
+          (imageAttachments.length === 0 || canCycleActiveRecovery) &&
+          (fileAttachments.length === 0 || canCycleActiveRecovery)
+        ) {
+          event.preventDefault();
+          void recoverPreviousComposerDraft();
+          return;
+        }
+        if (
+          event.key === "ArrowDown" &&
+          liveHasAnyComposerContent &&
+          canCycleActiveRecovery &&
+          (imageAttachments.length === 0 || canCycleActiveRecovery) &&
+          (fileAttachments.length === 0 || canCycleActiveRecovery)
+        ) {
+          event.preventDefault();
+          recoverNextComposerDraft();
+          return;
+        }
+
+        if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          void submitTurn(isSteerShortcut(event) ? "steer" : "default", {
+            restoreComposerFocus: true,
+          });
+        }
+        return;
+      }
+
+      handleAutocompleteKeyDown(event);
+    };
+    const handleTiptapComposerKeyDown = (
+      event: ReactKeyboardEvent<HTMLDivElement>,
+    ): void => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (restoreDeletedSkillToken(event)) {
+        return;
+      }
+
+      handlePlainComposerKeyDown(event);
+    };
+
+    const pdfPreviewPathSet = new Set(
+      pdfPreviewReferences.map((reference) => reference.path),
+    );
+    const visibleFileAttachments = fileAttachments.filter(
+      (attachment) => !pdfPreviewPathSet.has(attachment.path),
+    );
+    const hasVisibleAttachments =
+      imageAttachments.length > 0
+      || visibleFileAttachments.length > 0
+      || pdfPreviewReferences.length > 0
+      || remoteFileUploads.uploads.length > 0;
+    const remoteUploadTargetLabel = remoteFilePushTarget?.label ?? "the owning machine";
+    const uploadingRemoteFileCount = remoteFileUploads.uploads.filter(
+      (upload) => upload.status === "uploading",
+    ).length;
+    const failedRemoteFileUploads = remoteFileUploads.uploads.filter(
+      (upload) => upload.status === "failed",
+    );
+    // The strip is one gallery: every thumbnail that expands, in the order it
+    // is drawn — pasted images, then PDF page previews that are ready. A sent
+    // message's images page with the arrow keys; these must too, or the same
+    // pair of screenshots behaves differently before and after Send.
+    const stripLightboxItems = expandedStripItemKey
+      ? composerStripLightboxItems(
+          imageAttachments,
+          pdfPreviewReferences,
+          composerPdfPreviewStates,
+        )
+      : [];
+    const expandedStripIndex = stripLightboxItems.findIndex(
+      (item) => item.key === expandedStripItemKey,
+    );
+    const expandedStripItem = stripLightboxItems[expandedStripIndex];
+    const previousStripItem = stripLightboxItems[expandedStripIndex - 1];
+    const nextStripItem = stripLightboxItems[expandedStripIndex + 1];
+
+    const environmentSetup = props.environmentSetup;
+    const environmentSetupRetryId =
+      environmentSetup?.status === "failed" && environmentSetup.phase === "setup"
+        ? environmentSetup.environmentId
+        : undefined;
+
+    const composerErrorEntries: readonly ComposerErrorEntry[] = [
+      { id: "skills", label: "Couldn't load skills", message: props.skillError },
+      { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
+      {
+        id: "launchpad-configuration",
+        label: "Couldn't load thread settings",
+        message: props.launchpadConfigurationError,
+        dismissible: false,
+        retry: props.onReloadLaunchpadConfiguration ? {
+          label: "Reload thread settings",
+          onClick: () => { void props.onReloadLaunchpadConfiguration?.(); },
+        } : undefined,
+      },
+      {
+        id: "action",
+        label: "Action failed",
+        message: sendError,
+        occurrence: sendErrorState.occurrence,
+      },
+      {
+        id: "environment",
+        label: "Environment error",
+        // A failed setup command rejects `setCodexThreadEnvironment`, and the
+        // setup row already shows that failure with its full output: one
+        // surface per error. Only a failure for the same environment is
+        // claimed, so a different selection's error still reports here. The
+        // row clears this error when it is dismissed, so it cannot reappear.
+        // With no row (no progress stream reached this window), the error row
+        // is the only report and stays.
+        message:
+          environmentSetup?.status === "failed"
+          && environmentError?.selectedEnvironmentId !== undefined
+          && environmentError.selectedEnvironmentId === environmentSetup.environmentId
+            ? undefined
+            : environmentError?.message,
+      },
+      { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
+      {
+        id: "agent-change",
+        label: "Agent change failed",
+        message: props.thread?.agentChange?.error
+          ? formatAgentChangeStatus(props.thread.agentChange)
+          : undefined,
+      },
+      { id: "open-application", label: "Couldn't open application", message: applicationOpenError },
+      { id: "execution-mode", label: "Couldn't change access", message: props.setExecutionModeError },
+      { id: "model-settings", label: "Couldn't change model settings", message: props.threadModelSettingsError },
+      { id: "add-directory", label: "Couldn't add directory", message: props.pickDirectoryError },
+    ];
+    return {
+      tokenMiserEnabled,
+      tokenMiserDefaultEnabled,
+      currentSettings,
+      backgroundPrPollingEnabled,
+      prAutoDispatchAllowed,
+      prAutoDispatchAvailable,
+      modelOptions,
+      selectedModelOption,
+      imagesSupported,
+      imagesUnsupportedLabel,
+      supportsReasoning,
+      selectedReasoningEffort,
+      profileModelOption,
+      profileReasoningOptions,
+      profileReasoningEffort,
+      launchpadDiffersFromProfileDefaults,
+      supportsFast,
+      speedOptions,
+      selectedSpeed,
+      selectedServiceTier,
+      acpRuntimeModeControl,
+      providerOptions,
+      providerPickerEntries,
+      launchpadModelScope,
+      modelMenuFootnote,
+      reviewerBackendOptions,
+      reviewerOverridesSupported,
+      reviewerAuthorityKey,
+      reviewerSelection,
+      reviewerModelOptions,
+      reviewerReasoningOptions,
+      reviewerOverridden,
+      reviewOwnerSummary,
+      reviewAutoFixSupported,
+      reviewAutoFixChecked,
+      reviewRunModeDecision,
+      reviewSubmissionUnavailable,
+      reviewPullRequestWorkspaceNote,
+      resolvableReviewerRecents,
+      activeReviewerRecentIndex,
+      patchReviewer,
+      executionModeOptions,
+      workspaceLabel,
+      supportsPlanMode,
+      supportsSteering,
+      supportsInterruptSteer,
+      launchpadSubmitting,
+      subthreadParentTitle,
+      scheduledSendOptions,
+      sendButtonDisabled,
+      scheduleButtonDisabled,
+      scheduleAffordanceVisible,
+      scheduleToggleVisible,
+      effectiveScheduledSendAt,
+      submitButtonLabel,
+      forkInlineHint,
+      forkInlineCompletion,
+      commandChip,
+      commandInlineHint,
+      submitTooltip,
+      turnSendActionsVisible,
+      turnBackendLabel,
+      steerUnavailableReason,
+      interruptUnavailableReason,
+      pendingSteerReason,
+      launchpadWorkspaceOptions,
+      launchpadWorkspaceValue,
+      launchpadBranchPickerOptions,
+      launchpadCodexEnvironmentOptions,
+      selectedCodexEnvironment,
+      threadCodexEnvironmentOptions,
+      threadCodexEnvironmentActions,
+      threadCodexEnvironmentPickerOptions,
+      selectedThreadCodexAction,
+      currentThreadEnvActionStartingKey,
+      currentThreadEnvActionStarting,
+      threadEnvironmentBusy,
+      threadEnvironmentValue,
+      threadWorkspace,
+      showPrAutoDispatchToggle,
+      prAutoDispatchProjectOverride,
+      prAutoDispatchIdleTooltip,
+      prAutoDispatchTooltip,
+      prAutoDispatchProjectMuted,
+      prAutoDispatchIdle,
+      environmentMenuAction,
+      workspaceOpenPath,
+      editorApplication,
+      terminalApplication,
+      sourceBranch,
+      keepLocalBranchAvailable,
+      keepLocalBranchSelected,
+      localCheckoutBranch,
+      leaveLocalBranchOptions,
+      branchOptions,
+      freshBaseOptions,
+      freshBaseRef,
+      canMoveThreadProject,
+      canHandoffThreadWorkspace,
+      toNewWorktree,
+      fromWorktreeToNew,
+      openHandoffDialog,
+      handoffDialogRef,
+      submitHandoff,
+      openWorkspaceApplication,
+      handoffDisabled,
+      dismissAutocomplete,
+      handleAutocompleteKeyDown,
+      composerDisabled,
+      launchpadMachine,
+      renderLaunchpadMachineChip,
+      composerPlaceholder,
+      handleComposerChange,
+      handleComposerClick,
+      handleTiptapComposerKeyDown,
+      visibleFileAttachments,
+      hasVisibleAttachments,
+      remoteUploadTargetLabel,
+      uploadingRemoteFileCount,
+      failedRemoteFileUploads,
+      stripLightboxItems,
+      expandedStripIndex,
+      expandedStripItem,
+      previousStripItem,
+      nextStripItem,
+      environmentSetup,
+      environmentSetupRetryId,
+      composerErrorEntries,
+    };
+  }
+
 
   // React development JSX captures a stack for every element. Keep these
   // frames small and render after the controller has returned. Call helpers
