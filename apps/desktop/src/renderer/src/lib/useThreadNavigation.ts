@@ -2985,6 +2985,8 @@ function scheduleNavigationRefreshTask(callback: () => void): () => void {
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  /** Confirm the complete identity snapshot before any group archive mutation. */
+  confirmArchiveGroup?: (members: readonly NavigationArchiveMember[]) => Promise<boolean>;
   /** Event-triggered reads use a timer task by default; tests inject a task queue. */
   scheduleNavigationRefresh?: (callback: () => void) => () => void;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
@@ -3412,6 +3414,7 @@ export function useThreadNavigation(
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
+  const optionsConfirmArchiveGroup = options.confirmArchiveGroup;
   const removeRemoteThreadPinRequest = desktopApi?.removeRemoteThreadPin;
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
@@ -8787,11 +8790,13 @@ export function useThreadNavigation(
       const optimisticThreadKey = optimisticThread
         ? threadSummaryIdentityKey(optimisticThread)
         : undefined;
-      let targetThreads: NavigationArchiveMember[];
+      let targetThreads: readonly NavigationArchiveMember[];
       try {
-        targetThreads = options?.includeSubthreads
+        targetThreads = Object.freeze(options?.includeSubthreads
           ? await readNavigationArchiveGroup({ api: desktopApi ?? {}, thread, windowTarget: readRendererFederationTarget() })
-          : [thread];
+          : [thread]);
+        if (options?.includeSubthreads && optionsConfirmArchiveGroup
+          && !await optionsConfirmArchiveGroup(targetThreads)) return [];
       } catch (error) {
         setArchiveThreadError({ message: error instanceof Error ? error.message : String(error),
           ...threadActionErrorContext(thread, thread.federation?.ref.target ?? readRendererFederationTarget()) });
@@ -8872,9 +8877,9 @@ export function useThreadNavigation(
       const refreshOptions = { owners: [...refreshOwners.values()] };
       let archiveTarget: NavigationArchiveMember | undefined;
       let cleanupContextKey: string | undefined;
+      const failures: Array<{ target: NavigationArchiveMember; error: unknown }> = [];
       try {
-        for (const target of targetThreads) {
-          archiveTarget = target;
+        const archiveMember = async (target: NavigationArchiveMember): Promise<void> => {
           const federationTarget = target.federationTarget ?? target.federation?.ref.target
             ?? readRendererFederationTarget();
           cleanupContextKey = federationTarget?.scope === "remote"
@@ -8891,7 +8896,8 @@ export function useThreadNavigation(
             // Remote viewers may drop their last event subscription with the
             // archived pin. Retain the response's completion/errors there.
             ...(federationTarget?.scope === "remote" ? {} : { backgroundCleanup: true }),
-            ...(target.expectedParent !== undefined ? { expectedParent: target.expectedParent } : {}),
+            // The operator selected identities, not parent relationships.
+            // Group changes after confirmation cannot invalidate that list.
             ...(federationTarget ? { federationTarget } : {}),
           });
           if (!response.cleanupPending) archiveCleanupContexts.current.delete(cleanupContextKey);
@@ -8913,11 +8919,25 @@ export function useThreadNavigation(
               ref: target.federation.ref,
             });
           }
+        };
+        for (const target of targetThreads) {
+          archiveTarget = target;
+          cleanupContextKey = undefined;
+          try {
+            await archiveMember(target);
+          } catch (error) {
+            if (cleanupContextKey && !archivedKeys.has(threadSummaryIdentityKey(target))) archiveCleanupContexts.current.delete(cleanupContextKey);
+            failures.push({ target, error });
+          }
+        }
+        if (failures.length) {
+          archiveTarget = failures[0]!.target;
+          const error = failures[0]!.error;
+          throw failures.length === 1 ? error : new Error(`${failures.length} archive operations failed. ${error instanceof Error ? error.message : String(error)}`);
         }
         archiveTarget = undefined;
         await refreshAfterArchive(undefined, undefined, false, refreshOptions);
       } catch (error) {
-        if (cleanupContextKey && archiveTarget && !archivedKeys.has(threadSummaryIdentityKey(archiveTarget))) archiveCleanupContexts.current.delete(cleanupContextKey);
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) {
             updateArchivedThreadKey(targetKey, false);
@@ -8933,6 +8953,7 @@ export function useThreadNavigation(
     },
     [
       archiveThreadRequest,
+      optionsConfirmArchiveGroup,
       updateArchivedThreadKey,
       deferNestedArchiveRemoval,
       desktopApi,

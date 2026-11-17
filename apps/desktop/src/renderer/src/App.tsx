@@ -200,6 +200,7 @@ import {
   type ArchivedThreadRef,
   type SubthreadLaunchpadDraft,
 } from "./lib/useThreadNavigation";
+import { ArchiveGroupConfirmation, useArchiveGroupConfirmation } from "./features/navigation/ArchiveGroupConfirmation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -1667,7 +1668,9 @@ function DesktopAppShell(props: {
   const providerModelDefaults = useMemo(() => settings.snapshot?.models
     ? settings.snapshot.models.providerDefaults ?? {}
     : undefined, [settings.snapshot]);
+  const archiveGroupConfirmation = useArchiveGroupConfirmation();
   const navigation = useThreadNavigation(desktopApi, {
+    confirmArchiveGroup: archiveGroupConfirmation.confirm,
     enabled: normalAppEnabled,
     composerDraftStore,
     providerModelDefaults,
@@ -5017,6 +5020,7 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             onNoticeChanged={syncRestartGateNotice}
           />
+          <ArchiveGroupConfirmation controller={archiveGroupConfirmation} />
           <AppNoticeStack
             desktopApi={desktopApi}
             durableNotices={durableNotices}

@@ -44,9 +44,9 @@ async function archiveTree(parents: number[], backends: AppServerBackendKind[], 
     expect(plan.at(-1)?.id).toBe(threads[targetIndex]!.id);
     for (const member of plan) {
       const overlay = await store.getThreadOverlayState({ backend: member.source, threadId: member.id });
-      expect(member.expectedParent).toEqual(overlay?.parentThreadId
-        ? { threadId: overlay.parentThreadId, backend: overlay.parentThreadBackend ?? member.source,
-            instanceId: overlay.parentThreadInstanceId } : null);
+      const row = index.threads.find((thread) => thread.id === member.id && thread.source === member.source)!;
+      expect([row.parentThreadId, row.parentThreadBackend, row.parentThreadInstanceId])
+        .toEqual([overlay?.parentThreadId, overlay?.parentThreadBackend, overlay?.parentThreadInstanceId]);
       const position = threads.findIndex((thread) => key(thread) === buildThreadIdentityKey(member.source, member.id));
       // Every direct child must already be archived before its parent's mutation.
       for (const [child, parent] of parents.entries()) {

@@ -10637,6 +10637,38 @@ a.button {
   margin-top: 18px;
 }
 
+.archive-group-dialog:focus {
+  outline: none;
+}
+
+.archive-group-dialog__description {
+  margin: 10px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.archive-group-dialog__members {
+  max-height: min(45vh, 360px);
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.archive-group-dialog__members li {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.archive-group-dialog__members small {
+  color: var(--text-muted);
+}
+
 /* Lock Thread / Edit Lock Note: the rename dialog's frame with a note field. */
 .thread-lock-dialog {
   width: min(480px, 100%);

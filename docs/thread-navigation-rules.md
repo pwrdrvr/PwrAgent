@@ -172,6 +172,16 @@ Read this before changing thread lenses, Attention membership/order, unread stat
     every lens. Agents use `mutate_thread`'s `parentThreadId` and
     `detachFromParent`, for threads sharing an owner, including connected peers.
 
+### Group archive
+
+- Prepare the complete archive list before removing any row. Discover viewer-mounted members and owner-listed descendants, including unloaded threads.
+- Identify a target by owning instance, backend, and thread ID. Same IDs on different owners are different targets.
+- Show the exact count, titles, and owning machines for confirmation. Execute that same identity snapshot after confirmation.
+- Owner relationships determine descendant-first order. A viewer-mounted child remains selected when its owner names a different or unloaded intermediate parent.
+- Parent changes after confirmation do not cancel an archive or remove a target from the list. Newly added children do not join the confirmed list.
+- Attempt every confirmed target even if another target fails. Retain failed rows and report the failure; remove viewer pins only after the owner accepts the archive.
+- The owner still preserves surviving children using its current relationships when archiving each individual thread.
+
 ### Unread behavior
 
 - Show unread state as an orange cookie on thread rows in every lens.

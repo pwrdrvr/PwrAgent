@@ -1,16 +1,16 @@
 import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { ArchiveThreadRequest, FederationTarget, NavigationIdentity, NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget, NavigationIdentity, NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 export type NavigationArchiveMember = Pick<NavigationThreadSummary, "id" | "source" | "federation"> & {
   federationTarget?: FederationTarget;
-  expectedParent?: ArchiveThreadRequest["expectedParent"];
 } & Partial<Pick<NavigationThreadSummary, "title" | "titleSource" | "linkedDirectories" | "gitBranch">>;
-type Member = { ref: NavigationIdentity; parent?: NavigationIdentity; expectedParent: ArchiveThreadRequest["expectedParent"];
+type Member = { ref: NavigationIdentity; parent?: NavigationIdentity;
+  instanceLabel?: string;
   metadata: Pick<NavigationThreadSummary, "title" | "titleSource" | "linkedDirectories" | "gitBranch"> };
 let nextGroupRead = 0;
 
-/** Discover with viewer metadata; only owner-confirmed relationships enter the archive plan. */
+/** Snapshot identities from the viewer and owners; owner relationships determine order, not membership. */
 export async function readNavigationArchiveGroup(params: {
   api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery" | "readFederationHealth">;
   thread: NavigationThreadSummary;
@@ -76,10 +76,9 @@ export async function readNavigationArchiveGroup(params: {
     } while (cursor);
   };
   const member = (entry: NavigationQueryEntry, ref: NavigationIdentity): Member => ({ ref,
+    instanceLabel: entry.row.federation?.instanceLabel,
     metadata: { title: entry.row.title, titleSource: entry.row.titleSource, linkedDirectories: entry.row.linkedDirectories, gitBranch: entry.row.gitBranch },
-    parent: entry.placement.kind === "child" ? normalize(entry.placement.parent) : undefined,
-    expectedParent: entry.row.parentThreadId ? { threadId: entry.row.parentThreadId,
-      backend: entry.row.parentThreadBackend ?? entry.row.source, instanceId: entry.row.parentThreadInstanceId } : null });
+    parent: entry.placement.kind === "child" ? normalize(entry.placement.parent) : undefined });
   try {
     while (true) {
       const pending = [...discovered].filter(([id]) => !queried.has(id));
@@ -108,17 +107,26 @@ export async function readNavigationArchiveGroup(params: {
     }
     const result: NavigationArchiveMember[] = [];
     const visiting = new Set<string>();
+    const visited = new Set<string>();
     const visit = (value: Member, depth: number): void => {
       const id = key(value.ref);
+      if (visited.has(id)) return;
       if (visiting.has(id) || depth > 32) throw new Error("Thread group has a cycle or exceeds 32 levels.");
       visiting.add(id);
       for (const child of children.get(id) ?? []) visit(child, depth + 1);
       visiting.delete(id);
-      result.push({ ...value.metadata, source: value.ref.backend, id: value.ref.threadId, expectedParent: value.expectedParent,
+      visited.add(id);
+      result.push({ ...value.metadata, source: value.ref.backend, id: value.ref.threadId,
         federationTarget: value.ref.ownerInstanceId ? { scope: "remote", instanceId: value.ref.ownerInstanceId } : { scope: "local" },
-        ...(value.ref.ownerInstanceId ? { federation: { instanceLabel: value.ref.ownerInstanceId,
+        ...(value.ref.ownerInstanceId ? { federation: { instanceLabel: value.instanceLabel ?? value.ref.ownerInstanceId,
           ref: buildFederatedThreadRef({ backend: value.ref.backend, threadId: value.ref.threadId, instanceId: value.ref.ownerInstanceId }) } } : {}) });
     };
+    // A viewer mount can name a flattened or older parent. The owner may name
+    // an intermediate ancestor absent from this viewer. Keep the explicitly
+    // discovered identity even then, and visit each selected identity once.
+    // Visit other selected branches before the requested root, respecting the
+    // actual child edges between selected identities.
+    for (const value of authoritative.values()) if (key(value.ref) !== key(root)) visit(value, 0);
     visit(authoritative.get(key(root))!, 0);
     return result;
   } finally { await params.api.releaseNavigationQuery?.(token).catch(() => undefined); }
