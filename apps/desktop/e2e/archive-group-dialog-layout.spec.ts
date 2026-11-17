@@ -129,18 +129,15 @@ test("keeps the archive group confirmation usable at every window size and zoom"
 });
 
 /**
- * The sidebar loads rows in windows as it scrolls, so a root below the
- * first window has no row yet. Wheel down the thread browser until it does.
+ * The sidebar pages its threads behind a "Load more threads" button, so a
+ * root past the first page has no row until the operator asks for more.
  */
 async function revealSidebarRow(window: Page, title: string): Promise<void> {
   const row = window.getByRole("button", { name: new RegExp(`^${title}`) });
-  const browser = window.getByRole("region", { name: "Thread browser" });
+  const loadMore = window.getByRole("button", { name: "Load more threads", exact: true });
   await expect(async () => {
-    if (await row.count() === 0) {
-      await browser.hover();
-      await window.mouse.wheel(0, 800);
-    }
-    await expect(row).toHaveCount(1, { timeout: 500 });
+    if (await row.count() === 0 && await loadMore.count() > 0) await loadMore.first().click();
+    await expect(row).toHaveCount(1, { timeout: 1_000 });
   }).toPass({ timeout: 30_000 });
 }
 
