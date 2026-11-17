@@ -10637,22 +10637,17 @@ a.button {
   margin-top: 18px;
 }
 
-/* The backdrop scrolls only behind this dialog. At high zoom the minimum
-   window is a 320x213 CSS viewport, shorter than the heading, description
-   and buttons alone, and the shared fixed backdrop would leave Cancel and
-   Archive below it with no way to reach them. `safe` keeps the heading from
-   centering above the top edge once the dialog overflows. */
-.rename-thread-backdrop:has(> .archive-group-dialog) {
-  overflow: auto;
-  place-items: safe center;
-}
-
 /* A column capped to the backdrop's padded height, so the member list gives
-   up its rows before the buttons leave the window. */
+   up its rows before the buttons leave the window. The shared backdrop is
+   fixed and does not scroll, and at 300% zoom the minimum window is a
+   320x213 CSS viewport, where Archive used to end at y=274. The list keeps a
+   40px peek, a line and a half of the first title; once even that cannot
+   fit, the dialog scrolls instead of squeezing the list to an empty frame. */
 .archive-group-dialog {
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .archive-group-dialog:focus {
@@ -10671,7 +10666,7 @@ a.button {
    `scroll` shade at that end, so a shade shows only where rows remain. */
 .archive-group-dialog__members {
   flex: 0 1 auto;
-  min-height: 0;
+  min-height: 40px;
   max-height: min(45vh, 360px);
   overflow: auto;
   margin: 0;

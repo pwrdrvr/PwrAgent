@@ -18,22 +18,17 @@ import { cssRuleBody } from "./css-rule-body";
  *
  * The oracle is real Chromium: a fast-check sweep over viewports from 320x200
  * to 1400x900, groups of 1 to 120 threads and both schemes. It held that both
- * buttons can always be scrolled into view and clicked, that the heading never
- * opens above the top edge, and that an overflowing list is bounded and
- * shaded. Against the pre-fix stylesheet it failed on its first input (320x200,
- * one thread: both buttons unreachable) and at 960x640 with 40 threads
- * (unbounded list). jsdom performs no layout, so this suite pins the
- * declarations instead.
+ * buttons can always be scrolled into view and clicked, that they are in view
+ * on open whenever the dialog's chrome plus a 40px list peek fits, that the
+ * heading never opens above the top edge, that the list never collapses below
+ * that peek, and that an overflowing list is bounded and shaded. Against the
+ * pre-fix stylesheet it failed on its first input (320x200, one thread: both
+ * buttons unreachable) and at 960x640 with 40 threads (unbounded list). A
+ * first version of this fix, a height cap with no list minimum, squeezed the
+ * list to an empty 2px frame at 320x213; the peek rule caught it. jsdom
+ * performs no layout, so this suite pins the declarations instead.
  */
 describe("archive group dialog layout contract", () => {
-  it("lets only the archive dialog's backdrop scroll, without centering the heading off the top", () => {
-    const body = cssRuleBody(".rename-thread-backdrop:has(> .archive-group-dialog)");
-    expect(body).toMatch(/overflow:\s*auto;/);
-    expect(body).toMatch(/place-items:\s*safe center;/);
-    // The rename and lock dialogs keep the shared backdrop as it was.
-    expect(cssRuleBody(".rename-thread-backdrop")).not.toMatch(/overflow:/);
-  });
-
   it("caps the dialog to the backdrop's padded height so the list shrinks first", () => {
     const dialog = cssRuleBody(".archive-group-dialog");
     expect(dialog).toMatch(/display:\s*flex;/);
@@ -41,9 +36,14 @@ describe("archive group dialog layout contract", () => {
     // 48px is the backdrop's 24px padding on both edges.
     expect(cssRuleBody(".rename-thread-backdrop")).toMatch(/padding:\s*24px;/);
     expect(dialog).toMatch(/max-height:\s*calc\(100vh - 48px\);/);
+    // Below the list's peek the dialog itself scrolls; the shared backdrop
+    // is fixed, and the rename and lock dialogs keep it as it was.
+    expect(dialog).toMatch(/overflow-y:\s*auto;/);
+    expect(cssRuleBody(".rename-thread-backdrop")).not.toMatch(/overflow/);
     const list = cssRuleBody(".archive-group-dialog__members");
     expect(list).toMatch(/flex:\s*0 1 auto;/);
-    expect(list).toMatch(/min-height:\s*0;/);
+    // Shrinks, but keeps a peek at the first thread rather than an empty frame.
+    expect(list).toMatch(/min-height:\s*40px;/);
   });
 
   it("frames the member list and shades each edge that still has rows beyond it", () => {
