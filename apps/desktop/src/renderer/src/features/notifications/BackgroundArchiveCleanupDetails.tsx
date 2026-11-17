@@ -28,6 +28,7 @@ export function BackgroundArchiveCleanupDetails({ outcomes }: { outcomes: readon
           <p className="background-cleanup__reason">{outcome.blockerCount && /^Worktree is still used by /.test(outcome.reason)
             ? "Worktree is still used by active threads." : outcome.reason}</p>
           <p className="background-cleanup__path">{outcome.worktreePath ?? "Worktree path unavailable"}</p>
+          {outcome.repositoryPath ? <p className="background-cleanup__path">Missing repository: {outcome.repositoryPath}</p> : null}
           <div className="background-cleanup__threads">
             <span>Thread</span><CleanupThread thread={outcome.source} />
           </div>

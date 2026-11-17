@@ -47,7 +47,7 @@ export function archivedWorktreeKeptReasons(report: ArchivedWorktreeRepairReport
   }
   for (const item of report.cleanup) {
     if (item.removedWorktree || item.error || !item.skippedReason) continue;
-    if (item.skippedReason === MISSING_WORKTREE_SKIP_REASON) continue;
+    if (item.worktreeState === "absent" || item.skippedReason === MISSING_WORKTREE_SKIP_REASON) continue;
     if (item.skippedReason === MISSING_REPOSITORY_SKIP_REASON) add("Repository no longer exists");
     else if (item.skippedReason.includes("still used by")) add("Used by an active thread");
     else if (item.skippedReason.startsWith("Externally managed")) add("Externally managed");
@@ -60,4 +60,4 @@ export function archivedWorktreeKeptReasons(report: ArchivedWorktreeRepairReport
 export const REVIEWED_SNAPSHOT_LIMIT_TTL_MS = 30 * 60_000;
 
 export const MISSING_WORKTREE_SKIP_REASON = "Worktree directory no longer exists.";
-export const MISSING_REPOSITORY_SKIP_REASON = "Its repository no longer exists; the checkout was kept.";
+export const MISSING_REPOSITORY_SKIP_REASON = "The worktree folder still exists, but its repository is gone. The folder was kept without a snapshot.";

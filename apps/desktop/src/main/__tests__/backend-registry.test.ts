@@ -242,6 +242,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, stat: vi.fn(actual.stat) };
 });
 
+/** Model folder presence alongside a fake snapshot/removal service. Unrelated
+ * paths still use the real filesystem, including missing-folder regressions. */
+async function mockArchiveWorktreePresence(paths: string[], exists: (target: string) => boolean = () => true): Promise<void> {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const previous = vi.mocked(stat).getMockImplementation() ?? actual.stat;
+  vi.mocked(stat).mockImplementation(async (target, options) => {
+    if (typeof target === "string" && paths.some((candidate) => path.resolve(candidate) === path.resolve(target))) {
+      if (!exists(target)) throw Object.assign(new Error("Fixture worktree removed"), { code: "ENOENT" });
+      return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
+    }
+    return await actual.stat(target, options);
+  });
+  onTestFinished(() => { vi.mocked(stat).mockImplementation(previous); });
+}
+
 vi.mock("../codex-app-server/stdio-transport", async () => ({
   StdioJsonRpcTransport: (await import("./fixtures/archive-cleanup-transport")).ArchiveCleanupTransport,
 }));
@@ -64916,6 +64931,7 @@ script = "printf setup"
       archivedThreads: ownershipOnArchivedThread ? [{ ...thread, id: markerThreadId, archivedAt: 900 }] : [],
     });
     const archive = vi.fn();
+    await mockArchiveWorktreePresence([worktreePath]);
     const registry = createDesktopBackendRegistry({
       codexClient, overlayStore, worktreeArchiveService: { archive } as never,
     });
@@ -64939,6 +64955,7 @@ script = "printf setup"
       archivedThreads: [],
     });
     const archive = vi.fn();
+    await mockArchiveWorktreePresence([worktreePath]);
     const { registry } = createKimiAcpRegistry({
       codexClient,
       sessions: [{
@@ -65010,6 +65027,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
+    await mockArchiveWorktreePresence(["/repo/.worktrees/archive-me"], () => archiveWorktree.mock.calls.length === 0);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -65088,6 +65106,7 @@ script = "printf setup"
       threads: [parentThread, forkedThread],
     });
     const archiveWorktree = vi.fn();
+    await mockArchiveWorktreePresence(["/repo/.worktrees/shared"]);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -65425,6 +65444,7 @@ script = "printf setup"
       threads: [parentThread, childThread],
     });
     const archiveWorktree = vi.fn();
+    await mockArchiveWorktreePresence(["/repo/.worktrees/shared"]);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -65502,6 +65522,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
+    await mockArchiveWorktreePresence([worktreePath]);
     const { registry } = createKimiAcpRegistry({
       codexClient,
       sessions: [childSession],
@@ -65559,6 +65580,7 @@ script = "printf setup"
         threads: archived ? [{ ...codexThread, archived: true }] : [],
       })),
     });
+    await mockArchiveWorktreePresence([worktreePath]);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -65994,6 +66016,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
+    await mockArchiveWorktreePresence(["/repo/.worktrees/shared"], () => archiveWorktree.mock.calls.length === 0);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -66167,6 +66190,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
+    await mockArchiveWorktreePresence([worktreePath], () => archiveWorktree.mock.calls.length === 0);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -66264,6 +66288,7 @@ script = "printf setup"
         },
       },
     });
+    await mockArchiveWorktreePresence([worktreePath], () => archiveWorktree.mock.calls.length === 0);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
@@ -66425,6 +66450,7 @@ script = "printf setup"
         branch: undefined,
         removedWorktree: false,
         deletedBranch: false,
+        worktreeState: "absent",
         skippedReason: "Worktree directory no longer exists.",
       }]);
       expect(mainLoggerMock.warn).not.toHaveBeenCalledWith(
@@ -66439,7 +66465,9 @@ script = "printf setup"
         branch: undefined,
         removedWorktree: false,
         deletedBranch: false,
-        skippedReason: "Its repository no longer exists; the checkout was kept.",
+        worktreeState: "present",
+        repositoryPath,
+        skippedReason: "The worktree folder still exists, but its repository is gone. The folder was kept without a snapshot.",
       }]);
       expect(mainLoggerMock.warn).not.toHaveBeenCalledWith(
         "archive thread worktree cleanup failed",
@@ -67633,6 +67661,7 @@ script = "printf setup"
     const archiveWorktree = vi.fn(async () => {
       throw new Error("worktree unavailable");
     });
+    await mockArchiveWorktreePresence(["/repo/.worktrees/stale-thread"]);
     const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner: {
@@ -67970,6 +67999,7 @@ script = "printf setup"
         threads: archived ? [{ ...thread, archived: true }] : sharedWithActiveThread ? [child] : [],
       })),
     });
+    await mockArchiveWorktreePresence([oldWorktree, newWorktree], (target) => !archiveWorktree.mock.calls.some(([params]) => params.worktreePath === target));
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ overlays: { "codex:thread-1": {

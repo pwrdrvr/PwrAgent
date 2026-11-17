@@ -38,17 +38,7 @@ vi.mock("../app-server/thread-assets", async (importOriginal) => ({
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    // The worktree service is contrived, so its post-removal sentinel must be
-    // contrived too. Advancing fake timers cannot complete host filesystem I/O.
-    stat: vi.fn(async (filePath: Parameters<typeof actual.stat>[0], options?: Parameters<typeof actual.stat>[1]) => {
-      if (typeof filePath === "string" && filePath.startsWith("/contrived/")) {
-        throw Object.assign(new Error("Contrived worktree was removed."), { code: "ENOENT" });
-      }
-      return await actual.stat(filePath, options);
-    }),
-  };
+  return { ...actual, stat: vi.fn(actual.stat) };
 });
 
 /**
@@ -82,6 +72,17 @@ afterEach(async () => {
 });
 
 function build(active: AppServerThreadSummary[], target = codexThread({ id: "target" }), checkpoint?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">) {
+  // The fake archive service owns removal. Model both its input folder and
+  // its post-removal sentinel, rather than pretending it was always absent.
+  const removedWorktrees = new Set<string>();
+  vi.mocked(stat).mockImplementation(async (filePath, options) => {
+    if (typeof filePath === "string" && path.resolve(filePath).startsWith(path.resolve("/contrived") + path.sep)) {
+      if (removedWorktrees.has(path.resolve(filePath))) throw Object.assign(new Error("Contrived worktree was removed."), { code: "ENOENT" });
+      return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
+    }
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    return await actual.stat(filePath, options);
+  });
   const overlays = new Map<string, ThreadOverlayState>();
   let archived: AppServerThreadSummary[] = [];
   const counts = { aggregateLists: 0, archiveMutations: 0, providerPages: 0, largestProviderPage: 0, overlayReads: 0, largestOverlaySlice: 0 };
@@ -121,6 +122,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   const archiveWorktree = vi.fn(async (params: { backend: string; threadId: string; worktreePath: string; beforeRemove?: () => Promise<() => void> }) => {
     const assertRemoval = await params.beforeRemove?.();
     assertRemoval?.();
+    removedWorktrees.add(path.resolve(params.worktreePath));
     return { id: "snapshot", backend: params.backend, threadId: params.threadId, worktreePath: params.worktreePath,
       repositoryPath: "/contrived/repo", snapshotRef: "refs/codex/snapshots/test", snapshotCommit: "abc",
       createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
@@ -144,7 +146,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
     });
   });
-  return { registry, client, counts, events, overlays, store, claudeStore, archiveWorktree, completion };
+  return { registry, client, counts, events, overlays, store, claudeStore, archiveWorktree, completion, removedWorktrees };
 }
 
 function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerThreadSummary[], history: AppServerThreadSummary[] = [], checkpoint?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">) {
@@ -426,6 +428,7 @@ describe("archive cleanup pipeline", () => {
     expect(saved[0]?.deferredWorktrees?.[0]?.snapshot?.snapshotCommit).toBe("abc");
     await first.registry.close();
     const resumed = build([], target, checkpoint);
+    for (const worktree of first.removedWorktrees) resumed.removedWorktrees.add(worktree);
     const persist = vi.fn(async () => {});
     Object.assign(resumed.store, { upsertWorktreeSnapshot: persist });
     resumed.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived }) => ({ threads: archived ? [target] : [], nextCursor: undefined }));
@@ -1459,7 +1462,7 @@ describe("archive cleanup pipeline", () => {
     const sentinelStarted = new Promise<void>((resolve) => { entered = resolve; });
     const defaultStat = vi.mocked(stat).getMockImplementation()!;
     vi.mocked(stat).mockImplementation(async (filePath, options) => {
-      if (filePath !== "/contrived/worktree") return await defaultStat(filePath, options);
+      if (filePath !== "/contrived/worktree" || !fixture.removedWorktrees.has(path.resolve(filePath))) return await defaultStat(filePath, options);
       entered();
       await sentinelGate;
       throw Object.assign(new Error("Contrived worktree was removed."), { code: "ENOENT" });

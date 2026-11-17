@@ -1140,6 +1140,10 @@ export type ResolveThreadResponse = {
 
 export type ArchiveThreadCleanupResult = {
   worktreePath?: string;
+  /** Confirmed folder presence at cleanup, independent of other thread worktrees. */
+  worktreeState?: "present" | "absent";
+  /** Missing repository of a retained checkout, when confirmed by the owner. */
+  repositoryPath?: string;
   branch?: string;
   removedWorktree: boolean;
   deletedBranch: boolean;

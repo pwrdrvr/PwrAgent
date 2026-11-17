@@ -32,7 +32,7 @@ function completionKey(backend: string, instanceId: string | undefined, completi
   };
   [backend, instanceId, completion.threadId, completion.archivedAt, completion.error, completion.cleanup.length].forEach(add);
   for (const item of completion.cleanup) {
-    [item.worktreePath, item.branch, item.removedWorktree, item.deletedBranch, item.error, item.skippedReason, item.blockingThreads?.length].forEach(add);
+    [item.worktreePath, item.worktreeState, item.repositoryPath, item.branch, item.removedWorktree, item.deletedBranch, item.error, item.skippedReason, item.blockingThreads?.length].forEach(add);
     for (const thread of item.blockingThreads ?? []) [thread.backend, thread.threadId, thread.title].forEach(add);
   }
   return hashes.map((hash) => (hash >>> 0).toString(16).padStart(8, "0")).join("");
@@ -46,6 +46,8 @@ function threadText(thread: BackgroundCleanupThread): string {
 
 function outcomeText(outcome: BackgroundCleanupOutcome): string {
   return [outcome.kind.toUpperCase(), threadText(outcome.source), `Worktree: ${outcome.worktreePath ?? "unavailable"}`,
+    ...(outcome.worktreeState ? [`Worktree folder: ${outcome.worktreeState}`] : []),
+    ...(outcome.repositoryPath ? [`Repository: ${outcome.repositoryPath}`] : []),
     `Reason: ${outcome.reason}`,
     ...outcome.blockers.map((thread, index) => `Blocking thread ${index + 1}\n${threadText(thread)}`),
     ...(outcome.blockerCount > outcome.blockers.length ? [`Storage limit: ${outcome.blockerCount - outcome.blockers.length} blocking thread references omitted.`] : []),
@@ -107,15 +109,19 @@ export class BackgroundArchiveCleanupReport {
         ?? (legacy ? legacy[1].split(", ").map((threadId) => ({ threadId, ...(instanceId ? { instanceId } : {}) })) : []);
       const blockers = refs.slice(0, MAX_BLOCKERS).map((ref) => thread(ref, ref.title));
       const worktreePath = clip(item?.worktreePath);
+      const repositoryPath = clip(item?.repositoryPath);
       const clippedReason = clip(reason)!;
-      this.retain({ kind, source, reason: clippedReason, worktreePath, blockers, blockerCount: refs.length, textTruncated });
+      this.retain({ kind, source, reason: clippedReason, worktreePath, worktreeState: item?.worktreeState,
+        repositoryPath, blockers, blockerCount: refs.length, textTruncated });
     };
     if (completion.error) { this.failed++; add("failed", completion.error); }
     for (const item of cleanup) {
       if (item.removedWorktree) this.removed++;
       if (item.error) { this.failed++; add("failed", item.error, item); }
       else if (item.removedWorktree) add("removed", "Worktree removed.", item);
-      else if (item.skippedReason === "Worktree directory no longer exists.") { this.absent++; add("absent", item.skippedReason, item); }
+      else if (item.worktreeState === "absent" || item.skippedReason === "Worktree directory no longer exists.") {
+        this.absent++; add("absent", item.skippedReason ?? "Worktree directory no longer exists.", item);
+      }
       else { this.kept++; add("kept", item.skippedReason ?? "Cleanup was skipped; worktree kept.", item); }
     }
     return true;
