@@ -21,11 +21,11 @@ type Reads = Required<Pick<DesktopApi, "researchSnapshot" | "researchChanges">>;
  * Keeps one thread's research current at the cost of what changed.
  *
  * A change event names its run and revision. For the run on screen it reads
- * the items changed since the store's revision; for any other run it reads
- * listed run it reads that run's summary alone. The whole run list is read
- * once, and again only when the thread's pending request changes or a run it
- * does not list changes. Reads run one at a time, and a change that arrives
- * during a read is folded into the next one.
+ * the items changed since the store's revision; for any other listed run it
+ * reads that run's summary alone. The whole run list is read once, and again
+ * only when the thread's pending request changes or a run it does not list
+ * changes. Reads run one at a time. A change that arrives during a read is
+ * folded into the next one, unless the read in flight already reached it.
  */
 export class ResearchSync {
   private state: ResearchSyncState = { writableRunIds: [] };
@@ -33,6 +33,8 @@ export class ResearchSync {
   private wantedRunId?: string;
   private listDirty = true;
   private runDirty = false;
+  /** The highest revision a change named for the run on screen since its read began. A change that names none asks for whatever is newest. */
+  private runAsked = 0;
   /** Listed runs whose summary is behind, each with the revision a change named. */
   private readonly summariesDirty = new Map<string, number | undefined>();
   private pumping = false;
@@ -54,7 +56,10 @@ export class ResearchSync {
     if (change.runId === undefined) this.listDirty = true;
     else if (change.runId === this.store?.runId) {
       // A revision the store already holds was read by an earlier, wider delta.
-      if (change.revision === undefined || !researchRunStoreSynced(this.store) || this.store.revision < change.revision) this.runDirty = true;
+      if (change.revision === undefined || !researchRunStoreSynced(this.store) || this.store.revision < change.revision) {
+        this.runDirty = true;
+        this.runAsked = Math.max(this.runAsked, change.revision ?? Number.POSITIVE_INFINITY);
+      }
     } else {
       const known = this.state.runs?.find((run) => run.id === change.runId);
       // The owner decides which runs the list holds and in what order, so a run it does not hold yet is read with the list.
@@ -76,6 +81,7 @@ export class ResearchSync {
     if (this.store?.runId === id) return false;
     this.store = id ? emptyResearchRunStore(id) : undefined;
     this.runDirty = Boolean(id);
+    this.runAsked = 0;
     this.emit({ store: undefined });
     return this.runDirty;
   }
@@ -147,7 +153,9 @@ export class ResearchSync {
    * that fails part way leaves the store as it was.
    */
   private async readRun(): Promise<void> {
+    // The owner answers after every change received so far, so only changes from here on can ask for more.
     this.runDirty = false;
+    this.runAsked = 0;
     let store = this.store;
     if (!store) return;
     const pages: ResearchChanges[] = [];
@@ -165,6 +173,8 @@ export class ResearchSync {
     } catch (error) { this.runDirty = true; throw error; }
     for (const page of pages) store = applyResearchChanges(store, page);
     this.store = store;
+    // A change that arrived during the read is settled if the read reached its revision.
+    if (store.revision >= this.runAsked) this.runDirty = false;
     const state = store.state;
     const synced = store;
     this.emit({

@@ -398,6 +398,44 @@ describe("Research panel", () => {
     expect(await screen.findByText("Showing the latest 40 of 1000 findings.")).toBeInTheDocument();
   });
 
+  it("moves focus to the findings list only when Show more draws the last page", async () => {
+    const { api } = apiFor(snapshot(45));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
+    const list = screen.getByLabelText("Shared findings");
+    const filter = screen.getByLabelText("Filter this view");
+    expect(await screen.findByText("Showing the latest 20 of 45 findings.")).toBeInTheDocument();
+    // More remain after this click, so the button stays and focus stays on it.
+    const more = screen.getByRole("button", { name: "Show more" });
+    more.focus();
+    fireEvent.click(more);
+    expect(await screen.findByText("Showing the latest 40 of 45 findings.")).toBeInTheDocument();
+    expect(list).not.toHaveFocus();
+    // A filter that then fits one page hides the button. The operator is typing: focus stays in the filter.
+    filter.focus();
+    fireEvent.change(filter, { target: { value: "Counterexample 4" } });
+    expect(await screen.findByText("All 6 matching findings.")).toBeInTheDocument();
+    expect(filter).toHaveFocus();
+    // Show more that draws the last matches takes its button away, so focus goes to the list.
+    fireEvent.change(filter, { target: { value: "Counterexample" } });
+    expect(await screen.findByText("Showing the latest 20 of 45 matching findings.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Showing the latest 40 of 45 matching findings.")).toBeInTheDocument();
+    expect(list).not.toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("All 45 matching findings.")).toBeInTheDocument();
+    expect(list).toHaveFocus();
+    // The same holds for the pages read from the owner.
+    filter.focus();
+    fireEvent.change(filter, { target: { value: "" } });
+    expect(await screen.findByText("Showing the latest 40 of 45 findings.")).toBeInTheDocument();
+    expect(filter).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("All 45 findings.")).toBeInTheDocument();
+    await waitFor(() => expect(list).toHaveFocus());
+  });
+
   it("reads summaries with no items or journal, and the chosen run through its own change stream", async () => {
     const first = snapshot(3);
     const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));

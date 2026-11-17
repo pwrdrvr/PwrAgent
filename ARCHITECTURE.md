@@ -165,9 +165,11 @@ and nothing on a command, turn or read path replays the journal:
 `ResearchService` validates a command against these rows: the run header, the
 items the command names, slot counts, and the open deliveries. Idempotency is
 one indexed lookup of the command ID. `projectResearchRun` remains the
-definition of what the projections must hold. Oracle tests compare every
-stored read against it after every generated step, and a differential test
-runs each generated command through the earlier replay-based service too.
+definition of what the projections must hold. Oracle tests compare the
+stored reads against it: after every generated step, the reads of the run
+that step changed, and at the end of each generated run, every record of
+every run. A differential test runs each generated command through the
+earlier replay-based service too.
 Replay remains available as `ResearchService.read` for recovery and tests; no
 command, observer or view calls it.
 

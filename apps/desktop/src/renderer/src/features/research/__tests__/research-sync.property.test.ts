@@ -250,4 +250,45 @@ describe("research sync", () => {
       .toEqual({ list: 0, summary: 0, changes: 1, items: 1 });
     sync.dispose();
   });
+
+  it("reads once for a burst of changes the read in flight already reached, and again for one it did not", async () => {
+    const model = owner();
+    const journal = [researchCreatedEvent(3)];
+    model.journals.set("run-1", journal);
+    let state: ResearchSyncState = { writableRunIds: [] };
+    const sync = new ResearchSync(model.reads, thread, (next) => { state = next; });
+    const drain = async () => { await settle(); while (model.held.length) { model.held.shift()!(); await settle(); } };
+    const grow = () => { journal.push(nextResearchEvent(projectResearchRun("run-1", journal), { kind: "finding", pick: 0, other: 0, variant: 1, flag: false })); return journal.length; };
+    sync.start();
+    await drain();
+    let before = model.calls.changes;
+    // One command appends three events. The owner answers the first change's read after all three.
+    const first = grow();
+    grow();
+    const last = grow();
+    sync.notify({ ...thread, runId: "run-1", revision: first });
+    await settle();
+    expect(model.held).toHaveLength(1);
+    sync.notify({ ...thread, runId: "run-1", revision: first + 1 });
+    sync.notify({ ...thread, runId: "run-1", revision: last });
+    await drain();
+    expect(state.store?.revision).toBe(last);
+    expect(model.calls.changes - before).toBe(1);
+    // An event appended after the owner answered is not in that answer, so its change is read.
+    before = model.calls.changes;
+    sync.notify({ ...thread, runId: "run-1", revision: grow() });
+    await settle();
+    sync.notify({ ...thread, runId: "run-1", revision: grow() });
+    await drain();
+    expect(state.store?.revision).toBe(journal.length);
+    expect(model.calls.changes - before).toBe(2);
+    // A change that names no revision is read too.
+    before = model.calls.changes;
+    sync.notify({ ...thread, runId: "run-1", revision: grow() });
+    await settle();
+    sync.notify({ ...thread, runId: "run-1" });
+    await drain();
+    expect(model.calls.changes - before).toBe(2);
+    sync.dispose();
+  });
 });

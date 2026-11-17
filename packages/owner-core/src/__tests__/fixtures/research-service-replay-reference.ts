@@ -1,10 +1,12 @@
 /**
  * The research service as it was before commands and observers read stored
  * projections: every command and every turn or queue observation replays the
- * run's journal with `projectResearchRun`. It is kept, unchanged apart from
- * its imports and the removed renderer snapshot, as the reference for
- * differential tests: the projection-based service must accept and refuse the
- * same commands and append the same events. Nothing outside tests imports it.
+ * run's journal with `projectResearchRun`. The service is kept, unchanged
+ * apart from its imports and the removed renderer snapshot, as the reference
+ * for differential tests: the projection-based service must accept and refuse
+ * the same commands and append the same events. Its in-memory storage answers
+ * as it did, but replays a journal once per length. Nothing outside tests
+ * imports it.
  */
 import { randomUUID } from "node:crypto";
 import {

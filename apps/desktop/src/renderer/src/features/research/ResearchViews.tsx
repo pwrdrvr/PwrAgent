@@ -83,12 +83,13 @@ export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailab
   const error = matches ? "" : paged.error;
   const list = useRef<HTMLDivElement>(null);
   // Show more disappears with the last page; keep focus in the list instead of dropping it to the page.
+  // The click is forgotten once its page is drawn: a filter that hides the button later must not take focus from the filter box.
   const requestedMore = useRef(false);
   useEffect(() => {
-    if (more || !requestedMore.current) return;
+    if (!requestedMore.current || loadingOlder) return;
     requestedMore.current = false;
-    list.current?.focus();
-  }, [more]);
+    if (!more) list.current?.focus();
+  }, [more, shown.length, loadingOlder]);
   const showMore = () => {
     requestedMore.current = true;
     if (matches) setDrawn({ query, count: count + RESEARCH_FINDINGS_PAGE });
