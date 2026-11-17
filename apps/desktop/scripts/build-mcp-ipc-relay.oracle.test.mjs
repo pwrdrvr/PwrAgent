@@ -1,14 +1,17 @@
-import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { runNativeFixtureCommand } from "../src/test-setup/native-helper-fixture";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const fixtures = [];
-afterEach(() => {
+const pendingBuilds = [];
+afterEach(async () => {
+  // Even an aborted assertion must join native owners before removing inputs.
+  await Promise.allSettled(pendingBuilds.splice(0));
   for (const root of fixtures.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -123,10 +126,20 @@ it("a failed source rebuild or missing toolchain leaves no previously usable hel
 it("concurrent owners with separate output roots cannot replace each other's artifact", async () => {
   const f = fixture();
   const roots = [join(f.root, "owner-a"), join(f.root, "owner-b")];
-  const outputs = await Promise.all(roots.map(async (outputRoot) => {
-    const { stdout } = await promisify(execFile)(process.execPath, f.command({ outputRoot }));
-    return parseOutput(stdout);
-  }));
+  const resultFiles = roots.map((_, index) => join(f.root, `result-${index}.json`));
+  const builds = roots.map((outputRoot, index) => runNativeFixtureCommand(process.execPath, [
+    "--input-type=module", "-e", `
+      import { writeFileSync } from "node:fs";
+      import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(f.builder).href)};
+      writeFileSync(process.argv[1], JSON.stringify(buildMcpIpcRelay(${JSON.stringify({ outputRoot })})));
+    `, resultFiles[index],
+  ]));
+  pendingBuilds.push(...builds);
+  const results = await Promise.allSettled(builds);
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
+  }
+  const outputs = resultFiles.map((file) => JSON.parse(readFileSync(file, "utf8")));
   expect(outputs[0]).not.toBe(outputs[1]);
   for (const output of outputs) {
     expect(machine(output)).toBe(process.arch);

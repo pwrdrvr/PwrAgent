@@ -130,8 +130,9 @@ included headers and build-script flags at the same output path, corrupt the
 output, and remove the compiler from the build environment. They check that a
 failed rebuild leaves no old usable helper and that the rebuilt production
 entry rejects an absent peer without writing protocol data. They also exercise
-independent concurrent output roots and a shared packaged filename across
-requested architectures. Cross-architecture execution is not assumed.
+independent concurrent output roots, joining process groups/Windows Jobs
+before fixture cleanup, and a shared packaged filename across requested
+architectures. Cross-architecture execution is not assumed.
 
 An intentionally invalid candidate that returned an existing helper before
 compiling failed four of the five oracles. The normal builder passed all five.
