@@ -27,7 +27,7 @@ import {
 } from "./pr-derivations";
 import type { GithubTerminalNode } from "./pr-terminal-details";
 import { githubMergeQueueStatus } from "./pr-merge-queue";
-import { noteMergeQueueRepository } from "./merge-queue-repositories";
+import { isMergeQueueRepository, noteMergeQueueRepository } from "./merge-queue-repositories";
 import {
   hasForgeRepositoryName,
   recordForgeRepositoryName,
@@ -227,10 +227,10 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * `updatedAt` is deliberately absent — it moves on every comment and label,
  * which would churn snapshot equality for something no surface displays.
  *
- * The merge queue fields cost one connection per PR: `timelineItems(last: 1)`
- * filtered to queue events, which says whether the queue removed the PR (and
- * why) or landed it. The entry and `isMergeQueueEnabled` are plain objects
- * and scalars. See `githubMergeQueueStatus`.
+ * `isMergeQueueEnabled` and `mergeQueueEntry` are a scalar and an object, and
+ * cost no rate-limit points. The queue's last event is a connection
+ * (`PR_QUEUE_EVENTS_FRAGMENT`), so only the poll of a repository known to use
+ * a queue asks for it.
  */
 const PR_STATUS_FRAGMENT = `
 fragment PrStatus on PullRequest {
@@ -254,13 +254,6 @@ fragment PrStatus on PullRequest {
   headRepositoryOwner { login }
   isMergeQueueEnabled
   mergeQueueEntry { state position enqueuedAt }
-  queueEvents: timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
-    nodes {
-      __typename
-      ... on AddedToMergeQueueEvent { createdAt }
-      ... on RemovedFromMergeQueueEvent { createdAt reason }
-    }
-  }
   commits(last: 1) {
     totalCount
     nodes {
@@ -282,6 +275,25 @@ fragment PrStatus on PullRequest {
           nodes { status workflowRun { id } }
         }
       }
+    }
+  }
+}`;
+
+/**
+ * Whether the queue removed the PR, and why, or landed it. A connection, so
+ * it costs rate-limit points: with it, a poll of 40 PRs cost 2 points instead
+ * of 1 (`rateLimit(dryRun: true)`, 2026-11-17). Only a PR in a repository
+ * known to use a merge queue asks for it (`isMergeQueueRepository`). A
+ * repository joins that list from `isMergeQueueEnabled` on its first poll, so
+ * its removal reasons follow from the next round.
+ */
+const PR_QUEUE_EVENTS_FRAGMENT = `
+fragment PrQueueEvents on PullRequest {
+  queueEvents: timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+    nodes {
+      __typename
+      ... on AddedToMergeQueueEvent { createdAt }
+      ... on RemovedFromMergeQueueEvent { createdAt reason }
     }
   }
 }`;
@@ -384,25 +396,29 @@ export function buildBatchedPrQuery(refs: PrRef[]): {
   const variableDecls: string[] = [];
   const selections: string[] = [];
   const variables: Record<string, string | number> = {};
+  let queueEvents = false;
 
   refs.forEach((ref, index) => {
     const owner = `o${index}`;
     const name = `n${index}`;
     const number = `p${index}`;
+    const queued = isMergeQueueRepository("github.com", ref.owner, ref.repo);
+    queueEvents ||= queued;
     variableDecls.push(`$${owner}: String!`, `$${name}: String!`, `$${number}: Int!`);
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` pullRequest(number: $${number}) { ...PrStatus } }`,
+      + ` pullRequest(number: $${number}) { ...PrStatus${queued ? " ...PrQueueEvents" : ""} } }`,
     );
     variables[owner] = ref.owner;
     variables[name] = ref.repo;
     variables[number] = ref.number;
   });
 
+  // GraphQL refuses a document that defines a fragment it does not use.
   const query = `query PollPullRequests(${variableDecls.join(", ")}) {
 ${selections.join("\n")}
 }
-${PR_STATUS_FRAGMENT}`;
+${PR_STATUS_FRAGMENT}${queueEvents ? PR_QUEUE_EVENTS_FRAGMENT : ""}`;
 
   return { query, variables };
 }

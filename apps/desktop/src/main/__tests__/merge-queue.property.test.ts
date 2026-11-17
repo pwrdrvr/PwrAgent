@@ -15,7 +15,8 @@ import type { ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { forgetMergeQueueRepositories, isMergeQueueRepository, noteMergeQueueRepository } from "../pr-status/merge-queue-repositories";
-import { mapGraphqlPrNode, type GraphqlPrNode } from "../pr-status/github-graphql-client";
+import { buildBatchedPrQuery, mapGraphqlPrNode, type GraphqlPrNode } from "../pr-status/github-graphql-client";
+import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { githubMergeQueueStatus, gitlabMergeTrainStatus, type GithubMergeQueueObservation } from "../pr-status/pr-merge-queue";
 import { PrStatusWatchCoordinator, terminalWakeOutcomeOf } from "../pr-status/pr-status-watch";
 import { computePrStatusTransition } from "../pr-status/pr-transitions";
@@ -36,6 +37,9 @@ import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./
  *    otherwise enqueues. A branch with no queue merges directly as before.
  * 3. A removal from the queue wakes each merge watch armed before it,
  *    exactly once, and no watch armed after it, and leaves CI watches be.
+ * 4. A status poll in a repository with no known queue costs what it cost
+ *    before queues: no request of its own and no rate-limit connection. A
+ *    project's merge train setting is read once, however many MRs ask.
  */
 
 // ---------------------------------------------------------------------------
@@ -581,5 +585,69 @@ describe("a merge queue removal wakes merge watches", () => {
       expectSqliteWriteBudget({ scenario: "pr-merge-queue-removal-wake", writes,
         note: "one merge watch woken by a queue removal, then nine more polls of the removed PR: observe, claim and finish once, 0 commits per later poll; ~0.3 MB/day at 10 removals/day" });
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs(); }
+  });
+});
+
+describe("status polling costs nothing extra without a queue", () => {
+  beforeEach(() => forgetMergeQueueRepositories());
+
+  const repoName = fc.constantFrom("atlas", "beacon", "comet", "delta");
+  const refs = fc.array(fc.record({ owner: fc.constantFrom("acme", "globex"), repo: repoName, number: fc.integer({ min: 1, max: 9999 }) }),
+    { minLength: 1, maxLength: 40 });
+
+  it("asks for the queue's last event only for PRs in a repository known to use a queue", () => {
+    fc.assert(fc.property(refs, fc.subarray(["atlas", "beacon", "comet", "delta"]), (batch, queued) => {
+      forgetMergeQueueRepositories();
+      for (const repo of queued) noteMergeQueueRepository("github.com", "acme", repo);
+      const { query } = buildBatchedPrQuery(batch);
+      const selections = query.split("\n").filter((line) => /^ {2}r\d+: repository/.test(line));
+      const expected = batch.map((ref) => ref.owner === "acme" && queued.includes(ref.repo));
+      expect(selections.map((line) => line.includes("...PrQueueEvents"))).toEqual(expected);
+      // The connection that costs rate-limit points appears only with a queue.
+      expect(query.includes("timelineItems")).toBe(expected.some(Boolean));
+      expect(query.includes("fragment PrQueueEvents")).toBe(expected.some(Boolean));
+    }));
+  });
+
+  it("reads a project's merge train setting once for every MR that asks, together or later", async () => {
+    let reads = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fetcher = new GitLabPrFetcher({
+      discover: async () => ({ selectedCommand: "glab-fixture", candidates: [], checkedAt: 0 }),
+      tryTakeRequestToken: () => true,
+      run: async (_command, args) => {
+        if (args.some((arg) => arg.endsWith("projects/acme%2Fatlas"))) {
+          reads += 1;
+          await gate;
+          return JSON.stringify({ merge_trains_enabled: false });
+        }
+        throw new Error(`unexpected glab call: ${args.join(" ")}`);
+      },
+    });
+    const together = Array.from({ length: 8 }, async () => await fetcher.mergeTrainsEnabled("gitlab.com", "acme/atlas"));
+    release();
+    expect(await Promise.all(together)).toEqual(Array(8).fill(false));
+    expect(await fetcher.mergeTrainsEnabled("gitlab.com", "acme/atlas")).toBe(false);
+    expect(reads).toBe(1);
+  });
+
+  it("does not retry a project whose merge train setting could not be read on every poll", async () => {
+    let reads = 0;
+    const fetcher = new GitLabPrFetcher({
+      discover: async () => ({ selectedCommand: "glab-fixture", candidates: [], checkedAt: 0 }),
+      tryTakeRequestToken: () => true,
+      run: async (_command, args) => {
+        if (args.some((arg) => arg.endsWith("projects/acme%2Fatlas"))) {
+          reads += 1;
+          throw new Error("403 Forbidden");
+        }
+        throw new Error(`unexpected glab call: ${args.join(" ")}`);
+      },
+    });
+    for (let poll = 0; poll < 5; poll += 1) {
+      expect(await fetcher.mergeTrainsEnabled("gitlab.com", "acme/atlas")).toBeUndefined();
+    }
+    expect(reads).toBe(1);
   });
 });
