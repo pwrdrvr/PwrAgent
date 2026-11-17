@@ -9,7 +9,7 @@ import { buildActivityIntent, buildConfirmationIntent, buildErrorIntent } from "
 import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { buildBindingStatusIntent } from "./messaging-status-card.js";
 import { resolveMessagingThreadState, type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
-import { threadContextForAdmissionState, normalizeConversationTitle, conversationKindLabel, isDefaultAgentRouteBinding, handoffContextForBinding, describeConversation } from "./messaging-binding-helpers";
+import { threadContextForAdmissionState, normalizeConversationTitle, conversationKindLabel, isDefaultAgentRouteBinding, handoffContextForBinding, describeConversation, mergeRetiredBindingStatus } from "./messaging-binding-helpers";
 import type { MessagingBindingContext } from "./messaging-binding-context";
 
 export class MessagingBindingService {
@@ -633,7 +633,7 @@ export class MessagingBindingService {
       pinnedStatusSurface: undefined,
       statusSurface: undefined,
       updatedAt: this.context.now(),
-    }, { expectedActiveBinding: binding });
+    }, { expectedActiveBinding: binding, mergeActiveBinding: mergeRetiredBindingStatus });
   }
 
   async renderBindingStatus(

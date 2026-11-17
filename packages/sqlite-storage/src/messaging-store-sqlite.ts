@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { MessagingStorage, MessagingStorageRecords } from "@pwragent/owner-core/messaging-storage";
+import type { MessagingBindingWriteOptions, MessagingStorage, MessagingStorageRecords } from "@pwragent/owner-core/messaging-storage";
 import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 
@@ -87,25 +87,27 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
 
   async upsertBinding(
     binding: Records["binding"],
-    options?: { expectedActiveBinding: Records["binding"] },
+    options?: MessagingBindingWriteOptions<Records["binding"]>,
   ): Promise<Records["binding"]> {
-    const sanitized = this.policy.sanitizeBinding(binding);
+    let sanitized = this.policy.sanitizeBinding(binding);
     const expected = options
       ? JSON.parse(JSON.stringify(this.policy.sanitizeBinding(options.expectedActiveBinding))) as Records["binding"]
       : undefined;
-    const channel = sanitized.channel;
     const persist = () => {
       if (options) {
         const row = this.stateDb.raw.prepare("SELECT payload FROM bindings WHERE binding_id = ?")
           .get(sanitized.id) as { payload: string } | undefined;
         const current = row ? JSON.parse(row.payload) as Records["binding"] : undefined;
-        if (current && (
-          current.revokedAt !== undefined
-          || !isDeepStrictEqual(current, expected)
-        )) {
-          return current;
+        if (current) {
+          if (current.revokedAt !== undefined) return current;
+          if (!isDeepStrictEqual(current, expected)) {
+            const merged = options.mergeActiveBinding?.(current, expected!, sanitized);
+            if (!merged) return current;
+            sanitized = this.policy.sanitizeBinding(merged);
+          }
         }
       }
+      const channel = sanitized.channel;
       this.stateDb.raw
         .prepare(
           `INSERT OR REPLACE INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, revoked_at, payload)
