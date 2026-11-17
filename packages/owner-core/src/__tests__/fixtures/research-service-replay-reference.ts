@@ -32,13 +32,35 @@ export interface ReplayResearchStorage {
   append(id: string, revision: number, event: ResearchEvent): void;
 }
 
-/** Journals in memory. Every read replays, so it is the storage's own oracle. */
+/** Frozen all the way down, so a caller that wrote to a shared replay would throw. */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
+  return value;
+}
+
+/**
+ * Journals in memory. Every read answers from a replay, so it is the
+ * storage's own oracle. A journal is replayed once per length and the frozen
+ * run is shared by the reads that follow: a journal only grows, and the
+ * service reads a run hundreds of times between appends.
+ */
 export class ReplayMemoryStorage implements ReplayResearchStorage {
   readonly records = new Map<string, ResearchEvent[]>();
   readonly keys = new Map<string, string>();
   readonly workers = new Map<string, ResearchThread[]>();
+  private readonly replayed = new Map<string, { length: number; run: ResearchRun }>();
   findByStartKey(key: string) { const id = this.keys.get(key); return id ? this.get(id) : undefined; }
-  get(id: string) { const records = this.records.get(id); return records ? projectResearchRun(id, structuredClone(records)) : undefined; }
+  get(id: string) {
+    const records = this.records.get(id);
+    if (!records) return undefined;
+    const held = this.replayed.get(id);
+    if (held?.length === records.length) return held.run;
+    const run = deepFreeze(projectResearchRun(id, structuredClone(records)));
+    this.replayed.set(id, { length: records.length, run });
+    return run;
+  }
   /** Newest first, as the SQLite store lists them. */
   list(thread?: ResearchThread) {
     return [...this.records.keys()].map((id) => this.get(id)!)

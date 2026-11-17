@@ -120,22 +120,33 @@ async function apply(store: ResearchStore, oracle: ReplayOracle, op: Op) {
   expect(measured.writes.commits).toBe("appended" in expected && expected.appended ? 1 : 0);
 }
 
-async function expectAgreement(store: ResearchStore, oracle: ReplayOracle, op?: Op) {
+/**
+ * What one comparison reads. After a step it is the run the step changed, the
+ * records the step wrote and one thread, so a generated run costs what its
+ * steps changed. Each generated run ends with `EVERYTHING`, which reads every
+ * record of both runs for every thread: a write that reached a row it should
+ * not have is still there to find.
+ */
+type Scope = { runs: readonly (typeof RUNS)[number][]; threads: readonly ResearchThread[]; changedOnly: boolean };
+const EVERYTHING: Scope = { runs: RUNS, threads, changedOnly: false };
+const stepScope = (op: Op): Scope => ({ runs: [RUNS[op.run]!], threads: [threads[op.pick % threads.length]!], changedOnly: true });
+
+async function expectAgreement(store: ResearchStore, oracle: ReplayOracle, op?: Op, scope = EVERYTHING) {
   const reads = await measureSqliteWrites(() => {
     expect(store.activeRuns()).toEqual(oracle.activeRuns());
-    for (const thread of threads) {
+    for (const thread of scope.threads) {
       expect(store.activeRuns(thread)).toEqual(oracle.activeRuns(thread));
       expect(store.runSummaries(thread, 50)).toEqual(oracle.runSummaries(thread, 50));
       expect(store.runSummaries(thread, 1)).toEqual(oracle.runSummaries(thread, 1));
       expect(store.summaries(thread)).toEqual(oracle.summaries(thread));
       expect(store.isActiveWorker(thread)).toBe(oracle.isActiveWorker(thread));
     }
-    for (const id of RUNS) {
+    for (const id of scope.runs) {
       const run = oracle.get(id)!;
       expect(store.header(id)).toEqual(oracle.header(id));
       expect(store.runIdForStartKey(`start-${id}`)).toBe(id);
       expect(new Set(store.members(id).map(key))).toEqual(new Set(oracle.members(id).map(key)));
-      for (const thread of threads) {
+      for (const thread of scope.threads) {
         expect(store.runSummaries(thread, 50, id)).toEqual(oracle.runSummaries(thread, 50, id));
         expect(store.isMember(id, thread)).toBe(oracle.isMember(id, thread));
         expect(store.isApproachWorker(id, thread)).toBe(oracle.isApproachWorker(id, thread));
@@ -143,14 +154,16 @@ async function expectAgreement(store: ResearchStore, oracle: ReplayOracle, op?: 
       }
       expect(store.approaches(id, { occupying: true })).toEqual(oracle.approaches(id, { occupying: true }));
       expect(store.underwayItems(id)).toEqual(oracle.underwayItems(id));
-      for (const decision of [undefined, "accepted", "revision_requested", "rejected"] as const) expect(store.hasSubmission(id, decision)).toBe(oracle.hasSubmission(id, decision));
-      for (const item of run.items) expect(store.readItem(id, item.id)).toEqual(item);
+      const decisions = [undefined, "accepted", "revision_requested", "rejected"] as const;
+      for (const decision of scope.changedOnly ? [decisions[(op?.pick ?? 0) % decisions.length]] : decisions) expect(store.hasSubmission(id, decision)).toBe(oracle.hasSubmission(id, decision));
+      for (const item of run.items) if (!scope.changedOnly || item.version === run.revision) expect(store.readItem(id, item.id)).toEqual(item);
       expect(store.readItem(id, "missing")).toBeUndefined();
       for (const delivery of run.deliveries) expect(store.delivery(id, delivery.id)).toEqual(delivery);
       expect(store.delivery(id, "missing")).toBeUndefined();
       expect(store.deliveries(id, { open: true })).toEqual(oracle.deliveries(id, { open: true }));
-      for (const queueEntryId of ["queue-0", "queue-1", "queue-2", "missing"]) expect(store.deliveries(id, { queueEntryId })).toEqual(oracle.deliveries(id, { queueEntryId }));
-      for (const event of run.events.slice(-3)) expect(store.findCommand(id, event.commandId)).toEqual(event);
+      const queueEntryIds = ["queue-0", "queue-1", "queue-2", "missing"];
+      for (const queueEntryId of scope.changedOnly ? [queueEntryIds[(op?.pick ?? 0) % queueEntryIds.length]!] : queueEntryIds) expect(store.deliveries(id, { queueEntryId })).toEqual(oracle.deliveries(id, { queueEntryId }));
+      for (const event of run.events.slice(scope.changedOnly ? -1 : -3)) expect(store.findCommand(id, event.commandId)).toEqual(event);
       expect(store.events(id, { limit: 4 })).toEqual(oracle.events(id, { limit: 4 }));
       expect(store.search(id, { type: "finding", limit: 5 })).toEqual(oracle.search(id, { type: "finding", limit: 5 }));
       // Search reads the columns an update rewrites, so ask for the items changed last by what they now say and by what they said before.
@@ -173,12 +186,16 @@ async function expectAgreement(store: ResearchStore, oracle: ReplayOracle, op?: 
   expect(reads.writes.commits).toBe(0);
 }
 
-/** Every page of a delta at this page size, and of a full read, is the page replay gives. */
-async function expectChangesAgree(store: ResearchStore, oracle: ReplayOracle, limit: number) {
+/**
+ * Every page of a delta at this page size is the page replay gives. With
+ * `fromStart` the full read is compared page by page too; after a step the
+ * sync of an empty store reads those pages and is compared as a whole.
+ */
+async function expectChangesAgree(store: ResearchStore, oracle: ReplayOracle, limit: number, runs: readonly (typeof RUNS)[number][] = RUNS, fromStart = true) {
   const reads = await measureSqliteWrites(() => {
-    for (const id of RUNS) {
+    for (const id of runs) {
       const revision = oracle.get(id)!.revision;
-      for (const from of [0, Math.max(0, revision - 3), revision, revision + 5]) {
+      for (const from of [...(fromStart ? [0] : []), Math.max(0, revision - 3), revision, revision + 5]) {
         let since = from;
         let after: { version: number; id: string } | undefined;
         do {
@@ -222,11 +239,11 @@ describe("research projections", () => {
       const store = new ResearchStore(db);
       const oracle = new ReplayOracle();
       createRuns(store, oracle, sameInstant);
-      await expectAgreement(store, oracle);
       for (const op of ops) {
         await apply(store, oracle, op);
-        await expectAgreement(store, oracle, op);
+        await expectAgreement(store, oracle, op, stepScope(op));
       }
+      await expectAgreement(store, oracle);
       // The journal itself is what both sides were given.
       for (const id of RUNS) expect(store.get(id)).toEqual(oracle.get(id));
     }), { numRuns: 25 });
@@ -241,15 +258,21 @@ describe("research projections", () => {
       const held = new Map(RUNS.map((id) => [id, emptyResearchRunStore(id)]));
       for (const op of ops) {
         await apply(store, oracle, op);
-        await expectChangesAgree(store, oracle, op.limit);
-        for (const id of RUNS) {
-          const run = oracle.get(id)!;
-          // An empty store reads the whole run; the held one syncs after some steps and not others, so its delta spans one change or many.
-          expectStoreHoldsRun(sync(store, emptyResearchRunStore(id), op.limit), run);
-          if (!op.sync) continue;
-          held.set(id, sync(store, held.get(id)!, op.limit));
-          expectStoreHoldsRun(held.get(id)!, run);
-        }
+        // After a step, the run it changed. The other run is read at the end, by then many steps behind.
+        const id = RUNS[op.run]!;
+        const run = oracle.get(id)!;
+        await expectChangesAgree(store, oracle, op.limit, [id], false);
+        // An empty store reads the whole run. The held one syncs after some steps and not others, so its delta spans one change or many.
+        if (!op.sync) { expectStoreHoldsRun(sync(store, emptyResearchRunStore(id), op.limit), run); continue; }
+        held.set(id, sync(store, held.get(id)!, op.limit));
+        expectStoreHoldsRun(held.get(id)!, run);
+      }
+      const limit = ops.at(-1)!.limit;
+      await expectChangesAgree(store, oracle, limit);
+      for (const id of RUNS) {
+        const run = oracle.get(id)!;
+        expectStoreHoldsRun(sync(store, emptyResearchRunStore(id), limit), run);
+        expectStoreHoldsRun(sync(store, held.get(id)!, limit), run);
       }
     }), { numRuns: 25 });
   });
