@@ -10,6 +10,7 @@ import {
   resetArchiveGroupDialogScroll,
 } from "./fixtures/archive-group-dialog-layout-oracle";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { sizeWindowAtZoom, type WindowZoomSize } from "./fixtures/window-zoom";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
@@ -80,16 +81,7 @@ test("keeps the archive group confirmation usable at every window size and zoom"
       }
     },
   });
-  const sizeWindow = async (size: { width: number; height: number; zoom: number }) => {
-    await app.electronApp.evaluate(({ BrowserWindow }, next) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      if (!window) throw new Error("Expected the PwrAgent window.");
-      window.setMinimumSize(0, 0);
-      window.setContentSize(next.width, next.height);
-      window.webContents.setZoomFactor(next.zoom / 100);
-    }, size);
-    return settledViewport(app.window, { width: size.width * 100 / size.zoom, height: size.height * 100 / size.zoom });
-  };
+  const sizeWindow = (size: WindowZoomSize) => sizeWindowAtZoom(app.electronApp, app.window, size);
   try {
     const dialog = app.window.getByRole("dialog", { name: /^Archive \d+ Threads\?$/ });
     for (const group of GROUPS) {
@@ -141,27 +133,3 @@ async function revealSidebarRow(window: Page, title: string): Promise<void> {
   }).toPass({ timeout: 30_000 });
 }
 
-/**
- * Waits for the resize and zoom to reach the renderer: the CSS viewport is
- * within a pixel of the expected size, rounded either way. A window manager
- * may adjust a requested size, and the rules measure the real viewport, so
- * after 50 frames a viewport that holds still is accepted as it is.
- */
-async function settledViewport(
-  window: Page,
-  expected: { width: number; height: number },
-): Promise<{ width: number; height: number }> {
-  const read = () => window.evaluate(() => new Promise<{ width: number; height: number }>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve({ width: innerWidth, height: innerHeight })));
-  }));
-  let observed = await read();
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (Math.abs(observed.width - expected.width) <= 1.5 && Math.abs(observed.height - expected.height) <= 1.5) {
-      return observed;
-    }
-    observed = await read();
-  }
-  const steady = await read();
-  if (steady.width === observed.width && steady.height === observed.height) return steady;
-  throw new Error(`The viewport kept changing, last ${steady.width}x${steady.height}; expected about ${Math.round(expected.width)}x${Math.round(expected.height)}.`);
-}
