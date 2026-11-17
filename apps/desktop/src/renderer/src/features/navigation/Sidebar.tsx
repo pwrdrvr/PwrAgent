@@ -2079,9 +2079,9 @@ export function Sidebar(props: SidebarProps) {
     void revealHoverStableSnapshot(() => props.onMarkThreadUnread?.(thread));
   };
 
-  const markReadFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const markReadFromContextMenu = (threads: NavigationThreadSummary[]): void => {
     setContextMenu(undefined);
-    void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
+    void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.(threads));
   };
 
   const removeRemotePinsFromContextMenu = (
@@ -2574,6 +2574,10 @@ export function Sidebar(props: SidebarProps) {
   const threadCanRename = (thread: NavigationThreadSummary): boolean =>
     Boolean(props.onRenameThread)
     && threadSupportsRename(thread, threadBackends(thread), Boolean(federationTarget));
+  const threadCanMarkRead = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onMarkThreadsSeen)
+    && thread.inbox.inInbox
+    && threadCanRouteRemoteCapability(thread, "thread_navigation");
 
   /**
    * Rename in place: in the thread's sidebar row when the list shows one,
@@ -2692,7 +2696,7 @@ export function Sidebar(props: SidebarProps) {
         break;
       case "threads.toggle_unread":
         if (single && thread.inbox.inInbox) {
-          handled = Boolean(props.onMarkThreadsSeen) && !(thread.federation && !federationTarget);
+          handled = threadCanMarkRead(thread);
           if (handled) void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
         } else if (single) {
           handled = Boolean(props.onMarkThreadUnread)
@@ -2802,9 +2806,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanMarkRead = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
-      !contextMenuIsMainWindowRemoteRow &&
-      contextMenu.thread.inbox.inInbox &&
-      props.onMarkThreadsSeen,
+      threadCanMarkRead(contextMenu.thread),
   );
   // A transfer needs an idle Codex thread this window owns: a peer's row
   // belongs to its owner, and a native sub-agent belongs to its parent.
@@ -3252,13 +3254,16 @@ export function Sidebar(props: SidebarProps) {
   );
   const bulkArchivableThreads = contextMenuThreads.filter((thread) =>
     canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control"));
+  const bulkMarkReadableThreads = contextMenuThreads.filter(threadCanMarkRead);
+  const bulkCanMarkRead = bulkMarkReadableThreads.length > 0;
   const bulkHasPinActions =
     bulkCanPin &&
     (bulkPinnedThreads.length > 0 || bulkUnpinnedThreads.length > 0);
   const bulkHasManagementActions = Boolean(
     (bulkUnlinkableThreads.length > 0
       && (props.onUnlinkThreads || props.onSetThreadParent)) ||
-      bulkArchivableThreads.length > 0,
+      bulkArchivableThreads.length > 0 ||
+      bulkCanMarkRead,
   );
   const bulkThreadLinks = uniqueContextMenuValues(
     contextMenuThreads.map((thread) =>
@@ -3909,6 +3914,15 @@ export function Sidebar(props: SidebarProps) {
                 ) : null}
                 {bulkHasManagementActions ? (
                   <div className="thread-context-menu__section">
+                    {bulkCanMarkRead ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => markReadFromContextMenu(bulkMarkReadableThreads)}
+                      >
+                        Mark {formatThreadCount(bulkMarkReadableThreads.length)} Read
+                      </button>
+                    ) : null}
                     {bulkUnlinkableThreads.length > 0
                       && (props.onUnlinkThreads || props.onSetThreadParent) ? (
                       <button
@@ -4273,7 +4287,7 @@ export function Sidebar(props: SidebarProps) {
                         type="button"
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
                         onClick={() =>
-                          markReadFromContextMenu(contextMenu.thread)
+                          markReadFromContextMenu([contextMenu.thread])
                         }
                       >
                         <span>Mark Read</span>

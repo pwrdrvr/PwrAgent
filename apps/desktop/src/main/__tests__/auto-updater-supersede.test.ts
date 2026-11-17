@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     autoDownload: false,
     autoInstallOnAppQuit: false,
     checkForUpdates: vi.fn(),
+    downloadUpdate: vi.fn(),
     currentVersion: { version: "1.0.0" },
     logger: undefined as unknown,
     on: (event: string, handler: Handler) => updaterEvents.on(event, handler),
@@ -86,6 +87,9 @@ vi.mock("electron-updater", () => ({
     RpmUpdater: class {},
     PacmanUpdater: class {},
     AppImageUpdater: class {},
+    CancellationToken: class {
+      cancel = vi.fn();
+    },
   },
 }));
 vi.mock("../shell/linux-package-updater", () => ({
@@ -221,6 +225,7 @@ beforeEach(() => {
   mocks.send.mockReset();
   mocks.deferAutomaticChecks = false;
   mocks.autoUpdater.checkForUpdates.mockReset();
+  mocks.autoUpdater.downloadUpdate.mockReset();
   mocks.autoUpdater.quitAndInstall.mockReset();
   mocks.autoUpdater.autoInstallOnAppQuit = false;
   mocks.autoUpdater.currentVersion = { version: "1.0.0" };
@@ -236,6 +241,77 @@ afterEach(() => {
 });
 
 describe("a newer release replaces a downloaded update", () => {
+  async function offeredOnly() {
+    mocks.autoUpdater.currentVersion = { version: "1.4.7" };
+    feed("1.4.8");
+    mocks.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocks.updaterEvents.emit("update-available", { version: "1.4.8" });
+      return { updateInfo: { version: "1.4.8" } };
+    });
+    const updater = await import("../shell/auto-updater");
+    updater.initAutoUpdater();
+    await vi.waitFor(() => expect(updater.readAppUpdateStatus()).toMatchObject({ status: "available", version: "1.4.8" }));
+    return updater;
+  }
+
+  it("explicit download joins retries and checks, and becomes ready only after verified staging", async () => {
+    const updater = await offeredOnly();
+    const pending = deferred();
+    mocks.autoUpdater.downloadUpdate.mockReturnValue(pending.promise);
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.9" })).resolves.toMatchObject({ status: "error" });
+    expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    for (let retry = 0; retry < 3; retry++) {
+      await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "downloading", version: "1.4.8" });
+      await updater.checkForAppUpdatesNow("manual");
+    }
+    expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalledOnce();
+    expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+    await expect(updater.installDownloadedAppUpdate()).resolves.toMatchObject({ status: "error" });
+    mocks.updaterEvents.emit("update-downloaded", { version: "1.4.8" });
+    pending.resolve([]);
+    await vi.waitFor(() => expect(updater.readAppUpdateStatus()).toMatchObject({ status: "downloaded", version: "1.4.8" }));
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "downloaded", version: "1.4.8" });
+    expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("explicit cancellation binds the version and retries with a fresh SDK token after settlement", async () => {
+    const updater = await offeredOnly();
+    const pending = deferred();
+    mocks.autoUpdater.downloadUpdate.mockReturnValue(pending.promise);
+    await updater.downloadAppUpdate({ expectedVersion: "1.4.8" });
+    const firstToken = mocks.autoUpdater.downloadUpdate.mock.calls[0]![0] as { cancel: () => void };
+    expect(updater.cancelAppUpdateDownload("1.4.9")).toEqual({ canceled: false });
+    expect(firstToken.cancel).not.toHaveBeenCalled();
+    expect(updater.cancelAppUpdateDownload("1.4.8")).toEqual({ canceled: true });
+    expect(firstToken.cancel).toHaveBeenCalledOnce();
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "error" });
+    pending.reject(new Error("Cancelled"));
+    await vi.waitFor(() => expect(updater.readAppUpdateStatus()).toMatchObject({ status: "canceled" }));
+    const retry = deferred();
+    mocks.autoUpdater.downloadUpdate.mockReturnValue(retry.promise);
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "downloading" });
+    expect(mocks.autoUpdater.downloadUpdate.mock.calls[1]![0]).not.toBe(firstToken);
+    retry.reject(new Error("network unavailable"));
+    await vi.waitFor(() => expect(updater.readAppUpdateStatus()).toMatchObject({ status: "error" }));
+  });
+
+  it("cannot reuse an offer after another check or while shutdown owns it", async () => {
+    const updater = await offeredOnly();
+    const release = updater.reserveAppUpdateQuit();
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "error" });
+    release();
+    feed("1.4.9");
+    const check = deferred();
+    mocks.autoUpdater.checkForUpdates.mockReturnValueOnce(check.promise);
+    const checking = updater.checkForAppUpdatesNow("manual");
+    await vi.waitFor(() => expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2));
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "error" });
+    check.resolve({ updateInfo: { version: "1.4.9" } });
+    await checking;
+    await expect(updater.downloadAppUpdate({ expectedVersion: "1.4.8" })).resolves.toMatchObject({ status: "error" });
+    expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+  });
+
   it("keeps the downloaded update when the feed has nothing newer", async () => {
     const updater = await bootWithDownloaded();
     fetchMock.mockClear();

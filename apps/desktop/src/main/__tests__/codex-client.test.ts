@@ -7554,7 +7554,7 @@ describe("CodexAppServerClient", () => {
         id: "item-image-2",
         role: "user",
         text: "",
-        createdAt: 1_763_500_150_000,
+        createdAt: undefined,
         parts: [
           {
             type: "image",
@@ -7586,7 +7586,7 @@ describe("CodexAppServerClient", () => {
         id: "item-image-2",
         role: "user",
         text: "",
-        createdAt: 1_763_500_150_000,
+        createdAt: undefined,
         parts: [
           {
             type: "image",
@@ -8995,14 +8995,13 @@ describe("CodexAppServerClient", () => {
         id: "visible-review-steer",
         role: "user",
         text: "Also check the desktop renderer path.",
-        createdAt: 1_763_509_850_000,
+        createdAt: undefined,
         turn,
       },
       {
         type: "review",
         id: "exited-review",
         review: reviewOutput.overall_explanation,
-        createdAt: 1_763_509_850_000,
         output: reviewOutput,
         turn,
       },

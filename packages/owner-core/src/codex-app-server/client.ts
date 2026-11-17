@@ -3285,8 +3285,7 @@ function extractReviewEntryFromItem(
   const { event, item: reviewItem, parent } = reviewEvent;
   const createdAt =
     timestamps.itemCreatedAt ??
-    (event === "exitedreviewmode" ? turn?.completedAt : undefined) ??
-    timestamps.turnCreatedAt;
+    (event === "exitedreviewmode" ? turn?.completedAt : timestamps.turnCreatedAt);
   const reviewOutput = normalizeReviewOutput(reviewItem);
   const review =
     pickRawString(reviewItem, ["review", "text"]) ??
@@ -5438,11 +5437,12 @@ function extractThreadEntries(
       }
     };
 
-    for (const item of rawItems) {
+    for (const [itemIndex, item] of rawItems.entries()) {
       const itemCreatedAt = timestampFromRecord(item);
       const itemType = pickString(item, ["type"]);
       const role = normalizeConversationRole(itemType);
       if (role) {
+        const isOpeningPrompt = role === "user" && itemIndex === 0;
         // Only a message that renders ends the activity group. Models that
         // answer each tool call with an empty assistant message would
         // otherwise split their exploration into one activity per call.
@@ -5455,14 +5455,14 @@ function extractThreadEntries(
         }
         flushActivityItems();
         const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
-        // Turn start is a prompt boundary, not the send time of every
-        // assistant message in a potentially hours-long turn. Leave unknown
-        // item times absent; the renderer can retain times observed live.
+        // Turn start dates only the opening prompt. Later steers and
+        // assistant messages may arrive hours into the same turn. Leave
+        // unknown item times absent; the renderer can retain observed times.
         const messageCreatedAt =
           itemCreatedAt ??
           (role === "assistant"
             ? phase === "final" ? turnMetadata?.completedAt : undefined
-            : createdAt);
+            : isOpeningPrompt ? createdAt : undefined);
         entries.push({
           type: "message",
           id:
@@ -5553,7 +5553,7 @@ function extractThreadEntries(
 
     flushActivityItems();
     attachCustomToolOutputImagesToTurn({
-      createdAt: turnMetadata?.completedAt ?? createdAt,
+      createdAt: turnMetadata?.completedAt,
       entries,
       imageParts: assistantImageParts,
       startIndex: turnStartIndex,

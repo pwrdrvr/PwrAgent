@@ -451,6 +451,7 @@ import {
   isPwrAgentAppDynamicToolCall,
 } from "../agent-tools/pwragent-app-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
+import { authorizeAppManagement } from "../agent-tools/app-management-authorization";
 import {
   handlePwrAgentThreadDynamicToolCall,
   isPwrAgentThreadDynamicToolCall,
@@ -1048,6 +1049,8 @@ export class DesktopBackendRegistry {
   private readonly restartContinuationStore?: RestartContinuationStoreLike;
   /** Restart continuations and saved queued messages with a durable row, by queue entry id. */
   private readonly durableRestartContinuations = new Map<string, StoredRestartContinuation>();
+  private readonly quietRestartCheckpoint = new Map<string, StoredRestartContinuation>();
+  private appRestartVerification?: StoredRestartContinuation;
   /** See `restart-continuation-gate.ts`. */
   private restartGate: RestartGateState = OPEN_RESTART_GATE;
   private beforeQuietRestartGate?: RestartGateState;
@@ -1072,6 +1075,11 @@ export class DesktopBackendRegistry {
     (event: AgentEvent) => void | Promise<void>
   >();
   private latestCodexConfigWarning?: AgentEvent;
+  /** Error-boundary ownership, indexed by raw thread/turn identity for token delivery. */
+  private readonly streamNoticeOwners = new Map<
+    string,
+    Map<string, NonNullable<AgentEvent["errorNoticeContext"]>>
+  >();
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   private readonly fileChangeApprovalContexts = new Map<
@@ -1894,6 +1902,7 @@ export class DesktopBackendRegistry {
       assertThreadOwnership: (...args: Parameters<typeof this.assertThreadOwnership>) => this.assertThreadOwnership(...args),
       attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
       authorizeAgentToolMcpCall: (...args: Parameters<typeof this.authorizeAgentToolMcpCall>) => this.authorizeAgentToolMcpCall(...args),
+      canManagePwrAgent: (...args: Parameters<typeof this.canManagePwrAgent>) => this.canManagePwrAgent(...args),
       get automationInspectionHandler() { return current().automationInspectionHandler; },
       beginStartingTurnOrigin: (...args: Parameters<typeof this.beginStartingTurnOrigin>) => this.beginStartingTurnOrigin(...args),
       bindStartingTurnOrigin: (...args: Parameters<typeof this.bindStartingTurnOrigin>) => this.bindStartingTurnOrigin(...args),
@@ -2541,6 +2550,66 @@ export class DesktopBackendRegistry {
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
+  }
+
+  private readonly appManagementCallSources = new WeakMap<object, string>();
+
+  async canManagePwrAgent(context: import("@pwragent/shared").PwrAgentAppManagementContext, discovery = false, acceptedOperation = false): Promise<boolean> {
+    let sourceKey: string | undefined;
+    const allowed = await authorizeAppManagement({
+      allowCompleted: acceptedOperation && this.appManagementCallSources.has(context),
+      isActive: (caller) => Boolean(caller.backend && caller.threadId && caller.turnId
+        && this.isLiveDynamicToolCall(caller.backend, { threadId: caller.threadId, turnId: caller.turnId })),
+      isToolAllowed: () => !localAgentToolRefusal("manage_pwragent"),
+      isAgent: async (caller) => Boolean(caller.backend && caller.threadId
+        && !(caller.backend === "codex" && this.changingCodexAgentThreadIds.has(caller.threadId))
+        && (await this.overlayStore.getThreadOverlayState({ backend: caller.backend, threadId: caller.threadId }))?.agent),
+      readOrigin: async (caller) => {
+        if (!caller.backend || !caller.threadId) return undefined;
+        const origin = await this.readTurnCausalMessagingOrigin({ backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId })
+          ?? this.findStartingTurnOrigin({ backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId })?.origin;
+        sourceKey = JSON.stringify(origin?.causalMessagingSource);
+        const bound = this.appManagementCallSources.get(context);
+        return bound && bound !== sourceKey ? undefined : origin;
+      },
+      authorizeActor: async (caller, origin) => Boolean(caller.backend && caller.threadId && this.messagingAgentToolService?.authorizeRetainedTool
+        && (await this.messagingAgentToolService.authorizeRetainedTool({ backend: caller.backend, threadId: caller.threadId,
+          turnId: caller.turnId, causalMessagingSource: origin.causalMessagingSource }, {
+          backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId, category: "app_management", tool: "manage_pwragent",
+        })).allowed),
+    }, context, discovery);
+    if (allowed && sourceKey && !discovery) this.appManagementCallSources.set(context, sourceKey);
+    return allowed;
+  }
+
+  getAppManagementRuntimeId(): string { return this.runtimeInstanceId; }
+
+  async prepareAgentRestartVerification(
+    context: import("@pwragent/shared").PwrAgentAppManagementContext,
+    verification: { operationId: string; expectedVersion: string; previousRuntimeId: string },
+  ): Promise<() => void> {
+    if (!context.backend || !context.threadId || !context.turnId || !await this.canManagePwrAgent(context, false, true)) {
+      throw new Error("The restart caller is no longer authorized.");
+    }
+    const origin = await this.readTurnCausalMessagingOrigin({ backend: context.backend, threadId: context.threadId, turnId: context.turnId });
+    if (!origin?.causalMessagingSource || origin.causalMessagingAmbiguous) throw new Error("The restart caller's identity is unavailable.");
+    const entry: StoredRestartContinuation = {
+      id: `app-upgrade-verification:${verification.operationId}`, kind: "queued", backend: context.backend, threadId: context.threadId,
+      messageOrigin: { kind: "pwragent", systemReason: "app-restart", causalMessagingSource: origin.causalMessagingSource },
+      input: [{ type: "text", text: `The authorized user requested a PwrAgent restart targeting version ${verification.expectedVersion} from runtime ${verification.previousRuntimeId}. After relaunch, call manage_pwragent status again, with current authorization, and compare currentVersion and runtimeId against that exact target and previous runtime. Report the actual result to that user. If permission is missing or revoked, report that verification could not be completed. A scheduled or handed-off request was not confirmation of installation. Do not initiate another download or restart without a new user request.` }],
+      createdAt: Date.now(), queued: { origin: "scheduled" }, upgradeVerification: verification,
+    };
+    this.appRestartVerification = entry;
+    return () => { if (this.appRestartVerification === entry) this.appRestartVerification = undefined; };
+  }
+
+  private cancelUpgradeVerification(entry: StoredRestartContinuation): StoredRestartContinuation {
+    const verification = entry.upgradeVerification;
+    if (!verification || verification.cancelled) return entry;
+    return { ...entry, input: [...entry.input, { type: "text", text:
+      "The restart request was cancelled. Resume preserved work and report cancellation, not a completed upgrade." }],
+      upgradeVerification: { ...verification, cancelled: true },
+    };
   }
 
   // Federation needs the registry before it can supply routed owner bindings.
@@ -9590,13 +9659,31 @@ export class DesktopBackendRegistry {
    * and returns the running turns it will stop. Nothing is stopped yet.
    */
   beginQuietRestart(): QuietRestartTarget[] {
-    if (this.restartGate.phase !== "quieting") this.beforeQuietRestartGate = this.restartGate;
+    if (this.restartGate.phase !== "quieting") {
+      this.beforeQuietRestartGate = this.restartGate;
+      this.quietRestartCheckpoint.clear();
+    }
     this.applyRestartGate({ type: "quiet", at: Date.now() });
     return this.listQuietRestartTargets();
   }
 
-  /** Only used when the initial atomic checkpoint failed, before stopping work. */
-  cancelQuietRestart(): void {
+  /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
+  cancelQuietRestart(resumeCheckpoint = false): void {
+    if (resumeCheckpoint) {
+      const saved = [...this.quietRestartCheckpoint.values()].map((entry) => entry.kind === undefined
+        ? { ...entry, input: [{ type: "text" as const, text: "The PwrAgent restart was cancelled after quieting. Resume the preserved task, checking its current progress before repeating any action." }] }
+        : this.cancelUpgradeVerification(entry));
+      const receipts = saved.filter((entry) => entry.kind === "queued");
+      try { if (receipts.length) this.restartContinuationStore?.saveAll(this.runtimeInstanceId, receipts); }
+      catch (error) { backendRegistryLog.warn("cancelled restart receipt could not be updated", { error: String(error) }); }
+      for (const entry of saved) this.durableRestartContinuations.set(entry.id, entry);
+      this.threadTurnQueue.restoreQueued(receipts.map((entry) => restartQueuedEntry(entry)));
+      this.threadTurnQueue.restoreRestartContinuations(saved.filter((entry) => entry.kind === undefined).map((entry) => ({
+        id: entry.id, backend: entry.backend, threadId: entry.threadId, origin: "scheduled" as const,
+        input: entry.input, messageOrigin: entry.messageOrigin, createdAt: entry.createdAt,
+      })));
+    }
+    this.quietRestartCheckpoint.clear();
     const previous = this.beforeQuietRestartGate ?? OPEN_RESTART_GATE;
     this.beforeQuietRestartGate = undefined;
     this.applyRestartGate({ type: "cancel-quiet", previous: transitionRestartGate(previous, { type: "deadline", at: Date.now() }) });
@@ -9694,9 +9781,11 @@ export class DesktopBackendRegistry {
       createdAt: stoppedAt + index,
     }));
     // Messages waiting in queues live only in memory; carry them across too.
-    const queued = this.restartQueuedSnapshot();
+    const queued = [...this.restartQueuedSnapshot(), ...(this.appRestartVerification ? [this.appRestartVerification] : [])];
     try {
       const saved = store.saveAll(this.runtimeInstanceId, [...continuations, ...queued]);
+      for (const entry of saved) this.quietRestartCheckpoint.set(entry.id, entry);
+      if (this.appRestartVerification) this.quietRestartCheckpoint.set(this.appRestartVerification.id, this.appRestartVerification);
       for (const entry of queued) this.durableRestartContinuations.set(entry.id, entry);
       backendRegistryLog.info("restart continuations saved", {
         count: saved.length,
@@ -9781,7 +9870,17 @@ export class DesktopBackendRegistry {
    * batches, once providers can take a turn. Runs once; the first call wins.
    */
   beginRestartContinuationDispatch(): void {
-    if (this.restartDispatchStarted || this.restartGate.phase !== "resuming") return;
+    if (this.restartDispatchStarted) return;
+    if (this.restartGate.phase !== "resuming") {
+      // A caller can finish during quieting, leaving only queued input or
+      // its verification receipt. There is no running-turn continuation to
+      // open the gate and trigger a drain. Wait for this provider-ready call.
+      if (this.restartGate.phase === "open" && this.durableRestartContinuations.size > 0) {
+        this.restartDispatchStarted = true;
+        this.threadTurnQueue.drainAll();
+      }
+      return;
+    }
     this.restartDispatchStarted = true;
     // Every restored continuation still in a queue gets a time, settled ones
     // too: one a lock held before dispatch began still waits its turn once
@@ -9853,7 +9952,10 @@ export class DesktopBackendRegistry {
     // restored continuation keeps the row it has.
     return this.threadTurnQueue.getAllQueuedEntries()
       .filter((entry) => !entry.restartContinuation && !entry.projectHold)
-      .map((entry, position) => storedRestartQueuedEntry(entry, position));
+      .map((entry, position) => {
+        const verification = this.durableRestartContinuations.get(entry.id)?.upgradeVerification;
+        return { ...storedRestartQueuedEntry(entry, position), ...(verification ? { upgradeVerification: verification } : {}) };
+      });
   }
 
   /**
@@ -15294,6 +15396,7 @@ export class DesktopBackendRegistry {
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
+    this.streamNoticeOwners.clear();
     this.planLimits.close();
 
     for (const [key, pending] of this.pendingServerRequests) {
@@ -15750,13 +15853,15 @@ export class DesktopBackendRegistry {
       : undefined;
   }
 
-  private buildCodexParentDynamicTools(
+  private async buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
     discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
     eagerTools?: ReadonlySet<string>,
-  ): CodexDynamicToolSpec[] {
+    caller?: import("@pwragent/shared").PwrAgentAppManagementContext,
+  ): Promise<CodexDynamicToolSpec[]> {
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
+        appManagementAllowed: caller ? await this.canManagePwrAgent(caller, true) : false,
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
         federationHandler: this.federationHandler,
@@ -15798,6 +15903,7 @@ export class DesktopBackendRegistry {
       discoveryEnabled
         ? await this.resolveEagerPwrAgentTools(params.threadId)
         : undefined,
+      { backend: "codex", threadId: params.threadId },
     );
   }
 
@@ -17704,7 +17810,7 @@ export class DesktopBackendRegistry {
             };
             // A newly created director has the ordinary discovery catalog.
             // Eager director tools are a latency optimization, not authority.
-            const initialTools = this.buildCodexParentDynamicTools(
+            const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
@@ -18779,7 +18885,7 @@ export class DesktopBackendRegistry {
       }
       const tokenMiserEnabled = await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall);
       const router = new AgentToolRouter([buildPwrAgentToolSearchDefinition(
-        this.buildCodexParentDynamicTools(tokenMiserEnabled, false),
+        await this.buildCodexParentDynamicTools(tokenMiserEnabled, false, undefined, { backend, threadId: hostToolCall.threadId, turnId: hostToolCall.turnId }),
         tokenMiserEnabled ? this.tokenMiserStore : undefined,
       )]);
       return await router.handleDynamicToolCall({ backend, call: hostToolCall });
@@ -19249,6 +19355,9 @@ export class DesktopBackendRegistry {
     category: MessagingDynamicToolCategory,
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
   ): Promise<string | null> {
+    if (call.tool === "manage_pwragent" && !await this.canManagePwrAgent({ backend, threadId: call.threadId, turnId: call.turnId })) {
+      return "designated Agent and tools.instance_lifecycle";
+    }
     const service = this.messagingAgentToolService;
     const causalContext = await this.readCausalMessagingContext({ backend, ...call });
     if (!service) return isCausalMessagingContext(causalContext) ? "message.reply" : null;
@@ -21218,6 +21327,7 @@ export class DesktopBackendRegistry {
         }
       }
     }
+    event = this.withStreamNoticeRecoveryContext(event);
     this.threadUsageLedger.trackRecentThreadUsageTurn(event);
     const isLiveThreadUsage =
       event.notification.method === "thread/tokenUsage/updated";
@@ -21253,6 +21363,50 @@ export class DesktopBackendRegistry {
           this.threadUsageLedger.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
         })
       : emitted;
+  }
+
+  private withStreamNoticeRecoveryContext(event: AgentEvent): AgentEvent {
+    const { method, params } = event.notification;
+    const progress = method === "item/agentMessage/delta"
+      || method === "item/reasoning/textDelta"
+      || method === "item/reasoning/summaryTextDelta"
+      || method === "item/plan/delta";
+    const terminal = method === "turn/completed"
+      || method === "turn/failed"
+      || method === "turn/cancelled";
+    if (!progress && !terminal && method !== "error" && method !== "thread/deleted") return event;
+    const threadId = readNonEmptyString(params.threadId);
+    if (!threadId) return event;
+    const threadKey = JSON.stringify([
+      event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : null,
+      event.backend, threadId,
+    ]);
+    if (method === "thread/deleted") {
+      this.streamNoticeOwners.delete(threadKey);
+      return event;
+    }
+    const turnId = readNonEmptyString(readRecord(params)?.turnId) ?? "";
+    let turns = this.streamNoticeOwners.get(threadKey);
+    if (method === "error" && event.errorNoticeContext) {
+      if (!turns) {
+        turns = new Map();
+        this.streamNoticeOwners.set(threadKey, turns);
+      }
+      turns.set(turnId, event.errorNoticeContext);
+    } else if (progress && readNonEmptyString(readRecord(params)?.delta)) {
+      // Sparse parent viewers must see recovery on the first model delta.
+      // Resolve ownership only at the error boundary, never per streamed token.
+      const owner = turns?.get(turnId);
+      if (owner && turns) {
+        turns.delete(turnId);
+        if (turns.size === 0) this.streamNoticeOwners.delete(threadKey);
+        return { ...event, errorNoticeContext: owner };
+      }
+    } else if (terminal && turns) {
+      turns.delete(turnId);
+      if (turns.size === 0) this.streamNoticeOwners.delete(threadKey);
+    }
+    return event;
   }
 
   private async observeTurnMessageContext(delivery: TurnEventDelivery): Promise<void> {

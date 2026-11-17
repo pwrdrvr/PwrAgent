@@ -1087,9 +1087,9 @@ export function eventMatchesThreadSelection(
   if (selection.kind === "all") return true;
   // A directory set and a To-do feed belong to the owner, never to one thread.
   if (eventClass === "directory_set" || eventClass === "todo_feed") return true;
-  // Private execution threads do not appear in navigation. Failure notices
-  // name their visible owner separately, so subscribers of that owner still
-  // need the terminal event while unrelated sparse subscribers do not.
+  // Private execution threads do not appear in navigation. Notice events
+  // name their visible owner separately, so its sparse subscribers receive
+  // both the incident and model-progress recovery before the terminal event.
   const noticeOwner = event.errorNoticeContext;
   if (noticeOwner && selection.threads.some((thread) =>
     thread.backend === noticeOwner.backend

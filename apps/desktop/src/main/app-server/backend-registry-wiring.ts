@@ -917,6 +917,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
                 { id: "forge", router: new AgentToolRouter(ports.buildTaskMonitorForgeToolDefinitions(ports.resolveForgeToolPolicy())) },
               ]
             : resolveAgentToolCatalogs({
+              appManagementAllowed: true, // Per-actor discovery is checked below for each MCP request.
               appManagementHandler: ports.appManagementHandler,
               automationInspectionHandler: ports.automationInspectionHandler,
               federationHandler: ports.federationHandler,
@@ -940,7 +941,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             }, { taskMonitorRole: "all" }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
-          isToolAdvertised: isAgentToolAdvertisedLocally,
+          isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)
+            && (name !== "manage_pwragent" || await ports.canManagePwrAgent(
+              await ports.resolveAgentToolMcpCallContext(context) ?? context, true)),
           resolveToolResultReminder: (context) =>
             ports.takeAcpMonitorJobSuggestion(context),
         });

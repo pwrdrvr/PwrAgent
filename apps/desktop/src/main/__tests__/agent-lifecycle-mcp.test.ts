@@ -7,7 +7,7 @@ import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-
 import { getOwnerHostServices } from "../owner-host";
 
 it("flushes a lifecycle acknowledgement before its own MCP server shuts down", async () => {
-  const handler = createPwrAgentAppManagementHandler({ startedAt: 1 });
+  const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => true });
   const router = buildPwrAgentAppToolRouter(handler);
   const server = new AgentToolMcpServer({
     resolveCatalogs: () => [{ id: "app_management", router }],

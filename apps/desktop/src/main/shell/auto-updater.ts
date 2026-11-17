@@ -144,6 +144,12 @@ type ActiveUpdateDownload = {
 };
 
 let activeDownload: ActiveUpdateDownload | undefined;
+let offeredDownload: {
+  selection: UpdateSelectionKey;
+  version: string;
+  releaseTag: string;
+  result: NonNullable<Awaited<ReturnType<typeof autoUpdater.checkForUpdates>>>;
+} | undefined;
 // Error events may follow the rejected download promise. Keep its release
 // until a new download takes ownership of updater events.
 let lastDownloadReleaseTag: string | undefined;
@@ -950,6 +956,11 @@ async function runAppUpdateCheck(
     log.info("joining in-flight update check", { trigger });
     return updateCheckInFlight;
   }
+  if (activeDownload && (updateStatus.status !== "downloaded" || supersedingDownload || pendingSquirrelStage)) {
+    return pendingDownloadChannelsByVersion.get(activeDownload.version) === currentUpdateSelectionKey()
+      ? withDirection({ status: activeDownload.canceled ? "canceled" as const : "available" as const, version: activeDownload.version })
+      : { status: "skipped", reason: "Another track's download is in progress. Read status before checking again." };
+  }
 
   // What the catch below needs to name the slot it failed on, filled in as
   // the check learns each part. It reuses the selection the check already
@@ -1124,6 +1135,7 @@ async function runAppUpdateCheck(
         syncAutoInstallOnAppQuit(updateSelection);
       }
       let result: Awaited<ReturnType<typeof autoUpdater.checkForUpdates>>;
+      offeredDownload = undefined;
       try {
         result = await autoUpdater.checkForUpdates();
       } catch (err) {
@@ -1132,6 +1144,9 @@ async function runAppUpdateCheck(
         throw err;
       }
       adoptUpdateDownload(download, result);
+      if (result?.updateInfo?.version === selectedVersion) {
+        offeredDownload = { selection: updateSelection, version: selectedVersion, releaseTag: release.tag_name, result };
+      }
       if (result?.updateInfo?.version !== currentVersion) {
         recordPendingDownloadChannel(result?.updateInfo?.version, updateSelection);
       }
@@ -1288,9 +1303,9 @@ function adoptUpdateDownload(
  * or never started, while the click was in flight. The card has a status
  * change coming either way, so there is nothing for the caller to do about it.
  */
-export function cancelAppUpdateDownload(): AppUpdateCancelResult {
+export function cancelAppUpdateDownload(expectedVersion?: string): AppUpdateCancelResult {
   const download = activeDownload;
-  if (!download || download.canceled) {
+  if (!download || download.canceled || (expectedVersion !== undefined && download.version !== expectedVersion)) {
     return { canceled: false };
   }
   download.canceled = true;
@@ -1302,6 +1317,55 @@ export function cancelAppUpdateDownload(): AppUpdateCancelResult {
   // rejection must still read as a cancel rather than as a network failure.
   applyPendingUpdateCancel(download);
   return { canceled: true };
+}
+
+/** Start or reuse only the verified offer held by this updater's current feed. */
+export async function downloadAppUpdate(options: { expectedVersion: string }): Promise<AppUpdateStatus> {
+  const version = options.expectedVersion;
+  if (updateInstallReserved || updateCheckInFlight) {
+    return { status: "error", message: "An update check or lifecycle operation is in progress. Read status and retry." };
+  }
+  const selection = currentUpdateSelectionKey();
+  const ready = downloadedUpdateMatchesChannel(selection);
+  if (ready?.version === version && !supersedingDownload && !pendingSquirrelStage) return ready;
+  if (activeDownload) {
+    return activeDownload.version === version && pendingDownloadChannelsByVersion.get(version) === selection && !activeDownload.canceled
+      ? readAppUpdateStatus()
+      : { status: "error", message: "Another download or cancellation is in progress. Read status before retrying." };
+  }
+  if (pendingSquirrelStage) {
+    return pendingSquirrelStage.version === version && pendingSquirrelStage.selection === selection
+      ? withDirection({ status: "available" as const, version })
+      : { status: "error", message: "Another update is being staged. Read status before retrying." };
+  }
+  const offer = offeredDownload;
+  if (!offer || offer.version !== version || offer.selection !== selection) {
+    return { status: "error", message: "The requested version is not the checked offer for the selected track. Check updates again." };
+  }
+  if (!(updateStatus.status === "available" || updateStatus.status === "canceled" || updateStatus.status === "error")) {
+    return { status: "error", message: "The requested download is not ready to start. Read status and retry." };
+  }
+  const token = new electronUpdater.CancellationToken();
+  const download: ActiveUpdateDownload = { version, releaseTag: offer.releaseTag, cancel: () => token.cancel(), canceled: false };
+  activeDownload = download;
+  lastDownloadReleaseTag = offer.releaseTag;
+  canceledReleaseVersions.delete(version);
+  recordPendingDownloadChannel(version, selection);
+  if (heldDownloadedUpdate && heldDownloadedUpdate.version !== version) {
+    supersedingDownload = heldDownloadedUpdate;
+    syncAutoInstallOnAppQuit(selection);
+  }
+  setUpdateStatus(withDirection({ status: "downloading" as const, version, percent: 0 }));
+  try {
+    // electron-updater retains provider metadata and performs its existing package verification.
+    const downloadPromise = autoUpdater.downloadUpdate(token);
+    adoptUpdateDownload(download, { ...offer.result, cancellationToken: token, downloadPromise });
+  } catch (error) {
+    releaseActiveDownload(download);
+    abandonSupersede("download failed to start");
+    setUpdateStatusUnlessDownloaded({ status: "error", message: error instanceof Error ? error.message : String(error) });
+  }
+  return readAppUpdateStatus();
 }
 
 function startPeriodicUpdateChecks(): void {
@@ -2074,12 +2138,14 @@ async function runDownloadedAppUpdateInstall(options?: {
     let updateHandoffPromise: Promise<void> | undefined;
     let installFailure: Extract<AppUpdateInstallResult, { status: "error" }> | undefined;
     const linuxUpdater = linuxPackageUpdater();
+    let packageAuthorized = false;
     const beforeQuit = (): boolean => {
       if (!stillEligible()) {
         installFailure = { status: "error", message: "The downloaded update or selected channel changed. Restart cancelled." };
         return false;
       }
       if (!linuxUpdater) return true;
+      if (packageAuthorized) return true;
       let installError: Error | undefined;
       const captureError = (error: Error): void => { installError = error; };
       linuxUpdater.once("error", captureError);
@@ -2095,6 +2161,7 @@ async function runDownloadedAppUpdateInstall(options?: {
           message: `Installation failed or authorization was canceled: ${installError ? summarizeUpdateError(installError) : "Package installation did not complete."}`,
         }, `v${version}`);
       }
+      packageAuthorized = installed;
       return installed;
     };
     const performQuit = (): void => {

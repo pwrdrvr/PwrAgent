@@ -23,7 +23,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
   let internals: {
     tokenMiserStore?: TokenMiserStore;
     tokenMiserService?: TokenMiserService;
-    buildCodexParentDynamicTools(tokenMiserEnabled: boolean, discoveryEnabled: boolean): DynamicToolSpec[];
+    buildCodexParentDynamicTools(tokenMiserEnabled: boolean, discoveryEnabled: boolean): Promise<DynamicToolSpec[]>;
     performServerRequest(backend: "codex", request: AppServerPendingRequestNotification, signal?: AbortSignal): Promise<DynamicToolCallResponse>;
     isTokenMiserDynamicToolCallEnabled(): Promise<boolean>;
     dynamicToolPermissionDenied(): string | null;
@@ -74,7 +74,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
     const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall").mockResolvedValue({
       success: true, contentItems: [],
     });
-    const specs = internals.buildCodexParentDynamicTools(tokenMiser, discovery);
+    const specs = await internals.buildCodexParentDynamicTools(tokenMiser, discovery);
     expect(specs.length).toBeGreaterThan(0);
     for (const spec of specs) {
       expect(spec.type).toBe("namespace");
@@ -94,7 +94,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
   it("checks the active turn for every advertised tool before dispatch", async () => {
     registryModules(registry).turnState.registeredTurnKeys().forEach(key => registryModules(registry).turnState.unregisterTurn(key));
     const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall");
-    for (const spec of internals.buildCodexParentDynamicTools(true, true)) {
+    for (const spec of await internals.buildCodexParentDynamicTools(true, true)) {
       if (spec.type !== "namespace") throw new Error(`Unexpected tool spec: ${spec.type}`);
       for (const tool of spec.tools) {
         const response = await internals.performServerRequest("codex", request(spec.name, tool.name));
@@ -105,7 +105,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("allows the static guide without instance-management permission while requiring a live turn", async () => {
+  it("allows the static guide without lifecycle authority while requiring a live turn", async () => {
     const checkDynamicToolPermission = vi.fn(() => ({ allowed: false, permission: "tools.instance_management" }));
     registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
 
@@ -116,10 +116,8 @@ describe("Codex catalog dynamic tool dispatch", () => {
 
     const management = await internals.performServerRequest("codex", request("pwragent", "manage_pwragent"));
     expect(management.success).toBe(false);
-    expect(JSON.stringify(management)).toContain("tools.instance_management");
-    expect(checkDynamicToolPermission).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      category: "app_management", tool: "manage_pwragent",
-    }));
+    expect(JSON.stringify(management)).toContain("tools.instance_lifecycle");
+    expect(checkDynamicToolPermission).not.toHaveBeenCalled();
 
     checkDynamicToolPermission.mockClear();
     registryModules(registry).turnState.registeredTurnKeys().forEach(key => registryModules(registry).turnState.unregisterTurn(key));
@@ -153,9 +151,19 @@ describe("Codex catalog dynamic tool dispatch", () => {
     ["pwragent_app", "manage_pwragent"],
     ["pwragent_messaging", "get_current_messaging_surface"],
   ])("keeps persisted %s definitions dispatchable", async (namespace, tool) => {
+    if (tool === "manage_pwragent") vi.spyOn(registry, "canManagePwrAgent").mockResolvedValue(true);
     const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall").mockResolvedValue({ success: true, contentItems: [] });
     expect((await internals.performServerRequest("codex", request(namespace, tool))).success).toBe(true);
     expect(dispatch).toHaveBeenCalledWith({ backend: "codex", call: expect.objectContaining({ namespace: "pwragent", tool }) });
+  });
+
+  it.each(["pwragent", "pwragent_app"])("retains lifecycle authority checks through the %s namespace", async (namespace) => {
+    vi.spyOn(registry, "canManagePwrAgent").mockResolvedValue(false);
+    const dispatch = vi.spyOn(AgentToolRouter.prototype, "handleDynamicToolCall");
+    const response = await internals.performServerRequest("codex", request(namespace, "manage_pwragent"));
+    expect(response.success).toBe(false);
+    expect(JSON.stringify(response)).toContain("tools.instance_lifecycle");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each(["inject_progress", "complete_monitoring"])("routes the monitor role's %s definition", async (tool) => {

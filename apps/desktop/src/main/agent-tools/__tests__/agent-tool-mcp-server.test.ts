@@ -31,6 +31,30 @@ describe("AgentToolMcpServer", () => {
     await Promise.all(openServers.splice(0).map(async (server) => server.close()));
   });
 
+  it.each(["codex", "claude", "acp:grok"] as const)("rechecks asynchronous lifecycle discovery and direct calls for %s", async (backend) => {
+    let allowed = false;
+    const dispatch = vi.fn(async () => agentToolSuccess({ status: "ok" }));
+    const router = new AgentToolRouter([{ namespace: "pwragent", name: "manage_pwragent",
+      description: "Manage the local instance.", inputSchema: { type: "object" }, dispatch }]);
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [{ id: "app_management", router }],
+      resolveCallContext: () => ({ backend, threadId: "agent", turnId: "turn" }),
+      isToolAdvertised: async () => allowed,
+      authorizeToolCall: async () => allowed ? undefined : "tools.instance_lifecycle",
+    });
+    openServers.push(server);
+    const client = await connectClient(await server.registerClient({ backend, threadId: "agent" }));
+    try {
+      // Model: visibility and execution follow the current grant, never the initial catalog.
+      for (const grant of [false, true, false]) {
+        allowed = grant;
+        expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(grant ? ["manage_pwragent"] : []);
+        expect((await client.callTool({ name: "manage_pwragent", arguments: {} })).isError === true).toBe(!grant);
+      }
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally { await client.close(); }
+  });
+
   it("lists and dispatches only the catalog permitted for the bound worker", async () => {
     const mutation = vi.fn(async () => agentToolSuccess({ changed: true }));
     const parent = new AgentToolRouter([{ namespace: "pwragent", name: "reset_fixture", description: "Reset", inputSchema: { type: "object" }, dispatch: mutation }]);

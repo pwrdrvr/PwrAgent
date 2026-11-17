@@ -57,6 +57,8 @@ export type RequestQuitOptions = {
   source: QuitRequestSource;
   /** Use bounded checkpoint-and-continue after the normal quit decision. */
   quietRestart?: boolean;
+  /** Trusted app-management authorization; never a renderer or model-supplied flag. */
+  authorizeAgent?: () => Promise<boolean>;
 };
 
 export type QuitBlockerSnapshot = {
@@ -102,6 +104,7 @@ export type QuitManagerDependencies = {
    * A failed initial checkpoint refuses the quit and restores admission.
    */
   quietForRestart?: () => Promise<void>;
+  resumeAfterCancelledQuietRestart?: () => void;
   /** Hold new automation launches until quitting proceeds or the prompt closes. */
   quiesceAutomationDispatch?: () => () => Promise<void> | void;
   /**
@@ -182,9 +185,15 @@ export function createQuitManager(
     const quietQuit = (): Promise<boolean> => {
       pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
       const resumeAutomationDispatch = dependencies.quiesceAutomationDispatch?.();
+      let quietPrepared = false;
       const pending = Promise.resolve().then(async () => {
+        if (options.authorizeAgent && !await options.authorizeAgent()) return false;
         if (options.beforeQuit && !options.beforeQuit()) return false;
-        await dependencies.quietForRestart?.();
+        if (options.quietRestart) {
+          await dependencies.quietForRestart?.();
+          quietPrepared = true;
+        }
+        if (options.authorizeAgent && (!await options.authorizeAgent() || (options.beforeQuit && !options.beforeQuit()))) return false;
         dependencies.commitShutdown?.();
         committedPerformQuit = pendingPerformQuit;
         quitAllowed = true;
@@ -194,6 +203,7 @@ export function createQuitManager(
         promptPromise = undefined;
         pendingPerformQuit = undefined;
         if (!quitAllowed) {
+          if (quietPrepared) dependencies.resumeAfterCancelledQuietRestart?.();
           dependencies.cancelShutdown?.();
           resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         }
@@ -201,6 +211,10 @@ export function createQuitManager(
       promptPromise = pending;
       return pending;
     };
+
+    // The authenticated owner already chose this operation in chat. Claim
+    // quit ownership before awaiting authorization, and retain quiet/recheck semantics.
+    if (options.authorizeAgent) return await quietQuit();
 
     const snapshot = dependencies.getQuitBlockers();
     const federationPeerCount = dependencies.getFederationPeerCount?.() ?? 0;
@@ -781,6 +795,7 @@ export const appQuitManager = createQuitManager({
       log: quitLog,
     });
   },
+  resumeAfterCancelledQuietRestart: () => getDesktopBackendRegistry().cancelQuietRestart(true),
   // Map/store reads only, no peer round trip. Names remembered from peer
   // snapshots keep remote blockers readable without delaying shutdown.
   resolveThreadTitles: resolveCurrentQuitBlockerTitles,

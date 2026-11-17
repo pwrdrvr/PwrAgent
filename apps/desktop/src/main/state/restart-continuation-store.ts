@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import {
   isAppServerBackendKind,
+  isPwrAgentUpdateVersion,
   type AppServerBackendKind,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
@@ -43,6 +44,7 @@ export type StoredRestartContinuation = {
   /** Absent: the thread's continuation. `queued`: a message from its queue. */
   kind?: "queued";
   queued?: StoredRestartQueuedFields;
+  upgradeVerification?: { operationId: string; expectedVersion: string; previousRuntimeId: string; cancelled?: true };
 };
 
 type Row = {
@@ -65,6 +67,15 @@ function parseContinuation(row: Row): StoredRestartContinuation | undefined {
       || (value.queued !== undefined && (typeof value.queued !== "object" || value.queued === null))
     ) {
       return undefined;
+    }
+    const verification = value.upgradeVerification;
+    if (verification !== undefined && (typeof verification !== "object" || verification === null
+      || typeof verification.operationId !== "string" || !verification.operationId || verification.operationId.length > 128
+      || !isPwrAgentUpdateVersion(verification.expectedVersion)
+      || typeof verification.previousRuntimeId !== "string" || !verification.previousRuntimeId || verification.previousRuntimeId.length > 128
+      || (verification.cancelled !== undefined && verification.cancelled !== true))) {
+      // Invalid optional metadata must never discard accepted input.
+      delete value.upgradeVerification;
     }
     return value as StoredRestartContinuation;
   } catch {

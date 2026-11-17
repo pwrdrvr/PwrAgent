@@ -2,12 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import type {
   PwrAgentAppManagementData,
+  PwrAgentAppManagementContext,
   PwrAgentLifecycleOperation,
   PwrAgentAppRequest,
   PwrAgentAppResponse,
   PwrAgentCodexAppServerStatus,
   PwrAgentUpdateToolStatus,
 } from "@pwragent/shared";
+import { isPwrAgentUpdateVersion } from "@pwragent/shared";
 import type {
   AppUpdateCheckResult,
   AppUpdateStatus,
@@ -29,6 +31,11 @@ export type CodexAppServerDiagnostics = {
 };
 
 export type PwrAgentAppManagementServiceOptions = {
+  /** Re-resolves trusted Agent identity and actor permissions; absent means deny. */
+  authorize?: (context: PwrAgentAppManagementContext, phase?: "accepted") => Promise<boolean>;
+  prepareRestart?: (context: PwrAgentAppManagementContext, verification: {
+    operationId: string; expectedVersion: string; previousRuntimeId: string;
+  }) => Promise<() => void>;
   now?: () => number;
   readCodexAppServerDiagnostics?: () => Promise<CodexAppServerDiagnostics | undefined>;
   requestRestart?: (performRestart: () => void) => Promise<boolean>;
@@ -49,6 +56,9 @@ export function createPwrAgentAppManagementHandler(
     .digest("hex");
   const activeOperation = (): boolean => operation !== undefined
     && operation.status !== "cancelled" && operation.status !== "failed";
+  const authorized = async (request: PwrAgentAppRequest, phase?: "accepted"): Promise<boolean> => {
+    try { return await options.authorize?.(request.context, phase) === true; } catch { return false; }
+  };
   const data = (
     action: PwrAgentAppManagementData["action"],
     status: AppUpdateStatus,
@@ -64,11 +74,46 @@ export function createPwrAgentAppManagementHandler(
       return { ok: false, error: { code: "unsupported_operation", message: "Unsupported PwrAgent app management operation." } };
     }
     const action = request.args.action;
+    if (!await authorized(request)) {
+      return { ok: false, error: { code: "forbidden", message: "App management requires a designated Agent and a currently authorized lifecycle-management actor." } };
+    }
+    const expectedVersion = request.args.expectedVersion;
+    if ((expectedVersion !== undefined && !isPwrAgentUpdateVersion(expectedVersion))
+      || (request.args.operationId !== undefined && (typeof request.args.operationId !== "string" || !request.args.operationId || request.args.operationId.length > 128))) {
+      return { ok: false, error: { code: "invalid_arguments", message: "Supply an exact version and a valid operation identity." } };
+    }
     try {
       const status = readAppUpdateStatus();
       if (action !== "status" && request.args.expectedStateToken !== undefined
         && request.args.expectedStateToken !== tokenFor(status)) {
         return { ok: false, error: { code: "invalid_arguments", message: "PwrAgent owner or update state changed. Read status and request the intended operation again." } };
+      }
+      if (action === "cancel") {
+        if (request.args.operationId) {
+          if (!operation || operation.id !== request.args.operationId || ["preparing", "handed_off"].includes(operation.status)) {
+            return { ok: false, error: { code: "forbidden", message: "That operation is absent or already preparing shutdown. It cannot be cancelled by this request." } };
+          }
+          operation.status = "cancelled";
+          operation.message = "Cancelled by an authorized user request.";
+          return { ok: true, data: data(action, status, { status: "cancelled", message: operation.message }) };
+        }
+        if (!expectedVersion || !("version" in status) || status.version !== expectedVersion || activeOperation()) {
+          return { ok: false, error: { code: "forbidden", message: "Download cancellation requires its exact current version and no pending shutdown operation." } };
+        }
+        const updates = getOwnerHostServices().updates;
+        if (!updates.cancelDownload) return { ok: false, error: { code: "unsupported_operation", message: "Download cancellation is unavailable on this host." } };
+        const cancelled = updates.cancelDownload(expectedVersion);
+        return { ok: true, data: data(action, readAppUpdateStatus(), { status: "download_cancel_requested", cancelRequested: cancelled.canceled }) };
+      }
+      if (action === "download") {
+        if (!expectedVersion || activeOperation()) {
+          return { ok: false, error: { code: "forbidden", message: "Download requires an exact expectedVersion and no pending shutdown operation." } };
+        }
+        const updates = getOwnerHostServices().updates;
+        if (!updates.download) return { ok: false, error: { code: "unsupported_operation", message: "Explicit update downloads are unavailable on this host." } };
+        const result = await updates.download({ expectedVersion });
+        if (result.status === "error") return { ok: false, error: { code: "internal_error", message: result.message } };
+        return { ok: true, data: data(action, readAppUpdateStatus(), { status: "download_requested", download: toToolUpdateStatus(result) }) };
       }
       if (action === "upgrade_check") {
         if (activeOperation()) {
@@ -78,6 +123,13 @@ export function createPwrAgentAppManagementHandler(
         return { ok: true, data: data(action, readAppUpdateStatus(), { status: "check_completed", check: toToolUpdateStatus(check) }) };
       }
       if (action === "restart" || action === "stop") {
+        const targetVersion = status.status === "downloaded" && action === "restart" ? status.version : options.version?.() ?? app.getVersion();
+        if (action === "restart" && expectedVersion && expectedVersion !== targetVersion) {
+          return { ok: false, error: { code: "forbidden", message: "The exact requested version is not ready to run. Check/download that version and wait for downloaded status." } };
+        }
+        if (activeOperation() && expectedVersion && operation?.expectedVersion !== expectedVersion) {
+          return { ok: false, error: { code: "forbidden", message: "Another lifecycle operation targets a different version. Read status for its outcome." } };
+        }
         if (activeOperation() && operation?.action !== action) {
           return { ok: false, error: { code: "forbidden", message: "Another lifecycle request is already in progress. Read status for its outcome." } };
         }
@@ -90,57 +142,86 @@ export function createPwrAgentAppManagementHandler(
           }
           const expectedState = tokenFor(status);
           operationUpdate = status;
-          const current: PwrAgentLifecycleOperation = { id: randomUUID(), action, status: "waiting_for_response" };
+          const current: PwrAgentLifecycleOperation = { id: randomUUID(), action, status: "waiting_for_response", expectedVersion: targetVersion };
+          const cancelled = (): boolean => current.status === "cancelled";
           operation = current;
           // The acknowledgement names a scheduled request, not a completed
           // confirmation or install. No timer guesses when the caller heard it.
           void request.context.responseFlushed.then(async () => {
+            if (cancelled()) return;
+            if (!await authorized(request, "accepted")) {
+              current.status = "cancelled";
+              current.message = "Authorization changed before acknowledgement. Lifecycle request cancelled.";
+              return;
+            }
+            if (cancelled()) return;
             if (tokenFor(readAppUpdateStatus()) !== expectedState) {
               current.status = "cancelled";
               current.message = "Update state changed before acknowledgement. Read status and retry.";
               return;
             }
             current.status = "confirming";
-            let accepted: boolean;
-            if (action === "restart" && status.status === "downloaded") {
-              const install = await installDownloadedAppUpdate({
-                expectedVersion: status.version,
-                requestQuit: async (performQuit, beforeQuit) => await requestQuit({
-                  performQuit,
-                  beforeQuit: () => {
-                    const authorized = beforeQuit?.() ?? true;
-                    if (authorized) current.status = "preparing";
-                    return authorized;
-                  },
-                  quietRestart: true, source: "update-install",
-                }),
-              });
-              accepted = install.status === "restarting";
-              if (!accepted && install.status === "error") current.message = install.message;
-            } else {
-              const performQuit = action === "restart"
-                ? () => { app.relaunch(); app.quit(); }
-                : () => { app.quit(); };
-              const injected = action === "restart" ? options.requestRestart : options.requestStop;
-              const release = getOwnerHostServices().updates.reserveQuit?.();
-              accepted = false;
-              try {
-                accepted = injected ? await injected(performQuit) : await requestQuit({
-                  performQuit,
-                  beforeQuit: () => {
-                    const authorized = tokenFor(readAppUpdateStatus()) === expectedState;
-                    if (authorized) current.status = "preparing";
-                    return authorized;
-                  },
-                  ...(action === "restart" ? { quietRestart: true } : {}),
-                  source: "agent-tool",
+            let releaseContinuation: (() => void) | undefined;
+            const authorizeAgent = async (): Promise<boolean> => {
+              const allowed = await authorized(request, "accepted");
+              return allowed && current.status !== "cancelled";
+            };
+            try {
+              if (action === "restart") {
+                releaseContinuation = await options.prepareRestart?.(request.context, {
+                  operationId: current.id, expectedVersion: targetVersion, previousRuntimeId: options.runtimeId,
                 });
-              } finally {
-                if (!accepted) release?.();
               }
+              if (!await authorizeAgent()) {
+                current.status = "cancelled";
+                current.message = "Authorization or operation changed before preparation. Lifecycle request cancelled.";
+                return;
+              }
+              let accepted: boolean;
+              if (action === "restart" && status.status === "downloaded") {
+                const install = await installDownloadedAppUpdate({
+                  expectedVersion: status.version,
+                  requestQuit: async (performQuit, beforeQuit) => await requestQuit({
+                    performQuit,
+                    authorizeAgent,
+                    beforeQuit: () => {
+                      const authorized = beforeQuit?.() ?? true;
+                      if (authorized) current.status = "preparing";
+                      return authorized;
+                    },
+                    quietRestart: true, source: "update-install",
+                  }),
+                });
+                accepted = install.status === "restarting";
+                if (!accepted && install.status === "error") current.message = install.message;
+              } else {
+                const performQuit = action === "restart"
+                  ? () => { app.relaunch(); app.quit(); }
+                  : () => { app.quit(); };
+                const injected = action === "restart" ? options.requestRestart : options.requestStop;
+                const release = getOwnerHostServices().updates.reserveQuit?.();
+                accepted = false;
+                try {
+                  accepted = injected ? await injected(performQuit) : await requestQuit({
+                    performQuit,
+                    authorizeAgent,
+                    beforeQuit: () => {
+                      const authorized = tokenFor(readAppUpdateStatus()) === expectedState;
+                      if (authorized) current.status = "preparing";
+                      return authorized;
+                    },
+                    ...(action === "restart" ? { quietRestart: true } : {}),
+                    source: "agent-tool",
+                  });
+                } finally {
+                  if (!accepted) release?.();
+                }
+              }
+              current.status = accepted ? "handed_off" : "cancelled";
+              if (!accepted) current.message ??= "PwrAgent lifecycle request cancelled.";
+            } finally {
+              if (current.status !== "handed_off") releaseContinuation?.();
             }
-            current.status = accepted ? "handed_off" : "cancelled";
-            if (!accepted) current.message ??= "PwrAgent lifecycle request cancelled.";
           }).catch((error: unknown) => {
             current.status = "failed";
             current.message = error instanceof Error ? error.message : String(error);

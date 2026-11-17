@@ -41,7 +41,8 @@ complete scope, native typecheck command and formatting policy.
   Derive it from the composer draft store (`useThreadDraftIndicators`), not
   from `NavigationThreadSummary`.
 - Attention is a work queue: focusing a thread there must not clear its unread
-  cookie, only replying does. See "Current Product Direction" in the
+  cookie. Replying or explicitly choosing Mark Read clears it. See
+  "Current Product Direction" in the
   [repo-root `AGENTS.md`](../../AGENTS.md) for why that rule is lens-scoped
   rather than global.
 - Attention rows are ranked per turn, not per update

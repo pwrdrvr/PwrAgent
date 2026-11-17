@@ -1085,6 +1085,61 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("routes an explicit Attention read batch to each owner and retains a rejected remote mark", async () => {
+    const local: NavigationThreadSummary = {
+      id: "shared-thread", title: "Local thread", titleSource: "explicit", source: "codex",
+      executionMode: "default", linkedDirectories: [], updatedAt: 1_000, inbox: { inInbox: true },
+    };
+    // Every owner can independently have the same provider thread ID.
+    const remote = (instanceId: string, updatedAt: number): NavigationThreadSummary => ({
+      ...local, title: instanceId, updatedAt,
+      federation: { instanceLabel: instanceId, peerStatus: "connected", capabilities: ["thread_navigation"],
+        ref: { backend: "codex", threadId: local.id, target: { scope: "remote", instanceId } } },
+    });
+    const threads = [local, remote("peer-a", 2_000), remote("peer-b", 3_000)];
+    const markThreadSeen = vi.fn(async (
+      request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
+    ) => {
+      if (request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "peer-b") {
+        throw new Error("Peer disconnected before accepting the mark");
+      }
+      return { backend: request.backend ?? "codex", threadId: request.threadId,
+        seenAt: 4_000, seenUpdatedAt: request.seenUpdatedAt };
+    });
+    const desktopApi: DesktopApi = {
+      readPopulation: vi.fn(async () => ({
+        backend: "all" as const, fetchedAt: 4_000, unchanged: false, threads, directories: [],
+        inboxThreadKeys: threads.map(threadSummaryIdentityKey),
+        launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const },
+      })),
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => { expect(result.current.threads).toHaveLength(3); });
+    act(() => { result.current.setBrowseMode("attention"); });
+    await waitFor(() => {
+      expect(result.current.threads.map(threadSummaryIdentityKey).sort())
+        .toEqual(threads.map(threadSummaryIdentityKey).sort());
+    });
+
+    await act(async () => {
+      await result.current.markThreadsSeen([...threads, ...threads]);
+    });
+
+    expect(markThreadSeen).toHaveBeenCalledTimes(3);
+    for (const thread of threads) {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: thread.source, threadId: thread.id, seenUpdatedAt: thread.updatedAt,
+        ...(thread.federation ? { federationTarget: thread.federation.ref.target } : {}),
+      });
+    }
+    const unreadByOwner = new Map(result.current.threads.map((thread) =>
+      [threadSummaryIdentityKey(thread), thread.inbox.inInbox]));
+    expect(threads.map((thread) => unreadByOwner.get(threadSummaryIdentityKey(thread))))
+      .toEqual([false, false, true]);
+  });
+
   it("refreshes selected thread directory git status on demand", async () => {
     const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
     const readPopulation = vi.fn(async () => ({

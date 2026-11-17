@@ -76,7 +76,11 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
     app.startHeadlessHost().then(async services => {
       process.once("message", () => { process.disconnect(); process.emit("SIGTERM", "SIGTERM"); });
       const registry = services.registry;
-      const advertised = [...new Set([true, false].flatMap(tokenMiser => [true, false].flatMap(discovery => names(registry.buildCodexParentDynamicTools(tokenMiser, discovery)))))];
+      const advertisedNames = [];
+      for (const tokenMiser of [true, false]) for (const discovery of [true, false]) {
+        advertisedNames.push(...names(await registry.buildCodexParentDynamicTools(tokenMiser, discovery)));
+      }
+      const advertised = [...new Set(advertisedNames)];
       const responses = [];
       for (const [index, call] of ${JSON.stringify(calls)}.entries()) {
         responses.push(await registry.handleServerRequest("codex", { method: "item/tool/call", params: { threadId: "fixture-thread", turnId: "fixture-turn", requestId: "r" + index, callId: "c" + index, arguments: {}, ...call } }));
