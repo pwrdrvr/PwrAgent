@@ -939,6 +939,26 @@ describe("AutomationStore", () => {
     expect(store.getAutomation("automation-1")?.nextRunAt).toBe(30_000);
   });
 
+  it("corrects a stored next run that is later than the schedule's next occurrence", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      // Stored while the clock was a day ahead.
+      nextRunAt: 86_400_000,
+      now: 1_000,
+    });
+
+    expect(store.reconcileStartup({
+      now: 20_000,
+      nextRunAtByAutomationId: { "automation-1": 320_000 },
+    })).toMatchObject({ rescheduledAutomationCount: 1 });
+    expect(store.getAutomation("automation-1")?.nextRunAt).toBe(320_000);
+  });
+
   it("caps detailed run history per automation", () => {
     store.createAutomation({
       id: "automation-1",

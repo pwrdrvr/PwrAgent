@@ -86,9 +86,11 @@ Renderer components only create, edit, and inspect trigger records through IPC.
 When PwrAgent is closed, scheduled ticks do not fire and are not replayed on the
 next launch. Startup moves an enabled automation to its next future occurrence
 when the stored time is missing or already past. A stored time still ahead is
-kept, so a launch that missed nothing writes nothing, and a second instance on
-the profile does not move a live instance's schedule. This avoids surprising
-launch-time work after the app has been closed overnight or over a weekend.
+kept unless it is later than the schedule's next occurrence, which happens only
+after a clock or time-zone change. A launch that missed nothing therefore
+writes nothing, and a second instance on the profile does not move a live
+instance's schedule. This avoids surprising launch-time work after the app has
+been closed overnight or over a weekend.
 
 If the app stays open but the event loop wakes late, the scheduler evaluates the
 missed windows up to the current time and applies the automation's backlog
@@ -125,9 +127,10 @@ Each run records the process that created it: runtime instance ID, process ID
 and process start time, the identity of the profile runtime marker. At startup
 PwrAgent changes only the pending, queued and running runs whose owner it has
 proved dead, with the check Research runs use (`reconcileStartup` in
-`packages/sqlite-storage/src/automation-store.ts`). A run with no recorded owner, or
-an owner recorded without a start time, cannot prove a live owner and counts as
-dead. A live owner's runs and every terminal run are left as they are.
+`packages/sqlite-storage/src/automation-store.ts`). A run with no recorded
+owner, or an owner recorded without a start time, cannot prove a live owner and
+counts as dead. A live owner's runs and every terminal run are left as they
+are.
 
 A dead owner's run becomes `failed` with `failureReason: "interrupted"`, and
 run history shows it as interrupted. It is a reason on `failed` rather than a

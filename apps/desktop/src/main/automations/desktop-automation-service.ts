@@ -1497,21 +1497,23 @@ export class DesktopAutomationService {
    */
   private async reportInterruptedRuns(runs: AutomationRunSummary[]): Promise<void> {
     for (const run of runs) {
-      const automation = this.options.store.getAutomation(run.automationId, {
-        includeDeleted: true,
-      });
-      automationServiceLog.debug("automation run interrupted by a restart", {
-        automationId: run.automationId,
-        automationName: automation?.name,
-        backendTurnId: run.backendTurnId,
-        ownerInstanceId: run.owner?.instanceId,
-        ownerProcessId: run.owner?.processId,
-        runId: run.id,
-        startedAt: run.startedAt,
-        threadId: automation?.threadId,
-      });
-      if (!automation) continue;
+      // One run's failure, or a store closed by shutdown, must not stop the
+      // rest or escape the voided promise.
       try {
+        const automation = this.options.store.getAutomation(run.automationId, {
+          includeDeleted: true,
+        });
+        automationServiceLog.debug("automation run interrupted by a restart", {
+          automationId: run.automationId,
+          automationName: automation?.name,
+          backendTurnId: run.backendTurnId,
+          ownerInstanceId: run.owner?.instanceId,
+          ownerProcessId: run.owner?.processId,
+          runId: run.id,
+          startedAt: run.startedAt,
+          threadId: automation?.threadId,
+        });
+        if (!automation) continue;
         await this.publishAutomationRunUpdate({
           backend: automation.backend,
           runId: run.id,

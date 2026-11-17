@@ -3040,7 +3040,7 @@ describe("sqlite write metrics", () => {
         name: "Check email",
         taskPrompt: "Check mail",
         schedule: { kind: "interval", every: 5, unit: "minutes" },
-        nextRunAt: Date.now() + 3_600_000,
+        nextRunAt: Date.now() + 60_000,
         now: 0,
       });
       previous.createRun({ id: `run-report-${index}`, automationId: `automation-report-${index}`, trigger: "manual", now: 0 });

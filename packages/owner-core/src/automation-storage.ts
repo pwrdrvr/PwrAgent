@@ -105,9 +105,10 @@ export type CreateAutomationRunInput = {
 export type StartupReconciliationInput = {
   now?: number;
   /**
-   * Next run for each enabled schedule. Written only where the stored time is
-   * missing or already due, so a launch with nothing missed writes nothing and
-   * a second instance cannot move a live instance's schedule.
+   * Next run for each enabled schedule, computed from now. Written only where
+   * the stored time is missing, already due, or later than this value, so a
+   * launch with nothing missed writes nothing and a second instance cannot
+   * move a live instance's schedule.
    */
   nextRunAtByAutomationId?: Record<string, number | undefined>;
   /**
@@ -123,7 +124,7 @@ export type StartupReconciliationResult = {
   interruptedRuns: AutomationRunSummary[];
   /** Unfinished runs left alone because their owner is alive. */
   liveOwnerRunCount: number;
-  /** Schedules whose stored next run was missing or due. */
+  /** Schedules whose stored next run was missing, due or too late. */
   rescheduledAutomationCount: number;
 };
 

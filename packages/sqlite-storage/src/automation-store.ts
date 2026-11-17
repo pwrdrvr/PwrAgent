@@ -852,10 +852,20 @@ export class AutomationStore implements AutomationStorage {
     const deadOwnerRunIds: string[] = [];
     let liveOwnerRunCount = 0;
     // Liveness reads the profile's runtime markers, so decide it before the
-    // write lock is taken.
+    // write lock is taken, and once per owner.
+    const aliveByOwner = new Map<string, boolean>();
+    const isOwnerAlive = (owner: AutomationRunOwner): boolean => {
+      const key = `${owner.instanceId}\0${owner.processId}\0${owner.startedAt ?? ""}`;
+      let alive = aliveByOwner.get(key);
+      if (alive === undefined) {
+        alive = input.isOwnerAlive?.(owner) === true;
+        aliveByOwner.set(key, alive);
+      }
+      return alive;
+    };
     for (const row of unfinished) {
       const owner = readRunOwner(parseJson<AutomationRunPayload>(row.payload)?.owner);
-      if (owner && input.isOwnerAlive?.(owner) === true) liveOwnerRunCount += 1;
+      if (owner && isOwnerAlive(owner)) liveOwnerRunCount += 1;
       else deadOwnerRunIds.push(row.run_id);
     }
     const dueNextRunAt: Array<[string, number | null]> = [];
@@ -864,9 +874,15 @@ export class AutomationStore implements AutomationStorage {
     )) {
       const current = this.getAutomation(automationId);
       if (!current) continue;
-      // A stored time still ahead is the schedule another launch, or a live
-      // instance, already settled.
-      if (current.nextRunAt !== undefined && current.nextRunAt > now) continue;
+      // A stored time still ahead, and no later than the schedule's next
+      // occurrence, is the schedule another launch or a live instance already
+      // settled. One later than that was stored under a clock or time zone
+      // that has since changed, and is corrected.
+      if (
+        current.nextRunAt !== undefined
+        && current.nextRunAt > now
+        && (nextRunAt === undefined || current.nextRunAt <= nextRunAt)
+      ) continue;
       if (current.nextRunAt === nextRunAt) continue;
       dueNextRunAt.push([automationId, nextRunAt ?? null]);
     }

@@ -1986,7 +1986,8 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
         name,
         taskPrompt: "Summarize",
         schedule: { kind: "interval", every: 5, unit: "minutes" },
-        nextRunAt: Date.now() + 3_600_000,
+        // Ahead of now and inside the interval: nothing to reschedule.
+        nextRunAt: Date.now() + 60_000,
         now: 1_000,
       });
     }
