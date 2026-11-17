@@ -11,6 +11,7 @@ import {
 } from "./fixtures/archive-group-dialog-layout-oracle";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { sizeWindowAtZoom, type WindowZoomSize } from "./fixtures/window-zoom";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
@@ -83,6 +84,20 @@ test("keeps the archive group confirmation usable at every window size and zoom"
   });
   const sizeWindow = (size: WindowZoomSize) => sizeWindowAtZoom(app.electronApp, app.window, size);
   try {
+    // Rows can render while startup provider discovery is still checking.
+    // Archive planning intentionally refuses that incomplete membership, so
+    // row visibility alone is not readiness to open the confirmation.
+    await expect.poll(() => app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const consumerId = "archive-group-layout-ready";
+      try {
+        const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
+          query: { kind: "directory-index" }, pageSize: 10 }, consumerId);
+        return page.coverage.state;
+      } finally {
+        await api.releaseNavigationQuery?.(consumerId);
+      }
+    }), { message: "Archive layout setup requires complete owner membership" }).toBe("complete");
     const dialog = app.window.getByRole("dialog", { name: /^Archive \d+ Threads\?$/ });
     for (const group of GROUPS) {
       await sizeWindow({ ...LAUNCH_SIZE, zoom: 100 });
