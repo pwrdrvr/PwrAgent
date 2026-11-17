@@ -1,61 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
-import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
+import {
+  HeadlessAutomationRunner,
+  type HeadlessAutomationLauncher,
+} from "../automations/automation-runner";
 import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../storage/automation-store";
 import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
-class FakeQueue {
-  active = false;
-  submitted: ThreadTurnQueueEntry[] = [];
+type HeadlessLaunch = Parameters<HeadlessAutomationLauncher["startAutomationHeadlessTurn"]>[0];
 
-  canStartImmediately(): boolean {
-    return !this.active;
-  }
+/**
+ * Stands in for the registry behind the production runner. Each call is one
+ * headless thread and turn started for a run.
+ */
+class FakeLauncher implements HeadlessAutomationLauncher {
+  started: HeadlessLaunch[] = [];
 
-  async submit(
-    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-  ) {
-    const queuedEntry: ThreadTurnQueueEntry = {
-      ...entry,
-      id: entry.id ?? `queue-${this.submitted.length + 1}`,
-      createdAt: entry.createdAt ?? 1_000,
-    };
-    this.submitted.push(queuedEntry);
-    if (this.active) {
-      return {
-        status: "queued" as const,
-        entry: queuedEntry,
-        position: this.submitted.length,
-      };
-    }
+  async startAutomationHeadlessTurn(params: HeadlessLaunch) {
+    this.started.push(params);
+    const ordinal = this.started.length;
     return {
-      status: "started" as const,
-      entry: queuedEntry,
-      turnId: `turn-${queuedEntry.id}`,
+      headlessThreadId: `headless-thread-${ordinal}`,
+      queueEntryId: `headless:${params.automationRunId}`,
+      threadId: params.agentThreadId,
+      turnId: `turn-${ordinal}`,
     };
-  }
-
-  updateQueuedInput(entryId: string, input: ThreadTurnQueueEntry["input"]): void {
-    const entry = this.submitted.find((candidate) => candidate.id === entryId);
-    if (entry) {
-      entry.input = input;
-    }
   }
 }
 
 let stateDb: StateDb;
 let store: AutomationStore;
-let queue: FakeQueue;
+let launcher: FakeLauncher;
 let now = 0;
 
 beforeEach(() => {
   stateDb = openInMemoryStateDb();
   store = new AutomationStore(stateDb);
-  queue = new FakeQueue();
+  launcher = new FakeLauncher();
   now = 0;
 });
 
@@ -88,7 +72,7 @@ function createIntervalAutomation(
 function buildScheduler(): AutomationScheduler {
   return new AutomationScheduler({
     store,
-    runner: new ThreadQueueAutomationRunner(queue),
+    runner: new HeadlessAutomationRunner(launcher),
     now: () => now,
     setTimer: (() => 0) as unknown as typeof setTimeout,
     clearTimer: () => undefined,
@@ -98,7 +82,7 @@ function buildScheduler(): AutomationScheduler {
 function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationScheduler {
   return new AutomationScheduler({
     store,
-    runner: new ThreadQueueAutomationRunner(queue),
+    runner: new HeadlessAutomationRunner(launcher),
     gateRunner,
     now: () => now,
     setTimer: (() => 0) as unknown as typeof setTimeout,
@@ -107,7 +91,7 @@ function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationSch
 }
 
 describe("AutomationScheduler", () => {
-  it.each(["started", "queued", "failed"] as const)(
+  it.each(["started", "failed"] as const)(
     "preserves completion when a %s submission result arrives after lifecycle events",
     async (submissionStatus) => {
       const automation = createIntervalAutomation();
@@ -142,9 +126,7 @@ describe("AutomationScheduler", () => {
               input: [],
               createdAt: 0,
             };
-            return submissionStatus === "queued"
-              ? { status: "queued", entry, position: 1 }
-              : { status: "started", entry, turnId: "turn-1", backendThreadId: "headless-1" };
+            return { status: "started", entry, turnId: "turn-1", backendThreadId: "headless-1" };
           },
         },
       });
@@ -218,7 +200,7 @@ describe("AutomationScheduler", () => {
     const timerDelays: number[] = [];
     const scheduler = new AutomationScheduler({
       store,
-      runner: new ThreadQueueAutomationRunner(queue),
+      runner: new HeadlessAutomationRunner(launcher),
       now: () => now,
       setTimer: ((_callback: () => void, delayMs: number) => {
         timerDelays.push(delayMs);
@@ -236,18 +218,19 @@ describe("AutomationScheduler", () => {
     expect(timerDelays).toEqual([5 * 60 * 1000]);
   });
 
-  it("starts due interval automations on idle threads and advances next run", async () => {
+  it("starts due interval automations on a headless thread and advances next run", async () => {
     createIntervalAutomation();
     const scheduler = buildScheduler();
     now = 5 * 60 * 1000;
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
         status: "running",
-        backendTurnId: "turn-queue-1",
+        backendTurnId: "turn-1",
+        backendThreadId: "headless-thread-1",
         scheduledWindows: [{ scheduledFor: 5 * 60 * 1000 }],
       }),
     ]);
@@ -256,45 +239,17 @@ describe("AutomationScheduler", () => {
     });
   });
 
-  it("coalesces due windows into one queued catch-up run by default", async () => {
-    queue.active = true;
+  it("coalesces due windows into one catch-up run by default", async () => {
     createIntervalAutomation();
     const scheduler = buildScheduler();
     now = 15 * 60 * 1000;
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
-        status: "queued",
-        scheduledWindows: [
-          { scheduledFor: 5 * 60 * 1000 },
-          { scheduledFor: 10 * 60 * 1000 },
-          { scheduledFor: 15 * 60 * 1000 },
-        ],
-      }),
-    ]);
-  });
-
-  it("merges later due windows into an existing pending coalesced run", async () => {
-    queue.active = true;
-    createIntervalAutomation();
-    const scheduler = buildScheduler();
-    now = 10 * 60 * 1000;
-    await scheduler.evaluateDueAutomations();
-
-    now = 15 * 60 * 1000;
-    await scheduler.evaluateDueAutomations();
-
-    expect(queue.submitted).toHaveLength(1);
-    expect(queue.submitted[0]?.input).toEqual([
-      expect.objectContaining({
-        text: expect.stringContaining("- 1970-01-01T00:15:00.000Z"),
-      }),
-    ]);
-    expect(store.listRunsForAutomation("automation-1")).toEqual([
-      expect.objectContaining({
+        status: "running",
         scheduledWindows: [
           { scheduledFor: 5 * 60 * 1000 },
           { scheduledFor: 10 * 60 * 1000 },
@@ -316,7 +271,7 @@ describe("AutomationScheduler", () => {
     now = 15 * 60 * 1000;
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
         status: "queued",
@@ -335,7 +290,15 @@ describe("AutomationScheduler", () => {
       now: 16 * 60 * 1000,
     });
 
-    expect(queue.submitted).toHaveLength(2);
+    expect(launcher.started).toHaveLength(2);
+    // The input is built when the run starts, so it names every merged window.
+    expect(launcher.started[1]?.input).toEqual([
+      expect.objectContaining({
+        text: expect.stringMatching(
+          /- 1970-01-01T00:10:00\.000Z[\s\S]*- 1970-01-01T00:15:00\.000Z/,
+        ),
+      }),
+    ]);
     expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
       status: "running",
       scheduledWindows: [
@@ -345,8 +308,7 @@ describe("AutomationScheduler", () => {
     });
   });
 
-  it("queues drop_missed runs when only the assigned Agent thread is busy", async () => {
-    queue.active = true;
+  it("starts drop_missed with only the first missed window when the lane is idle", async () => {
     createIntervalAutomation({
       backend: "codex",
       threadId: "thread-1",
@@ -366,10 +328,10 @@ describe("AutomationScheduler", () => {
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
-        status: "queued",
+        status: "running",
         scheduledWindows: [{ scheduledFor: 5 * 60 * 1000 }],
       }),
     ]);
@@ -397,7 +359,7 @@ describe("AutomationScheduler", () => {
     now = 10 * 60 * 1000;
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({ status: "skipped", scheduledFor: 10 * 60 * 1000 }),
       expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
@@ -426,7 +388,7 @@ describe("AutomationScheduler", () => {
     now = 60 * 60 * 1000;
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
         status: "skipped",
@@ -439,19 +401,18 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
-  it("queues manual run-now without changing the recurring next run", async () => {
-    queue.active = true;
+  it("starts manual run-now without changing the recurring next run", async () => {
     createIntervalAutomation();
     const scheduler = buildScheduler();
     now = 2 * 60 * 1000;
 
     await scheduler.runNow("automation-1");
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
         trigger: "manual",
-        status: "queued",
+        status: "running",
         scheduledWindows: [],
       }),
     ]);
@@ -471,7 +432,7 @@ describe("AutomationScheduler", () => {
     const queued = await scheduler.runNow("automation-1");
 
     expect(queued?.status).toBe("queued");
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
       trigger: "manual",
       status: "queued",
@@ -484,7 +445,7 @@ describe("AutomationScheduler", () => {
       now: 7 * 60 * 1000,
     });
 
-    expect(queue.submitted).toHaveLength(2);
+    expect(launcher.started).toHaveLength(2);
     expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
       trigger: "manual",
       status: "running",
@@ -592,7 +553,7 @@ describe("AutomationScheduler", () => {
       now,
     });
 
-    expect(queue.submitted).toHaveLength(2);
+    expect(launcher.started).toHaveLength(2);
     expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
       trigger: "inbound_message",
       status: "running",
@@ -661,9 +622,9 @@ describe("AutomationScheduler", () => {
       }),
     ]);
 
-    expect(queue.submitted).toHaveLength(2);
+    expect(launcher.started).toHaveLength(2);
     expect(
-      queue.submitted.filter((entry) => entry.automationRunId !== activeRun.id),
+      launcher.started.filter((launch) => launch.automationRunId !== activeRun.id),
     ).toHaveLength(1);
   });
 
@@ -704,14 +665,14 @@ describe("AutomationScheduler", () => {
     });
 
     expect(result?.status).toBe("queued");
-    expect(queue.submitted).toHaveLength(0);
+    expect(launcher.started).toHaveLength(0);
     expect(store.findActiveRunForAutomation(automation.id)).toMatchObject({
       status: "queued",
     });
 
     await resume();
 
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.findActiveRunForAutomation(automation.id)).toMatchObject({
       status: "running",
     });
@@ -760,7 +721,7 @@ describe("AutomationScheduler", () => {
     releaseFirstGate();
     await evaluating;
 
-    expect(queue.submitted).toHaveLength(0);
+    expect(launcher.started).toHaveLength(0);
     expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
       status: "queued",
     });
@@ -768,7 +729,7 @@ describe("AutomationScheduler", () => {
     await resume();
 
     expect(gateCalls).toBe(2);
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
     expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
       status: "running",
     });
@@ -815,7 +776,7 @@ describe("AutomationScheduler", () => {
     expect(first).toBeDefined();
     expect(redelivered).toBeUndefined();
     expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
   });
 
   it("coalesces an inbound burst into a leading run plus one batched run", async () => {
@@ -839,7 +800,7 @@ describe("AutomationScheduler", () => {
     let windowCallback: (() => void) | undefined;
     const scheduler = new AutomationScheduler({
       store,
-      runner: new ThreadQueueAutomationRunner(queue),
+      runner: new HeadlessAutomationRunner(launcher),
       now: () => now,
       setTimer: ((callback: () => void) => {
         windowCallback = callback;
@@ -861,7 +822,7 @@ describe("AutomationScheduler", () => {
     await scheduler.runFromInboundEvent({ automation, source: src("k1", "ERROR one"), now });
     // Leading edge fires immediately.
     expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
-    expect(queue.submitted).toHaveLength(1);
+    expect(launcher.started).toHaveLength(1);
 
     // Two more within the window are buffered, not run.
     now = 1_100;
@@ -887,7 +848,7 @@ describe("AutomationScheduler", () => {
 
     const runs = store.listRunsForAutomation("automation-1");
     expect(runs).toHaveLength(2);
-    expect(queue.submitted).toHaveLength(2);
+    expect(launcher.started).toHaveLength(2);
     const batched = runs[0];
     expect(batched?.source?.sourceEventKey).toBe("k2");
     expect(batched?.source?.batchedEvents).toEqual([
@@ -920,7 +881,7 @@ describe("AutomationScheduler", () => {
     let windowCallback: (() => void) | undefined;
     const scheduler = new AutomationScheduler({
       store,
-      runner: new ThreadQueueAutomationRunner(queue),
+      runner: new HeadlessAutomationRunner(launcher),
       now: () => now,
       setTimer: ((callback: () => void) => {
         windowCallback = callback;
@@ -1320,7 +1281,7 @@ describe("AutomationScheduler", () => {
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted[0]?.input).toEqual([
+    expect(launcher.started[0]?.input).toEqual([
       expect.objectContaining({
         text: expect.stringContaining("Gate output:\nready"),
       }),
@@ -1355,7 +1316,7 @@ describe("AutomationScheduler", () => {
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(0);
+    expect(launcher.started).toHaveLength(0);
     const [run] = store.listRunsForAutomation("automation-1");
     expect(run).toMatchObject({
       status: "skipped",
@@ -1405,7 +1366,7 @@ describe("AutomationScheduler", () => {
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toHaveLength(0);
+    expect(launcher.started).toHaveLength(0);
     const [run] = store.listRunsForAutomation("automation-1");
     expect(run).toMatchObject({
       status: "failed",

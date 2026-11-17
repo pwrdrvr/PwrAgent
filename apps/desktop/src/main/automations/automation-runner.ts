@@ -15,36 +15,28 @@ import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
 const automationRunnerLog = getMainLogger("pwragent:automation-runner");
 
-export type AutomationTurnQueue = {
-  canStartImmediately(params: {
-    backend: AutomationRecord["backend"];
-    threadId: AutomationRecord["threadId"];
-  }): boolean;
-  submit(
-    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-  ): Promise<ThreadTurnQueueSubmissionResult>;
-  updateQueuedInput?(entryId: string, input: ThreadTurnQueueEntry["input"]): void;
-};
-
 export type AutomationRunner = {
   submitRun(params: {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
     priorRuns?: AutomationPriorRunContext[];
     run: AutomationRunSummary;
-  }): Promise<AutomationRunSubmissionResult>;
-  updateQueuedRunInput?(params: {
-    automation: AutomationRecord;
-    priorRuns?: AutomationPriorRunContext[];
-    queueEntryId: string;
-    run: AutomationRunSummary;
-  }): void;
+  }): Promise<AutomationRunStartResult>;
 };
 
-export type AutomationRunSubmissionResult = ThreadTurnQueueSubmissionResult & {
-  backendThreadId?: string;
-};
+/**
+ * A runner starts the run or throws. Waiting is the scheduler's concern: a
+ * run that cannot start yet is held in its automation's own lane.
+ */
+export type AutomationRunStartResult =
+  Extract<ThreadTurnQueueSubmissionResult, { status: "started" }> & {
+    backendThreadId?: string;
+  };
+
+/** What the scheduler reports for a run: started, or queued in its lane. */
+export type AutomationRunSubmissionResult =
+  | AutomationRunStartResult
+  | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>;
 
 export type HeadlessAutomationLauncher = {
   startAutomationHeadlessTurn(params: {
@@ -83,7 +75,7 @@ export class HeadlessAutomationRunner implements AutomationRunner {
     gateResult?: AutomationGateRunResult;
     priorRuns?: AutomationPriorRunContext[];
     run: AutomationRunSummary;
-  }): Promise<AutomationRunSubmissionResult> {
+  }): Promise<AutomationRunStartResult> {
     const input = buildAutomationTurnInput(params);
     automationRunnerLog.info("submitting headless automation run", {
       automationId: params.automation.id,
@@ -139,43 +131,5 @@ export class HeadlessAutomationRunner implements AutomationRunner {
       },
       turnId: result.turnId,
     };
-  }
-}
-
-export class ThreadQueueAutomationRunner implements AutomationRunner {
-  constructor(private readonly queue: AutomationTurnQueue) {}
-
-  async submitRun(params: {
-    automation: AutomationRecord;
-    gateResult?: AutomationGateRunResult;
-    priorRuns?: AutomationPriorRunContext[];
-    run: AutomationRunSummary;
-  }): Promise<AutomationRunSubmissionResult> {
-    return await this.queue.submit({
-      backend: params.automation.backend,
-      threadId: params.automation.threadId,
-      origin: "automation",
-      automationRunId: params.run.id,
-      automationName: params.automation.name,
-      input: buildAutomationTurnInput(params),
-    });
-  }
-
-  updateQueuedRunInput(params: {
-    automation: AutomationRecord;
-    priorRuns?: AutomationPriorRunContext[];
-    queueEntryId: string;
-    run: AutomationRunSummary;
-  }): void {
-    this.queue.updateQueuedInput?.(
-      params.queueEntryId,
-      buildAutomationTurnInput({
-        automation: params.automation,
-        // Without this, a coalesced rewrite would silently drop the lookback
-        // section the original submission included.
-        priorRuns: params.priorRuns,
-        run: params.run,
-      }),
-    );
   }
 }

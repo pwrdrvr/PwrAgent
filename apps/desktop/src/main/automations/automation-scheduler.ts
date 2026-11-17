@@ -18,7 +18,10 @@ import {
 } from "./automation-schedule.js";
 import { getMainLogger } from "../log.js";
 import type { AutomationGateRunner } from "./automation-gate-runner.js";
-import type { AutomationRunner } from "./automation-runner.js";
+import type {
+  AutomationRunner,
+  AutomationRunSubmissionResult,
+} from "./automation-runner.js";
 import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
 
 const automationSchedulerLog = getMainLogger("pwragent:automation-scheduler");
@@ -133,7 +136,7 @@ export class AutomationScheduler {
   async runNow(
     automationId: string,
     now = this.now(),
-  ): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+  ): Promise<AutomationRunSubmissionResult | undefined> {
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return undefined;
     const active = this.options.store.findActiveRunForAutomation(automationId);
@@ -171,7 +174,7 @@ export class AutomationScheduler {
     automation: AutomationRecord;
     source: AutomationRunSourceMetadata;
     now?: number;
-  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+  }): Promise<AutomationRunSubmissionResult | undefined> {
     const now = params.now ?? this.now();
     const automation = params.automation;
     const active = this.options.store.findActiveRunForAutomation(automation.id);
@@ -199,7 +202,7 @@ export class AutomationScheduler {
     automation: AutomationRecord;
     source: AutomationRunSourceMetadata;
     now?: number;
-  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+  }): Promise<AutomationRunSubmissionResult | undefined> {
     const now = params.now ?? this.now();
     const windowMs =
       params.automation.inboundCoalesceWindowMs ??
@@ -237,7 +240,7 @@ export class AutomationScheduler {
     automation: AutomationRecord;
     source: AutomationRunSourceMetadata;
     now: number;
-  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+  }): Promise<AutomationRunSubmissionResult | undefined> {
     const { now } = params;
     // Idempotency: a provider can redeliver the same event (slow ack, retry),
     // and an automation with two triggers can match one message twice. If a run
@@ -539,19 +542,13 @@ export class AutomationScheduler {
     } else {
       const existing = this.options.store.findPendingScheduledRun(automation.id);
       if (existing) {
-        const coalesced = this.options.store.coalescePendingScheduledRun({
+        // The run's input is built from its windows when it starts, so the
+        // merged windows need no other delivery.
+        this.options.store.coalescePendingScheduledRun({
           automationId: automation.id,
           scheduledWindows: windows,
           now,
         });
-        if (coalesced?.queueEntryId) {
-          this.options.runner.updateQueuedRunInput?.({
-            automation,
-            priorRuns: this.collectPriorRunContext(automation, coalesced.id, now),
-            queueEntryId: coalesced.queueEntryId,
-            run: coalesced,
-          });
-        }
       } else if (this.options.store.findActiveRunForAutomation(automation.id)) {
         const run = this.options.store.createRun({
           automationId: automation.id,
@@ -583,7 +580,7 @@ export class AutomationScheduler {
     automation: AutomationRecord;
     windows: AutomationRunWindow[];
     now: number;
-  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+  }): Promise<AutomationRunSubmissionResult | undefined> {
     const run = this.options.store.createRun({
       automationId: params.automation.id,
       trigger: "scheduled",
@@ -605,7 +602,7 @@ export class AutomationScheduler {
     runId: string;
     windows: AutomationRunWindow[];
     now: number;
-  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+  }): Promise<AutomationRunSubmissionResult | undefined> {
     const run = this.options.store.getRun(params.runId);
     if (!run) return undefined;
 
@@ -654,23 +651,14 @@ export class AutomationScheduler {
         priorRuns: this.collectPriorRunContext(params.automation, run.id, params.now),
         run,
       });
-      if (result.status === "queued") {
-        this.options.store.markRunQueued({
-          runId: params.runId,
-          queueEntryId: result.entry.id,
-          queuedAt: params.now,
-          now: params.now,
-        });
-      } else {
-        this.options.store.markRunStarted({
-          runId: params.runId,
-          backendThreadId: result.backendThreadId,
-          backendTurnId: result.turnId,
-          queueEntryId: result.entry.id,
-          startedAt: params.now,
-          now: params.now,
-        });
-      }
+      this.options.store.markRunStarted({
+        runId: params.runId,
+        backendThreadId: result.backendThreadId,
+        backendTurnId: result.turnId,
+        queueEntryId: result.entry.id,
+        startedAt: params.now,
+        now: params.now,
+      });
       automationSchedulerLog.info("automation run submitted", {
         automationId: params.automation.id,
         automationName: params.automation.name,
@@ -679,7 +667,7 @@ export class AutomationScheduler {
         runId: params.runId,
         status: result.status,
         threadId: params.automation.threadId,
-        turnId: result.status === "started" ? result.turnId : undefined,
+        turnId: result.turnId,
         windowCount: params.windows.length,
       });
       return result;
@@ -957,7 +945,7 @@ function buildLaneQueuedResult(params: {
   run: {
     id: string;
   };
-}): Awaited<ReturnType<AutomationRunner["submitRun"]>> {
+}): AutomationRunSubmissionResult {
   return {
     status: "queued",
     entry: {
