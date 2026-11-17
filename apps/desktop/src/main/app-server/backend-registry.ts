@@ -12509,9 +12509,17 @@ export class DesktopBackendRegistry {
     return this.subAgentMonitorService.listPendingTaskMonitorWakes(params);
   }
 
-  async stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {
+  stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {
     const batchId = decisionBatchIdFromSubAgentId(params.monitorId);
-    if (batchId === undefined) return await this.subAgentMonitorService.stopSubAgent(params);
+    // Other cards stay a plain facade over the monitor module's result.
+    if (batchId === undefined) return this.subAgentMonitorService.stopSubAgent(params);
+    return this.stopDecisionBatchSubAgent(params, batchId);
+  }
+
+  private async stopDecisionBatchSubAgent(
+    params: StopSubAgentRequest,
+    batchId: string,
+  ): Promise<StopSubAgentResponse> {
     // A decision batch runs in this owner's decisions service, not in a
     // thread turn. The card's own thread is the batch's caller, so a stop
     // can reach only that thread's batch.
