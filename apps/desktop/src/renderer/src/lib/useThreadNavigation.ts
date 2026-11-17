@@ -3955,7 +3955,8 @@ export function useThreadNavigation(
           .map((directory) => directory.key);
       }));
       const pendingDirectoryPins = new Set(pendingDirectoryPinsRef.current.keys());
-      const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
+      const retainedKeys = new Set([...pages.values(), ...boundedNavigation.selectionAncestry ? [boundedNavigation.selectionAncestry] : []]
+        .flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       // Acceptance must publish even when reconciliation retains every row
       // and the loading flags are unchanged after a batched refresh.
       setAcceptedPages(pages);
@@ -4077,7 +4078,7 @@ export function useThreadNavigation(
       setState((current) => current.loading === loading && current.refreshing === refreshing && current.error === error
         ? current : { ...current, loading, refreshing, error });
     }
-  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
+  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.selectionAncestry, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
   // The effect above folds a landed page into the rows, so a render in which
   // a page lands still shows the rows from before it. In that render the page
   // is not stale, yet nothing built from the rows reflects it. A selection's

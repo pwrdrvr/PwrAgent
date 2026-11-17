@@ -94,7 +94,9 @@ export function useBoundedNavigationWindow(params: Demand & {
     ? mountResource?.state.page : undefined;
   // The owner's inventory cannot supply a root owned by this viewer. Reveal
   // and range seeking must use the same ancestry as directory presentation.
-  const presentedSelection = remoteViewerSelection ? selectedMount : selectedContext;
+  const presentedSelection = params.browseMode === "directories" && params.selectedRef
+    ? controllerRef.current?.selectionAncestry(params.selectedRef, params.target, state)
+    : remoteViewerSelection ? selectedMount : selectedContext;
   const selectedRoot = presentedSelection?.entries.find((entry) => entry.placement.kind === "root");
   const selectedHome = presentedSelection?.selectionDirectory;
   // While the viewer mount loads, neither owner-linked paths nor detail
@@ -116,6 +118,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
     const disclosedParentDirectoryKeys = new Map<string, string>();
     const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(), pages,
+      selectionAncestry: presentedSelection ?? null,
       disclosedParents: params.disclosedParents ?? [],
       directoryKeysByParent: disclosedParentDirectoryKeys,
     });
@@ -124,7 +127,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     return prepareNavigationDemand(requests);
   }, [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,
     params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.disclosedParents,
-    directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories, pages]);
+    directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories, pages, presentedSelection]);
   // A previous lens can still own the snapshot during the render that changes
   // demand. Empty Drafts and collapsed Directories are ready only after that
   // transition, just like lenses with collection pages.
@@ -250,11 +253,13 @@ export function useBoundedNavigationWindow(params: Demand & {
   const rebaseline = useCallback((id: string, anchor: NavigationQueryAnchor) => controllerRef.current?.rebaseline(id, anchor) ?? Promise.resolve(), []);
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);
   const setVisibleAnchor = useCallback((id: string, anchor: NavigationQueryAnchor | undefined) => controllerRef.current?.setVisibleAnchor(id, anchor), []);
+  const selectionPresentation = useMemo<{ selectionAncestry?: NavigationQueryPage | null }>(
+    () => ({ selectionAncestry: presentedSelection ?? null }), [presentedSelection]);
   const connectionError = !connected && connection?.target === targetKey ? connection.error : undefined;
   // The controller publishes immutable resource snapshots. Unrelated shell
   // state must not give every navigation consumer a new wrapper.
-  return useMemo(() => ({ ...state, presentationReady, directories, selectedDirectoryKeys, connected,
+  return useMemo(() => ({ ...state, ...selectionPresentation, presentationReady, directories, selectedDirectoryKeys, connected,
     ...(connectionError ? { connectionError } : {}), invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor }),
-  [state, presentationReady, directories, selectedDirectoryKeys, connected, connectionError,
+  [state, selectionPresentation, presentationReady, directories, selectedDirectoryKeys, connected, connectionError,
     invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor]);
 }

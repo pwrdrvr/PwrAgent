@@ -1,4 +1,4 @@
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { act, fireEvent, render } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
@@ -17,9 +17,20 @@ it.each([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reve
   },
 );
 
-it("keeps owner order through generated selection histories and a fresh owner reorder", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 3, max: 16 }), fc.array(fc.nat(), { minLength: 3, maxLength: 7 }),
-    fc.boolean(), fc.boolean(), (count, selections, reverse, hover) => stableSelectionHistory(count, reverse, selections, hover)), { numRuns: 12 });
+// Partition the same 12 generated histories at pagination boundaries so each
+// mounted model stays within the suite's per-test execution budget.
+it.each([{ min: 3, max: 9 }, { min: 10, max: 11 }, { min: 12, max: 16 }])(
+  "keeps owner order through generated histories with $min–$max children", async (range) => {
+  await fc.assert(fc.asyncProperty(fc.integer(range), fc.array(fc.nat(), { minLength: 3, maxLength: 7 }),
+    fc.boolean(), fc.boolean(), (count, selections, reverse, hover) => stableSelectionHistory(count, reverse, selections, hover)), { numRuns: 4 });
+});
+
+it.each([false, true].flatMap((offPage) => [{ min: 3, max: 9 }, { min: 10, max: 16 }].map((range) => ({ offPage, ...range }))))(
+  "preserves generated selection publications, offPage=$offPage children=$min–$max", async ({ offPage, ...range }) => {
+  await fc.assert(fc.asyncProperty(fc.integer(range),
+    fc.array(fc.nat(), { minLength: 3, maxLength: 6 }), fc.boolean(),
+    (count, selections, reverse) => stableSelectionHistory(count, reverse, selections, false,
+      !offPage, false, offPage, !offPage)), { numRuns: 3 });
 });
 
 it("keeps native order when owner-directory ancestry stops before the viewer-mounted parent", async () => {
@@ -30,7 +41,19 @@ it("keeps a legacy cross-provider parent identity across scoped owner exact read
   await stableSelectionHistory(6, false, [1, 2, 1], false, false, true);
 });
 
-async function stableSelectionHistory(count: number, reverse: boolean, selections: number[], hover: boolean, differentOwnerProjects = false, crossProvider = false): Promise<void> {
+it.each([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
+  "retains off-page parent ancestry during child selection, count=$count reverse=$reverse", async ({ count, reverse }) => {
+    await stableSelectionHistory(count, reverse, [1, 2, 1], false, false, false, true);
+  },
+);
+
+it.each([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
+  "keeps viewer child demand with split owner directories, count=$count reverse=$reverse", async ({ count, reverse }) => {
+    await stableSelectionHistory(count, reverse, [1, 2, 1], false, true, false, false, true);
+  },
+);
+
+async function stableSelectionHistory(count: number, reverse: boolean, selections: number[], hover: boolean, differentOwnerProjects = false, crossProvider = false, offPage = false, startAtParent = false): Promise<void> {
   const directory = { key: "directory:/fixture", kind: "directory" as const, path: "/fixture", label: "Project" };
   const thread = (id: string, parent?: string): NavigationThreadSummary => ({ id, source: "codex", title: id,
     titleSource: "explicit", createdAt: 100, updatedAt: 100, inbox: { inInbox: false },
@@ -38,7 +61,7 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
     ...(parent ? { parentThreadId: parent, parentThreadBackend: "codex" as const } : {}),
     federation: { ref: { backend: "codex", threadId: id, target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer" },
   });
-  const parent = thread("parent");
+  const parent = { ...thread("parent"), ...(offPage ? { pinnedRank: "11" } : {}) };
   if (crossProvider) {
     parent.source = "claude";
     parent.federation!.ref.backend = "claude";
@@ -46,7 +69,7 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
   const children = Array.from({ length: count }, (_, i) => ({ ...thread(`child-${i}`, parent.id),
     ...(crossProvider ? { parentThreadBackend: undefined } : {}),
   }));
-  const threads = [parent, ...children];
+  const threads = [...(offPage ? Array.from({ length: 10 }, (_, i) => ({ ...thread(`pin-${i}`), pinnedRank: String(i + 1) })) : []), parent, ...children];
   let viewerThreads = threads;
   // Native owner projects need not match this viewer mount. In particular,
   // the selected child's owner-directory ancestry can stop before its true
@@ -88,20 +111,21 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
   };
   let navigation!: ReturnType<typeof useThreadNavigation>;
   function Window() {
+    const root = useRef<HTMLDivElement>(null);
     navigation = useThreadNavigation(api, { scheduleNavigationRefresh: (task) => {
       tasks.add(task); return () => { tasks.delete(task); };
     } });
     useLayoutEffect(() => {
-      if (recording) publications.push([...document.querySelectorAll("[data-thread-key]")]
+      if (recording) publications.push([...root.current!.querySelectorAll("[data-thread-key]")]
         .map((row) => row.getAttribute("data-thread-key")!.split(":").at(-1)!)
         .filter((id) => id.startsWith("child-")));
     });
-    return <Sidebar backends={[]} browseMode={navigation.browseMode} directories={navigation.directories}
+    return <div ref={root}><Sidebar backends={[]} browseMode={navigation.browseMode} directories={navigation.directories}
       directoryDisclosure={navigation.directoryDisclosure} threads={navigation.threads} inboxThreads={navigation.inboxThreads}
       pagedNavigation={navigation.pagedNavigation} loading={navigation.loading} selectedItemKey={navigation.selectedItemKey}
       selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys} pagesAwaitingRows={navigation.pagesAwaitingRows}
       onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
-      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} /></div>;
   }
   const mounted = render(<Window />);
   const drain = async () => {
@@ -117,7 +141,7 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
   try {
     await act(async () => { navigation.setBrowseMode("inbox"); });
     await drain();
-    await act(async () => { navigation.selectThread(children[0]!); });
+    await act(async () => { navigation.selectThread(startAtParent || offPage ? parent : children[0]!); });
     await drain();
     await act(async () => {
       navigation.setBrowseMode("directories");

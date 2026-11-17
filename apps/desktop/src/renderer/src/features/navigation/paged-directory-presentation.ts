@@ -1,6 +1,6 @@
 import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationThreadSummary } from "@pwragent/shared";
 import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
@@ -89,6 +89,7 @@ export function buildPagedDirectoryChildKeys(params: PagedDirectoryChildInputs &
 /** Presentation of admitted entries only. Placement and counts remain owner authority. */
 export function buildPagedDirectoryPresentation(params: {
   directory: NavigationDirectoryView;
+  selectionAncestry?: NavigationQueryPage | null;
   presentationOrder?: NavigationPresentationOrder;
   resources: NavigationWindowQueriesState["resources"];
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
@@ -117,8 +118,8 @@ export function buildPagedDirectoryPresentation(params: {
   // Selection is an independent exact read, not a replacement pin range.
   // Admit only its root in this directory; keep page membership and cursors
   // untouched so revealing a newly appended pin cannot discard earlier pins.
-  const selected = params.resources.get("selected-viewer-mount")?.state.page
-    ?? params.resources.get("selected-context")?.state.page;
+  const selected = params.selectionAncestry !== undefined ? params.selectionAncestry
+    : params.resources.get("selected-viewer-mount")?.state.page ?? params.resources.get("selected-context")?.state.page;
   const selectedEntry = selected?.entries.find((entry) => entry.placement.kind === "root");
   const selectedThread = selectedEntry && params.threadsByKey.get(navigationThreadSelectionKey(selectedEntry.row.ref));
   const pinResource = params.resources.get(`directory-pins:${params.directory.key}`);
