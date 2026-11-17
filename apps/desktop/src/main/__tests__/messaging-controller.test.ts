@@ -18662,9 +18662,12 @@ describe("MessagingController", () => {
         response.resolve();
         try {
           await click;
-          await settleHarness(created);
         } finally {
-          db.close();
+          try {
+            await settleHarness(created);
+          } finally {
+            db.close();
+          }
         }
       }
     }), { numRuns: 6 });
