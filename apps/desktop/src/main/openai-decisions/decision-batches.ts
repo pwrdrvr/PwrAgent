@@ -5,8 +5,9 @@ import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisio
  * were already paid for outlive the call that asked for them: a cancelled
  * turn, an MCP client that timed out, or a background run whose caller
  * ended its turn. Nothing here is written to sqlite. Decision answers are
- * model output, which the state database does not hold, so the results last
- * until PwrAgent quits or the retention limits below evict them.
+ * model output, which the state database does not hold. Memory keeps a
+ * batch until the retention limits below evict it; its JSONL result file
+ * (decision-batch-files.ts) keeps it across evictions and restarts.
  */
 
 /** One input's outcome. A failed item carries a stable code. */
@@ -57,9 +58,9 @@ export type DecisionBatchRecord = {
   /** Finished items that did not succeed, skipped ones included. */
   failed: number;
   skipped: number;
-  /** Cancels a background run. A blocking run follows its call's signal. */
+  /** Cancels the run. A blocking batch aborts it when its call is cancelled. */
   controller: AbortController;
-  /** The batch's JSONL file in its thread's storage, while it is being written. */
+  /** The batch's JSONL file in its thread's storage; absent when it could not be written. */
   resultsFile?: string;
 };
 

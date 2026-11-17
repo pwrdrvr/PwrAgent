@@ -85,6 +85,9 @@ export class DecisionBatchFileWriter {
     } catch (error) {
       this.failed = true;
       this.pending = [];
+      // A file missing lines would read back as a cancelled batch with
+      // answered items skipped, so a failed one is removed instead.
+      await rm(this.file, { force: true }).catch(() => undefined);
       this.options.onError(error);
     } finally {
       this.draining = undefined;

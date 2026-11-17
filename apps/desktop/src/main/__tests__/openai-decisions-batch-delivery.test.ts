@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -431,6 +431,40 @@ describe("background batches", () => {
     expect(wakes).toHaveLength(0);
   });
 
+  // Rule: a batch waiting for its decision's lane is visible on its thread
+  // and the operator can stop it. Pre-fix, its card was first written when
+  // the lane let it run, so a queued batch had no card and no Stop.
+  it("show a card while they wait for their lane, and can be stopped there", async () => {
+    const gate = deferred();
+    const service = makeService(async () => {
+      await gate.promise;
+      return json({ answers: { bar: { noul: 0.5 } } });
+    });
+    const inputs = Array.from({ length: 20 }, (_, index) => `item-${index}`);
+    const first = await service.invoke(CALLER, { definition: JEV, inputs, background: true }) as { batchId: string };
+    await expect.poll(() => cards.some((card) => card.batchId === first.batchId)).toBe(true);
+    const queued = await service.invoke(CALLER, { definition: JEV, inputs, background: true }) as { batchId: string; state: string };
+    expect(queued.state).toBe("queued");
+    const waiting = cards.filter((card) => card.batchId === queued.batchId);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ status: "running" });
+    expect(waiting[0]!.message).toContain("Waiting for another call");
+
+    expect(await service.stopBatch(CALLER, queued.batchId)).toBe("stopped");
+    expect(cards.filter((card) => card.batchId === queued.batchId).at(-1)).toMatchObject({ status: "cancelled" });
+    gate.resolve();
+    await expect.poll(() => wakes.length).toBe(1);
+    expect(wakes[0]!.batchId).toBe(first.batchId);
+  });
+
+  it("are refused once shutdown has begun", async () => {
+    const service = makeService(async () => json({ answers: { bar: { noul: 0.5 } } }));
+    await service.close();
+    const error = await errorOf(() => service.invoke(CALLER, { definition: JEV, inputs: ["item-0"], background: true }));
+    expect(error.code).toBe("busy");
+    expect(await service.batchResults(CALLER, {})).toEqual({ batches: [] });
+  });
+
   it("are limited per thread", async () => {
     const gate = deferred();
     const service = makeService(async () => {
@@ -553,6 +587,20 @@ describe("per-item timing", () => {
     await service.update(CALLER, { name: "bar_joke", ...JEV, instructions: "Is it a pun?", inputSchema: { type: "string" } });
     expect(listed().timing).toBeUndefined();
   });
+
+  // Rule: ad-hoc definitions never take a timing slot, since decisions_list
+  // cannot show their timing. Pre-fix, enough distinct ad-hoc runs evicted
+  // a saved decision's window.
+  it("keeps a saved decision's window however many ad-hoc definitions run", async () => {
+    const service = makeService(async () => json({ answers: { bar: { noul: 0.5 } } }));
+    await service.register(CALLER, { name: "bar_joke", ...JEV, inputSchema: { type: "string" } });
+    await service.invoke(CALLER, { name: "bar_joke", input: "item-0" });
+    for (let run = 0; run < DECISION_TIMING_LIMITS.decisions; run += 1) {
+      await service.invoke(CALLER, { definition: { ...JEV, instructions: `Ad hoc ${run}.` }, input: "item-0" });
+    }
+    const listed = (service.list(CALLER, {}) as { decisions: Array<{ timing?: { samples: number } }> }).decisions[0]!;
+    expect(listed.timing?.samples).toBe(1);
+  });
 });
 
 describe("result files", () => {
@@ -622,6 +670,33 @@ describe("result files", () => {
     const read = await service.batchResults(CALLER, { batchId: "batch_crashed" }) as unknown as Page;
     expect(read).toMatchObject({ state: "cancelled", count: 4, succeeded: 1, failed: 3, skipped: 2 });
     expect(read.results.map((item) => item.code ?? "ok")).toEqual(["rate_limited", "ok", "skipped", "skipped"]);
+  });
+
+  // Rule: a result file that could not be written in full is not left to
+  // read back as a cancelled batch. Pre-fix, the partial file stayed, and
+  // after a restart its answered items read as skipped.
+  it.skipIf(process.platform === "win32")("removes a file it could not finish writing", async () => {
+    const gate = deferred();
+    const service = makeService(async () => {
+      await gate.promise;
+      return json({ answers: { bar: { noul: 0.5 } } });
+    }, { resultsDir: dir });
+    const started = await service.invoke(CALLER, {
+      definition: JEV,
+      inputs: Array.from({ length: 4 }, (_, index) => `item-${index}`),
+      concurrency: 1,
+      background: true,
+    }) as { batchId: string; resultsFile: string };
+    await expect.poll(async () => (await readFile(started.resultsFile, "utf8").catch(() => "")).length).toBeGreaterThan(0);
+    await chmod(started.resultsFile, 0o444);
+    gate.resolve();
+    await expect.poll(() => wakes.length).toBe(1);
+    expect(await readdir(dir)).toEqual([]);
+    const read = await service.batchResults(CALLER, { batchId: started.batchId }) as unknown as Page & { resultsFile?: string };
+    expect(read).toMatchObject({ state: "completed", succeeded: 4 });
+    expect(read.resultsFile).toBeUndefined();
+    const restarted = makeService(async () => json({}), { resultsDir: dir });
+    expect(await restarted.batchResults(CALLER, {})).toEqual({ batches: [] });
   });
 
   it("never turns a batch id that PwrAgent did not make into a path", async () => {

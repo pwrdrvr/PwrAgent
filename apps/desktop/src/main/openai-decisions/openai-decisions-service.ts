@@ -168,6 +168,13 @@ const TARGET_KEYS = new Set(["name", "decisionId"]);
 /** A batch card is rewritten at each further tenth of its items. */
 const BATCH_CARD_STEPS = 10;
 
+/** Writes a batch's card: on start (or while it waits), on progress, and at its end. */
+type BatchCard = {
+  update: () => void;
+  progress: () => void;
+  finish: () => Promise<void>;
+};
+
 /**
  * Registered OpenAI Decisions. The registry is local: OpenAI has no
  * register, update, delete, or version API. Invoke replays the stored
@@ -341,8 +348,9 @@ export class OpenAIDecisionsService {
 
   /**
    * Runs one input, or a batch. Every batch gets a batch id and keeps its
-   * finished items in owner memory, so decisions_batch_results can read
-   * them after a cancel, a client timeout, or a background run.
+   * finished items in owner memory and in its thread's result file, so
+   * decisions_batch_results can read them after a cancel, a client
+   * timeout, a background run, or a restart.
    * `onProgress` receives one line per finished batch item.
    */
   async invoke(
@@ -354,6 +362,8 @@ export class OpenAIDecisionsService {
     for (const key of Object.keys(args)) {
       if (!INVOKE_KEYS.has(key)) throw new OpenAIDecisionsError("invalid_input", `Unknown property "${key}".`);
     }
+    // close() waits only for the batches it saw, so nothing starts after it.
+    if (this.closing) throw new OpenAIDecisionsError("busy", "PwrAgent is shutting down. Try again after it restarts.");
     const bulk = args.inputs !== undefined;
     const single = "input" in args;
     if (bulk && single) {
@@ -395,10 +405,14 @@ export class OpenAIDecisionsService {
     this.assertLaneHasRoom(record.decisionId);
     this.batches.add(batch);
     this.openBatchFile(batch);
+    const card = this.batchCard(batch);
+    // A batch that must wait for its lane shows as waiting, so the
+    // operator can see it and stop it.
+    if (this.lanes.get(batch.decisionId)?.active) card.update();
     if (background) {
       const done = this.inLane(batch.decisionId, batch.controller.signal, async () =>
-        await this.runBatch(batch, validated, run))
-        .catch((error: unknown) => this.finishUnstarted(batch, error));
+        await this.runBatch(batch, validated, run, card))
+        .catch((error: unknown) => this.finishUnstarted(batch, card, error));
       this.runs.set(batch.batchId, done);
       void done.finally(() => this.runs.delete(batch.batchId));
       return {
@@ -416,8 +430,8 @@ export class OpenAIDecisionsService {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       const done = this.inLane(batch.decisionId, batch.controller.signal, async () =>
-        await this.runBatch(batch, validated, run, onProgress))
-        .catch((error: unknown) => this.finishUnstarted(batch, error));
+        await this.runBatch(batch, validated, run, card, onProgress))
+        .catch((error: unknown) => this.finishUnstarted(batch, card, error));
       this.runs.set(batch.batchId, done);
       await done;
     } finally {
@@ -612,7 +626,7 @@ export class OpenAIDecisionsService {
    * or one that failed unexpectedly. Either way it ends cancelled, and
    * whatever finished stays readable.
    */
-  private async finishUnstarted(batch: DecisionBatchRecord, error: unknown): Promise<void> {
+  private async finishUnstarted(batch: DecisionBatchRecord, card: BatchCard, error: unknown): Promise<void> {
     if (isFinishedBatch(batch)) return;
     if (!(error instanceof OpenAIDecisionsError)) {
       this.options.log?.warn("decision batch failed unexpectedly", {
@@ -624,7 +638,7 @@ export class OpenAIDecisionsService {
     }
     batch.cancelReason ??= "the call was cancelled";
     batch.controller.abort();
-    await this.finishBatch(batch, undefined);
+    await this.finishBatch(batch, card);
   }
 
   /** The stored version a call names: latest active, or a pinned version. */
@@ -668,7 +682,7 @@ export class OpenAIDecisionsService {
     const provider = definition.provider
       ?? await this.options.resolveDefaultProvider?.()
       ?? "openai";
-    const decisionId = `adhoc:${sha256Hex(canonicalJson({
+    const decisionId = `${AD_HOC_DECISION_ID_PREFIX}${sha256Hex(canonicalJson({
       provider,
       questions: definition.questions,
       prefix: definition.prefix ?? null,
@@ -701,6 +715,9 @@ export class OpenAIDecisionsService {
     signal: AbortSignal | undefined,
   ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
     const run = await this.untimedItemRunner(caller, record, signal);
+    // decisions_list shows timing for saved decisions only. An ad-hoc
+    // definition would take a slot and evict a saved one's window.
+    if (isAdHocDecisionId(record.decisionId)) return run;
     return async (input) => {
       const startedAt = this.now();
       const result = await run(input);
@@ -748,12 +765,12 @@ export class OpenAIDecisionsService {
     batch: DecisionBatchRecord,
     inputs: readonly unknown[],
     run: (input: unknown) => Promise<DecisionItemResult>,
+    card: BatchCard,
     onProgress?: (message: string) => void,
   ): Promise<void> {
     const signal = batch.controller.signal;
     batch.state = "running";
     batch.startedAt = this.now();
-    const card = this.batchCard(batch);
     card.update();
     function* pending(): Generator<number> {
       for (let index = 0; index < inputs.length; index += 1) {
@@ -793,7 +810,7 @@ export class OpenAIDecisionsService {
   /** Skips what never ran, settles the state, and tells the thread. */
   private async finishBatch(
     batch: DecisionBatchRecord,
-    started: ReturnType<OpenAIDecisionsService["batchCard"]> | undefined,
+    card: BatchCard,
   ): Promise<void> {
     const skippedReason = batch.stoppedBy
       ? `Skipped after ${batch.stoppedBy.code}.`
@@ -828,7 +845,6 @@ export class OpenAIDecisionsService {
       state: batch.state,
       ...(batch.stoppedBy ? { stoppedBy: batch.stoppedBy.code } : {}),
     });
-    const card = started ?? this.batchCard(batch);
     await card.finish();
     const silent = this.silentBatches.delete(batch.batchId);
     if (!batch.background || silent || this.closing || !this.options.wakeThread) return;
@@ -849,7 +865,7 @@ export class OpenAIDecisionsService {
    * 11 writes a batch, whatever its size. Writes run in order and a failed
    * write never fails the batch. Small blocking batches get no card.
    */
-  private batchCard(batch: DecisionBatchRecord) {
+  private batchCard(batch: DecisionBatchRecord): BatchCard {
     const report = this.options.reportBatch;
     const shown = report !== undefined
       && (batch.background || batch.count > OPENAI_DECISION_BOUNDS.bulkMaxConcurrency);
@@ -1094,12 +1110,7 @@ export class OpenAIDecisionsService {
       this.lanes.set(decisionId, lane);
     }
     if (lane.active) {
-      if (lane.waiters.length >= (this.options.queueLimit ?? 4)) {
-        throw new OpenAIDecisionsError(
-          "busy",
-          "This decision already has one request in flight and four waiting. Try again shortly.",
-        );
-      }
+      this.assertLaneHasRoom(decisionId);
       // A cancelled caller leaves the queue at once instead of holding a slot.
       await new Promise<void>((resolve, reject) => {
         const waiters = lane!.waiters;
@@ -1178,6 +1189,12 @@ function parseConcurrency(value: unknown, bulk: boolean): number {
     );
   }
   return value as number;
+}
+
+const AD_HOC_DECISION_ID_PREFIX = "adhoc:";
+
+function isAdHocDecisionId(decisionId: string): boolean {
+  return decisionId.startsWith(AD_HOC_DECISION_ID_PREFIX);
 }
 
 /** A decision's observed per-request time, once it has run since PwrAgent started. */
