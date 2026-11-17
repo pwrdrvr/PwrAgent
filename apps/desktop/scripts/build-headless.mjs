@@ -4,7 +4,6 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { headlessOutputManifest } from "./headless-output-manifest.mjs";
-import { headlessExternalSpecifier } from "./headless-external-specifier.mjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(desktop, "package.json"));
@@ -23,15 +22,17 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
   const result = await build({
     metafile: true,
     entryPoints: Object.fromEntries(Object.entries(headlessEntries).map(([name, entry]) => [name, path.join(desktop, entry)])),
-    // esbuild splits ESM only. Keep the Node 24 runtime graph as ESM and
-    // publish small CJS entry shims for existing daemon/worker consumers.
-    outdir, bundle: true, platform: "node", target: "node24", format: "esm", splitting: true,
-    outExtension: { ".js": ".mjs" }, sourcemap, logLevel,
+    // esbuild splits ESM only. Ship the portable Node 24 graph as ESM with
+    // CJS entry shims; retain the established CJS graph for checkout fixtures.
+    outdir, bundle: true, platform: "node", target: "node24", format: portable ? "esm" : "cjs", splitting: portable,
+    outExtension: { ".js": portable ? ".mjs" : ".js" }, sourcemap, logLevel,
     define: { "process.env.NODE_ENV": '"production"', "import.meta.url": "__pwragentModuleUrl", "import.meta.dirname": "__dirname" },
     // Bundled CommonJS dependencies still need a require relative to their
     // installed chunk, including native modules. All chunks stay beside the
     // runtime manifest and worker entries so existing asset paths keep working.
-    banner: { js: 'import { createRequire as __pwragentCreateRequire } from "node:module"; import { fileURLToPath as __pwragentFileURLToPath } from "node:url"; import { dirname as __pwragentDirname } from "node:path"; const require = __pwragentCreateRequire(import.meta.url); const __filename = __pwragentFileURLToPath(import.meta.url); const __dirname = __pwragentDirname(__filename); const __pwragentModuleUrl = import.meta.url;' },
+    banner: { js: portable
+      ? 'import { createRequire as __pwragentCreateRequire } from "node:module"; import { fileURLToPath as __pwragentFileURLToPath } from "node:url"; import { dirname as __pwragentDirname } from "node:path"; const require = __pwragentCreateRequire(import.meta.url); const __filename = __pwragentFileURLToPath(import.meta.url); const __dirname = __pwragentDirname(__filename); const __pwragentModuleUrl = import.meta.url;'
+      : 'const __pwragentModuleUrl = require("node:url").pathToFileURL(__filename).href;' },
     plugins: [...plugins, { name: "headless-host-dependencies", setup(builder) {
       builder.onResolve({ filter: /^electron(?:\/|$)/ }, () => { throw new Error("The headless runtime cannot import Electron."); });
       builder.onResolve({ filter: /^[^./]/ }, (args) => {
@@ -41,15 +42,7 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
           if (["better-sqlite3", "node-pty", "@napi-rs/canvas", "pdfjs-dist", "electron-log/node", "electron-log/node.js"].some(name => args.path === name || args.path.startsWith(name + "/"))) return { path: args.path, external: true };
           return;
         }
-        // Bundled CJS retains require's conditions and filesystem paths.
-        if (args.kind === "require-call" || args.kind === "require-resolve") {
-          try { return { path: require.resolve(args.path), external: true }; } catch { return; }
-        }
-        // ESM consumers need the package's import export condition (not, for
-        // example, ws/index.js whose CJS exports omit named ESM bindings).
-        try { return { path: import.meta.resolve(args.path), external: true }; } catch {
-          try { return { path: headlessExternalSpecifier(require.resolve(args.path)), external: true }; } catch { return; }
-        }
+        try { return { path: require.resolve(args.path), external: true }; } catch { return; }
       });
       builder.onResolve({ filter: /\?raw$/ }, (args) => ({ path: path.resolve(args.resolveDir, args.path.slice(0, -4)), namespace: "raw-data" }));
       builder.onLoad({ filter: /.*/, namespace: "raw-data" }, async (args) => ({ contents: await readFile(args.path, "utf8"), loader: "text" }));
@@ -57,7 +50,7 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
   });
   const info = JSON.parse(await readFile(path.join(desktop, "package.json"), "utf8"));
   await mkdir(outdir, { recursive: true });
-  for (const name of Object.keys(headlessEntries)) {
+  for (const name of portable ? Object.keys(headlessEntries) : []) {
     const entry = Object.values(result.metafile.outputs).find(output => output.entryPoint
       && path.resolve(output.entryPoint) === path.join(desktop, headlessEntries[name]));
     if (!entry) throw new Error(`Missing headless entry: ${name}`);
