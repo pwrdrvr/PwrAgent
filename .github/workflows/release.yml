@@ -700,50 +700,60 @@ jobs:
       - linux-package
       - sign
       - windows-sign
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       contents: write
       id-token: none
     steps:
       - name: Set up Node.js runtime only
+        timeout-minutes: 2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "^24.22.1"
           package-manager-cache: false
 
       - name: Checkout repository
+        timeout-minutes: 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Download macOS release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: desktop-release-artifacts
-          path: mac-dist
+      # Separate destinations; the group joins before any verification/mutation.
+      # Transfers share this runner's network and disk; throughput is unmeasured.
+      - parallel:
+          - name: Download macOS release artifacts
+            timeout-minutes: 10
+            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+            with:
+              name: desktop-release-artifacts
+              path: mac-dist
 
-      - name: Download Windows installer artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: windows-installer
-          path: windows-dist
+          - name: Download Windows installer artifact
+            timeout-minutes: 10
+            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+            with:
+              name: windows-installer
+              path: windows-dist
 
-      - name: Download Linux package artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: linux-packages-*
-          path: linux-dist
-          merge-multiple: true
+          - name: Download Linux package artifacts
+            timeout-minutes: 10
+            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+            with:
+              pattern: linux-packages-*
+              path: linux-dist
+              merge-multiple: true
 
-      - name: Download exact-build debug artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: desktop-debug-*
-          path: debug-dist
-          merge-multiple: true
+          - name: Download exact-build debug artifacts
+            timeout-minutes: 10
+            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+            with:
+              pattern: desktop-debug-*
+              path: debug-dist
+              merge-multiple: true
 
       - name: Verify debug artifact targets, identities, and checksums
+        timeout-minutes: 2
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
@@ -752,6 +762,7 @@ jobs:
             debug-dist "${RELEASE_TAG#v}" "$(git rev-parse HEAD)"
 
       - name: Verify Linux packages and generate checksums
+        timeout-minutes: 3
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
@@ -762,6 +773,7 @@ jobs:
       # alias for its documented download URL while giving the Windows manifest
       # a platform-specific asset name; GitHub Releases rejects duplicate names.
       - name: Name Windows checksum manifest
+        timeout-minutes: 1
         run: mv windows-dist/SHA256SUMS windows-dist/PwrAgent-windows-SHA256SUMS
 
       # electron-updater resolves an update by fetching exactly one file name
@@ -770,6 +782,7 @@ jobs:
       # the module release.mjs imports for its own packaging checks, so the two
       # cannot drift.
       - name: Verify updater channel files
+        timeout-minutes: 2
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
@@ -780,7 +793,12 @@ jobs:
             --version "${RELEASE_TAG#v}" \
             mac-dist windows-dist linux-dist
 
+      # All staged files are now final. Both uploads only read them. Wait below
+      # keeps publication failure fatal; optional retention has its own deadline.
       - name: Create release and publish all platform assets
+        id: publish_assets
+        background: true
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -844,11 +862,13 @@ jobs:
             verify-published "$RUNNER_TEMP/release-asset-names.txt" "${RELEASE_TAG#v}"
 
       - name: Upload assembled release artifacts (debug retention)
+        timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         continue-on-error: true
         with:
           name: release-publish-artifacts
+          compression-level: 0
           path: |
             mac-dist/*
             windows-dist/*
@@ -860,6 +880,9 @@ jobs:
             linux-dist/SHA256SUMS
             debug-dist/*
           retention-days: 90
+
+      - name: Wait for required release publication
+        wait: publish_assets
 
   publish-release-notes:
     name: Publish release notes

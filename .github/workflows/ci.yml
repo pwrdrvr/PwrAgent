@@ -232,6 +232,10 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:electron-version
 
+      - name: Release publication time budget and isolation
+        timeout-minutes: 1
+        run: node scripts/check-release-publication-workflow.mjs
+
       - name: Renderer function bytecode budget
         timeout-minutes: 10
         run: pnpm check:renderer-bytecode

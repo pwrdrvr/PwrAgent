@@ -370,6 +370,72 @@ do not depend on a prior job's PATH or the hosted image's preinstalled Node.
 Signing dependencies arrive in the verified archive; publication scripts use
 Node's standard library and do not install project dependencies.
 
+### Publication time budget and optional retention
+
+`publish-release-assets` has a 45-minute deadline. Its four downloads use a
+native Actions `parallel` group with separate destinations and ten-minute
+step caps. The group joins before debug/source/checksum verification, Linux
+checksum generation, Windows checksum renaming, and updater verification.
+After those operations the staged files are final: required publication runs
+with `background: true` and a twenty-minute cap while one optional assembled
+artifact upload runs with a five-minute cap and `continue-on-error: true`.
+An explicit `wait` propagates publication failure before notes/npm can start.
+Retention failure or step timeout is optional; required publication and all
+verification remain fatal. No upload fan-out was added inside either uploader.
+
+The maximum configured step path is 42 minutes, leaving three minutes for
+runner/action overhead and cleanup. This reserve matters: `continue-on-error`
+does not protect a job from its overall deadline. The static oracle
+`node scripts/check-release-publication-workflow.mjs` checks the path and join;
+CI also exercises its budget boundaries and failure-isolation mutations.
+These are limits, not measured throughput improvements. Concurrent transfers
+share runner network/disk capacity; compare future run timings before making
+performance claims.
+
+The assembled `release-publish-artifacts` ZIP retains the same members and
+90-day lifetime, with `compression-level: 0` to avoid recompressing the packaged
+DMG/ZIP/installer/Linux/debug archives. This changes only the Actions container,
+not member bytes. Original macOS/Windows signed artifacts also retain for
+90 days. Homebrew/Winget acquisition continues to require an exact-source,
+successful `release.yml` run and verified member size/SHA-256; the assembled
+artifact remains a fallback, not a prerequisite for successful publication.
+
+### Recovery proposal when assets were published before a job timeout
+
+This is a separate operator-authorized procedure to design and review, not a
+reason to rerun or retag an existing release. Workflow edits on `main` do not
+change the workflow stored at an existing tag. A failed-job rerun can encounter
+an already-created release, and dispatching the tagged workflow still uses its
+old time budget. Neither is a safe general recovery for this case.
+
+For v1.4.9, preserve source `fef2605487bcdc1c10cf031f81eaee15901deb92`,
+run `44021090875`, all published assets, and the original retained platform,
+debug and tested npm artifacts. Inventory the current attempts and retention
+first. A proposed verification-only recovery should check the unmoved tag,
+original producer identities, complete expected asset set, member sizes and
+hashes, source/debug identities, signed installer identities and updater feeds
+against the published metadata. It must neither create/edit/upload a release
+nor rebuild, delete, overwrite or republish its assets, and must leave channel,
+credentials and environment protections unchanged.
+
+The current artifact resolver rejects the failed original run even if its
+producer jobs succeeded. A new workflow dispatched on `main` would also have
+a different `head_sha`. Do not relax either check globally or report that a
+verification-only run automatically repairs distribution eligibility. Review
+an explicit recovery attestation design separately: bind the immutable original
+run, source, artifact IDs/digests and complete published inventory to trusted
+verification evidence, and teach Homebrew/Winget consumers to accept only that
+narrowly verified recovery. Keep ordinary failed/fork/PR/expired artifact
+rejection intact, with negative oracle coverage before any consumer change.
+
+Notes and npm completion need a separate decision after this read-only audit.
+Check notes and npm state first; an existing npm version requires the retained
+tested tarball's integrity/source/provenance verification. If npm was never
+submitted, a new publish requires explicit operator authorization and the
+existing protected environment. Do not promote the desktop release or claim
+shared completion while npm remains incomplete. See
+[partial-failure recovery](headless-npm-release.md#partial-failures-and-retries).
+
 The macOS no-secret prepare job runs on GitHub-hosted `macos-26`.
 Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
 so selecting Xcode 26 on `macos-15` crashes during the icon compile even when
