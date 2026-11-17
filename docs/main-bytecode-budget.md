@@ -122,7 +122,15 @@ first/third-party provenance, and missing source-map attribution.
 A new helper containing an anonymous callback with 4,000 observable property
 updates fails the real SSR and Oxc-production checks on Node and Electron.
 Moving those same updates into four named function frames passes, including
-production compression. A separate oversized function with an empty source
-map also fails. The fixtures cross the bytecode bound rather than infer size
+production compression. Exact maximum first-party sizes for the unchanged
+oversized fixture and its separated version are:
+
+| Compilation | Oversized, exit 1 | Separated, exit 0 |
+| --- | ---: | ---: |
+| Node, Vitest SSR | 55,619 | 14,002 |
+| Node, Oxc production | 55,619 | 14,002 |
+| Electron, Oxc production | 51,747 | 13,002 |
+
+A separate oversized function with an empty source map also fails. The fixtures cross the bytecode bound rather than infer size
 from source length or elapsed time. Compiler subprocess integrations have a
 30-second test-harness timeout; no test asserts a runtime latency threshold.
