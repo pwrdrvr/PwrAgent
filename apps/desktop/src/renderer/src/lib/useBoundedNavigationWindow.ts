@@ -251,5 +251,10 @@ export function useBoundedNavigationWindow(params: Demand & {
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);
   const setVisibleAnchor = useCallback((id: string, anchor: NavigationQueryAnchor | undefined) => controllerRef.current?.setVisibleAnchor(id, anchor), []);
   const connectionError = !connected && connection?.target === targetKey ? connection.error : undefined;
-  return { ...state, presentationReady, directories, selectedDirectoryKeys, connected, ...(connectionError ? { connectionError } : {}), invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
+  // The controller publishes immutable resource snapshots. Unrelated shell
+  // state must not give every navigation consumer a new wrapper.
+  return useMemo(() => ({ ...state, presentationReady, directories, selectedDirectoryKeys, connected,
+    ...(connectionError ? { connectionError } : {}), invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor }),
+  [state, presentationReady, directories, selectedDirectoryKeys, connected, connectionError,
+    invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor]);
 }

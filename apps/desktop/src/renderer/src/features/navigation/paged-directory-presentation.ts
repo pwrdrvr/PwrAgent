@@ -18,17 +18,25 @@ export type PagedDirectoryPresentation = {
   directoryUnpinnedThreadCount: number;
 };
 
-type DirectoryChildren = Pick<PagedDirectoryPresentation, "childThreadsByParentKey" | "ownerChildOrder" | "ordinaryChildCounts">;
+export type DirectoryChildren<Row = NavigationThreadSummary> = {
+  childThreadsByParentKey: Map<string, Row[]>;
+  ownerChildOrder: Map<string, string[]>;
+  ordinaryChildCounts: Map<string, number>;
+};
 export type PagedDirectoryChildren = Map<string, DirectoryChildren>;
 
-/** Child pages belong to the window, not to each expanded directory. */
-export function buildPagedDirectoryChildren(params: {
+export type PagedDirectoryChildInputs = {
   presentationOrder?: NavigationPresentationOrder;
   resources: NavigationWindowQueriesState["resources"];
-  threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
-}): PagedDirectoryChildren {
+};
+
+/** Child pages belong to the window, not to each expanded directory. */
+function projectPagedDirectoryChildren<Row>(
+  params: PagedDirectoryChildInputs,
+  resolve: (key: string) => Row | undefined,
+): Map<string, DirectoryChildren<Row>> {
   const presentation = params.presentationOrder ?? readNavigationPresentationOrder(params.resources);
-  const directories: PagedDirectoryChildren = new Map();
+  const directories = new Map<string, DirectoryChildren<Row>>();
   const seenByScopeAndParent = new Map<string, Set<string>>();
   const ownerChildOrder = readOwnerChildOrder(params.resources, presentation);
   for (const resource of params.resources.values()) {
@@ -47,7 +55,7 @@ export function buildPagedDirectoryChildren(params: {
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
       const bucketKey = JSON.stringify([query.directoryKey, parentKey]);
       const seen = seenByScopeAndParent.get(bucketKey) ?? new Set<string>();
-      const row = params.threadsByKey.get(entry.key);
+      const row = resolve(entry.key);
       const children = directory.childThreadsByParentKey.get(parentKey) ?? [];
       if (!row || seen.has(entry.key)) continue;
       seen.add(entry.key);
@@ -57,6 +65,24 @@ export function buildPagedDirectoryChildren(params: {
     }
   }
   return directories;
+}
+
+export function buildPagedDirectoryChildren(params: PagedDirectoryChildInputs & {
+  threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
+}): PagedDirectoryChildren {
+  return projectPagedDirectoryChildren(params, (key) => params.threadsByKey.get(key));
+}
+
+/** Membership and owner order do not depend on the latest row metadata. */
+export function buildPagedDirectoryChildKeys(params: PagedDirectoryChildInputs & {
+  threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
+}): { directories: Map<string, DirectoryChildren<string>>; admissionKeys: string[] } {
+  const admissionKeys: string[] = [];
+  const directories = projectPagedDirectoryChildren(params, (key) => {
+    admissionKeys.push(key);
+    return params.threadsByKey.has(key) ? key : undefined;
+  });
+  return { directories, admissionKeys };
 }
 
 /** Presentation of admitted entries only. Placement and counts remain owner authority. */
