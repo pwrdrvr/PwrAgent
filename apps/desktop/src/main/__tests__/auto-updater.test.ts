@@ -1680,6 +1680,26 @@ describe("auto updater", () => {
         fixture.restore();
       }
     });
+
+    it("revalidates readiness after quieting without installing the Linux package twice", async () => {
+      const fixture = useLinuxPackage("deb");
+      try {
+        const updater = await importAutoUpdater();
+        updater.initAutoUpdater();
+        await vi.waitFor(() => expect(checkForUpdatesMock).toHaveBeenCalledOnce());
+        updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+        expect(await updater.installDownloadedAppUpdate({ requestQuit: async (performQuit, beforeQuit) => {
+          expect(beforeQuit?.()).toBe(true);
+          expect(beforeQuit?.()).toBe(true);
+          performQuit();
+          return true;
+        } })).toEqual({ status: "restarting" });
+        expect(authorizeInstallMock).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(appQuitMock).toHaveBeenCalledOnce());
+      } finally {
+        fixture.restore();
+      }
+    });
   });
 
   it("uses the selected update channel for manual checks", async () => {

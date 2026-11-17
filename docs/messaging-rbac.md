@@ -56,6 +56,7 @@ code side).
 | `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection, `read_star_map_view`), point the desktop Star Map at them (`fly_star_map_to`, `highlight_star_map_threads`, `set_star_map_view`), scan for idle threads (`scan_thread_maintenance`), and open the desktop Thread maintenance dialog (`open_thread_maintenance`). |
 | `tools.thread_orchestration` | tools (danger: med) | Let the agent inject messages into other threads, hand off tasks, attach directories, and attach PRs. |
 | `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
+| `tools.instance_lifecycle` | tools (danger: high) | Additional explicit grant for `manage_pwragent`, including status. Requires a designated Agent thread and a retained actor whose current provider access is verified. Admin is the only built-in role granting it. Power User + Tools does not. |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
 | `federation.remote_control` | danger (danger: high) | Browse and drive threads that live on federated peers, not just this machine. Required *in addition to* the action's own permission — see "Federation scope" below. |
 
@@ -147,6 +148,14 @@ Two operator consequences of that rule are worth internalizing:
   so re-toggling never clobbers edits.
 
 ## Enforcement surfaces
+
+`manage_pwragent` requires both instance permissions through the canonical
+resolver. Its stricter lifecycle gate denies legacy/non-enforcing policy,
+unattributed desktop turns, missing actor provenance, and ordinary coding or
+handoff threads. An actor or custom role named “owner” confers no authority by
+name; a custom role needs explicit grants. The local provider transport supplies
+thread/turn identity. Discovery and execution re-resolve the persisted Agent
+designation and retained actor, including after response acknowledgement.
 
 All enforcement funnels through `requirePermission` in
 [`apps/desktop/src/main/messaging/core/messaging-controller.ts`](../apps/desktop/src/main/messaging/core/messaging-controller.ts):

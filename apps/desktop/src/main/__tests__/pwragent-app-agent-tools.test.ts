@@ -66,7 +66,7 @@ describe("PwrAgent app agent tools", () => {
     });
     expect(handler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "status" },
     });
   });
@@ -91,11 +91,23 @@ describe("PwrAgent app agent tools", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it.each([{ action: "restart", instanceId: "another-owner" }, { action: "stop", expectedStateToken: 123 }])("refuses unsupported targets and invalid guards rather than dropping them", async (args) => {
+  it.each([{ action: "restart", instanceId: "another-owner" }, { action: "stop", expectedStateToken: 123 },
+    { action: "download", expectedVersion: "latest" }, { action: "restart", role: "owner" }, { action: "restart", actor: "admin" },
+    { action: "cancel", operationId: 123 }])("refuses unsupported targets and invalid guards rather than dropping them", async (args) => {
     const handler = vi.fn();
     const router = buildPwrAgentAppToolRouter(handler);
     expect(await router.handleMcpToolCall({ backend: "codex", threadId: "fixture", tool: "manage_pwragent", args })).toMatchObject({ isError: true });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("advertises explicit download and cancellation in the existing lifecycle tool", () => {
+    const specs = buildPwrAgentAppToolRouter(undefined).buildMcpTools();
+    expect(specs).toEqual([expect.objectContaining({ name: "manage_pwragent", inputSchema: expect.objectContaining({
+      additionalProperties: false, properties: expect.objectContaining({
+        action: expect.objectContaining({ enum: ["status", "upgrade_check", "download", "cancel", "restart", "stop"] }),
+        expectedVersion: expect.objectContaining({ type: "string" }), operationId: expect.objectContaining({ type: "string" }),
+      }),
+    }) })]);
   });
 
   it("accepts the legacy pwragent_app namespace as an invocation alias", async () => {
@@ -139,7 +151,7 @@ describe("PwrAgent app agent tools", () => {
     ).resolves.toMatchObject({ success: true });
     expect(handler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "stop" },
     });
   });

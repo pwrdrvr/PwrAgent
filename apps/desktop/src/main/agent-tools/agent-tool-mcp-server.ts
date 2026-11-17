@@ -153,7 +153,7 @@ export type AgentToolMcpServerOptions = {
    * Whether a client may see a tool. A contained member lists only its
    * allowed tools; `authorizeToolCall` still refuses the rest per call.
    */
-  isToolAdvertised?: (name: string) => boolean;
+  isToolAdvertised?: (name: string, context: AgentToolMcpClientContext) => boolean | Promise<boolean>;
   resolveToolResultReminder?: (
     context: ResolvedAgentToolMcpCallContext,
   ) => Promise<string | undefined>;
@@ -375,7 +375,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     });
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
-    const toolNames = this.resolveMcpTools(params.clientContext).map((tool) => tool.name);
+    const toolNames = (await this.resolveMcpTools(params.clientContext)).map((tool) => tool.name);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
     const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
@@ -428,7 +428,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return { contents: [content] };
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: this.resolveMcpTools(params.clientContext),
+      tools: await this.resolveMcpTools(params.clientContext),
     }));
     mcpServer.setRequestHandler(
       CallToolRequestSchema,
@@ -570,11 +570,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return result;
   }
 
-  private resolveMcpTools(context: AgentToolMcpClientContext): AgentMcpTool[] {
+  private async resolveMcpTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
     const toolsByName = new Map<string, AgentMcpTool>();
     for (const catalog of this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
-        if (this.options.isToolAdvertised && !this.options.isToolAdvertised(tool.name)) continue;
+        if (this.options.isToolAdvertised && !await this.options.isToolAdvertised(tool.name, context)) continue;
         if (toolsByName.has(tool.name)) {
           throw new Error(`Duplicate PwrAgent MCP tool name: ${tool.name}`);
         }

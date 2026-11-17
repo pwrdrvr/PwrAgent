@@ -77,6 +77,7 @@ export type MessagingPermissionId =
   | "tools.thread_inspection"
   | "tools.thread_orchestration"
   | "tools.instance_management"
+  | "tools.instance_lifecycle"
   // Publishes as the operator's GitHub or GitLab account: pull and merge requests, comments,
   // reviews, issues and merges through PwrAgent's own forge tools.
   | "tools.forge_write"
@@ -294,6 +295,14 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     danger: "med",
   },
   {
+    id: "tools.instance_lifecycle",
+    label: "Agent: update and restart PwrAgent",
+    description:
+      "Allow a designated Agent to check, download, install, restart or stop its local PwrAgent instance for an authenticated actor.",
+    group: "tools",
+    danger: "high",
+  },
+  {
     id: "tools.forge_write",
     label: "Agent: change GitHub and GitLab",
     description:
@@ -350,13 +359,13 @@ export const RBAC_BUILT_IN_ROLE_IDS = {
 
 /**
  * Whether a role's permission set makes it escalation-equivalent. A role that
- * can select full access is dangerous and must carry the danger marker (drives
+ * can select full access or control the app lifecycle must carry the danger marker (drives
  * the danger badge + the mandatory two-factor grant acknowledgment).
  */
 export function roleIsDangerous(
   permissions: readonly MessagingPermissionId[],
 ): boolean {
-  return permissions.includes("thread.execution.full_access");
+  return permissions.includes("thread.execution.full_access") || permissions.includes("tools.instance_lifecycle");
 }
 
 /**

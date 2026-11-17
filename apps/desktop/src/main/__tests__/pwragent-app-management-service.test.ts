@@ -41,7 +41,7 @@ describe("PwrAgent app management service", () => {
     const { createPwrAgentAppManagementHandler } = await import(
       "../agent-tools/pwragent-app-management-service"
     );
-    const handler = createPwrAgentAppManagementHandler({
+    const handler = createPwrAgentAppManagementHandler({ authorize: async () => true,
       now: () => 121_000,
       startedAt: 1_000,
       version: () => "9.9.9",
@@ -85,7 +85,7 @@ describe("PwrAgent app management service", () => {
     const { createPwrAgentAppManagementHandler } = await import(
       "../agent-tools/pwragent-app-management-service"
     );
-    const handler = createPwrAgentAppManagementHandler({
+    const handler = createPwrAgentAppManagementHandler({ authorize: async () => true,
       now: () => 2_000,
       startedAt: 1_000,
     });
@@ -124,7 +124,7 @@ describe("PwrAgent app management service", () => {
     const { createPwrAgentAppManagementHandler } = await import(
       "../agent-tools/pwragent-app-management-service"
     );
-    const handler = createPwrAgentAppManagementHandler({
+    const handler = createPwrAgentAppManagementHandler({ authorize: async () => true,
       now: () => 2_000,
       requestRestart,
       startedAt: 1_000,
@@ -136,7 +136,7 @@ describe("PwrAgent app management service", () => {
       args: { action: "restart" },
     });
 
-    expect(requestRestart).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(requestRestart).toHaveBeenCalledTimes(1));
     expect(appMock.relaunch).toHaveBeenCalledTimes(1);
     expect(appMock.quit).toHaveBeenCalledTimes(1);
     expect(response).toMatchObject({
@@ -166,7 +166,7 @@ describe("PwrAgent app management service", () => {
     const { createPwrAgentAppManagementHandler } = await import(
       "../agent-tools/pwragent-app-management-service"
     );
-    const handler = createPwrAgentAppManagementHandler({ startedAt: 1_000 });
+    const handler = createPwrAgentAppManagementHandler({ authorize: async () => true, startedAt: 1_000 });
 
     await expect(
       handler({
@@ -205,7 +205,7 @@ describe("PwrAgent app management service", () => {
       return accepted ? { status: "restarting" } : { status: "error", message: "Not authorized" };
     });
     const { createPwrAgentAppManagementHandler } = await import("../agent-tools/pwragent-app-management-service");
-    const handler = createPwrAgentAppManagementHandler({ startedAt: 1_000 });
+    const handler = createPwrAgentAppManagementHandler({ authorize: async () => true, startedAt: 1_000 });
     const response = await handler({ operation: "manage_pwragent", context: { responseFlushed: Promise.resolve() }, args: { action: "restart" } });
     expect(response).toMatchObject({ data: { result: { status: "restart_scheduled" }, operation: { status: "waiting_for_response" } } });
     await vi.waitFor(async () => {
@@ -224,7 +224,7 @@ describe("PwrAgent app management service", () => {
     const { createPwrAgentAppManagementHandler } = await import(
       "../agent-tools/pwragent-app-management-service"
     );
-    const handler = createPwrAgentAppManagementHandler({
+    const handler = createPwrAgentAppManagementHandler({ authorize: async () => true,
       now: () => 2_000,
       startedAt: 1_000,
     });
@@ -235,7 +235,7 @@ describe("PwrAgent app management service", () => {
       args: { action: "restart" },
     });
 
-    expect(installDownloadedAppUpdateMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(installDownloadedAppUpdateMock).toHaveBeenCalledTimes(1));
     expect(response).toMatchObject({
       ok: true,
       data: {

@@ -8,6 +8,7 @@ import {
   PWRAGENT_APP_MANAGEMENT_ACTIONS,
   PWRAGENT_APP_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
+  isPwrAgentUpdateVersion,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -40,11 +41,12 @@ export function buildPwrAgentAppToolRouter(
 
 export function buildPwrAgentAppToolDefinitions(
   handler: PwrAgentAppManagementHandler | undefined,
-  options: { namespace?: string } = {},
+  options: { namespace?: string; advertise?: boolean } = {},
 ): AgentToolDefinition<PwrAgentAppOperationName>[] {
   return PWRAGENT_APP_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    advertise: options.advertise,
     annotations: { readOnlyHint: false },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
@@ -56,22 +58,29 @@ export function buildPwrAgentAppToolDefinitions(
           message: PWRAGENT_APP_MANAGEMENT_UNAVAILABLE_MESSAGE,
         });
       }
-      if (Object.keys(args).some((key) => key !== "action" && key !== "expectedStateToken")
-        || (args.expectedStateToken !== undefined && (typeof args.expectedStateToken !== "string" || !args.expectedStateToken))) {
-        return agentToolFailure({ code: "invalid_arguments", message: "App management accepts only action and an optional non-empty expectedStateToken. It always targets this local owner." });
+      if (Object.keys(args).some((key) => !["action", "expectedStateToken", "expectedVersion", "operationId"].includes(key))
+        || (args.expectedStateToken !== undefined && (typeof args.expectedStateToken !== "string" || !args.expectedStateToken))
+        || (args.expectedVersion !== undefined && !isPwrAgentUpdateVersion(args.expectedVersion))
+        || (args.operationId !== undefined && (typeof args.operationId !== "string" || !args.operationId || args.operationId.length > 128))) {
+        return agentToolFailure({ code: "invalid_arguments", message: "App management accepts only action, expectedStateToken, expectedVersion and operationId. It always targets this local owner." });
       }
       const action = normalizeAction(args.action);
       if (!action) {
         return agentToolFailure({
           code: "invalid_arguments",
           message:
-            "manage_pwragent requires action to be one of: status, upgrade_check, restart, stop.",
+            "manage_pwragent requires action to be one of: status, upgrade_check, download, cancel, restart, stop.",
         });
       }
       const response = await handler({
         operation,
-        context: context.responseFlushed ? { responseFlushed: context.responseFlushed } : {},
-        args: { action, ...(typeof args.expectedStateToken === "string" ? { expectedStateToken: args.expectedStateToken } : {}) },
+        context: { backend: context.backend, threadId: context.threadId, turnId: context.turnId,
+          ...(context.responseFlushed ? { responseFlushed: context.responseFlushed } : {}) },
+        args: { action,
+          ...(typeof args.expectedStateToken === "string" ? { expectedStateToken: args.expectedStateToken } : {}),
+          ...(typeof args.expectedVersion === "string" ? { expectedVersion: args.expectedVersion } : {}),
+          ...(typeof args.operationId === "string" ? { operationId: args.operationId } : {}),
+        },
       } as PwrAgentAppRequest);
       return appResponseToAgentToolResult(response);
     },
@@ -81,7 +90,7 @@ export function buildPwrAgentAppToolDefinitions(
 function descriptionForOperation(operation: PwrAgentAppOperationName): string {
   switch (operation) {
     case "manage_pwragent":
-      return "Manage this local desktop owner only (no Federation routing). Status is read-only. upgrade_check may download/stage. Restart uses Quiet & Continue After Restart after acknowledgement and any quit confirmation. Stop uses ordinary quit. Restart/stop require an explicit user request. Scheduled means pending acknowledgement or confirmation. Accepted means handed to shutdown. It does not confirm installation completed.";
+      return "Manage this local desktop owner from a designated Agent with explicit lifecycle authority. No Federation target forwarding. Status is read-only. upgrade_check may download/stage. download starts or reuses an exact checked version. Restart uses Quiet & Continue After Restart after acknowledgement. Authorized chat operations require no desktop confirmation. Restart/stop require an explicit user request. Scheduled means pending acknowledgement. Accepted means handed to shutdown. Verify the running version after relaunch.";
   }
 }
 
@@ -95,6 +104,14 @@ function inputSchemaForOperation(
         additionalProperties: false,
         required: ["action"],
         properties: {
+          expectedVersion: {
+            type: "string", maxLength: 128,
+            description: "Exact version, such as 1.4.8. Required for download or download cancellation. Use with restart to refuse any other version.",
+          },
+          operationId: {
+            type: "string", minLength: 1, maxLength: 128,
+            description: "For cancel, copy the scheduled lifecycle operation id from status. Cancellation is refused after shutdown preparation starts.",
+          },
           expectedStateToken: {
             type: "string",
             minLength: 1,
@@ -104,7 +121,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: PWRAGENT_APP_MANAGEMENT_ACTIONS,
             description:
-              "`status` gets version, start time, uptime and update state. It also includes Codex app-server uptime, child-process count and last idle recycle. `upgrade_check` checks and may automatically download/stage. It never installs or restarts. `restart` installs a ready upgrade or relaunches the current version. It uses bounded Quiet & Continue After Restart. Quiet checkpoints and steers turns, terminates environment actions and may interrupt unfinished work after 15s. It does not wait indefinitely for idle. The operator can override with Quit Now. `stop` requests ordinary quit. Staged updates may apply under the platform quit policy. Read status for the asynchronous operation outcome. Headless owners do not support desktop lifecycle actions.",
+              "`status` reads runtime and update progress without a network request. `upgrade_check` checks the selected track and may download automatically. `download` starts or reuses the checked expectedVersion. Read status until that exact version is downloaded and staged. `restart` installs that ready version or relaunches the current version. It uses bounded Quiet & Continue After Restart after acknowledgement. Quiet checkpoints work and may interrupt unfinished turns after 15s. `cancel` uses operationId before shutdown preparation, or expectedVersion to request download cancellation. `stop` requests ordinary quit. Staged updates may apply under the platform quit policy. Scheduled and handed_off describe progress, not proof of installation. Post-restart continuations verify the target version. Headless owners do not support desktop lifecycle actions.",
           },
         },
       };

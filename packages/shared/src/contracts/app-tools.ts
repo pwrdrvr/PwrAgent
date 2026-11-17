@@ -1,3 +1,5 @@
+import type { AppServerBackendKind } from "./normalized-app-server";
+
 /** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const PWRAGENT_APP_TOOL_NAMESPACE = "pwragent_app";
 
@@ -9,6 +11,8 @@ export type PwrAgentAppOperationName =
 export const PWRAGENT_APP_MANAGEMENT_ACTIONS = [
   "status",
   "upgrade_check",
+  "download",
+  "cancel",
   "restart",
   "stop",
 ] as const;
@@ -26,6 +30,10 @@ export const PWRAGENT_APP_ERROR_CODES = [
 export type PwrAgentAppErrorCode = (typeof PWRAGENT_APP_ERROR_CODES)[number];
 
 export type PwrAgentAppManagementContext = {
+  /** Caller identity supplied by the local provider transport, never tool arguments. */
+  backend?: AppServerBackendKind;
+  threadId?: string;
+  turnId?: string;
   now?: number;
   /** Trusted local transport acknowledgement, never a tool argument. */
   responseFlushed?: Promise<void>;
@@ -35,7 +43,16 @@ export type ManagePwrAgentToolArgs = {
   action: PwrAgentAppManagementAction;
   /** Opaque status token binds a mutation to the inspected owner and update state. */
   expectedStateToken?: string;
+  /** Exact target, required for a download or download cancellation. */
+  expectedVersion?: string;
+  /** Cancel only this scheduled lifecycle operation, before preparation starts. */
+  operationId?: string;
 };
+
+export function isPwrAgentUpdateVersion(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 128
+    && /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(value);
+}
 
 export type PwrAgentAppToolArgsByOperation = {
   manage_pwragent: ManagePwrAgentToolArgs;
@@ -134,6 +151,7 @@ export type PwrAgentLifecycleOperation = {
   action: "restart" | "stop";
   status: "waiting_for_response" | "confirming" | "preparing" | "handed_off" | "cancelled" | "failed";
   message?: string;
+  expectedVersion?: string;
 };
 
 export type PwrAgentAppManagementData = {
@@ -152,6 +170,8 @@ export type PwrAgentAppManagementData = {
   result:
     | { status: "reported" }
     | { status: "check_completed"; check: PwrAgentUpdateToolStatus }
+    | { status: "download_requested"; download: PwrAgentUpdateToolStatus }
+    | { status: "download_cancel_requested"; cancelRequested: boolean }
     | { status: "restart_scheduled"; installingDownloadedUpdate: boolean }
     | { status: "stop_scheduled" }
     | { status: "restart_accepted"; installingDownloadedUpdate: boolean }

@@ -5,9 +5,10 @@ import { buildPwrAgentTaskMonitorToolRouter } from "../pwragent-task-monitor-age
 
 describe("PwrAgent task monitor agent tools", () => {
   it("includes monitor creation and cancellation in both parent transports", () => {
-    const catalogs = resolveAgentToolCatalogs({});
+    const context = { appManagementAllowed: true };
+    const catalogs = resolveAgentToolCatalogs(context);
     const mcpCatalogs = resolveAgentToolCatalogs(
-      {},
+      context,
       { taskMonitorRole: "all" },
     );
     const dynamicTools = catalogs
@@ -180,7 +181,7 @@ describe("PwrAgent task monitor agent tools", () => {
         }
       }
     };
-    for (const catalog of resolveAgentToolCatalogs({})) {
+    for (const catalog of resolveAgentToolCatalogs({ appManagementAllowed: true })) {
       visit(catalog.dynamicTools);
     }
 

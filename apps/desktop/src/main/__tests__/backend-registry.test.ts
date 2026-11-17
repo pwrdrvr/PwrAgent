@@ -1,6 +1,7 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
+import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
@@ -5134,8 +5135,9 @@ describe("DesktopBackendRegistry", () => {
       instanceId: string,
       live: string[] = [],
       plan: Omit<RestartDispatchPlanOptions, "now"> = {},
+      uniqueTurns = false,
     ) => {
-      const codexClient = new MockBackendClient({});
+      const codexClient = new MockBackendClient(uniqueTurns ? { startTurnResults: Array.from({ length: 10 }, (_, index) => ({ threadId: "manager", turnId: `turn-${index + 1}` })) } : {});
       const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
@@ -5155,6 +5157,122 @@ describe("DesktopBackendRegistry", () => {
       if (started.status !== "started") throw new Error("expected a started turn");
       await emitStartedTurn(registry, "codex", threadId, started.turnId);
     };
+
+    const prepareVerification = async (registry: DesktopBackendRegistry) => {
+      vi.spyOn(registry, "canManagePwrAgent").mockResolvedValue(true);
+      const host = registry as unknown as { readTurnCausalMessagingOrigin: () => Promise<AppServerThreadMessageOrigin | undefined> };
+      vi.spyOn(host, "readTurnCausalMessagingOrigin").mockResolvedValue({ kind: "messaging",
+        causalMessagingSource: { ownerId: "profile", requestId: "owner-request" } });
+      return await registry.prepareAgentRestartVerification({ backend: "codex", threadId: "manager", turnId: "turn" }, {
+        operationId: "upgrade-1", expectedVersion: "1.4.8", previousRuntimeId: "instance-a",
+      });
+    };
+
+    it.each(["1.4.7", "1.4.8", "1.4.9"])("reports the observed %s after recovery while preserving accepted work", async (version) => {
+      const { store, payloads, rows } = durableStore();
+      vi.spyOn(getOwnerHostServices().application, "getVersion").mockReturnValue(version);
+      vi.spyOn(getOwnerHostServices().updates, "read").mockReturnValue({ status: "idle" });
+      const first = launch(store, "instance-a", [], {}, true);
+      await startRunningTurn(first.registry, "manager");
+      await first.registry.submitTurn({ backend: "codex", threadId: "manager", input: text("Accepted reply") });
+      await prepareVerification(first.registry);
+      const { writes } = await measureSqliteWrites(async () => {
+        first.registry.saveRestartContinuations(first.registry.beginQuietRestart(), Date.now(), true);
+        first.registry.saveRestartContinuations(first.registry.beginQuietRestart());
+        expect(payloads()).toHaveLength(3);
+        await first.registry.close();
+        const second = launch(store, "instance-b", ["instance-b"], {}, true);
+        second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+        expect(second.codexClient.startTurnCalls[0]!.input).toEqual([{ type: "text", text: expect.stringContaining("PwrAgent restarted") }]);
+        const finish = async () => {
+          const active = second.registry.getActiveTurnForThread({ backend: "codex", threadId: "manager" });
+          await emitCompletedTurn(second.registry, "codex", "manager", active!.turnId);
+        };
+        await finish();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(2));
+        expect(second.codexClient.startTurnCalls[1]!.input).toEqual(text("Accepted reply"));
+        await finish();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(3));
+        const receipt = second.codexClient.startTurnCalls[2]!;
+        expect(JSON.stringify(receipt.input)).toContain("targeting version 1.4.8 from runtime instance-a");
+        expect(JSON.stringify(receipt.input)).toContain("with current authorization");
+        const verify = createPwrAgentAppManagementHandler({ startedAt: 1, runtimeId: "instance-b", version: () => version, authorize: async () => true });
+        expect(await verify({ operation: "manage_pwragent", args: { action: "status" }, context: {} }))
+          .toMatchObject({ data: { runtime: { runtimeId: "instance-b", currentVersion: version } } });
+        const denied = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => false });
+        expect(await denied({ operation: "manage_pwragent", args: { action: "status" }, context: {} })).toMatchObject({ ok: false });
+        expect(second.registry.getActiveTurnForThread({ backend: "codex", threadId: "manager" })).toBeDefined();
+        expect(rows()).toEqual([]);
+      });
+      expectSqliteWriteBudget({ scenario: "agent-upgrade-verification-cycle", writes,
+        note: "One checkpoint holds a running continuation, accepted reply, and version-verification receipt; one claim and three deletes. No polling writes. About 0.4 MB/day at 10 restart cycles/day." });
+    });
+
+    it("resumes checkpointed work and a cancellation receipt when authorization changes after quieting", async () => {
+      const { store, rows } = durableStore();
+      const first = launch(store, "instance-a", [], {}, true);
+      await startRunningTurn(first.registry, "manager");
+      await prepareVerification(first.registry);
+      const { writes } = await measureSqliteWrites(async () => {
+        first.registry.saveRestartContinuations(first.registry.beginQuietRestart(), Date.now(), true);
+        first.registry.cancelQuietRestart(true);
+        expect(first.registry.isRestartGateClosed()).toBe(false);
+        const finish = async () => {
+          const active = first.registry.getActiveTurnForThread({ backend: "codex", threadId: "manager" });
+          await emitCompletedTurn(first.registry, "codex", "manager", active!.turnId);
+        };
+        await finish();
+        await vi.waitFor(() => expect(first.codexClient.startTurnCallCount).toBe(2));
+        expect(JSON.stringify(first.codexClient.startTurnCalls[1]!.input)).toContain("restart was cancelled");
+        await finish();
+        await vi.waitFor(() => expect(first.codexClient.startTurnCallCount).toBe(3));
+        expect(JSON.stringify(first.codexClient.startTurnCalls[2]!.input)).toContain("restart request was cancelled");
+        expect(rows()).toEqual([]);
+      });
+      expectSqliteWriteBudget({ scenario: "agent-upgrade-verification-cancel", writes,
+        note: "Checkpoint once, mark the verification receipt cancelled, and delete the continuation and receipt when each resumes. No per-turn or idle writes; about 0.3 MB/day at 10 cancellations/day." });
+    });
+
+    it("keeps verification identity across another checkpoint before its turn can run", async () => {
+      const { store, payloads } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "manager");
+      await prepareVerification(first.registry);
+      first.registry.saveRestartContinuations(first.registry.beginQuietRestart(), Date.now(), true);
+      await first.registry.close();
+      const second = launch(store, "instance-b", ["instance-b"]);
+      second.registry.saveRestartContinuations(second.registry.beginQuietRestart(), Date.now(), true);
+      const verification = payloads().find((entry) => entry.id === "app-upgrade-verification:upgrade-1");
+      expect(verification?.upgradeVerification).toEqual({ operationId: "upgrade-1", expectedVersion: "1.4.8", previousRuntimeId: "instance-a" });
+      expect(verification?.messageOrigin?.causalMessagingSource).toEqual({ ownerId: "profile", requestId: "owner-request" });
+      await second.registry.close();
+      const third = launch(store, "instance-c", ["instance-c"]);
+      expect(third.registry.getQueuedTurnsForThread({ backend: "codex", threadId: "manager" }))
+        .toContainEqual(expect.objectContaining({ queueEntryId: verification!.id, displayText: expect.stringContaining("with current authorization") }));
+    });
+
+    it("dispatches verification after readiness when the initiating turn finished before checkpointing", async () => {
+      const { store, rows } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "manager");
+      await prepareVerification(first.registry);
+      await emitCompletedTurn(first.registry, "codex", "manager", "turn-1");
+      const { writes } = await measureSqliteWrites(async () => {
+        expect(first.registry.beginQuietRestart()).toEqual([]);
+        first.registry.saveRestartContinuations([], Date.now(), true);
+        expect(rows()).toHaveLength(1);
+        await first.registry.close();
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+        second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+        expect(JSON.stringify(second.codexClient.startTurnCalls[0]!.input)).toContain("targeting version 1.4.8");
+        expect(rows()).toEqual([]);
+      });
+      expectSqliteWriteBudget({ scenario: "agent-upgrade-verification-only", writes,
+        note: "Only the initiating Agent's verification remains: one checkpoint, one startup claim, one delete at dispatch. No polling writes; about 0.2 MB/day at 10 restarts/day." });
+    });
 
     it("restores admission after an initial checkpoint error and preserves a pending start", async () => {
       const { store, payloads } = durableStore();
@@ -5859,16 +5977,16 @@ describe("DesktopBackendRegistry", () => {
   });
 
   describe("research handoff admission", () => {
-    it("research catalogs follow the live experiment and discovery gates", () => {
+    it("research catalogs follow the live experiment and discovery gates", async () => {
       let enabled = false;
       let discovery = true;
       const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), resolveCodexToolDiscovery: () => discovery });
       onTestFinished(() => registry.close());
       registry.setResearchHandler(async () => ({}), undefined, () => enabled);
-      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => DynamicToolSpec[] };
+      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => Promise<DynamicToolSpec[]> };
       for (const [feature, discover] of [[false, true], [true, true], [true, false], [false, true]]) {
         enabled = feature; discovery = discover;
-        const tools = catalog.buildCodexParentDynamicTools(false).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+        const tools = (await catalog.buildCodexParentDynamicTools(false)).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
         expect(tools).toHaveLength(feature && discover ? 5 : 0);
         expect(tools.every((tool) => tool.deferLoading === true)).toBe(true);
       }
@@ -20260,7 +20378,6 @@ script = "echo setup"
 
     expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
       "list_automations",
-      "manage_pwragent",
       "search_threads",
       "read_thread",
       "get_current_messaging_surface",
@@ -20271,6 +20388,8 @@ script = "echo setup"
       "create_monitor_delegation",
       "cancel_monitor_delegation",
     ]);
+    expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name))
+      .not.toContain("manage_pwragent");
 
     await registry.close();
   });
@@ -20756,7 +20875,6 @@ script = "echo setup"
       "get_automation_run_artifact",
       "create_monitor_delegation",
       "cancel_monitor_delegation",
-      "manage_pwragent",
       "search_threads",
       "read_thread",
       "get_thread_status",
@@ -20768,6 +20886,7 @@ script = "echo setup"
       "send_message_to_thread",
       "start_review",
     ]);
+    expect(pwragentDynamicTools(dynamicTools).map((tool) => tool.name)).not.toContain("manage_pwragent");
     const getThreadStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "get_thread_status");
     expect(getThreadStatusTool?.description).toContain(
@@ -25859,12 +25978,13 @@ command = "pnpm grok"
     expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
       "list_automations",
       "search_threads",
-      "manage_pwragent",
       "get_current_messaging_surface",
       "send_messaging_file",
       "attach_thread_here",
       "handoff_task",
     ]);
+    expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name))
+      .not.toContain("manage_pwragent");
 
     await registry.close();
   });
@@ -43876,15 +43996,13 @@ command = "pnpm dev"
         result: { status: "reported" as const },
       },
     }));
-    const registry = createDesktopBackendRegistry({
-      appManagementHandler,
-      codexClient,
-      overlayStore: createOverlayStoreMock({
-        overlays: {
-          "codex:agent-thread": createAgentOverlay(),
-        },
-      }),
-    });
+    const overlayStore = createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } });
+    await overlayStore.upsertThreadMessageOrigin!({ backend: "codex", threadId: "agent-thread", messageId: "user:turn-1",
+      origin: { kind: "messaging", causalMessagingSource: { ownerId: "profile", requestId: "request" } } });
+    const registry = createDesktopBackendRegistry({ appManagementHandler, codexClient, overlayStore });
+    let actorAllowed = true;
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission: () => ({ allowed: true }), authorizeRetainedTool: async () => ({ allowed: actorAllowed }) });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -43923,9 +44041,18 @@ command = "pnpm dev"
     });
     expect(appManagementHandler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "status" },
     });
+
+    const acceptedContext = { backend: "codex" as const, threadId: "agent-thread", turnId: "turn-1" };
+    expect(await registry.canManagePwrAgent(acceptedContext)).toBe(true);
+    await emitCompletedTurn(registry, "codex", "agent-thread", "turn-1");
+    expect(await registry.canManagePwrAgent(acceptedContext)).toBe(false);
+    expect(await registry.canManagePwrAgent({ ...acceptedContext }, false, true)).toBe(false);
+    expect(await registry.canManagePwrAgent(acceptedContext, false, true)).toBe(true);
+    actorAllowed = false;
+    expect(await registry.canManagePwrAgent(acceptedContext, false, true)).toBe(false);
 
     await registry.close();
   });
@@ -58870,7 +58997,7 @@ script = "printf setup"
     }
   });
 
-  it("handles PwrAgent app management tools from active ordinary threads", async () => {
+  it("denies PwrAgent app management tools from active ordinary threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -58929,20 +59056,8 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(response).toMatchObject({
-      success: true,
-      contentItems: [
-        {
-          type: "inputText",
-          text: expect.stringContaining('"currentVersion": "1.2.3"'),
-        },
-      ],
-    });
-    expect(appManagementHandler).toHaveBeenCalledWith({
-      operation: "manage_pwragent",
-      context: { responseFlushed },
-      args: { action: "status" },
-    });
+    expect(response).toMatchObject({ success: false });
+    expect(appManagementHandler).not.toHaveBeenCalled();
 
     await registry.close();
   });
