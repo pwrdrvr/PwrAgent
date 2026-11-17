@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { writeSync } from "node:fs";
+import { readFileSync, writeFileSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { readJsonRpcLines } from "../apps/desktop/scripts/json-rpc-lines.mjs";
@@ -12,15 +12,7 @@ import { Script } from "node:vm";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), "..");
-// Cohesive controllers and render helpers leave 28 KiB before V8's default
-// 60 KiB TurboFan cutoff. Check every function, including nested helpers.
-const bytecodeBudget = 32 * 1024;
-const components = [
-  ["DesktopAppShell", "apps/desktop/src/renderer/src/App.tsx"],
-  ["Sidebar", "apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx"],
-  ["ThreadView", "apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx"],
-  ["AutomationEditor", "apps/desktop/src/renderer/src/features/automations/AutomationEditor.tsx"],
-];
+const rendererRoot = resolve(repoRoot, "apps/desktop/src/renderer/src");
 
 // Match Vitest 5's module-evaluator wrapper, including its CJS globals.
 // Its context layout affects bytecode size, so compiling a bare ESM module
@@ -52,6 +44,15 @@ async function compileModules() {
 }
 
 async function checkBytecode() {
+  // Keep TypeScript's scope parser out of the eager compiler subprocess.
+  const { discoverRendererBytecodeSources, rendererBytecodeBudget: bytecodeBudget, rendererBytecodeRoots } = await import("./renderer-bytecode-scope.mjs");
+  const scopeIndex = process.argv.indexOf("--scope");
+  if (scopeIndex !== -1 && !process.argv[scopeIndex + 1]) throw new Error("--scope requires a path");
+  const scope = scopeIndex === -1 ? {
+    roots: rendererBytecodeRoots,
+    boundaries: JSON.parse(readFileSync(new URL("./renderer-bytecode-boundaries.json", import.meta.url), "utf8")),
+  } : JSON.parse(readFileSync(process.argv[scopeIndex + 1], "utf8"));
+  const components = scope.roots.map(([name, file]) => [name, `apps/desktop/src/renderer/src/${file}`]);
   const { createVitest } = await import("vitest/node");
   const viteRequire = createRequire(import.meta.resolve("vite"));
   const { minifySync } = await import(viteRequire.resolve("rolldown/utils"));
@@ -67,7 +68,10 @@ async function checkBytecode() {
     const environment = context.projects[0]?.vite.environments.ssr;
     if (!environment) throw new Error("The desktop-renderer SSR environment is missing");
     const modules = [];
-    for (const [, file] of components) {
+    const boundaries = scope.boundaries;
+    const sources = discoverRendererBytecodeSources(rendererRoot, scope.roots.map(([, file]) => file), boundaries);
+    for (const source of sources) {
+      const file = `apps/desktop/src/renderer/src/${source}`;
       const result = await environment.fetchModule(resolve(repoRoot, file));
       if (!("code" in result)) throw new Error(`No transformed code for ${file}`);
       const code = wrapModule(result.code);
@@ -111,13 +115,21 @@ async function checkBytecode() {
     const [exitCode] = await finished;
     if (exitCode !== 0) throw new Error(`Bytecode compiler exited ${exitCode}: ${diagnostics}`);
 
+    const reportIndex = process.argv.indexOf("--report");
+    if (reportIndex !== -1) {
+      if (!process.argv[reportIndex + 1]) throw new Error("--report requires a path");
+      writeFileSync(process.argv[reportIndex + 1], JSON.stringify({ budget: bytecodeBudget, node: process.version, v8: process.versions.v8, sources, boundaries, records }, null, 2) + "\n");
+    }
+
     for (const [component, file] of components) {
       const record = records.find((entry) => entry.file === file && entry.variant === "Vitest" && entry.name === component);
       if (!record) throw new Error(`V8 did not report bytecode for ${component}`);
       const minified = records.filter((entry) => entry.file === file && entry.variant === "minified");
       if (minified.length < 2) throw new Error(`V8 did not report minified functions for ${file}`);
+      const ordinary = records.filter((entry) => entry.file === file && entry.variant === "Vitest");
+      const ordinaryMaximum = Math.max(...ordinary.map((entry) => entry.bytes));
       const maximum = Math.max(...minified.map((entry) => entry.bytes));
-      console.log(`${component}: ${record.bytes.toLocaleString("en-US")} bytes; minified file maximum ${maximum.toLocaleString("en-US")}`);
+      console.log(`${component}: ${record.bytes.toLocaleString("en-US")} bytes; file maxima ${ordinaryMaximum.toLocaleString("en-US")} Vitest / ${maximum.toLocaleString("en-US")} minified`);
     }
     const failures = records.filter((record) => !Number.isInteger(record.bytes) || record.bytes > bytecodeBudget);
     for (const record of failures) {
@@ -126,7 +138,7 @@ async function checkBytecode() {
     if (failures.length > 0) {
       throw new Error(`${failures.length} renderer functions exceed the ${bytecodeBudget}-byte budget`);
     }
-    console.log(`Renderer bytecode budget passed for all ${records.length} compiled functions`);
+    console.log(`Renderer bytecode budget passed for all ${records.length} compiled functions in ${sources.length} modules`);
   } finally {
     if (child && child.exitCode === null) child.kill();
     await context.close();

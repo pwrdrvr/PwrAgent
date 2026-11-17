@@ -106,17 +106,34 @@ Read this before source edits, dependency installation, test execution, lint/too
 ### Renderer function bytecode budget
 
 - Run `pnpm check:renderer-bytecode` after changing `DesktopAppShell`, `Sidebar`,
-  `ThreadView`, or `AutomationEditor`. The CI Lint job runs it too.
+  `ThreadView`, `AutomationEditor`, `Composer`, or their extracted helpers.
+  The CI Lint job runs it too.
 - The check uses the real Vitest SSR transform and module wrapper, then asks
-  V8 to compile every function in those four files without executing them.
+  V8 to compile every function in the covered modules without executing them.
   It checks both ordinary output and output compressed by Vite's Oxc minifier.
-- Each function, including nested render helpers, has a 32 KiB budget. This
-  leaves 28 KiB before V8's default 60 KiB TurboFan eligibility limit.
+- Each function, including nested and anonymous callbacks, has a 25 KiB
+  (25,600-byte) operational budget. This chosen early budget is distinct from
+  V8's default 60 KiB TurboFan eligibility limit and is not a universal latency
+  threshold. Runtime performance claims require three plain-Node and three
+  no-Sparkplug measurements, with machine and runtime details reported.
+- `scripts/renderer-bytecode-scope.mjs` owns the eight entry modules: the five
+  views plus Composer's three extracted hooks. All new relative imports,
+  reexports, renderer aliases and literal lazy imports are followed recursively.
+  Moving a callback to a new helper module does not remove its coverage.
+- `scripts/renderer-bytecode-boundaries.json` lists pre-existing independent
+  dependencies outside these controllers' ownership. It is an explicit scope
+  boundary, not a bytecode exemption within a covered module. Do not add an
+  extracted helper to that list to pass the check. A scope change requires a
+  reviewable rationale; this budget does not cover the entire renderer.
+- `--report <path>` saves every measured function and the complete scope as
+  JSON. `--scope <path>` accepts alternate roots and boundaries for audit and
+  oracle fixtures; CI always checks the default scope.
 - Extract cohesive state, effects and actions into custom hooks, and use pure
   projections or stable module-level components for presentation. Keep
   callbacks and state at the same lifetime as their owning view.
-- Keep JSX construction in separate local function declarations. The minifier
-  folds single-use arrow helpers back into their callers. Calling a helper
+- Keep JSX construction in separate named function frames (declarations or
+  directly called function expressions). The minifier folds single-use arrow
+  helpers back into their callers. Calling a helper
   preserves the component's hook order and React identity while compiling the
   render body separately from setup. Do not replace the call with an inline
   return or render a locally defined helper as a React component.
