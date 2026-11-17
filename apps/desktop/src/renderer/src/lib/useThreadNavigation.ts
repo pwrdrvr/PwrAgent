@@ -3864,6 +3864,12 @@ export function useThreadNavigation(
   // their lens for good. Unknown counts and providers still checking keep the
   // saved lens, so an ordinary launch never shows Directories and jumps back.
   const ownerIndexPage = boundedNavigation.resources.get("directory-index")?.state.page;
+  const coverageState = ownerIndexPage?.coverage.state;
+  const failedProviders = ownerIndexPage?.coverage.failedProviders;
+  const providerRefresh = useMemo(() => coverageState
+    ? { state: coverageState === "complete" ? "ready" as const : coverageState,
+        ...(failedProviders !== undefined ? { failedProviders } : {}) }
+    : undefined, [coverageState, failedProviders]);
   const threadLensesEmpty = ownerIndexPage?.counts.total === 0 && ownerIndexPage.coverage.state !== "checking";
   const shownBrowseMode: BrowseMode = threadLensesEmpty ? "directories" : browseMode;
   const [acceptedPages, setAcceptedPages] = useState(() => new Map<string, unknown>());
@@ -4056,9 +4062,9 @@ export function useThreadNavigation(
   // is not stale, yet nothing built from the rows reflects it. A selection's
   // exact page can even hold an older copy of its directory than the index,
   // so the rows can briefly show a pin the owner has already removed.
-  const pagesAwaitingRows = [...boundedNavigation.resources]
+  const pagesAwaitingRows = useMemo(() => [...boundedNavigation.resources]
     .filter(([id, resource]) => resource.state.page && acceptedPages.get(id) !== resource.state.page)
-    .map(([id]) => id);
+    .map(([id]) => id), [boundedNavigation.resources, acceptedPages]);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
@@ -10314,8 +10320,7 @@ export function useThreadNavigation(
     worktreeArchiveError,
     loading: state.loading,
     loaded: Boolean(state.rows),
-    providerRefresh: ownerIndexPage?.coverage
-      ? { ...ownerIndexPage.coverage, state: ownerIndexPage.coverage.state === "complete" ? "ready" : ownerIndexPage.coverage.state } : undefined,
+    providerRefresh,
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     refreshThreadMetadata,
