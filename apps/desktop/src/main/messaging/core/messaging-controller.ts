@@ -327,7 +327,7 @@ import {
   type MessagingAttachmentPolicy,
   type MessagingAttachmentRejection,
 } from "./messaging-attachment-processor.js";
-import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentInput } from "./messaging-original-attachment-store.js";
+import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentInput, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
 import {
   PdfAttachmentStore,
   type PendingPdfAttachment,
@@ -1253,11 +1253,12 @@ export class MessagingController {
   async handlePwrAgentMessagingRequest(
     request: PwrAgentMessagingRequest,
     receivedFile?: Uint8Array,
+    consumeOriginal?: OriginalAttachmentConsumer,
   ): Promise<PwrAgentMessagingResponse> {
     switch (request.operation) {
       case "list_messaging_attachments":
       case "export_messaging_attachment":
-        return await this.handleOriginalAttachmentRequest(request);
+        return await this.handleOriginalAttachmentRequest(request, consumeOriginal);
       case "list_messaging_surfaces":
         return await this.listRetainedMessagingSurfaces(request);
       case "attach_thread_to_surface":
@@ -20286,12 +20287,8 @@ export class MessagingController {
 
   private async handleOriginalAttachmentRequest(
     request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_attachments" | "export_messaging_attachment" }>,
+    consumeOriginal?: OriginalAttachmentConsumer,
   ): Promise<PwrAgentMessagingResponse> {
-    // Matching thread IDs on another machine never grant file authority.
-    if (request.context.requestingInstanceId) {
-      return { ok: false, error: { code: "unsupported_operation", message:
-        "Original-file export across machines is unavailable. Reattach the file to a local thread on the messaging owner and request the save there, then transfer the saved copy using an authorized file-transfer tool. Do not use an owner-local path on this machine." } };
-    }
     const store = this.options.originalAttachmentStore;
     if (!store) return { ok: false, error: { code: "not_found", message: "No original-file cache is available on this messaging owner. Ask the sender to reattach the file after upgrading." } };
     if (request.context.causalMessagingAmbiguous) return this.retainedSourceUnavailable(request.context);
@@ -20305,18 +20302,34 @@ export class MessagingController {
     if (event && !this.isChannelInScope(event.channel)) {
       return { ok: false, error: { code: "not_found", message: "No original attachments for this messaging provider." } };
     }
+    const remote = request.context.requestingInstanceId;
+    // The authenticated caller must be the actual execution owner, including
+    // full peers. A source ref or colliding thread ID alone is never a grant.
+    const remoteAuthorized = async (verifyAccess = true): Promise<boolean> => {
+      if (!remote || !source || !source.bindingId || source.agent.backend !== request.context.backend
+        || source.agent.threadId !== request.context.threadId) return false;
+      if (!await this.retainedSourceIsAuthorized(source, verifyAccess)) return false;
+      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
+      return binding?.id === source.bindingId && binding.backend === request.context.backend
+        && binding.threadId === request.context.threadId && containedMessagingBindingMatches(request.context, binding)
+        && this.retainedRequestCanCrossInstance(request.context, source)
+        && this.checkDynamicToolPermission({ ...request.context, category: "messaging_context",
+          tool: request.operation, arguments: request.args }, source).allowed;
+    };
+    if (remote && !await remoteAuthorized()) return this.retainedSourceUnavailable(request.context);
     if (!event && (request.context.messagingTurn || request.context.causalMessagingSource)) {
       return { ok: false, error: { code: "not_found", message:
         "This messaging turn's actor cannot be reauthorized after restart. Send a new message in the original conversation, or request the save in a local desktop turn on this thread." } };
     }
-    if (!active && request.context.causalMessagingSource && (!source || !await this.retainedSourceIsAuthorized(source))) {
+    if (!remote && !active && request.context.causalMessagingSource && (!source || !await this.retainedSourceIsAuthorized(source))) {
       return this.retainedSourceUnavailable(request.context);
     }
     const permission = this.checkDynamicToolPermission({ ...request.context,
       category: "messaging_context", tool: request.operation, arguments: request.args,
     }, source);
     if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot access received attachments." } };
-    const scope = { backend: request.context.backend, threadId: request.context.threadId, provider: this.options.channel };
+    const scope = { backend: request.context.backend, threadId: request.context.threadId, provider: this.options.channel,
+      ...(remote ? { instanceId: remote } : {}) };
     const actorKey = event ? originalAttachmentActorKey(event) : undefined;
     try {
       if (request.operation === "list_messaging_attachments") {
@@ -20330,6 +20343,21 @@ export class MessagingController {
       }
       if (typeof request.args.attachmentId !== "string" || !/^[a-f0-9]{64}$/u.test(request.args.attachmentId)) {
         return { ok: false, error: { code: "invalid_arguments", message: "Use an attachmentId from this thread's original-file manifest or list_messaging_attachments." } };
+      }
+      if (remote) {
+        if (!consumeOriginal || !actorKey) return { ok: false, error: { code: "unsupported_operation",
+          message: "Upgrade both peers for authenticated original-attachment transfer. Owner-local paths cannot be exported remotely." } };
+        const original = await store.read(scope, request.args.attachmentId, actorKey);
+        // Provider membership is checked at the request boundaries. Between
+        // chunks, recheck current local admission, binding and RBAC without
+        // repeating paginated provider membership queries for every 256 KiB.
+        const reauthorize = async () => this.now() < original.attachment.expiresAt && await remoteAuthorized(false);
+        if (!await reauthorize()) return this.retainedSourceUnavailable(request.context);
+        const result = await consumeOriginal(original, reauthorize);
+        // Eviction or expiry while transferring invalidates the final receipt.
+        await store.read(scope, request.args.attachmentId, actorKey);
+        if (!await remoteAuthorized() || !await reauthorize()) return this.retainedSourceUnavailable(request.context);
+        return result;
       }
       const exported = await store.export(scope, request.args.attachmentId, actorKey);
       return { ok: true, data: { ...exported, guidance:

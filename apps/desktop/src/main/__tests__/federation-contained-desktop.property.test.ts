@@ -11,9 +11,59 @@ import { FEDERATION_BACKEND_METHODS } from "@pwragent/federation/federation-back
 import { FederationRouter } from "../federation/federation-router";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
+import { MESSAGING_ORIGINALS_METHOD } from "../federation/federation-messaging-attachments";
 
 vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: vi.fn() }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
+
+it("an older messaging owner returns an upgrade error without consulting any local thread or filesystem", async () => {
+  const runtime = Object.assign(new DesktopFederationRuntime(), { remotePeerAdvertisesCapability: () => false }) as unknown as DesktopFederationRuntime;
+  expect(await runtime.requestMessagingAttachments("old-owner", { operation: "export_messaging_attachment",
+    context: { backend: "codex", threadId: "colliding-thread" }, args: { attachmentId: "a".repeat(64) } }))
+    .toMatchObject({ ok: false, error: { code: "unsupported_operation", message: expect.stringContaining("Upgrade both peers") } });
+});
+
+it("the original-export endpoint requires authenticated origin and all three negotiated grants", async () => {
+  const db = openInMemoryStateDb();
+  const store = new FederationStore(db);
+  store.upsertPeer({ peer: { id: "execution", label: "Synthetic", role: "client", status: "connected",
+    capabilities: [...FEDERATION_CAPABILITIES], pinnedPublicKeyPem: "fixture" }, updatedAt: 1 });
+  const stop = new Error("Router ready");
+  vi.mocked(getDesktopSettingsService).mockReturnValue({ readFederationConfig: () => ({}),
+    getOrCreateFederationNoiseStaticKeyPair: async () => { throw stop; },
+  } as unknown as ReturnType<typeof getDesktopSettingsService>);
+  const runtime = Object.assign(new DesktopFederationRuntime(), { localInstanceId: "provider", store: () => store,
+    durableTurnRequestService: () => ({}), subscribeLocalBackendEvents: () => {} }) as unknown as {
+      router?: FederationRouter; filePushReceiver?: { dispose(): Promise<void> };
+      startAfterLeaseAcquired(mode: string, config: object): Promise<void>;
+    };
+  setFederationMessagingDestinationHandler(async (_operation, caller, contained) => {
+    expect(caller).toBe("execution");
+    expect(contained).toBe(store.getPeer("execution")?.permissionRole === "contained");
+    return { ok: true, data: { attachments: [] } };
+  });
+  try {
+    await expect(runtime.startAfterLeaseAcquired("disabled", {})).rejects.toBe(stop);
+    await fc.assert(fc.asyncProperty(fc.constantFrom("messaging_original_attachments_v1", "messaging_route", "thread_navigation", "none"),
+      fc.boolean(), fc.constantFrom("full" as const, "contained" as const), async (missing, spoof, role) => {
+        store.setPeerRole("execution", role, 2);
+        runtime.router!.registerConnection({ peerId: "execution",
+          capabilities: FEDERATION_CAPABILITIES.filter((capability) => capability !== missing), sendEnvelope: () => {} });
+        const result = await runtime.router!.routeEnvelope({ sourcePeerId: "execution", envelope: {
+          id: "originals", kind: "request", protocolVersion: 1, createdAt: Date.now(), method: MESSAGING_ORIGINALS_METHOD,
+          sourceInstanceId: spoof ? "unrelated" : "execution", targetInstanceId: "provider",
+          params: { kind: "request", request: { operation: "list_messaging_attachments", context: {}, args: {} } },
+        } });
+        expect(result.status).toBe(!spoof && missing === "none" ? "handled" : "rejected");
+        if (spoof) expect(result).toMatchObject({ code: "relay_origin_mismatch" });
+        else if (missing !== "none") expect(result).toMatchObject({ code: "capability_denied" });
+      }), { numRuns: 24 });
+  } finally {
+    setFederationMessagingDestinationHandler(undefined);
+    await runtime.filePushReceiver?.dispose();
+    db.close();
+  }
+});
 
 it("the actual desktop receiver denies every generated owner request from a contained peer", async () => {
   const db = openInMemoryStateDb();

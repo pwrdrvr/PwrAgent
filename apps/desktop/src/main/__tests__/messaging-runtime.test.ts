@@ -140,6 +140,114 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
+  it.each([false, true])("the authenticated execution owner can list only its admitted originals after restart (Slack first: %s)", async (slackFirst) => {
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    await prepareRuntimeStore();
+    let authorized = true;
+    let member = true;
+    const telegramAuthorization = vi.fn(() => true);
+    const telegram = createAdapter("telegram", { retainedSourceConnectionId: () => "telegram-fixture",
+      authorizeRetainedSource: telegramAuthorization });
+    const slack = createAdapter("slack", { retainedSourceConnectionId: () => "slack-fixture",
+      authorizeRetainedSource: (_event, verifyAccess = true) => authorized && (!verifyAccess || member),
+      downloadAttachment: async () => ({ data: Buffer.from("synthetic original"), fileName: "../archive.zip", sizeBytes: 18 }) });
+    const bridge = createBackendBridge();
+    const event = { ...buildTextEvent("Save"), kind: "media" as const, text: "Save", botMention: true,
+      receivedAt: Date.now(), disposition: "available" as const,
+      channel: { channel: "slack" as const, conversation: { id: "C4", kind: "channel" as const, workspaceId: "T1" } },
+      attachments: [{ id: "private-id", name: "../archive.zip", kind: "file" as const, disposition: "available" as const }] };
+    const { getDesktopMessagingStore } = await import("../messaging/desktop-messaging-store");
+    const binding = { id: "remote-originals", backend: "codex" as const, threadId: "thread-1",
+      targetKind: "thread" as const, channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000,
+      federatedThread: { backend: "codex" as const, threadId: "thread-1", target: { scope: "remote" as const, instanceId: "execution-owner" } } };
+    await getDesktopMessagingStore().upsertBinding(binding);
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const runtime = trackRuntime(new Runtime({ adapterFactory: () => slackFirst ? [slack, telegram] : [telegram, slack], backendBridge: bridge,
+      config: { inputDebounceMs: 0,
+        telegram: { channel: "telegram", botToken: "synthetic", authorizedActorIds: [{ id: "user-1", displayName: "" }] },
+        slack: { channel: "slack", appToken: "synthetic", botToken: "synthetic", signingSecret: "synthetic",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }] } } }));
+    await runtime.start();
+    await slack.listener!(event);
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    const context = { backend: "codex" as const, threadId: "thread-1", turnId: "completion",
+      causalMessagingSource: vi.mocked(bridge.startTurn).mock.calls[0]![0].messageOrigin?.causalMessagingSource };
+    expect(context.causalMessagingSource).toBeDefined();
+    const { handleFederationMessagingDestination: handle } = await import("../federation/federation-messaging-tools");
+    const list = () => handle({ kind: "request", request: { operation: "list_messaging_attachments", context, args: {} } }, "execution-owner");
+    // Owner oracle: admission into this exact remote binding is the grant,
+    // independent of a colliding local ID, adapter order or process memory.
+    expect(await list()).toMatchObject({ ok: true, data: { attachments: [{ name: "../archive.zip" }] } });
+    await runtime.stop();
+    await runtime.start();
+    expect(await list()).toMatchObject({ ok: true });
+    const { FederationMessagingAttachmentExports } = await import("../federation/federation-messaging-attachments");
+    const transferRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-original-export-"));
+    tempDirs.push(transferRoot);
+    const sourceOwner = context.causalMessagingSource!.instanceId!;
+    let revokeMembershipAfterTransfer = false;
+    let destination: InstanceType<typeof FederationMessagingAttachmentExports>;
+    const owner = new FederationMessagingAttachmentExports({ directory: path.join(transferRoot, "provider-profile"),
+      sendAllowed: () => true, receiveAllowed: () => false,
+      rpc: () => ({ request: async <T,>(call: { params?: unknown }): Promise<T> => {
+        const result = await destination.handle(sourceOwner, call.params, false) as T;
+        if (revokeMembershipAfterTransfer && (call.params as { method?: string }).method === "file.push.finish") member = false;
+        return result;
+      } }) });
+    destination = new FederationMessagingAttachmentExports({ directory: path.join(transferRoot, "execution-profile"),
+      sendAllowed: () => false, receiveAllowed: () => true,
+      rpc: () => ({ request: async <T,>(call: { params?: unknown }): Promise<T> =>
+        await owner.handle("execution-owner", call.params, false) as T }) });
+    const listed = await destination.request(sourceOwner, { operation: "list_messaging_attachments", context, args: {} });
+    if (!listed.ok || !("attachments" in listed.data)) throw new Error("Expected remote originals");
+    const attachmentId = listed.data.attachments[0]!.attachmentId;
+    const exportRequest = { operation: "export_messaging_attachment" as const, context, args: { attachmentId } };
+    const { result: exported, writes } = await measureSqliteWrites(async () =>
+      await destination.request(sourceOwner, exportRequest));
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    expectSqliteWriteBudget({ scenario: "messaging-remote-original-export", writes,
+      note: "One authenticated remote original export through restarted production messaging controllers and a destination receipt: 0 SQLite commits, 0 MB/day; source admission and fixture setup excluded." });
+    if (!exported.ok || !("path" in exported.data)) throw new Error("Expected execution-local export");
+    expect(await readFile(exported.data.path, "utf8")).toBe("synthetic original");
+    expect(exported.data.path.startsWith(path.join(transferRoot, "execution-profile"))).toBe(true);
+    revokeMembershipAfterTransfer = true;
+    expect(await destination.request(sourceOwner, exportRequest)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    member = true;
+    revokeMembershipAfterTransfer = false;
+    // No legacy destination request can expose a provider-owner path.
+    expect(await handle({ kind: "request", request: exportRequest }, "execution-owner"))
+      .toMatchObject({ ok: false, error: { code: "unsupported_operation" } });
+    for (const changed of [{ backend: "claude" as const }, { threadId: "other-thread" },
+      { causalMessagingSource: { ...context.causalMessagingSource!, ownerId: "another-profile" } },
+      { causalMessagingSource: { ...context.causalMessagingSource!, requestId: "another-human-request" } }]) {
+      expect(await handle({ kind: "request", request: { operation: "list_messaging_attachments", context: { ...context, ...changed }, args: {} } }, "execution-owner"))
+        .toMatchObject({ ok: false });
+    }
+    expect(await handle({ kind: "request", request: { operation: "list_messaging_attachments", context, args: {} } }, "other-peer"))
+      .toMatchObject({ ok: false });
+    expect(await destination.request(sourceOwner, { ...exportRequest, args: { attachmentId: "f".repeat(64) } }))
+      .toMatchObject({ ok: false, error: { code: "not_found" } });
+    const { getRbacPolicyService } = await import("../messaging/rbac-policy-service");
+    const policy = getRbacPolicyService();
+    const subject = { kind: "actor" as const, platform: "slack" as const, actorId: "user-1" };
+    policy.setEnforced(true, [{ subject, roleIds: ["admin"] }]);
+    expect(await list()).toMatchObject({ ok: true });
+    policy.upsertAttachment({ subject, roleIds: [] });
+    expect(await list()).toMatchObject({ ok: false });
+    expect(await destination.request(sourceOwner, exportRequest)).toMatchObject({ ok: false });
+    policy.setEnforced(false);
+    authorized = false;
+    expect(await list()).toMatchObject({ ok: false });
+    expect(await destination.request(sourceOwner, exportRequest)).toMatchObject({ ok: false });
+    authorized = true;
+    await getDesktopMessagingStore().upsertBinding({ ...binding, federatedThread: { ...binding.federatedThread,
+      target: { scope: "remote", instanceId: "other-peer" } } });
+    expect(await list()).toMatchObject({ ok: false });
+    await destination.reset();
+    expect(telegramAuthorization).not.toHaveBeenCalled();
+  });
+
   it.each(["codex", "claude", "acp:gemini"] as const)("retains and exports general files through the production %s owner wiring", async (backend) => {
     await prepareRuntimeStore();
     const data = Buffer.from([0, 1, 2, 3, 255]);

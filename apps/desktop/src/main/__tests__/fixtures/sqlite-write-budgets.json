@@ -1,4 +1,5 @@
 {
+  "messaging-remote-original-export": {"commits": 0, "note": "One authenticated remote original export through restarted production messaging controllers and a destination receipt: 0 SQLite commits, 0 MB/day; source admission and fixture setup excluded.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-experiment-disable": {"commits": 5, "note": "Explicitly disabling research stops three workers through the existing stop lifecycle. No setting polling or idle writes.", "observedWalBytes": 127720, "rowsChanged": 10, "statements": 10},
   "research-focused-cancel-both-references": {"commits": 3, "note": "One exact worker terminal event and one settlement per requested item: source evidence and focused approach. No duplicate settlement writes.", "observedWalBytes": 98880, "rowsChanged": 6, "statements": 6},
   "research-focused-approach-cancel": {"commits": 3, "note": "Durable cancellation request, exact worker acknowledgement and item settlement. An unknown outcome would retain cancel_requested.", "observedWalBytes": 86520, "rowsChanged": 6, "statements": 6},
