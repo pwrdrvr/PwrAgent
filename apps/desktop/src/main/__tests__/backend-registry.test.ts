@@ -5252,6 +5252,28 @@ describe("DesktopBackendRegistry", () => {
         .toContainEqual(expect.objectContaining({ queueEntryId: verification!.id, displayText: expect.stringContaining("with current authorization") }));
     });
 
+    it("dispatches verification after readiness when the initiating turn finished before checkpointing", async () => {
+      const { store, rows } = durableStore();
+      const first = launch(store, "instance-a");
+      await startRunningTurn(first.registry, "manager");
+      await prepareVerification(first.registry);
+      await emitCompletedTurn(first.registry, "codex", "manager", "turn-1");
+      const { writes } = await measureSqliteWrites(async () => {
+        expect(first.registry.beginQuietRestart()).toEqual([]);
+        first.registry.saveRestartContinuations([], Date.now(), true);
+        expect(rows()).toHaveLength(1);
+        await first.registry.close();
+        const second = launch(store, "instance-b", ["instance-b"]);
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+        second.registry.beginRestartContinuationDispatch();
+        await vi.waitFor(() => expect(second.codexClient.startTurnCallCount).toBe(1));
+        expect(JSON.stringify(second.codexClient.startTurnCalls[0]!.input)).toContain("targeting version 1.4.8");
+        expect(rows()).toEqual([]);
+      });
+      expectSqliteWriteBudget({ scenario: "agent-upgrade-verification-only", writes,
+        note: "Only the initiating Agent's verification remains: one checkpoint, one startup claim, one delete at dispatch. No polling writes; about 0.2 MB/day at 10 restarts/day." });
+    });
+
     it("restores admission after an initial checkpoint error and preserves a pending start", async () => {
       const { store, payloads } = durableStore();
       let finish!: () => void;

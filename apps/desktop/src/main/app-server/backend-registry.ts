@@ -9865,7 +9865,17 @@ export class DesktopBackendRegistry {
    * batches, once providers can take a turn. Runs once; the first call wins.
    */
   beginRestartContinuationDispatch(): void {
-    if (this.restartDispatchStarted || this.restartGate.phase !== "resuming") return;
+    if (this.restartDispatchStarted) return;
+    if (this.restartGate.phase !== "resuming") {
+      // A caller can finish during quieting, leaving only queued input or
+      // its verification receipt. There is no running-turn continuation to
+      // open the gate and trigger a drain. Wait for this provider-ready call.
+      if (this.restartGate.phase === "open" && this.durableRestartContinuations.size > 0) {
+        this.restartDispatchStarted = true;
+        this.threadTurnQueue.drainAll();
+      }
+      return;
+    }
     this.restartDispatchStarted = true;
     // Every restored continuation still in a queue gets a time, settled ones
     // too: one a lock held before dispatch began still waits its turn once
