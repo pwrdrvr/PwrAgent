@@ -289,13 +289,14 @@ jobs:
         run: pnpm run build
 
   test:
-    # Two shards, as the Windows lanes run. The single lane reached its
-    # 10-minute step budget on 2026-10-10 and the suite grows a few seconds a
-    # day; each lane keeps that budget rather than raising it. Balance the
-    # measured main-process and renderer outliers instead of giving one hash
-    # shard twice the test work. See docs/linux-unit-sharding.md. Setup before
-    # the test step costs about 30s per lane.
-    name: Test (lane ${{ matrix.lane }} of 2)
+    # Four shards. The single lane reached its 10-minute step budget on
+    # 2026-10-10; two balanced lanes then reached it on 2026-11-17 because
+    # GitHub-hosted runner speed varies by about ±20% between jobs. Each lane
+    # keeps that budget rather than raising it. Balance the measured
+    # main-process and renderer outliers instead of giving one hash shard twice
+    # the test work. See docs/linux-unit-sharding.md. Setup before the test
+    # step costs about 30s per lane.
+    name: Test (lane ${{ matrix.lane }} of 4)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changes, install-deps]
@@ -304,7 +305,7 @@ jobs:
       # Keep the other lane running after a failure so it still reports.
       fail-fast: false
       matrix:
-        lane: [1, 2]
+        lane: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -327,7 +328,7 @@ jobs:
         timeout-minutes: 10
         env:
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/unit-first.json
-        run: pnpm exec vitest run --config vitest.linux-ci.ts --shard=${{ matrix.lane }}/2 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs
+        run: pnpm exec vitest run --config vitest.linux-ci.ts --shard=${{ matrix.lane }}/4 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs
 
       - name: Verify the unit slice completed
         id: unit-completion
@@ -389,7 +390,7 @@ jobs:
           # Mirror the result into the job summary, as the Desktop E2E gate
           # does, so the checks page says why the gate failed.
           if [[ "$TEST_RESULT" != "success" ]]; then
-            echo "- FAIL \`Test\` lanes ($TEST_RESULT); see the failing \`Test (lane N of 2)\` job" >> "$GITHUB_STEP_SUMMARY"
+            echo "- FAIL \`Test\` lanes ($TEST_RESULT); see the failing \`Test (lane N of 4)\` job" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::A Test lane did not succeed ($TEST_RESULT)."
             exit 1
           fi

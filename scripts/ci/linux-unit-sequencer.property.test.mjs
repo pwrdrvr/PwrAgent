@@ -98,3 +98,26 @@ it("gives the completion reporter the same selection as the test pool", async ()
     expect(reporter.planned).toEqual(selected.map((spec) => JSON.stringify([spec.project.name, spec.moduleId])));
   }
 });
+
+// Rule: every Linux lane finishes inside its 10-minute step with a 25%
+// reserve on the slowest runner measured. Main runs 44021057434,
+// 44102962515, 44107691727, 44108073103 and 44114042498, with PR run
+// 44111357566, gave 1,761s of median per-file work across the suite. The
+// largest file took 108s. Per-file medians showed runner speed from 0.69x to
+// 1.22x, and vitest's Duration was at most 0.608 of the summed file time.
+// Allocation was balanced within 7% in every run; two lanes failed only
+// because a 1.22x runner turned 831s of work into 609.86s.
+it("gives every Linux CI lane deadline headroom on the slowest measured runner", () => {
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = workflow.split("\n  test:\n")[1].split("\n  test-result:\n")[0];
+  const lanes = job.match(/lane: \[([\d, ]+)\]/)[1].split(",").map(Number);
+  const shards = Number(job.match(/--config vitest\.linux-ci\.ts --shard=\$\{\{ matrix\.lane \}\}\/(\d+) /)[1]);
+  const deadlineSeconds = Number(job.match(/name: Test\n\s+id: unit-tests\n(?:\s+.*\n)*?\s+timeout-minutes: (\d+)\n/)[1]) * 60;
+  expect(lanes).toEqual(Array.from({ length: shards }, (_, index) => index + 1));
+  const suiteWorkSeconds = 1761;
+  const largestFileSeconds = 108;
+  const slowestRunner = 1.22;
+  const durationPerWork = 0.608;
+  const heaviestLaneSeconds = (suiteWorkSeconds / shards + largestFileSeconds) * slowestRunner * durationPerWork;
+  expect(heaviestLaneSeconds).toBeLessThanOrEqual(deadlineSeconds * 0.75);
+});

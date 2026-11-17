@@ -1,6 +1,6 @@
 # Linux unit-test allocation
 
-The Linux CI unit job runs two parallel lanes with a ten-minute test-step
+The Linux CI unit job runs four parallel lanes with a ten-minute test-step
 deadline. Only this job uses `vitest.linux-ci.ts`, which extends the shared
 workspace configuration with `scripts/ci/linux-unit-sequencer.mjs`.
 Desktop-main and desktop-renderer are allocated independently using measured
@@ -55,6 +55,35 @@ and 314.392s of actual test work to the two lanes. This is an allocation
 model, not a measured new CI wall time. The new
 partition property failed on the prior sequencer: with four lanes and one new
 file, the estimated imbalance was 62.909s, above the largest file's 34.467s.
+
+## Runner-speed evidence and lane count
+
+With two balanced lanes,
+[PR run 44111357566](https://github.com/pwrdrvr/PwrAgent/actions/runs/44111357566)
+again crossed the ten-minute step deadline. Lane 2 reported a Duration of
+609.86s with every test passing, and its retry failed because no tests had
+failed. The cause was runner speed, not allocation. Five main runs
+(44021057434, 44102962515, 44107691727, 44108073103 and 44114042498) and
+this PR run were measured across all twelve lanes. Each file's time was
+compared with its median across those runs.
+
+- The median work per lane was within 7% across both lanes in every run. In
+  the failing run it was 829s on lane 1 and 831s on lane 2.
+- The median per-file ratio for each lane ranged from 0.69x to 1.22x. The
+  failing lane ran at 1.20x. The slower lane alternated between lane 1 and
+  lane 2 from run to run.
+- Vitest's Duration was 0.567 to 0.608 of the lane's summed file time.
+
+The suite holds 1,761s of median file work. With two lanes, a 1.22x runner
+projects to about 650s, over the deadline before setup. With four lanes,
+replaying the sequencer on the main inventory gives 424s to 457s of median
+work per lane, about 340s of Duration on the slowest runner measured. The
+desktop-main and desktop-renderer cost tables were left unchanged; they
+already balance the measured work. A property test in
+`linux-unit-sequencer.property.test.mjs` reads the lane count from `ci.yml`.
+It requires the heaviest-lane bound (one lane's share plus the largest file,
+at 1.22x and 0.608) to stay within 75% of the step deadline. The two-lane
+workflow failed that rule at 733s.
 
 ## Allocation and maintenance
 

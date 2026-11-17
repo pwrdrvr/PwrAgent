@@ -31,11 +31,11 @@ test("E2E identifies first unexpected outcomes and matches retry results by ID",
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
   const expected = expectedSlices(3);
-  assert.equal(expected.length, 30);
+  assert.equal(expected.length, 32);
   const slice = createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 2, first: null, retries: [] });
   const report = aggregateSlices({ slices: [slice], samples: 3, runId: "123", attempt: "2" });
   assert.equal(report.slices.length, 1);
-  assert.equal(report.missingSlices.length, 29);
+  assert.equal(report.missingSlices.length, 31);
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
@@ -106,14 +106,14 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const aggregate = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1" }, encoding: "utf8" });
       assert.equal(aggregate.status, 0, aggregate.stderr);
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(result.expectedSlices, 22);
-      assert.equal(result.missingSlices.length, 21);
+      assert.equal(result.expectedSlices, 24);
+      assert.equal(result.missingSlices.length, 23);
       const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
       assert.equal(skipped.status, 0, skipped.stderr);
       assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);
       const pr = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(pr.expectedSlices, 10);
-      assert.equal(pr.missingSlices.length, 9);
+      assert.equal(pr.expectedSlices, 12);
+      assert.equal(pr.missingSlices.length, 11);
       assert.equal(result.slices[0].first.complete, false);
       assert.equal(result.slices[0].failures[0].retry, "unknown");
     }
@@ -149,7 +149,7 @@ test("the job summary counts every unavailable or incomplete first report even w
       const result = spawnSync(process.execPath, [script, "aggregate"], { cwd, encoding: "utf8", env: { ...process.env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: String(incomplete + 1), GITHUB_STEP_SUMMARY: summary } });
       assert.equal(result.status, 0, result.stderr);
       const content = readFileSync(summary, "utf8");
-      assert.match(content, /Slices received: 22\/22; missing: 0/);
+      assert.match(content, /Slices received: 24\/24; missing: 0/);
       assert.ok(content.includes(`Download the \`ci-flake-report-${incomplete + 1}\` artifact`));
       assert.match(content, new RegExp(`First reports unavailable or incomplete: ${incomplete}\\.`));
       if (incomplete > 0) assert.match(content, /failure counts may be incomplete/i);
