@@ -94,6 +94,7 @@ test("keeps the archive group confirmation usable at every window size and zoom"
     const dialog = app.window.getByRole("dialog", { name: /^Archive \d+ Threads\?$/ });
     for (const group of GROUPS) {
       await sizeWindow({ ...LAUNCH_SIZE, zoom: 100 });
+      await revealSidebarRow(app.window, group.root);
       await app.window.getByRole("button", { name: new RegExp(`^${group.root}`) }).click({ button: "right" });
       await app.window.getByRole("menuitem", { name: /^Archive Thread and Sub-Threads\./ }).click();
       await expect(dialog).toHaveAccessibleName(`Archive ${group.size} Threads?`);
@@ -126,6 +127,22 @@ test("keeps the archive group confirmation usable at every window size and zoom"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * The sidebar loads rows in windows as it scrolls, so a root below the
+ * first window has no row yet. Wheel down the thread browser until it does.
+ */
+async function revealSidebarRow(window: Page, title: string): Promise<void> {
+  const row = window.getByRole("button", { name: new RegExp(`^${title}`) });
+  const browser = window.getByRole("region", { name: "Thread browser" });
+  await expect(async () => {
+    if (await row.count() === 0) {
+      await browser.hover();
+      await window.mouse.wheel(0, 800);
+    }
+    await expect(row).toHaveCount(1, { timeout: 500 });
+  }).toPass({ timeout: 30_000 });
+}
 
 /**
  * Waits for the resize and zoom to reach the renderer: the CSS viewport is
