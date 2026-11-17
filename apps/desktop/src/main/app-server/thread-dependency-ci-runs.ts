@@ -37,6 +37,8 @@ export function parseCiRunUrl(value: string): CiRunRef | undefined {
 
 const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
 const SUCCEEDED = new Set(["success", "neutral", "skipped"]);
+/** Up to 1,000 jobs per check. */
+const MAX_JOB_PAGES = 10;
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("GitHub returned an invalid object.");
@@ -55,8 +57,14 @@ export async function readCiRun(get: CiRunGet, ref: CiRunRef, now: number): Prom
   const base = `repos/${encodeURIComponent(ref.repository.owner)}/${encodeURIComponent(ref.repository.repo)}/actions/runs/${ref.runId}`;
   const run = record(await get(ref.repository, base));
   if (run.id !== ref.runId || typeof run.status !== "string") throw new Error("GitHub returned a different run.");
-  const jobRows = record(await get(ref.repository, `${base}/jobs?filter=latest&per_page=100`)).jobs;
-  const jobs = Array.isArray(jobRows) ? jobRows.map(record) : [];
+  const jobs: Record<string, unknown>[] = [];
+  // A large matrix spans pages; a failed job on a later one must still count.
+  for (let page = 1; page <= MAX_JOB_PAGES; page++) {
+    const body = record(await get(ref.repository, `${base}/jobs?filter=latest&per_page=100&page=${page}`));
+    const rows = Array.isArray(body.jobs) ? body.jobs.map(record) : [];
+    jobs.push(...rows);
+    if (rows.length < 100 || typeof body.total_count !== "number" || jobs.length >= body.total_count) break;
+  }
   const counts = { total: jobs.length, passed: 0, failed: 0, running: 0, queued: 0, waiting: 0, skipped: 0 };
   const failedJobs: NonNullable<ThreadDependencyCiRunObservation["failedJobs"]> = [];
   for (const job of jobs) {

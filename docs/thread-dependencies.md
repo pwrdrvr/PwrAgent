@@ -323,12 +323,14 @@ repairs; the tool defaults to reporting failure.
 
 ## CI runs without a PR
 
-A `ci_run` condition names one GitHub Actions run by URL, with `threadId: ""`:
+A `ci_run` condition names one GitHub Actions run by URL, with `threadId: ""`
+and the waiting thread's `backend`:
 
 ```json
 {
   "action": "create",
   "conditions": [{
+    "backend": "codex",
     "threadId": "",
     "when": "ci_run",
     "ciRun": {
@@ -370,7 +372,8 @@ deployments. Requests go through the forge client's admission and token
 bucket. No model is involved.
 
 The poller runs only while background PR polling is enabled and the waiting
-thread's project allows PR watches, the same gate as PR conditions. A failed
+thread's project allows PR watches, the same gate as PR conditions. With PR
+polling off, registration is refused, as it is for a PR prerequisite. A failed
 check keeps the last observation and marks it stale. It never fails the wait.
 
 A future PwrAgent GitHub App should replace this polling with `workflow_run`

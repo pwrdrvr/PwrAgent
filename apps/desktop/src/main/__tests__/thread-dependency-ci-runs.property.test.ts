@@ -154,6 +154,21 @@ describe("reading a run", () => {
     expect(get.mock.calls.map(([, path]) => path)).not.toContainEqual(expect.stringContaining("pending_deployments"));
   });
 
+  it("reads every page of a large matrix, so a failed job past the first hundred counts", async () => {
+    const job = (index: number) => ({ id: index, name: `Shard ${index}`, status: "completed", html_url: `${RUN_URL}/job/${index}`,
+      conclusion: index === 120 ? "failure" : "success", steps: index === 120 ? [{ name: "Test", conclusion: "failure" }] : [] });
+    const all = Array.from({ length: 150 }, (_, index) => job(index + 1));
+    const get = vi.fn(async (_repository: unknown, path: string) => {
+      if (!path.includes("/jobs?")) return { id: 8841207733, status: "in_progress" };
+      const page = Number(new URLSearchParams(path.split("?")[1]).get("page") ?? 1);
+      return { total_count: all.length, jobs: all.slice((page - 1) * 100, page * 100) };
+    });
+    const seen = await readCiRun(get, parseCiRunUrl(RUN_URL)!, 0);
+    expect(seen.jobs).toMatchObject({ total: 150, passed: 149, failed: 1 });
+    expect(seen.failedJobs).toEqual([{ name: "Shard 120", url: `${RUN_URL}/job/120`, failedStep: "Test" }]);
+    expect(get.mock.calls.filter(([, path]) => path.includes("/jobs?"))).toHaveLength(2);
+  });
+
   it("refuses a response for another run", async () => {
     await expect(readCiRun(async () => ({ id: 1, status: "completed" }), parseCiRunUrl(RUN_URL)!, 0)).rejects.toThrow("different run");
   });
@@ -298,6 +313,27 @@ describe("Continue After a CI run", () => {
     await expect(create(coordinator(), { ...ciRunCondition(), threadId: "release" })).rejects.toThrow("names no thread");
     await expect(create(coordinator(), ciRunCondition({ url: RUN_URL, on: ["finished"], environments: ["windows-signing"] }))).rejects.toThrow("include approval_gate");
     expect(store.active()).toHaveLength(0);
+  });
+
+  it("stores one spelling of a wait, so a reordered retry is the same wait", async () => {
+    const agent = coordinator();
+    await create(agent, ciRunCondition({ url: RUN_URL, on: ["finished", "approval_gate"], environments: ["windows-signing", "macos-notarize"] }));
+    await create(agent, ciRunCondition({ url: `${RUN_URL}/`, on: ["approval_gate", "finished"], environments: ["macos-notarize", "windows-signing"] }));
+    expect(store.active()).toHaveLength(1);
+    expect(store.active()[0]!.conditions[0]!.ciRun).toEqual({
+      url: RUN_URL, on: ["approval_gate", "finished"], environments: ["macos-notarize", "windows-signing"],
+    });
+  });
+
+  it("announces every check, so windows show when the run was last checked", async () => {
+    const changed = vi.fn(async () => undefined);
+    const agent = coordinator({ changed });
+    await create(agent);
+    changed.mockClear();
+    await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 2 }));
+    await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 3 }));
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect(agent.withCiRunObservations(store.active())[0]!.evidence[0]!.ciRun?.checkedAt).toBe(3);
   });
 
   it("keeps the latest check in memory only and survives a restart on stored evidence", async () => {

@@ -9436,6 +9436,8 @@ class DesktopAppServerService {
         });
       });
     }
+    // CI run waits are checked only while their project allows PR watches.
+    if (projectAllowsPrWatches(previous) !== projectAllowsPrWatches(next)) this.threadDependencyCiRunPoller?.sync();
     if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
       await this.getThreadDependencyCoordinator().handlePrEvent();
       // A merge or close seen while watches were held left its watch
@@ -10120,7 +10122,8 @@ class DesktopAppServerService {
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
           // A wait that starts, fires or ends changes which runs need checks.
-          if (dependency.conditions.some((condition) => condition.ciRun)) this.getThreadDependencyCiRunPoller().sync();
+          // After close() the poller is gone; a late change must not rebuild it.
+          if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
           for (const target of [dependency, ...dependency.conditions.filter(isThreadDependencyLocalThreadCondition)]) {
@@ -10328,6 +10331,10 @@ class DesktopAppServerService {
       }
       if (request.conditions?.some(isPrDependencyCondition) && !this.backgroundPrPollingEnabled) {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
+      }
+      // CI runs are checked under the same switch, so a wait would never fire.
+      if (request.conditions?.some((condition) => condition?.when === "ci_run") && !this.backgroundPrPollingEnabled) {
+        throw new Error("Enable background PR polling before waiting for a CI run.");
       }
     }
     const { pullRequest, ...managed } = request;

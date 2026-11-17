@@ -9,7 +9,7 @@ import {
   THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
   THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH, THREAD_DEPENDENCY_MAX_STEPS, THREAD_DEPENDENCY_STEP_MAX_LENGTH,
   THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH, threadDependencyMarkDoneIndex,
-  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS, THREAD_DEPENDENCY_CI_RUN_OUTCOMES, summarizeThreadDependencyCiRun, threadDependencyCiRunId,
+  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS, THREAD_DEPENDENCY_CI_RUN_OUTCOMES, threadDependencyCiRunId, threadDependencyCiRunOutcomes,
   threadDependencyConditionName, threadDependencyConditionPhrase,
   THREAD_DEPENDENCY_PROMPT_ANY_MET, THREAD_DEPENDENCY_PROMPT_FAILED, THREAD_DEPENDENCY_PROMPT_INTRO,
   THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
@@ -285,7 +285,14 @@ export class ThreadDependencyCoordinator {
     this.ciRuns.set(ref.url, observation);
     this.options.ciRunChecked?.(ref.url);
     const title = condition.title ?? `${observation.name ? `${observation.name} ` : ""}run ${ref.runId}`.replace(/^run/, "Run").slice(0, 200);
-    return { ...condition, ciRun: { ...condition.ciRun!, url: ref.url }, title };
+    // One spelling per wait, so dedupe and supersession see a reordered list as the same wait.
+    const { on, environments } = condition.ciRun!;
+    const ciRun = {
+      url: ref.url,
+      ...on ? { on: threadDependencyCiRunOutcomes({ on }) } : {},
+      ...environments ? { environments: [...new Set(environments.map((name) => name.trim()))].sort() } : {},
+    };
+    return { ...condition, ciRun, title };
   }
 
   /**
@@ -298,14 +305,13 @@ export class ThreadDependencyCoordinator {
       // A failed check keeps what the last good one saw, for display.
       const current = observation.error && previous ? { ...previous, error: observation.error, checkedAt: observation.checkedAt } : observation;
       this.ciRuns.set(url, current);
-      // Windows show the latest check. Announce a changed summary; the
-      // announcement writes nothing.
-      const shown = !previous || summarizeThreadDependencyCiRun(previous) !== summarizeThreadDependencyCiRun(current);
+      // Windows show the latest check and when it ran, so every check is
+      // announced. A save announces itself; the announcement writes nothing.
       for (const item of this.options.store.active()) {
         if (!item.conditions.some((condition) => condition.ciRun?.url === url)) continue;
         await this.evaluate(item);
         const after = this.options.store.get(item.backend, item.threadId, item.id);
-        if (shown && after && JSON.stringify(after) === JSON.stringify(item)) await this.options.changed(after);
+        if (after && JSON.stringify(after) === JSON.stringify(item)) await this.options.changed(after);
       }
     });
   }
@@ -322,7 +328,8 @@ export class ThreadDependencyCoordinator {
       if (item.status !== "waiting") continue;
       for (const condition of item.conditions) {
         const url = condition.ciRun?.url;
-        if (!url || evidenceFor(item, condition)?.state === "satisfied" || evidenceFor(item, condition)?.state === "failed") continue;
+        const state = evidenceFor(item, condition)?.state;
+        if (!url || state === "satisfied" || state === "failed") continue;
         waiting.add(url);
         if (eligible(item)) wanted.add(url);
       }
@@ -523,7 +530,7 @@ export class ThreadDependencyCoordinator {
     const snapshots = new Map<string, DependencyThreadSnapshot>();
     for (const [conditionIndex, stored] of item.conditions.entries()) {
       let condition = stored;
-      const previous = item.evidence.find((entry) => JSON.stringify(entry.condition) === JSON.stringify(condition));
+      const previous = evidenceFor(item, condition);
       if (condition.when === "ci_run") {
         evidence.push(evaluateCiRunCondition(condition, condition.ciRun ? this.ciRuns.get(condition.ciRun.url) : undefined, previous, this.now()));
         continue;
