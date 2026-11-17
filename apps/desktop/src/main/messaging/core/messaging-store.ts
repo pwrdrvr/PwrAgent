@@ -1,6 +1,7 @@
 import { isAsyncQuestionnaireForThread } from "./messaging-pending-intent-match.js";
 export { isAsyncQuestionnaireForThread } from "./messaging-pending-intent-match.js";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -51,10 +52,21 @@ export class MessagingStore {
 
   async upsertBinding(
     binding: MessagingBindingRecord,
+    options?: { expectedActiveBinding: MessagingBindingRecord },
   ): Promise<MessagingBindingRecord> {
     const sanitized = sanitizeBinding(binding);
+    const expected = options
+      ? JSON.parse(JSON.stringify(sanitizeBinding(options.expectedActiveBinding))) as MessagingBindingRecord
+      : undefined;
     const channelKey = buildMessagingConversationKey(sanitized.channel);
     return await this.withData((data) => {
+      const current = data.bindings[sanitized.id];
+      if (options && current && (
+        current.revokedAt !== undefined
+        || !isDeepStrictEqual(current, expected)
+      )) {
+        return structuredClone(current);
+      }
       for (const existing of Object.values(data.bindings)) {
         if (
           existing.id !== sanitized.id &&

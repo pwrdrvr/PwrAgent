@@ -455,11 +455,11 @@ export class MessagingBindingService {
       event,
     );
     await this.context.host().flushToolUpdatesForBinding(binding, { clear: true });
-    await this.context.host().stopMonitoringForBinding(binding, event, {
+    const stoppedBinding = await this.context.host().stopMonitoringForBinding(binding, event, {
       deliverStatus: options.deliverMonitorStatus,
     });
     await this.retireBindingStatus(
-      binding,
+      stoppedBinding,
       event,
       { kind: "thread", thread: await this.context.host().readBoundNavigationThread(binding) },
     );
@@ -633,7 +633,7 @@ export class MessagingBindingService {
       pinnedStatusSurface: undefined,
       statusSurface: undefined,
       updatedAt: this.context.now(),
-    });
+    }, { expectedActiveBinding: binding });
   }
 
   async renderBindingStatus(

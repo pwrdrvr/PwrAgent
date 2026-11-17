@@ -24,6 +24,9 @@ export interface MessagingStorageRecords {
 export interface MessagingStorage<Records extends MessagingStorageRecords> {
   upsertBinding(
     binding: Records["binding"],
+    // Async completions may replace an existing row only while that same
+    // snapshot is active. Rejected replacements return the canonical row.
+    options?: { expectedActiveBinding: Records["binding"] },
   ): Promise<Records["binding"]>;
 
   mergeBindingChannelMetadata(
