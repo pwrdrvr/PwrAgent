@@ -115,8 +115,9 @@ test("desktop reads portable automations and hands lifecycle and editor mutation
     });
     expect(result.before.automations).toHaveLength(2);
     expect(result.before.automations).toContainEqual(expect.objectContaining({ id: "portable-automation", name: "Portable automation", status: "paused" }));
-    expect(result.runs.runs).toContainEqual(expect.objectContaining({ id: "portable-interrupted-run", status: "cancelled",
-      backendTurnId: "portable-old-turn", errorMessage: "PwrAgent restarted before this local automation run completed." }));
+    expect(result.runs.runs).toContainEqual(expect.objectContaining({ id: "portable-interrupted-run", status: "failed",
+      failureReason: "interrupted", backendTurnId: "portable-old-turn",
+      errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed." }));
     expect(result.runs.runs).toContainEqual(expect.objectContaining({ id: "portable-completed-run", status: "completed", completedAt: 5 }));
     expect(result.artifact.artifact?.transcriptEvents).toEqual([
       { id: "portable-final", kind: "assistant_final", text: "Invented portable result", at: 5 },
@@ -130,7 +131,7 @@ test("desktop reads portable automations and hands lifecycle and editor mutation
         taskPrompt: "Invented desktop edited task", status: "paused" });
       expect(store.getAutomation("portable-delete")).toBeUndefined();
       expect(store.getAutomation("portable-delete", { includeDeleted: true })?.status).toBe("deleted");
-      expect(store.getRun("portable-interrupted-run")?.status).toBe("cancelled");
+      expect(store.getRun("portable-interrupted-run")).toMatchObject({ status: "failed", failureReason: "interrupted" });
       expect(store.getRunArtifact("portable-completed-run")?.transcriptEvents).toEqual(result.artifact.artifact?.transcriptEvents);
     } finally { db.close(); }
   } finally { await app.close(); }
