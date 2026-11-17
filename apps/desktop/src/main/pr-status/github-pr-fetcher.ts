@@ -1,4 +1,11 @@
-import { parsePullRequestReferenceUrl } from "./forge-reference";
+import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
+import { describeMergeQueueState } from "@pwragent/shared";
+import {
+  GITHUB_MERGE_QUEUE_GATE_QUERY,
+  parseGithubMergeQueueGate,
+  runGithubQueueMerge,
+} from "./github-merge-queue";
+import { isMergeQueueRepository, mentionsMergeQueue, noteMergeQueueRepository } from "./merge-queue-repositories";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
@@ -139,6 +146,8 @@ export type GithubPrFetcherOptions = {
    * Defaults to `DEFAULT_GH_AVAILABLE_CACHE_TTL_MS` (60s).
    */
   ghAvailableCacheTtlMs?: number;
+  /** Override the `gh` subprocess a to-do merge runs — used by tests. */
+  runGhCommand?: (command: string, args: string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string; stderr?: string }>;
 };
 
 export class GithubPrFetcher {
@@ -159,6 +168,7 @@ export class GithubPrFetcher {
   >;
   private readonly authStatusCacheTtlMs: number;
   private readonly ghAvailableCacheTtlMs: number;
+  private readonly runGhCommand: NonNullable<GithubPrFetcherOptions["runGhCommand"]>;
   private ghAvailableCache: { value: boolean; fetchedAt: number } | undefined;
   private ghDiscoveryCache:
     | { value: DesktopGhDiscoverySnapshot; fetchedAt: number }
@@ -206,6 +216,12 @@ export class GithubPrFetcher {
       options.authStatusCacheTtlMs ?? DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS;
     this.ghAvailableCacheTtlMs =
       options.ghAvailableCacheTtlMs ?? DEFAULT_GH_AVAILABLE_CACHE_TTL_MS;
+    this.runGhCommand = options.runGhCommand ?? (async (command, args, runOptions) => await execFileAsync(command, args, {
+      ...(runOptions.cwd ? { cwd: runOptions.cwd } : {}),
+      env: buildPwrAgentChildProcessEnv(process.env),
+      timeout: runOptions.timeout,
+      encoding: "utf8",
+    }));
   }
 
   /**
@@ -214,47 +230,113 @@ export class GithubPrFetcher {
    * a number, resolved against the repository at `cwd`, or a github.com URL.
    * The branch is left alone: `--delete-branch` would also check out the
    * default branch in `cwd`, which may be the thread's worktree.
+   *
+   * A base branch that requires a merge queue never takes a direct merge:
+   * the PR is added to the queue (or auto-merge waits for its checks), the
+   * method does not apply, and the summary says it was queued.
    */
   async mergePullRequest(params: {
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
     assertCanMerge?: (url: string) => void;
-  }): Promise<{ summary: string }> {
+  }): Promise<{ summary: string; queued?: boolean }> {
     const command = await this.resolveGhCommand();
-    if (params.assertCanMerge) {
-      let url = params.pullRequest;
-      if (!parsePullRequestReferenceUrl(url)) {
-        const result = await execFileAsync(command, ["pr", "view", params.pullRequest, "--json", "url", "--jq", ".url"], {
-          ...(params.cwd ? { cwd: params.cwd } : {}), env: buildPwrAgentChildProcessEnv(process.env), timeout: 30_000, encoding: "utf8",
-        });
-        url = result.stdout.trim();
-        if (!parsePullRequestReferenceUrl(url)) throw new Error("Could not identify the pull request before checking merge holds.");
-      }
-      params.assertCanMerge(url);
+    const run = async (args: string[], timeout = 30_000) => await this.runGhCommand(command, args, {
+      ...(params.cwd ? { cwd: params.cwd } : {}), timeout,
+    });
+    let reference = parsePullRequestReferenceUrl(params.pullRequest);
+    if (!reference) {
+      const result = await run(["pr", "view", params.pullRequest, "--json", "url", "--jq", ".url"]);
+      reference = parsePullRequestReferenceUrl(result.stdout.trim());
+      if (!reference) throw new Error("Could not identify the pull request before merging.");
     }
+    params.assertCanMerge?.(reference.url);
+    const label = `#${reference.number}`;
+    // A repository never seen with a queue merges exactly as before.
+    const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
+    if (queueRepository) {
+      const queued = await this.mergeThroughQueue(reference, label, run);
+      if (queued) return queued;
+    }
+    let output: { stdout: string; stderr?: string };
     try {
-      await execFileAsync(
-        command,
-        ["pr", "merge", params.pullRequest, `--${params.method}`],
-        {
-          ...(params.cwd ? { cwd: params.cwd } : {}),
-          env: buildPwrAgentChildProcessEnv(process.env),
-          timeout: 60_000,
-          encoding: "utf8",
-        },
-      );
+      output = await run(["pr", "merge", params.pullRequest, `--${params.method}`], 60_000);
     } catch (error) {
       const err = error as { stderr?: string; message?: string };
       const detail = err.stderr?.trim() || err.message || String(error);
+      // Refused for want of the queue: learn the repository and queue it.
+      if (!queueRepository && mentionsMergeQueue(detail)) {
+        noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
+        const queued = await this.mergeThroughQueue(reference, label, run);
+        if (queued) return queued;
+      }
       const firstLine = detail.split("\n")[0];
       throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`);
+    }
+    // `gh pr merge` adds a PR to a required queue itself, and says so rather
+    // than merging: report that, not a merge.
+    if (mentionsMergeQueue(`${output.stdout}\n${output.stderr ?? ""}`)) {
+      noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
+      return { queued: true, summary: `Sent ${label} to the merge queue: it merges once the queue's checks pass` };
     }
     const verb = MERGE_METHOD_RESULTS[params.method];
     return {
       summary: /^\d+$/.test(params.pullRequest)
         ? `${verb} #${params.pullRequest}`
         : verb,
+    };
+  }
+
+  /**
+   * Add the PR to its base branch's merge queue when the branch requires
+   * one. Undefined when it does not, or when the queue cannot be read, so
+   * the caller merges with gh as before.
+   */
+  private async mergeThroughQueue(
+    reference: PullRequestReferenceIdentity,
+    label: string,
+    run: (args: string[], timeout?: number) => Promise<{ stdout: string }>,
+  ): Promise<{ summary: string; queued: true } | undefined> {
+    const host = ["--hostname", reference.provider];
+    const graphql = async (query: string, fields: string[]) => {
+      try {
+        const result = await run(["api", "graphql", ...host, "-f", `query=${query}`, ...fields]);
+        return (JSON.parse(result.stdout) as { data?: unknown }).data;
+      } catch (error) {
+        const err = error as { stderr?: string; message?: string };
+        const detail = (err.stderr?.trim() || err.message || String(error)).split("\n")[0];
+        throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`);
+      }
+    };
+    let gate;
+    try {
+      gate = parseGithubMergeQueueGate(await graphql(GITHUB_MERGE_QUEUE_GATE_QUERY, [
+        "-f", `owner=${reference.org}`, "-f", `repo=${reference.repo}`, "-F", `number=${reference.number}`,
+      ]));
+    } catch (error) {
+      // A queue read that fails (an Enterprise Server without the queue
+      // schema, a GraphQL outage) never blocks the merge: `gh pr merge` runs
+      // as it always has, and it adds the PR to a queue itself when needed.
+      fetcherLog.warn("could not read the merge queue before merging; merging with gh", {
+        pullRequest: reference.url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+    if (!gate.required) return undefined;
+    const result = await runGithubQueueMerge(gate, async (query, variables) => await graphql(query, [
+      "-f", `id=${variables.id}`, ...(variables.head ? ["-f", `head=${variables.head}`] : []),
+    ]));
+    if (result.action === "already_queued") {
+      return { queued: true, summary: `${label} is already in the merge queue · ${describeMergeQueueState(result.status) ?? "queued"}` };
+    }
+    if (result.action === "auto_merge") {
+      return { queued: true, summary: `Auto-merge on for ${label}: GitHub adds it to the merge queue when its checks pass` };
+    }
+    return {
+      queued: true,
+      summary: `Added ${label} to the merge queue · ${describeMergeQueueState(result.status) ?? "queued"}`,
     };
   }
 

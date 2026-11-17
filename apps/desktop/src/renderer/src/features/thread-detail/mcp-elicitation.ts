@@ -2,15 +2,18 @@ import {
   FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  isGitObjectId,
   isSecretFieldLabel,
   isSecretFieldName,
   mcpElicitationPurpose,
   readForgeApprovalMergeMethods,
+  readForgeApprovalMergeQueue,
   readForgeApprovalRememberOptions,
   readMcpProjectToolApprovalOffer,
   type AppServerMcpElicitationRequestNotification,
   type AppServerMcpElicitationResponse,
   type ForgeApprovalMergeMethods,
+  type ForgeApprovalMergeQueue,
   type ForgeApprovalRememberOption,
   type ForgeApprovalRememberOptionId,
   type McpElicitationPurpose,
@@ -177,6 +180,12 @@ export function readMcpProjectApprovalOffer(state: PendingMcpInteractionState): 
 export function readMcpMergeMethods(state: PendingMcpInteractionState): ForgeApprovalMergeMethods | undefined {
   if (state.mode !== "form" || state._meta?.pwragent_approval_kind !== "mcp_tool_call") return undefined;
   return readForgeApprovalMergeMethods(state._meta);
+}
+
+/** A merge whose base branch requires a merge queue or train: it enqueues. */
+export function readMcpMergeQueue(state: PendingMcpInteractionState): ForgeApprovalMergeQueue | undefined {
+  if (state.mode !== "form" || state._meta?.pwragent_approval_kind !== "mcp_tool_call") return undefined;
+  return readForgeApprovalMergeQueue(state._meta);
 }
 
 /** Permission to run a tool, not a request for data. */
@@ -372,6 +381,10 @@ const SECRET_ASSIGNMENT = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|se
 const BEARER_CREDENTIAL = /(\bbearer\s+)\S+/giu;
 
 function redactDisplayString(value: string, key?: string): string {
+  // A commit id under a key that names one is not a credential: the
+  // operator must see which head a merge approval pins. Checked before the
+  // multi-line path so a trailing newline does not hide it line by line.
+  if (isCommitIdField(value, key)) return value;
   // Multi-line text is something to read, such as a pull request body, so
   // only the credential in it is hidden. Hiding the whole body for one
   // `SECRET=` line would leave the operator approving text they cannot see.
@@ -387,6 +400,18 @@ function redactDisplayString(value: string, key?: string): string {
   // long. Explicit bearer/credential assignments remain hidden in any field.
   if (looksSecret(value, key === "name")) return "[redacted]";
   return redactUrl(value);
+}
+
+// The key's last word must name a commit: a whole key (`sha`), one after a
+// separator (`head_sha`), or a camelCase word (`expectedHeadSha`). A bare
+// suffix would also admit keys such as `void` or `prev`.
+const COMMIT_WORD = /(?:^|[_.-])(?:sha|oid|commit|rev|revision)$/iu;
+const COMMIT_CAMEL_WORD = /[a-z0-9](?:Sha|SHA|Oid|OID|Commit|Rev|Revision)$/u;
+
+// Both halves are required. A 40-hex value alone may be a classic GitHub
+// personal access token, so the key must say it holds a commit.
+function isCommitIdField(value: string, key = ""): boolean {
+  return (COMMIT_WORD.test(key) || COMMIT_CAMEL_WORD.test(key)) && isGitObjectId(value.trim());
 }
 
 function baseState(

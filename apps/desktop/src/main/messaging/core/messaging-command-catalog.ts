@@ -19,7 +19,7 @@ export {
  *
  * The channel-neutral verb list lives in `@pwragent/messaging-interface` and
  * is shared by:
- *   - The controller's `handleCommand` dispatch (verb → handler).
+ *   - `MessagingCommandHandlers.handleCommand` dispatch (verb → handler).
  *   - The user-facing `/help` body, which lists every verb here with
  *     its description.
  *   - Provider adapters that register native slash commands
@@ -36,10 +36,8 @@ export {
  * To add a new verb:
  *   1. Add an entry to the interface catalog with a stable `verb`, a one-line
  *      `description`, and whether it can be invoked directly from `/help`.
- *   2. Wire the handler in `MessagingController.handleCommand` (this
- *      module deliberately does NOT export the dispatch table — the
- *      controller owns its own state and shouldn't be coupled to a
- *      data structure that lives elsewhere).
+ *   2. Wire the handler in `MessagingCommandHandlers.handleCommand`.
+ *      The catalog supplies metadata; the command owner handles dispatch.
  *   3. Add provider-specific native metadata where the platform needs it.
  */
 

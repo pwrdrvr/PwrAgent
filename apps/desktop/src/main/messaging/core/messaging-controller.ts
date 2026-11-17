@@ -1,3 +1,6 @@
+import { MessagingCommandHandlers } from "./messaging-command-handlers";
+import type { MessagingCommandHost } from "./messaging-command-context";
+import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
 import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
@@ -59,7 +62,6 @@ import {
   describeProviderResponseBlock,
   parseThreadIdentityKey,
   permissionForActionId,
-  permissionForCommandVerb,
   permissionForDynamicTool,
   permissionsForThreadMutation,
   toolArgsTargetRemoteInstance,
@@ -117,7 +119,6 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   RbacResolution,
-  ScheduledThreadAction,
   ThreadMessagingBindingTransition,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -175,13 +176,7 @@ import {
   normalizeMessagingQuestionnaireIntent,
 } from "@pwragent/messaging-interface";
 import {
-  buildHelpActions,
-  formatMessagingCommandHelpBody,
   matchMessagingCommandVerb,
-  MESSAGING_COMMAND_CATALOG,
-  MESSAGING_HELP_ACTION_COMMANDS,
-  MESSAGING_REVIEW_HELP_SPEC,
-  paginateHelpCatalog,
 } from "./messaging-command-catalog.js";
 import {
   buildMonitorStatusIntent,
@@ -243,9 +238,6 @@ import { getMainLogger } from "../../log.js";
 import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
-import {
-  parseReviewCommand,
-} from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildBoundedResumeIntent,
@@ -315,11 +307,6 @@ import {
 } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
 import type { MessagingToolActivity } from "./messaging-tool-activity.js";
-import {
-  parseMessagingSchedule,
-  resolveScheduledAction,
-  scheduledActionDisplayId,
-} from "./messaging-scheduled-actions.js";
 import {
   MessagingToolUpdatePolicy,
   type MessagingToolUpdatePolicyDelivery,
@@ -480,24 +467,6 @@ const ACTIVE_TURN_HANDOFF_ERROR =
 
 type PreparedInputStartResult = "failed" | "queued" | "started";
 const messagingControllerLog = getMainLogger("pwragent:messaging");
-
-type MonitorCommandAction =
-  | { kind: "start" }
-  | { kind: "stop" }
-  | { kind: "refresh" }
-  | { kind: "topics-adopt" }
-  | { kind: "topics-cleanup" }
-  | { kind: "topics-fanout" }
-  | { kind: "cycle-interval" }
-  | { kind: "cycle-pinned" }
-  | { kind: "cycle-recent" }
-  | { kind: "toggle-snippet" }
-  | { kind: "toggle-status-line" }
-  | { kind: "set-pinned"; count: number }
-  | { kind: "set-interval"; intervalMs: number }
-  | { kind: "set-recent"; count: number }
-  | { kind: "set-snippet"; enabled: boolean }
-  | { kind: "set-status-line"; enabled: boolean };
 
 type MonitorStateOptions = Pick<
   MessagingMonitorState,
@@ -1077,7 +1046,10 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly queuedTurnDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly queuedTurnDrainTimers = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    settle: () => void;
+  }>();
   private readonly queuedTurnDrains = new Map<string, Promise<void>>();
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
@@ -1124,6 +1096,9 @@ export class MessagingController {
   private readonly unregisterAutomationSourceMessageDeliveryHandler: () => void;
   private readonly unregisterAutomationTargetMessageDeliveryHandler: () => void;
 
+  private readonly commandHandlers: MessagingCommandHandlers;
+  private commandHostPorts?: MessagingCommandHost;
+
   constructor(private readonly options: MessagingControllerOptions) {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
@@ -1133,6 +1108,15 @@ export class MessagingController {
       get now() { return readNow(); },
       get logger() { return readLogger(); },
       host: () => this.backendEventHost(),
+    });
+    const readBackend = () => this.options.backend;
+    const readCapabilityProfile = () => this.capabilityProfile;
+    this.commandHandlers = new MessagingCommandHandlers({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get now() { return readNow(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      host: () => this.commandHost(),
     });
     this.authorizedActorIds = new Set(options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
@@ -1280,7 +1264,7 @@ export class MessagingController {
     }
 
     if (event.kind === "command") {
-      await this.handleCommand(event);
+      await this.commandHandlers.handleCommand(event);
       return;
     }
 
@@ -1487,6 +1471,38 @@ export class MessagingController {
   }
 
   private backendEventPorts?: MessagingBackendEventHost;
+
+  private commandHost(): MessagingCommandHost {
+    return this.commandHostPorts ??= {
+      requirePermission: (...args) => this.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      handleStatusCallback: (...args) => this.handleStatusCallback(...args),
+      presentStatus: (...args) => this.presentStatus(...args),
+      detachBinding: (...args) => this.detachBinding(...args),
+      presentResumeBrowser: (...args) => this.presentResumeBrowser(...args),
+      presentAgentBrowser: (...args) => this.presentAgentBrowser(...args),
+      rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      shouldHandleAmbientSharedMessage: (...args) => this.shouldHandleAmbientSharedMessage(...args),
+      admitTurnInput: (...args) => this.admitTurnInput(...args),
+      reviewSupportedForBinding: (...args) => this.reviewSupportedForBinding(...args),
+      deliverReviewUnsupported: (...args) => this.deliverReviewUnsupported(...args),
+      submitMessagingReview: (...args) => this.submitMessagingReview(...args),
+      presentReviewPicker: (...args) => this.presentReviewPicker(...args),
+      deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
+      presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
+      clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
+      presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
+      stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
+      enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
+      resolveMonitorControlTopic: (...args) => this.resolveMonitorControlTopic(...args),
+      eventForManagedTopic: (...args) => this.eventForManagedTopic(...args),
+      renderTopicCleanupProposal: (...args) => this.renderTopicCleanupProposal(...args),
+      runTopicMonitorFanout: (...args) => this.runTopicMonitorFanout(...args),
+      renderTopicControlStatus: (...args) => this.renderTopicControlStatus(...args),
+    };
+  }
 
   private backendEventHost(): MessagingBackendEventHost {
     if (this.backendEventPorts) return this.backendEventPorts;
@@ -1856,430 +1872,6 @@ export class MessagingController {
     // The chip now has fresher breadcrumbs in the store; nudge the
     // renderer to refetch so the tooltip / label reflect them.
     this.notifyBindingChanged("refresh-from-inbound");
-  }
-
-  private async handleCommand(
-    event: MessagingInboundCommandEvent,
-    options?: {
-      targetSurface?: MessagingSurfaceRef;
-    },
-  ): Promise<void> {
-    const verb = matchMessagingCommandVerb(event.command);
-    // RBAC: gate the verb before dispatching. `help` and unknown commands are
-    // ungated (they only surface the command list). `permissionForCommandVerb`
-    // is the same lookup the render-time button filter uses, so they can't drift.
-    // This stays ABOVE every verb branch so a newly added command cannot slip
-    // in below the gate.
-    if (verb) {
-      const permission = permissionForCommandVerb(verb);
-      if (
-        permission &&
-        !(await this.requirePermission(event, permission, `command:${verb}`))
-      ) {
-        return;
-      }
-      // Scope gate: a command against a conversation already bound to a peer's
-      // thread drives that peer. Exempt: `resume`/`agent` only open the picker
-      // (which filters, and the bind is gated at bind time), and `detach` is a
-      // local unbind that must stay available or a scope-revoked actor is
-      // stranded in a conversation they can neither use nor leave.
-      if (
-        verb !== "resume" &&
-        verb !== "agent" &&
-        verb !== "detach" &&
-        !(await this.requireRemoteScopeForBinding(
-          event,
-          await this.options.store.findActiveBindingForChannel(event.channel),
-          `command:${verb}:remote-instance`,
-        ))
-      ) {
-        return;
-      }
-    }
-    if (verb === "schedule") {
-      await this.handleScheduleCommand(event);
-      return;
-    }
-    if (verb === "scheduled") {
-      await this.handleScheduledCommand(event);
-      return;
-    }
-    if (verb === "continue") {
-      await this.continueClaudeThreadInNewSession(event);
-      return;
-    }
-    if (verb === "status") {
-      if (event.args[0]?.toLowerCase() === "handoff") {
-        await this.handleStatusCallback({
-          ...event, kind: "callback",
-          interaction: { channel: event.channel.channel, id: event.id },
-          actionId: "status:handoff",
-        }, "status:handoff");
-        return;
-      }
-      await this.presentStatus(event);
-      return;
-    }
-    if (verb === "detach") {
-      await this.detachBinding(event);
-      return;
-    }
-    if (verb === "monitor") {
-      await this.handleMonitorCommand(event);
-      return;
-    }
-    if (verb === "resume") {
-      await this.presentResumeBrowser(event, {
-        cancelDestination: options?.targetSurface ? "help" : undefined,
-        targetSurface: options?.targetSurface,
-      });
-      return;
-    }
-    if (verb === "agent") {
-      if (event.args[0]?.toLowerCase() === "default") {
-        await this.handleDefaultAgentCommand(event);
-        return;
-      }
-      await this.presentAgentBrowser(event, {
-        cancelDestination: options?.targetSurface ? "help" : undefined,
-        targetSurface: options?.targetSurface,
-      });
-      return;
-    }
-    if (verb === "new") {
-      await this.presentResumeBrowser(
-        {
-          ...event,
-          command: "resume",
-          args: ["--new", ...event.args],
-          rawText: ["/resume", "--new", ...event.args].join(" "),
-        },
-        {
-          cancelDestination: options?.targetSurface ? "help" : undefined,
-          targetSurface: options?.targetSurface,
-        },
-      );
-      return;
-    }
-    if (verb === "help") {
-      await this.presentHelp(event, {
-        targetSurface: options?.targetSurface,
-      });
-      return;
-    }
-    if (
-      event.command.trim().replace(/^\/+/, "").toLowerCase()
-        === "review"
-    ) {
-      await this.handleReviewCommand(event);
-      return;
-    }
-    await this.routeUnknownCommandToBoundThread(event);
-  }
-
-  private async handleScheduleCommand(
-    event: MessagingInboundCommandEvent,
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      await this.presentThreadCommandNeedsBinding(event);
-      return;
-    }
-    if (!this.options.backend.createScheduledThreadAction) {
-      await this.deliverScheduledActionError(
-        binding,
-        event,
-        "Scheduled messages are unavailable.",
-      );
-      return;
-    }
-    const parsed = parseMessagingSchedule(event.args, this.now());
-    if (!parsed.ok) {
-      await this.deliverScheduledActionError(binding, event, parsed.error);
-      return;
-    }
-    const response = await this.options.backend.createScheduledThreadAction({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: binding.threadId,
-      kind: "turn",
-      origin: "messaging",
-      scheduledFor: parsed.scheduledFor,
-      displayText: parsed.text,
-      turn: {
-        input: [{ type: "text", text: parsed.text }],
-        messageOrigin: messageOriginForInboundEvent(event, this.rememberHumanMessagingSource(binding, event)?.ref),
-      },
-    });
-    const failureMessage = scheduledActionFailureMessage(response.action);
-    if (failureMessage) {
-      await this.deliverScheduledActionError(binding, event, failureMessage);
-      return;
-    }
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("scheduled-message-created"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Message scheduled",
-        body: [
-          `ID: ${scheduledActionDisplayId(response.action.id)}`,
-          `Sends: ${new Date(response.action.scheduledFor).toISOString()}`,
-          "",
-          response.action.displayText,
-        ].join("\n"),
-      }),
-      binding,
-      event,
-    );
-  }
-
-  private async handleScheduledCommand(
-    event: MessagingInboundCommandEvent,
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      await this.presentThreadCommandNeedsBinding(event);
-      return;
-    }
-    const list = this.options.backend.listScheduledThreadActions?.bind(
-      this.options.backend,
-    );
-    if (!list) {
-      await this.deliverScheduledActionError(
-        binding,
-        event,
-        "Scheduled messages are unavailable.",
-      );
-      return;
-    }
-    const response = await list({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: binding.threadId,
-    });
-    const [operation, candidateId, ...remaining] = event.args;
-    if (!operation) {
-      const body = response.actions.length > 0
-        ? response.actions.map((action) => [
-            `${scheduledActionDisplayId(action.id)} · ${action.status} · ${new Date(action.scheduledFor).toISOString()}`,
-            action.displayText,
-          ].join("\n")).join("\n\n")
-        : "No scheduled messages are waiting for this thread.";
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("scheduled-message-list"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Scheduled messages",
-          body: [
-            body,
-            "",
-            "Manage with /scheduled send <id>, /scheduled cancel <id>, or /scheduled edit <id> <time> <message>.",
-          ].join("\n"),
-        }),
-        binding,
-        event,
-      );
-      return;
-    }
-    const resolved = resolveScheduledAction(response.actions, candidateId);
-    if (!resolved.ok) {
-      await this.deliverScheduledActionError(binding, event, resolved.error);
-      return;
-    }
-    try {
-      if (operation === "send" || operation === "now") {
-        if (!this.options.backend.sendScheduledThreadActionNow) {
-          throw new Error("Sending scheduled messages now is unavailable.");
-        }
-        const mutation = await this.options.backend.sendScheduledThreadActionNow({
-          federationTarget: federationTargetForBinding(binding),
-          id: resolved.action.id,
-        });
-        const failureMessage = scheduledActionFailureMessage(mutation.action);
-        if (failureMessage) throw new Error(failureMessage);
-      } else if (operation === "cancel" || operation === "remove") {
-        if (!this.options.backend.cancelScheduledThreadAction) {
-          throw new Error("Cancelling scheduled messages is unavailable.");
-        }
-        await this.options.backend.cancelScheduledThreadAction({
-          federationTarget: federationTargetForBinding(binding),
-          id: resolved.action.id,
-        });
-      } else if (operation === "edit") {
-        if (
-          resolved.action.kind !== "turn"
-          || !this.options.backend.updateScheduledThreadAction
-        ) {
-          throw new Error("That scheduled action cannot be edited here.");
-        }
-        const parsed = parseMessagingSchedule(remaining, this.now());
-        if (!parsed.ok) throw new Error(parsed.error);
-        const mutation = await this.options.backend.updateScheduledThreadAction({
-          federationTarget: federationTargetForBinding(binding),
-          id: resolved.action.id,
-          scheduledFor: parsed.scheduledFor,
-          displayText: parsed.text,
-          turn: {
-            ...resolved.action.turn,
-            input: [{ type: "text", text: parsed.text }],
-            messageOrigin:
-              resolved.action.turn?.messageOrigin
-              ?? messageOriginForInboundEvent(event),
-          },
-        });
-        const failureMessage = scheduledActionFailureMessage(mutation.action);
-        if (failureMessage) throw new Error(failureMessage);
-      } else {
-        throw new Error(
-          "Use /scheduled, /scheduled send <id>, /scheduled cancel <id>, or /scheduled edit <id> <time> <message>.",
-        );
-      }
-    } catch (error) {
-      await this.deliverScheduledActionError(
-        binding,
-        event,
-        error instanceof Error ? error.message : String(error),
-      );
-      return;
-    }
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("scheduled-message-updated"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title:
-          operation === "edit"
-            ? "Scheduled message updated"
-            : operation === "cancel" || operation === "remove"
-              ? "Scheduled message cancelled"
-              : "Scheduled message sent",
-        body: resolved.action.displayText,
-      }),
-      binding,
-      event,
-    );
-  }
-
-  private async deliverScheduledActionError(
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
-    message: string,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("scheduled-message-error"),
-        createdAt: this.now(),
-        title: "Scheduled message error",
-        body: message,
-        recoverable: true,
-      }),
-      binding,
-      event,
-    );
-  }
-
-  private async routeUnknownCommandToBoundThread(
-    event: MessagingInboundCommandEvent,
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      await this.presentThreadCommandNeedsBinding(event);
-      return;
-    }
-    if (
-      binding.targetKind === "agent_thread" &&
-      !await this.shouldHandleAmbientSharedMessage(
-        {
-          ...event,
-          kind: "text",
-          text: event.rawText,
-        },
-        binding,
-      )
-    ) {
-      return;
-    }
-    const text = `/${[event.command.replace(/^\/+/, ""), ...event.args]
-      .filter(Boolean)
-      .join(" ")}`;
-    await this.admitTurnInput({
-      binding,
-      event: {
-        ...event,
-        kind: "text",
-        text,
-      },
-    });
-  }
-
-  private async presentThreadCommandNeedsBinding(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("thread-command-needs-binding"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Choose a thread",
-        body: "Bind this conversation to a PwrAgent thread before sending thread commands.",
-        fallbackText: "Reply /resume to choose a thread.",
-        actions: [
-          {
-            id: "command:resume",
-            label: "Resume",
-            style: "primary",
-            fallbackText: "/resume",
-          },
-        ],
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async handleReviewCommand(
-    event: MessagingInboundCommandEvent,
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      await this.presentThreadCommandNeedsBinding(event);
-      return;
-    }
-    if (!await this.reviewSupportedForBinding(binding)) {
-      await this.deliverReviewUnsupported(binding, event);
-      return;
-    }
-
-    if (event.args.length > 0) {
-      const parsed = parseReviewCommand(
-        `/${["review", ...event.args].join(" ")}`,
-      );
-      if (!parsed) {
-        await this.deliver(
-          buildErrorIntent({
-            id: this.newIntentId("invalid-review-command"),
-            createdAt: this.now(),
-            title: "Invalid review command",
-            body:
-              "Use /review, /review <base branch>, /review --pr <attached GitHub.com PR URL>, /review --commit <sha>, or /review --custom <instructions>.",
-            recoverable: true,
-          }),
-          binding,
-          event,
-        );
-        return;
-      }
-      await this.submitMessagingReview({
-        binding,
-        event,
-        target: parsed.target,
-      });
-      return;
-    }
-
-    await this.presentReviewPicker(binding, event);
   }
 
   private async presentReviewPicker(
@@ -2829,77 +2421,6 @@ export class MessagingController {
     };
   }
 
-  /**
-   * Render the help surface. The body is the prose
-   * description-list (derived from `MESSAGING_COMMAND_CATALOG` so it
-   * never drifts from the verb set) and the action row is one
-   * `command:<verb>` button per catalog entry on the current page,
-   * plus Prev/Next/Cancel navigation when the catalog overflows a
-   * single page.
-   *
-   * Pagination is stateless: the next/previous page index travels in
-   * `action.value.pageIndex` and comes back through the
-   * `MessagingInboundCallbackEvent.value` field. Help has no
-   * persistent session record like the resume browser does — the
-   * page content is deterministic from the catalog plus the page
-   * index.
-   *
-   * Re-renders pass `targetSurface` from the originating callback's
-   * interaction state so we update the existing post in place
-   * instead of stacking new help posts on every Next click.
-   */
-  private async presentHelp(
-    event: MessagingInboundEvent,
-    options?: { pageIndex?: number; targetSurface?: MessagingSurfaceRef },
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    const reviewSupported = binding
-      ? await this.reviewSupportedForBinding(binding)
-      : false;
-    const actionCatalog =
-      reviewSupported
-        ? MESSAGING_HELP_ACTION_COMMANDS.flatMap((command) =>
-            command.verb === "help"
-              ? [MESSAGING_REVIEW_HELP_SPEC, command]
-              : [command],
-          )
-        : MESSAGING_HELP_ACTION_COMMANDS;
-    const helpCatalog = [
-      ...MESSAGING_COMMAND_CATALOG,
-      ...(reviewSupported
-        ? [MESSAGING_REVIEW_HELP_SPEC]
-        : []),
-    ];
-    const page = paginateHelpCatalog({
-      catalog: actionCatalog,
-      profile: this.capabilityProfile,
-      pageIndex: options?.pageIndex,
-    });
-    const actions = buildHelpActions({ page });
-    const titleSuffix
-      = page.totalPages > 1
-        ? ` (page ${page.pageIndex + 1}/${page.totalPages})`
-        : "";
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("help"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: `PwrAgent commands${titleSuffix}`,
-        body: formatMessagingCommandHelpBody({ catalog: helpCatalog }),
-        actions,
-        ...(options?.targetSurface
-          ? {
-              targetSurface: options.targetSurface,
-              delivery: { mode: "update" as const, replaceMarkup: true },
-            }
-          : {}),
-      }),
-      undefined,
-      event,
-    );
-  }
-
   private async handleText(event: MessagingInboundTextEvent): Promise<void> {
     const command = this.measureHandledToRoutedSyncSubspan(
       event,
@@ -2907,7 +2428,7 @@ export class MessagingController {
       () => parseTextCommand(event.text),
     );
     if (command) {
-      await this.handleCommand({
+      await this.commandHandlers.handleCommand({
         ...event,
         kind: "command",
         command,
@@ -2923,7 +2444,7 @@ export class MessagingController {
       () => event.botMention ? parseMentionCommand(event.text) : undefined,
     );
     if (mentionCommand) {
-      await this.handleCommand({
+      await this.commandHandlers.handleCommand({
         ...event,
         kind: "command",
         command: mentionCommand.command,
@@ -3065,7 +2586,7 @@ export class MessagingController {
       if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
         return;
       }
-      await this.presentHelp(event);
+      await this.commandHandlers.presentHelp(event);
       return;
     }
 
@@ -3318,7 +2839,7 @@ export class MessagingController {
       () => event.text ? parseTextCommand(event.text) : undefined,
     );
     if (command) {
-      await this.handleCommand({
+      await this.commandHandlers.handleCommand({
         ...event,
         kind: "command",
         command,
@@ -3335,7 +2856,7 @@ export class MessagingController {
         : undefined,
     );
     if (mentionCommand) {
-      await this.handleCommand({
+      await this.commandHandlers.handleCommand({
         ...event,
         kind: "command",
         command: mentionCommand.command,
@@ -5053,19 +4574,23 @@ export class MessagingController {
     // A start emits ordered lifecycle events. It cannot acknowledge while
     // the event that released it is still awaiting this listener. Leave the
     // delivery stack before draining, and coalesce terminal + idle releases.
+    const { promise: drain, resolve: settle } = Promise.withResolvers<void>();
+    this.queuedTurnDrains.set(key, drain);
+    void drain.finally(() => this.queuedTurnDrains.delete(key));
     const timer = setTimeout(() => {
       this.queuedTurnDrainTimers.delete(key);
-      if (this.disposed) return;
-      const drain = this.startNextQueuedTurn(binding).catch((error) => {
+      if (this.disposed) {
+        settle();
+        return;
+      }
+      void this.startNextQueuedTurn(binding).catch((error) => {
         this.logger.warn?.("messaging queued turn dispatch failed", {
           threadId: binding.threadId,
           error: error instanceof Error ? error.message : String(error),
         });
-      });
-      this.queuedTurnDrains.set(key, drain);
-      void drain.finally(() => this.queuedTurnDrains.delete(key));
+      }).finally(settle);
     }, 0);
-    this.queuedTurnDrainTimers.set(key, timer);
+    this.queuedTurnDrainTimers.set(key, { timer, settle });
   }
 
   private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
@@ -5123,7 +4648,7 @@ export class MessagingController {
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
     if (event.actionId === "claude:continue-session") {
-      await this.continueClaudeThreadInNewSession(event);
+      await this.commandHandlers.continueClaudeThreadInNewSession(event);
       return;
     }
     const privateReplyAction = readPrivateReplyAction(event);
@@ -5141,7 +4666,7 @@ export class MessagingController {
     }
     const command = readCommandAction(event);
     if (command) {
-      await this.handleCommand(
+      await this.commandHandlers.handleCommand(
         {
           ...event,
           kind: "command",
@@ -8028,7 +7553,10 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
-    for (const timer of this.queuedTurnDrainTimers.values()) clearTimeout(timer);
+    for (const { timer, settle } of this.queuedTurnDrainTimers.values()) {
+      clearTimeout(timer);
+      settle();
+    }
     this.queuedTurnDrainTimers.clear();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
@@ -8074,7 +7602,7 @@ export class MessagingController {
   /**
    * Resolves once the tool-update batches that a flush timer already started
    * have finished delivering, including their store writes, and then once
-   * every queued-turn drain already begun has finished. dispose() is
+   * every scheduled or running queued-turn drain has finished. dispose() is
    * synchronous and only stops new batches.
    */
   async whenToolUpdatesSettled(): Promise<void> {
@@ -8083,9 +7611,9 @@ export class MessagingController {
   }
 
   /**
-   * Resolves once every queued-turn drain that has already begun has finished,
-   * including the start it submits and the queued notice it retires. A drain
-   * scheduled but not yet begun is not awaited.
+   * Resolves once every queued-turn drain scheduled or running at the time of
+   * the call has finished, including the start it submits and the queued notice
+   * it retires. dispose() cancels and settles drains that have not yet begun.
    */
   async whenQueuedTurnDrainsSettled(): Promise<void> {
     await Promise.allSettled([...this.queuedTurnDrains.values()]);
@@ -8136,7 +7664,7 @@ export class MessagingController {
       return;
     }
     const requestedPage = readHelpPageIndex(event);
-    await this.presentHelp(event, {
+    await this.commandHandlers.presentHelp(event, {
       pageIndex: requestedPage,
       targetSurface,
     });
@@ -8321,37 +7849,6 @@ export class MessagingController {
     } finally {
       if (current()) this.progressiveBrowseByConversation.delete(key);
     }
-  }
-
-  private async handleDefaultAgentCommand(
-    event: MessagingInboundCommandEvent,
-  ): Promise<void> {
-    const action = event.args[1]?.toLowerCase() ?? "show";
-    const requestedScope = parseDefaultAgentScopeKind(event.args[2]);
-    if (event.args[2] && !requestedScope) {
-      await this.deliverDefaultAgentCommandError(
-        event,
-        "Scope must be conversation, parent, workspace, provider, or profile.",
-      );
-      return;
-    }
-    const scopeKind = requestedScope ?? "conversation";
-    if (action === "set" || action === "change") {
-      await this.presentDefaultAgentAssignmentBrowser(event, scopeKind);
-      return;
-    }
-    if (action === "clear") {
-      await this.clearDefaultAgentAssignment(event, scopeKind);
-      return;
-    }
-    if (action !== "show") {
-      await this.deliverDefaultAgentCommandError(
-        event,
-        "Use /agent default, /agent default set [scope], or /agent default clear [scope].",
-      );
-      return;
-    }
-    await this.presentDefaultAgentStatus(event);
   }
 
   private async presentDefaultAgentAssignmentBrowser(
@@ -8684,7 +8181,7 @@ export class MessagingController {
     if (actionId === "browse:cancel") {
       await this.retireBrowseSession(session);
       if (session.cancelDestination === "help" && session.surface) {
-        await this.presentHelp(event, {
+        await this.commandHandlers.presentHelp(event, {
           targetSurface: session.surface,
         });
         return;
@@ -11202,24 +10699,6 @@ export class MessagingController {
     await this.recreateBindingStatus(binding, event);
   }
 
-  private async handleMonitorCommand(event: MessagingInboundCommandEvent): Promise<void> {
-    const action = normalizeMonitorCommandAction(event.args);
-    if (
-      action.kind === "topics-adopt" ||
-      action.kind === "topics-cleanup" ||
-      action.kind === "topics-fanout"
-    ) {
-      await this.handleMonitorTopicCommand(event, action);
-      return;
-    }
-    if (action.kind === "stop") {
-      await this.stopMonitoringForChannel(event);
-      return;
-    }
-
-    await this.enableAndRenderChannelMonitor(event, action);
-  }
-
   private async handleMonitorCallback(
     event: MessagingInboundCallbackEvent,
     actionId: string,
@@ -11234,53 +10713,6 @@ export class MessagingController {
     }
 
     await this.enableAndRenderChannelMonitor(event, normalizeMonitorCallbackAction(actionId));
-  }
-
-  private async handleMonitorTopicCommand(
-    event: MessagingInboundCommandEvent,
-    action: Extract<
-      MonitorCommandAction,
-      { kind: "topics-adopt" | "topics-cleanup" | "topics-fanout" }
-    >,
-  ): Promise<void> {
-    if (event.channel.channel !== "telegram") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-unsupported"),
-          createdAt: this.now(),
-          title: "Topic management unavailable",
-          body: "Topic cleanup and fanout are currently implemented for Telegram supergroup topics only.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    const topic = await this.resolveMonitorControlTopic(event);
-    if (!topic) {
-      return;
-    }
-    const topicEvent = this.eventForManagedTopic(
-      event,
-      topic,
-      action.kind === "topics-cleanup"
-        ? ["topics", "cleanup"]
-        : action.kind === "topics-fanout"
-          ? ["topics", "fanout"]
-          : ["topics"],
-    );
-    if (action.kind === "topics-cleanup") {
-      await this.renderTopicCleanupProposal(topicEvent, topic);
-      return;
-    }
-    if (action.kind === "topics-fanout") {
-      await this.runTopicMonitorFanout(topicEvent, topic);
-      return;
-    }
-
-    await this.renderTopicControlStatus(topicEvent, topic);
   }
 
   private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
@@ -11396,7 +10828,7 @@ export class MessagingController {
     actionId: string,
   ): Promise<void> {
     if (actionId === "monitor:topics:cleanup") {
-      await this.handleMonitorTopicCommand(
+      await this.commandHandlers.handleMonitorTopicCommand(
         {
           ...event,
           kind: "command",
@@ -11409,7 +10841,7 @@ export class MessagingController {
       return;
     }
     if (actionId === "monitor:topics:fanout") {
-      await this.handleMonitorTopicCommand(
+      await this.commandHandlers.handleMonitorTopicCommand(
         {
           ...event,
           kind: "command",
@@ -11423,7 +10855,7 @@ export class MessagingController {
     }
     const approvePrefix = "monitor:topics:approve:";
     if (!actionId.startsWith(approvePrefix)) {
-      await this.handleMonitorTopicCommand(
+      await this.commandHandlers.handleMonitorTopicCommand(
         {
           ...event,
           kind: "command",
@@ -14623,58 +14055,6 @@ export class MessagingController {
       locked,
     });
     // Refresh handled by the thread-state update bus.
-  }
-
-  private async continueClaudeThreadInNewSession(
-    event: MessagingInboundCommandEvent | MessagingInboundCallbackEvent,
-  ): Promise<void> {
-    // Recovery replaces only a session Claude confirms is gone. It preserves
-    // the thread's messages and execution settings, so the reply floor applies.
-    if (!(await this.requirePermission(event, "message.reply", "claude:continue-session"))) {
-      return;
-    }
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!(await this.requireRemoteScopeForBinding(event, binding, "claude:continue-session:remote-instance"))) {
-      return;
-    }
-    let errorMessage: string | undefined;
-    if (!binding) {
-      errorMessage = "This conversation is not attached to a thread. Use /resume to choose one.";
-    } else if (
-      event.kind === "callback"
-      && (readStringValue(event.value, "bindingId") !== binding.id
-        || readStringValue(event.value, "threadId") !== binding.threadId)
-    ) {
-      errorMessage = "This conversation is now attached to a different thread. Send /continue for the current thread.";
-    } else if (binding.backend !== "claude") {
-      errorMessage = "Only Claude threads can continue in a new session.";
-    } else if (federationTargetForBinding(binding)) {
-      errorMessage = "Continue this Claude thread on its owning instance.";
-    } else if (!this.options.backend.continueClaudeThreadInNewSession) {
-      errorMessage = "This backend does not support continuing Claude in a new session.";
-    } else {
-      try {
-        await this.options.backend.continueClaudeThreadInNewSession({ threadId: binding.threadId });
-      } catch (error) {
-        errorMessage = error instanceof Error ? error.message : String(error);
-      }
-    }
-    if (errorMessage !== undefined) {
-      await this.deliver(buildErrorIntent({
-        id: this.newIntentId("claude-continue-failed"),
-        createdAt: this.now(),
-        title: "Could not continue in a new session",
-        body: errorMessage,
-        recoverable: true,
-      }), binding, event);
-      return;
-    }
-    await this.deliver(buildConfirmationIntent({
-      id: this.newIntentId("claude-continue-ready"),
-      createdAt: this.now(),
-      title: "Ready to continue",
-      body: "Your next message starts a new Claude session with this thread's conversation as context.",
-    }), binding, event);
   }
 
   private async compactThread(
@@ -19871,7 +19251,6 @@ export class MessagingController {
     return { ...context, directory: context.workspaceDirectories?.find((directory) => directory.path === linked?.path) };
   }
 
-
   private async readBoundThreadConfiguration(binding: MessagingBindingRecord) {
     if (!this.options.backend.getNavigationLaunchpadConfig) {
       throw new Error("Upgrade the owning instance to navigation query protocol 2 before using thread configuration.");
@@ -20468,83 +19847,6 @@ function readMonitorAction(event: MessagingInboundCallbackEvent): string | undef
   return actionId.startsWith("monitor:") ? actionId : undefined;
 }
 
-function normalizeMonitorCommandAction(
-  args: readonly string[] | undefined,
-): MonitorCommandAction {
-  const normalized = args?.[0]?.trim().toLowerCase();
-  if (normalized === "stop" || normalized === "off" || normalized === "disable") {
-    return { kind: "stop" };
-  }
-  if (normalized === "refresh" || normalized === "now") {
-    return { kind: "refresh" };
-  }
-  if (normalized === "topic" || normalized === "topics") {
-    const topicAction = args?.[1]?.trim().toLowerCase();
-    if (
-      topicAction === "cleanup" ||
-      topicAction === "clean" ||
-      topicAction === "sweep"
-    ) {
-      return { kind: "topics-cleanup" };
-    }
-    if (
-      topicAction === "fanout" ||
-      topicAction === "fan-out" ||
-      topicAction === "attach"
-    ) {
-      return { kind: "topics-fanout" };
-    }
-    return { kind: "topics-adopt" };
-  }
-  if (
-    normalized === "interval" ||
-    normalized === "every" ||
-    normalized === "frequency"
-  ) {
-    const intervalMs = parseMonitorIntervalArg(args?.[1]);
-    return typeof intervalMs === "number"
-      ? { kind: "set-interval", intervalMs }
-      : { kind: "cycle-interval" };
-  }
-  if (normalized === "pins" || normalized === "pin") {
-    const count = parseMonitorCountArg(args?.[1]);
-    return typeof count === "number"
-      ? { kind: "set-pinned", count }
-      : { kind: "cycle-pinned" };
-  }
-  if (
-    normalized === "recent" ||
-    normalized === "recents" ||
-    normalized === "threads"
-  ) {
-    const count = parseMonitorCountArg(args?.[1]);
-    return typeof count === "number"
-      ? { kind: "set-recent", count }
-      : { kind: "cycle-recent" };
-  }
-  if (
-    normalized === "status" ||
-    normalized === "details" ||
-    normalized === "detail"
-  ) {
-    const enabled = parseMonitorStatusLineArg(args?.[1]);
-    return typeof enabled === "boolean"
-      ? { kind: "set-status-line", enabled }
-      : { kind: "toggle-status-line" };
-  }
-  if (
-    normalized === "snippet" ||
-    normalized === "snippets" ||
-    normalized === "response"
-  ) {
-    const enabled = parseMonitorBooleanArg(args?.[1]);
-    return typeof enabled === "boolean"
-      ? { kind: "set-snippet", enabled }
-      : { kind: "toggle-snippet" };
-  }
-  return { kind: "start" };
-}
-
 function normalizeMonitorCallbackAction(actionId: string): MonitorCommandAction {
   if (actionId === "monitor:interval") {
     return { kind: "cycle-interval" };
@@ -20678,69 +19980,6 @@ function resolveMonitorStateOptions(
         showStatusLine: currentShowStatusLine,
       };
   }
-}
-
-function parseMonitorCountArg(arg: string | undefined): number | undefined {
-  if (!arg) {
-    return undefined;
-  }
-  const parsed = Number(arg.trim());
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function parseMonitorIntervalArg(arg: string | undefined): number | undefined {
-  const normalized = arg?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  const match = normalized.match(
-    /^(\d+(?:\.\d+)?)(?:\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes))?$/,
-  );
-  if (!match) {
-    return undefined;
-  }
-  const value = Number(match[1]);
-  if (!Number.isFinite(value)) {
-    return undefined;
-  }
-  const unit = match[2];
-  if (unit?.startsWith("m")) {
-    return value * 60_000;
-  }
-  return value * 1000;
-}
-
-function parseMonitorStatusLineArg(arg: string | undefined): boolean | undefined {
-  const normalized = arg?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "line" ||
-    normalized === "lines" ||
-    normalized === "detail" ||
-    normalized === "details"
-  ) {
-    return true;
-  }
-  if (normalized === "inline" || normalized === "off") {
-    return false;
-  }
-  return parseMonitorBooleanArg(normalized);
-}
-
-function parseMonitorBooleanArg(arg: string | undefined): boolean | undefined {
-  const normalized = arg?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "on" || normalized === "true" || normalized === "yes") {
-    return true;
-  }
-  if (normalized === "off" || normalized === "false" || normalized === "no") {
-    return false;
-  }
-  return undefined;
 }
 
 function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {
@@ -21288,7 +20527,6 @@ function formatMessagingReviewScope(target: AppServerReviewTarget): string {
   }
 }
 
-
 function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,
   context: MessagingWorkspaceHandoffContext,
@@ -21374,7 +20612,6 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     .filter((line): line is string => Boolean(line))
     .join("\n");
 }
-
 
 function normalizeNewThreadSessionForBackend(
   session: MessagingBrowseSessionRecord,
@@ -21962,14 +21199,6 @@ function sharedConversationMentionInstruction(
   return capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
-function scheduledActionFailureMessage(
-  action: ScheduledThreadAction,
-): string | undefined {
-  return action.status === "failed"
-    ? action.errorMessage ?? "The scheduled action could not be dispatched."
-    : undefined;
-}
-
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
   const explicitSummary = findStringField(value, "summary");
   if (explicitSummary) {
@@ -22229,25 +21458,6 @@ function summarizeMessagingActor(
     username: actor.username,
     isBot: actor.isBot,
   };
-}
-
-function parseDefaultAgentScopeKind(
-  value: string | undefined,
-): MessagingDefaultAgentScopeKind | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "conversation"
-    || normalized === "parent"
-    || normalized === "workspace"
-    || normalized === "provider"
-    || normalized === "profile"
-  ) {
-    return normalized;
-  }
-  return undefined;
 }
 
 function formatDefaultAgentScope(scope: MessagingDefaultAgentScope): string {
@@ -23261,18 +22471,6 @@ function readStatusStopTurnValue(
   };
 }
 
-function readStringValue(
-  value: MessagingJsonValue | undefined,
-  key: string,
-): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const result = value[key];
-  return typeof result === "string" ? result : undefined;
-}
-
 function questionnaireAnswerValue(
   answer: MessagingQuestionnaireAnswer | null | undefined,
 ): string[] {
@@ -23338,46 +22536,6 @@ function bindingWithInboundRoutingState(
   return binding && routingState
     ? { ...binding, routingState }
     : binding;
-}
-
-function messageOriginForInboundEvent(
-  event: MessagingInboundEvent | undefined,
-  causalMessagingSource?: AppServerThreadMessageOrigin["causalMessagingSource"],
-): AppServerThreadMessageOrigin {
-  if (!event) {
-    return { kind: "messaging" };
-  }
-
-  const conversation = event.channel.conversation;
-  return {
-    kind: "messaging",
-    ...(causalMessagingSource ? { causalMessagingSource } : {}),
-    messaging: {
-      platform: event.channel.channel,
-      ...(event.sourceUrl ? { sourceUrl: event.sourceUrl } : {}),
-      surface: {
-        id: conversation.id,
-        kind: conversation.kind,
-        ...(conversation.title ? { title: conversation.title } : {}),
-        ...(conversation.parentTitle
-          ? { parentTitle: conversation.parentTitle }
-          : {}),
-        ...(conversation.ancestorTitle
-          ? { ancestorTitle: conversation.ancestorTitle }
-          : {}),
-      },
-      actor: {
-        platformUserId: event.actor.platformUserId,
-        ...(event.actor.displayName
-          ? { displayName: event.actor.displayName }
-          : {}),
-        ...(event.actor.phoneNumber
-          ? { phoneNumber: event.actor.phoneNumber }
-          : {}),
-        ...(event.actor.username ? { username: event.actor.username } : {}),
-      },
-    },
-  };
 }
 
 function requestsExplicitPrivateResponse(

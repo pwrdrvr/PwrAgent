@@ -559,7 +559,12 @@ export function queuedTurnDisplayText(input: AppServerTurnInputItem[]): string {
 }
 
 /** The card's title, in the provider's own words: GitLab says merge request and !number. */
-export function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePrToolArgs, provider: ForgeRepository["provider"]): string {
+export function forgeToolApprovalMessage(
+  operation: ForgePrToolOperation,
+  args: ForgePrToolArgs,
+  provider: ForgeRepository["provider"],
+  mergeQueue?: { kind: "merge_queue" | "merge_train"; baseRef?: string },
+): string {
   const gitlab = provider === "gitlab";
   const forge = gitlab ? "GitLab" : "GitHub";
   const request = gitlab ? "merge request" : "pull request";
@@ -572,7 +577,10 @@ export function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: 
       : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;
     case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
     case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
-    case "merge_pull_request": switch (args.method) {
+    case "merge_pull_request": if (mergeQueue) {
+      const noun = mergeQueue.kind === "merge_train" ? "merge train" : "merge queue";
+      return `Allow the agent to add ${request}${pr} to the ${noun}${mergeQueue.baseRef ? ` for ${mergeQueue.baseRef}` : ""} on ${forge}?`;
+    } else switch (args.method) {
       // Every surface that shows the request reads which merge it is.
       case "squash": return `Allow the agent to squash and merge ${request}${pr} on ${forge}?`;
       case "rebase": return `Allow the agent to rebase and merge ${request}${pr} on ${forge}?`;

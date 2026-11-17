@@ -58,7 +58,7 @@ import {
 } from "./fixtures/sub-agent-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
-import { seedResearchState, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun } from "./fixtures/research-state-seeding";
+import { seedResearchState, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun, seedLongResearchRun, LONG_RESEARCH_OBJECTIVE } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -778,7 +778,11 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       const app = await launchAuditApp({
         ...appearance,
         fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
-        preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
+        preLaunchHook: async (homeRoot) => {
+          enableResearchFixture(homeRoot);
+          seedResearchState(stateDbPathForHomeRoot(homeRoot));
+          seedLongResearchRun(stateDbPathForHomeRoot(homeRoot));
+        },
       });
       try {
         // A live run owned by this app, so the run controls and review forms render.
@@ -807,8 +811,13 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await expect(panel.getByRole("heading", { name: "Counterexample from Invalidation order" })).toBeFocused();
         await runAxe(app.window, "research item detail");
         await panel.getByRole("tab", { name: "Activity", exact: true }).click();
-        await expect(panel.getByLabel("Research activity")).toBeVisible();
+        await expect(panel.getByLabel("Research activity").getByRole("listitem").first()).toBeVisible();
         await runAxe(app.window, "research activity");
+        // A journal longer than one page adds the Show older control.
+        await panel.getByRole("combobox", { name: "Run" }).click();
+        await app.window.getByRole("option", { name: new RegExp(LONG_RESEARCH_OBJECTIVE.slice(0, 30)) }).click();
+        await expect(panel.getByRole("button", { name: "Show older", exact: true })).toBeVisible();
+        await runAxe(app.window, "research activity with older pages");
         await panel.getByRole("button", { name: "New run", exact: true }).click();
         await expect(panel.getByRole("textbox", { name: "Objective", exact: true })).toBeVisible();
         await runAxe(app.window, "research request form");

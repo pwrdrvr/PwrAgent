@@ -113,3 +113,36 @@ export function seedLiveResearchRun(stateDbPath: string, owner: { ownerId: strin
     append({ type: "item_work", itemId: "f-order", work: { state: "in_progress", assignmentId: "work-live", assignee: { backend: "codex", threadId: "thread-research-focused" }, note: "Replaying trace 17 with logging on the invalidation queue." } }, worker(4));
   } finally { db.close(); }
 }
+
+export const LONG_RESEARCH_OBJECTIVE = "Which retry path sends a webhook delivery twice?";
+export const LONG_RESEARCH_EVENTS = 230;
+
+/** Invented, finished research whose journal spans three Activity pages. It is older than the other fixture runs, so it is never selected first. */
+export function seedLongResearchRun(stateDbPath: string): void {
+  const db = StateDb.open(stateDbPath);
+  const store = new ResearchStore(db);
+  const coordinator: ResearchActor = { backend: "codex", threadId: "thread-smoke", kind: "agent" };
+  const worker: ResearchActor = { ...coordinator, threadId: "thread-research-worker-1" };
+  const runId = "research-long-fixture";
+  let revision = 0;
+  const append = (data: ResearchEventData, author = coordinator) => {
+    if (data.type === "finding") data.finding.author = { backend: author.backend, threadId: author.threadId };
+    const event: ResearchEvent = { seq: ++revision, commandId: `long-${revision}`, signature: `long-${revision}`,
+      at: Date.UTC(2026, 9, 1, 9, 0, 0) + revision * 15_000, actor: author, data };
+    if (revision === 1) store.create(runId, runId, event);
+    else store.append(runId, revision - 1, event);
+  };
+  try {
+    append({ type: "created", objective: LONG_RESEARCH_OBJECTIVE, coordinator, ownerId: "historical-fixture", ownerPid: 1,
+      deadlineAt: Date.UTC(2026, 9, 1, 11, 0), workspaceMode: "none", approaches: [
+        { id: "a1", title: "Retry timing", task: "Record each delivery attempt and the retry that caused it.", state: "pending" },
+      ] });
+    append({ type: "worker", approachId: "a1", state: "running", worker: { backend: "codex", threadId: worker.threadId, turnId: "long-turn" } });
+    while (revision < LONG_RESEARCH_EVENTS - 2) {
+      append({ type: "finding", finding: { id: `attempt-${revision}`, approachId: "a1", kind: "experiment",
+        text: `Delivery attempt ${revision - 1} completed once after its retry.`, paths: [] } }, worker);
+    }
+    append({ type: "worker", approachId: "a1", state: "ended" });
+    append({ type: "status", status: "exhausted", reason: "The worker ended without a candidate." });
+  } finally { db.close(); }
+}

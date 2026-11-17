@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type KeyboardEvent } from "react";
-import { sameResearchThread, type NavigationThreadSummary, type ResearchCommand, type ResearchRun, type ResearchThread } from "@pwragent/shared";
+import { sameResearchThread, type NavigationThreadSummary, type ResearchCommand, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -34,9 +34,9 @@ function useNow(live: boolean): number {
 export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
   const identity = thread && !remote && thread.source === "codex" ? { backend: thread.source, threadId: thread.id } : undefined;
-  const state = useResearchSnapshot(api, identity);
-  const tabsId = useId();
   const [selectedRunId, setSelectedRunId] = useState<string>();
+  const state = useResearchSnapshot(api, identity, selectedRunId);
+  const tabsId = useId();
   const [view, setView] = useState<View>("map");
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,7 +47,11 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const [returnFocusId, setReturnFocusId] = useState<string>();
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
   const snapshot = state.snapshot;
-  const run = snapshot?.runs.find((r) => r.id === selectedRunId) ?? snapshot?.runs[0];
+  // The board arrives with its summaries. While a newly chosen run's board is in flight, show none:
+  // the previous board's controls would act on a run the selector no longer names.
+  const wantedRunId = selectedRunId && snapshot?.runs.some((r) => r.id === selectedRunId) ? selectedRunId : undefined;
+  const switchingRun = Boolean(wantedRunId && snapshot?.selected?.id !== wantedRunId);
+  const run = switchingRun ? undefined : snapshot?.selected;
   // Read the clock directly: once the request expires, the tick that hid it also stops the timer.
   const pendingLive = Boolean(snapshot?.pending && snapshot.pending.expiresAt > Date.now());
   const now = useNow(Boolean(run && isResearchRunLive(run)) || pendingLive);
@@ -145,10 +149,11 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     {notice && <p role="status" className="research-notice">{notice}</p>}
     {!snapshot && !state.error && <p role="status" className="context-empty">Loading research…</p>}
     {pending && <ResearchPendingCard pending={pending} busy={busy} onWithdraw={api.withdrawResearch ? () => { void withdraw(); } : undefined} />}
-    {snapshot && snapshot.runs.length > 1 && run && <label className="research-run-select">Run
-      <Select value={run.id} onChange={selectRun} className="research-select"
-        options={snapshot.runs.map((r: ResearchRun) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
+    {snapshot && snapshot.runs.length > 1 && (run || wantedRunId) && <label className="research-run-select">Run
+      <Select value={wantedRunId ?? run!.id} onChange={selectRun} className="research-select"
+        options={snapshot.runs.map((r: ResearchRunSummary) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
     </label>}
+    {switchingRun && <p role="status" className="context-empty">Loading run…</p>}
     {run && <>
       <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
@@ -173,7 +178,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
             onBack={() => { setReturnFocusId(openItemId); setOpenItemId(undefined); }} onOpenItem={openItem} />
           : <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run}
             query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} onFocusReturned={() => setReturnFocusId(undefined)} />)}
-        {view === "activity" && <ResearchActivityView run={run} filter={filter} onOpenItem={openItem} />}
+        {view === "activity" && <ResearchActivityView key={run.id} api={api} thread={identity} run={run} filter={filter} onOpenItem={openItem} />}
       </div>
     </>}
   </section>;
