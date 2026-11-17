@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchRunBoard,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork, type ResearchPendingRequest,
+  type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage,
 } from "@pwragent/shared/research";
+
+/** How many of a thread's runs the panel lists. Only the selected one is projected. */
+export const RESEARCH_SNAPSHOT_RUN_LIMIT = 50;
 
 /** An operator request expires if the coordinator has not started it within five minutes. */
 export const RESEARCH_REQUEST_TTL_MS = 5 * 60_000;
@@ -70,10 +74,25 @@ export class ResearchService {
     }
   }
 
-  snapshot(thread: ResearchThread): ResearchSnapshot {
-    const runs = this.storage.list(thread);
+  /**
+   * Run summaries for the thread, plus the board of one run: the requested
+   * one when the thread can see it, else the newest. The journal is read
+   * separately in pages (`readEvents`), so a change re-sends no history.
+   */
+  snapshot(request: ResearchSnapshotRequest): ResearchSnapshot {
+    const thread = { backend: request.backend, threadId: request.threadId };
+    const runs = this.storage.runSummaries(thread, RESEARCH_SNAPSHOT_RUN_LIMIT);
     const pending = this.pendingRequest(thread);
-    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id), ...(pending ? { pending } : {}) };
+    const selectedId = (runs.find((r) => r.id === request.runId) ?? runs[0])?.id;
+    const selected = selectedId ? this.storage.get(selectedId) : undefined;
+    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id),
+      ...(pending ? { pending } : {}), ...(selected ? { selected: researchRunBoard(selected) } : {}) };
+  }
+
+  /** One page of a run's journal, newest first. Members only; no writes. */
+  readEvents(id: string, range: ResearchEventRange, actor: ResearchActor): ResearchEventPage {
+    this.accessibleHeader(id, actor);
+    return this.storage.events(id, range);
   }
 
   /** The thread's unexpired operator request. Memory only: a restart drops it, as the agent's start would also be refused. */

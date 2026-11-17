@@ -180,7 +180,16 @@ approximately 20.8 MB/day, including 13.1 MB/day added by reservation tracking
 and queue reconciliation. Repeated or unrelated queue events write nothing.
 
 The renderer reads research through IPC. This first integration serves local
-Codex threads; federation viewers must use the owning instance. Graph edges
+Codex threads; federation viewers must use the owning instance. Each
+`research:changed` read returns the thread's run summaries (header fields plus
+candidate counts, from SQL without replaying a journal), the operator's waiting
+request, and the board of one selected run: its projection without the event
+journal. Activity reads the journal separately through `research:events`, in
+pages of at most 200 events, newest first, while the Activity view is open.
+Journal entries never change once appended, so a `beforeSeq` page stays valid
+while the run grows. A refresh reads only events above the loaded window. If
+more than one page arrived in between, the window restarts from the newest
+page, and Show older reaches the rest. All of these reads make zero commits. Graph edges
 represent recorded assignments and contributions, and finding relationships
 identify their source explicitly. Review acceptance is a coordinator or
 operator judgment, never formal verification. Open Math Harness execution

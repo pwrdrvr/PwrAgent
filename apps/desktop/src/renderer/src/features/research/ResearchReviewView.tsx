@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { ResearchRun, ResearchSubmission } from "@pwragent/shared";
+import type { ResearchRunBoard, ResearchSubmission } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
 import { approachTitle, researchLabel, researchRevisionBlocker } from "./research-view-model";
@@ -7,7 +7,7 @@ import { approachTitle, researchLabel, researchRevisionBlocker } from "./researc
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
 export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailable, onReview, onOpenItem, onOpenEvidence }: {
-  run: ResearchRun; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
+  run: ResearchRunBoard; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
@@ -24,7 +24,7 @@ export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailab
 }
 
 function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailable, onReview, onOpenItem, onOpenEvidence }: {
-  run: ResearchRun; submission: ResearchSubmission; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
+  run: ResearchRunBoard; submission: ResearchSubmission; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {

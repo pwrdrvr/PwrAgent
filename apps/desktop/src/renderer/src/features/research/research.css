@@ -110,8 +110,11 @@
 
 /* Activity */
 .research-activity { display: flex; flex-direction: column; gap: 10px; padding: 0; list-style: none; }
+.research-activity:focus { outline: none; }
 .research-activity li { display: flex; flex-direction: column; gap: 3px; }
 .research-activity__meta { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
 .research-activity__text { border: 0; padding: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 11px; line-height: 1.55; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
 button.research-activity__text { cursor: pointer; }
 button.research-activity__text:hover { color: var(--accent); }
+.research-activity-panel { display: flex; flex-direction: column; gap: 10px; }
+.research-activity__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

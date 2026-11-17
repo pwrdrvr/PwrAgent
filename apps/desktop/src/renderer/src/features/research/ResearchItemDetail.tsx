@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchItemContext, type ResearchRun, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
+import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchItemContext, type ResearchRunBoard, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
@@ -10,7 +10,7 @@ const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> 
 };
 
 export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, onBack, onOpenItem }: {
-  api: DesktopApi; thread: ResearchThread; run: ResearchRun; itemId: string; writable: boolean; coordinator: boolean;
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunBoard; itemId: string; writable: boolean; coordinator: boolean;
   onBack: () => void; onOpenItem: (itemId: string) => void;
 }) {
   const id = useId();

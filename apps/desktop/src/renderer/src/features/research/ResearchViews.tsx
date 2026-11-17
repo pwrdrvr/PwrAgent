@@ -1,6 +1,9 @@
-import type { ResearchApproach, ResearchFinding, ResearchRun } from "@pwragent/shared";
+import { useEffect, useRef } from "react";
+import type { ResearchApproach, ResearchFinding, ResearchRunBoard, ResearchThread } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
-import { approachTitle, excerpt, formatClock, researchActivityRows, researchLabel, researchMapBranches, type ResearchMapBranch } from "./research-view-model";
+import { useResearchActivity } from "./useResearchActivity";
+import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchLabel, researchMapBranches, type ResearchMapBranch } from "./research-view-model";
 
 type Open = (itemId: string) => void;
 
@@ -9,7 +12,7 @@ function approachState(approach: ResearchApproach): string {
 }
 
 export function ResearchMapView({ run, filter, onOpenItem, onShowApproachItems }: {
-  run: ResearchRun; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
+  run: ResearchRunBoard; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
 }) {
   const query = filter.trim().toLowerCase();
   const branches = researchMapBranches(run).filter((branch) => !query || branchText(branch).includes(query));
@@ -25,7 +28,7 @@ function branchText(branch: ResearchMapBranch): string {
 }
 
 function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = false }: {
-  run: ResearchRun; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
+  run: ResearchRunBoard; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
 }) {
   const { approach } = branch;
   return <div className={`research-map__branch${nested ? " research-map__branch--nested" : ""}`}>
@@ -54,7 +57,7 @@ function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = fals
 }
 
 export function ResearchFindingsView({ run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRun; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+  run: ResearchRunBoard; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
   const query = filter.trim().toLowerCase();
   const findings = [...run.findings].reverse().filter((f) => !query || `${f.kind} ${f.text} ${approachTitle(run, f.approachId)} ${f.paths.join(" ")}`.toLowerCase().includes(query));
@@ -66,7 +69,7 @@ export function ResearchFindingsView({ run, filter, evidenceAvailable, onOpenIte
 }
 
 function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRun; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+  run: ResearchRunBoard; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
   const related = finding.relatesTo ? run.findings.find((other) => other.id === finding.relatesTo) : undefined;
   return <article className="research-entry" aria-label={`${researchLabel(finding.kind)} from ${approachTitle(run, finding.approachId)}`}>
@@ -86,17 +89,41 @@ export function EvidenceList({ paths, available, onOpen }: { paths: string[]; av
   </ul>;
 }
 
-export function ResearchActivityView({ run, filter, onOpenItem }: { run: ResearchRun; filter: string; onOpenItem: Open }) {
+/** Newest first. The journal is read in pages; the filter covers what is loaded. */
+export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunBoard; filter: string; onOpenItem: Open;
+}) {
+  const activity = useResearchActivity(api, thread, run.id, run.revision);
   const query = filter.trim().toLowerCase();
-  const rows = researchActivityRows(run).filter((row) => !query || `${row.kind} ${row.actor} ${row.text}`.toLowerCase().includes(query));
+  const loaded = activity.loaded.events;
+  const rows = researchActivityRows(run, loaded).filter((row) => !query || `${row.kind} ${row.actor} ${row.text}`.toLowerCase().includes(query));
   const known = new Set(run.items.map((item) => item.id));
-  return <ol className="research-activity" aria-label="Research activity" reversed>
-    {rows.map((row) => <li key={row.seq}>
-      <span className="research-activity__meta"><time dateTime={new Date(row.at).toISOString()}>{formatClock(row.at)}</time> · {row.actor} · {row.kind}</span>
-      {row.itemId && known.has(row.itemId)
-        ? <button type="button" className="research-activity__text" onClick={() => onOpenItem(row.itemId!)}>{row.text}</button>
-        : <p className="research-activity__text">{row.text}</p>}
-    </li>)}
-    {run.events.length > 100 && !query && <li className="research-muted">Showing the latest 100 of {run.events.length} events.</li>}
-  </ol>;
+  const older = activity.loaded.nextBeforeSeq !== undefined;
+  const list = useRef<HTMLOListElement>(null);
+  // Show older disappears with the last page; keep focus in the list instead of dropping it to the page.
+  const requestedOlder = useRef(false);
+  useEffect(() => {
+    if (older || !requestedOlder.current) return;
+    requestedOlder.current = false;
+    list.current?.focus();
+  }, [older]);
+  return <div className="research-activity-panel">
+    {activity.error && <p role="alert" className="research-error">{activity.error}</p>}
+    <ol ref={list} tabIndex={-1} className="research-activity" aria-label="Research activity" reversed>
+      {rows.map((row) => <li key={row.seq}>
+        <span className="research-activity__meta"><time dateTime={new Date(row.at).toISOString()}>{formatClock(row.at)}</time> · {row.actor} · {row.kind}</span>
+        {row.itemId && known.has(row.itemId)
+          ? <button type="button" className="research-activity__text" onClick={() => onOpenItem(row.itemId!)}>{row.text}</button>
+          : <p className="research-activity__text">{row.text}</p>}
+      </li>)}
+    </ol>
+    {!loaded.length && !activity.error && <p role="status" className="context-empty">Loading activity…</p>}
+    {loaded.length > 0 && query && !rows.length && <p className="context-empty">No loaded activity matches this filter.</p>}
+    {loaded.length > 0 && <div className="research-activity__footer">
+      <span className="research-muted" role="status">{older ? `Showing the latest ${loaded.length} of ${run.revision} events.` : `All ${plural(loaded.length, "event")}.`}</span>
+      {older && <button type="button" className="research-button" disabled={activity.loadingOlder || !activity.available} onClick={() => { requestedOlder.current = true; activity.showOlder(); }}>
+        {activity.loadingOlder ? "Loading…" : "Show older"}
+      </button>}
+    </div>}
+  </div>;
 }

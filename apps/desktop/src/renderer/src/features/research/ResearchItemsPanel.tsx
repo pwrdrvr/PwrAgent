@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { RESEARCH_FINDING_KINDS, RESEARCH_WORK_STATES, type ResearchRun, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchThread } from "@pwragent/shared";
+import { RESEARCH_FINDING_KINDS, RESEARCH_WORK_STATES, type ResearchRunBoard, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchThread } from "@pwragent/shared";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { approachTitle, plural, researchLabel } from "./research-view-model";
@@ -28,7 +28,7 @@ const REVIEW_OPTIONS: SelectOption<ResearchItemsQuery["review"]>[] = [
 ];
 
 export function ResearchItemsPanel({ api, thread, run, query, onQueryChange, onOpenItem, returnFocusId, onFocusReturned }: {
-  api: DesktopApi; thread: ResearchThread; run: ResearchRun; query: ResearchItemsQuery;
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunBoard; query: ResearchItemsQuery;
   onQueryChange: (query: ResearchItemsQuery) => void; onOpenItem: (itemId: string) => void;
   /** Focus this result once it renders, as Back from its detail, then report it so later refreshes leave focus alone. */
   returnFocusId?: string; onFocusReturned?: () => void;

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchService, type ResearchPorts } from "@pwragent/owner-core/research-service";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
-import { searchResearchItems, type ResearchActor, type ResearchEvent, type ResearchSearchQuery } from "@pwragent/shared";
+import { projectResearchRun, researchEventPage, searchResearchItems, summarizeResearchRun, type ResearchActor, type ResearchApproach, type ResearchEvent, type ResearchEventData, type ResearchSearchQuery } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -96,6 +96,8 @@ describe("research journal storage", () => {
           expect(service.readItem(run.id, source.id, actor).item.record).toMatchObject({ text: "Focused evidence" });
           expect(service.search(run.id, { query: "Focused", type: "finding" }, actor).items).toHaveLength(1);
           expect(service.summaries(actor).map((entry) => entry.id)).toContain(run.id);
+          expect(store.runSummaries(actor, 50).map((entry) => entry.id)).toContain(run.id);
+          expect(service.readEvents(run.id, { limit: 2 }, actor).events.map((event) => event.seq)).toEqual([run.revision + 1, run.revision]);
         }
       });
       expectSqliteWriteBudget({ scenario: "research-item-focused-reads", note: "Fifty direct item/context reads and indexed searches. No journal replay, repair writes or polling commits.", writes: reads.writes });
@@ -110,6 +112,57 @@ describe("research journal storage", () => {
       expectSqliteWriteBudget({ scenario: "research-item-redelivery-and-stale", note: "A duplicate claim and a rejected stale version cause zero commits.", writes: duplicate.writes });
       expect(journal).not.toHaveBeenCalled();
     } finally { journal.mockRestore(); }
+  });
+
+  it("pages the stored journal and summarizes runs as projectResearchRun does while the board changes between page reads", () => {
+    const store = new ResearchStore(db);
+    let runCount = 0;
+    const step = fc.oneof(
+      fc.record({ type: fc.constant("finding" as const), approach: fc.integer({ min: 1, max: 2 }) }),
+      fc.record({ type: fc.constant("submission" as const), approach: fc.integer({ min: 1, max: 2 }) }),
+      fc.record({ type: fc.constant("review" as const), pick: fc.nat(), decision: fc.constantFrom("accepted" as const, "revision_requested" as const, "rejected" as const) }),
+      fc.record({ type: fc.constant("worker" as const), approach: fc.integer({ min: 1, max: 2 }), state: fc.constantFrom<ResearchApproach["state"]>("running", "ended", "failed") }),
+    );
+    // Each read pages down from the newest event; appends between reads must not shift, repeat or skip a page.
+    const op = fc.oneof(fc.record({ append: fc.array(step, { minLength: 1, maxLength: 6 }) }), fc.record({ read: fc.integer({ min: 1, max: 5 }) }));
+    fc.assert(fc.property(fc.array(op, { minLength: 8, maxLength: 30 }), (ops) => {
+      const id = `paged-${++runCount}`;
+      const records: ResearchEvent[] = [];
+      const append = (data: ResearchEventData) => {
+        const event: ResearchEvent = { seq: records.length + 1, commandId: `c${records.length + 1}`, signature: "s", at: 1000 + records.length, actor, data };
+        if (event.seq === 1) store.create(id, id, event); else store.append(id, records.length, event);
+        records.push(event);
+      };
+      append({ type: "created", objective: "Paged", coordinator: actor, ownerId: "owner", ownerPid: 1, deadlineAt: 10_000, workspaceMode: "none",
+        approaches: [{ id: "a1", title: "One", task: "t", state: "pending" }, { id: "a2", title: "Two", task: "t", state: "pending" }] });
+      let cursor: { before?: number; seen: number[]; top: number } | undefined;
+      for (const entry of ops) {
+        if ("append" in entry) {
+          for (const s of entry.append) {
+            const seq = records.length + 1;
+            const submissions = records.flatMap((e) => e.data.type === "submission" ? [e.data.submission.id] : []);
+            if (s.type === "review" && submissions.length) append({ type: "review", submissionId: submissions[s.pick % submissions.length]!, decision: s.decision, reason: "r" });
+            else if (s.type === "worker") append({ type: "worker", approachId: `a${s.approach}`, state: s.state });
+            else if (s.type === "submission") append({ type: "submission", submission: { id: `s${seq}`, approachId: `a${s.approach}`, text: `Candidate ${seq}`, paths: [] } });
+            else append({ type: "finding", finding: { id: `f${seq}`, approachId: `a${"approach" in s ? s.approach : 1}`, kind: "note", text: `Finding ${seq}`, paths: [] } });
+          }
+          continue;
+        }
+        const projected = projectResearchRun(id, structuredClone(records));
+        const range = cursor?.before !== undefined ? { beforeSeq: cursor.before, limit: entry.read } : { limit: entry.read };
+        const page = store.events(id, range);
+        expect(page).toEqual(researchEventPage(projected, range));
+        cursor ??= { seen: [], top: page.events[0]?.seq ?? 0 };
+        cursor.seen.push(...page.events.map((event) => event.seq));
+        cursor.before = page.nextBeforeSeq;
+        if (cursor.before === undefined) {
+          // A completed walk is exactly the journal as of its first page, newest first, whatever was appended since.
+          expect(cursor.seen).toEqual(projected.events.slice(0, cursor.top).map((event) => event.seq).reverse());
+          cursor = undefined;
+        }
+        expect(store.runSummaries(actor, 50).find((summary) => summary.id === id)).toEqual(summarizeResearchRun(projected));
+      }
+    }), { numRuns: 30 });
   });
 
   it("keeps search metadata and results on one SQLite snapshot during a concurrent append", async () => {
@@ -225,7 +278,7 @@ describe("research journal storage", () => {
     const service = createService();
     const start = await measureSqliteWrites(async () => await service.start(mutableRequest(), actor));
     expectSqliteWriteBudget({ scenario: "research-start-three-workers", note: "One run and three managed worker admissions; no provider transcripts or token events.", writes: start.writes });
-    const run = service.snapshot(actor).runs[0]!;
+    const run = service.snapshot(actor).selected!;
     const command = { action: "finding", approachId: "a1", kind: "note", text: "Evidence", paths: [] } as const;
     const post = await measureSqliteWrites(async () => await service.update(run.id, "post", { ...command, paths: [] }, actor));
     expectSqliteWriteBudget({ scenario: "research-finding", note: "One explicit structured finding. No polling writes. Project using observed bytes per commit at one finding/minute, not one streamed token/event.", writes: post.writes });

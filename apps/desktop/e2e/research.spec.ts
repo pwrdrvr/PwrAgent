@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
-import { LIVE_RESEARCH_OBJECTIVE, RESEARCH_FIXTURE_OBJECTIVE, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun, seedResearchState } from "./fixtures/research-state-seeding";
+import { LIVE_RESEARCH_OBJECTIVE, LONG_RESEARCH_EVENTS, LONG_RESEARCH_OBJECTIVE, RESEARCH_FIXTURE_OBJECTIVE, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun, seedLongResearchRun, seedResearchState } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -121,5 +121,39 @@ test("a live run shows time left, review work and a confirmed stop", async () =>
     await expect(panel.getByRole("button", { name: "Keep running", exact: true })).toBeFocused();
     await panel.getByRole("button", { name: "Keep running", exact: true }).click();
     await expect(summary.getByText("Running", { exact: true })).toBeVisible();
+  } finally { await app.close(); }
+});
+
+test("a long run's Activity pages from the newest event back to the first", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
+    preLaunchHook: async (homeRoot) => {
+      enableResearchFixture(homeRoot);
+      seedResearchState(stateDbPathForHomeRoot(homeRoot));
+      seedLongResearchRun(stateDbPathForHomeRoot(homeRoot));
+    },
+  });
+  try {
+    await app.window.emulateMedia({ reducedMotion: "reduce" });
+    await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
+    await app.window.getByRole("tab", { name: "Research", exact: true }).click();
+    const panel = app.window.getByRole("region", { name: "Research", exact: true });
+    await expect(panel.getByRole("region", { name: "Research run summary" })).toContainText(RESEARCH_FIXTURE_OBJECTIVE);
+    await panel.getByRole("combobox", { name: "Run" }).click();
+    await app.window.getByRole("option", { name: new RegExp(LONG_RESEARCH_OBJECTIVE.slice(0, 30)) }).click();
+    await expect(panel.getByRole("region", { name: "Research run summary" })).toContainText(LONG_RESEARCH_OBJECTIVE);
+    await panel.getByRole("tab", { name: "Activity", exact: true }).click();
+    const activity = panel.getByLabel("Research activity");
+    await expect(activity.getByRole("listitem")).toHaveCount(100);
+    await expect(activity.getByRole("listitem").first()).toContainText("The worker ended without a candidate.");
+    await expect(panel.getByText(`Showing the latest 100 of ${LONG_RESEARCH_EVENTS} events.`, { exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: "Show older", exact: true }).click();
+    await expect(activity.getByRole("listitem")).toHaveCount(200);
+    await panel.getByRole("button", { name: "Show older", exact: true }).click();
+    await expect(activity.getByRole("listitem")).toHaveCount(LONG_RESEARCH_EVENTS);
+    await expect(panel.getByText(`All ${LONG_RESEARCH_EVENTS} events.`, { exact: true })).toBeVisible();
+    await expect(activity.getByRole("listitem").last()).toContainText(LONG_RESEARCH_OBJECTIVE);
+    await expect(panel.getByRole("button", { name: "Show older", exact: true })).toHaveCount(0);
+    await expect(activity).toBeFocused();
   } finally { await app.close(); }
 });
