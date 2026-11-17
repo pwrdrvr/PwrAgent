@@ -146,7 +146,8 @@ the finish in the same turn. PwrAgent never approves a deployment. Choose
 `deliver: "operator"` when only the operator has anything to do at the gate.
 
 Only runs on github.com are supported. Checks run while PR polling is on
-and the waiting thread's project allows PR watches.
+and the waiting thread's project allows PR watches. A run that is deleted, or
+stays unreadable for a day, ends the wait with a failure.
 
 ## Registration lifecycle and delivery review
 

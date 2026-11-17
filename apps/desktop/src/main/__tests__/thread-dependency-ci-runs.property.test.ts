@@ -8,7 +8,7 @@ import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
 import {
-  ThreadDependencyCiRunPoller, evaluateCiRunCondition, parseCiRunUrl, readCiRun,
+  CI_RUN_GONE_CHECKS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, readCiRun,
 } from "../app-server/thread-dependency-ci-runs";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
@@ -79,6 +79,36 @@ describe("CI run prerequisite evaluation", () => {
           expect(evidence.ciRun).toBe(seen);
         }
         previous = evidence;
+      }
+    }));
+  });
+
+  it("gives up on a run that is gone or unreadable for a day, and waits through passing failures", () => {
+    // Raw check results: a readable run with no milestone yet, or a failure with a forge code.
+    const checkArb = fc.record({
+      gapMs: fc.constantFrom(30_000, 120_000, 2 * 60 * 60_000, 9 * 60 * 60_000),
+      failure: fc.constantFrom(undefined, "not_found", "rate_limited", "forbidden", "unauthenticated"),
+    });
+    fc.assert(fc.property(fc.array(checkArb, { maxLength: 30 }), (checks) => {
+      const condition = ciRunCondition();
+      let at = 0;
+      let merged: ThreadDependencyCiRunObservation | undefined;
+      let previous: ThreadDependencyEvidence | undefined;
+      // The rule, kept separately: count consecutive 404s, and time any unbroken run of failures.
+      let notFound = 0;
+      let failingSince: number | undefined;
+      let expected: "waiting" | "failed" = "waiting";
+      for (const check of checks) {
+        at += check.gapMs;
+        const seen = check.failure
+          ? { runId: 8841207733, status: "unknown", error: `GitHub said ${check.failure}`, errorCode: check.failure, checkedAt: at }
+          : observation({ checkedAt: at });
+        notFound = check.failure === "not_found" ? notFound + 1 : 0;
+        failingSince = check.failure ? failingSince ?? at : undefined;
+        if (expected === "waiting" && check.failure && (notFound >= CI_RUN_GONE_CHECKS || at - failingSince! >= CI_RUN_UNREADABLE_MS)) expected = "failed";
+        merged = mergeCiRunCheck(merged, seen);
+        previous = evaluateCiRunCondition(condition, merged, previous, at);
+        expect(previous.state).toBe(expected);
       }
     }));
   });
@@ -213,7 +243,7 @@ describe("CI run poller", () => {
     const timers: (() => void)[] = [];
     const poller = new ThreadDependencyCiRunPoller({
       urls: () => [RUN_URL],
-      read: async () => { throw new Error("GitHub rate limit reached."); },
+      read: async () => { throw Object.assign(new Error("GitHub rate limit reached."), { code: "rate_limited" }); },
       observe: async (_url, seen) => { observed.push(seen); },
       now: () => now,
       setTimer: (fn) => { timers.push(fn); return fn; },
@@ -222,7 +252,7 @@ describe("CI run poller", () => {
     poller.sync();
     timers.shift()!();
     await vi.waitFor(() => expect(observed).toHaveLength(1));
-    expect(observed[0]).toMatchObject({ runId: 8841207733, error: "GitHub rate limit reached." });
+    expect(observed[0]).toMatchObject({ runId: 8841207733, error: "GitHub rate limit reached.", errorCode: "rate_limited" });
     await vi.waitFor(() => expect(timers).toHaveLength(1));
     poller.dispose();
   });
@@ -334,6 +364,22 @@ describe("Continue After a CI run", () => {
     await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 3 }));
     expect(changed).toHaveBeenCalledTimes(2);
     expect(agent.withCiRunObservations(store.active())[0]!.evidence[0]!.ciRun?.checkedAt).toBe(3);
+  });
+
+  it("reports a run that is gone after three 404s and stops checking it", async () => {
+    const agent = coordinator();
+    await create(agent);
+    const gone = (checkedAt: number) => ({ runId: 8841207733, status: "unknown", error: "GitHub returned HTTP 404.", errorCode: "not_found", checkedAt });
+    await agent.handleCiRunObservation(RUN_URL, gone(2));
+    await agent.handleCiRunObservation(RUN_URL, gone(3));
+    expect(submit).not.toHaveBeenCalled();
+    expect(agent.ciRunUrls()).toEqual([RUN_URL]);
+    await agent.handleCiRunObservation(RUN_URL, gone(4));
+    expect(submit).toHaveBeenCalledTimes(1);
+    const prompt = submit.mock.calls[0]![0].input[0]!.text;
+    expect(prompt).toContain("Run can no longer be read: GitHub returned HTTP 404.");
+    expect(prompt).toContain("Report the prerequisite failure.");
+    expect(agent.ciRunUrls()).toEqual([]);
   });
 
   it("keeps the latest check in memory only and survives a restart on stored evidence", async () => {

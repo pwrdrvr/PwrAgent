@@ -373,8 +373,12 @@ bucket. No model is involved.
 
 The poller runs only while background PR polling is enabled and the waiting
 thread's project allows PR watches, the same gate as PR conditions. With PR
-polling off, registration is refused, as it is for a PR prerequisite. A failed
-check keeps the last observation and marks it stale. It never fails the wait.
+polling off, registration is refused, as it is for a PR prerequisite.
+
+A failed check keeps the last observation and marks it stale. A passing
+failure, such as a rate limit, keeps the wait waiting. A run that is gone ends
+the wait with a failure after three consecutive `not_found` checks. Any other
+failure that lasts 24 hours does the same, so no wait polls forever.
 
 A future PwrAgent GitHub App should replace this polling with `workflow_run`
 and `deployment_review` webhooks.

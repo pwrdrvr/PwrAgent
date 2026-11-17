@@ -17,7 +17,7 @@ import {
 } from "@pwragent/shared";
 import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
-import { describeCiRunObservation, evaluateCiRunCondition, parseCiRunUrl } from "./thread-dependency-ci-runs";
+import { describeCiRunObservation, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl } from "./thread-dependency-ci-runs";
 
 export type DependencyThreadSnapshot = {
   activeTurnId?: string;
@@ -302,8 +302,8 @@ export class ThreadDependencyCoordinator {
   handleCiRunObservation(url: string, observation: ThreadDependencyCiRunObservation): Promise<void> {
     return this.serialize(async () => {
       const previous = this.ciRuns.get(url);
-      // A failed check keeps what the last good one saw, for display.
-      const current = observation.error && previous ? { ...previous, error: observation.error, checkedAt: observation.checkedAt } : observation;
+      // A failed check keeps what the last good one saw, and counts toward giving up.
+      const current = mergeCiRunCheck(previous, observation);
       this.ciRuns.set(url, current);
       // Windows show the latest check and when it ran, so every check is
       // announced. A save announces itself; the announcement writes nothing.

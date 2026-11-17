@@ -44,6 +44,12 @@ export type ThreadDependencyCiRunObservation = {
   failedJobs?: { name: string; url: string; failedStep?: string }[];
   /** The check failed; the wait keeps the last good observation's meaning. */
   error?: string;
+  /** The forge's code for that failure, such as `not_found`. */
+  errorCode?: string;
+  /** Consecutive failed checks with this `errorCode`. */
+  errorChecks?: number;
+  /** When the current run of failed checks began, whatever their codes. */
+  failingSince?: number;
   checkedAt: number;
 };
 

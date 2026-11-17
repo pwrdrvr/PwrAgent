@@ -39,6 +39,10 @@ const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_requi
 const SUCCEEDED = new Set(["success", "neutral", "skipped"]);
 /** Up to 1,000 jobs per check. */
 const MAX_JOB_PAGES = 10;
+/** Consecutive 404s that show a run is gone, not a passing GitHub fault. */
+export const CI_RUN_GONE_CHECKS = 3;
+/** Any failure that lasts this long ends the wait, so no wait polls forever. */
+export const CI_RUN_UNREADABLE_MS = 24 * 60 * 60_000;
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("GitHub returned an invalid object.");
@@ -123,8 +127,19 @@ export function evaluateCiRunCondition(condition: ThreadDependencyCondition, obs
   if (previous && previous.state !== "waiting") return previous;
   const ciRun = condition.ciRun;
   const waiting: ThreadDependencyEvidence = { condition, state: "waiting", reason: `Waiting for run ${threadDependencyCiRunId(ciRun?.url ?? "") ?? ""}`.trimEnd(), observedAt: now };
-  if (!ciRun || !observation || observation.error) return waiting;
+  if (!ciRun || !observation) return waiting;
   const fired = (state: "satisfied" | "failed", reason: string): ThreadDependencyEvidence => ({ condition, state, reason, observedAt: now, ciRun: observation });
+  if (observation.error) {
+    // A passing failure keeps waiting. A run that is gone, or unreadable for a
+    // day, can never reach its milestone, so the wait reports that instead.
+    if (observation.errorCode === "not_found" && (observation.errorChecks ?? 0) >= CI_RUN_GONE_CHECKS) {
+      return fired("failed", `Run can no longer be read: ${observation.error}`);
+    }
+    if (observation.failingSince !== undefined && observation.checkedAt - observation.failingSince >= CI_RUN_UNREADABLE_MS) {
+      return fired("failed", `Run could not be read for 24 hours: ${observation.error}`);
+    }
+    return waiting;
+  }
   const on = threadDependencyCiRunOutcomes(ciRun);
   if (observation.status === "completed") {
     const conclusion = observation.conclusion ?? "unknown";
@@ -156,7 +171,28 @@ export function describeCiRunObservation(observation: ThreadDependencyCiRunObser
     lines.push(`  Jobs (latest attempt): ${parts.length ? parts.join(", ") : "none listed"}`);
   }
   for (const job of observation.failedJobs ?? []) lines.push(`  Failed job: ${job.name}${job.failedStep ? `, step "${job.failedStep}"` : ""}; ${job.url}`);
+  if (observation.error) lines.push(`  Last check failed: ${observation.error}`);
   return lines;
+}
+
+/**
+ * Folds one check into the last. A failed check keeps what the last good one
+ * saw, for display, and counts the failures that decide when a wait gives up.
+ */
+export function mergeCiRunCheck(previous: ThreadDependencyCiRunObservation | undefined,
+  observation: ThreadDependencyCiRunObservation): ThreadDependencyCiRunObservation {
+  if (!observation.error) return observation;
+  const streak = previous?.error ? previous : undefined;
+  const base: ThreadDependencyCiRunObservation = { ...previous ?? observation };
+  delete base.errorCode;
+  return {
+    ...base,
+    error: observation.error,
+    ...observation.errorCode ? { errorCode: observation.errorCode } : {},
+    errorChecks: streak && streak.errorCode === observation.errorCode ? (streak.errorChecks ?? 1) + 1 : 1,
+    failingSince: streak?.failingSince ?? observation.checkedAt,
+    checkedAt: observation.checkedAt,
+  };
 }
 
 /** First check at once, then every 30 s for ten minutes, then every 2 min. */
@@ -240,7 +276,9 @@ export class ThreadDependencyCiRunPoller {
         try {
           observation = await this.options.read(url);
         } catch (error) {
-          observation = { runId: Number(threadDependencyCiRunId(url) ?? 0), status: "unknown", error: error instanceof Error ? error.message.slice(0, 300) : "Check failed", checkedAt: now };
+          const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+          observation = { runId: Number(threadDependencyCiRunId(url) ?? 0), status: "unknown", error: error instanceof Error ? error.message.slice(0, 300) : "Check failed",
+            ...code ? { errorCode: code } : {}, checkedAt: now };
         }
         entry.nextAt = this.now() + ciRunPollDelay(entry.firstCheckedAt, this.now());
         if (this.disposed) return;
