@@ -1176,7 +1176,7 @@ describe("Claude SDK backend", () => {
     const model = { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
       costUSD: 0.1, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
     const resetsAt = Date.now() + 86_400_000;
-    // Every probe is an older reading of the weekly window than the stream's 50%.
+    // The fresh probe refines the stream's rounded 50% reading.
     const probe = vi.fn().mockResolvedValue({ session: { model_usage: { opus: model } }, rate_limits_available: true,
       rate_limits: { seven_day: { utilization: 49.4, resets_at: new Date(resetsAt).toISOString() } } });
     const reported = Promise.withResolvers<void>();
@@ -1204,7 +1204,7 @@ describe("Claude SDK backend", () => {
     expect(costs[0]).toBeCloseTo(0.1);
     expect(costs.at(-1)).toBeCloseTo(0.3);
     expect(methods.indexOf("thread/tokenUsage/updated")).toBeLessThan(methods.indexOf("turn/completed"));
-    expect(backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 50 })]);
+    expect(backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 49.4 })]);
     await backend.close();
   });
 
@@ -1222,6 +1222,42 @@ describe("Claude SDK backend", () => {
       expect.objectContaining({ limitId: "seven_day", usedPercent: 35 }),
       expect.objectContaining({ limitId: "five_hour", usedPercent: 10 }),
     ]));
+  });
+
+  it("does not let an overtaken Claude usage probe lower a newer account reading", async () => {
+    const resetsAt = new Date(Date.now() + 86_400_000).toISOString();
+    const snapshot = (utilization: number) => ({ rate_limits_available: true, rate_limits: {
+      seven_day: { utilization, resets_at: resetsAt },
+    }, session: { model_usage: {} } });
+    const started = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<ReturnType<typeof snapshot>>();
+    const oldCompleted = Promise.withResolvers<void>();
+    const usage = vi.fn().mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    }).mockResolvedValue(snapshot(8));
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
+    let oldThreadId: string;
+    const backend = f.openBackend({ ...f.backendOptions, emit: async (event) => {
+      await f.backendOptions.emit(event);
+      if (event.notification.method === "turn/completed" && event.notification.params.threadId === oldThreadId) oldCompleted.resolve();
+    } });
+    oldThreadId = (await backend.startThread({ cwd: f.root, executionMode: "default" })).threadId;
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId: oldThreadId, input: [{ type: "text", text: "Old session" }] });
+    await started.promise;
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "New session" }] });
+    await f.waitForTurn();
+    expect(backend.summary().rateLimits?.[0].usedPercent).toBe(8);
+    // The second probe on the old session fails, leaving its delayed reading
+    // as the last opportunity to overwrite the newer session's account data.
+    usage.mockRejectedValue(new Error("Probe unavailable"));
+    pending.resolve(snapshot(1));
+    await oldCompleted.promise;
+    expect(backend.summary().rateLimits?.[0].usedPercent).toBe(8);
   });
 
   it("keeps the full limit snapshot across turns, coarse stream events, and a restart", async () => {
@@ -1419,7 +1455,7 @@ describe("Claude SDK backend", () => {
     await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual({ limits: [] }));
   });
 
-  it("keeps limits moving forward across CLIs and starts over when the plan changes", async () => {
+  it("accepts a lower fresh probe and starts over when the plan changes", async () => {
     const resetsAt = Date.now() + 86_400_000;
     let utilization = 56;
     let plan = "pro";
@@ -1439,10 +1475,10 @@ describe("Claude SDK backend", () => {
     };
     await turn();
     expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 56 })]);
-    // Another CLI answers from an older reading of the same window.
+    // A requested full reading can report less use within the same window.
     utilization = 50;
     await turn();
-    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 56 })]);
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 50 })]);
 
     // A new plan has a new allowance, so usage can fall within the window.
     plan = "max";
