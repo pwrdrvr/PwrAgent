@@ -37,8 +37,8 @@ async function withWorld<T>(run: (world: AgentFollowUpWorld) => Promise<T>): Pro
 type Model = {
   /** Every follow-up a create returned, in order. */
   created: string[];
-  /** Follow-ups a cancel reported cancelled. */
-  cancelled: Set<string>;
+  /** Follow-ups a cancel reported cancelled, with the turns admitted by then. */
+  cancelled: Map<string, number>;
   /** Follow-ups in flight when a process died, for the visible-failure rule. */
   inFlightAtCrash: Set<string>;
 };
@@ -49,7 +49,9 @@ function checkOracle(model: Model, world: AgentFollowUpWorld): void {
   for (const { actionId } of world.admissions) {
     expect(created.has(actionId), `an unknown follow-up ${actionId} was admitted`).toBe(true);
     expect(world.admittedCount(actionId), `follow-up ${actionId} was admitted more than once`).toBe(1);
-    expect(model.cancelled.has(actionId), `cancelled follow-up ${actionId} was admitted`).toBe(false);
+  }
+  for (const [actionId, admittedAtCancel] of model.cancelled) {
+    expect(world.admittedCount(actionId), `follow-up ${actionId} was admitted after its cancel`).toBe(admittedAtCancel);
   }
 }
 
@@ -94,9 +96,12 @@ const commands = [
           );
       await world.settle();
       if (!ok) return;
-      // A cancel that reports success must have beaten every admission.
-      expect(admittedBefore, `cancel succeeded on started follow-up ${id}`).toBe(0);
-      model.cancelled.add(id);
+      // One window lets a cancel succeed after a start: a lock held the
+      // follow-up, the unlock started it, and the process died before the
+      // start was recorded, so the row still reads held. Nothing is admitted
+      // twice there, and nothing may be admitted from here on.
+      if (admittedBefore > 0) expect(world.store.get(id)?.manualReleaseRequired).toBe(true);
+      if (!model.cancelled.has(id)) model.cancelled.set(id, admittedBefore);
     },
   )),
   fc.boolean().map((locked) => command(locked ? "lock" : "unlock", async (_model, world) => {
@@ -135,7 +140,7 @@ describe("agent follow-up lifecycle model", () => {
     // crash behind a busy thread; ask for the whole range.
     fc.commands(commands, { maxCommands: 40, size: "max" }), async (cmds) => {
       await withWorld(async (world) => {
-        const model: Model = { created: [], cancelled: new Set(), inFlightAtCrash: new Set() };
+        const model: Model = { created: [], cancelled: new Map(), inFlightAtCrash: new Set() };
         await fc.asyncModelRun(() => ({ model, real: world }), cmds);
         // Whatever state the run ended in, a clean launch and a long idle
         // must not start anything that was cancelled or already started.

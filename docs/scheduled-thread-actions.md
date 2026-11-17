@@ -161,6 +161,13 @@ follow-up is held, the action stays `held` and the queue entry is gone:
 unlocking starts nothing, and Send Now returns it to `held`. This is true of
 every scheduled action, not only an agent's. Cancel it and schedule it again.
 
+The same hold has one more window. When an unlock starts a held follow-up
+and the owner dies before the queue's `started` event is recorded, the
+action still reads `held` although its turn began. It cannot be sent again,
+because its queue entry is gone, so no turn is duplicated. Cancel reports it
+cancelled. The lifecycle model's oracle is therefore "nothing is admitted
+after a cancel", not "a cancelled follow-up never ran".
+
 ### Budgets
 
 `agent-follow-up-*` in `sqlite-write-budgets.json`: three commits for a
