@@ -8,7 +8,7 @@ import {
 import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../../../../packages/shared/src/__tests__/research-journal-arbitraries";
 import {
   appendResearchActivityOlder, appendResearchFindingsOlder, emptyResearchActivity, emptyResearchFindings, mergeResearchActivityHead, mergeResearchFindingsHead, researchActivityHeadRange,
-  researchActivityRows, researchFindingMatches, researchFindingsOlderCursor, researchMapBranches, researchRunPhase, researchRunView, researchTimeLeft,
+  researchActivityRows, researchFindingMatches, researchFindingsOlderCursor, researchMapBranches, researchMapMatches, researchRunPhase, researchRunView, researchTimeLeft,
   type ResearchActivityWindow, type ResearchFindingsWindow, type ResearchMapBranch, type ResearchPhaseInput,
 } from "../research-view-model";
 
@@ -350,6 +350,105 @@ describe("research findings filter", () => {
     expect(ids("Contradicts: long evidence")).toEqual([second]);
     expect(ids("long evidence")).toEqual([second, first]);
     expect(ids("tail past the cut")).toEqual([first]);
+  });
+});
+
+describe("research map filter", () => {
+  const PARTS = ["title", "task", "note", "text", "state", "abandoned", "kind", "candidate", "overlap", "child", "more"] as const;
+  type Part = { kind: typeof PARTS[number]; text: string };
+  const queryArb = fc.record({ pick: fc.nat(), part: fc.constantFrom(...PARTS, "more" as const, "more" as const, "absent" as const), which: fc.nat(), start: fc.nat(40), length: fc.integer({ min: 1, max: 14 }), upper: fc.boolean() });
+  const label = (value: string) => value.replaceAll("_", " ").replace(/^./, (s) => s.toUpperCase());
+  const cut = (text: string) => text.length > 100 ? `${text.slice(0, 100).trimEnd()}…` : text;
+  /** A line as the Map draws it: a line break or a run of spaces in a record reads as one space. */
+  const drawn = (part: Part): Part => ({ kind: part.kind, text: part.text.replace(/\s+/g, " ").trim() });
+
+  /**
+   * Every line `branch` draws, from the replayed run's own records: its title (after "Focused child" when nested), state chip, task, note,
+   * overlap line, each shown contribution's label and text, the count of the rest, and the same for the children nested in it.
+   */
+  function shownParts(run: ResearchRun, branch: ResearchMapBranch, nested = false): Part[] {
+    const approach = run.approaches.find((entry) => entry.id === branch.approach.id)!;
+    const parts: Part[] = [{ kind: "title", text: approach.title }, { kind: "task", text: approach.task }];
+    if (nested) parts.push({ kind: "child", text: `Focused child · ${approach.title}` });
+    parts.push(approach.directionState === "abandoned" ? { kind: "abandoned", text: "Abandoned" } : { kind: "state", text: label(approach.state) });
+    if (approach.note) parts.push({ kind: "note", text: approach.note });
+    if (approach.overlapsApproachId) parts.push({ kind: "overlap", text: `Overlaps ${run.approaches.find((entry) => entry.id === approach.overlapsApproachId)?.title ?? approach.overlapsApproachId}` });
+    for (const leaf of branch.leaves) {
+      const finding = run.findings.find((entry) => entry.id === leaf.record.id);
+      const candidate = run.submissions.find((entry) => entry.id === leaf.record.id);
+      const shown = finding ? { kind: "kind" as const, text: label(finding.kind) }
+        : { kind: "candidate" as const, text: `Candidate · ${candidate!.review ? label(candidate!.review.decision) : "Awaiting review"}` };
+      parts.push(shown, { kind: "text", text: `${shown.text} ${cut((finding ?? candidate)!.text)}` });
+      for (const child of leaf.children) parts.push(...shownParts(run, child, true));
+    }
+    if (branch.hidden > 0) parts.push({ kind: "more", text: `${branch.hidden} more from ${approach.title}` });
+    for (const child of branch.assignments) parts.push(...shownParts(run, child, true));
+    return parts.map(drawn);
+  }
+
+  it("keeps exactly the branches that show the filter text, as the run changes", () => {
+    const reached = new Map<string, number>();
+    // Long enough rounds that an approach often holds more contributions than its branch draws.
+    fc.assert(fc.property(fc.array(fc.record({ steps: fc.array(researchJournalStepArb, { size: "max", minLength: 1, maxLength: 16 }), queries: fc.array(queryArb, { minLength: 1, maxLength: 4 }) }), { minLength: 1, maxLength: 6 }), (rounds) => {
+      const journal = [researchCreatedEvent(3)];
+      let store = emptyResearchRunStore("run");
+      for (const round of rounds) {
+        for (const step of round.steps) journal.push(nextResearchEvent(projectResearchRun("run", journal), step));
+        const run = projectResearchRun("run", journal);
+        store = applyResearchChanges(store, { ...researchChangePage(run, store.revision), writable: true });
+        const view = researchRunView(summarizeResearchRun(run), store)!;
+        const branches = researchMapBranches(view);
+        const shown = branches.map((branch) => shownParts(run, branch));
+        for (const wanted of round.queries) {
+          // The picked branch, or the next one that shows the kind of text wanted.
+          const from = wanted.pick % branches.length;
+          const order = branches.map((_, index) => (from + index) % branches.length);
+          const source = order.find((index) => shown[index]!.some((part) => part.kind === wanted.part)) ?? from;
+          const candidates = shown[source]!.filter((part) => part.kind === wanted.part);
+          const part = wanted.part === "absent" ? undefined : candidates.length ? candidates[wanted.which % candidates.length]! : shown[source]![0]!;
+          // A label is typed whole; free text is cut anywhere.
+          const sliced = part && ["title", "task", "note", "text"].includes(part.kind);
+          const piece = !part ? "no branch shows this" : sliced ? part.text.slice(wanted.start % part.text.length, wanted.start % part.text.length + wanted.length) : part.text;
+          const query = wanted.upper ? piece.toUpperCase() : piece;
+          const needle = query.trim().toLowerCase();
+          const expected = branches.filter((_, index) => !needle || shown[index]!.some((entry) => entry.text.toLowerCase().includes(needle)));
+          expect(researchMapMatches(view, branches, query).map((branch) => branch.approach.id)).toEqual(expected.map((branch) => branch.approach.id));
+          if (needle && part) {
+            // The text was cut from this branch, so the filter must keep it.
+            expect(expected).toContain(branches[source]);
+            reached.set(part.kind, (reached.get(part.kind) ?? 0) + 1);
+          }
+        }
+      }
+    }), { numRuns: 150 });
+    // The generated filters reached each kind of text a branch shows.
+    for (const part of PARTS) expect([part, reached.get(part) ?? 0]).toEqual([part, expect.toSatisfy((count: number) => count > 10)]);
+  });
+
+  it("finds a branch by its state chip, a contribution's label, its overlap line and a focused child's prefix", () => {
+    const journal = [researchCreatedEvent(3)];
+    const append = (data: ResearchEventData) => { const seq = journal.length + 1; journal.push({ seq, at: 1000 + seq, actor, commandId: `c${seq}`, signature: JSON.stringify(data), data }); };
+    append({ type: "worker", approachId: "a1", state: "ended" });
+    append({ type: "abandoned", approachId: "a1", reason: "Ruled out" });
+    append({ type: "finding", finding: { id: "f1", approachId: "a2", kind: "dead_end", text: "The cache is never read", paths: [] } });
+    append({ type: "submission", submission: { id: "s1", approachId: "a2", text: "Drop the cache\nand  its index", paths: [] } });
+    append({ type: "direction", approachId: "a3", title: "Third", task: "Measure", reason: "Narrowed", overlapsApproachId: "a2" });
+    append({ type: "assignment", itemId: "f1", task: "Confirm", approach: { id: "work-1", itemId: "f1", title: "Confirm the read path", task: "Confirm", state: "pending" } });
+    const run = projectResearchRun("run", journal);
+    const view = researchRunView(summarizeResearchRun(run), applyResearchChanges(emptyResearchRunStore("run"), { ...researchChangePage(run), writable: true }))!;
+    const ids = (query: string) => researchMapMatches(view, researchMapBranches(view), query).map((branch) => branch.approach.id);
+    expect(ids("abandoned")).toEqual(["a1"]);
+    // The chip of an abandoned approach no longer shows its worker's state.
+    expect(ids("ended")).toEqual([]);
+    expect(ids("Dead end")).toEqual(["a2"]);
+    expect(ids("awaiting review")).toEqual(["a2"]);
+    expect(ids("Candidate · Awaiting")).toEqual(["a2"]);
+    // A line break in a record is drawn as a space, and that is what an operator types.
+    expect(ids("the cache and its index")).toEqual(["a2"]);
+    expect(ids("the  cache\tand its")).toEqual(["a2"]);
+    expect(ids("overlaps approach 2")).toEqual(["a3"]);
+    expect(ids("focused child · confirm")).toEqual(["a2"]);
+    expect(ids("  ")).toEqual(["a1", "a2", "a3"]);
   });
 });
 

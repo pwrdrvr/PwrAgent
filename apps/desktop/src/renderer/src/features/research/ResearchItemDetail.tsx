@@ -3,7 +3,7 @@ import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchI
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
-import { approachTitle, excerpt, formatClock, researchItemText, researchLabel, type ResearchRunView } from "./research-view-model";
+import { approachTitle, excerpt, formatClock, RESEARCH_FOCUSED_CHILD_PREFIX, researchApproachStateLabel, researchItemText, researchLabel, researchReviewStatusLabel, type ResearchRunView } from "./research-view-model";
 
 const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> = {
   open: "Release / reopen", claimed: "Claim", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancel item",
@@ -86,8 +86,8 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
     {!context && !(detail.key === key && detail.error) && <p role="status" className="research-muted">Loading item…</p>}
     {item && record && <>
       <div className="research-entry__meta">
-        {item.type === "approach" && <span className="research-chip">{researchLabel(item.record.directionState === "abandoned" ? "abandoned" : item.record.state)}</span>}
-        {item.type === "submission" && <span className={`research-chip${item.record.review ? "" : " research-chip--attention"}`}>{item.record.review ? researchLabel(item.record.review.decision) : "Awaiting review"}</span>}
+        {item.type === "approach" && <span className="research-chip">{researchApproachStateLabel(item.record)}</span>}
+        {item.type === "submission" && <span className={`research-chip${item.record.review ? "" : " research-chip--attention"}`}>{researchReviewStatusLabel(item.record.review?.decision)}</span>}
         {item.work.state !== "open" && <span className={`research-chip${["in_progress", "claimed", "assigned"].includes(item.work.state) ? " research-chip--live" : ""}`}>Progress: {researchLabel(item.work.state)}</span>}
       </div>
       <p className="research-detail__text">{item.type === "approach" ? item.record.task : item.record.text}</p>
@@ -99,7 +99,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {item.type === "approach" && item.record.worker && <ResearchThreadButton thread={item.record.worker} title="Open worker thread" />}
       {"author" in record && record.author && <ResearchThreadButton thread={record.author} title="Open source thread" />}
       {context.assignment && <div className="research-node research-node--static">
-        <span className="research-node__meta">Focused child · {researchLabel(context.assignment.state)}</span>
+        <span className="research-node__meta">{RESEARCH_FOCUSED_CHILD_PREFIX}{researchLabel(context.assignment.state)}</span>
         {" "}{context.assignment.task}
         <span className="research-actions">
           <button type="button" className="research-link" onClick={() => onOpenItem(context.assignment!.id)}>Open assignment</button>
