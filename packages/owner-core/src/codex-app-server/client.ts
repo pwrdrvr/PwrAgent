@@ -5423,6 +5423,7 @@ function extractThreadEntries(
     const pendingActivityItems: Record<string, unknown>[] = [];
     const pendingActivityById = new Map<string, Record<string, unknown>>();
     let pendingActivityCreatedAt: number | undefined;
+    let hasUserMessage = false;
 
     const flushActivityItems = (): void => {
       const activity = summarizeActivityItems(
@@ -5443,6 +5444,8 @@ function extractThreadEntries(
       const itemType = pickString(item, ["type"]);
       const role = normalizeConversationRole(itemType);
       if (role) {
+        const isOpeningPrompt = role === "user" && !hasUserMessage;
+        if (role === "user") hasUserMessage = true;
         // Only a message that renders ends the activity group. Models that
         // answer each tool call with an empty assistant message would
         // otherwise split their exploration into one activity per call.
@@ -5455,14 +5458,14 @@ function extractThreadEntries(
         }
         flushActivityItems();
         const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
-        // Turn start is a prompt boundary, not the send time of every
-        // assistant message in a potentially hours-long turn. Leave unknown
-        // item times absent; the renderer can retain times observed live.
+        // Turn start dates only the opening prompt. Later steers and
+        // assistant messages may arrive hours into the same turn. Leave
+        // unknown item times absent; the renderer can retain observed times.
         const messageCreatedAt =
           itemCreatedAt ??
           (role === "assistant"
             ? phase === "final" ? turnMetadata?.completedAt : undefined
-            : createdAt);
+            : isOpeningPrompt ? createdAt : undefined);
         entries.push({
           type: "message",
           id:

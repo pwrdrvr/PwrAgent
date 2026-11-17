@@ -7554,7 +7554,7 @@ describe("CodexAppServerClient", () => {
         id: "item-image-2",
         role: "user",
         text: "",
-        createdAt: 1_763_500_150_000,
+        createdAt: undefined,
         parts: [
           {
             type: "image",
@@ -7586,7 +7586,7 @@ describe("CodexAppServerClient", () => {
         id: "item-image-2",
         role: "user",
         text: "",
-        createdAt: 1_763_500_150_000,
+        createdAt: undefined,
         parts: [
           {
             type: "image",
