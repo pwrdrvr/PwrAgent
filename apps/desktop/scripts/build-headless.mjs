@@ -4,6 +4,7 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { headlessOutputManifest } from "./headless-output-manifest.mjs";
+import { headlessExternalSpecifier } from "./headless-external-specifier.mjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(desktop, "package.json"));
@@ -40,10 +41,14 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
           if (["better-sqlite3", "node-pty", "@napi-rs/canvas", "pdfjs-dist", "electron-log/node", "electron-log/node.js"].some(name => args.path === name || args.path.startsWith(name + "/"))) return { path: args.path, external: true };
           return;
         }
+        // Bundled CJS retains require's conditions and filesystem paths.
+        if (args.kind === "require-call" || args.kind === "require-resolve") {
+          try { return { path: require.resolve(args.path), external: true }; } catch { return; }
+        }
         // ESM consumers need the package's import export condition (not, for
         // example, ws/index.js whose CJS exports omit named ESM bindings).
-        try { return { path: fileURLToPath(import.meta.resolve(args.path)), external: true }; } catch {
-          try { return { path: require.resolve(args.path), external: true }; } catch { return; }
+        try { return { path: import.meta.resolve(args.path), external: true }; } catch {
+          try { return { path: headlessExternalSpecifier(require.resolve(args.path)), external: true }; } catch { return; }
         }
       });
       builder.onResolve({ filter: /\?raw$/ }, (args) => ({ path: path.resolve(args.resolveDir, args.path.slice(0, -4)), namespace: "raw-data" }));
