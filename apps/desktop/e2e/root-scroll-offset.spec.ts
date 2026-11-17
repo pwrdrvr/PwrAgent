@@ -34,6 +34,11 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
   const sizeWindow = (size: WindowZoomSize) => sizeWindowAtZoom(app.electronApp, app.window, size);
   try {
     await expect(app.window.locator(".app-shell")).toBeVisible();
+    // The shell and selected header mount before the list/detail reads land.
+    // The Windows failure screenshot contained only that short pending view,
+    // which need not overflow at 180%. Exercise the loaded smoke layout.
+    await app.window.getByRole("button", { name: "Replay smoke thread", exact: true }).click();
+    await expect(app.window.locator(".app-main .composer")).toBeVisible();
     await fc.assert(fc.asyncProperty(fc.record({
       platform: fc.constantFrom(...PLATFORMS),
       // 960 CSS px at 118% and above is narrower than the 820px breakpoint.
