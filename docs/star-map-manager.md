@@ -243,35 +243,24 @@ an upgraded persona reaches an existing manager thread.
 The same text is written under `CLAUDE.md`, `GEMINI.md` and `QWEN.md`
 (`MANAGER_INSTRUCTION_FILES` in
 `apps/desktop/src/main/star-map/star-map-manager-thread.ts`), because the
-supported backends do not share one file name. The workspace file is the
-delivery the manager depends on, because it is the only one that reaches every
-backend.
+supported backends do not share one file name.
 
-The manager does **not** depend on the thread's `agent` metadata.
-`star-map-manager-thread.ts` sets that metadata, with the same instructions, so
-that search and the Agents browser mark the thread as a persona thread. Whether
-the metadata's instructions also reach the model depends on the backend:
+The manager's persona reaches the model from that file and from nowhere else.
+`star-map-manager-thread.ts` also sets the thread's `agent` metadata, with the
+same instructions, so that search and the Agents browser mark the thread as a
+persona thread. That metadata carries `instructionsDelivery: "workspace-file"`.
 
-- **Claude.** They are appended to the system prompt.
-  `startTurnWithoutHandoff` in
-  `apps/desktop/src/main/app-server/backend-registry.ts` reads
-  `agent.instructions` inside its `params.backend === "claude"` branch, and
-  `apps/desktop/src/main/claude/claude-backend.ts` passes them as the `append`
-  of the `claude_code` system prompt preset. The system prompt is fixed when
-  the Claude process starts, so changed instructions apply when the session
-  next relaunches (`reconfigure` in the same file).
-- **Codex and ACP.** This document makes no claim. That Claude branch is the
-  delivery described here, and PWR-203 tracks delivery on the other backends.
-  Read the turn-start path of a backend before relying on
-  `agent.instructions` reaching its model. Setting an Agent on a Codex thread
-  refreshes its tool catalog (`applyThreadAgentChange`), which is a separate
-  matter from its instructions.
+An ordinary Agent's `agent.instructions` are sent to the model by its backend:
+appended to the system prompt on Claude, as developer instructions on Codex, and
+in a marked block ahead of the prompt on ACP.
+[agent-instructions.md](agent-instructions.md) describes each. The marker
+tells all three to send nothing for this thread, so the manager receives its
+persona once on every backend. A manager created before the marker existed gets
+it the next time it is opened.
 
-A Star Map manager on Claude therefore receives its persona twice: once from
-`CLAUDE.md` in its workspace and once from the system prompt. The Voice manager
-(`apps/desktop/src/main/native-voice/voice-manager-thread.ts`) writes the same
-four files and sets the same metadata, so the same would hold for it on Claude.
-It is created on Codex only today.
+The Voice manager (`apps/desktop/src/main/native-voice/voice-manager-thread.ts`)
+writes the same four files and sets the same metadata and marker. It is created
+on Codex only today.
 
 ## Identity and lifecycle
 

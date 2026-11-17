@@ -1,5 +1,6 @@
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
+import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
   AcpThreadRewindPoint,
@@ -281,6 +282,14 @@ export class AcpAgentClient {
   >();
   private readonly loadingSessions = new Map<string, AcpSessionLoadState>();
   private readonly sessionLoadReplays = new Map<string, AcpSessionLoadReplay>();
+  /**
+   * The Agent instructions each loaded agent session was last sent, by
+   * protocol session id. ACP has no instruction field, so they travel in a
+   * prompt. A session that is created or loaded again has no entry and is
+   * sent them with its next prompt: the agent may have compacted them away,
+   * and ACP reports no compaction.
+   */
+  private readonly deliveredAgentInstructions = new Map<string, string>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly retainableSessionIds = new Set<string>();
@@ -1104,6 +1113,12 @@ export class AcpAgentClient {
     promptContent?: AcpPromptContentBlock[];
     parts?: AppServerThreadMessagePart[];
     turnId?: string;
+    /**
+     * The thread's current Agent instructions, or an empty string for none.
+     * Sent ahead of the prompt when this agent session has not been sent this
+     * text. Undefined leaves the prompt alone.
+     */
+    agentInstructions?: string;
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
@@ -1130,6 +1145,7 @@ export class AcpAgentClient {
       prompt: params.promptContent ?? textPrompt(params.prompt),
       sessionId: params.sessionId,
       turnId,
+      agentInstructions: params.agentInstructions?.trim(),
     });
     void promptRequest
       .then((result) => {
@@ -2035,6 +2051,7 @@ export class AcpAgentClient {
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
     };
     this.loadingSessions.set(protocolSessionId, loadState);
+    this.deliveredAgentInstructions.delete(protocolSessionId);
     let result: unknown;
     try {
       result = await this.options.transport.request("session/load", {
@@ -2166,6 +2183,7 @@ export class AcpAgentClient {
     prompt: AcpPromptContentBlock[];
     sessionId: string;
     turnId: string;
+    agentInstructions?: string;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
     const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
@@ -2183,14 +2201,29 @@ export class AcpAgentClient {
         timer.unref?.();
       };
     });
-    const sendPrompt = () => this.options.transport.request(
-      "session/prompt",
-      {
-        sessionId: params.protocolSessionId,
-        prompt: params.prompt,
-      },
-      ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
-    );
+    const sendPrompt = async () => {
+      // Decided here, after any reload below: a reloaded session is sent the
+      // instructions again.
+      const instructions = params.agentInstructions;
+      const sendInstructions = instructions !== undefined
+        && instructions !== (this.deliveredAgentInstructions.get(params.protocolSessionId) ?? "");
+      const result = await this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: params.protocolSessionId,
+          prompt: sendInstructions
+            ? [...textPrompt(buildAcpAgentInstructionBlock(instructions)), ...params.prompt]
+            : params.prompt,
+        },
+        ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
+      );
+      // Recorded once the agent has answered the prompt. A prompt that fails
+      // leaves the session due the instructions again.
+      if (sendInstructions) {
+        this.deliveredAgentInstructions.set(params.protocolSessionId, instructions);
+      }
+      return result;
+    };
     // The turn is already tracked, so no idle close can start now; one that
     // already released the session is undone first. A session whose MCP
     // servers list another agent tool catalog is reloaded the same way.

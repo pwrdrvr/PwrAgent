@@ -46,6 +46,7 @@ import { ThreadDependencyStore } from "./thread-dependency-store";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
+  NavigationLaunchpadAgent,
   AppServerBackendKind,
   ArchiveSubthreadPromotion,
   AppServerBackendScope,
@@ -5409,7 +5410,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async setThreadAgent(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-    agent: { name: string; instructions?: string } | null;
+    agent: NavigationLaunchpadAgent | null;
     now?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -11447,7 +11448,7 @@ function normalizeLinkedDirectoryPath(value: string | undefined): string | undef
 }
 
 function normalizeThreadAgent(
-  input: { name: string; instructions?: string },
+  input: NavigationLaunchpadAgent,
   now = Date.now(),
 ): NonNullable<ThreadOverlayState["agent"]> {
   const name = input.name.trim();
@@ -11459,6 +11460,9 @@ function normalizeThreadAgent(
   return {
     name,
     instructions: instructions || undefined,
+    ...(input.instructionsDelivery === "workspace-file"
+      ? { instructionsDelivery: "workspace-file" as const }
+      : {}),
     instructionLineCount,
     instructionsTooLong:
       instructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,

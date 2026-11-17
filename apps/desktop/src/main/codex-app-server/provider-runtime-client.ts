@@ -68,6 +68,9 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   refreshThreadTools: "thread",
   resumeNativeVoiceThread: "thread",
   injectThreadItems: "thread",
+  // Each runtime resumes its own threads, including one started later.
+  provideThreadDeveloperInstructions: "subscribe",
+  replaceThreadDeveloperInstructions: "thread",
   startThread: "model",
   forkThread: "thread",
   startTurn: "thread",

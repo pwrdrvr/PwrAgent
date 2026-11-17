@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import { formatWebSearchLabel } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
+import { stripAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import {
   type AcpProviderTool,
   isGenericShellToolTitle,
@@ -712,11 +713,13 @@ export class AcpSessionReplayNormalizer {
     // prompt so the agent can reason about it. The transcript already shows
     // that review as its own entry, so strip the block back out of the echo
     // rather than rendering it as something the operator typed.
-    const text = stripManagedReviewContextBlock(
+    // The Agent instruction block PwrAgent puts ahead of a prompt is removed
+    // the same way: the operator did not type it.
+    const text = stripAcpAgentInstructionBlock(stripManagedReviewContextBlock(
       readContentText(update.update, "content") ??
         readString(update.update, "text") ??
         "",
-    );
+    ));
     if (!text) {
       return;
     }

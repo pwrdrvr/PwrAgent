@@ -16,6 +16,7 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
+import { markAgentInstructionsDeliveredByWorkspaceFile } from "../app-server/workspace-instructed-agent";
 
 const log = getMainLogger("pwragent:star-map-manager");
 
@@ -24,11 +25,11 @@ const MANAGER_WORKSPACE_DIR = "star-map-manager";
 
 /**
  * The manager's standing instructions reach the model through an instruction
- * file in its own workspace. The thread's `agent` metadata marks it as a
- * persona thread for search and the Agents browser, and is not a delivery the
- * manager depends on, because not every backend is known to receive it. The
- * Claude turn-start path in backend-registry does append `agent.instructions`
- * to the system prompt, so a manager on Claude receives this text from both.
+ * file in its own workspace, and through nothing else. The thread's `agent`
+ * metadata marks it as a persona thread for search and the Agents browser. It
+ * carries `instructionsDelivery: "workspace-file"`, which tells every backend
+ * not to send `agent.instructions` itself, so the manager receives this text
+ * once.
  *
  * Written under every name the supported backends read, because there is no
  * single one. Codex and Claude take AGENTS.md and CLAUDE.md — the repository
@@ -61,7 +62,10 @@ export type StarMapManagerDeps = {
   overlayStore?: Pick<
     ReturnType<typeof getDesktopOverlayStore>,
     "getStarMapManagerThread" | "setStarMapManagerThread" | "getLaunchpadDefaults"
-  >;
+  > & Partial<Pick<
+    ReturnType<typeof getDesktopOverlayStore>,
+    "getThreadOverlayState" | "setThreadAgent"
+  >>;
   listThreadKeys?: () => Promise<Set<string>>;
   workspaceDir?: () => string;
 };
@@ -92,6 +96,7 @@ export async function openStarMapManagerThread(
         // reason to withhold a thread that already exists and needs nothing
         // from the filesystem to reopen.
         await refreshManagerWorkspace(deps.workspaceDir);
+        await markWorkspaceFileDelivery(overlayStore, remembered);
         return {
           status: "ready",
           backend: remembered.backend,
@@ -114,6 +119,8 @@ export async function openStarMapManagerThread(
       agent: {
         name: STAR_MAP_MANAGER_AGENT_NAME,
         instructions: STAR_MAP_MANAGER_AGENT_INSTRUCTIONS,
+        // The workspace file above is the one delivery.
+        instructionsDelivery: "workspace-file",
       },
     });
     try {
@@ -153,6 +160,27 @@ async function refreshManagerWorkspace(
     await ensureManagerWorkspace(workspaceDir);
   } catch (error) {
     log.warn("could not refresh the star map manager instructions", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * A manager created before `instructionsDelivery` existed has none. Best
+ * effort, like the file refresh: without the marker the thread still opens,
+ * and its backend sends the persona alongside the workspace file.
+ */
+async function markWorkspaceFileDelivery(
+  overlayStore: NonNullable<StarMapManagerDeps["overlayStore"]>,
+  thread: { backend: string; threadId: string },
+): Promise<void> {
+  try {
+    await markAgentInstructionsDeliveredByWorkspaceFile(overlayStore, {
+      backend: thread.backend as AppServerBackendKind,
+      threadId: thread.threadId,
+    });
+  } catch (error) {
+    log.warn("could not mark the star map manager instructions as file-delivered", {
       error: error instanceof Error ? error.message : String(error),
     });
   }
