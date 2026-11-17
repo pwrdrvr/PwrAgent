@@ -22542,6 +22542,8 @@ script = "echo setup"
               threads: archived ? [{ ...thread, archived: true, linkedDirectories: [primary] }] : [],
             })),
           });
+          await mockArchiveWorktreePresence([primaryPath, secondaryPath], (target) =>
+            !archiveWorktree.mock.calls.some(([params]) => path.resolve(params.worktreePath) === path.resolve(target)));
           const archiveRegistry = createDesktopBackendRegistry({
             codexClient: archiveClient,
             overlayStore: reopenedStore,
@@ -66102,6 +66104,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
+    await mockArchiveWorktreePresence(["/Users/test/.codex/worktrees/shared/PwrAgnt"], () => archiveWorktree.mock.calls.length === 0);
     const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
