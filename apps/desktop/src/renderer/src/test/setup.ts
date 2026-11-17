@@ -1,6 +1,10 @@
 import { act, fireEvent } from "@testing-library/react";
+import { Editor } from "@tiptap/react";
 import { aroundAll, aroundEach } from "vitest";
 import { getActWarningGuard } from "./act-warning-guard";
+import { getEditorTeardown } from "./editor-teardown";
+
+getEditorTeardown().install(Editor);
 
 const actWarningGuard = getActWarningGuard();
 actWarningGuard.install();
