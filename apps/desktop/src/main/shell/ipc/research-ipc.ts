@@ -64,7 +64,8 @@ export function registerResearchIpcHandlers(): void {
     // A receipt only: the items the command changed reach the window by delta.
     const key = `operator:${request.requestId}`;
     const run = await getResearchService().update(request.runId, key, request.command, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-    const { delivery } = getResearchService().receipt(run.id, key, request.command);
+    // Only a revision request has a delivery to report.
+    const delivery = request.command.action === "review" && request.command.decision === "revision_requested" ? getResearchService().revisionDelivery(run.id, key) : undefined;
     const receipt: ResearchUpdateReceipt = { runId: run.id, revision: run.revision, status: run.status, ...(delivery ? { delivery } : {}) };
     return receipt;
   });

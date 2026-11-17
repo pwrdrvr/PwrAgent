@@ -376,6 +376,11 @@ describe("Research panel", () => {
     expect(screen.queryByText("Counterexample 1", { exact: true })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "nothing matches this" } });
     expect(await screen.findByText("No findings match this filter.")).toBeInTheDocument();
+    // The owner's search refuses a query over 300 characters, so a longer filter is cut to that, not answered with an error.
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "x".repeat(400) } });
+    await waitFor(() => expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ query: "x".repeat(300) }) })));
+    expect(await screen.findByText("No findings match this filter.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("reads summaries with no items or journal, and the chosen run through its own change stream", async () => {

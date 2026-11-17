@@ -22,9 +22,10 @@ type Reads = Required<Pick<DesktopApi, "researchSnapshot" | "researchChanges">>;
  *
  * A change event names its run and revision. For the run on screen it reads
  * the items changed since the store's revision; for any other run it reads
- * that run's summary alone. The whole run list is read once, and again only
- * when the thread's pending request changes. Reads run one at a time, and a
- * change that arrives during a read is folded into the next one.
+ * listed run it reads that run's summary alone. The whole run list is read
+ * once, and again only when the thread's pending request changes or a run it
+ * does not list changes. Reads run one at a time, and a change that arrives
+ * during a read is folded into the next one.
  */
 export class ResearchSync {
   private state: ResearchSyncState = { writableRunIds: [] };
@@ -32,7 +33,8 @@ export class ResearchSync {
   private wantedRunId?: string;
   private listDirty = true;
   private runDirty = false;
-  private readonly summariesDirty = new Set<string>();
+  /** Listed runs whose summary is behind, each with the revision a change named. */
+  private readonly summariesDirty = new Map<string, number | undefined>();
   private pumping = false;
   private disposed = false;
 
@@ -55,7 +57,9 @@ export class ResearchSync {
       if (change.revision === undefined || !researchRunStoreSynced(this.store) || this.store.revision < change.revision) this.runDirty = true;
     } else {
       const known = this.state.runs?.find((run) => run.id === change.runId);
-      if (!known || change.revision === undefined || known.revision < change.revision) this.summariesDirty.add(change.runId);
+      // The owner decides which runs the list holds and in what order, so a run it does not hold yet is read with the list.
+      if (!known) this.listDirty = true;
+      else if (change.revision === undefined || known.revision < change.revision) this.summariesDirty.set(change.runId, change.revision);
     }
     // Even a change that needs no read of its own retries one that failed earlier.
     void this.pump();
@@ -88,7 +92,7 @@ export class ResearchSync {
       while (!this.disposed && (this.listDirty || this.runDirty || this.summariesDirty.size)) {
         if (this.listDirty) await this.readList();
         else if (this.runDirty) await this.readRun();
-        else await this.readSummary(this.summariesDirty.values().next().value!);
+        else await this.readSummary(this.summariesDirty.keys().next().value!);
       }
     } catch (error) {
       // Leave what was dirty as it is: the next change event retries it.
@@ -101,27 +105,35 @@ export class ResearchSync {
     try {
       const snapshot = await this.reads.researchSnapshot({ ...this.thread });
       if (this.disposed) return;
-      this.summariesDirty.clear();
+      // A change that arrived while this list was read may be newer than the list: keep its summary to read.
+      for (const [runId, revision] of this.summariesDirty) {
+        const listed = snapshot.runs.find((run) => run.id === runId);
+        if (!listed || (revision !== undefined && listed.revision >= revision)) this.summariesDirty.delete(runId);
+      }
       this.emit({ runs: snapshot.runs, writableRunIds: snapshot.writableRunIds, pending: snapshot.pending, error: undefined });
       this.adoptRun();
     } catch (error) { this.listDirty = true; throw error; }
   }
 
   private async readSummary(runId: string): Promise<void> {
+    const revision = this.summariesDirty.get(runId);
     this.summariesDirty.delete(runId);
     try {
       const snapshot = await this.reads.researchSnapshot({ ...this.thread, runId });
       if (this.disposed) return;
       this.mergeSummary(runId, snapshot);
       this.adoptRun();
-    } catch (error) { this.summariesDirty.add(runId); throw error; }
+    } catch (error) {
+      // A change that arrived during the failed read already asked again.
+      if (!this.summariesDirty.has(runId)) this.summariesDirty.set(runId, revision);
+      throw error;
+    }
   }
 
-  /** Replace or insert one run in the list, newest first as the owner lists them. */
+  /** Replace one listed run's summary where it stands, or drop the run when the thread can no longer see it. */
   private mergeSummary(runId: string, snapshot: ResearchSnapshot): void {
     const summary = snapshot.runs.find((run) => run.id === runId);
-    const others = (this.state.runs ?? []).filter((run) => run.id !== runId);
-    const runs = summary ? [...others, summary].sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)) : others;
+    const runs = (this.state.runs ?? []).flatMap((run) => run.id !== runId ? [run] : summary ? [summary] : []);
     const writable = new Set(this.state.writableRunIds);
     if (snapshot.writableRunIds.includes(runId)) writable.add(runId); else writable.delete(runId);
     this.emit({ runs, writableRunIds: [...writable], pending: snapshot.pending, error: undefined });

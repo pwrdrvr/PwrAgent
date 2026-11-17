@@ -7,6 +7,9 @@ import {
 
 export const RESEARCH_FINDINGS_PAGE = 20;
 const FILTER_DELAY_MS = 150;
+/** The owner's search refuses a longer query, so the filter matches on its first 300 characters. */
+const FILTER_MAX = 300;
+const filterText = (filter: string) => filter.trim().slice(0, FILTER_MAX);
 
 /**
  * Findings are read in pages through the indexed item search while they are
@@ -18,9 +21,9 @@ const FILTER_DELAY_MS = 150;
 export function useResearchFindings(api: DesktopApi | undefined, thread: ResearchThread, runId: string, findings: number, filter: string) {
   const search = api?.searchResearch;
   const { backend, threadId } = thread;
-  const [text, setText] = useState(() => filter.trim());
+  const [text, setText] = useState(() => filterText(filter));
   useEffect(() => {
-    const next = filter.trim();
+    const next = filterText(filter);
     if (next === text) return;
     const timer = window.setTimeout(() => setText(next), FILTER_DELAY_MS);
     return () => window.clearTimeout(timer);

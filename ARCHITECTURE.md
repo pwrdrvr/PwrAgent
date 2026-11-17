@@ -225,7 +225,9 @@ carries only the thread.
 The window keeps one store per run on screen, keyed by item ID
 (`ResearchRunStore` in `packages/shared`). `ResearchSync` applies a change to
 the run on screen as one delta read, patches the run's summary from the
-delta's header state, and reads one summary for a change to another run. It
+delta's header state, and reads one summary for a change to another listed
+run. A change to a run it does not list reads the list, which the owner
+bounds and orders. It
 reads all pages of a sync before showing any of them, so the panel never
 shows a run part way through. The first open of a run reads it in pages. A
 failed read is retried by the next change event. All of these reads make zero

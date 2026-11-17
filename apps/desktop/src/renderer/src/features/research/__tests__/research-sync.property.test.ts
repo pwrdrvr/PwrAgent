@@ -83,14 +83,15 @@ describe("research sync", () => {
       let state: ResearchSyncState = { writableRunIds: [] };
       let selected: string | undefined;
       const notifications: ResearchChange[] = [];
-      let unnamed = 0;
+      let listChanges = 0;
       let failures = 0;
       const sync = new ResearchSync(model.reads, thread, (next) => {
         state = next;
         // Every store the panel is given is a whole run, never a sync part way through its pages.
         if (next.store) expectStoreIsRunAt(next.store, model.journals.get(next.store.runId)!);
       });
-      const deliver = (change: ResearchChange) => { if (change.runId === undefined) unnamed++; sync.notify(change); };
+      // A change asks for the list when it names no run, or a run the window does not list yet.
+      const deliver = (change: ResearchChange) => { if (change.runId === undefined || !state.runs?.some((run) => run.id === change.runId)) listChanges++; sync.notify(change); };
       const publish = (change: ResearchChange, defer: boolean) => { if (defer) notifications.push(change); else deliver(change); };
       sync.start();
       for (const entry of ops) {
@@ -131,8 +132,8 @@ describe("research sync", () => {
       expect(state.store?.runId).toBe(shown);
       expect(state.store?.revision).toBe(model.journals.get(shown)!.length);
       expectStoreIsRunAt(state.store!, model.journals.get(shown)!);
-      // The list is read once, then only for a change that names no run, or to retry a failed read.
-      expect(model.calls.list).toBeLessThanOrEqual(1 + unnamed + failures);
+      // The list is read once, then only for a change that names no run or an unlisted one, or to retry a failed read.
+      expect(model.calls.list).toBeLessThanOrEqual(1 + listChanges + failures);
       sync.dispose();
     }), { numRuns: 100 });
   });
@@ -157,6 +158,46 @@ describe("research sync", () => {
     await drain();
     expect(state.error).toBeUndefined();
     expect(state.pending).toEqual(pendingRequest);
+    sync.dispose();
+  });
+
+  it("keeps a change to another run that arrives while the run list is being read", async () => {
+    const model = owner();
+    model.journals.set("run-1", [researchCreatedEvent(2, { at: 1000 })]);
+    model.journals.set("run-2", [researchCreatedEvent(2, { at: 1001 })]);
+    let state: ResearchSyncState = { writableRunIds: [] };
+    const sync = new ResearchSync(model.reads, thread, (next) => { state = next; });
+    const drain = async () => { await settle(); while (model.held.length) { model.held.shift()!(); await settle(); } };
+    sync.start();
+    await drain();
+    expect(state.store?.runId).toBe("run-2");
+    // The list is asked for, and answered as it stood, before the other run changes.
+    model.setPending(pendingRequest);
+    sync.notify({ ...thread });
+    const journal = model.journals.get("run-1")!;
+    journal.push(nextResearchEvent(model.run("run-1"), { kind: "finding", pick: 0, other: 0, variant: 0, flag: false }));
+    sync.notify({ ...thread, runId: "run-1", revision: journal.length });
+    await drain();
+    expect(state.pending).toEqual(pendingRequest);
+    expect(state.runs).toEqual(model.summaries());
+    sync.dispose();
+  });
+
+  it("reads the run list, not one summary, for a change to a run the window does not list", async () => {
+    const model = owner();
+    model.journals.set("run-1", [researchCreatedEvent(2, { at: 1000 })]);
+    let state: ResearchSyncState = { writableRunIds: [] };
+    const sync = new ResearchSync(model.reads, thread, (next) => { state = next; });
+    const drain = async () => { await settle(); while (model.held.length) { model.held.shift()!(); await settle(); } };
+    sync.start();
+    await drain();
+    const before = { ...model.calls };
+    model.journals.set("run-2", [researchCreatedEvent(2, { at: 1001 })]);
+    sync.notify({ ...thread, runId: "run-2", revision: 1 });
+    await drain();
+    expect(state.runs).toEqual(model.summaries());
+    expect(state.store?.runId).toBe("run-2");
+    expect({ list: model.calls.list - before.list, summary: model.calls.summary - before.summary }).toEqual({ list: 1, summary: 0 });
     sync.dispose();
   });
 

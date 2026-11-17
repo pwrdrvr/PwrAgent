@@ -152,8 +152,13 @@ export class ResearchService {
     const itemId = event?.data.type === "finding" ? event.data.finding.id : event?.data.type === "submission" ? event.data.submission.id
       : command.action === "review" ? command.submissionId : "approachId" in command ? command.approachId : undefined;
     const item = itemId ? this.storage.readItem(id, itemId) : undefined;
-    const delivery = command.action === "review" && command.decision === "revision_requested" ? this.storage.delivery(id, `feedback:${commandId}`) : undefined;
+    const delivery = command.action === "review" && command.decision === "revision_requested" ? this.revisionDelivery(id, commandId) : undefined;
     return { ...(item ? { item } : {}), ...(delivery ? { delivery } : {}) };
+  }
+
+  /** The latest receipt of the delivery a revision request made, by that request's command ID. */
+  revisionDelivery(id: string, commandId: string): ResearchDelivery | undefined {
+    return this.storage.delivery(id, `feedback:${commandId}`);
   }
 
   /** The header for a thread the run's coordinator or an approach's current worker. */

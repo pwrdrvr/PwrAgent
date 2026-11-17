@@ -92,6 +92,18 @@ CREATE INDEX IF NOT EXISTS idx_research_events_delivery_failed ON research_event
   WHERE json_extract(payload, '$.data.type') = 'delivery_failed';
 `;
 
+/** What every header read selects: the creation event, and the columns and counts that change after it. */
+const HEADER_COLUMNS = `r.run_id, r.status, r.reason, e.payload,
+  (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
+  (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers`;
+/** A summary adds the review counts. Each is an index range, not a scan of item payloads. */
+const SUMMARY_COLUMNS = HEADER_COLUMNS + `,
+  (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'unreviewed') AS unreviewed,
+  (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'accepted') AS accepted`;
+const HEADER_FROM = "FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1";
+const SELECT_HEADERS = "SELECT " + HEADER_COLUMNS + " " + HEADER_FROM;
+const SELECT_SUMMARIES = "SELECT " + SUMMARY_COLUMNS + " " + HEADER_FROM;
+
 type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; revision: number; active_workers: number };
 type SummaryRow = HeaderRow & { unreviewed: number; accepted: number };
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
@@ -109,27 +121,16 @@ export class ResearchStore implements ResearchStorage {
     return rows.length ? projectResearchRun(id, rows.map((r) => JSON.parse(r.payload) as ResearchEvent)) : undefined;
   }
   header(id: string): ResearchRunHeader | undefined {
-    const row = this.stateDb.raw.prepare(`SELECT r.run_id, r.status, r.reason, e.payload,
-      (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
-      (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers
-      FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1 WHERE r.run_id = ?`).get(id) as HeaderRow | undefined;
+    const row = this.stateDb.raw.prepare(SELECT_HEADERS + " WHERE r.run_id = ?").get(id) as HeaderRow | undefined;
     return row ? headerFromRow(row) : undefined;
   }
   activeRuns(thread?: ResearchThread): ResearchRunHeader[] {
     const db = this.stateDb.raw;
     const rows = thread
-      ? db.prepare(`SELECT r.run_id, r.status, r.reason, e.payload,
-          (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers
-          FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1
-          WHERE r.status IN ('running', 'stopping') AND ((r.coordinator_backend = ? AND r.coordinator_thread_id = ?)
+      ? db.prepare(SELECT_HEADERS + ` WHERE r.status IN ('running', 'stopping') AND ((r.coordinator_backend = ? AND r.coordinator_thread_id = ?)
             OR r.run_id IN (SELECT run_id FROM research_workers WHERE backend = ? AND thread_id = ?))
           ORDER BY r.created_at DESC, r.run_id DESC`).all(thread.backend, thread.threadId, thread.backend, thread.threadId)
-      : db.prepare(`SELECT r.run_id, r.status, r.reason, e.payload,
-          (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers
-          FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1
-          WHERE r.status IN ('running', 'stopping') ORDER BY r.created_at DESC, r.run_id DESC`).all();
+      : db.prepare(SELECT_HEADERS + " WHERE r.status IN ('running', 'stopping') ORDER BY r.created_at DESC, r.run_id DESC").all();
     return (rows as HeaderRow[]).map(headerFromRow);
   }
   isMember(id: string, thread: ResearchThread): boolean {
@@ -149,26 +150,14 @@ export class ResearchStore implements ResearchStorage {
   summaries(thread: ResearchThread): ResearchRunHeader[] {
     return this.runSummaries(thread, 20).map(({ unreviewed: _unreviewed, accepted: _accepted, ...header }) => header);
   }
-  /** One statement: each count is an index range, not a scan of item payloads. */
+  /** One statement for the whole list. */
   runSummaries(thread: ResearchThread, limit: number, runId?: string): ResearchRunSummary[] {
     const db = this.stateDb.raw;
     const rows = runId === undefined
-      ? db.prepare(`SELECT r.run_id, r.status, r.reason, e.payload,
-          (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'unreviewed') AS unreviewed,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'accepted') AS accepted
-          FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1
-          WHERE (r.coordinator_backend = ? AND r.coordinator_thread_id = ?)
+      ? db.prepare(SELECT_SUMMARIES + ` WHERE (r.coordinator_backend = ? AND r.coordinator_thread_id = ?)
             OR r.run_id IN (SELECT run_id FROM research_workers WHERE backend = ? AND thread_id = ?)
           ORDER BY r.created_at DESC, r.run_id DESC LIMIT ?`).all(thread.backend, thread.threadId, thread.backend, thread.threadId, limit)
-      : db.prepare(`SELECT r.run_id, r.status, r.reason, e.payload,
-          (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'unreviewed') AS unreviewed,
-          (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'accepted') AS accepted
-          FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1
-          WHERE r.run_id = ? AND ((r.coordinator_backend = ? AND r.coordinator_thread_id = ?) OR EXISTS
+      : db.prepare(SELECT_SUMMARIES + ` WHERE r.run_id = ? AND ((r.coordinator_backend = ? AND r.coordinator_thread_id = ?) OR EXISTS
             (SELECT 1 FROM research_workers WHERE run_id = r.run_id AND backend = ? AND thread_id = ?))
           LIMIT ?`).all(runId, thread.backend, thread.threadId, thread.backend, thread.threadId, limit);
     return (rows as SummaryRow[]).map((row) => ({ ...headerFromRow(row), unreviewed: row.unreviewed, accepted: row.accepted }));
