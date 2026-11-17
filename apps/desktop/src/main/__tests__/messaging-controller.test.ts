@@ -6758,9 +6758,9 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     // The drain records turn-2 as active only after its start resolves.
     await harness.controller.whenQueuedTurnDrainsSettled();
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
         operation: "get_current_messaging_surface",
@@ -17895,9 +17895,11 @@ describe("MessagingController", () => {
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("first"));
       await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
+      const entered = createDeferred<void>();
       let acknowledge!: () => void;
       const acknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });
       harness.startTurn.mockImplementationOnce(async (request) => {
+        entered.resolve();
         await acknowledgement;
         return { backend: request.backend, threadId: request.threadId, turnId: "turn-2" };
       });
@@ -17916,14 +17918,80 @@ describe("MessagingController", () => {
         delivered = true;
       })();
       try {
-        await vi.waitFor(() => expect(delivered).toBe(true));
-        await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+        await delivery;
+        expect(delivered).toBe(true);
+        await entered.promise;
+        expect(harness.startTurn).toHaveBeenCalledTimes(2);
       } finally {
         acknowledge();
         await delivery;
+        await harness.controller.whenQueuedTurnDrainsSettled();
         harness.controller.dispose();
       }
     }), { numRuns: 4 });
+  });
+
+  it("settles armed queued-turn drains only after dispatch finishes or disposal cancels them", async () => {
+    // Oracle: a released entry must start before the settle hook resolves,
+    // and the hook must include acknowledgement and notice retirement.
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("completed", "idle", "both"),
+      fc.constantFrom("accepted", "rejected", "disposed"),
+      async (release, outcome) => {
+        const harness = await createHarness();
+        const entered = createDeferred<void>();
+        const acknowledgement = createDeferred<void>();
+        try {
+          await bindThread(harness);
+          await harness.controller.handleInboundEvent(buildTextEvent("first"));
+          await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
+          harness.startTurn.mockImplementationOnce(async (request) => {
+            entered.resolve();
+            await acknowledgement.promise;
+            if (outcome === "rejected") throw new Error("fixture dispatch failed");
+            return { backend: request.backend, threadId: request.threadId, turnId: "turn-2" };
+          });
+          if (release !== "idle") await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+            method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1",
+              turn: { id: "turn-1", status: "completed", output: [] } },
+          } });
+          if (release === "both" && outcome === "disposed") await entered.promise;
+          if (release !== "completed") await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+            method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+          } });
+          const settled = harness.controller.whenQueuedTurnDrainsSettled();
+          if (outcome === "disposed") {
+            // With two releases, dispatch may already be awaiting its
+            // acknowledgement. Disposal cancels only work still armed.
+            const startsBeforeDisposal = harness.startTurn.mock.calls.length;
+            harness.controller.dispose();
+            acknowledgement.resolve();
+            await settled;
+            expect(harness.startTurn).toHaveBeenCalledTimes(startsBeforeDisposal);
+            return;
+          }
+          expect(await Promise.race([
+            settled.then(() => "settled"), entered.promise.then(() => "started"),
+          ])).toBe("started");
+          // Register after observing start, so this also checks the running
+          // drain rather than only the promise captured while it was armed.
+          const running = harness.controller.whenQueuedTurnDrainsSettled();
+          expect(harness.delivered).not.toContainEqual(expect.objectContaining({
+            body: "Queued message sent as the next turn.",
+          }));
+          acknowledgement.resolve();
+          await Promise.all([settled, running]);
+          expect(harness.startTurn).toHaveBeenCalledTimes(2);
+          expect(harness.delivered).toContainEqual(expect.objectContaining(outcome === "accepted"
+            ? { kind: "confirmation", body: "Queued message sent as the next turn." }
+            : { kind: "error", title: "Turn could not start", body: "fixture dispatch failed" }));
+        } finally {
+          acknowledgement.resolve();
+          harness.controller.dispose();
+          await harness.controller.whenQueuedTurnDrainsSettled();
+        }
+      },
+    ), { numRuns: 9, examples: [["completed", "accepted"], ["idle", "rejected"], ["completed", "disposed"], ["both", "disposed"]] });
   });
 
   it("queues follow-up text while a turn is active and starts it after completion", async () => {
@@ -17953,8 +18021,10 @@ describe("MessagingController", () => {
     // is retired only once the backend accepts the start. Hold that start open,
     // as a loaded machine can, so the gap between the call and the retirement
     // is always present rather than only under load.
+    const queuedStartEntered = createDeferred<void>();
     const queuedStartAccepted = createDeferred<void>();
     harness.startTurn.mockImplementationOnce(async (request: StartTurnRequest) => {
+      queuedStartEntered.resolve();
       await queuedStartAccepted.promise;
       return {
         backend: request.backend,
@@ -17979,11 +18049,11 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    // The second call proves the drain has begun, so the controller now
-    // tracks it, but its notice is retired only after the start resolves.
-    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    const drain = harness.controller.whenQueuedTurnDrainsSettled();
+    await queuedStartEntered.promise;
     queuedStartAccepted.resolve();
-    await harness.controller.whenQueuedTurnDrainsSettled();
+    await drain;
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [
@@ -18114,7 +18184,8 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    await harness.controller.whenQueuedTurnDrainsSettled();
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         backend: "codex",
@@ -18151,8 +18222,10 @@ describe("MessagingController", () => {
 
     // Hold the rejection open, as a loaded machine can: the drain reports the
     // failure only after the start settles.
+    const queuedStartEntered = createDeferred<void>();
     const queuedStartRejected = createDeferred<void>();
     harness.startTurn.mockImplementationOnce(async () => {
+      queuedStartEntered.resolve();
       await queuedStartRejected.promise;
       throw new Error("provider unavailable");
     });
@@ -18173,9 +18246,11 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    const drain = harness.controller.whenQueuedTurnDrainsSettled();
+    await queuedStartEntered.promise;
     queuedStartRejected.resolve();
-    await harness.controller.whenQueuedTurnDrainsSettled();
+    await drain;
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         kind: "error",
@@ -18365,9 +18440,9 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
     // The drain renders the post-start status only after its start resolves.
     await harness.controller.whenQueuedTurnDrainsSettled();
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [
@@ -18615,7 +18690,8 @@ describe("MessagingController", () => {
           } });
           expect(owner.getAllQueuedEntries()).toHaveLength(0);
         } else {
-          await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+          await harness.controller.whenQueuedTurnDrainsSettled();
+          expect(harness.startTurn).toHaveBeenCalledTimes(2);
           expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
             input: [{ type: "text", text: "keep this queued message" }],
           }));
