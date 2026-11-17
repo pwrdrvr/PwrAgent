@@ -1,16 +1,16 @@
 import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { ArchiveThreadRequest, FederationTarget, NavigationIdentity, NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget, NavigationIdentity, NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 export type NavigationArchiveMember = Pick<NavigationThreadSummary, "id" | "source" | "federation"> & {
   federationTarget?: FederationTarget;
-  expectedParent?: ArchiveThreadRequest["expectedParent"];
 } & Partial<Pick<NavigationThreadSummary, "title" | "titleSource" | "linkedDirectories" | "gitBranch">>;
-type Member = { ref: NavigationIdentity; parent?: NavigationIdentity; expectedParent: ArchiveThreadRequest["expectedParent"];
+type Member = { ref: NavigationIdentity; parent?: NavigationIdentity;
+  instanceLabel?: string;
   metadata: Pick<NavigationThreadSummary, "title" | "titleSource" | "linkedDirectories" | "gitBranch"> };
 let nextGroupRead = 0;
 
-/** Discover with viewer metadata; only owner-confirmed relationships enter the archive plan. */
+/** Snapshot identities from the viewer and owners; owner relationships determine order, not membership. */
 export async function readNavigationArchiveGroup(params: {
   api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery" | "readFederationHealth">;
   thread: NavigationThreadSummary;
@@ -33,12 +33,30 @@ export async function readNavigationArchiveGroup(params: {
   const authoritative = new Map<string, Member>();
   const queried = new Set<string>();
   const token = `archive-group:${++nextGroupRead}`;
-  const admit = (ref: NavigationIdentity): void => {
-    discovered.set(key(ref), normalize(ref));
-    if (discovered.size > 1000 || new TextEncoder().encode(JSON.stringify([...discovered.values(), ...authoritative.values()])).byteLength > 1024 * 1024) {
+  // The budget is the size of the serialized plan: every discovered identity
+  // and every owner row. Charge each entry once, when it first enters, so a
+  // 1,000-member group costs one pass rather than one re-encode per row.
+  const encoder = new TextEncoder();
+  const charged = new Set<string>();
+  let plannedBytes = 2;
+  const charge = (entry: string, value: unknown): void => {
+    if (charged.has(entry)) return;
+    charged.add(entry);
+    plannedBytes += encoder.encode(JSON.stringify(value)).byteLength + (charged.size > 1 ? 1 : 0);
+  };
+  const admit = (ref: NavigationIdentity, owned?: Member): void => {
+    const id = key(ref);
+    if (owned) {
+      authoritative.set(id, owned);
+      charge(`owner:${id}`, owned);
+    }
+    discovered.set(id, normalize(ref));
+    charge(`discovered:${id}`, normalize(ref));
+    if (discovered.size > 1000 || plannedBytes > 1024 * 1024) {
       throw new Error("Thread group exceeds the 1,000-member or 1 MiB archive planning budget. Archive a smaller subgroup.");
     }
   };
+  charge(`discovered:${key(root)}`, root);
   const read = async (roots: NavigationIdentity[], owner: string | undefined, viewer: boolean): Promise<void> => {
     let cursor: string | undefined;
     let generation: string | undefined;
@@ -66,8 +84,7 @@ export async function readNavigationArchiveGroup(params: {
         if (!viewer && owner && !entry.row.federation?.capabilities?.includes("turn_control")) {
           throw new Error(`The owner ${owner} has not granted thread control. No threads were archived.`);
         }
-        if (!viewer) authoritative.set(key(ref), member(entry, ref));
-        admit(ref);
+        admit(ref, viewer ? undefined : member(entry, ref));
       }
       cursor = page.nextCursor;
       if (!cursor && !page.complete) throw new Error("Thread group membership is incomplete. No threads were archived.");
@@ -76,10 +93,9 @@ export async function readNavigationArchiveGroup(params: {
     } while (cursor);
   };
   const member = (entry: NavigationQueryEntry, ref: NavigationIdentity): Member => ({ ref,
+    instanceLabel: entry.row.federation?.instanceLabel,
     metadata: { title: entry.row.title, titleSource: entry.row.titleSource, linkedDirectories: entry.row.linkedDirectories, gitBranch: entry.row.gitBranch },
-    parent: entry.placement.kind === "child" ? normalize(entry.placement.parent) : undefined,
-    expectedParent: entry.row.parentThreadId ? { threadId: entry.row.parentThreadId,
-      backend: entry.row.parentThreadBackend ?? entry.row.source, instanceId: entry.row.parentThreadInstanceId } : null });
+    parent: entry.placement.kind === "child" ? normalize(entry.placement.parent) : undefined });
   try {
     while (true) {
       const pending = [...discovered].filter(([id]) => !queried.has(id));
@@ -108,17 +124,26 @@ export async function readNavigationArchiveGroup(params: {
     }
     const result: NavigationArchiveMember[] = [];
     const visiting = new Set<string>();
+    const visited = new Set<string>();
     const visit = (value: Member, depth: number): void => {
       const id = key(value.ref);
+      if (visited.has(id)) return;
       if (visiting.has(id) || depth > 32) throw new Error("Thread group has a cycle or exceeds 32 levels.");
       visiting.add(id);
       for (const child of children.get(id) ?? []) visit(child, depth + 1);
       visiting.delete(id);
-      result.push({ ...value.metadata, source: value.ref.backend, id: value.ref.threadId, expectedParent: value.expectedParent,
+      visited.add(id);
+      result.push({ ...value.metadata, source: value.ref.backend, id: value.ref.threadId,
         federationTarget: value.ref.ownerInstanceId ? { scope: "remote", instanceId: value.ref.ownerInstanceId } : { scope: "local" },
-        ...(value.ref.ownerInstanceId ? { federation: { instanceLabel: value.ref.ownerInstanceId,
+        ...(value.ref.ownerInstanceId ? { federation: { instanceLabel: value.instanceLabel ?? value.ref.ownerInstanceId,
           ref: buildFederatedThreadRef({ backend: value.ref.backend, threadId: value.ref.threadId, instanceId: value.ref.ownerInstanceId }) } } : {}) });
     };
+    // A viewer mount can name a flattened or older parent. The owner may name
+    // an intermediate ancestor absent from this viewer. Keep the explicitly
+    // discovered identity even then, and visit each selected identity once.
+    // Visit other selected branches before the requested root, respecting the
+    // actual child edges between selected identities.
+    for (const value of authoritative.values()) if (key(value.ref) !== key(root)) visit(value, 0);
     visit(authoritative.get(key(root))!, 0);
     return result;
   } finally { await params.api.releaseNavigationQuery?.(token).catch(() => undefined); }

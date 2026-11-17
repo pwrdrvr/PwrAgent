@@ -1141,8 +1141,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     }
     const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays,
       firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
-      previousKnownThreadKeys: baseline?.knownThreadKeys ?? backendState?.knownThreadKeys ?? [] }).map((thread) => ({ ...thread,
-        nativeSubAgentCount: nativeCounts.get(buildThreadIdentityKey(thread.source, thread.id)) ?? 0 }));
+      previousKnownThreadKeys: baseline?.knownThreadKeys ?? backendState?.knownThreadKeys ?? [] }).map((thread) => {
+        const key = buildThreadIdentityKey(thread.source, thread.id);
+        const overlay = overlays[key];
+        // Legacy snapshot materialization flattens a tray to its local root.
+        // Query consumers traverse and mutate the actual tree: retaining the
+        // immediate parent keeps archive admission and descendant order in
+        // agreement with the saved relationships.
+        return { ...thread, parentThreadId: overlay?.parentThreadId,
+          parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
+          nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
+      });
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
       directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });
     return { threads, directories };

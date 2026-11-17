@@ -17,7 +17,6 @@ describe("owner-revalidated archive group planning", () => {
     const members = await readNavigationArchiveGroup({ api: { getNavigationQueryPage, releaseNavigationQuery }, thread: root });
     expect(members).toHaveLength(122);
     expect(members.at(-1)?.id).toBe("root");
-    expect(members[0]?.expectedParent).toEqual({ threadId: "root", backend: "codex", instanceId: undefined });
     expect(JSON.stringify(members)).not.toContain("private provider text");
     expect(JSON.stringify(members)).not.toContain("inbox");
     expect(getNavigationQueryPage.mock.calls.some(([request]) => request.cursor !== undefined)).toBe(true);
@@ -25,7 +24,7 @@ describe("owner-revalidated archive group planning", () => {
     expect(releaseNavigationQuery).toHaveBeenCalledTimes(1);
   });
 
-  it("discovers a cross-owner child through viewer metadata but uses its owner's current parent", async () => {
+  it("retains a cross-owner child selected through viewer metadata after its owner changes the parent", async () => {
     const root = thread("root");
     const remote = { ...thread("child", "root"), parentThreadInstanceId: "local-id",
       federation: { instanceLabel: "Peer", capabilities: ["turn_control" as const], ref: { backend: "codex" as const, threadId: "child",
@@ -37,7 +36,7 @@ describe("owner-revalidated archive group planning", () => {
     const members = await readNavigationArchiveGroup({ api: { getNavigationQueryPage,
       readFederationHealth: async () => ({ health: { instanceId: "local-id", enabled: true, role: "gateway", status: "connected", peers: [] } }) }, thread: root });
     expect(getNavigationQueryPage.mock.calls.some(([request]) => request.federationTarget?.scope === "remote")).toBe(true);
-    expect(members.map((member) => member.id)).toEqual(["root"]);
+    expect(members.map((member) => member.id)).toEqual(["child", "root"]);
   });
 
   it("fails discovery before returning an archive plan when a required owner is unavailable", async () => {
