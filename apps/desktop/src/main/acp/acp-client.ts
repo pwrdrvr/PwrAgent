@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
@@ -282,14 +283,6 @@ export class AcpAgentClient {
   >();
   private readonly loadingSessions = new Map<string, AcpSessionLoadState>();
   private readonly sessionLoadReplays = new Map<string, AcpSessionLoadReplay>();
-  /**
-   * The Agent instructions each loaded agent session was last sent, by
-   * protocol session id. ACP has no instruction field, so they travel in a
-   * prompt. A session that is created or loaded again has no entry and is
-   * sent them with its next prompt: the agent may have compacted them away,
-   * and ACP reports no compaction.
-   */
-  private readonly deliveredAgentInstructions = new Map<string, string>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly retainableSessionIds = new Set<string>();
@@ -2051,7 +2044,6 @@ export class AcpAgentClient {
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
     };
     this.loadingSessions.set(protocolSessionId, loadState);
-    this.deliveredAgentInstructions.delete(protocolSessionId);
     let result: unknown;
     try {
       result = await this.options.transport.request("session/load", {
@@ -2202,11 +2194,18 @@ export class AcpAgentClient {
       };
     });
     const sendPrompt = async () => {
-      // Decided here, after any reload below: a reloaded session is sent the
-      // instructions again.
+      // The agent keeps the block in the session's history, so a session
+      // loaded again (after an idle close or an app restart) is not sent it
+      // a second time. The stored record says what this agent session holds.
       const instructions = params.agentInstructions;
+      const digest = instructions === undefined
+        ? undefined
+        : agentInstructionsDigest(params.protocolSessionId, instructions);
       const sendInstructions = instructions !== undefined
-        && instructions !== (this.deliveredAgentInstructions.get(params.protocolSessionId) ?? "");
+        && digest !== this.options.store.getSession(
+          this.options.backendId,
+          params.sessionId,
+        )?.agentInstructionsDigest;
       const result = await this.options.transport.request(
         "session/prompt",
         {
@@ -2220,7 +2219,7 @@ export class AcpAgentClient {
       // Recorded once the agent has answered the prompt. A prompt that fails
       // leaves the session due the instructions again.
       if (sendInstructions) {
-        this.deliveredAgentInstructions.set(params.protocolSessionId, instructions);
+        this.recordDeliveredAgentInstructions(params.sessionId, digest);
       }
       return result;
     };
@@ -2287,6 +2286,22 @@ export class AcpAgentClient {
     throw new Error(
       `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
     );
+  }
+
+  /** One write per delivered block: the first delivery and each edit. */
+  private recordDeliveredAgentInstructions(
+    sessionId: string,
+    digest: string | undefined,
+  ): void {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return;
+    }
+    const { agentInstructionsDigest: _previous, ...rest } = metadata;
+    this.options.store.upsertSession({
+      ...rest,
+      ...(digest ? { agentInstructionsDigest: digest } : {}),
+    });
   }
 
   private recordPromptFailure(
@@ -2813,4 +2828,19 @@ function normalizeRewindTimestamp(value: unknown): number | undefined {
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Identifies the instruction text an agent session was sent. Empty text has
+ * no digest, which is also what a session that was sent nothing records. The
+ * session id is part of it, so a thread bound to a new agent session, which
+ * starts with an empty history, is sent the block again.
+ */
+function agentInstructionsDigest(
+  protocolSessionId: string,
+  instructions: string,
+): string | undefined {
+  return instructions
+    ? createHash("sha256").update(`${protocolSessionId}\0${instructions}`).digest("hex")
+    : undefined;
 }

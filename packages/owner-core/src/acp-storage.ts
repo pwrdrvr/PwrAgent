@@ -37,6 +37,11 @@ export type AcpSessionMetadata = {
   hidden?: boolean;
   hasConversationHistory?: boolean;
   requiresAgentSessionRebind?: boolean;
+  /**
+   * Digest of the Agent instruction block this agent session was last sent.
+   * Absent when it was sent none, or was told they were removed.
+   */
+  agentInstructionsDigest?: string;
   archivedAt?: number;
   lastError?: string;
 };

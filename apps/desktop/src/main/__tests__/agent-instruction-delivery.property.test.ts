@@ -202,7 +202,7 @@ describe("a turn on a designated Agent carries its instructions to the provider"
     expect(codexFrames("thread/resume").map((frame) => frame.developerInstructions)).toEqual([FIRST]);
   });
 
-  it("ACP: at the front of the prompt, once per loaded agent session", async () => {
+  it("ACP: at the front of the prompt, once per agent session", async () => {
     const { root, open, acpTransport } = await createFixture();
     const { registry } = open();
     const started = await registry.startThread({ backend: ACP, cwd: root, agent: agent(FIRST) });
@@ -402,19 +402,21 @@ describe("a manager thread receives its persona exactly once", () => {
 
 describe("the ACP instruction block", () => {
   // Model: an agent session holds the instructions it was last sent in a
-  // prompt, and nothing once it is loaded again, because the agent may have
-  // compacted its history and ACP reports no compaction. A prompt must carry
-  // the block exactly when the session does not hold the current text, and a
-  // prompt the agent rejected changed nothing.
+  // prompt, and keeps them in its history when it is loaded again, after an
+  // idle close or an app restart. A prompt must carry the block exactly when
+  // the session does not hold the current text, and a prompt the agent
+  // rejected changed nothing.
   type Step =
     | { kind: "turn"; fails: boolean }
     | { kind: "edit"; instructions: string }
-    | { kind: "reload" };
+    | { kind: "reload" }
+    | { kind: "restart" };
   const step: fc.Arbitrary<Step> = fc.oneof(
     { weight: 4, arbitrary: fc.constant({ kind: "turn" as const, fails: false }) },
     { weight: 2, arbitrary: fc.constant({ kind: "turn" as const, fails: true }) },
     { weight: 3, arbitrary: fc.constantFrom("", "alpha", "beta\nsecond line").map((instructions) => ({ kind: "edit" as const, instructions })) },
     { weight: 2, arbitrary: fc.constant({ kind: "reload" as const }) },
+    { weight: 2, arbitrary: fc.constant({ kind: "restart" as const }) },
   );
 
   it("is sent exactly when the loaded agent session does not hold the current instructions", async () => {
@@ -422,23 +424,27 @@ describe("the ACP instruction block", () => {
       const db = openInMemoryStateDb();
       const store = new AcpSessionStore(db);
       let failNext = false;
-      const transport = new FakeAcpAgentTransport({
-        initialize: { protocolVersion: 1, agentCapabilities: {
-          loadSession: true, sessionCapabilities: { close: {} },
-        } },
-      });
-      const request = transport.request.bind(transport);
-      vi.spyOn(transport, "request").mockImplementation(async (method, params, timeoutMs) => {
-        if (method === "session/prompt") {
-          transport.requests.push({ method, params });
-          if (failNext) throw new Error("JSON-RPC -32000 fixture prompt failure");
-          return { stopReason: "end_turn" };
-        }
-        return await request(method, params, timeoutMs);
-      });
-      const client = new AcpAgentClient({ backendId: ACP, store, transport });
-      try {
+      const connect = async () => {
+        const transport = new FakeAcpAgentTransport({
+          initialize: { protocolVersion: 1, agentCapabilities: {
+            loadSession: true, sessionCapabilities: { close: {} },
+          } },
+        });
+        const request = transport.request.bind(transport);
+        vi.spyOn(transport, "request").mockImplementation(async (method, params, timeoutMs) => {
+          if (method === "session/prompt") {
+            transport.requests.push({ method, params });
+            if (failNext) throw new Error("JSON-RPC -32000 fixture prompt failure");
+            return { stopReason: "end_turn" };
+          }
+          return await request(method, params, timeoutMs);
+        });
+        const client = new AcpAgentClient({ backendId: ACP, store, transport });
         await client.initialize();
+        return { client, transport };
+      };
+      let { client, transport } = await connect();
+      try {
         const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
         let current = "";
         let held = "";
@@ -449,7 +455,11 @@ describe("the ACP instruction block", () => {
             // An idle close releases the session; the next prompt loads it again.
             // A session that is already released stays released.
             await client.closeIdleSessions({ idleMs: 0 });
-            held = "";
+          } else if (next.kind === "restart") {
+            // A new app process: a new client over the same stored sessions.
+            await client.dispose();
+            ({ client, transport } = await connect());
+            await client.ensureSession(store.getSession(ACP, sessionId)!);
           } else {
             failNext = next.fails;
             const sent = transport.requests.length;
@@ -473,7 +483,8 @@ describe("the ACP instruction block", () => {
     }), { numRuns: 60, examples: [[[
       { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: true }, { kind: "turn", fails: false },
       { kind: "turn", fails: false }, { kind: "reload" }, { kind: "turn", fails: false },
-      { kind: "edit", instructions: "" }, { kind: "turn", fails: false },
+      { kind: "restart" }, { kind: "turn", fails: false },
+      { kind: "edit", instructions: "" }, { kind: "restart" }, { kind: "turn", fails: false },
     ]]] });
   }, 60_000);
 

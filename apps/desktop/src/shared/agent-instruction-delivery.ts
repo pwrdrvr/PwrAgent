@@ -9,8 +9,9 @@
  *   the model on the first turn and again after each compaction. A changed
  *   text reloads the thread and is announced with one developer message.
  * - **ACP.** The protocol has no instruction field, so the text travels as a
- *   marked text block at the front of a prompt: the first prompt after a
- *   session is created or loaded, and the first after the text changes.
+ *   marked text block at the front of a prompt: the first prompt of an agent
+ *   session, and the first after the text changes. A session loaded again
+ *   keeps the block in its history and is not sent it a second time.
  *
  * An Agent whose own workspace holds its instructions in a file the backend
  * reads (`instructionsDelivery: "workspace-file"`) gets nothing from here, so

@@ -16,7 +16,7 @@ decides whether PwrAgent itself must send it.
 |---|---|---|---|---|
 | Claude | Appended to the `claude_code` system prompt | The system prompt of the relaunched process | The system prompt is not compacted | The next turn relaunches the session with the new prompt |
 | Codex | `developerInstructions` on `thread/start` | `developerInstructions` on every `thread/resume` | Codex re-sends the loaded session's developer instructions | The thread is reloaded with the new text, and one developer message announces it |
-| ACP | A marked text block at the front of the first `session/prompt` | The block is sent again after `session/load` | Not visible to PwrAgent; the next load sends the block again | The next `session/prompt` carries the new block |
+| ACP | A marked text block at the front of the first `session/prompt` | Nothing is sent: the block is in the session's history | Not visible to PwrAgent, see the limit below | The next `session/prompt` carries the new block |
 
 ### Claude
 
@@ -83,27 +83,32 @@ only vendor extensions. Every agent must accept text blocks in
 `session/prompt`, so the instructions travel there.
 
 `AcpAgentClient.startPrompt` (`apps/desktop/src/main/acp/acp-client.ts`) puts
-one marked text block ahead of the operator's prompt when the loaded agent
-session has not been sent the current text:
+one marked text block ahead of the operator's prompt when the agent session
+has not been sent the current text:
 
 - the first prompt after `session/new`;
-- the first prompt after `session/load`, which follows an app restart or an
-  idle close. An agent may compact its history without telling the client, so a
-  loaded session is not assumed to still hold the block;
-- the first prompt after the text changes. A prompt that is already running is
-  not touched.
+- the first prompt after the text changes, including a removal. A prompt that
+  is already running is not touched.
 
-The client remembers what each loaded session was sent in memory only. A
-prompt the agent rejects leaves the block due again.
+A `session/load` sends nothing. It follows an app restart and every idle
+close, which happens after 10 minutes without activity, so a block per load
+would repeat the instructions on most turns of a quiet thread. The block is
+part of the session's history, and the agent restores that history on load.
+
+The record of what a session was sent is `agentInstructionsDigest` on the
+session's row in `acp_sessions`: a SHA-256 of the agent session id and the
+text, not the text. A thread bound to a new agent session has no matching
+digest and is sent the block. A prompt the agent rejects leaves the block due
+again.
 
 ACP agents echo each prompt back as a `user_message_chunk`. The transcript
 filter `stripAcpAgentInstructionBlock` removes the block by its markers, the
 way `stripManagedReviewContextBlock` removes a review artifact. Change a marker
 in one place and the block renders as something the operator typed.
 
-Known limit: when an Agent's instructions are removed and the session is then
-loaded again before its next prompt, nothing withdraws the block that is still
-in the agent's history.
+Known limit: ACP does not report compaction. An agent that compacts its
+history may summarize the block away, and PwrAgent does not send it again
+until the text changes or the thread gets a new agent session.
 
 ## Agents whose workspace holds the instructions
 
@@ -120,7 +125,8 @@ Agent working in a repository never has files written into that repository.
 ## Writes
 
 Delivery adds no SQLite write per turn. The Codex resolver reads the overlay.
-The ACP client keeps its state in memory. A manager thread created before
+The ACP client writes the session row once per delivered block: on the first
+prompt of an agent session and on the first prompt after an edit. A manager thread created before
 `instructionsDelivery` existed gets the marker in one write the next time it is
 opened.
 
