@@ -42,10 +42,15 @@ int ${entry}(${parameters}) {
 }
 `);
   const program = (options = {}) => `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
-    console.log(buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, ...options })}));`;
+    console.log(JSON.stringify(buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, ...options })})));`;
   const command = (options) => ["--input-type=module", "-e", program(options)];
-  const build = (options, env = process.env) => execFileSync(process.execPath, command(options), { encoding: "utf8", env, stdio: "pipe" }).trim();
+  const build = (options, env = process.env) => parseOutput(execFileSync(process.execPath, command(options), { encoding: "utf8", env, stdio: "pipe" }));
   return { root, builder, source, header, build, command };
+}
+
+// MSVC prints source/linker diagnostics before the child's final JSON line.
+function parseOutput(stdout) {
+  return JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
 }
 
 function observe(output) {
@@ -120,7 +125,7 @@ it("concurrent owners with separate output roots cannot replace each other's art
   const roots = [join(f.root, "owner-a"), join(f.root, "owner-b")];
   const outputs = await Promise.all(roots.map(async (outputRoot) => {
     const { stdout } = await promisify(execFile)(process.execPath, f.command({ outputRoot }));
-    return stdout.trim();
+    return parseOutput(stdout);
   }));
   expect(outputs[0]).not.toBe(outputs[1]);
   for (const output of outputs) {
