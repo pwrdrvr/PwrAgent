@@ -174,6 +174,9 @@ At one six-record page per minute across the owner, the measured rate is
 `(1/60 commits/s) × 70,040 bytes/commit × 86,400 s = 100.86 MB/day`,
 or 8.40 MB over one run's maximum two hours. The source-state and source-receipt
 indexes add WAL pages while preserving the commit, statement and row budgets.
+Their two extra pages also add 8,240 bytes to the daily compaction fixture
+(1,483,232 bytes total), with the same two commits: approximately 0.00824 MB/day
+of additional maintenance WAL at one compaction per day.
 Idle polling and token streaming add zero writes. Four imports/hour at the measured
 size add approximately 17.80 MB/day. WAL bytes vary with payload/page layout and
 are recorded, not asserted; commit/statement/row budgets fail in either direction.

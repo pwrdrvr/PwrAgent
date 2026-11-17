@@ -284,7 +284,7 @@ export class ResearchStore implements ResearchStorage {
   }
   private state(id: string): ResearchRunState | undefined {
     const db = this.stateDb.raw;
-    const row = db.prepare(`SELECT r.status, r.reason, ${HARNESS_STATE} AS harness,
+    const row = db.prepare("SELECT r.status, r.reason, " + HARNESS_STATE + ` AS harness,
       (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers,
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'unreviewed') AS unreviewed,
