@@ -138,6 +138,7 @@ it("rejects an extracted anonymous helper in real SSR and Oxc output, then accep
 
 it("keeps an oversized function budgeted when its source map has no original locations", async () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
+  mkdirSync(join(root, ".local"), { recursive: true });
   const directory = mkdtempSync(join(root, ".local/main-bytecode-unmapped-"));
   try {
     const entry = join(directory, "entry.ts");
