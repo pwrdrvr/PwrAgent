@@ -4,11 +4,11 @@ import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
-import {
-  isMessagingInteractivePendingRequest,
+import type {
   MessagingController,
-  type MessagingControllerDeliveryBudgetEvent,
+  MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
+import { isMessagingInteractivePendingRequest } from "./core/messaging-pending-request";
 import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "./core/messaging-storage";
@@ -1585,6 +1585,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (!(await this.previousAdapterIsDown(adapter.channel))) {
       return "failed";
     }
+    // An unconfigured owner still needs the lightweight messaging runtime for
+    // federation/file routing, but no controller workflow until an adapter starts.
+    const { MessagingController } = await import("./core/messaging-controller");
     const authorizedActorIds = [...adapter.authorizedActorIds];
     const authorization: RunningMessagingAuthorization = {
       actorIds: authorizedActorIds,

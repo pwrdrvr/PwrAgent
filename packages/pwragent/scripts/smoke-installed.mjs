@@ -14,7 +14,7 @@ const directory = name => { const value = path.join(temporary, name); fs.mkdirSy
 const workspace = directory("w"), home = directory("c"), data = directory("f");
 const env = { ...process.env, PWRAGENT_HOME: directory("p"), PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data };
 const installed = createRequire(fs.realpathSync(cli));
-const owner = installed("../dist/index.js");
+const owner = await import(pathToFileURL(installed.resolve("../dist/index.js")).href);
 const installedRoot = path.resolve(path.dirname(fs.realpathSync(cli)), "..");
 const git = spawnSync(path.join(installedRoot, "resources/git/bin/git"), ["--version"], { encoding: "utf8" });
 assert.equal(git.status, 0, git.error?.message ?? git.stderr);

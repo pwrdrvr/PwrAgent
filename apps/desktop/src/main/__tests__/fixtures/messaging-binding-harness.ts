@@ -10,6 +10,7 @@ import { openInMemoryStateDb } from "../sqlite-test-utils";
 export async function messagingBindingHarness(options: {
   channel?: "telegram" | "discord";
   rename?: boolean;
+  pinStatus?: boolean;
   clock?: () => number;
   store?: SqliteMessagingStore;
 } = {}) {
@@ -75,7 +76,7 @@ export async function messagingBindingHarness(options: {
         if (intent.kind === "dismiss") trace.push("unpin");
         if (intent.kind === "confirmation" && intent.title.includes("detached")) trace.push("confirmed");
         const surface: MessagingSurfaceRef = intent.targetSurface ?? { channel: channel.channel, id: `fixture-surface-${++sequence}` };
-        return { outcome: "presented", channel: channel.channel, deliveredAt: now, surface };
+        return { outcome: options.pinStatus && intent.delivery?.pin ? "pinned" : "presented", channel: channel.channel, deliveredAt: now, surface };
       },
     },
   };

@@ -2298,12 +2298,19 @@ describe("DesktopMessagingRuntime", () => {
   it("starts adapters in parallel and reports pending adapters as loading", async () => {
     await prepareRuntimeStore();
     const telegramStart = createDeferred<void>();
+    const telegramStarting = createDeferred<void>();
+    const discordStarting = createDeferred<void>();
     const slowTelegramAdapter = createAdapter("telegram");
     slowTelegramAdapter.start.mockImplementation(async (listener) => {
       slowTelegramAdapter.listener = listener;
+      telegramStarting.resolve();
       await telegramStart.promise;
     });
     const workingDiscordAdapter = createAdapter("discord");
+    workingDiscordAdapter.start.mockImplementation(async (listener) => {
+      workingDiscordAdapter.listener = listener;
+      discordStarting.resolve();
+    });
     const bridge = createBackendBridge();
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
@@ -2328,7 +2335,9 @@ describe("DesktopMessagingRuntime", () => {
     runtime.onPlatformStatus((event) => events.push(event));
 
     const startPromise = runtime.start();
-    await flushMicrotasks();
+    // Loading the controller is asynchronous. Observe both real start calls
+    // while Telegram remains blocked, so serial adapter startup still fails.
+    await Promise.all([telegramStarting.promise, discordStarting.promise]);
 
     expect(slowTelegramAdapter.start).toHaveBeenCalledTimes(1);
     expect(workingDiscordAdapter.start).toHaveBeenCalledTimes(1);
@@ -2559,9 +2568,11 @@ describe("DesktopMessagingRuntime", () => {
   it("serializes config changes behind pending startup", async () => {
     await prepareRuntimeStore();
     const firstTelegramStart = createDeferred<void>();
+    const firstTelegramStarting = createDeferred<void>();
     const firstTelegramAdapter = createAdapter("telegram");
     firstTelegramAdapter.start.mockImplementation(async (listener) => {
       firstTelegramAdapter.listener = listener;
+      firstTelegramStarting.resolve();
       await firstTelegramStart.promise;
     });
     const secondTelegramAdapter = createAdapter("telegram");
@@ -2589,7 +2600,7 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     const startPromise = runtime.start();
-    await flushMicrotasks();
+    await firstTelegramStarting.promise;
     const applyPromise = runtime.applyConfig({
       telegram: {
         channel: "telegram",

@@ -1,6 +1,7 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { useEffect } from "react";
 import fc from "fast-check";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerReadThreadResponse,
@@ -12,6 +13,41 @@ import { useThreadSessionState } from "../useThreadSessionState";
 import { injectPermissionTransitions } from "../../features/thread-detail/permission-transition-entries";
 
 const NOW = 50_123;
+
+// The test deadline stops Vitest's wait, not fast-check or a pending hook read.
+// Keep the assertion and its clock alive until its admitted case has settled.
+class LedgerModelLifetime {
+  private stopped = false;
+  private work: Promise<unknown> | undefined;
+
+  checkpoint(): void {
+    if (this.stopped) throw new fc.PreconditionFailure(true);
+  }
+
+  async run<T>(body: () => Promise<T>): Promise<T> {
+    const work = Promise.resolve().then(() => {
+      this.checkpoint();
+      return body();
+    });
+    this.work = work;
+    try { return await work; }
+    finally { this.work = undefined; }
+  }
+
+  async close(): Promise<void> {
+    this.stopped = true;
+    await this.work;
+  }
+}
+
+let ledgerLifetime: LedgerModelLifetime;
+beforeEach(() => { ledgerLifetime = new LedgerModelLifetime(); });
+async function retireLedgerModels(): Promise<void> {
+  try { await ledgerLifetime.close(); }
+  finally { cleanup(); }
+}
+afterEach(retireLedgerModels);
+
 type Item = {
   turn: number;
   sequence: number;
@@ -103,7 +139,14 @@ function response(model: Model, before?: number): AppServerReadThreadResponse {
 }
 
 async function mount(model: Model) {
+  const lifetime = ledgerLifetime;
+  lifetime.checkpoint();
   const reads: Read[] = [];
+  const operations: Promise<PromiseSettledResult<void>>[] = [];
+  const track = (work: Promise<void>) => operations.push(work.then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (reason: unknown) => ({ status: "rejected" as const, reason }),
+  ));
   sentKeys.clear();
   const visibility: Visibility = { issued: 0, settled: 0, live: new Map() };
   let emit: (event: AgentEvent) => void = () => { throw new Error("missing subscription"); };
@@ -127,12 +170,36 @@ async function mount(model: Model) {
     id: "ledger-thread", title: "Provider ledger", titleSource: "explicit", summary: "Fixture",
     source: "codex", linkedDirectories: [], inbox: { inInbox: false }, updatedAt: 1,
   };
-  const hook = renderHook(() => useThreadSessionState({ desktopApi, thread, initialHistoryLimit: 2 }));
+  let mounted = false;
+  const hook = renderHook(() => {
+    useEffect(() => {
+      mounted = true;
+      return () => { mounted = false; };
+    }, []);
+    return useThreadSessionState({ desktopApi, thread, initialHistoryLimit: 2 });
+  });
   // Async act flushes passive effects as well as the read's promise. No findBy
   // polling or real sleeps: the model supplies every asynchronous boundary.
   await act(async () => {});
   expect(hook.result.current.loading).toBe(false);
-  return { ...hook, reads, visibility, trace: [] as string[], emit: (method: string, params: Record<string, unknown>) => emit({
+  const close = async () => {
+    const errors: unknown[] = [];
+    try {
+      for (let count = 0; reads.length || operations.length; count++) {
+        expect(count, "hook reads must settle before unmount").toBeLessThan(64);
+        await act(async () => {
+          for (const read of reads.splice(0)) read.resolve(read.response);
+          for (const result of await Promise.all(operations.splice(0))) {
+            if (result.status === "rejected") errors.push(result.reason);
+          }
+        });
+      }
+      if (errors.length) throw new AggregateError(errors, "Ledger hook operations failed");
+    } finally { hook.unmount(); }
+  };
+  return { ...hook, close, track, checkpoint: () => lifetime.checkpoint(), isMounted: () => mounted,
+    pendingOperations: () => operations.length, reads, visibility, trace: [] as string[],
+    emit: (method: string, params: Record<string, unknown>) => emit({
     backend: "codex", notification: { method, params: { threadId: "ledger-thread", ...params } } as AgentEvent["notification"],
   }) };
 }
@@ -188,6 +255,7 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
     }
   }
   async run(model: Model, real: Real) {
+    real.checkpoint();
     real.trace.push(this.toString());
     await act(async () => {
       switch (this.operation) {
@@ -263,7 +331,7 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
           } });
           break;
         }
-        case "read": { void real.result.current.reload(); break; }
+        case "read": { real.track(real.result.current.reload()); break; }
         case "resolve": {
           const read = this.reverse ? real.reads.pop() : real.reads.shift();
           if (read) {
@@ -281,7 +349,7 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
           }
           break;
         }
-        case "older": { void real.result.current.loadOlder(); break; }
+        case "older": { real.track(real.result.current.loadOlder()); break; }
         case "compact": {
           // Compaction replaces the transcript as a whole, and shows it again
           // only once its own read lands. That is not a pruned live row.
@@ -397,14 +465,13 @@ it.each([
   } finally { real.unmount(); clock.mockRestore(); }
 });
 
-it("keeps completed live tool turns before subsequent acknowledged sends for generated clocks", async () => {
+it("keeps completed live tool turns before subsequent acknowledged sends for generated clocks", () => ledgerLifetime.run(async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   try {
     await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: 2 }), { minLength: 1, maxLength: 5 }),
       async (clocks) => {
         const model = initialModel();
-        const real = await mount(model);
-        try {
+        await withLedgerExample(model, async (real) => {
           await fc.asyncModelRun(() => ({ model, real }), openingCommands());
           for (const time of clocks) {
             await fc.asyncModelRun(() => ({ model, real }), [
@@ -414,10 +481,10 @@ it("keeps completed live tool turns before subsequent acknowledged sends for gen
             ]);
           }
           await drain(model, real);
-        } finally { real.unmount(); }
-      }), { numRuns: 25 });
+        });
+      }), { numRuns: 25, markInterruptAsFailure: true });
   } finally { clock.mockRestore(); }
-});
+}));
 
 it("keeps a completed message's live sequence when a tied command row precedes it", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -503,15 +570,14 @@ it("invalidates outstanding snapshots and page cursors when compaction resets hi
   } finally { real.unmount(); clock.mockRestore(); }
 });
 
-it("keeps the observed ledger through arbitrary same-turn hydration permutations", async () => {
+it("keeps the observed ledger through arbitrary same-turn hydration permutations", () => ledgerLifetime.run(async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   try {
     await fc.assert(fc.asyncProperty(
       fc.shuffledSubarray([0, 1, 2, 3], { minLength: 4, maxLength: 4 }),
       async (permutation) => {
         const model: Model = { turn: 0, ledger: [] };
-        const real = await mount(model);
-        try {
+        await withLedgerExample(model, async (real) => {
           await new LedgerCommand("start").run(model, real);
           await act(async () => {
             for (let sequence = 0; sequence < 4; sequence++) {
@@ -530,16 +596,26 @@ it("keeps the observed ledger through arbitrary same-turn hydration permutations
           await act(async () => read.resolve(read.response));
           assertLedger(model, real);
           expect(logicalKeys(real.result.current.entries)).toEqual(model.ledger.map(key));
-        } finally { real.unmount(); }
+        });
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 25, markInterruptAsFailure: true });
   } finally { clock.mockRestore(); }
-});
+}));
+
+async function withLedgerExample(model: Model, body: (real: Real) => Promise<void>): Promise<void> {
+  const real = await mount(model);
+  const failures: unknown[] = [];
+  try { await body(real); }
+  catch (error) { failures.push(error); }
+  try { await real.close(); }
+  catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Ledger model and hook cleanup failed");
+}
 
 async function runToQuiescence(time: number, reverse: boolean, commands: Iterable<fc.AsyncCommand<Model, Real>>) {
   const model = initialModel();
-  const real = await mount(model);
-  try {
+  await withLedgerExample(model, async (real) => {
     assertLedger(model, real);
     // Every run visits the live/read race; random commands then explore
     // other interleavings. This also keeps coverage useful at 25 runs.
@@ -563,9 +639,7 @@ async function runToQuiescence(time: number, reverse: boolean, commands: Iterabl
     }
     assertLedger(model, real);
     expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
-  } finally {
-    real.unmount();
-  }
+  });
 }
 
 // fast-check seed -1865083612, path "1:0:7:6:15:13:12:12:14:14:14:17".
@@ -700,7 +774,7 @@ it("keeps a bound send in its place when a pending send repeats its text", async
   } finally { clock.mockRestore(); }
 });
 
-it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", async () => {
+it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", () => ledgerLifetime.run(async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   try {
     const command = fc.tuple(fc.constantFrom<Operation>(
@@ -708,6 +782,51 @@ it("renders a subsequence of the provider ledger after every command and the who
     ), fc.integer({ min: 0, max: 2 }), fc.boolean()).map(([op, time, reverse]) => new LedgerCommand(op, time, reverse));
     await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 2 }), fc.boolean(),
       fc.commands([command], { maxCommands: 24, size: "+2" }),
-      (time, reverse, commands) => runToQuiescence(time, reverse, commands)), { numRuns: 25 });
+      (time, reverse, commands) => runToQuiescence(time, reverse, commands)), { numRuns: 25, markInterruptAsFailure: true });
   } finally { clock.mockRestore(); }
+}));
+
+it("joins an admitted ledger case and its hook reads before retiring the renderer", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let cases = 0;
+  let active!: Real;
+  const gate: fc.AsyncCommand<Model, Real> = {
+    check: () => true,
+    run: async (model, real) => {
+      active = real;
+      await new LedgerCommand("older").run(model, real);
+      expect(real.reads.length).toBeGreaterThan(0);
+      enter();
+      await held;
+      real.checkpoint();
+    },
+    toString: () => "held older read",
+  };
+  const work = ledgerLifetime.run(() => fc.check(fc.asyncProperty(fc.constant(null), async () => {
+    ledgerLifetime.checkpoint();
+    cases++;
+    await runToQuiescence(0, false, [gate]);
+  }), { numRuns: 2, markInterruptAsFailure: true }));
+  try {
+    await Promise.race([entered, work.then((result) => {
+      throw new Error("The ledger did not reach its gate", { cause: result.errorInstance });
+    })]);
+    const retiring = retireLedgerModels();
+    const mountedWhileHeld = active.isMounted();
+    release();
+    const result = await work;
+    await retiring;
+    expect({ mountedWhileHeld, mounted: active.isMounted(), cases, reads: active.reads.length,
+      operations: active.pendingOperations(), interrupted: result.interrupted, failed: result.failed }).toEqual({
+      mountedWhileHeld: true, mounted: false, cases: 1, reads: 0, operations: 0, interrupted: true, failed: true,
+    });
+  } finally {
+    release();
+    try { await work; }
+    finally { clock.mockRestore(); }
+  }
 });

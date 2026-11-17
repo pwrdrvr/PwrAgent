@@ -6386,11 +6386,16 @@ export function useThreadSessionState(params: {
     if (hydrationsRef.current.get(threadKey)?.phase === "loading") {
       return;
     }
+    // Every automatic refresh shares the failure guard, including completion,
+    // metadata and history-size reconciliation of an already loaded transcript.
+    // A rejected read cannot satisfy those conditions; retrying on each state
+    // update would repeatedly clear the error and toggle loading until recovery.
+    // Explicit reload/reselection and a new hydration version can still retry.
+    if (session?.failedHydrationVersion === hydrationVersion) {
+      return;
+    }
     if (!session?.response) {
-      if (
-        !session?.loading &&
-        session?.failedHydrationVersion !== hydrationVersion
-      ) {
+      if (!session?.loading) {
         void loadLatest(thread);
       }
       return;
@@ -6405,9 +6410,7 @@ export function useThreadSessionState(params: {
     // active-turn check below would hold it back until the turn ends, leaving
     // only the current turn on screen with nothing older to scroll to.
     if (!session.hydratedFromOwner) {
-      if (session.failedHydrationVersion !== hydrationVersion) {
-        void loadLatest(thread);
-      }
+      void loadLatest(thread);
       return;
     }
 
@@ -6415,16 +6418,12 @@ export function useThreadSessionState(params: {
       session.hydratedEnvironmentSetupVersion
       !== getEnvironmentSetupHydrationVersion(thread)
     ) {
-      if (session.failedHydrationVersion !== hydrationVersion) {
-        void loadLatest(thread);
-      }
+      void loadLatest(thread);
       return;
     }
 
     if ((session.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion) {
-      if (session.failedHydrationVersion !== hydrationVersion) {
-        void loadLatest(thread);
-      }
+      void loadLatest(thread);
       return;
     }
 

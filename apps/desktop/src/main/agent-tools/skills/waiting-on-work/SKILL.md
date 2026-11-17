@@ -13,7 +13,7 @@ input schema for argument details and result semantics.
 | CI or merge of this thread's attached PR | `check_thread_pull_request_status`, follow `prAutomation.guidance`, then `watch_thread_pull_request` if a notification is needed. |
 | Another local thread's turn, passing CI, or PR merge | `manage_thread_dependencies` (the **Continue After** UI) with `action: "create"`. Use `mode: "all"` for several prerequisites. |
 | Work that finishes only when someone says so, before merging or before the operator acts, including a peer's thread or work outside PwrAgent | `manage_thread_dependencies` with a `marked_done` condition. |
-| A GitHub Actions run with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
+| A GitHub Actions run or GitLab pipeline with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
 | A long job or repeatable check that neither workflow covers | `create_monitor_delegation`. |
 
 ## This thread's PR
@@ -145,7 +145,22 @@ wait is one-shot, so after a gate wake, register another `ci_run` wait for
 the finish in the same turn. PwrAgent never approves a deployment. Choose
 `deliver: "operator"` when only the operator has anything to do at the gate.
 
-Only runs on github.com are supported. Checks run while PR polling is on
+`ciRun.url` is one of:
+
+- `https://github.com/<owner>/<repo>/actions/runs/<id>`
+- `https://gitlab.com/<group>/<project>/-/pipelines/<id>`
+- the GitHub path on a GitHub Enterprise host the operator listed in
+  `[git] github_enterprise_hosts` in `config.toml`
+
+Any other host is refused. Do not work around a refusal with a Job Monitor.
+Tell the operator which host to add.
+
+On GitLab, a gate is a deployment blocked on approval, named by its
+environment, or a manual job that can be played, named by the job.
+`environments` matches either name. A failed job with `allow_failure` wakes
+nothing. PwrAgent never plays a manual job.
+
+Checks run while PR polling is on
 and the waiting thread's project allows PR watches. A run that is deleted, or
 stays unreadable for a day, ends the wait with a failure.
 

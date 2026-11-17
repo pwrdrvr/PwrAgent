@@ -12,7 +12,9 @@ import type {
   AutomationOutputActionDefinition,
   AutomationOutputActionResult,
   AutomationRunArtifact,
+  AutomationRunFailureReason,
   AutomationRunOutputDecision,
+  AutomationRunOwner,
   AutomationRunSkipReason,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
@@ -40,8 +42,8 @@ import {
 } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 import { mergeTranscriptEvents } from "@pwragent/owner-core/automation-transcript-merge";
-import type { AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
-export type { AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
+import type { AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
+export type { AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
 
@@ -56,8 +58,14 @@ const RUN_STATUS_TRANSITIONS: Record<AutomationRunStatus, readonly AutomationRun
   skipped: [],
 };
 
+/** Shown in run history and on the Agent thread for a run a restart ended. */
+export const AUTOMATION_RUN_INTERRUPTED_MESSAGE =
+  "PwrAgent stopped before this automation run finished. The run was not resumed.";
+
 export type AutomationStoreOptions = {
   runHistoryLimit?: number;
+  /** Recorded on each run this store creates, for startup reconciliation. */
+  runOwner?: AutomationRunOwner;
   warn?: (message: string, details: Record<string, unknown>) => void;
 };
 
@@ -140,6 +148,10 @@ type AutomationRunPayload = {
   backendThreadId?: string;
   errorMessage?: string;
   skipReason?: AutomationRunSkipReason;
+  // Additive: a build that predates these ignores them on read. Its own
+  // rewrite of a run drops them, which reads as a run with no owner.
+  failureReason?: AutomationRunFailureReason;
+  owner?: AutomationRunOwner;
   coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
   usage?: AutomationRunUsage;
@@ -436,6 +448,7 @@ export class AutomationStore implements AutomationStorage {
       source: input.source,
       queuedAt: input.queuedAt,
       queueEntryId: input.queueEntryId,
+      owner: this.options.runOwner,
     };
 
     this.upsertRun(run, {
@@ -823,48 +836,117 @@ export class AutomationStore implements AutomationStorage {
       .filter((run): run is AutomationRunSummary => Boolean(run));
   }
 
-  reconcileStartup(input: StartupReconciliationInput = {}): void {
+  /**
+   * Reports what the previous process lost. A run is changed only when its
+   * owner is proved dead; a live owner's run and every terminal run are left
+   * exactly as they are. One transaction, and none when nothing needs
+   * reconciling. Nothing is resumed or replayed.
+   */
+  reconcileStartup(input: StartupReconciliationInput = {}): StartupReconciliationResult {
     const now = input.now ?? Date.now();
-    const rows = this.stateDb.raw
-      .prepare("SELECT * FROM automation_runs WHERE status IN ('pending', 'queued', 'running')")
+    const unfinished = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE status IN ('pending', 'queued', 'running') ORDER BY created_at, rowid",
+      )
       .all() as AutomationRunRow[];
+    const deadOwnerRunIds: string[] = [];
+    let liveOwnerRunCount = 0;
+    // Liveness reads the profile's runtime markers, so decide it before the
+    // write lock is taken, and once per owner.
+    const aliveByOwner = new Map<string, boolean>();
+    const isOwnerAlive = (owner: AutomationRunOwner): boolean => {
+      const key = `${owner.instanceId}\0${owner.processId}\0${owner.startedAt ?? ""}`;
+      let alive = aliveByOwner.get(key);
+      if (alive === undefined) {
+        alive = input.isOwnerAlive?.(owner) === true;
+        aliveByOwner.set(key, alive);
+      }
+      return alive;
+    };
+    for (const row of unfinished) {
+      const owner = readRunOwner(parseJson<AutomationRunPayload>(row.payload)?.owner);
+      if (owner && isOwnerAlive(owner)) liveOwnerRunCount += 1;
+      else deadOwnerRunIds.push(row.run_id);
+    }
+    const dueNextRunAt: Array<[string, number | null]> = [];
+    for (const [automationId, nextRunAt] of Object.entries(
+      input.nextRunAtByAutomationId ?? {},
+    )) {
+      const current = this.getAutomation(automationId);
+      if (!current) continue;
+      // A stored time still ahead, and no later than the schedule's next
+      // occurrence, is the schedule another launch or a live instance already
+      // settled. One later than that was stored under a clock or time zone
+      // that has since changed, and is corrected.
+      if (
+        current.nextRunAt !== undefined
+        && current.nextRunAt > now
+        && (nextRunAt === undefined || current.nextRunAt <= nextRunAt)
+      ) continue;
+      if (current.nextRunAt === nextRunAt) continue;
+      dueNextRunAt.push([automationId, nextRunAt ?? null]);
+    }
+    const interruptedRuns: AutomationRunSummary[] = [];
+    if (deadOwnerRunIds.length === 0 && dueNextRunAt.length === 0) {
+      return { interruptedRuns, liveOwnerRunCount, rescheduledAutomationCount: 0 };
+    }
 
     const transaction = this.stateDb.raw.transaction(() => {
-      for (const row of rows) {
-        const run = this.runFromRow(row);
-        if (!run) continue;
-        this.upsertRun(
-          {
-            ...run,
-            status: "cancelled",
-            completedAt: now,
-            errorMessage: "PwrAgent restarted before this local automation run completed.",
-          },
-          {
-            backend: row.backend,
-            threadId: row.thread_id,
-            queueEntryId: row.queue_entry_id ?? undefined,
-            createdAt: row.created_at,
-            updatedAt: now,
-          },
-        );
+      for (const runId of deadOwnerRunIds) {
+        // Re-read under the write lock: the run may have reached an outcome,
+        // or another launch may have reported it, since the scan.
+        const row = this.getRunRow(runId);
+        const run = row ? this.runFromRow(row) : undefined;
+        if (!row || !run || RUN_STATUS_TRANSITIONS[run.status].length === 0) continue;
+        const interrupted: AutomationRunSummary = {
+          ...run,
+          status: "failed",
+          failureReason: "interrupted",
+          completedAt: now,
+          errorMessage: AUTOMATION_RUN_INTERRUPTED_MESSAGE,
+        };
+        this.upsertRun(interrupted, {
+          backend: row.backend,
+          threadId: row.thread_id,
+          queueEntryId: row.queue_entry_id ?? undefined,
+          createdAt: row.created_at,
+          updatedAt: now,
+        });
         this.updateAutomationLastRun(run.automationId, {
           lastRunAt: now,
-          lastRunStatus: "cancelled",
+          lastRunStatus: "failed",
           now,
         });
+        interruptedRuns.push(interrupted);
       }
 
-      for (const [automationId, nextRunAt] of Object.entries(
-        input.nextRunAtByAutomationId ?? {},
-      )) {
-        this.updateAutomation(automationId, {
-          nextRunAt: nextRunAt ?? null,
-          now,
-        });
+      for (const [automationId, nextRunAt] of dueNextRunAt) {
+        this.updateAutomation(automationId, { nextRunAt, now });
       }
     });
-    transaction();
+    transaction.immediate();
+    return {
+      interruptedRuns,
+      liveOwnerRunCount,
+      rescheduledAutomationCount: dueNextRunAt.length,
+    };
+  }
+
+  listUnreportedInterruptedRuns(): AutomationRunSummary[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT r.* FROM automation_runs r
+         LEFT JOIN automation_run_artifacts a ON a.run_id = r.run_id
+         WHERE r.status = 'failed'
+           AND (a.run_id IS NULL OR a.status <> 'failed')
+           AND CASE WHEN json_valid(r.payload)
+             THEN json_extract(r.payload, '$.failureReason') END = 'interrupted'
+         ORDER BY r.created_at, r.rowid`,
+      )
+      .all() as AutomationRunRow[];
+    return rows
+      .map((row) => this.runFromRow(row))
+      .filter((run): run is AutomationRunSummary => Boolean(run));
   }
 
   buildThreadSummaries(): Record<string, AutomationThreadSummary> {
@@ -1085,6 +1167,8 @@ export class AutomationStore implements AutomationStorage {
       backendThreadId: run.backendThreadId,
       errorMessage: run.errorMessage,
       skipReason: run.skipReason,
+      failureReason: run.failureReason,
+      owner: run.owner,
       coalescedCount: run.coalescedCount,
       source: run.source,
       usage: run.usage,
@@ -1264,6 +1348,8 @@ export class AutomationStore implements AutomationStorage {
       backendTurnId: row.backend_turn_id ?? undefined,
       errorMessage: payload.errorMessage,
       skipReason: payload.skipReason,
+      failureReason: payload.failureReason === "interrupted" ? "interrupted" : undefined,
+      owner: readRunOwner(payload.owner),
       coalescedCount: payload.coalescedCount,
       usage: payload.usage,
     };
@@ -1401,6 +1487,20 @@ export class AutomationStore implements AutomationStorage {
   private get runHistoryLimit(): number {
     return this.options.runHistoryLimit ?? DEFAULT_RUN_HISTORY_LIMIT;
   }
+}
+
+/** Stored JSON is untrusted: an owner that is not well formed is no owner. */
+function readRunOwner(value: unknown): AutomationRunOwner | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const owner = value as Partial<Record<keyof AutomationRunOwner, unknown>>;
+  if (typeof owner.instanceId !== "string" || typeof owner.processId !== "number") {
+    return undefined;
+  }
+  return {
+    instanceId: owner.instanceId,
+    processId: owner.processId,
+    ...(typeof owner.startedAt === "number" ? { startedAt: owner.startedAt } : {}),
+  };
 }
 
 function parseJson<T>(value: string): T | undefined {

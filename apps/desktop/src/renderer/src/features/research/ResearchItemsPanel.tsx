@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { RESEARCH_FINDING_KINDS, RESEARCH_WORK_STATES, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchThread } from "@pwragent/shared";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { approachTitle, plural, researchLabel, type ResearchRunView } from "./research-view-model";
+import { approachTitle, plural, researchLabel, researchReviewStatusLabel, type ResearchRunView } from "./research-view-model";
 
 /** Item search filters. Kept by the panel so a detail view or another tab does not reset them. */
 export type ResearchItemsQuery = {
@@ -105,7 +105,7 @@ export function ResearchItemsPanel({ api, thread, run, query, onQueryChange, onO
 export function hitLabels(hit: ResearchSearchHit): string[] {
   const labels = hit.type === "approach" ? ["Approach", researchLabel(hit.executionState ?? "unknown")]
     : hit.type === "finding" ? [researchLabel(hit.kind ?? "finding")]
-      : ["Candidate", hit.review === "unreviewed" || !hit.review ? "Awaiting review" : researchLabel(hit.review)];
+      : ["Candidate", researchReviewStatusLabel(hit.review)];
   if (hit.state !== "open") labels.push(researchLabel(hit.state));
   return labels;
 }

@@ -11,6 +11,7 @@ import type {
   AutomationMutationResponse,
   AutomationReplaySource,
   AutomationReplayUnsupportedReason,
+  AutomationRunOwner,
   AutomationRunSummary,
   AutomationRunStatus,
   AutomationRunUsage,
@@ -49,6 +50,10 @@ import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAutomationStorage } from "../storage/desktop-automation-storage.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
+import {
+  readAutomationRunOwnerLiveness,
+  type AutomationRunOwnerLiveness,
+} from "./automation-run-owner.js";
 import {
   buildPendingDeliveryActionResults,
   executeAutomationOutputActions,
@@ -126,6 +131,9 @@ function replayUnsupportedReason(
   return undefined;
 }
 
+/** Three heartbeats: time for a live owner to rewrite an aged-out marker. */
+const RUN_OWNER_RECHECK_DELAY_MS = 30_000;
+
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStorage | null = null;
 
@@ -180,6 +188,9 @@ export class DesktopAutomationService {
    * window loses at most the last in-flight snapshot of a cost estimate.
    */
   private readonly pendingRunUsage = new Map<string, AutomationRunUsage>();
+  private runOwnerRecheckTimer: NodeJS.Timeout | undefined;
+  /** Runs already handed to a report pass in this process. */
+  private readonly reportingInterruptedRunIds = new Set<string>();
   private pendingRunUsageTimer: NodeJS.Timeout | undefined;
   private readonly pendingRunTranscriptEvents = new Map<
     string,
@@ -193,6 +204,10 @@ export class DesktopAutomationService {
         disabled?: boolean;
         disabledReason?: string;
       };
+      /** Defaults to this profile's runtime markers and process table. */
+      runOwnerLiveness?: (owner: AutomationRunOwner) => AutomationRunOwnerLiveness;
+      /** How long an unconfirmed owner has to refresh its marker. */
+      runOwnerRecheckDelayMs?: number;
       store: AutomationStorage;
     },
   ) {
@@ -285,6 +300,10 @@ export class DesktopAutomationService {
     this.unsubscribeRestartGate?.();
     this.unsubscribeRestartGate = undefined;
     this.releaseRestartGateHold = undefined;
+    if (this.runOwnerRecheckTimer) {
+      clearTimeout(this.runOwnerRecheckTimer);
+      this.runOwnerRecheckTimer = undefined;
+    }
     if (this.pendingRunUsageTimer) {
       clearTimeout(this.pendingRunUsageTimer);
       this.pendingRunUsageTimer = undefined;
@@ -1145,6 +1164,8 @@ export class DesktopAutomationService {
     threadId: string;
     finalText?: string;
     errorMessage?: string;
+    /** Startup reports its runs in one summary line; per-run detail is debug. */
+    startupReconcile?: boolean;
   }): Promise<void> {
     const run = this.options.store.getRun(params.runId);
     if (!run) {
@@ -1235,7 +1256,9 @@ export class DesktopAutomationService {
       }
     }
     const artifact = this.options.store.getRunArtifact(run.id);
-    if (
+    if (params.startupReconcile) {
+      automationServiceLog.debug("publishing interrupted automation run", logFields);
+    } else if (
       params.status === "terminal"
       || params.status === "failed"
       || params.status === "cancelled"
@@ -1467,7 +1490,114 @@ export class DesktopAutomationService {
           computeNextAutomationRunAt(automation.schedule!, now),
         ]),
     );
-    this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
+    const liveness = this.options.runOwnerLiveness ?? readAutomationRunOwnerLiveness;
+    let unconfirmedOwner = false;
+    const result = this.options.store.reconcileStartup({
+      now,
+      nextRunAtByAutomationId,
+      // An unconfirmed owner keeps its runs for now and is checked once more.
+      isOwnerAlive: (owner) => {
+        const state = liveness(owner);
+        if (state === "unconfirmed") unconfirmedOwner = true;
+        return state !== "dead";
+      },
+    });
+    automationServiceLog.info("automation startup reconcile finished", {
+      interruptedRunCount: result.interruptedRuns.length,
+      liveOwnerRunCount: result.liveOwnerRunCount,
+      rescheduledAutomationCount: result.rescheduledAutomationCount,
+      unconfirmedOwner,
+    });
+    this.reportUnreportedInterruptedRuns();
+    if (unconfirmedOwner && !this.runOwnerRecheckTimer) {
+      this.runOwnerRecheckTimer = setTimeout(
+        () => this.recheckUnconfirmedRunOwners(),
+        this.options.runOwnerRecheckDelayMs ?? RUN_OWNER_RECHECK_DELAY_MS,
+      );
+      this.runOwnerRecheckTimer.unref?.();
+    }
+  }
+
+  /**
+   * A live owner has rewritten its marker by now. One that still has none is
+   * a reused process ID: the owner is gone and its runs are interrupted.
+   */
+  private recheckUnconfirmedRunOwners(): void {
+    this.runOwnerRecheckTimer = undefined;
+    try {
+      const liveness = this.options.runOwnerLiveness ?? readAutomationRunOwnerLiveness;
+      const result = this.options.store.reconcileStartup({
+        now: Date.now(),
+        isOwnerAlive: (owner) => liveness(owner) === "alive",
+      });
+      if (result.interruptedRuns.length > 0) {
+        automationServiceLog.info("automation run owner recheck interrupted runs", {
+          interruptedRunCount: result.interruptedRuns.length,
+          liveOwnerRunCount: result.liveOwnerRunCount,
+        });
+      }
+      this.reportUnreportedInterruptedRuns();
+    } catch (error) {
+      automationServiceLog.warn("automation run owner recheck failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Reports every interrupted run that has no failed artifact yet: the ones
+   * this launch just interrupted, and any a previous launch interrupted and
+   * stopped before reporting.
+   */
+  private reportUnreportedInterruptedRuns(): void {
+    const runs = this.options.store
+      .listUnreportedInterruptedRuns()
+      .filter((run) => !this.reportingInterruptedRunIds.has(run.id));
+    if (runs.length === 0) return;
+    for (const run of runs) this.reportingInterruptedRunIds.add(run.id);
+    void this.reportInterruptedRuns(runs);
+  }
+
+  /**
+   * Tells the operator what the previous process lost, through the path a
+   * failed run takes: the run artifact, the automation's output actions, and
+   * `automation/run/updated` for the Agent thread and its bound conversation.
+   * Nothing is resumed.
+   */
+  private async reportInterruptedRuns(runs: AutomationRunSummary[]): Promise<void> {
+    for (const run of runs) {
+      // One run's failure, or a store closed by shutdown, must not stop the
+      // rest or escape the voided promise.
+      try {
+        const automation = this.options.store.getAutomation(run.automationId, {
+          includeDeleted: true,
+        });
+        automationServiceLog.debug("automation run interrupted by a restart", {
+          automationId: run.automationId,
+          automationName: automation?.name,
+          backendTurnId: run.backendTurnId,
+          ownerInstanceId: run.owner?.instanceId,
+          ownerProcessId: run.owner?.processId,
+          runId: run.id,
+          startedAt: run.startedAt,
+          threadId: automation?.threadId,
+        });
+        if (!automation) continue;
+        await this.publishAutomationRunUpdate({
+          backend: automation.backend,
+          runId: run.id,
+          status: "failed",
+          threadId: automation.threadId,
+          errorMessage: run.errorMessage,
+          startupReconcile: true,
+        });
+      } catch (error) {
+        automationServiceLog.warn("interrupted automation run report failed", {
+          error: error instanceof Error ? error.message : String(error),
+          runId: run.id,
+        });
+      }
+    }
   }
 
   private startSchedulerIfEnabled(): void {

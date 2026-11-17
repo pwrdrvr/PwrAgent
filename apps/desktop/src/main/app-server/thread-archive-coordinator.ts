@@ -4160,6 +4160,9 @@ export class ThreadArchiveCoordinator {
       }
       await params.context?.checkpoint();
       try {
+        // Ownership records can outlive the folder. Nothing can be kept or
+        // blocked by another thread when the target is already absent.
+        if (!(await pathExists(candidate.worktreePath))) throw new MissingArchiveWorktreeError(candidate.worktreePath);
         const acpBlocker = this.archivedAcpWorktreeBlocker(candidate.worktreePath, params);
         if (acpBlocker) {
           return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
@@ -4368,7 +4371,17 @@ export class ThreadArchiveCoordinator {
           removedWorktree: true,
           deletedBranch: false,
         };
-      } catch (error) {
+      } catch (caughtError) {
+        let error = caughtError;
+        if (error instanceof MissingArchiveRepositoryError) {
+          // The folder may have disappeared while the repository was being
+          // probed. Confirm it remains before reporting a retained checkout.
+          try {
+            if (!(await pathExists(candidate.worktreePath))) error = new MissingArchiveWorktreeError(candidate.worktreePath);
+          } catch (verificationError) {
+            error = verificationError;
+          }
+        }
         if (error instanceof MissingArchiveWorktreeError) {
           await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
           backendRegistryLog.debug("archive thread worktree cleanup skipped: missing worktree", {
@@ -4382,6 +4395,7 @@ export class ThreadArchiveCoordinator {
             branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
             removedWorktree: false,
             deletedBranch: false,
+            worktreeState: "absent",
             skippedReason: MISSING_WORKTREE_SKIP_REASON,
           };
         }
@@ -4399,6 +4413,8 @@ export class ThreadArchiveCoordinator {
             branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
             removedWorktree: false,
             deletedBranch: false,
+            worktreeState: "present",
+            repositoryPath: error.repositoryPath,
             skippedReason: MISSING_REPOSITORY_SKIP_REASON,
           };
         }

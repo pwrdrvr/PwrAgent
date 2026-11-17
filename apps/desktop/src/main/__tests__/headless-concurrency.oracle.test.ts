@@ -1,11 +1,12 @@
-import { fork } from "node:child_process";
+import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 import type { AppServerBackendKind } from "@pwragent/shared";
-import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import fc from "fast-check";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
@@ -61,7 +62,10 @@ afterAll(() => {
   if (runtimeRoot) fs.rmSync(runtimeRoot, { recursive: true, force: true });
 });
 
-async function builtHost(): Promise<Host> {
+async function builtHost(
+  signal: AbortSignal,
+  observe?: (child: ChildProcess, close: () => Promise<void>) => void,
+): Promise<Host> {
   const { outputDirectory, guard } = runtime;
   const root = fs.realpathSync(fs.mkdtempSync(path.join(runtime.root, "host-")));
   const workspace = path.join(root, "workspace");
@@ -126,17 +130,32 @@ async function builtHost(): Promise<Host> {
   let output = "";
   child.stdout?.on("data", chunk => { output += chunk.toString(); });
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    if (child.connected) child.send({ method: "stop" });
-    const [code] = await exited;
-    // afterAll removes this host's directory with the shared runtime root.
-    expect(code, output).toBe(0);
+  const send = (message: object): Promise<void> => new Promise((resolve, reject) => {
+    child.send(message, error => { if (error) reject(error); else resolve(); });
+  });
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    closing ??= (async () => {
+      // Keep a failed stop write visible, but still join process and pipe
+      // retirement before afterAll can remove the shared runtime root.
+      const stopped = child.connected ? send({ method: "stop" }).then(() => undefined, (error: Error) => error) : undefined;
+      const [code] = await exited;
+      const error = await stopped;
+      if (error) throw error;
+      expect(code, output).toBe(0);
+    })();
+    return closing;
   };
   onTestFinished(close);
-  await Promise.race([once(child, "message"), exited.then(([code]) => { throw new Error(`Node owner exited (${code}): ${output}`); })]);
+  observe?.(child, close);
+  try {
+    await Promise.race([once(child, "message"), exited.then(([code]) => { throw new Error(`Node owner exited (${code}): ${output}`); })]);
+    signal.throwIfAborted();
+    if (closing) throw new Error("Node owner retired during startup");
+  } catch (error) {
+    await close();
+    throw error;
+  }
   let id = 0;
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   child.on("message", (raw) => {
@@ -146,18 +165,27 @@ async function builtHost(): Promise<Host> {
     if (message.error) waiter?.reject(new Error(message.error));
     else waiter?.resolve(message.result);
   });
-  void exited.then(([code]) => {
-    for (const waiter of pending.values()) waiter.reject(new Error(`Node owner exited (${code}) before replying: ${output}`));
+  const rejectPending = (error: Error) => {
+    for (const waiter of pending.values()) waiter.reject(error);
     pending.clear();
-  });
+  };
+  void exited.then(([code]) => {
+    rejectPending(new Error(`Node owner exited (${code}) before replying: ${output}`));
+  }, rejectPending);
+  const assertOpen = (method: string) => {
+    signal.throwIfAborted();
+    if (closing) throw new Error(`Node owner is closing before ${method}`);
+    if (!child.connected) throw new Error(`Node owner disconnected before ${method}: ${output}`);
+  };
   const call = <T>(method: string, values: Record<string, unknown>): Promise<T> => new Promise((resolve, reject) => {
-    if (!child.connected) {
-      reject(new Error(`Node owner disconnected before ${method}: ${output}`));
-      return;
-    }
+    assertOpen(method);
     const requestId = ++id;
     pending.set(requestId, { resolve: value => resolve(value as T), reject });
-    child.send({ id: requestId, method, ...values });
+    void send({ id: requestId, method, ...values }).catch(error => {
+      const waiter = pending.get(requestId);
+      pending.delete(requestId);
+      waiter?.reject(error);
+    });
   });
   return {
     startThread: () => call("startThread", { params: { backend: "codex", cwd: workspace, executionMode: "auto" } }),
@@ -171,7 +199,8 @@ async function builtHost(): Promise<Host> {
     policyProbe: () => call("policyProbe", {}), requests: () => call("requests", {}),
     complete: (threads, ids) => call("complete", { threads, ids }),
     stopDuringRequest: async (method, values) => {
-      child.send({ id: ++id, method, ...values });
+      assertOpen(method);
+      await send({ id: ++id, method, ...values });
       await close();
       return fs.readFileSync(droppedReplies, "utf8");
     },
@@ -179,8 +208,8 @@ async function builtHost(): Promise<Host> {
   };
 }
 
-it("admits a new thread and two independently identified turns while both threads are active", async () => {
-  const host = await builtHost();
+it("admits a new thread and two independently identified turns while both threads are active", async ({ signal }) => {
+  const host = await builtHost(signal);
   // Claude, an unallowed mode and a sandbox above the mode's are refused. An
   // approval policy is not: the default Outpost asks for approval as a desktop does.
   expect(await host.policyProbe()).toEqual(["refused", "refused", "admitted", "refused"]);
@@ -211,12 +240,76 @@ it("admits a new thread and two independently identified turns while both thread
   expect(completed.map(value => value.replay?.lastAssistantMessage)).toEqual(["Fixture result", "Fixture result"]);
 });
 
-it("exits cleanly when the parent stops the driver before a reply is sent", async () => {
-  const host = await builtHost();
+it("exits cleanly when the parent stops the driver before a reply is sent", async ({ signal }) => {
+  const host = await builtHost(signal);
   // The request settles only once the channel is closed, so its reply always
   // comes after the disconnect. A registry call could settle on either side
   // of the stop depending on the platform.
   const dropped = await host.stopDuringRequest("replyAfterDisconnect", {});
   // Without this, a driver that never replies would pass without the race.
   expect(dropped).toContain("dropped reply after disconnect");
+});
+
+it("joins every close caller to the actual process and pipe retirement", async ({ signal }) => {
+  let retired = false;
+  const host = await builtHost(signal, child => { child.once("close", () => { retired = true; }); });
+  const stopping = host.close();
+  try {
+    await host.close();
+    expect(retired).toBe(true);
+  } finally {
+    await stopping;
+  }
+});
+
+it("rejects readiness when its test aborts at the child's ready message", async () => {
+  const aborted = new AbortController();
+  const reason = new Error("controlled test abort at native readiness");
+  let retire!: () => Promise<void>;
+  try {
+    const host = builtHost(aborted.signal, (child, close) => {
+      retire = close;
+      // This is the real child's protocol event, before the readiness await
+      // resumes. No deadline or scheduling delay chooses the interleaving.
+      child.prependOnceListener("message", () => { aborted.abort(reason); });
+    });
+    await expect(host).rejects.toBe(reason);
+  } finally {
+    await retire();
+  }
+});
+
+it.for(["abort", "stop"] as const)("admits no generated request after %s, even while IPC is connected", async (action, { signal }) => {
+  let child!: ChildProcess;
+  const aborted = new AbortController();
+  const reason = new Error("controlled test abort before next request");
+  const host = await builtHost(AbortSignal.any([signal, aborted.signal]), value => { child = value; });
+  const sends = vi.spyOn(child, "send");
+  const errors: Error[] = [];
+  child.on("error", error => { errors.push(error); });
+  if (action === "abort") aborted.abort(reason);
+  else void host.close();
+  // The minimal regression is a first thread request after abort or stop.
+  const late = host.startThread().then(() => "admitted", error => error);
+  try {
+    if (action === "abort") expect(await late).toBe(reason);
+    else expect(await late).toMatchObject({ message: "Node owner is closing before startThread" });
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.constantFrom("startThread", "requests", "policyProbe"), { minLength: 1, maxLength: 12 }),
+      async methods => {
+        signal.throwIfAborted();
+        for (const method of methods) {
+          if (action === "abort") await expect(host[method]()).rejects.toBe(reason);
+          else await expect(host[method]()).rejects.toThrow("Node owner is closing");
+        }
+      },
+    ));
+    // Forward every real native send. A stop is the only write admitted once
+    // closing; an aborted owner admits none before its cleanup starts.
+    expect(sends.mock.calls.map(args => (args[0] as { method: string }).method)).toEqual(action === "stop" ? ["stop"] : []);
+  } finally {
+    await host.close();
+    sends.mockRestore();
+  }
+  expect(errors).toEqual([]);
 });

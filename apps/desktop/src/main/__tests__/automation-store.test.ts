@@ -871,7 +871,9 @@ describe("AutomationStore", () => {
     expect(stored?.coalescedCount).toBe(7);
   });
 
-  it("reconciles stale local runs on startup without creating catch-up rows", () => {
+  // PWR-201: this asserted `cancelled`, which read as an operator cancel and
+  // kept the loss off the Agent thread. A run with no recorded owner is dead.
+  it("reports stale local runs as interrupted on startup without creating catch-up rows", () => {
     store.createAutomation({
       id: "automation-1",
       backend: "codex",
@@ -906,14 +908,55 @@ describe("AutomationStore", () => {
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
         id: "run-1",
-        status: "cancelled",
+        status: "failed",
+        failureReason: "interrupted",
         completedAt: 20_000,
-        errorMessage: "PwrAgent restarted before this local automation run completed.",
+        errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed.",
       }),
     ]);
     expect(store.getAutomation("automation-1")).toMatchObject({
+      lastRunStatus: "failed",
       nextRunAt: 25_000,
     });
+  });
+
+  it("keeps a next run that is still ahead, so a second launch cannot move a live schedule", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      nextRunAt: 30_000,
+      now: 1_000,
+    });
+
+    expect(store.reconcileStartup({
+      now: 20_000,
+      nextRunAtByAutomationId: { "automation-1": 320_000 },
+    })).toEqual({ interruptedRuns: [], liveOwnerRunCount: 0, rescheduledAutomationCount: 0 });
+    expect(store.getAutomation("automation-1")?.nextRunAt).toBe(30_000);
+  });
+
+  it("corrects a stored next run that is later than the schedule's next occurrence", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      // Stored while the clock was a day ahead.
+      nextRunAt: 86_400_000,
+      now: 1_000,
+    });
+
+    expect(store.reconcileStartup({
+      now: 20_000,
+      nextRunAtByAutomationId: { "automation-1": 320_000 },
+    })).toMatchObject({ rescheduledAutomationCount: 1 });
+    expect(store.getAutomation("automation-1")?.nextRunAt).toBe(320_000);
   });
 
   it("caps detailed run history per automation", () => {

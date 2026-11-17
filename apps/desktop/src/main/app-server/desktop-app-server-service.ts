@@ -35,7 +35,7 @@ import {
 } from "../app-server/thread-pending-wakes";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
-import { parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller } from "../app-server/thread-dependency-ci-runs";
+import { CI_RUN_URL_FORMS, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
 import {
   getProjectForgeAutomationIndex,
   summarizeProjectHeldWakeup,
@@ -52,6 +52,7 @@ import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } 
 import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
+import { readRemoteNavigationPageWithinBudget } from "../federation/federation-navigation-query";
 import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -153,7 +154,6 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type NavigationDirectoryRow,
-  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationQueryPage,
@@ -2262,6 +2262,21 @@ class DesktopAppServerService {
     request: NavigationQueryRequest,
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
+    if (!request.federationTarget || !isRemoteFederationTarget(request.federationTarget)) {
+      return this.readNavigationQueryPageOnce(request, rpcOptions);
+    }
+    // A remote page is measured as this viewer serves it. Stamping and viewer
+    // overlays grow it past what its owner measured.
+    return readRemoteNavigationPageWithinBudget({
+      request,
+      read: (sized) => this.readNavigationQueryPageOnce(sized, rpcOptions),
+    });
+  }
+
+  private async readNavigationQueryPageOnce(
+    request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
+  ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       // Owner resolution reads this machine's peers for its own viewer. It must
       // never become a request this instance sends to an owner.
@@ -2310,12 +2325,8 @@ class DesktopAppServerService {
         return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
           ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
       };
-      const result = { ...page, directories: page.directories?.map(apply),
+      return { ...page, directories: page.directories?.map(apply),
         selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
-      if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
-        throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
-      }
-      return result;
     }
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {
@@ -10094,6 +10105,7 @@ class DesktopAppServerService {
         },
         readThread: (condition) => this.readDependencyThread(condition),
         readCiRun: async (url) => await this.readDependencyCiRun(url),
+        ciRunUrlOptions: () => this.ciRunUrlOptions(),
         ciRunChecked: (url) => this.getThreadDependencyCiRunPoller().checked(url),
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
@@ -10160,10 +10172,17 @@ class DesktopAppServerService {
   }
 
   private async readDependencyCiRun(url: string) {
-    const ref = parseCiRunUrl(url);
-    if (!ref) throw new Error("Not a GitHub Actions run on github.com.");
+    // Parsed again at every check, so a host the operator removed is no longer read.
+    const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
+    if (!ref) throw new Error(`Not a CI run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
     const client = this.getForgeCiClient();
-    return await readCiRun(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
+    return await readCiRun(async (repository, path) => repository.provider === "gitlab"
+      ? await client.readGitlab(repository, path)
+      : await client.requestGithub(repository, { path }), ref, Date.now());
+  }
+
+  private ciRunUrlOptions(): CiRunUrlOptions {
+    return { githubEnterpriseHosts: getDesktopSettingsService().resolveGithubEnterpriseHosts() };
   }
 
   /**
@@ -10319,7 +10338,7 @@ class DesktopAppServerService {
       throw new Error("A local backend and waiting threadId are required.");
     }
     if (request.action === "create") {
-      validateDependencyCreate(request);
+      validateDependencyCreate(request, () => this.ciRunUrlOptions());
       // The resumed turn starts from this text alone, for the operator's
       // dialog as for an agent's tool call.
       if (typeof request.continuation !== "string" || !request.continuation.trim()) {

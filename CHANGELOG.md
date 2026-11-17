@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.4.10 - 2026-11-17
+
+- Continue After CI - Resume a thread when a GitHub Actions run or GitLab pipeline reaches an approval gate, fails a job, or finishes, without using a model-powered polling monitor. Support GitHub Enterprise hosts explicitly allowed in configuration. Show waiting CI runs and their gates in Waiting For; PwrAgent never approves deployments automatically.
+- Decision Batches - Show batch progress, stop a batch independently of its thread, and run long batches in the background with a completion turn. Retain completed results by batch ID for paged retrieval after a cancelled call or app restart, and return compact answers by default instead of flooding the thread with full provider responses.
+- MCP Plugin Store - Browse built-in PwrSnap, PwrGit, GitHub, and Sandboxer connections alongside a Custom server option. Separate installed connections from setup suggestions, jump to the connection just added, and support multiple GitHub connections with clearer account identity.
+- Merge Queues - Add pull requests to GitHub merge queues and GitLab merge trains instead of treating them as direct merges. Show queue state and position, distinguish queued from actually merged results, and adapt merge To-do and approval cards to the queue-controlled workflow without changing repository protections.
+- Research (Experimental) - Rework the opt-in, default-off panel around time remaining, worker capacity, candidates awaiting review, and direct item access. Open findings and assignments from the map, review each candidate with its own reason, and withdraw pending requests. Page activity and findings and sync changed items instead of repeatedly loading the whole run.
+- Group Archiving - Confirm the complete set of threads and owning machines, then archive exactly those identities even if parent relationships change. Keep newly arrived children outside the confirmed set, restore failed rows, and remove viewer pins only after the owner accepts the archive.
+- Automation Recovery - Report runs interrupted by a restart or crash on their Agent thread instead of silently labelling them cancelled. Leave another live owner's runs alone; interrupted work is not automatically resumed.
+- Messaging Reliability - Keep approval callbacks valid when timestamps tie, wait for scheduled queued-turn delivery to settle, and prevent a late status update from restoring a detached or rebound messaging connection.
+- Navigation and Context - Preserve child lists through selection refreshes, reuse sidebar and navigation projections, and keep remote pages within their response budget. Make the context-window moon fill as usage grows rather than showing the opposite progression.
+- Reviews and Approvals - Distinguish stopped Codex reviews from clean results, and show commit SHAs on tool approval cards so the exact revision is visible before approval.
+- Codex GPT-6.2 Sol - Accept additional advertised input modalities without rejecting the entire model catalog, and skip individually malformed model entries while retaining valid models. Fix desktop and Outpost discovery when Sol advertises audio; this does not add audio input support.
+- Outpost and Compatibility - Preserve lazy provider, SDK, PDF, and image features in portable Outpost packages, and tolerate unavailable system uptime during startup. Handle concurrent Electron install-lock removal on Windows.
+- Release Reliability - Increase the publication job budget to 45 minutes, download independent platform artifacts in parallel, and upload retention copies without recompressing them. Give optional retention its own five-minute limit so it cannot exhaust the publication deadline; required asset publication and verification remain mandatory.
+- Minor - Bound gateway search notices within the result budget, reduce renderer and main-process function size, and improve lifecycle ownership and test cleanup.
+
 ## v1.4.9 - 2026-11-16
 
 - Agent Upgrades - Complete the authorized chat upgrade flow with exact-version download/retry, progress, cancellation, quiet installation/restart, and version verification after relaunch. Authorized chat upgrades no longer wait for a desktop quit-confirmation dialog. Access requires a designated PwrAgent Agent, a verified messaging actor, and privileged instance-management and lifecycle permissions; ordinary coding threads cannot restart the app. Native installer authorization remains required where applicable.

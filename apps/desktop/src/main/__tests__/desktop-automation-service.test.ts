@@ -1972,3 +1972,195 @@ describe("multi-source inbound automations", () => {
     expect(replayCandidateLimitPerSource(10)).toBe(5);
   });
 });
+
+describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
+  const deadOwner = { instanceId: "runtime-v2-previous", processId: 4_242, startedAt: 1 };
+
+  function seedPreviousProcessRuns(): void {
+    const previous = new AutomationStore(stateDb, { runOwner: deadOwner });
+    for (const [index, name] of ["Morning digest", "Inbox triage"].entries()) {
+      previous.createAutomation({
+        id: `automation-${index}`,
+        backend: "codex",
+        threadId: `agent-thread-${index}`,
+        name,
+        taskPrompt: "Summarize",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+        // Ahead of now and inside the interval: nothing to reschedule.
+        nextRunAt: Date.now() + 60_000,
+        now: 1_000,
+      });
+    }
+    previous.createRun({ id: "run-running", automationId: "automation-0", trigger: "manual", now: 2_000 });
+    previous.markRunStarted({ runId: "run-running", backendTurnId: "turn-1", now: 2_100 });
+    previous.createRun({ id: "run-queued", automationId: "automation-1", trigger: "manual", now: 2_000 });
+    previous.markRunQueued({ runId: "run-queued", queueEntryId: "queue-9", now: 2_050 });
+    previous.createRun({ id: "run-done", automationId: "automation-1", trigger: "manual", now: 1_500 });
+    previous.markRunTerminal({ runId: "run-done", status: "completed", now: 1_600 });
+  }
+
+  function runUpdates(): AgentEvent[] {
+    return publishedEvents.filter((event) => event.notification.method === "automation/run/updated");
+  }
+
+  it("reports each run the previous process left unfinished as a failed run on its Agent thread", async () => {
+    seedPreviousProcessRuns();
+    const done = store.getRun("run-done");
+    const service = new DesktopAutomationService({ registry, store, runOwnerLiveness: () => "dead" });
+    automationLoggerMock.info.mockClear();
+    try {
+      service.start();
+      await vi.waitFor(() => expect(runUpdates()).toHaveLength(2));
+
+      // The event a failed run publishes: status `failed` on the Agent thread
+      // that owns the automation. Messaging and the renderer key off it.
+      expect(runUpdates()).toEqual([
+        {
+          backend: "codex",
+          notification: {
+            method: "automation/run/updated",
+            params: expect.objectContaining({
+              automationId: "automation-0",
+              automationName: "Morning digest",
+              runId: "run-running",
+              status: "failed",
+              threadId: "agent-thread-0",
+            }),
+          },
+        },
+        {
+          backend: "codex",
+          notification: {
+            method: "automation/run/updated",
+            params: expect.objectContaining({
+              automationId: "automation-1",
+              runId: "run-queued",
+              status: "failed",
+              threadId: "agent-thread-1",
+            }),
+          },
+        },
+      ]);
+      // What the Agent thread's strip reads to draw its failed-run row.
+      for (const [index, runId] of ["run-running", "run-queued"].entries()) {
+        expect(service.list({ backend: "codex", threadId: `agent-thread-${index}` }).automations)
+          .toEqual([expect.objectContaining({ lastRunStatus: "failed", lastRunId: runId })]);
+        expect(store.getRun(runId)).toMatchObject({ status: "failed", failureReason: "interrupted" });
+        expect(store.getRunArtifact(runId)).toMatchObject({
+          status: "failed",
+          errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed.",
+        });
+      }
+      expect(store.getRun("run-done")).toEqual(done);
+      // Nothing is resumed or replayed.
+      expect(registry.submitTurn).not.toHaveBeenCalled();
+      expect(registry.startAutomationHeadlessTurn).not.toHaveBeenCalled();
+      // One lifecycle line at info; per-run detail is debug.
+      expect(automationLoggerMock.info.mock.calls).toEqual([
+        ["automation startup reconcile finished", {
+          interruptedRunCount: 2,
+          liveOwnerRunCount: 0,
+          rescheduledAutomationCount: 0,
+          unconfirmedOwner: false,
+        }],
+      ]);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("leaves a live instance's runs alone and reports nothing", async () => {
+    seedPreviousProcessRuns();
+    const before = ["run-running", "run-queued", "run-done"].map((id) => store.getRun(id));
+    const runOwnerLiveness = vi.fn(() => "alive" as const);
+    const service = new DesktopAutomationService({ registry, store, runOwnerLiveness });
+    automationLoggerMock.info.mockClear();
+    try {
+      service.start();
+      await Promise.resolve();
+
+      expect(runOwnerLiveness).toHaveBeenCalledWith(deadOwner);
+      expect(["run-running", "run-queued", "run-done"].map((id) => store.getRun(id))).toEqual(before);
+      expect(runUpdates()).toEqual([]);
+      expect(automationLoggerMock.info.mock.calls).toEqual([
+        ["automation startup reconcile finished", {
+          interruptedRunCount: 0,
+          liveOwnerRunCount: 2,
+          rescheduledAutomationCount: 0,
+          unconfirmedOwner: false,
+        }],
+      ]);
+      // The first instance's real outcome still lands.
+      store.markRunTerminal({ runId: "run-running", status: "completed", now: 9_000 });
+      expect(store.getRun("run-running")?.status).toBe("completed");
+    } finally {
+      service.dispose();
+    }
+  });
+
+  // A process ID that is alive with no fresh marker is either a live owner
+  // whose marker aged out (the machine just woke) or a reused process ID.
+  it("gives an unconfirmed owner one heartbeat window and leaves its runs alone once it proves alive", async () => {
+    seedPreviousProcessRuns();
+    const before = ["run-running", "run-queued"].map((id) => store.getRun(id));
+    const runOwnerLiveness = vi.fn()
+      .mockReturnValueOnce("unconfirmed")
+      .mockReturnValue("alive");
+    const service = new DesktopAutomationService({
+      registry, store, runOwnerLiveness, runOwnerRecheckDelayMs: 5,
+    });
+    try {
+      service.start();
+      expect(["run-running", "run-queued"].map((id) => store.getRun(id))).toEqual(before);
+      // start() asks once per distinct owner; the recheck asks again.
+      await vi.waitFor(() => expect(runOwnerLiveness.mock.calls.length).toBeGreaterThanOrEqual(2));
+      expect(["run-running", "run-queued"].map((id) => store.getRun(id))).toEqual(before);
+      expect(runUpdates()).toEqual([]);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("interrupts an unconfirmed owner's runs when it still has no marker after the window", async () => {
+    seedPreviousProcessRuns();
+    const service = new DesktopAutomationService({
+      registry, store, runOwnerLiveness: () => "unconfirmed", runOwnerRecheckDelayMs: 5,
+    });
+    try {
+      service.start();
+      expect(store.getRun("run-running")?.status).toBe("running");
+      expect(runUpdates()).toEqual([]);
+
+      await vi.waitFor(() => expect(runUpdates()).toHaveLength(2));
+      expect(store.getRun("run-running")).toMatchObject({ status: "failed", failureReason: "interrupted" });
+      expect(store.getRun("run-queued")).toMatchObject({ status: "failed", failureReason: "interrupted" });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("reports an interrupted run that a previous launch stopped before reporting, exactly once", async () => {
+    seedPreviousProcessRuns();
+    // The previous launch committed the interruption and then stopped.
+    expect(store.reconcileStartup({ now: 5_000 }).interruptedRuns).toHaveLength(2);
+    expect(store.listUnreportedInterruptedRuns().map((run) => run.id)).toEqual(["run-running", "run-queued"]);
+
+    const first = new DesktopAutomationService({ registry, store, runOwnerLiveness: () => "dead" });
+    try {
+      first.start();
+      await vi.waitFor(() => expect(runUpdates()).toHaveLength(2));
+    } finally {
+      first.dispose();
+    }
+    expect(store.listUnreportedInterruptedRuns()).toEqual([]);
+
+    const second = new DesktopAutomationService({ registry, store, runOwnerLiveness: () => "dead" });
+    try {
+      second.start();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(runUpdates()).toHaveLength(2);
+    } finally {
+      second.dispose();
+    }
+  });
+});

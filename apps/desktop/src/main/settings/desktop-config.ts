@@ -404,6 +404,12 @@ export type DesktopSettingsConfig = {
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
     defaultMergeMethod?: ThreadTodoMergeMethod;
+    /**
+     * `[git] github_enterprise_hosts`: exact GitHub Enterprise hostnames an
+     * agent-supplied CI run URL may name. Read-only here; the operator edits
+     * the file.
+     */
+    githubEnterpriseHosts?: string[];
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
@@ -2762,6 +2768,7 @@ function normalizeDesktopConfig(
         git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
       defaultMergeMethod: readMergeMethod(git?.default_merge_method),
+      githubEnterpriseHosts: readStringArray(git?.github_enterprise_hosts),
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
         access: readForgeAgentToolAccess(gitAgentTools),

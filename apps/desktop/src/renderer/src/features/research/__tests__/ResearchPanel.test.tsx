@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import {
-  projectResearchRun, researchChangePage, researchEventPage, searchResearchItems, summarizeResearchRun,
+  applyResearchChanges, emptyResearchRunStore, projectResearchRun, researchChangePage, researchEventPage, searchResearchItems, summarizeResearchRun,
   type NavigationThreadSummary, type ResearchChange, type ResearchChanges, type ResearchChangesRequest, type ResearchEvent, type ResearchRun, type ResearchSnapshot, type ResearchSnapshotRequest,
   type ResearchItemContext, type ResearchUpdateReceipt,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption } from "../../../test/select";
+import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../../../../packages/shared/src/__tests__/research-journal-arbitraries";
 import { ResearchPanel } from "../ResearchPanel";
+import { ResearchMapView } from "../ResearchViews";
+import { researchMapBranches, researchMapMatches, researchRunView } from "../research-view-model";
 
 const thread = { id: "parent", source: "codex", title: "Queue investigation" } as NavigationThreadSummary;
 const actor = { backend: "codex", threadId: "parent", kind: "agent" } as const;
@@ -518,5 +522,35 @@ describe("Research panel", () => {
     await screen.findAllByText("New thread's run");
     await act(async () => first.resolve(ownerSnapshot(snapshot())));
     expect(screen.queryByText("Investigate queue ordering")).not.toBeInTheDocument();
+  });
+});
+
+describe("research map filter", () => {
+  it("keeps a branch for every piece of text the rendered branch shows", () => {
+    const reached = new Map<string, number>();
+    // Long enough journals that branches nest, overlap, are abandoned and hold more contributions than they draw.
+    fc.assert(fc.property(fc.array(researchJournalStepArb, { size: "max", minLength: 10, maxLength: 60 }), (steps) => {
+      const journal = [researchCreatedEvent(3)];
+      for (const step of steps) journal.push(nextResearchEvent(projectResearchRun("run", journal), step));
+      const run = projectResearchRun("run", journal);
+      const view = researchRunView(summarizeResearchRun(run), applyResearchChanges(emptyResearchRunStore("run"), { ...researchChangePage(run), writable: true }))!;
+      const branches = researchMapBranches(view);
+      const { container } = render(<ResearchMapView run={view} filter="" onOpenItem={() => {}} onShowApproachItems={() => {}} />);
+      const drawn = [...container.querySelectorAll(".research-map > .research-map__branch")];
+      expect(drawn).toHaveLength(branches.length);
+      drawn.forEach((element, index) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const text = node.textContent!.replace(/\s+/g, " ").trim();
+          // The link to a worker's thread is a control, like "Open source thread" on a finding's card.
+          if (!text || node.parentElement!.closest("[aria-label^='Open worker thread']")) continue;
+          expect([text, researchMapMatches(view, branches, text.toUpperCase()).includes(branches[index]!)]).toEqual([text, true]);
+          for (const marker of ["Focused child", "Abandoned", "Overlaps", "more from", "Candidate ·", "Dead end"]) if (text.includes(marker)) reached.set(marker, (reached.get(marker) ?? 0) + 1);
+        }
+      });
+      cleanup();
+    }), { numRuns: 40 });
+    // The rendered branches reached each kind of line beyond an approach's own text.
+    for (const marker of ["Focused child", "Abandoned", "Overlaps", "more from", "Candidate ·", "Dead end"]) expect([marker, reached.get(marker) ?? 0]).toEqual([marker, expect.toSatisfy((count: number) => count > 3)]);
   });
 });

@@ -296,7 +296,9 @@ const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
 // Rank familiar models, but let the server decide which models are available.
 // An allowlist here would silently hide every newly released model on refresh.
 const PREFERRED_CODEX_MODEL_ORDER = [
+  "gpt-6.2-astra",
   "gpt-6-astra",
+  "gpt-6.2-sol",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6.1-terra",
@@ -6015,9 +6017,11 @@ type ConsumedCodexModel = Pick<
   | "displayName"
   | "hidden"
   | "id"
-  | "inputModalities"
   | "isDefault"
 > & {
+  // Discovery may advertise modalities added after our generated protocol.
+  // Only the capabilities PwrAgent understands are projected below.
+  inputModalities: string[];
   serviceTiers: Array<
     Pick<CodexModel["serviceTiers"][number], "id">
   >;
@@ -6051,7 +6055,7 @@ function isConsumedCodexModel(value: unknown): value is ConsumedCodexModel {
     && typeof record.defaultReasoningEffort === "string"
     && Array.isArray(record.inputModalities)
     && record.inputModalities.every(
-      (modality) => modality === "text" || modality === "image",
+      (modality) => typeof modality === "string",
     )
     && Array.isArray(record.additionalSpeedTiers)
     && record.additionalSpeedTiers.every((tier) => typeof tier === "string")
@@ -6066,12 +6070,12 @@ function isConsumedCodexModel(value: unknown): value is ConsumedCodexModel {
 
 function parseConsumedCodexModelListResponse(
   value: unknown,
+  logger: CodexClientLogger,
 ): ConsumedCodexModelListResponse {
   const record = asRecord(value);
   if (
     !record
     || !Array.isArray(record.data)
-    || !record.data.every(isConsumedCodexModel)
     || (
       record.nextCursor !== null
       && typeof record.nextCursor !== "string"
@@ -6082,7 +6086,36 @@ function parseConsumedCodexModelListResponse(
     );
   }
 
-  return value as ConsumedCodexModelListResponse;
+  const data: ConsumedCodexModel[] = [];
+  for (const [index, entry] of record.data.entries()) {
+    if (!isConsumedCodexModel(entry)) {
+      logger.warn("model/list skipped malformed model", {
+        index,
+        modelId: pickString(asRecord(entry) ?? {}, ["id"]) ?? null,
+      });
+      continue;
+    }
+
+    const unsupportedModalities = [...new Set(entry.inputModalities.filter(
+      (modality) => modality !== "text" && modality !== "image",
+    ))];
+    if (unsupportedModalities.length > 0) {
+      logger.warn("model/list ignored unsupported input modalities", {
+        modelId: entry.id,
+        inputModalities: unsupportedModalities,
+      });
+    }
+    data.push(entry);
+  }
+
+  // Preserve a real empty catalog, but do not cache protocol breakage as one.
+  if (record.data.length > 0 && data.length === 0) {
+    throw new Error(
+      "codex app server model/list response does not provide the generated fields PwrAgent consumes: no usable models",
+    );
+  }
+
+  return { data, nextCursor: record.nextCursor as string | null };
 }
 
 function extractGeneratedModelOptions(
@@ -10396,7 +10429,7 @@ export class CodexAppServerClient {
     });
 
     if (usesGeneratedCodexModelListResponse(this.initializeResult?.userAgent)) {
-      const parsedResult = parseConsumedCodexModelListResponse(result);
+      const parsedResult = parseConsumedCodexModelListResponse(result, this.host.logger);
       const models = extractGeneratedModelOptions(parsedResult);
       this.availableHelperModels = models;
       this.helperModelsRead = true;

@@ -36,7 +36,7 @@ try {
     "dist/chunks.json", "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
-  assert.ok([...files].some(file => file.endsWith(".mjs.map")), "Normal packed builds retain debugging source maps");
+  assert.ok([...files].some(file => file.endsWith(".js.map")), "Normal packed builds retain debugging source maps");
   for (const file of files) assert.ok(!file.split("/").includes(".."), `Packed path escapes package: ${file}`);
   for (const file of ["runtime.js", "federation-backend.js", "federation.js", "federation-core.ts", "codex.js", "store.js", "projects.js", "handoffs.js", "owner-thread-registry.js"]) {
     assert.ok(!files.has(`src/${file}`), `Retired runtime shipped: ${file}`);
@@ -46,6 +46,9 @@ try {
   run("tar", ["-xf", tarball, "-C", extracted]);
   const unpacked = file => readFileSync(path.join(extracted, "package", file), "utf8");
   const graph = JSON.parse(unpacked("dist/chunks.json"));
+  assert.equal(JSON.parse(unpacked("dist/package.json")).type, "module");
+  assert.deepEqual([...files].filter(file => /^dist\/[^/]+\.[cm]?js$/.test(file)).sort(),
+    Object.keys(graph.chunks).map(file => `dist/${file}`).sort(), "Ship the emitted ESM graph without entry wrappers");
   for (const chunk of Object.keys(graph.chunks)) {
     assert.ok(files.has(`dist/${chunk}`), `Missing packed chunk: ${chunk}`);
     assert.ok(!/require\(["'](?:\/|[A-Za-z]:)/.test(unpacked(`dist/${chunk}`)), `Chunk requires a build-host path: ${chunk}`);

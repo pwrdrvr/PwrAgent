@@ -1,58 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ResearchApproach, ResearchFinding, ResearchThread } from "@pwragent/shared";
+import type { ResearchFinding, ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";
 import { RESEARCH_FINDINGS_PAGE, useResearchFindings } from "./useResearchFindings";
-import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchFindingMatches, researchFindingRelation, researchLabel, researchMapBranches, researchSourceLabel, type ResearchMapBranch, type ResearchRunView } from "./research-view-model";
+import {
+  approachTitle, excerpt, formatClock, plural, RESEARCH_FOCUSED_CHILD_PREFIX, researchActivityRows, researchApproachOverlap, researchApproachStateLabel, researchFindingMatches, researchFindingRelation,
+  researchLabel, researchMapBranches, researchMapLeafLabel, researchMapMatches, researchMapMoreLabel, researchSourceLabel, type ResearchMapBranch, type ResearchRunView,
+} from "./research-view-model";
 
 type Open = (itemId: string) => void;
 
-function approachState(approach: ResearchApproach): string {
-  return researchLabel(approach.directionState === "abandoned" ? "abandoned" : approach.state);
-}
-
+/** Every approach with its newest contributions. A filter keeps the branches that show its text. */
 export function ResearchMapView({ run, filter, onOpenItem, onShowApproachItems }: {
   run: ResearchRunView; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
 }) {
-  const query = filter.trim().toLowerCase();
   const all = useMemo(() => researchMapBranches(run), [run]);
-  const branches = all.filter((branch) => !query || branchText(branch).includes(query));
+  const branches = useMemo(() => researchMapMatches(run, all, filter), [run, all, filter]);
   return <div className="research-map" aria-label="Research map">
     {branches.map((branch) => <MapBranch key={branch.approach.id} run={run} branch={branch} onOpenItem={onOpenItem} onShowApproachItems={onShowApproachItems} />)}
-    {!branches.length && <p className="context-empty">{query ? "No approaches match this filter." : "Approaches appear here once the coordinator starts the run."}</p>}
+    {!branches.length && <p className="context-empty">{filter.trim() ? "No approaches match this filter." : "Approaches appear here once the coordinator starts the run."}</p>}
   </div>;
-}
-
-function branchText(branch: ResearchMapBranch): string {
-  return [branch.approach.title, branch.approach.task, branch.approach.state, branch.approach.note ?? "",
-    ...branch.leaves.flatMap((leaf) => [leaf.record.text, ...leaf.children.map(branchText)]), ...branch.assignments.map(branchText)].join(" ").toLowerCase();
 }
 
 function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = false }: {
   run: ResearchRunView; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
 }) {
   const { approach } = branch;
+  const overlap = researchApproachOverlap(run, approach);
+  const more = researchMapMoreLabel(branch);
   return <div className={`research-map__branch${nested ? " research-map__branch--nested" : ""}`}>
     <div className="research-map__approach">
       <button type="button" className="research-map__title" onClick={() => onOpenItem(approach.id)}>
-        {nested && <span className="research-muted">Focused child · </span>}{approach.title}
+        {nested && <span className="research-muted">{RESEARCH_FOCUSED_CHILD_PREFIX}</span>}{approach.title}
       </button>
-      <span className="research-chip">{approachState(approach)}</span>
+      <span className="research-chip">{researchApproachStateLabel(approach)}</span>
       {approach.worker && <ResearchThreadButton thread={approach.worker} title="Open worker" label={`Open worker thread: ${approach.title}`} />}
     </div>
     <p className="research-muted research-clamp">{approach.task}</p>
     {approach.note && <p className="research-muted">{approach.note}</p>}
-    {approach.overlapsApproachId && <p className="research-muted">Overlaps {approachTitle(run, approach.overlapsApproachId)}</p>}
+    {overlap && <p className="research-muted">{overlap}</p>}
     {(branch.leaves.length > 0 || branch.assignments.length > 0) && <div className="research-map__children">
       {branch.leaves.map((leaf) => <div key={leaf.record.id} className="research-map__leaf">
         <button type="button" className="research-node" onClick={() => onOpenItem(leaf.record.id)}>
-          <span className="research-node__meta">{leaf.type === "finding" ? researchLabel(leaf.record.kind) : `Candidate · ${leaf.record.review ? researchLabel(leaf.record.review.decision) : "Awaiting review"}`}</span>
+          <span className="research-node__meta">{researchMapLeafLabel(leaf)}</span>
           {" "}{excerpt(leaf.record.text)}
         </button>
         {leaf.children.map((child) => <MapBranch key={child.approach.id} run={run} branch={child} onOpenItem={onOpenItem} onShowApproachItems={onShowApproachItems} nested />)}
       </div>)}
-      {branch.hidden > 0 && <button type="button" className="research-link" onClick={() => onShowApproachItems(approach.id)}>{branch.hidden} more from {approach.title}</button>}
+      {more && <button type="button" className="research-link" onClick={() => onShowApproachItems(approach.id)}>{more}</button>}
       {branch.assignments.map((child) => <MapBranch key={child.approach.id} run={run} branch={child} onOpenItem={onOpenItem} onShowApproachItems={onShowApproachItems} nested />)}
     </div>}
   </div>;

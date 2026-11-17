@@ -125,9 +125,9 @@ follow-up as `continuation`. Do not replace it with a Job Monitor running
 spend no model turns while waiting, even if merging takes days. They schedule
 the follow-up, but do not merge the PRs or enforce their merge order.
 
-A GitHub Actions run that no PR check covers, such as a tag-push release or a
-manual dispatch, is a `ci_run` condition. Do not start a Job Monitor to poll
-`gh run view` for it.
+A GitHub Actions run or GitLab pipeline that no PR check covers, such as a
+tag-push release or a manual dispatch, is a `ci_run` condition. Do not start
+a Job Monitor to poll `gh run view` or `glab ci status` for it.
 
 Reserve `create_monitor_delegation` for long jobs that PR watches and local
 thread dependencies cannot cover. Confirm a wait was registered, finish any
@@ -323,8 +323,8 @@ repairs; the tool defaults to reporting failure.
 
 ## CI runs without a PR
 
-A `ci_run` condition names one GitHub Actions run by URL, with `threadId: ""`
-and the waiting thread's `backend`:
+A `ci_run` condition names one GitHub Actions run or one GitLab pipeline by
+URL, with `threadId: ""` and the waiting thread's `backend`:
 
 ```json
 {
@@ -355,18 +355,74 @@ and the waiting thread's `backend`:
 - **Registration reads the run once.** A URL it cannot read is refused. A run
   already at a requested milestone fires at once. A re-run is followed through
   its latest attempt.
-- **Host.** Only `https://github.com/<owner>/<repo>/actions/runs/<id>` is
-  accepted, the same origin rule as automatic transcript PR reads. GitHub
-  Enterprise hosts and GitLab pipelines are not supported.
+- **Host.** The URL must be one of:
+  - `https://github.com/<owner>/<repo>/actions/runs/<id>`
+  - `https://gitlab.com/<group>/<project>/-/pipelines/<id>`, with any depth
+    of subgroups
+  - the GitHub path on a GitHub Enterprise Server host the operator
+    authorized (see [GitHub Enterprise hosts](#github-enterprise-hosts))
+
+  github.com and gitlab.com are the same origins as automatic transcript PR
+  reads. Self-managed GitLab hosts are not supported.
 - **Wake context.** The continuation prompt lists the run, each pending gate
   with its reviewers, job counts for the latest attempt, and each failed job
   with its failed step and URL.
 
+### GitLab pipelines
+
+A pipeline is read through `glab api` and reported in the same terms as a
+GitHub run, so one rule decides every wait (`evaluateCiRunCondition`).
+
+| `ciRun.on` | GitLab |
+| --- | --- |
+| `approval_gate` | A deployment to a protected environment that is `blocked` on approval, named by its environment, with its approval rules as reviewers. Also a manual job that can be played now, named by the job. |
+| `job_failed` | A job with status `failed`, unless it has `allow_failure`. Retried jobs are left out. |
+| `finished` | The pipeline's final status: `success` or `skipped` passes, `failed` or `canceled` fails. |
+
+- `ciRun.environments` matches a gate's name: the environment of a blocked
+  deployment, or the name of a manual job.
+- A pipeline can end `success` while an optional manual job still waits. A
+  wait that asked for `finished` reports the finish. A wait that asked only
+  for `approval_gate` reports the gate.
+- An `allow_failure` job that fails is counted among failed jobs and wakes
+  nothing, because its pipeline still passes.
+- Each check reads the pipeline, its jobs, and the project's 100 newest
+  blocked deployments. A manual trigger job is read only when the pipeline is
+  `manual` and nothing else explains it. A project whose token cannot list
+  deployments reports manual jobs only.
+- Deployment approvals need GitLab Premium or Ultimate. Without them only
+  manual jobs are gates.
+
+### GitHub Enterprise hosts
+
+An agent supplies the run URL, and a read sends the operator's `gh`
+credentials for that host. A login alone is therefore not authorization. The
+operator lists each GitHub Enterprise Server host in the profile's
+`config.toml`:
+
+```toml
+[git]
+github_enterprise_hosts = ["github.example.com", "ghe.internal.example:8443"]
+```
+
+- An entry is one exact hostname, with its port when the server uses one. A
+  run URL's host must equal an entry. There are no wildcards, and an entry
+  never matches a subdomain.
+- Entries that are not a bare hostname are ignored, and so is a name without
+  a dot. `:443` is the default port and is dropped. At most 16 are read.
+- The key takes effect at the next registration or check; no restart is
+  needed. Removing a host stops reads of its waiting runs at once. Those
+  waits then end with a failure after 24 hours.
+- Reads use `https://<host>/api/v3` with `gh auth token --hostname <host>`,
+  so the operator must also be signed in to that host with GitHub CLI.
+- The list authorizes `ci_run` reads only. It does not change automatic
+  transcript PR reads, which stay on github.com and gitlab.com.
+
 ### Polling
 
-GitHub sends no events for a run without a GitHub App, so the main process
-polls. The poller keeps one timer for all waiting runs: every 30 seconds for
-a run's first ten minutes, then every two minutes. Each check reads the run,
+Neither forge sends events for a run without an installed app or webhook, so
+the main process polls. The poller keeps one timer for all waiting runs: every 30 seconds for
+a run's first ten minutes, then every two minutes. Each GitHub check reads the run,
 its latest-attempt jobs, and, while the run is waiting, its pending
 deployments. Requests go through the forge client's admission and token
 bucket. No model is involved.

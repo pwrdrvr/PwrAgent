@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type {
   AgentEvent,
@@ -114,6 +114,38 @@ const tempDirs: string[] = [];
 const harnessControllers: MessagingController[] = [];
 const tempStores: MessagingStore[] = [];
 
+// A Vitest timeout does not stop fast-check's current case, later cases or
+// shrinking. Retain the whole assertion until fixture teardown has stopped
+// admission and joined it, before its controllers and stores are retired.
+class MessagingPropertyOwner {
+  private readonly stop = new AbortController();
+  private readonly tasks = new Set<Promise<void>>();
+
+  get signal(): AbortSignal { return this.stop.signal; }
+
+  checkpoint(): void {
+    if (this.signal.aborted) throw new fc.PreconditionFailure(true);
+  }
+
+  async run(work: (scope: MessagingPropertyOwner) => Promise<void>): Promise<void> {
+    const task = Promise.resolve().then(() => {
+      this.checkpoint();
+      return work(this);
+    });
+    this.tasks.add(task);
+    try { await task; }
+    finally { this.tasks.delete(task); }
+  }
+
+  async close(): Promise<void> {
+    this.stop.abort();
+    await Promise.allSettled([...this.tasks]);
+  }
+}
+
+let messagingPropertyOwner = new MessagingPropertyOwner();
+beforeEach(() => { messagingPropertyOwner = new MessagingPropertyOwner(); });
+
 vi.mock("../messaging/attachment-image-normalization", () => ({
   normalizeMessagingImageAttachment: vi.fn(async () => ({
     dataUrl: "data:image/png;base64,AQID",
@@ -166,6 +198,8 @@ function createDeferred<T>(): {
  * queues, so no write renames a temp file into a removed directory.
  */
 async function settleHarnessWork(): Promise<void> {
+  await messagingPropertyOwner.close();
+  vi.useRealTimers();
   for (const controller of harnessControllers.splice(0)) {
     controller.dispose();
     await controller.whenToolUpdatesSettled();
@@ -250,7 +284,6 @@ function propertyExample<Args extends unknown[]>(
 }
 
 afterEach(async () => {
-  vi.useRealTimers();
   await settleHarnessWork();
   await Promise.all(
     tempDirs.splice(0).map(async (tempDir) => {
@@ -18639,12 +18672,11 @@ describe("MessagingController", () => {
   it.for((["mcp", "command"] as const).flatMap((kind) =>
     (["accept", "decline", "cancel"] as const).flatMap((decision) =>
       [false, true].map((ownsTurnQueue) => ({ kind, decision, ownsTurnQueue }))),
-  ))("keeps messaging $kind $decision escalation and queued cancellation live while a steer awaits approval (owner FIFO: $ownsTurnQueue)", async ({ kind, decision, ownsTurnQueue }, { signal }) => {
+  ))("keeps messaging $kind $decision escalation and queued cancellation live while a steer awaits approval (owner FIFO: $ownsTurnQueue)", async ({ kind, decision, ownsTurnQueue }) => {
     // Model: ingress is sequential, as in Telegram polling. A provider's
     // pending steer must not own ingress needed to answer its escalation.
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (cancelFirst) => {
-      // A timed-out test keeps running. Stop before starting more work.
-      signal.throwIfAborted();
+    await messagingPropertyOwner.run((scope) => fc.assert(fc.asyncProperty(fc.boolean(), async (cancelFirst) => {
+      scope.checkpoint();
       // This property checks ingress and approval ordering, not file
       // persistence. The JSON store serialized about 94 reads and 46 atomic
       // rewrites per example, which timed out under full-suite I/O load.
@@ -18687,6 +18719,7 @@ describe("MessagingController", () => {
         isEnforcing: () => true,
         resolve: () => ({ permissions, roleIds: ["fixture"], matchedSubjects: [], rejected: false }),
       } });
+      scope.checkpoint();
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
       const queue = async (text: string) => {
@@ -18702,6 +18735,9 @@ describe("MessagingController", () => {
         buildCallbackEvent({ actionId: actions.find((candidate) => candidate.id.startsWith(`queued-turn:${kind}:`))!.id });
       const shown = createDeferred<void>();
       const response = createDeferred<void>();
+      const stop = () => response.resolve();
+      scope.checkpoint();
+      scope.signal.addEventListener("abort", stop, { once: true });
       harness.steerTurn.mockImplementation(async (request: SteerTurnRequest) => {
         await harness.controller.handleBackendPendingRequest("codex", kind === "mcp" ? {
           method: "mcpServer/elicitation/request", params: { threadId: "thread-1", turnId: "turn-1",
@@ -18719,9 +18755,11 @@ describe("MessagingController", () => {
       const click = harness.controller.handleInboundEvent(action(first, "steer")).then(() => { returned = true; });
       try {
         await shown.promise;
+        scope.checkpoint();
         // One event-loop boundary observes whether ingress returned without
         // resolving the backend gate; no timeout or retry can satisfy this.
         await new Promise<void>((resolve) => setImmediate(resolve));
+        scope.checkpoint();
         expect(returned).toBe(true);
         expect(harness.submitServerRequest).not.toHaveBeenCalled();
         const cancel = () => harness.controller.handleInboundEvent(action(second, "cancel"));
@@ -18766,6 +18804,7 @@ describe("MessagingController", () => {
         await harness.controller.handleInboundEvent(action(third, "steer"));
         expect(harness.steerTurn).toHaveBeenCalledTimes(1);
       } finally {
+        scope.signal.removeEventListener("abort", stop);
         response.resolve();
         try {
           await click;
@@ -18777,7 +18816,59 @@ describe("MessagingController", () => {
           }
         }
       }
-    }), { numRuns: 6 });
+    }), { numRuns: 6, markInterruptAsFailure: true }));
+  });
+
+  it("joins a paused generated messaging scenario before retiring its real controller and owner", async () => {
+    const paused = createDeferred<void>();
+    const release = createDeferred<void>();
+    const starts: string[] = [];
+    let sessions = 0;
+    const running = messagingPropertyOwner.run((scope) => fc.assert(fc.asyncProperty(fc.constant(null), async () => {
+      scope.checkpoint();
+      sessions++;
+      const owner = new ThreadTurnQueue({ startTurn: async (entry) => {
+        const turnId = `turn-${sessions}`;
+        starts.push(turnId);
+        return { backend: entry.backend, threadId: entry.threadId, turnId };
+      } });
+      const harness = await createHarness({
+        backendOverrides: { ownsTurnQueue: true },
+        startTurn: async (request) => {
+          const result = await owner.submit({ ...request, origin: "messaging" });
+          if (result.status !== "started") throw new Error("The first owner turn must start");
+          return { backend: request.backend, threadId: request.threadId, turnId: result.turnId };
+        },
+      });
+      try {
+        await bindThread(harness);
+        await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+        paused.resolve();
+        await release.promise;
+        scope.checkpoint();
+      } finally {
+        await owner.releaseThread({ backend: "codex", threadId: "thread-1", turnId: starts.at(-1)!, status: "turn/completed" });
+      }
+    }), { numRuns: 2, markInterruptAsFailure: true }));
+    const outcome = running.then(() => "passed", () => "interrupted");
+    await paused.promise;
+    let retired = false;
+    let retiredWhilePaused = false;
+    const retiring = settleHarnessWork().then(() => { retired = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      retiredWhilePaused = retired;
+    } finally {
+      release.resolve();
+      await retiring;
+      await outcome;
+    }
+    expect({ retiredWhilePaused, outcome: await outcome, sessions, starts }).toEqual({
+      retiredWhilePaused: false,
+      outcome: "interrupted",
+      sessions: 1,
+      starts: ["turn-1"],
+    });
   });
 
   it("releases the remaining queue when completion overtakes a steer acknowledgement", async ({ signal }) => {

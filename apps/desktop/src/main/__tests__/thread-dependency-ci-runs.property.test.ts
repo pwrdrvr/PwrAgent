@@ -1,20 +1,27 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ThreadDependencyCiRunObservation, ThreadDependencyCiRunOutcome, ThreadDependencyCondition, ThreadDependencyEvidence,
 } from "@pwragent/shared";
-import { summarizeThreadDependencyPrompt, threadDependencyCiRunOutcomes } from "@pwragent/shared";
+import { summarizeThreadDependencyPrompt, threadDependencyCiRunId, threadDependencyCiRunOutcomes } from "@pwragent/shared";
+import { readDesktopSettingsConfig } from "../settings/desktop-config";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
 import {
-  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, readCiRun,
+  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck,
+  normalizeGithubEnterpriseHosts, parseCiRunUrl, readCiRun,
 } from "../app-server/thread-dependency-ci-runs";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 const RUN_URL = "https://github.com/example/app/actions/runs/8841207733";
+const PIPELINE_URL = "https://gitlab.com/example/platform/app/-/pipelines/901";
+const GHES_URL = "https://github.example.com/example/app/actions/runs/77";
 
 const ciRunCondition = (ciRun: ThreadDependencyCondition["ciRun"] = { url: RUN_URL }): ThreadDependencyCondition =>
   ({ backend: "codex", threadId: "", when: "ci_run", ciRun });
@@ -34,10 +41,14 @@ const SUCCEEDED = new Set(["success", "neutral", "skipped"]);
 function oracle(on: readonly ThreadDependencyCiRunOutcome[], environments: readonly string[] | undefined, seen: ThreadDependencyCiRunObservation):
   "waiting" | "satisfied" | "failed" {
   if (seen.error) return "waiting";
-  if (seen.status === "completed") return SUCCEEDED.has(seen.conclusion ?? "") && on.includes("finished") ? "satisfied" : "failed";
-  if (on.includes("job_failed") && (seen.failedJobs?.length ?? 0) > 0) return "failed";
   const gateMatches = (seen.gates ?? []).some((gate) => !environments?.length
     || environments.some((name) => name.toLowerCase() === gate.environment.toLowerCase()));
+  if (seen.status === "completed") {
+    if (!SUCCEEDED.has(seen.conclusion ?? "")) return "failed";
+    // A pass is the finish when asked for; otherwise a gate still open on it (GitLab) counts.
+    return on.includes("finished") || on.includes("approval_gate") && gateMatches ? "satisfied" : "failed";
+  }
+  if (on.includes("job_failed") && (seen.failedJobs?.length ?? 0) > 0) return "failed";
   if (on.includes("approval_gate") && seen.status === "waiting" && gateMatches) return "satisfied";
   return "waiting";
 }
@@ -154,6 +165,61 @@ describe("CI run URLs", () => {
     expect(parseCiRunUrl(`${RUN_URL}/`)?.url).toBe(RUN_URL);
   });
 
+  it("accepts gitlab.com pipelines at any subgroup depth", () => {
+    expect(parseCiRunUrl(`${PIPELINE_URL}/`)).toEqual({ runId: 901, url: PIPELINE_URL, repository: { provider: "gitlab", host: "gitlab.com", owner: "example/platform", repo: "app" } });
+    expect(parseCiRunUrl("https://gitlab.com/example/app/-/pipelines/5")?.repository).toMatchObject({ owner: "example", repo: "app" });
+    for (const url of [
+      "https://gitlab.com/app/-/pipelines/5",
+      "https://gitlab.com/example/app/-/pipelines/0",
+      "https://gitlab.com/example/app/-/jobs/5",
+      "https://gitlab.com/example/app/actions/runs/5",
+      "https://gitlab.example.com/example/app/-/pipelines/5",
+      "https://github.com/example/app/-/pipelines/5",
+    ]) expect(parseCiRunUrl(url, { githubEnterpriseHosts: ["gitlab.example.com"] })).toBeUndefined();
+  });
+
+  it("accepts a GitHub Enterprise run only on a host the operator listed, matched exactly", () => {
+    // Entries an operator might write, a URL host an agent might supply: accepted only on equality.
+    const entryArb = fc.constantFrom("github.example.com", "GitHub.Example.com ", "ghe.internal.example:8443", "*.example.com", ".example.com", "example.com",
+      "https://github.example.com", "github.example.com/api", "github.com", "gitlab.com", "localhost", "", "ghe internal");
+    const hostArb = fc.constantFrom("github.example.com", "ghe.internal.example:8443", "ghe.internal.example", "evil.github.example.com", "github.example.com.evil.test",
+      "example.com", "a.example.com", "notgithub.example.com", "localhost", "gitlab.com");
+    const valid = new Set(["github.example.com", "ghe.internal.example:8443", "example.com"]);
+    fc.assert(fc.property(fc.array(entryArb, { maxLength: 6 }), hostArb, (entries, host) => {
+      const listed = new Set(entries.map((entry) => entry.trim().toLowerCase()).filter((entry) => valid.has(entry)));
+      expect(new Set(normalizeGithubEnterpriseHosts(entries))).toEqual(listed);
+      const ref = parseCiRunUrl(`https://${host}/example/app/actions/runs/77`, { githubEnterpriseHosts: entries });
+      expect(ref !== undefined).toBe(listed.has(host));
+      if (ref) expect(ref).toMatchObject({ url: `https://${host}/example/app/actions/runs/77`, repository: { provider: "github", host } });
+    }));
+    expect(parseCiRunUrl(GHES_URL)).toBeUndefined();
+    expect(normalizeGithubEnterpriseHosts(Array.from({ length: 40 }, (_, index) => `ghe${index}.example.com`))).toHaveLength(16);
+    expect(normalizeGithubEnterpriseHosts([7, null, "github.example.com"])).toEqual(["github.example.com"]);
+    // A URL's host never carries the default port, so an entry written with it still matches.
+    expect(parseCiRunUrl("https://github.example.com:443/example/app/actions/runs/77", { githubEnterpriseHosts: ["github.example.com:443"] })?.url).toBe(GHES_URL);
+  });
+
+  it("reads the authorized hosts from [git] github_enterprise_hosts in config.toml", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwragent-ci-run-hosts-"));
+    try {
+      const configPath = join(dir, "config.toml");
+      writeFileSync(configPath, '[git]\ngithub_enterprise_hosts = ["github.example.com", "*.example.com"]\n');
+      const hosts = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts;
+      expect(hosts).toEqual(["github.example.com", "*.example.com"]);
+      expect(parseCiRunUrl(GHES_URL, { githubEnterpriseHosts: hosts })?.url).toBe(GHES_URL);
+      expect(parseCiRunUrl("https://ghe.example.com/example/app/actions/runs/77", { githubEnterpriseHosts: hosts })).toBeUndefined();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("names the run by the id at the end of its URL", () => {
+    expect(threadDependencyCiRunId(RUN_URL)).toBe("8841207733");
+    expect(threadDependencyCiRunId(`${RUN_URL}/attempts/2`)).toBe("8841207733");
+    expect(threadDependencyCiRunId(PIPELINE_URL)).toBe("901");
+    // A namespace can spell another run path; the pipeline id is still the last one.
+    expect(threadDependencyCiRunId("https://gitlab.com/actions/runs/5/app/-/pipelines/901")).toBe("901");
+    expect(threadDependencyCiRunId("https://github.com/example/app/pull/12")).toBeUndefined();
+  });
+
   it("refuses other hosts, plain http, credentials and non-run pages", () => {
     for (const url of [
       "http://github.com/example/app/actions/runs/1",
@@ -218,6 +284,152 @@ describe("reading a run", () => {
 
   it("refuses a response for another run", async () => {
     await expect(readCiRun(async () => ({ id: 1, status: "completed" }), parseCiRunUrl(RUN_URL)!, 0)).rejects.toThrow("different run");
+    await expect(readCiRun(async () => ({ id: 1, status: "success" }), parseCiRunUrl(PIPELINE_URL)!, 0)).rejects.toThrow("different run");
+  });
+
+  it("reads a GitHub Enterprise run from its own host and keeps job links on it", async () => {
+    const ref = parseCiRunUrl(GHES_URL, { githubEnterpriseHosts: ["github.example.com"] })!;
+    const get = vi.fn(async (_repository: unknown, path: string): Promise<unknown> => path.includes("/jobs?")
+      ? { jobs: [
+        { id: 1, name: "Build", status: "completed", conclusion: "failure", html_url: "https://github.example.com/example/app/actions/runs/77/job/1" },
+        { id: 2, name: "Lint", status: "completed", conclusion: "failure", html_url: "https://github.com/example/app/actions/runs/77/job/2" },
+      ] }
+      : { id: 77, status: "in_progress" });
+    const seen = await readCiRun(get, ref, 0);
+    expect(get.mock.calls.every(([repository]) => (repository as { host: string }).host === "github.example.com")).toBe(true);
+    expect(get.mock.calls[0]![1]).toBe("repos/example/app/actions/runs/77");
+    expect(seen.failedJobs).toEqual([
+      { name: "Build", url: "https://github.example.com/example/app/actions/runs/77/job/1" },
+      { name: "Lint", url: GHES_URL },
+    ]);
+  });
+});
+
+describe("reading a GitLab pipeline", () => {
+  type Job = { id: number; name: string; status: string; allow_failure?: boolean; web_url?: string };
+  const ref = parseCiRunUrl(PIPELINE_URL)!;
+  const project = "projects/example%2Fplatform%2Fapp";
+  const forge = (pipeline: Record<string, unknown>, jobs: Job[], extra: { deployments?: unknown; bridges?: unknown } = {}) =>
+    vi.fn(async (_repository: unknown, path: string): Promise<unknown> => {
+      if (path.startsWith(`${project}/deployments?`)) {
+        if (extra.deployments instanceof Error) throw extra.deployments;
+        return extra.deployments ?? [];
+      }
+      if (path.startsWith(`${project}/pipelines/901/bridges?`)) return extra.bridges ?? [];
+      if (path.startsWith(`${project}/pipelines/901/jobs?`)) {
+        const page = Number(new URLSearchParams(path.split("?")[1]).get("page") ?? 1);
+        return jobs.slice((page - 1) * 100, page * 100);
+      }
+      if (path === `${project}/pipelines/901`) return { id: 901, name: "Release", ref: "v2.4.1", sha: "3f9c02e1aa", ...pipeline };
+      throw new Error(`Unexpected GitLab read: ${path}`);
+    });
+  const fire = (seen: ThreadDependencyCiRunObservation, ciRun: Omit<NonNullable<ThreadDependencyCondition["ciRun"]>, "url"> = {}) =>
+    evaluateCiRunCondition(ciRunCondition({ url: PIPELINE_URL, ...ciRun }), seen, undefined, 0);
+
+  it("maps every pipeline status onto the run vocabulary the readiness rule reads", async () => {
+    const expected: Record<string, [string, string | undefined]> = {
+      success: ["completed", "success"], failed: ["completed", "failure"], canceled: ["completed", "cancelled"], skipped: ["completed", "skipped"],
+      running: ["in_progress", undefined], canceling: ["in_progress", undefined], manual: ["waiting", undefined],
+      created: ["queued", undefined], pending: ["queued", undefined], preparing: ["queued", undefined], scheduled: ["queued", undefined],
+      waiting_for_resource: ["queued", undefined], waiting_for_callback: ["queued", undefined], brand_new_status: ["brand_new_status", undefined],
+    };
+    for (const [status, [mapped, conclusion]] of Object.entries(expected)) {
+      const seen = await readCiRun(forge({ status }, []), ref, 7);
+      expect([status, seen.status, seen.conclusion]).toEqual([status, mapped, conclusion]);
+      // A final status always ends a default wait; anything else keeps waiting.
+      expect(fire(seen).state).toBe(mapped !== "completed" ? "waiting" : conclusion === "success" || conclusion === "skipped" ? "satisfied" : "failed");
+    }
+  });
+
+  it("counts jobs, reports failed ones, and lets an allowed failure wake nothing", async () => {
+    const get = forge({ status: "running" }, [
+      { id: 1, name: "build", status: "success" },
+      { id: 2, name: "unit tests\u0007", status: "failed", web_url: "https://gitlab.com/example/platform/app/-/jobs/2" },
+      { id: 3, name: "flaky lint", status: "failed", allow_failure: true },
+      { id: 4, name: "docs", status: "failed", web_url: "https://elsewhere.example/jobs/4" },
+      { id: 5, name: "deploy", status: "created" },
+      { id: 6, name: "e2e", status: "running" },
+      { id: 7, name: "old", status: "canceled" },
+      { id: 8, name: "pages", status: "skipped" },
+      { id: 9, name: "locked", status: "waiting_for_resource" },
+    ]);
+    const seen = await readCiRun(get, ref, 42);
+    expect(seen).toMatchObject({
+      runId: 901, name: "Release", status: "in_progress", branch: "v2.4.1", headSha: "3f9c02e1aa", checkedAt: 42,
+      jobs: { total: 9, passed: 1, failed: 4, running: 1, queued: 2, waiting: 0, skipped: 1 },
+      failedJobs: [{ name: "unit tests", url: "https://gitlab.com/example/platform/app/-/jobs/2" }, { name: "docs", url: PIPELINE_URL }],
+    });
+    expect(seen.gates).toBeUndefined();
+    expect(fire(seen, { on: ["job_failed"] })).toMatchObject({ state: "failed", reason: "Job failed: unit tests, docs" });
+    const allowed = await readCiRun(forge({ status: "running" }, [{ id: 3, name: "flaky lint", status: "failed", allow_failure: true }]), ref, 0);
+    expect(allowed.jobs?.failed).toBe(1);
+    expect(fire(allowed, { on: ["job_failed"] }).state).toBe("waiting");
+  });
+
+  it("reports a blocked deployment by environment and a playable manual job by name", async () => {
+    const deployments = [
+      { status: "blocked", environment: { name: "production" }, deployable: { id: 11, pipeline: { id: 901 } },
+        approval_summary: { rules: [{ access_level_description: "release-managers", required_approvals: 1 }, { access_level_description: "security" }] } },
+      { status: "blocked", environment: { name: "other-pipeline" }, deployable: { id: 99, pipeline: { id: 902 } } },
+    ];
+    const get = forge({ status: "running" }, [
+      { id: 10, name: "build", status: "success" },
+      { id: 11, name: "deploy production", status: "manual" },
+      { id: 12, name: "publish docs", status: "manual" },
+    ], { deployments });
+    const seen = await readCiRun(get, ref, 0);
+    // The deployment's own job is one gate, not two.
+    expect(seen).toMatchObject({ status: "waiting", jobs: { waiting: 2 }, gates: [
+      { environment: "production", reviewers: ["release-managers", "security"] },
+      { environment: "publish docs", reviewers: [] },
+    ] });
+    expect(get.mock.calls.map(([, path]) => path)).toContain(`${project}/deployments?status=blocked&order_by=id&sort=desc&per_page=100`);
+    expect(fire(seen, { on: ["approval_gate"] })).toMatchObject({ state: "satisfied", reason: "Needs approval: production, publish docs" });
+    expect(fire(seen, { on: ["approval_gate"], environments: ["Publish Docs"] })).toMatchObject({ state: "satisfied", reason: "Needs approval: publish docs" });
+    expect(fire(seen, { on: ["approval_gate"], environments: ["staging"] }).state).toBe("waiting");
+    expect(fire(seen, { on: ["finished"] }).state).toBe("waiting");
+  });
+
+  it("keeps the gates of a pipeline that passed with an optional manual job still waiting", async () => {
+    const seen = await readCiRun(forge({ status: "success" }, [{ id: 1, name: "build", status: "success" }, { id: 2, name: "deploy production", status: "manual" }]), ref, 0);
+    expect(seen).toMatchObject({ status: "completed", conclusion: "success", gates: [{ environment: "deploy production", reviewers: [] }] });
+    expect(fire(seen)).toMatchObject({ state: "satisfied", reason: "Run finished: success" });
+    expect(fire(seen, { on: ["approval_gate"] })).toMatchObject({ state: "satisfied", reason: "Needs approval: deploy production" });
+    expect(fire(seen, { on: ["job_failed"] }).state).toBe("failed");
+  });
+
+  it("reads no gates for a failed pipeline, and reads a manual trigger job only when nothing else explains the pause", async () => {
+    const failed = forge({ status: "failed" }, [{ id: 2, name: "deploy production", status: "manual" }]);
+    expect((await readCiRun(failed, ref, 0)).gates).toBeUndefined();
+    expect(failed.mock.calls.some(([, path]) => path.includes("/deployments?"))).toBe(false);
+
+    const bridged = forge({ status: "manual" }, [{ id: 1, name: "build", status: "success" }], { bridges: [{ id: 5, name: "trigger deploy", status: "manual" }, { id: 6, name: "trigger docs", status: "success" }] });
+    expect(await readCiRun(bridged, ref, 0)).toMatchObject({ status: "waiting", gates: [{ environment: "trigger deploy", reviewers: [] }] });
+    const plain = forge({ status: "running" }, [{ id: 2, name: "deploy", status: "manual" }]);
+    await readCiRun(plain, ref, 0);
+    expect(plain.mock.calls.some(([, path]) => path.includes("/bridges?"))).toBe(false);
+  });
+
+  it("treats deployments the token cannot list as none, and passes other failures on", async () => {
+    const jobs = [{ id: 2, name: "deploy", status: "manual" }];
+    const forbidden = Object.assign(new Error("GitLab returned HTTP 403."), { code: "forbidden" });
+    expect(await readCiRun(forge({ status: "running" }, jobs, { deployments: forbidden }), ref, 0)).toMatchObject({ status: "waiting", gates: [{ environment: "deploy" }] });
+    const limited = Object.assign(new Error("GitLab rate limit reached."), { code: "rate_limited" });
+    await expect(readCiRun(forge({ status: "running" }, jobs, { deployments: limited }), ref, 0)).rejects.toThrow("rate limit");
+  });
+
+  it("refuses a job list that is not a list", async () => {
+    const get = vi.fn(async (_repository: unknown, path: string): Promise<unknown> => path.includes("/jobs?") ? { message: "401 Unauthorized" } : { id: 901, status: "running" });
+    await expect(readCiRun(get, ref, 0)).rejects.toThrow("invalid job list");
+  });
+
+  it("reads every page of jobs", async () => {
+    const jobs = Array.from({ length: 150 }, (_, index) => ({ id: index + 1, name: `shard ${index + 1}`, status: index === 119 ? "failed" : "success" }));
+    const get = forge({ status: "running" }, jobs);
+    const seen = await readCiRun(get, ref, 0);
+    expect(seen.jobs).toMatchObject({ total: 150, passed: 149, failed: 1 });
+    expect(seen.failedJobs).toEqual([{ name: "shard 120", url: PIPELINE_URL }]);
+    expect(get.mock.calls.filter(([, path]) => path.includes("/jobs?"))).toHaveLength(2);
   });
 });
 
@@ -357,9 +569,22 @@ describe("Continue After a CI run", () => {
     await expect(create(coordinator({ readCiRun: async () => { throw new Error("GitHub returned HTTP 404."); } }))).rejects.toThrow("Could not read CI run");
     await expect(create(coordinator(), ciRunCondition({ url: "https://ci.example.com/example/app/actions/runs/1" }))).rejects.toThrow("github.com");
     await expect(create(coordinator({ readCiRun: undefined }))).rejects.toThrow("not available");
+    await expect(create(coordinator(), ciRunCondition({ url: GHES_URL }))).rejects.toThrow("github_enterprise_hosts");
+    await expect(create(coordinator({ ciRunUrlOptions: () => ({ githubEnterpriseHosts: ["*.example.com", "example.com"] }) }), ciRunCondition({ url: GHES_URL })))
+      .rejects.toThrow("github_enterprise_hosts");
     await expect(create(coordinator(), { ...ciRunCondition(), threadId: "release" })).rejects.toThrow("names no thread");
     await expect(create(coordinator(), ciRunCondition({ url: RUN_URL, on: ["finished"], environments: ["windows-signing"] }))).rejects.toThrow("include approval_gate");
     expect(store.active()).toHaveLength(0);
+  });
+
+  it("registers a GitLab pipeline, and a GitHub Enterprise run on a host the operator listed", async () => {
+    const read = vi.fn(async (_url: string) => run);
+    const agent = coordinator({ readCiRun: read, ciRunUrlOptions: () => ({ githubEnterpriseHosts: ["github.example.com"] }) });
+    const pipeline = await create(agent, ciRunCondition({ url: `${PIPELINE_URL}/` }));
+    expect(pipeline.dependencies[0]).toMatchObject({ status: "waiting", conditions: [{ title: "Release run 901", ciRun: { url: PIPELINE_URL } }] });
+    await create(agent, ciRunCondition({ url: `${GHES_URL}/attempts/3` }));
+    expect(read.mock.calls.map(([url]) => url)).toEqual([PIPELINE_URL, GHES_URL]);
+    expect(agent.ciRunUrls().sort()).toEqual([GHES_URL, PIPELINE_URL].sort());
   });
 
   it("stores one spelling of a wait, so a reordered retry is the same wait", async () => {
