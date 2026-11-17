@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ResearchActor, ResearchEvent, ResearchEventData } from "@pwragent/shared";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { StateDb } from "../../src/main/state/state-db";
@@ -49,5 +51,62 @@ export function seedResearchState(stateDbPath: string): void {
     append({ type: "item_work", itemId: "owner", work: { state: "cancelled", note: "This direction was ruled out by the counterexample." } });
     append({ type: "item_work", itemId: "durable", work: { state: "blocked", note: "Retain this partial result for the next investigation." } });
     append({ type: "status", status: "completed", reason: "Completed after reviewing the queue model and reproduction." });
+  } finally { db.close(); }
+}
+
+export const LIVE_RESEARCH_OBJECTIVE = "Find a smaller reproducer for the flaky cache invalidation test";
+
+/** The running Electron owner's identity, read from its own profile runtime marker. */
+export function readResearchOwnerIdentity(homeRoot: string, processId: number): { ownerId: string; ownerPid: number; ownerStartedAt: number } {
+  const markerDir = path.join(homeRoot, ".pwragent/profiles/default/state/runtime-instances");
+  for (const entry of fs.readdirSync(markerDir)) {
+    const marker = JSON.parse(fs.readFileSync(path.join(markerDir, entry), "utf8")) as { instanceId?: string; processId?: number; startedAt?: number };
+    if (marker.processId === processId && marker.instanceId && marker.startedAt) return { ownerId: marker.instanceId, ownerPid: processId, ownerStartedAt: marker.startedAt };
+  }
+  throw new Error("The running owner's runtime marker was not found");
+}
+
+/** Invented, live research owned by the running app, so its controls are writable. Seed after launch, then reload. */
+export function seedLiveResearchRun(stateDbPath: string, owner: { ownerId: string; ownerPid: number; ownerStartedAt: number }, now = Date.now()): void {
+  const db = StateDb.open(stateDbPath);
+  const store = new ResearchStore(db);
+  const coordinator: ResearchActor = { backend: "codex", threadId: "thread-smoke", kind: "agent" };
+  const worker = (index: number): ResearchActor => ({ ...coordinator, threadId: index === 4 ? "thread-research-focused" : `thread-research-worker-${index}` });
+  const runId = "research-live-fixture";
+  let revision = 0;
+  const append = (data: ResearchEventData, author = coordinator) => {
+    if (data.type === "finding") data.finding.author = { backend: author.backend, threadId: author.threadId };
+    if (data.type === "submission") data.submission.author = { backend: author.backend, threadId: author.threadId };
+    const event: ResearchEvent = { seq: ++revision, commandId: `live-${revision}`, signature: `live-${revision}`,
+      at: now - 18 * 60_000 + revision * 25_000, actor: author, data };
+    if (revision === 1) store.create(runId, runId, event);
+    else store.append(runId, revision - 1, event);
+  };
+  try {
+    append({ type: "created", objective: LIVE_RESEARCH_OBJECTIVE, coordinator, ...owner,
+      deadlineAt: now + 22 * 60_000, workspaceMode: "new_worktree", approaches: [
+        { id: "a1", title: "Bisect fixture setup", task: "Remove fixture setup steps until the failure disappears.", state: "pending" },
+        { id: "a2", title: "Clock skew", task: "Check whether cache timestamps cross a second boundary during the test.", state: "pending" },
+        { id: "a3", title: "Parallel workers", task: "Compare the failure rate with one worker and with four.", state: "pending" },
+        { id: "a4", title: "Invalidation order", task: "Record the order of invalidation events in failing runs.", state: "pending" },
+      ] });
+    append({ type: "worker", approachId: "a1", state: "running", worker: { backend: "codex", threadId: "thread-research-worker-1", turnId: "live-turn-1" } });
+    append({ type: "worker", approachId: "a2", state: "ended", worker: { backend: "codex", threadId: "thread-research-worker-2", turnId: "live-turn-2" } });
+    append({ type: "worker", approachId: "a3", state: "running", worker: { backend: "codex", threadId: "thread-research-worker-3", turnId: "live-turn-3" } });
+    append({ type: "worker", approachId: "a4", state: "ended" , note: "Worker finished after recording one trace." });
+    append({ type: "finding", finding: { id: "f-setup", approachId: "a1", kind: "experiment", text: "The failure still reproduces with only the in-memory store fixture. The database and network fixtures are not needed.", paths: ["test/cache/invalidation.test.ts", "notes/setup-bisect.md"] } }, worker(1));
+    append({ type: "finding", finding: { id: "f-clock", approachId: "a2", kind: "dead_end", text: "Freezing the clock does not change the failure rate across 200 runs.", paths: ["notes/clock-freeze.md"] } }, worker(2));
+    append({ type: "abandoned", approachId: "a2", reason: "Clock skew is ruled out by the frozen-clock runs." });
+    append({ type: "finding", finding: { id: "f-parallel", approachId: "a3", kind: "partial", text: "With one worker the failure rate drops from 1 in 40 to 1 in 400. Shared cache state is likely involved.", paths: ["notes/worker-counts.csv"], relatesTo: "f-setup", relation: "supports" } }, worker(3));
+    append({ type: "finding", finding: { id: "f-order", approachId: "a4", kind: "counterexample", text: "One failing trace shows invalidation completing before the write it should follow. Ordering alone does not explain the other failures.", paths: ["traces/failing-run-17.json"], relatesTo: "f-parallel", relation: "contradicts" } });
+    append({ type: "finding", finding: { id: "f-key", approachId: "a1", kind: "lemma", text: "Two tests share the cache key \"user:1\". A test that runs later can read the earlier test's entry.", paths: ["test/cache/keys.ts"] } }, worker(1));
+    append({ type: "submission", submission: { id: "c-1", approachId: "a3", text: "Run the cache tests with one worker.", paths: [] } }, worker(3));
+    append({ type: "review", submissionId: "c-1", decision: "revision_requested", reason: "This hides the failure rather than explaining it. Show which shared state causes it." });
+    append({ type: "submission", submission: { id: "c-2", approachId: "a1", text: "Give each test its own cache namespace. The 12-line reproducer in notes/repro.ts fails within 20 runs before the change and passes 2,000 runs after it.", paths: ["notes/repro.ts", "test/cache/keys.ts"] } }, worker(1));
+    append({ type: "assignment", itemId: "f-order", task: "Find the second cause of the out-of-order invalidation trace.", approach: {
+      id: "work-live", itemId: "f-order", title: "Investigate: out-of-order invalidation", task: "Find the second cause of the out-of-order invalidation trace.", state: "pending",
+    } });
+    append({ type: "worker", approachId: "work-live", state: "running", worker: { backend: "codex", threadId: "thread-research-focused", turnId: "live-focused-turn" } });
+    append({ type: "item_work", itemId: "f-order", work: { state: "in_progress", assignmentId: "work-live", assignee: { backend: "codex", threadId: "thread-research-focused" }, note: "Replaying trace 17 with logging on the invalidation queue." } }, worker(4));
   } finally { db.close(); }
 }

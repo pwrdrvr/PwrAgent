@@ -1,65 +1,105 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type KeyboardEvent } from "react";
 import { sameResearchThread, type NavigationThreadSummary, type ResearchCommand, type ResearchRun, type ResearchThread } from "@pwragent/shared";
+import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { ResearchThreadButton } from "./ResearchThreadButton";
-import { ResearchItemsPanel } from "./ResearchItemsPanel";
+import { ResearchItemDetail } from "./ResearchItemDetail";
+import { EMPTY_RESEARCH_ITEMS_QUERY, ResearchItemsPanel, type ResearchItemsQuery } from "./ResearchItemsPanel";
+import { ResearchReviewView } from "./ResearchReviewView";
+import { ResearchRunCard } from "./ResearchRunCard";
+import { ResearchPendingCard, ResearchStartForm, type ResearchStartValues } from "./ResearchStartForm";
+import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
+import { excerpt, isResearchRunLive, researchRunPhase, unreviewedCandidates } from "./research-view-model";
 import { useResearchSnapshot } from "./useResearchSnapshot";
 import "./research.css";
 
-type View = "graph" | "board" | "review" | "activity" | "items";
+const VIEWS = [
+  { id: "map", label: "Map" }, { id: "findings", label: "Findings" }, { id: "review", label: "Review" },
+  { id: "items", label: "Items" }, { id: "activity", label: "Activity" },
+] as const;
+type View = typeof VIEWS[number]["id"];
+
+/** Wall-clock time for countdowns, ticking only while something on screen is live. */
+function useNow(live: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  return now;
+}
 
 export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
   const identity = thread && !remote && thread.source === "codex" ? { backend: thread.source, threadId: thread.id } : undefined;
   const state = useResearchSnapshot(api, identity);
+  const tabsId = useId();
   const [selectedRunId, setSelectedRunId] = useState<string>();
-  const [view, setView] = useState<View>("graph");
+  const [view, setView] = useState<View>("map");
   const [filter, setFilter] = useState("");
-  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
-  const [objective, setObjective] = useState("");
-  const [workers, setWorkers] = useState(3);
-  const [minutes, setMinutes] = useState(30);
-  const [workspaceMode, setWorkspaceMode] = useState<"new_worktree" | "none">("new_worktree");
-  const run = state.snapshot?.runs.find((r) => r.id === selectedRunId) ?? state.snapshot?.runs[0];
+  const [openItemId, setOpenItemId] = useState<string>();
+  const [returnFocusId, setReturnFocusId] = useState<string>();
+  const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
+  const snapshot = state.snapshot;
+  const run = snapshot?.runs.find((r) => r.id === selectedRunId) ?? snapshot?.runs[0];
+  const pendingLive = Boolean(snapshot?.pending);
+  const now = useNow(Boolean(run && isResearchRunLive(run)) || pendingLive);
+  const pending = snapshot?.pending && now < snapshot.pending.expiresAt ? snapshot.pending : undefined;
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
-  const writable = Boolean(run && state.snapshot?.writableRunIds.includes(run.id));
-  const active = run?.status === "running" || run?.status === "stopping";
-  const canReview = coordinator && writable;
-  const awaitingReview = run?.status === "running" && run.approaches.every((a) => ["ended", "failed", "stopped"].includes(a.state)) && run.submissions.length > 0;
+  const writable = Boolean(run && snapshot?.writableRunIds.includes(run.id));
+  const live = Boolean(run && isResearchRunLive(run));
 
+  function selectRun(id: string) {
+    setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError("");
+  }
+  function openItem(itemId: string) {
+    setOpenItemId(itemId); setReturnFocusId(undefined); setView("items");
+  }
+  function chooseView(next: View) {
+    setView(next); setFilter("");
+    if (next !== "items") setOpenItemId(undefined);
+  }
   async function send(target: ResearchThread, text: string) {
     if (!api?.submitThreadReply) throw new Error("Thread replies are unavailable");
     const receipt = await api.submitThreadReply({ ...target, input: [{ type: "text", text }] });
-    if (!receipt) throw new Error("The owner did not accept this request");
-    setNotice(receipt.queueStatus === "queued" ? "Request queued in the coordinating thread." : "Request accepted by the coordinating thread.");
+    if (!receipt) throw new Error("The coordinating thread did not accept this request");
+    setNotice(receipt.queueStatus === "queued" ? "Request queued. This thread starts the run after its current turn." : "Request sent. This thread is proposing approaches.");
   }
-  async function start(event: FormEvent) {
-    event.preventDefault();
-    if (!identity || !objective.trim() || !api?.prepareResearch) return;
+  async function start(values: ResearchStartValues): Promise<boolean> {
+    if (!identity || !api?.prepareResearch) return false;
     setBusy(true); setError(""); setNotice("");
     try {
-      const prepared = await api.prepareResearch({ ...identity, objective: objective.trim(), workers, minutes, workspaceMode });
-      await send(identity, `Start a research run using research_start with intentId=${prepared.intentId}. Objective: ${objective.trim()}\nUse exactly ${workers} distinct approaches, a ${minutes}-minute deadline, and workspaceMode=${workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently increase the worker count or deadline.`);
-      setCreating(false); setObjective("");
-    } catch (failure) { setError(message(failure)); }
+      const prepared = await api.prepareResearch({ ...identity, ...values });
+      await send(identity, `Start a research run using research_start with intentId=${prepared.intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, a ${values.minutes}-minute deadline, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently increase the worker count or deadline.`);
+      setCreating(false);
+      return true;
+    } catch (failure) { setError(message(failure)); return false; }
     finally { setBusy(false); }
   }
-  async function update(command: ResearchCommand) {
-    if (!run || !identity || !api?.updateResearch) return;
+  async function withdraw() {
+    if (!identity || !api?.withdrawResearch) return;
+    setBusy(true); setError(""); setNotice("");
+    try { await api.withdrawResearch(identity); setNotice("Request withdrawn. If this thread tries to start it, the start is refused."); }
+    catch (failure) { setError(message(failure)); }
+    finally { setBusy(false); }
+  }
+  async function update(command: ResearchCommand): Promise<boolean> {
+    if (!run || !identity || !api?.updateResearch) return false;
     setBusy(true); setError(""); setNotice("");
     try {
       const result = await api.updateResearch({ ...identity, runId: run.id, requestId: crypto.randomUUID(), command });
       if (command.action === "review" && command.decision === "revision_requested") {
         const delivery = result.deliveries.at(-1);
-        setNotice(delivery?.state === "queued" ? "Revision feedback is queued for the worker." : delivery?.state === "started" ? "Revision feedback was accepted by the worker’s owner." : "Revision is recorded; feedback delivery was not confirmed. Inspect Activity before sending it again.");
-      }
-      setReason("");
-    } catch (failure) { setError(message(failure)); }
+        setNotice(delivery?.state === "queued" ? "Revision feedback is queued for the worker." : delivery?.state === "started" ? "The worker received the revision feedback." : "The revision is recorded, but delivery to the worker was not confirmed. Check Activity before you send it again.");
+      } else if (command.action === "review") setNotice(`Decision recorded: ${command.decision === "accepted" ? "accepted" : "rejected"}.`);
+      return true;
+    } catch (failure) { setError(message(failure)); return false; }
     finally { setBusy(false); }
   }
   async function openEvidence(itemId: string, pathIndex: number) {
@@ -70,101 +110,66 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
       if (!result.opened) throw new Error(result.error ?? "Evidence could not be opened");
     } catch (failure) { setError(message(failure)); }
   }
-  const matches = (text: string) => text.toLowerCase().includes(filter.toLowerCase());
-  const titleFor = (id: string) => run?.approaches.find((a) => a.id === id)?.title ?? id;
+  function onTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const index = VIEWS.findIndex((entry) => entry.id === view);
+    const next = event.key === "ArrowRight" ? (index + 1) % VIEWS.length : event.key === "ArrowLeft" ? (index - 1 + VIEWS.length) % VIEWS.length
+      : event.key === "Home" ? 0 : event.key === "End" ? VIEWS.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    chooseView(VIEWS[next]!.id);
+    document.getElementById(`${tabsId}-${VIEWS[next]!.id}`)?.focus();
+  }
 
   if (remote) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Open this thread on its owning instance to inspect its research runs.</p></section>;
   if (!identity) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research runs are available in local Codex threads.</p></section>;
   if (!api?.researchSnapshot) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
 
+  const firstRun = Boolean(snapshot && snapshot.runs.length === 0 && !pending);
+  const showForm = Boolean(snapshot) && (creating || firstRun);
+  const reviewCount = run ? unreviewedCandidates(run).length : 0;
   return <section className="context-panel__section research-panel" aria-label="Research">
-    <div className="research-heading"><h3>Research</h3><button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button></div>
-    {(creating || (state.snapshot?.runs.length === 0)) && <form onSubmit={(event) => { void start(event); }} className="research-form">
-      <label>Objective<textarea value={objective} onChange={(event) => setObjective(event.target.value)} maxLength={8000} rows={3} required /></label>
-      <label>Workers<input type="number" min={1} max={8} required value={workers} onChange={(event) => setWorkers(Number(event.target.value))} /></label>
-      <label>Deadline in minutes<input type="number" min={1} max={120} required value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} /></label>
-      <div className="research-switch" role="group" aria-label="Worker workspaces">
-        <button type="button" aria-pressed={workspaceMode === "new_worktree"} onClick={() => setWorkspaceMode("new_worktree")}>Isolated worktrees</button>
-        <button type="button" aria-pressed={workspaceMode === "none"} onClick={() => setWorkspaceMode("none")}>Scratch</button>
-      </div>
-      <p className="research-muted">Workers inherit this thread’s model and access. Starting spends model budget. The worker count and deadline are enforced; token and dollar limits are unavailable.</p>
-      <p className="research-muted">The request expires if it has not started within five minutes.</p>
-      <button className="research-button research-button--primary" type="submit" disabled={busy || !objective.trim() || !api.submitThreadReply || !api.prepareResearch}>Request research</button>
-    </form>}
+    <div className="research-heading">
+      <h3>Research</h3>
+      {!firstRun && snapshot && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
+    </div>
+    {showForm && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
+      onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
-    {notice && <p role="status" className="research-muted">{notice}</p>}
-    {!state.snapshot && !state.error && <p role="status" className="context-empty">Loading research…</p>}
-    {state.snapshot && state.snapshot.runs.length > 1 && <div className="research-runs" aria-label="Research runs">
-      {state.snapshot.runs.map((r) => <button type="button" key={r.id} aria-pressed={r.id === run?.id} onClick={() => { setSelectedRunId(r.id); setFilter(""); }}>{r.objective}</button>)}
-    </div>}
+    {notice && <p role="status" className="research-notice">{notice}</p>}
+    {!snapshot && !state.error && <p role="status" className="context-empty">Loading research…</p>}
+    {pending && <ResearchPendingCard pending={pending} busy={busy} onWithdraw={api.withdrawResearch ? () => { void withdraw(); } : undefined} />}
+    {snapshot && snapshot.runs.length > 1 && run && <label className="research-run-select">Run
+      <Select value={run.id} onChange={selectRun} className="research-select"
+        options={snapshot.runs.map((r: ResearchRun) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
+    </label>}
     {run && <>
-      <div className="research-summary"><strong>{run.objective}</strong><span className="research-state">{awaitingReview ? "Awaiting review" : label(run.status)}</span></div>
-      <p className="research-muted">{run.approaches.filter((a) => !["ended", "failed", "stopped"].includes(a.state)).length} active · {run.approaches.length} total workers · limit {run.workerLimit} · deadline {new Date(run.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
-      <p className="research-muted">{run.findings.length} findings · {run.submissions.length} submissions · usage in each worker’s Pricing panel</p>
-      {run.reason && <p className="research-muted">{run.reason}</p>}
-      {!writable && (active || run.status === "interrupted") && <p className="research-muted">This run’s owner is unavailable in this process. Evidence is retained. Inspect the worker threads before requesting a new run.</p>}
-      {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
-      {coordinator && writable && active && <div className="research-actions">
-        <button type="button" className="research-button" disabled={busy} onClick={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}>Stop run</button>
-        <button type="button" className="research-button" disabled={busy || !run.submissions.some((s) => s.review?.decision === "accepted")} onClick={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}>Finish run</button>
-      </div>}
-      <div className="research-switch" role="group" aria-label="Research view">{(["graph", "items", "board", "review", "activity"] as const).map((v) => <button type="button" key={v} aria-pressed={view === v} onClick={() => { setView(v); setFilter(""); }}>{label(v)}</button>)}</div>
-      {view !== "items" && <input className="research-filter" type="search" aria-label="Filter research by approach, finding, or state" placeholder="Filter approaches, findings, states…" value={filter} onChange={(event) => setFilter(event.target.value)} />}
-      {view === "items" && <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run} writable={writable} coordinator={coordinator} />}
-      {view === "graph" && <div className="research-graph" aria-label="Recorded research graph">
-        <div className="research-graph__root">{run.objective}</div>
-        {run.approaches.filter((a) => matches(`${a.title} ${a.state} ${a.note ?? ""}`)).map((a) => <div className="research-graph__branch" key={a.id}>
-          <div className="research-node"><strong>{a.title}</strong><span>{label(a.directionState === "abandoned" ? "abandoned" : a.state)}</span>{a.worker && <ResearchThreadButton thread={a.worker} title="Open worker" />}</div>
-          <p className="research-muted">{a.task}</p>{a.note && <p className="research-muted">{a.note}</p>}
-          {a.overlapsApproachId && <p className="research-muted">Overlaps: {titleFor(a.overlapsApproachId)}</p>}
-          <div className="research-graph__children">{run.findings.filter((f) => f.approachId === a.id).slice(-6).map((f) => <button type="button" className="research-node research-node--finding" key={f.id} onClick={() => { setView("board"); setFilter(f.text.slice(0, 40)); }}><span>{label(f.kind)}</span>{excerpt(f.text)}</button>)}
-            {run.submissions.filter((s) => s.approachId === a.id).slice(-6).map((s) => <button type="button" className="research-node research-node--finding" key={s.id} onClick={() => { setView("review"); setFilter(s.text.slice(0, 40)); }}><span>Candidate · {s.review ? label(s.review.decision) : "Awaiting review"}</span>{excerpt(s.text)}</button>)}
-          </div>
-        </div>)}
-        <p className="research-muted">Connections show recorded assignments and contributions. The board preserves supporting and contradicting evidence.</p>
-      </div>}
-      {view === "board" && <div className="research-board" aria-label="Shared findings">
-        {run.findings.filter((f) => matches(`${f.id} ${f.kind} ${f.text} ${titleFor(f.approachId)}`)).map((f) => <article key={f.id} className="research-entry">
-          <div className="research-entry__meta">{label(f.kind)} · {titleFor(f.approachId)}</div><p>{f.text}</p>
-          {f.author && <ResearchThreadButton thread={f.author} title="Open source thread" />}
-          {f.relatesTo && <button type="button" className="research-link" onClick={() => setFilter(run.findings.find((other) => other.id === f.relatesTo)?.text.slice(0, 40) ?? "")}>{label(f.relation ?? "related")} {run.findings.find((other) => other.id === f.relatesTo)?.text.slice(0, 80) ?? "earlier finding"}</button>}
-          {f.paths.map((path, index) => <button key={path} className="research-evidence" type="button" disabled={!api.openResearchEvidence} onClick={() => { void openEvidence(f.id, index); }}>{path}</button>)}
-        </article>)}
-        {!run.findings.length && <p className="context-empty">Findings will appear here as workers share evidence.</p>}
-      </div>}
-      {view === "review" && <div aria-label="Research submissions">
-        <p className="research-muted">Acceptance records a reviewer’s judgment. Formal verification has not been performed.</p>
-        {canReview && <label className="research-review-reason">Review reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} rows={2} /></label>}
-        {run.submissions.filter((s) => matches(`${s.id} ${s.text} ${titleFor(s.approachId)} ${s.review?.decision ?? "awaiting review"}`)).map((s) => <article className="research-entry" key={s.id}>
-          <div className="research-entry__meta">{titleFor(s.approachId)} · {s.review ? label(s.review.decision) : "Awaiting review"}</div><p>{s.text}</p>
-          {s.author && <ResearchThreadButton thread={s.author} title="Open source thread" />}
-          {s.paths.map((path, index) => <button key={path} className="research-evidence" type="button" disabled={!api.openResearchEvidence} onClick={() => { void openEvidence(s.id, index); }}>{path}</button>)}
-          {s.review && <p className="research-muted">{s.review.actor.kind === "operator" ? "Operator" : "Coordinator"}: {s.review.reason}</p>}
-          {canReview && <div className="research-actions">{(["accepted", "revision_requested", "rejected"] as const).map((decision) => <button key={decision} type="button" className="research-button" disabled={busy || !reason.trim() || (decision === "revision_requested" && !active)} onClick={() => { void update({ action: "review", submissionId: s.id, decision, reason: reason.trim() }); }}>{decision === "accepted" ? "Accept" : decision === "revision_requested" ? "Request revision" : "Reject"}</button>)}</div>}
-        </article>)}
-        {!run.submissions.length && <p className="context-empty">No candidates have been submitted.</p>}
-      </div>}
-      {view === "activity" && <ol className="research-activity" aria-label="Research activity">{run.events.slice(-100).filter((event) => matches(`${event.data.type} ${JSON.stringify(event.data)}`)).map((event) => <li key={event.seq}><span>{event.seq} · {label(event.data.type)} · {new Date(event.at).toLocaleTimeString()}</span><p>{eventDescription(event.data)}</p></li>)}</ol>}
+      <ResearchRunCard run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
+        onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
+        onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }} />
+      <div className="research-tabs" role="tablist" aria-label="Research views" onKeyDown={onTabKeyDown}>
+        {VIEWS.map((entry) => <button type="button" role="tab" key={entry.id} id={`${tabsId}-${entry.id}`} aria-selected={view === entry.id}
+          aria-controls={`${tabsId}-panel`} tabIndex={view === entry.id ? 0 : -1} onClick={() => chooseView(entry.id)}>
+          {entry.label}{entry.id === "review" && reviewCount > 0 && <><span className="research-sr-only">,</span>{" "}<span className="research-tab-count">{reviewCount}</span>{" "}<span className="research-sr-only">to review</span></>}
+        </button>)}
+      </div>
+      <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${view}`} className="research-tabpanel">
+        {(view === "map" || view === "findings" || view === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"
+          placeholder={view === "map" ? "Filter approaches and findings" : view === "findings" ? "Filter findings" : "Filter activity"} value={filter} onChange={(event) => setFilter(event.target.value)} />}
+        {view === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={openItem}
+          onShowApproachItems={(approachId) => { setItemsQuery({ ...EMPTY_RESEARCH_ITEMS_QUERY, approachId }); setOpenItemId(undefined); setView("items"); }} />}
+        {view === "findings" && <ResearchFindingsView run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
+        {view === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={Boolean(api.openResearchEvidence)}
+          onReview={(submissionId, decision, reason) => update({ action: "review", submissionId, decision, reason })}
+          onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
+        {view === "items" && (openItemId
+          ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable} coordinator={coordinator}
+            onBack={() => { setReturnFocusId(openItemId); setOpenItemId(undefined); }} onOpenItem={openItem} />
+          : <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run}
+            query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} />)}
+        {view === "activity" && <ResearchActivityView run={run} filter={filter} onOpenItem={openItem} />}
+      </div>
     </>}
   </section>;
 }
 
-function label(value: string): string { return value.replaceAll("_", " ").replace(/^./, (s) => s.toUpperCase()); }
-function excerpt(text: string): string { return text.length > 100 ? `${text.slice(0, 100)}…` : text; }
 function message(error: unknown): string { return error instanceof Error ? error.message : "Research operation failed"; }
-function eventDescription(data: ResearchRun["events"][number]["data"]): string {
-  switch (data.type) {
-    case "created": return data.objective;
-    case "worker": return `${data.approachId}: ${label(data.state)}${data.note ? ` · ${data.note}` : ""}`;
-    case "finding": return data.finding.text;
-    case "submission": return data.submission.text;
-    case "review": return `${label(data.decision)}: ${data.reason}`;
-    case "abandoned": return `${data.approachId}: ${data.reason}`;
-    case "direction": return `${data.approachId}: ${data.title} · ${data.reason}`;
-    case "status": return `${label(data.status)}: ${data.reason}`;
-    case "delivery_failed": return `Message delivery was not confirmed: ${data.reason}`;
-    case "delivery": return `Revision feedback ${label(data.delivery.state)}`;
-    case "assignment": return `Assigned item ${data.itemId}: ${data.task}`;
-    case "item_work": return `${data.itemId}: ${label(data.work.state)} · ${data.work.note ?? ""}`;
-  }
-}

@@ -1056,6 +1056,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   updateResearchItem?: (request: ResearchWorkRequest) => Promise<ResearchItemContext>;
   researchSnapshot?: (thread: ResearchThread) => Promise<ResearchSnapshot>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
+  withdrawResearch?: (thread: ResearchThread) => Promise<void>;
   updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchRun>;
   openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
   onResearchChanged?: (callback: (thread: ResearchThread) => void) => () => void;
