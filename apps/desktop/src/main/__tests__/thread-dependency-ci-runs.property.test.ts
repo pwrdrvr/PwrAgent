@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ThreadDependencyCiRunObservation, ThreadDependencyCiRunOutcome, ThreadDependencyCondition, ThreadDependencyEvidence,
 } from "@pwragent/shared";
-import { summarizeThreadDependencyPrompt, threadDependencyCiRunOutcomes } from "@pwragent/shared";
+import { summarizeThreadDependencyPrompt, threadDependencyCiRunId, threadDependencyCiRunOutcomes } from "@pwragent/shared";
+import { readDesktopSettingsConfig } from "../settings/desktop-config";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
@@ -191,6 +195,29 @@ describe("CI run URLs", () => {
     expect(parseCiRunUrl(GHES_URL)).toBeUndefined();
     expect(normalizeGithubEnterpriseHosts(Array.from({ length: 40 }, (_, index) => `ghe${index}.example.com`))).toHaveLength(16);
     expect(normalizeGithubEnterpriseHosts([7, null, "github.example.com"])).toEqual(["github.example.com"]);
+    // A URL's host never carries the default port, so an entry written with it still matches.
+    expect(parseCiRunUrl("https://github.example.com:443/example/app/actions/runs/77", { githubEnterpriseHosts: ["github.example.com:443"] })?.url).toBe(GHES_URL);
+  });
+
+  it("reads the authorized hosts from [git] github_enterprise_hosts in config.toml", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwragent-ci-run-hosts-"));
+    try {
+      const configPath = join(dir, "config.toml");
+      writeFileSync(configPath, '[git]\ngithub_enterprise_hosts = ["github.example.com", "*.example.com"]\n');
+      const hosts = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts;
+      expect(hosts).toEqual(["github.example.com", "*.example.com"]);
+      expect(parseCiRunUrl(GHES_URL, { githubEnterpriseHosts: hosts })?.url).toBe(GHES_URL);
+      expect(parseCiRunUrl("https://ghe.example.com/example/app/actions/runs/77", { githubEnterpriseHosts: hosts })).toBeUndefined();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("names the run by the id at the end of its URL", () => {
+    expect(threadDependencyCiRunId(RUN_URL)).toBe("8841207733");
+    expect(threadDependencyCiRunId(`${RUN_URL}/attempts/2`)).toBe("8841207733");
+    expect(threadDependencyCiRunId(PIPELINE_URL)).toBe("901");
+    // A namespace can spell another run path; the pipeline id is still the last one.
+    expect(threadDependencyCiRunId("https://gitlab.com/actions/runs/5/app/-/pipelines/901")).toBe("901");
+    expect(threadDependencyCiRunId("https://github.com/example/app/pull/12")).toBeUndefined();
   });
 
   it("refuses other hosts, plain http, credentials and non-run pages", () => {
@@ -389,6 +416,11 @@ describe("reading a GitLab pipeline", () => {
     expect(await readCiRun(forge({ status: "running" }, jobs, { deployments: forbidden }), ref, 0)).toMatchObject({ status: "waiting", gates: [{ environment: "deploy" }] });
     const limited = Object.assign(new Error("GitLab rate limit reached."), { code: "rate_limited" });
     await expect(readCiRun(forge({ status: "running" }, jobs, { deployments: limited }), ref, 0)).rejects.toThrow("rate limit");
+  });
+
+  it("refuses a job list that is not a list", async () => {
+    const get = vi.fn(async (_repository: unknown, path: string): Promise<unknown> => path.includes("/jobs?") ? { message: "401 Unauthorized" } : { id: 901, status: "running" });
+    await expect(readCiRun(get, ref, 0)).rejects.toThrow("invalid job list");
   });
 
   it("reads every page of jobs", async () => {

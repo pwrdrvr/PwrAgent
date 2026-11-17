@@ -408,7 +408,8 @@ github_enterprise_hosts = ["github.example.com", "ghe.internal.example:8443"]
 - An entry is one exact hostname, with its port when the server uses one. A
   run URL's host must equal an entry. There are no wildcards, and an entry
   never matches a subdomain.
-- Entries that are not a bare hostname are ignored. At most 16 are read.
+- Entries that are not a bare hostname are ignored, and so is a name without
+  a dot. `:443` is the default port and is dropped. At most 16 are read.
 - The key takes effect at the next registration or check; no restart is
   needed. Removing a host stops reads of its waiting runs at once. Those
   waits then end with a failure after 24 hours.

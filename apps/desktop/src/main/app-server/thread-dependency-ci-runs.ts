@@ -23,13 +23,14 @@ export const CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS = 16;
 /**
  * `[git] github_enterprise_hosts` as exact hosts. An entry is one hostname,
  * with a port when the server uses one. Anything else is dropped: a wildcard,
- * a URL, a path, or a host PwrAgent already knows. An entry never matches a
- * subdomain or a suffix.
+ * a URL, a path, a name without a dot, or a host PwrAgent already knows. An
+ * entry never matches a subdomain or a suffix. `:443` is dropped, because a
+ * URL's host never carries the default port.
  */
 export function normalizeGithubEnterpriseHosts(values: readonly unknown[] | undefined): string[] {
   const hosts = new Set<string>();
   for (const value of values ?? []) {
-    const host = typeof value === "string" ? value.trim().toLowerCase() : "";
+    const host = typeof value === "string" ? value.trim().toLowerCase().replace(/:443$/, "") : "";
     if (HOST.test(host) && host !== "github.com" && host !== "gitlab.com") hosts.add(host);
     if (hosts.size >= CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS) break;
   }
@@ -209,7 +210,8 @@ async function readGitlabPipeline(get: CiRunGet, ref: CiRunRef, now: number): Pr
   const jobs: Record<string, unknown>[] = [];
   for (let page = 1; page <= MAX_JOB_PAGES; page++) {
     const body = await get(ref.repository, `${base}/jobs?per_page=100&page=${page}`);
-    const rows = Array.isArray(body) ? body.map(record) : [];
+    if (!Array.isArray(body)) throw new Error("GitLab returned an invalid job list.");
+    const rows = body.map(record);
     jobs.push(...rows);
     if (rows.length < 100) break;
   }

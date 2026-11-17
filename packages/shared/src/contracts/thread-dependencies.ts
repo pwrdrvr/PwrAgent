@@ -84,7 +84,7 @@ export function threadDependencyCiRunPhrase(ciRun: Pick<ThreadDependencyCiRun, "
 
 /** The run id in a CI run URL, for labels; undefined when the URL names none. */
 export function threadDependencyCiRunId(url: string): string | undefined {
-  return url.match(/\/(?:actions\/runs|-\/pipelines)\/(\d+)/)?.[1];
+  return url.match(/\/(?:actions\/runs|-\/pipelines)\/(\d+)(?:\/attempts\/\d+)?\/?$/)?.[1];
 }
 
 /** "Waiting for approval: windows-signing · 2 passed, 1 running" from one check. */
