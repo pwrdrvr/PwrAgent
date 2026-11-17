@@ -112,6 +112,7 @@ describe("AgentToolMcpServer", () => {
         "read_tool_guide",
         "scan_thread_maintenance",
         "decisions_list",
+        "decisions_batch_results",
       ].sort();
       expect(tools.filter((tool) => tool.annotations?.readOnlyHint).map((tool) => tool.name).sort()).toEqual(readOnlyNames);
       // Every advertised tool has an explicit classification, including mixed tools

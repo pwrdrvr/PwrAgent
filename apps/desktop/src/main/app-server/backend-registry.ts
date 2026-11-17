@@ -104,7 +104,7 @@ import {
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
-import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
+import { decisionBatchSubAgentId, isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import {
   buildProjectPausedThreadMessageRefusal,
@@ -609,6 +609,7 @@ import {
 } from "@pwragent/owner-core/thread-turn-queue";
 import {
   getProjectForgeAutomationIndex,
+  summarizeProjectHeldWakeup,
   type ProjectForgeAutomationResolution,
 } from "./project-forge-automation-index";
 import {
@@ -2726,6 +2727,93 @@ export class DesktopBackendRegistry {
     for (const thread of threads.values()) {
       await this.threadUsageLedger.emitThreadPricingUpdated(thread);
     }
+  }
+
+  /**
+   * Writes a decisions_invoke batch's card on its calling thread, beside the
+   * system helpers, and tells every surface. Its usage is already on the
+   * thread as openai_decisions ledger lines, so the card carries none.
+   */
+  async publishDecisionBatchCard(report: {
+    caller: { backend: string; threadId: string };
+    batchId: string;
+    task: string;
+    message: string;
+    status: "running" | "success" | "failed" | "cancelled";
+    createdAt: number;
+    updatedAt: number;
+    completedAt?: number;
+  }): Promise<void> {
+    const backend = report.caller.backend as AppServerBackendKind;
+    const outcome = report.status === "success"
+      ? "success"
+      : report.status === "failed"
+        ? "failure"
+        : report.status === "cancelled"
+          ? "cancelled"
+          : undefined;
+    await this.writeSystemHelperSubAgent({
+      backend,
+      threadId: report.caller.threadId,
+      subAgent: {
+        monitorId: decisionBatchSubAgentId(report.batchId),
+        task: report.task,
+        status: report.status,
+        createdAt: report.createdAt,
+        updatedAt: report.updatedAt,
+        ownerRuntimeInstanceId: this.runtimeInstanceId,
+        ownerRegistrySessionId: this.registrySessionId,
+        backend,
+        agentName: "PwrAgent",
+        lastMessage: report.message,
+        ...(outcome ? { outcome } : {}),
+        ...(report.completedAt !== undefined ? { completedAt: report.completedAt } : {}),
+      },
+    });
+  }
+
+  /**
+   * Wakes a thread whose background decision batch ended, the way a task
+   * monitor's result does: a queued turn that starts now when the thread is
+   * idle and waits behind its turn when it is busy. A locked thread holds
+   * it until unlock; a paused project holds or discards it by its policy.
+   */
+  async deliverDecisionBatchWakeup(params: {
+    backend: string;
+    threadId: string;
+    batchId: string;
+    text: string;
+  }): Promise<void> {
+    const wake = {
+      backend: params.backend as AppServerBackendKind,
+      threadId: params.threadId,
+      input: [{ type: "text" as const, text: params.text }],
+      origin: "automation" as const,
+      messageOrigin: { kind: "pwragent" as const },
+    };
+    const queueEntryId = `decision-batch:${params.batchId}`;
+    const lock = await this.readThreadLock(wake.backend, wake.threadId);
+    if (lock) {
+      await this.submitHeldTurn({
+        ...wake,
+        queueEntryId,
+        holdReason: threadLockRefusalMessage(lock),
+        title: "Decision batch finished",
+      });
+      return;
+    }
+    const project = this.resolvePausedThreadProject(wake);
+    if (project) {
+      await this.deliverProjectPausedWakeup({
+        ...wake,
+        project,
+        queueEntryId,
+        source: "other",
+        summary: summarizeProjectHeldWakeup(`Decision batch finished: ${params.batchId}`),
+      });
+      return;
+    }
+    await this.submitTurn({ ...wake, queueEntryId });
   }
 
   /**

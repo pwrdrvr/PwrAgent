@@ -102,6 +102,19 @@ export function isSystemQueuedMessageTitleHelperSubAgent(
   return subAgent.monitorId.startsWith("system:queued-message-titles:");
 }
 
+/** A decisions_invoke batch's card; the id after the prefix is its batch id. */
+export const DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX = "system:decision-batch:";
+
+export function decisionBatchSubAgentId(batchId: string): string {
+  return `${DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX}${batchId}`;
+}
+
+export function isDecisionBatchSubAgent(
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
+): boolean {
+  return subAgent.monitorId.startsWith(DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX);
+}
+
 export function isTokenMiserSubAgent(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): boolean {
@@ -134,6 +147,9 @@ export function subAgentOriginLabel(
   if (isTokenMiserSubAgent(subAgent)) {
     return "PwrAgent Token Miser gate";
   }
+  if (isDecisionBatchSubAgent(subAgent)) {
+    return "PwrAgent decision batch";
+  }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
@@ -160,6 +176,9 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
   if (isTokenMiserSubAgent(subAgent)) {
     return "Gate";
   }
+  if (isDecisionBatchSubAgent(subAgent)) {
+    return "Decisions";
+  }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
@@ -180,6 +199,9 @@ export function subAgentPricingUsageTitle(
   }
   if (isTokenMiserSubAgent(subAgent)) {
     return "Token Miser gate";
+  }
+  if (isDecisionBatchSubAgent(subAgent)) {
+    return "Decision batch";
   }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex sub-agent usage";

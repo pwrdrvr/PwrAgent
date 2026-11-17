@@ -84,6 +84,8 @@ const SEARCH_ALIASES: Record<string, string> = {
   decisions_invoke: "decision decisions decide run evaluate classify classifier judge grade score answer test new input jev typesafe clef",
   decisions_update: "decision decisions edit change revise rubric prompt version",
   decisions_delete: "decision decisions remove retire",
+  decisions_batch_results: "decision decisions batch results answers read page progress status background failed skipped",
+  decisions_batch_cancel: "decision decisions batch cancel stop abort background",
 };
 
 const STOP_WORDS = new Set(["a", "an", "and", "can", "for", "i", "in", "is", "it", "me", "my", "of", "on", "or", "our", "please", "the", "to", "use", "want", "with"]);

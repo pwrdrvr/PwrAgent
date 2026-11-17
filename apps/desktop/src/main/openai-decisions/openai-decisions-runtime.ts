@@ -9,15 +9,16 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfileName } from "../profile";
 import type { OpenAIDecisionRegistryStorage } from "../storage/openai-decision-store";
 import { createOpenAIDecisionStorage } from "../storage/desktop-runtime-storage";
-import { OpenAIDecisionsService } from "./openai-decisions-service";
+import { OpenAIDecisionsService, type OpenAIDecisionsServiceOptions } from "./openai-decisions-service";
 
 const openAIDecisionsLog = getMainLogger("pwragent:openai-decisions");
 
 let flushPendingUsage: (() => Promise<void>) | undefined;
 
 /**
- * Writes batched decision usage before the profile database closes, and
- * writes any request still in flight as soon as it finishes.
+ * Cancels running decision batches, then writes batched decision usage
+ * before the profile database closes, and writes any request still in
+ * flight as soon as it finishes.
  */
 export async function flushOpenAIDecisionsUsage(): Promise<void> {
   await flushPendingUsage?.();
@@ -33,6 +34,10 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     resolveOpenAIDecisionsSettings: () => { organizationId?: string; projectId?: string };
   };
   recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void>;
+  /** Shows a batch's progress as a card on its calling thread. */
+  reportBatch?: OpenAIDecisionsServiceOptions["reportBatch"];
+  /** Wakes the calling thread when its background batch ends. */
+  wakeThread?: OpenAIDecisionsServiceOptions["wakeThread"];
 }): PwrAgentOpenAIDecisionsHandler {
   // Opened on first tool call, so installing the handler never touches the
   // profile database during boot.
@@ -55,17 +60,21 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     resolveDefaultProvider: async () => await resolveDefaultDecisionProvider(params.settings),
     profileId: () => resolveActiveProfileName(),
     recordUsageLines: params.recordUsageLines,
+    ...(params.reportBatch ? { reportBatch: params.reportBatch } : {}),
+    ...(params.wakeThread ? { wakeThread: params.wakeThread } : {}),
     log: {
       info: (message, fields) => openAIDecisionsLog.info(message, fields),
       warn: (message, fields) => openAIDecisionsLog.warn(message, fields),
     },
   });
-  flushPendingUsage = async () => await service.closeUsage();
+  flushPendingUsage = async () => await service.close();
   return {
     register: (caller, args) => service.register(caller, args),
     list: (caller, args) => service.list(caller, args),
-    invoke: async (caller, args, signal) => await service.invoke(caller, args, signal),
+    invoke: async (caller, args, signal, onProgress) => await service.invoke(caller, args, signal, onProgress),
     update: (caller, args) => service.update(caller, args),
     delete: (caller, args) => service.delete(caller, args),
+    batchResults: (caller, args) => service.batchResults(caller, args),
+    cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
   };
 }

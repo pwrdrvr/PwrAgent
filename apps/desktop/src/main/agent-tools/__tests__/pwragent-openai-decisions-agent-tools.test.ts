@@ -33,9 +33,11 @@ beforeEach(() => {
   handler = {
     register: (caller, args) => service.register(caller, args),
     list: (caller, args) => service.list(caller, args),
-    invoke: async (caller, args, signal) => await service.invoke(caller, args, signal),
+    invoke: async (caller, args, signal, onProgress) => await service.invoke(caller, args, signal, onProgress),
     update: (caller, args) => service.update(caller, args),
     delete: (caller, args) => service.delete(caller, args),
+    batchResults: (caller, args) => service.batchResults(caller, args),
+    cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
   };
 });
 afterEach(() => db.close());
@@ -55,13 +57,13 @@ function toolNames(catalog: ReturnType<typeof decisionsCatalog>) {
   };
 }
 
-it("publishes the same five fixed tools as Codex dynamic tools and on the MCP server", async () => {
+it("publishes the same seven fixed tools as Codex dynamic tools and on the MCP server", async () => {
   const catalog = decisionsCatalog();
-  expect(catalog.summary).toMatchObject({ id: "openai_decisions", enabled: true, toolCount: 5 });
+  expect(catalog.summary).toMatchObject({ id: "openai_decisions", enabled: true, toolCount: 7 });
   const before = toolNames(catalog);
   expect(before.dynamic).toEqual(OPENAI_DECISIONS_TOOL_NAMES.map((name) => `pwragent/${name}`));
   expect(before.mcp).toEqual(expect.arrayContaining([...OPENAI_DECISIONS_TOOL_NAMES]));
-  expect(before.mcp).toHaveLength(5);
+  expect(before.mcp).toHaveLength(7);
   const advertised = JSON.stringify([catalog.dynamicTools, catalog.router.buildMcpTools()]);
   expect(advertised).not.toMatch(/sk-|openaiDecisionsApiKey|Bearer /);
 

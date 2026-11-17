@@ -11,6 +11,7 @@ import type {
 } from "./agent-tool-definition.js";
 import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
+import { DECISION_BATCH_LIMITS } from "../openai-decisions/decision-batches.js";
 
 export const PWRAGENT_OPENAI_DECISIONS_UNAVAILABLE_MESSAGE =
   "OpenAI Decisions tools are not available in this PwrAgent runtime.";
@@ -18,8 +19,8 @@ export const PWRAGENT_OPENAI_DECISIONS_UNAVAILABLE_MESSAGE =
 type DecisionCaller = { backend: string; threadId: string };
 
 /**
- * One handler for all five tools. The calling thread comes from the call
- * context, never from arguments. Arguments are the model's data; the
+ * One handler for every decisions tool. The calling thread comes from the
+ * call context, never from arguments. Arguments are the model's data; the
  * handler loads the OpenAI key itself.
  */
 export type PwrAgentOpenAIDecisionsHandler = {
@@ -29,9 +30,13 @@ export type PwrAgentOpenAIDecisionsHandler = {
     caller: DecisionCaller,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    onProgress?: (message: string) => void,
   ) => Promise<unknown>;
   update: (caller: DecisionCaller, args: Record<string, unknown>) => unknown;
   delete: (caller: DecisionCaller, args: Record<string, unknown>) => unknown;
+  /** Reads a batch the calling thread started, or lists its batches. */
+  batchResults: (caller: DecisionCaller, args: Record<string, unknown>) => unknown;
+  cancelBatch: (caller: DecisionCaller, args: Record<string, unknown>) => Promise<unknown>;
 };
 
 /** An error that carries a stable tool failure code, such as `decision_not_found`. */
@@ -93,9 +98,11 @@ async function dispatch(
   switch (name) {
     case "decisions_register": return handler.register(caller, args);
     case "decisions_list": return handler.list(caller, args);
-    case "decisions_invoke": return await handler.invoke(caller, args, context.signal);
+    case "decisions_invoke": return await handler.invoke(caller, args, context.signal, context.reportProgress);
     case "decisions_update": return handler.update(caller, args);
     case "decisions_delete": return handler.delete(caller, args);
+    case "decisions_batch_results": return handler.batchResults(caller, args);
+    case "decisions_batch_cancel": return await handler.cancelBatch(caller, args);
   }
 }
 
@@ -122,14 +129,25 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
   decisions_list: [
     "List registered OpenAI decisions visible to this thread.",
     "Each entry has its id, name, version, scope, provider, questions, choice values or score labels, and input schema.",
+    "timing gives one request's p50Ms, meanMs, minMs and maxMs over the version's latest 200 successes.",
+    "It appears once the version has run since PwrAgent started.",
     "Instructions and prefixes appear only with includeInstructions.",
   ].join(" "),
   decisions_invoke: [
     "Run a registered decision on new input, or pass definition to run one ad hoc without registering it.",
+    "One input returns its answers. For OpenAI it also returns the request id, response body, and token usage with an estimated price.",
     "Pass inputs instead of input to run a batch of up to 500 items, at most 8 at once.",
-    "A batch returns one result per item in input order, and a failed item does not stop the rest.",
-    "Every input is checked against the schema before any request.",
-    "Returns every answer, and for OpenAI the request id and token usage with an estimated API price.",
+    "Every input is checked against the schema before any request, and a failed item does not stop the rest.",
+    "A batch returns a batchId, totals, and results by index: each item's answers and confidence, without response bodies.",
+    "Pass detail full for response bodies, request ids, and per-item usage.",
+    "Results stop at 64 KiB. nextFrom then says where decisions_batch_results continues.",
+    "The thread shows the batch's progress while it runs.",
+    "Estimate a batch as inputs / concurrency x timing.p50Ms from decisions_list.",
+    "Wait for a batch you expect to finish within about a minute.",
+    "For a longer or unknown one, pass background true: the call returns the batchId at once, so end your turn.",
+    "PwrAgent then starts a turn on this thread when the batch ends.",
+    "If a batch call is cancelled or times out, its finished answers are kept.",
+    "Call decisions_batch_results without arguments to find the batchId.",
     "A refusal for one question is still a success.",
     "OpenAI calls bill the operator's API project, and Jev calls bill their TypeSafe account.",
     "Pass version to pin an older stored version. Omit it for the latest.",
@@ -147,6 +165,23 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "Every version stops running, and invoke returns decision_deleted.",
     "The name can then be registered again as a new decision.",
   ].join(" "),
+  decisions_batch_results: [
+    "Read a decisions_invoke batch this thread started, while it runs or after it ends.",
+    "Pass batchId for its state, totals, and a page of finished items in input order.",
+    "status picks succeeded, failed (skipped included), or skipped items. The default is all.",
+    "from is the first input index and limit the most items, 100 by default and 500 at most.",
+    "A page also stops at 64 KiB. Pass nextFrom back as from for the rest.",
+    "Items are compact, answers and confidence only. Pass detail full for response bodies and per-item usage.",
+    "Without batchId, lists this thread's batches, newest first.",
+    "Batches are kept in memory until PwrAgent quits, for 24 hours, and the latest 10 per thread.",
+    "Reading makes no API call.",
+  ].join(" "),
+  decisions_batch_cancel: [
+    "Cancel a running decisions_invoke batch this thread started.",
+    "Requests in flight are aborted and unsent items are skipped.",
+    "Finished answers stay readable with decisions_batch_results.",
+    "No wake-up turn follows a cancel.",
+  ].join(" "),
 };
 
 const ANNOTATIONS: Record<OpenAIDecisionsToolName, AgentToolDefinition["annotations"]> = {
@@ -155,6 +190,14 @@ const ANNOTATIONS: Record<OpenAIDecisionsToolName, AgentToolDefinition["annotati
   decisions_invoke: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   decisions_update: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   decisions_delete: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  decisions_batch_results: { readOnlyHint: true, openWorldHint: false },
+  decisions_batch_cancel: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+};
+
+const DETAIL_SCHEMA = {
+  type: "string",
+  enum: ["compact", "full"],
+  description: "compact: answers and confidence. full: also response bodies, request ids, and per-item usage. Default compact for batches, full for one input.",
 };
 
 const NAME_SCHEMA = {
@@ -293,6 +336,11 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
         maximum: OPENAI_DECISION_BOUNDS.bulkMaxConcurrency,
         description: "Requests in flight at once for inputs. Default 8.",
       },
+      detail: DETAIL_SCHEMA,
+      background: {
+        type: "boolean",
+        description: "inputs only. Return the batchId at once and run the batch after the call. PwrAgent starts a turn on this thread when it ends.",
+      },
     },
   },
   decisions_update: {
@@ -307,6 +355,34 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     properties: {
       name: NAME_SCHEMA,
       decisionId: { type: "string" },
+    },
+  },
+  decisions_batch_results: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      batchId: { type: "string", description: "From decisions_invoke. Omit to list this thread's batches." },
+      status: {
+        type: "string",
+        enum: ["all", "succeeded", "failed", "skipped"],
+        description: "Which finished items to return. failed includes skipped. Default all.",
+      },
+      from: { type: "integer", minimum: 0, description: "First input index to read. Default 0. Pass nextFrom for the next page." },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: DECISION_BATCH_LIMITS.pageMaxItems,
+        description: "Most items to return. Default 100.",
+      },
+      detail: DETAIL_SCHEMA,
+    },
+  },
+  decisions_batch_cancel: {
+    type: "object",
+    additionalProperties: false,
+    required: ["batchId"],
+    properties: {
+      batchId: { type: "string" },
     },
   },
 };

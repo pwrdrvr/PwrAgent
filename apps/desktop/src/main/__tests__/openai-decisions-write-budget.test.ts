@@ -59,3 +59,59 @@ it("costs one commit per registry change and one per 50 invoked requests", async
     rmSync(fixture.tempDir, { recursive: true, force: true });
   }
 });
+
+// A batch's card on its thread is the one write a batch adds. It is
+// rewritten at start, at each further tenth of its items, and at the end,
+// so it costs at most 11 commits whatever the batch's size.
+it("costs at most 11 card commits per batch, not one per item", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("openai-decisions-card-writes-");
+  const db = StateDb.open(fixture.dbPath);
+  try {
+    const overlay = new SqliteOverlayStore(db);
+    let wakes = 0;
+    const service = new OpenAIDecisionsService({
+      store: new OpenAIDecisionStore(db),
+      readApiKey: async () => undefined,
+      readSystemOneTarget: async () => ({ endpoint: "https://jev.test", model: "jev-latest", apiKey: "sk-test-card-budget-key" }),
+      readAccountSettings: () => ({}),
+      profileId: () => "test-profile",
+      recordUsageLines: async () => undefined,
+      // The registry's publishDecisionBatchCard writes the same row.
+      reportBatch: async (report) => {
+        await overlay.upsertThreadSubAgent({
+          backend: "codex",
+          threadId: report.caller.threadId,
+          subAgent: {
+            monitorId: `system:decision-batch:${report.batchId}`,
+            task: report.task,
+            status: report.status,
+            createdAt: report.createdAt,
+            updatedAt: report.updatedAt,
+            agentName: "PwrAgent",
+            lastMessage: report.message,
+          },
+        });
+      },
+      wakeThread: async () => { wakes += 1; },
+      fetch: async () => new Response(JSON.stringify({ answers: { q1: { noul: 0.5 } } }), { status: 200 }),
+    });
+    const caller = { backend: "codex", threadId: "thread-a" };
+    const { writes } = await measureSqliteWrites(async () => {
+      await service.invoke(caller, {
+        definition: { provider: "jev", instructions: "Is this urgent?", question: { type: "predicate" } },
+        inputs: Array.from({ length: 500 }, (_, index) => `Server down ${index}`),
+      });
+    });
+    expect(writes.commits).toBe(11);
+    expect(wakes).toBe(0);
+    expectSqliteWriteBudget({
+      scenario: "openai-decisions-batch-card",
+      note: "one 500-item decisions_invoke batch: its thread card written at start, at each tenth, and at the end. Item results stay in memory. 11 commits (~0.23 MB WAL) per batch whatever its size; ~1.2 MB/day at 5 large batches/day, ~12 MB/day at 50.",
+      writes,
+    });
+  } finally {
+    db.close();
+    rmSync(fixture.tempDir, { recursive: true, force: true });
+  }
+});

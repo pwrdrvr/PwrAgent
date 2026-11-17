@@ -37,6 +37,8 @@ Prefer the causal recommendation over unrelated newer traffic. Sole-surface sele
 Send messages or files only when authorized.
 Use decisions_list, then decisions_invoke, to run a registered OpenAI decision on new evidence.
 decisions_register stores one locally. decisions_invoke also takes an ad hoc definition, and inputs for a batch of up to 500.
+A batch returns a batchId and compact answers; read more pages, failures, or full bodies with decisions_batch_results.
+Wait for a batch expected to finish within a minute (inputs / concurrency x decisions_list timing.p50Ms). Otherwise pass background true and end the turn; PwrAgent starts a turn when it ends.
 Each run bills the operator's provider account. Use one batch call instead of a loop of calls.
 Use search_mcp_tools to find tools on selected connections.
 Use call_mcp_tool with the returned identity and schemaRevision.
