@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // These libraries belong to configured-only providers or first-use features.
 // Their code must be absent from the static emitted startup closure, even if
 // a bundler would defer their initializer inside a giant startup file.
-const optionalInput = /messaging\/providers\/|node_modules\/(?:discord\.js|grammy|@slack\/(?:socket-mode|web-api)|@larksuiteoapi\/node-sdk|@line\/bot-sdk|@mattermost\/client|@anthropic-ai\/claude-agent-sdk|@modelcontextprotocol\/sdk|@agentclientprotocol\/sdk|@napi-rs\/canvas|pdfjs-dist|sigstore|zod|ajv)\//;
+const optionalInput = /messaging\/core\/messaging-controller\.[jt]s$|messaging\/providers\/|node_modules\/(?:discord\.js|grammy|@slack\/(?:socket-mode|web-api)|@larksuiteoapi\/node-sdk|@line\/bot-sdk|@mattermost\/client|@anthropic-ai\/claude-agent-sdk|@modelcontextprotocol\/sdk|@agentclientprotocol\/sdk|@napi-rs\/canvas|pdfjs-dist|sigstore|zod|ajv)\//;
 
 /** Assert the daemon's own load trace at readiness, before feature requests. */
 export function assertPortableStartupLoads(directory, urls) {
@@ -44,6 +44,7 @@ export async function checkPortableRuntime(directory) {
   }
   visit(manifest.entries.index);
   const optional = Object.entries(manifest.chunks).filter(([, chunk]) => chunk.entryPoint && optionalInput.test(chunk.entryPoint));
+  assert.ok(optional.some(([, chunk]) => chunk.entryPoint.endsWith("messaging/core/messaging-controller.ts")), "Missing lazy messaging workflow");
   for (const provider of ["discord", "telegram", "mattermost", "slack", "feishu", "line"]) {
     assert.ok(optional.some(([, chunk]) => chunk.entryPoint.includes(`messaging/providers/${provider}/`)), `Missing lazy provider: ${provider}`);
   }
@@ -66,6 +67,8 @@ export async function checkPortableRuntime(directory) {
     const owner = await import(pathToFileURL(path.join(root, manifest.entries.index)).href);
     assert.equal(typeof owner.startHeadlessHost, "function");
     assert.equal(typeof owner.shutdownHeadlessHost, "function");
+    assert.equal(require("./index.js").startHeadlessHost, owner.startHeadlessHost,
+      "Native ESM imports and Node 24 require consumers share one owner");
     for (const file of closure) assert.ok(loaded.has(pathToFileURL(path.join(root, file)).href), `Startup probe missed ${file}`);
     for (const [file] of optional) assert.ok(!loaded.has(pathToFileURL(path.join(root, file)).href), `Startup loaded optional chunk: ${file}`);
     for (const url of loaded) assert.ok(!optionalInput.test(url.replaceAll("\\", "/")), `Startup loaded optional package: ${url}`);
@@ -73,6 +76,9 @@ export async function checkPortableRuntime(directory) {
       const url = pathToFileURL(path.join(root, file)).href;
       const feature = await import(url);
       assert.ok(Object.keys(feature).length > 0, `First use returned no exports: ${file}`);
+      if (manifest.chunks[file].entryPoint.endsWith("messaging/core/messaging-controller.ts")) {
+        assert.equal(typeof feature.MessagingController, "function", "First use must expose the messaging workflow");
+      }
       const provider = manifest.chunks[file].entryPoint.match(/messaging\/providers\/([^/]+)\//)?.[1];
       if (provider) {
         const adapter = `create${provider[0].toUpperCase()}${provider.slice(1)}Adapter`;

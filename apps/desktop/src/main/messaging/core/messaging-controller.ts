@@ -1,4 +1,5 @@
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
+import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
 import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, buildQueuedInputPreview, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type PreparedInputStartResult, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage, type PendingNewThreadPromptWindow, type PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
@@ -16379,17 +16380,7 @@ export class MessagingController {
   }
 }
 
-export function isMessagingInteractivePendingRequest(
-  notification: AgentEvent["notification"],
-): notification is AppServerPendingRequestNotification {
-  return (
-    notification.method === "item/tool/requestUserInput"
-    || notification.method === "mcpServer/elicitation/request"
-    || notification.method === "applyPatchApproval"
-    || notification.method === "execCommandApproval"
-    || notification.method.toLowerCase().includes("requestapproval")
-  );
-}
+export { isMessagingInteractivePendingRequest };
 
 function originalAttachmentActorKey(event: MessagingInboundEvent): string {
   return MessagingOriginalAttachmentStore.actorKey(
