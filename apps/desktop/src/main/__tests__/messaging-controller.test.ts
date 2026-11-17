@@ -243,9 +243,10 @@ describe("MessagingController", () => {
     const errorEntered = createDeferred<void>();
     const errorDelivery = createDeferred<void>();
     let handling: Promise<void> | undefined;
+    let created: Awaited<ReturnType<typeof createHarness>> | undefined;
     try {
       const store = new SqliteMessagingStore(db);
-      const harness = await createHarness({
+      const harness = created = await createHarness({
         store,
         startTurn: async (request) => {
           startupEntered.resolve();
@@ -289,7 +290,7 @@ describe("MessagingController", () => {
       startup.resolve();
       errorDelivery.resolve();
       await handling;
-      await settleHarnessWork();
+      await settleHarness(created);
       db.close();
       if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
       else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
@@ -1155,17 +1156,20 @@ describe("MessagingController", () => {
     expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
   });
 
-  it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async () => {
+  it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async ({ signal }) => {
     // Model: new reviews fix by default; only a toggle changes that choice.
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("toggle", "scope", "mode", "reviewer"), { maxLength: 6 }),
       async (steps) => {
+        // A timed-out test keeps running. Stop before starting more work.
+        signal.throwIfAborted();
         // This property checks picker state, not file persistence. Repeating
         // the JSON store's reads and atomic rewrites for 25 examples can
         // exhaust the test timeout while other survey files are doing I/O.
         const db = openInMemoryStateDb();
+        let created: Awaited<ReturnType<typeof createHarness>> | undefined;
         try {
-          const harness = await createHarness({ store: new SqliteMessagingStore(db), listBackends: async () => ({
+          const harness = created = await createHarness({ store: new SqliteMessagingStore(db), listBackends: async () => ({
             fetchedAt: 1000, backends: [
               buildBackendSummary({ capabilities: {
                 ...buildBackendSummary().capabilities, reviewRunner: true,
@@ -1199,7 +1203,7 @@ describe("MessagingController", () => {
           }));
         } finally {
           try {
-            await settleHarnessWork();
+            await settleHarness(created);
           } finally {
             db.close();
           }
@@ -1236,8 +1240,9 @@ describe("MessagingController", () => {
     const { tempDir, dbPath } = createTempStateDb("pwragent-review-autofix-writes-");
     tempDirs.push(tempDir);
     const db = StateDb.open(dbPath);
+    let created: Awaited<ReturnType<typeof createHarness>> | undefined;
     try {
-      const harness = await createHarness({
+      const harness = created = await createHarness({
         store: new SqliteMessagingStore(db),
         listBackends: async () => ({
           fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
@@ -1256,7 +1261,7 @@ describe("MessagingController", () => {
         writes,
       });
     } finally {
-      await settleHarnessWork();
+      await settleHarness(created);
       db.close();
       if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
       else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
@@ -21091,7 +21096,7 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("keeps delivered text unchanged under arbitrary backend event redeliveries", async () => {
+  it("keeps delivered text unchanged under arbitrary backend event redeliveries", async ({ signal }) => {
     const turn = fc.array(fc.record({
       text: fc.string({ maxLength: 24 }),
       // Retry any previously seen event here, including after turn/completed.
@@ -21121,8 +21126,16 @@ describe("MessagingController", () => {
         }];
 
         async function deliver(withRetries: boolean): Promise<string[]> {
-          const harness = await createHarness();
+          // A timed-out test keeps running. Stop before starting more work.
+          signal.throwIfAborted();
+          // This property checks delivery deduplication, not file persistence.
+          // The JSON store serializes a read, or a read and an atomic rewrite,
+          // for each store operation: about 1,500 file operations across 25
+          // examples, which exceeded the timeout under full-suite I/O load.
+          const db = openInMemoryStateDb();
+          let created: Awaited<ReturnType<typeof createHarness>> | undefined;
           try {
+            const harness = created = await createHarness({ store: new SqliteMessagingStore(db) });
             await bindThread(harness);
             harness.delivered.length = 0;
             for (const [index, event] of events.entries()) {
@@ -21140,7 +21153,11 @@ describe("MessagingController", () => {
                 intent.kind === "message" && intent.role === "assistant")
               .flatMap((intent) => intent.parts.flatMap((part) => "text" in part ? [part.text] : []));
           } finally {
-            await settleHarnessWork();
+            try {
+              await settleHarness(created);
+            } finally {
+              db.close();
+            }
           }
         }
 
@@ -21151,6 +21168,33 @@ describe("MessagingController", () => {
         expect(unique).toEqual(texts);
       },
     ), { numRuns: 25 });
+  });
+
+  it("settles one test harness without disposing another test's harness", async () => {
+    // A property that times out keeps running into the next test. Its
+    // per-run teardown once disposed every registered controller, so the next
+    // test's controller delivered nothing.
+    const leftover = await createHarness();
+    const current = await createHarness();
+    await bindThread(current);
+    current.delivered.length = 0;
+
+    await settleHarness(leftover);
+    await current.controller.handleBackendEvent({
+      backend: "codex",
+      notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "item-1", type: "agentMessage", phase: "final", text: "Still delivered." },
+      } },
+    } satisfies AgentEvent);
+
+    expect(current.delivered).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ text: "Still delivered." })],
+      }),
+    ]);
   });
 
   it("posts one final response when turn completion repeats it with commentary", async () => {
