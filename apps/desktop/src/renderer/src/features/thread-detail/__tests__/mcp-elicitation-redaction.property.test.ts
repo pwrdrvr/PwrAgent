@@ -15,6 +15,7 @@ const commitKey = fc.constantFrom(
   "headSha",
   "expectedHeadSha",
   "expected_head_sha",
+  "HEAD_SHA",
   "commitSha",
   "baseOid",
   "oid",
@@ -25,13 +26,18 @@ const commitKey = fc.constantFrom(
 );
 
 // Keys that say nothing about commits. A 40-hex value here may be a classic
-// GitHub personal access token, so it stays hidden.
-const otherKey = fc.constantFrom("value", "labels", "body", "id", "data", "query");
+// GitHub personal access token, so it stays hidden. The last six merely end
+// in a commit word's letters.
+const otherKey = fc.constantFrom(
+  "value", "labels", "body", "id", "data", "query",
+  "void", "avoid", "prev", "abbrev", "hashas", "paranoid",
+);
 
 describe("redactDisplayValue commit ids", () => {
   it("shows a git object id under a commit-naming key, top-level or nested", () => {
     fc.assert(fc.property(commitKey, objectId, (key, sha) => {
       expect(redactDisplayValue(sha, { key })).toBe(sha);
+      expect(redactDisplayValue(`${sha}\n`, { key })).toBe(`${sha}\n`);
       expect(JSON.parse(redactDisplayValue({ [key]: sha }, { key: "arguments" }))).toEqual({ [key]: sha });
     }));
   });

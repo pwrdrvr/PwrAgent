@@ -2,6 +2,7 @@ import {
   FORGE_APPROVAL_MERGE_METHOD_CHOICE_META_KEY,
   FORGE_APPROVAL_REMEMBER_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
+  isGitObjectId,
   isSecretFieldLabel,
   isSecretFieldName,
   mcpElicitationPurpose,
@@ -372,6 +373,10 @@ const SECRET_ASSIGNMENT = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|se
 const BEARER_CREDENTIAL = /(\bbearer\s+)\S+/giu;
 
 function redactDisplayString(value: string, key?: string): string {
+  // A commit id under a key that names one is not a credential: the
+  // operator must see which head a merge approval pins. Checked before the
+  // multi-line path so a trailing newline does not hide it line by line.
+  if (isCommitIdField(value, key)) return value;
   // Multi-line text is something to read, such as a pull request body, so
   // only the credential in it is hidden. Hiding the whole body for one
   // `SECRET=` line would leave the operator approving text they cannot see.
@@ -384,20 +389,21 @@ function redactDisplayString(value: string, key?: string): string {
       .replace(BEARER_CREDENTIAL, "$1[redacted]");
   }
   // A tool's display-name argument is not a credential merely because it is
-  // long, and neither is a commit id under a key that names one: the
-  // operator must see which head a merge approval pins. Explicit
-  // bearer/credential assignments remain hidden in any field.
-  if (looksSecret(value, key === "name" || isGitObjectId(value, key))) return "[redacted]";
+  // long. Explicit bearer/credential assignments remain hidden in any field.
+  if (looksSecret(value, key === "name")) return "[redacted]";
   return redactUrl(value);
 }
 
+// The key's last word must name a commit: a whole key (`sha`), one after a
+// separator (`head_sha`), or a camelCase word (`expectedHeadSha`). A bare
+// suffix would also admit keys such as `void` or `prev`.
+const COMMIT_WORD = /(?:^|[_.-])(?:sha|oid|commit|rev|revision)$/iu;
+const COMMIT_CAMEL_WORD = /[a-z0-9](?:Sha|SHA|Oid|OID|Commit|Rev|Revision)$/u;
+
 // Both halves are required. A 40-hex value alone may be a classic GitHub
 // personal access token, so the key must say it holds a commit.
-const COMMIT_KEY = /(?:sha|oid|commit|rev|revision)$/iu;
-const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
-
-function isGitObjectId(value: string, key: string | undefined): boolean {
-  return COMMIT_KEY.test(key ?? "") && GIT_OBJECT_ID.test(value.trim());
+function isCommitIdField(value: string, key = ""): boolean {
+  return (COMMIT_WORD.test(key) || COMMIT_CAMEL_WORD.test(key)) && isGitObjectId(value.trim());
 }
 
 function baseState(
