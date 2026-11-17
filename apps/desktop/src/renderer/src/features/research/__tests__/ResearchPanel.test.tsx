@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { projectResearchRun, searchResearchItems, type NavigationThreadSummary, type ResearchEvent, type ResearchSnapshot, type ResearchItemContext } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { chooseSelectOption } from "../../../test/select";
 import { ResearchPanel } from "../ResearchPanel";
 
 const thread = { id: "parent", source: "codex", title: "Queue investigation" } as NavigationThreadSummary;
@@ -23,6 +24,7 @@ function apiFor(data = snapshot()) {
   const api = {
     researchSnapshot: vi.fn(async () => data),
     prepareResearch: vi.fn(async () => ({ intentId: "prepared-intent" })),
+    withdrawResearch: vi.fn(async () => {}),
     onResearchChanged: vi.fn((callback) => { changed = () => callback({ backend: "codex", threadId: "parent" }); return unsubscribe; }),
     updateResearch: vi.fn(async () => data.runs[0]!),
     submitThreadReply: vi.fn<NonNullable<DesktopApi["submitThreadReply"]>>(async () => ({ backend: "codex", threadId: "parent", queueStatus: "queued", queueEntryId: "queue" })),
@@ -35,24 +37,42 @@ function apiFor(data = snapshot()) {
 }
 
 describe("Research panel", () => {
-  it("searches compact pages, loads one selected item and uses its version for progress", async () => {
+  it("searches compact pages, opens one item in place and uses its version for progress", async () => {
     const { api, mocks } = apiFor(snapshot(15));
     render(<ResearchPanel desktopApi={api} thread={thread} />);
-    await screen.findByLabelText("Recorded research graph");
-    fireEvent.click(screen.getByRole("button", { name: "Items" }));
-    expect(await screen.findByText(/17 matching items/)).toBeInTheDocument();
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Items" }));
+    expect(await screen.findByText("17 items · showing 10")).toBeInTheDocument();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Type" }), "Findings");
     fireEvent.change(screen.getByLabelText("Search items"), { target: { value: "Counterexample 14" } });
-    fireEvent.change(screen.getByLabelText("Item type"), { target: { value: "finding" } });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     await waitFor(() => expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ query: "Counterexample 14", type: "finding" }) })));
-    fireEvent.click(await screen.findByRole("button", { name: /Finding · Open Counterexample 14/ }));
-    expect(await screen.findByLabelText("Selected research item")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 14/ }));
+    const heading = await screen.findByRole("heading", { name: "Counterexample from Events" });
+    expect(heading).toHaveFocus();
+    expect(screen.queryByText(/items · showing/)).not.toBeInTheDocument();
     expect(mocks.readResearchItem).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "run", itemId: "f14" });
     expect(screen.getByRole("button", { name: "Claim" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Work update reason"), { target: { value: "Reproduce this case" } });
+    fireEvent.change(screen.getByLabelText("Progress note"), { target: { value: "Reproduce this case" } });
     fireEvent.click(screen.getByRole("button", { name: "Claim" }));
     await waitFor(() => expect(mocks.updateResearchItem).toHaveBeenCalledWith(expect.objectContaining({ command: { action: "work", itemId: "f14", expectedVersion: 16, state: "claimed", reason: "Reproduce this case" } })));
     expect(screen.queryByText("Verified")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "← Back to results" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Counterexample Counterexample 14/ })).toHaveFocus());
+    expect(screen.getByRole("combobox", { name: "Type" })).toHaveTextContent("Findings");
+  });
+
+  it("opens an item directly from the map, findings, relations and activity", async () => {
+    const data = snapshot(2);
+    const { api, mocks } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 1/ }));
+    expect(await screen.findByRole("heading", { name: "Counterexample from Events" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Items" })).toHaveAttribute("aria-selected", "true");
+    expect(mocks.readResearchItem).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: "f1" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    fireEvent.click(screen.getByRole("button", { name: "Counterexample 0" }));
+    await waitFor(() => expect(mocks.readResearchItem).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: "f0" })));
   });
 
   it("does not report a child assignment before its request is accepted", async () => {
@@ -62,39 +82,38 @@ describe("Research panel", () => {
     const pending = Promise.withResolvers<Awaited<ReturnType<NonNullable<DesktopApi["submitThreadReply"]>>>>();
     mocks.submitThreadReply.mockImplementation(async () => await pending.promise);
     render(<ResearchPanel desktopApi={api} thread={thread} />);
-    await screen.findByLabelText("Recorded research graph");
-    fireEvent.click(screen.getByRole("button", { name: "Items" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Finding · Open Counterexample 0/ }));
-    await screen.findByLabelText("Selected research item");
-    fireEvent.change(screen.getByLabelText("Task for child"), { target: { value: "Investigate only this counterexample" } });
-    fireEvent.click(screen.getByRole("button", { name: "Request child for this item" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 0/ }));
+    fireEvent.change(await screen.findByLabelText("Task for a focused child"), { target: { value: "Investigate only this counterexample" } });
+    fireEvent.click(screen.getByRole("button", { name: "Request focused child" }));
     expect(screen.queryByText(/Assignment request queued/)).not.toBeInTheDocument();
     await act(async () => pending.resolve({ backend: "codex", threadId: "parent", queueStatus: "queued", queueEntryId: "q" }));
     expect(screen.getByRole("status")).toHaveTextContent("Assignment request queued in the coordinating thread");
     expect(mocks.submitThreadReply).toHaveBeenCalledWith(expect.objectContaining({ input: [expect.objectContaining({ text: expect.stringContaining("itemId=f0; expectedVersion=2") })] }));
   });
 
-  it("discards an old item read when a different item is selected", async () => {
+  it("discards an old item read when a different item is opened", async () => {
     const data = snapshot(2);
     const { api, mocks } = apiFor(data);
     let resolve!: (value: ResearchItemContext) => void;
     const pending = new Promise<ResearchItemContext>((done) => { resolve = done; });
     mocks.readResearchItem.mockImplementationOnce(async () => await pending);
     render(<ResearchPanel desktopApi={api} thread={thread} />);
-    await screen.findByLabelText("Recorded research graph");
-    fireEvent.click(screen.getByRole("button", { name: "Items" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Finding · Open Counterexample 0/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Finding · Open Counterexample 1/ }));
-    await waitFor(() => expect(screen.getByLabelText("Selected research item")).toHaveTextContent("f1"));
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 0/ }));
+    fireEvent.click(screen.getByRole("button", { name: "← Back to results" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 1/ }));
+    await waitFor(() => expect(screen.getByText("f1")).toBeInTheDocument());
     await act(async () => resolve({ run: data.runs[0]!, item: data.runs[0]!.items.find((item) => item.id === "f0")! }));
-    expect(screen.getByLabelText("Selected research item")).toHaveTextContent("f1");
+    expect(screen.getByText("f1")).toBeInTheDocument();
+    expect(screen.queryByText("f0")).not.toBeInTheDocument();
   });
-  it("shows a recorded graph, a findings board, and evidence references", async () => {
+
+  it("shows a map, a findings list and evidence references, and follows owner changes", async () => {
     const { api, mocks, unsubscribe, changed } = apiFor();
     const view = render(<ResearchPanel desktopApi={api} thread={thread} />);
-    expect(await screen.findByLabelText("Recorded research graph")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Research map")).toBeInTheDocument();
     expect(screen.getByText("Counterexample 0")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    expect(screen.getByRole("button", { name: "Open worker thread: Events" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
     expect(screen.getByLabelText("Shared findings")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "evidence.txt" }));
     await waitFor(() => expect(mocks.openResearchEvidence).toHaveBeenCalledWith({ backend: "codex", threadId: "parent", runId: "run", itemId: "f0", pathIndex: 0 }));
@@ -104,30 +123,140 @@ describe("Research panel", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it("requires a reason and keeps reviewer acceptance separate from verification", async () => {
-    const { api, mocks } = apiFor();
+  it("reviews each candidate with its own reason and keeps acceptance separate from verification", async () => {
+    const data = snapshot();
+    const records = [...data.runs[0]!.events, { seq: data.runs[0]!.events.length + 1, commandId: "s2", signature: "t", at: 1000, actor,
+      data: { type: "submission", submission: { id: "s2", approachId: "a1", text: "Release in insertion order", paths: [] } } } as ResearchEvent];
+    data.runs[0] = projectResearchRun("run", records);
+    const { api, mocks } = apiFor(data);
     render(<ResearchPanel desktopApi={api} thread={thread} />);
-    await screen.findByLabelText("Recorded research graph");
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
-    expect(screen.getByText(/Formal verification has not been performed/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Review reason"), { target: { value: "Reproduction supports this" } });
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({ runId: "run", command: { action: "review", submissionId: "s1", decision: "accepted", reason: "Reproduction supports this" } })));
+    await screen.findByLabelText("Research map");
+    const tab = screen.getByRole("tab", { name: "Review, 2 to review" });
+    fireEvent.click(tab);
+    expect(screen.getByText(/It is not formal verification/)).toBeInTheDocument();
+    const first = screen.getByRole("button", { name: "Release in insertion order" }).closest("article")!;
+    const accept = within(first).getByRole("button", { name: "Accept" });
+    expect(accept).toBeDisabled();
+    fireEvent.change(within(first).getByLabelText("Reason for your decision"), { target: { value: "Reproduction supports this" } });
+    const second = screen.getByRole("button", { name: "Preserve the original event order" }).closest("article")!;
+    expect(within(second).getByRole("button", { name: "Accept" })).toBeDisabled();
+    fireEvent.click(accept);
+    await waitFor(() => expect(mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({ runId: "run", command: { action: "review", submissionId: "s2", decision: "accepted", reason: "Reproduction supports this" } })));
     expect(screen.queryByText("Verified")).not.toBeInTheDocument();
   });
 
-  it("reports a research request only after the owner accepts it, including queued sends", async () => {
+  it("does not call a run awaiting review when every candidate is decided", async () => {
+    const data = snapshot(0);
+    const records = data.runs[0]!.events.map((event) => event.data.type === "created"
+      ? { ...event, data: { ...event.data, approaches: event.data.approaches.map((a) => ({ ...a, state: "ended" as const })) } } : event);
+    records.push({ seq: records.length + 1, commandId: "review", signature: "t", at: 1000, actor, data: { type: "review", submissionId: "s1", decision: "rejected", reason: "Not reproduced" } });
+    const { api } = apiFor({ ...data, runs: [projectResearchRun("run", records)] });
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findAllByText("Investigate queue ordering");
+    expect(screen.queryByText("Awaiting review")).not.toBeInTheDocument();
+  });
+
+  it("confirms before stopping every worker", async () => {
+    const data = snapshot();
+    data.runs[0]!.deadlineAt = Date.now() + 600_000;
+    const { api, mocks } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop run…" }));
+    expect(mocks.updateResearch).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Keep running" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Keep running" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop run…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    await waitFor(() => expect(mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({ command: { action: "stop", reason: "Stopped by the operator" } })));
+    expect(screen.getByText("Accept a candidate to finish the run.")).toBeInTheDocument();
+  });
+
+  it("does not carry a stop confirmation over to another run", async () => {
+    const first = snapshot();
+    const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));
+    const data: ResearchSnapshot = { runs: [first.runs[0]!, second], writableRunIds: ["run", "other-run"] };
+    data.runs.forEach((run) => { run.deadlineAt = Date.now() + 600_000; });
+    const { api, mocks } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop run…" }));
+    expect(screen.getByRole("group", { name: "Confirm stopping the run" })).toBeInTheDocument();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Run" }), /Second objective/);
+    expect(screen.queryByRole("group", { name: "Confirm stopping the run" })).not.toBeInTheDocument();
+    expect(mocks.updateResearch).not.toHaveBeenCalled();
+  });
+
+  it("withdraws a prepared request the coordinating thread did not accept", async () => {
+    const { api, mocks } = apiFor({ runs: [], writableRunIds: [] });
+    mocks.submitThreadReply.mockImplementation(async () => undefined as never);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.change(await screen.findByLabelText("Objective"), { target: { value: "Investigate cancellation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Request research" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("did not accept");
+    expect(mocks.withdrawResearch).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" });
+  });
+
+  it("returns focus to a result once, not on every later refresh", async () => {
+    const { api, mocks } = apiFor(snapshot(3));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 1/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "← Back to results" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Counterexample Counterexample 1/ })).toHaveFocus());
+    const search = screen.getByLabelText("Search items");
+    search.focus();
+    const calls = mocks.searchResearch.mock.calls.length;
+    fireEvent.change(search, { target: { value: "Counterexample" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    search.focus();
+    await waitFor(() => expect(mocks.searchResearch.mock.calls.length).toBeGreaterThan(calls));
+    await act(async () => {});
+    expect(search).toHaveFocus();
+  });
+
+  it("moves between views with the arrow keys", async () => {
+    const { api } = apiFor();
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    const map = await screen.findByRole("tab", { name: "Map" });
+    map.focus();
+    fireEvent.keyDown(map, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Findings" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Findings" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Findings" }), { key: "End" });
+    expect(screen.getByRole("tab", { name: "Activity" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Activity" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Map" })).toHaveFocus();
+  });
+
+  it("reports a research request only after the owner accepts it, then shows the owner's pending request", async () => {
     const { api, mocks } = apiFor({ runs: [], writableRunIds: [] });
     const pending = Promise.withResolvers<Awaited<ReturnType<NonNullable<DesktopApi["submitThreadReply"]>>>>();
     mocks.submitThreadReply.mockImplementation(async () => await pending.promise);
     render(<ResearchPanel desktopApi={api} thread={thread} />);
-    fireEvent.change(await screen.findByLabelText("Objective"), { target: { value: "Investigate cancellation" } });
+    expect(await screen.findByText(/This thread coordinates/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Investigate cancellation" } });
     fireEvent.click(screen.getByRole("button", { name: "Request research" }));
     expect(screen.queryByText(/Request queued/)).not.toBeInTheDocument();
     await act(async () => pending.resolve({ backend: "codex", threadId: "parent", queueStatus: "queued", queueEntryId: "q" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Request queued in the coordinating thread");
+    expect(screen.getByRole("status")).toHaveTextContent("Request queued");
     expect(mocks.submitThreadReply).toHaveBeenCalledWith(expect.objectContaining({ input: [expect.objectContaining({ text: expect.stringContaining("exactly 3 distinct approaches") })] }));
+  });
+
+  it("shows a pending request until it expires and withdraws it on request", async () => {
+    const expiresAt = Date.now() + 120_000;
+    const { api, mocks } = apiFor({ runs: [], writableRunIds: [], pending: { objective: "Why does the changelog step skip?", workers: 2, minutes: 15, workspaceMode: "none", preparedAt: Date.now(), expiresAt } });
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    const card = await screen.findByRole("region", { name: "Research request waiting to start" });
+    expect(card).toHaveTextContent("Why does the changelog step skip?");
+    expect(card).toHaveTextContent("2 workers · 15 min · scratch workspaces");
+    expect(screen.queryByLabelText("Objective")).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "Withdraw request" }));
+    await waitFor(() => expect(mocks.withdrawResearch).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" }));
+  });
+
+  it("hides an expired pending request", async () => {
+    const { api } = apiFor({ runs: [], writableRunIds: [], pending: { objective: "Stale", workers: 1, minutes: 5, workspaceMode: "none", preparedAt: 0, expiresAt: Date.now() - 1 } });
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    expect(await screen.findByLabelText("Objective")).toBeInTheDocument();
+    expect(screen.queryByText("Stale")).not.toBeInTheDocument();
   });
 
   it("does not read the local owner's data for a remote thread", () => {
@@ -138,14 +267,17 @@ describe("Research panel", () => {
     expect(mocks.researchSnapshot).not.toHaveBeenCalled();
   });
 
-  it("keeps a thousand recorded contributions out of the graph DOM until selected", async () => {
-    const { api } = apiFor(snapshot(1000));
+  it("keeps a thousand recorded contributions out of the map DOM and links to the rest", async () => {
+    const { api, mocks } = apiFor(snapshot(1000));
     render(<ResearchPanel desktopApi={api} thread={thread} />);
-    const graph = await screen.findByLabelText("Recorded research graph");
-    expect(graph.querySelectorAll(".research-node--finding")).toHaveLength(7);
-    expect(screen.getByText(/1000 findings/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Board" }));
-    fireEvent.change(screen.getByLabelText("Filter research by approach, finding, or state"), { target: { value: "Counterexample 999" } });
+    const map = await screen.findByLabelText("Research map");
+    expect(map.querySelectorAll(".research-node")).toHaveLength(6);
+    expect(screen.getByText("1000", { selector: "dd" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "995 more from Events" }));
+    await waitFor(() => expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ approachId: "a1" }) })));
+    expect(screen.getByRole("button", { name: "Remove approach filter: Events" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "Counterexample 999" } });
     expect(screen.getByText("Counterexample 999")).toBeInTheDocument();
     expect(screen.queryByText("Counterexample 1")).not.toBeInTheDocument();
   });

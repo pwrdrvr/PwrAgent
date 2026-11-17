@@ -131,7 +131,9 @@ export type ResearchRun = {
   activeWorkers: number;
   items: ResearchItem[];
 };
-export type ResearchSnapshot = { runs: ResearchRun[]; writableRunIds: string[] };
+/** The operator's bound request, waiting for this thread to call research_start. Owner memory only. */
+export type ResearchPendingRequest = Omit<PrepareResearchRequest, "backend" | "threadId"> & { preparedAt: number; expiresAt: number };
+export type ResearchSnapshot = { runs: ResearchRun[]; writableRunIds: string[]; pending?: ResearchPendingRequest };
 export type ResearchUpdateRequest = ResearchThread & { runId: string; requestId: string; command: ResearchCommand };
 export type ResearchEvidenceRequest = ResearchThread & { runId: string; itemId: string; pathIndex: number };
 export type ResearchItemReadRequest = ResearchThread & { runId: string; itemId: string };
