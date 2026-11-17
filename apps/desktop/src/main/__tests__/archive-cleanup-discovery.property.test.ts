@@ -24,10 +24,7 @@ vi.mock("../app-server/thread-assets", async (original) => ({
 }));
 vi.mock("node:fs/promises", async (original) => {
   const actual = await original<typeof import("node:fs/promises")>();
-  return { ...actual, stat: vi.fn(async (...args: Parameters<typeof actual.stat>) => {
-    if (String(args[0]).startsWith("/fixture/")) throw Object.assign(new Error("Removed fixture"), { code: "ENOENT" });
-    return await actual.stat(...args);
-  }) };
+  return { ...actual, stat: vi.fn(actual.stat) };
 });
 
 type Row = { id: string; cwd: string };
@@ -54,6 +51,15 @@ function worktree(cwd: string): LinkedDirectorySummary {
 }
 
 async function fixture(noise: Noise[], roots = 1, overlayOnly = false, real?: { cwd: string; repositoryPath: string }) {
+  const removedPaths = new Set<string>();
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  vi.mocked(stat).mockImplementation(async (filePath, options) => {
+    if (!real && typeof filePath === "string" && path.resolve(filePath).startsWith(path.resolve("/fixture") + path.sep)) {
+      if (removedPaths.has(path.resolve(filePath))) throw Object.assign(new Error("Removed fixture"), { code: "ENOENT" });
+      return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
+    }
+    return await actual.stat(filePath, options);
+  });
   const candidates = real ? [real.cwd] : Array.from({ length: roots }, (_, i) => `/fixture/candidate-${i}`);
   const effects = { git: 0, workspace: 0 };
   const inspected = new Set<string>();
@@ -97,6 +103,7 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false, real?: { 
     const guard = await params.beforeRemove!();
     guard();
     removed += 1;
+    removedPaths.add(path.resolve(params.worktreePath));
     return { id: `snapshot-${removed}`, ...params, repositoryPath: "/fixture/repository", snapshotRef: "refs/codex/snapshots/test",
       snapshotCommit: "abc", createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });

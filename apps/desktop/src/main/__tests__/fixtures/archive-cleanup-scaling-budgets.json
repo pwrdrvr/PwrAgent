@@ -103,7 +103,7 @@
     "overlayQueries": 232,
     "overlayRows": 700,
     "claudeLists": 2,
-    "realpathCalls": 2440,
+    "realpathCalls": 1900,
     "checkpointSaves": 2,
     "checkpointSerializedBytes": 0,
     "checkpointBytes": 0,

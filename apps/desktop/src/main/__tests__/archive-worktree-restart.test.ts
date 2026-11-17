@@ -1085,7 +1085,7 @@ describe("archive worktrees across a desktop restart", () => {
     const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.cleanup).toEqual(expect.arrayContaining([
       expect.objectContaining({ worktreePath: orphan, removedWorktree: false,
-        skippedReason: "Its repository no longer exists; the checkout was kept." }),
+        skippedReason: "The worktree folder still exists, but its repository is gone. The folder was kept without a snapshot." }),
       expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
     ]));
     expect(result.cleanup.filter((item) => item.error)).toEqual([]);

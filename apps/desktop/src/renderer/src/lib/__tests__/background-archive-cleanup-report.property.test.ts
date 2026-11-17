@@ -17,6 +17,39 @@ function recordOutcome(report: BackgroundArchiveCleanupReport, index: number, fa
   return { completion, blocker, reason };
 }
 
+it("stays quiet when every checkout is already absent", () => {
+  fc.assert(fc.property(fc.array(fc.uuid(), { minLength: 1, maxLength: 30 }), (paths) => {
+    const report = new BackgroundArchiveCleanupReport();
+    report.record("codex", { threadId: "multiple-checkouts", archivedAt: 1, cleanup: paths.map((name) => ({
+      worktreePath: `/contrived/${name}`, removedWorktree: false, deletedBranch: false,
+      skippedReason: "Worktree directory no longer exists.",
+    })) });
+    expect(report.notice()).toBeUndefined();
+  }));
+});
+
+it("names the retained additional checkout and its missing repository separately from an absent primary checkout", () => {
+  const report = new BackgroundArchiveCleanupReport();
+  const cleanup = [
+    { worktreePath: "/contrived/primary", worktreeState: "absent" as const,
+      removedWorktree: false, deletedBranch: false, skippedReason: "Worktree directory no longer exists." },
+    { worktreePath: "/contrived/additional", worktreeState: "present" as const, repositoryPath: "/contrived/missing-repository",
+      removedWorktree: false, deletedBranch: false,
+      skippedReason: "The worktree folder still exists, but its repository is gone. The folder was kept without a snapshot." },
+  ];
+  report.record("codex", { threadId: "multiple-checkouts", archivedAt: 1, cleanup });
+  const notice = report.notice()!;
+  const visible = renderToStaticMarkup(notice.body);
+  expect(notice.message).toContain("1 kept · 0 failed · 1 already absent");
+  expect(visible).toContain("/contrived/additional");
+  expect(visible).toContain("Missing repository: ");
+  expect(visible).toContain("/contrived/missing-repository");
+  expect(visible).not.toContain("/contrived/primary");
+  expect(notice.copyText).toContain("Worktree folder: present");
+  expect(notice.copyText).toContain("Repository: /contrived/missing-repository");
+  expect(notice.copyText).toContain("Worktree folder: absent");
+});
+
 it("shows the two actual failures after nineteen shared-worktree skips and copies all twenty-one outcomes", () => {
   const report = new BackgroundArchiveCleanupReport();
   const outcomes = Array.from({ length: 21 }, (_, index) => recordOutcome(report, index, index >= 19));

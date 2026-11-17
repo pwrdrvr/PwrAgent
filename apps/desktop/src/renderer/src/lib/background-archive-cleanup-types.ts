@@ -5,6 +5,8 @@ export type BackgroundCleanupOutcome = {
   kind: "failed" | "kept" | "removed" | "absent";
   source: BackgroundCleanupThread;
   worktreePath?: string;
+  worktreeState?: "present" | "absent";
+  repositoryPath?: string;
   reason: string;
   blockers: BackgroundCleanupThread[];
   blockerCount: number;

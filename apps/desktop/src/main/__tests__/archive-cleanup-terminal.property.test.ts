@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
@@ -53,6 +54,11 @@ async function fixture(outcomes: Outcome[], deferred: boolean) {
     label: "Fixture", path: path.join(temp.tempDir, "repo"), worktreePath: path.join(temp.tempDir, `checkout-${index}`),
     ...(outcome === "external" ? { worktreeOwnership: "external" as const } : {}),
   }));
+  // A held checkout must actually exist. Only the absent outcome has no
+  // folder; stale ownership cannot keep a folder that is already gone.
+  for (let index = 0; index < outcomes.length; index += 1) {
+    if (outcomes[index] !== "absent") await mkdir(directories[index]!.worktreePath);
+  }
   ArchiveWorktreeTransport.threads = outcomes.flatMap((outcome, index) => [
     { id: `archived-${index}`, cwd: directories[index]!.worktreePath, source: "cli", archived: true },
     ...(outcome === "blocked" ? [{ id: `blocker-${index}`, cwd: directories[index]!.worktreePath, source: "cli" }] : []),
