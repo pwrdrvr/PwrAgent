@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.9 - 2026-11-16
+
+- Agent Upgrades - Complete the authorized chat upgrade flow with exact-version download/retry, progress, cancellation, quiet installation/restart, and version verification after relaunch. Authorized chat upgrades no longer wait for a desktop quit-confirmation dialog. Access requires a designated PwrAgent Agent, a verified messaging actor, and privileged instance-management and lifecycle permissions; ordinary coding threads cannot restart the app. Native installer authorization remains required where applicable.
+- Mark Read - Add Mark Read to Attention's multi-selection menu and enable single-thread menu and shortcut actions for connected remote owners that grant thread-navigation access. Route each read watermark to its owning instance; failed remote actions leave the thread unread.
+- Remote Messaging Attachments - Let remote execution owners list and export original received files instead of only their previews. Authenticate the requesting peer and retained human request, verify transferred bytes, and preserve ordinary filesystem approval rules for the final save. Both peers must support the new attachment-transfer contract.
+- Transcript Timestamps - Preserve message timestamps across replay and live events, including mid-turn steers, review results, and image-only replies. Stop duplicate live echoes from moving the displayed time forward, and leave unsupported historical times absent instead of inventing them.
+- Remote Retry Notices - Clear hidden-worker retry notices as soon as message, reasoning, or plan progress resumes, even when a remote viewer subscribes only to the visible parent thread. Keep separate workers and turns from clearing each other's notices.
+- Navigation Performance - Reuse unchanged thread-link and navigation projections across page requests, and coalesce Remove from My List refreshes so one removal does not trigger redundant broad reloads.
+- Minor - Internal messaging routing cleanup and more reliable, lower-overhead test fixtures.
+
 ## v1.4.8 - 2026-11-16
 
 - Research Runs (Experimental) - Coordinate distinct approaches across managed workers, collect shared findings, request revisions, and review candidates through an assignment graph, searchable items, evidence board, and activity history. Available for local Codex threads only; opt in under Settings > Experimental > Research runs with Codex Tool Discovery enabled.
