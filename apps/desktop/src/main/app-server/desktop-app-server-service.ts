@@ -10327,7 +10327,7 @@ class DesktopAppServerService {
       throw new Error("A local backend and waiting threadId are required.");
     }
     if (request.action === "create") {
-      validateDependencyCreate(request, this.ciRunUrlOptions());
+      validateDependencyCreate(request, () => this.ciRunUrlOptions());
       // The resumed turn starts from this text alone, for the operator's
       // dialog as for an agent's tool call.
       if (typeof request.continuation !== "string" || !request.continuation.trim()) {

@@ -188,7 +188,7 @@ export class ThreadDependencyCoordinator {
         await this.options.changed(changed);
         return response;
       }
-      validateDependencyCreate(request, this.options.ciRunUrlOptions?.());
+      validateDependencyCreate(request, this.options.ciRunUrlOptions);
       const deliver = request.deliver ?? "agent";
       if (deliver === "operator" && !this.options.operatorTodos) throw new Error("Operator reminders are not available on this instance.");
       // Validate the consumer too: a mistyped id must never become a durable wake target.
@@ -783,7 +783,8 @@ function settledCompaction(item: ThreadDependency, turnId?: string, error?: stri
   };
 }
 
-export function validateDependencyCreate(request: ManageThreadDependenciesRequest, ciRunUrls?: CiRunUrlOptions): void {
+/** `ciRunUrls` is read only when a request names a CI run. */
+export function validateDependencyCreate(request: ManageThreadDependenciesRequest, ciRunUrls?: () => CiRunUrlOptions): void {
   if (request.action !== "create") throw new Error("action must be create, list, cancel, dismiss, or mark_done.");
   if (request.deliver !== undefined && !THREAD_DEPENDENCY_DELIVERY_TARGETS.includes(request.deliver)) throw new Error("deliver must be agent or operator.");
   if (request.handoff !== undefined && typeof request.handoff !== "boolean") throw new Error("handoff must be true or false.");
@@ -816,7 +817,7 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
     if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun"].includes(field))) throw new Error("Unknown prerequisite condition field.");
     if (condition.when === "ci_run" || condition.ciRun !== undefined) {
-      validateCiRunCondition(condition, ciRunUrls);
+      validateCiRunCondition(condition, ciRunUrls?.());
       continue;
     }
     if (condition.subject !== undefined) {
