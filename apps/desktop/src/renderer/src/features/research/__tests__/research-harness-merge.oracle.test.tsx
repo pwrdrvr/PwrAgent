@@ -2,17 +2,18 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ResearchRun } from "@pwragent/shared";
+import { researchEventPage, researchRunBoard, summarizeResearchRun, type NavigationThreadSummary, type ResearchRun } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ResearchPanel } from "../ResearchPanel";
 import { harnessRun } from "./research-harness-fixture";
 
 function show(run: ResearchRun) {
   const api = {
-    researchSnapshot: vi.fn(async () => ({ runs: [run], writableRunIds: [run.id] })),
+    researchSnapshot: vi.fn(async () => ({ runs: [summarizeResearchRun(run)], selected: researchRunBoard(run), writableRunIds: [run.id] })),
+    readResearchEvents: vi.fn<NonNullable<DesktopApi["readResearchEvents"]>>(async (request) => researchEventPage(run, request.range)),
     onResearchChanged: vi.fn(() => () => {}),
     readResearchItem: vi.fn<NonNullable<DesktopApi["readResearchItem"]>>(async (request) => ({ run, item: run.items.find((item) => item.id === request.itemId)! })),
-    updateResearch: vi.fn<NonNullable<DesktopApi["updateResearch"]>>(async () => run),
+    updateResearch: vi.fn<NonNullable<DesktopApi["updateResearch"]>>(async () => researchRunBoard(run)),
     updateResearchItem: vi.fn(), submitThreadReply: vi.fn(),
   } satisfies Partial<DesktopApi>;
   render(<ResearchPanel desktopApi={api as DesktopApi} thread={{ id: "parent", source: "codex" } as NavigationThreadSummary} />);
@@ -36,7 +37,8 @@ it("preserves source provenance, unknown cancellation and source verdicts across
     action: "review", submissionId: run.submissions[0]!.id, decision: "accepted", reason: "Independent review",
   } })));
   fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
-  expect(screen.getByText("Source coordinator accepted this informal candidate")).toBeInTheDocument();
+  expect(await screen.findByText("Source coordinator accepted this informal candidate")).toBeInTheDocument();
+  expect(api.readResearchEvents).toHaveBeenCalledWith(expect.objectContaining({ runId: run.id, range: { limit: 100 } }));
 });
 
 it("keeps imported items readable without offering native progress or child dispatch", async () => {

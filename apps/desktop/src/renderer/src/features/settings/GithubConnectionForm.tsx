@@ -18,6 +18,7 @@ import {
   type InspectGithubMcpSetupResponse,
   type TestGithubMcpConnectionResponse,
 } from "@pwragent/shared";
+import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 /**
@@ -187,6 +188,12 @@ function cliStatus(
  * selected account, and switching to a token stays one click away.
  */
 export function GithubConnectionFields(props: {
+  /**
+   * The GitHub connections that already use the CLI sign-in, when adding
+   * another. Picking it again only makes sense for different toolsets or
+   * access, so the choice says so.
+   */
+  cliUsedBy?: readonly string[];
   draft: GithubConnectionDraft;
   disabled: boolean;
   /** The CLI sign-in and the local server, as last inspected. */
@@ -249,6 +256,12 @@ export function GithubConnectionFields(props: {
                   applies on the next connect.
                   {cli?.state === "ready" && cli.scopes?.length ? (
                     <> Scopes: <b>{cli.scopes.join(", ")}</b>.</>
+                  ) : null}
+                  {props.cliUsedBy?.length ? (
+                    <>
+                      {" "}Already used by <b>{props.cliUsedBy.join(", ")}</b>. Choose it again only
+                      for different toolsets or access.
+                    </>
                   ) : null}
                 </>
               )}
@@ -476,5 +489,33 @@ export function GithubConnectionTestResult(props: {
         <pre className="settings-mcp-local__output" aria-label="Server output">{result.output}</pre>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * GitHub before anyone sets it up: one line in the connection list, as
+ * Sandboxer's is. GitHub is a known server PwrAgent signs in to with the
+ * GitHub CLI, not a kind of transport, so it is listed with the built-ins
+ * instead of offered as a server type in the add form.
+ */
+export function GithubCompactRow(props: {
+  disabled?: boolean;
+  onSetUp: () => void;
+}) {
+  return (
+    <CompactMcpConnectionRow
+      meta={<>Issues, repositories and more &middot; signs in with your GitHub CLI</>}
+      name="GitHub"
+    >
+      <button
+        aria-label="Set up GitHub"
+        className="button button--secondary"
+        disabled={props.disabled}
+        type="button"
+        onClick={props.onSetUp}
+      >
+        Set up
+      </button>
+    </CompactMcpConnectionRow>
   );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { projectResearchRun, RESEARCH_MAX_EVENTS, sameResearchThread, searchResearchItems, type ResearchActor, type ResearchEvent, type ResearchThread, type StartResearchRequest, type ResearchSearchQuery } from "@pwragent/shared/research";
+import { projectResearchRun, RESEARCH_MAX_EVENTS, researchEventPage, sameResearchThread, searchResearchItems, summarizeResearchRun, type ResearchActor, type ResearchEvent, type ResearchThread, type StartResearchRequest, type ResearchSearchQuery, type ResearchEventRange } from "@pwragent/shared/research";
 import { ResearchService, validateStartResearch, type ResearchPorts } from "../research-service";
 import type { ResearchStorage } from "../research-storage";
 
@@ -12,6 +12,8 @@ class MemoryResearchStorage implements ResearchStorage {
   list(thread?: ResearchThread) { return [...this.records.keys()].map((id) => this.get(id)!).filter((r) => !thread || sameResearchThread(r.coordinator, thread) || r.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread))); }
   header(id: string) { return this.get(id); }
   summaries(thread: ResearchThread) { return this.list(thread); }
+  runSummaries(thread: ResearchThread, limit: number) { return this.list(thread).toSorted((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1)).slice(0, limit).map(summarizeResearchRun); }
+  events(id: string, range: ResearchEventRange) { const run = this.get(id); if (!run) throw new Error("Research run not found"); return researchEventPage(run, range); }
   members(id: string) { const run = this.get(id)!; return [run.coordinator, ...run.approaches.flatMap((a) => a.worker ? [a.worker] : [])]; }
   isMember(id: string, thread: ResearchThread) { const run = this.get(id); return Boolean(run && (sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread)))); }
   readItem(id: string, itemId: string) { return this.get(id)?.items.find((item) => item.id === itemId); }

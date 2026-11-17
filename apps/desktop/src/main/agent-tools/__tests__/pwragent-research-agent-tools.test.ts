@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchService } from "@pwragent/owner-core/research-service";
 import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
-import { projectResearchRun, sameResearchThread, searchResearchItems, type ResearchEvent, type ResearchSearchPage, type ResearchItemContext } from "@pwragent/shared";
+import { projectResearchRun, researchEventPage, sameResearchThread, searchResearchItems, summarizeResearchRun, type ResearchEvent, type ResearchSearchPage, type ResearchItemContext } from "@pwragent/shared";
 import type { ResearchAssignmentReceipt } from "@pwragent/owner-core/research-service";
 import { createResearchAgentHandler } from "../../research/research-runtime";
 import { resolveAgentToolCatalogs } from "../agent-tool-catalog-registry";
@@ -44,6 +44,8 @@ describe("ordinary research tools", () => {
       get,
       header: get,
       summaries: (thread) => [...journals.keys()].map((id) => get(id)!).filter((run) => sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread))),
+      runSummaries: (thread, limit) => storage.list(thread).slice(0, limit).map(summarizeResearchRun),
+      events: (id, range) => researchEventPage(get(id)!, range),
       members: (id) => { const run = get(id)!; return [run.coordinator, ...run.approaches.flatMap((a) => a.worker ? [a.worker] : [])]; },
       isMember: (id, thread) => { const run = get(id); return Boolean(run && (sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread)))); },
       readItem: (id, itemId) => get(id)?.items.find((item) => item.id === itemId),
@@ -85,7 +87,7 @@ describe("ordinary research tools", () => {
       } });
       expect(result.success).toBe(true);
       expect(spawned).toBe(3);
-      const run = service.snapshot({ backend: "codex", threadId: "coordinator" }).runs[0]!;
+      const run = service.snapshot({ backend: "codex", threadId: "coordinator" }).selected!;
       const posted = await catalog.router.handleDynamicToolCall({ backend: "codex", call: { namespace: "pwragent", tool: "research_update", threadId: "worker-1", turnId: "turn-1", callId: "finding",
         arguments: { runId: run.id, command: { action: "finding", approachId: "a1", kind: "counterexample", text: "A reversed event sequence fails", paths: [] } },
       } });

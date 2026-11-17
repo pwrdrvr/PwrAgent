@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type {
   CodexMcpServerSummary,
@@ -24,8 +25,11 @@ import {
   describeMcpAuthStatus,
   describeMcpConnectionAuth,
   formatMcpCommandLine,
+  describeGithubMcpConnection,
   isMcpIpcUrl,
+  isSuggestedMcpConnection,
   mcpConnectionIdsForNewThread,
+  orderManagedMcpConnections,
   resolveMcpConnectionSetup,
   summarizeMcpConnectionReadiness,
 } from "@pwragent/shared";
@@ -75,8 +79,14 @@ import {
   sandboxerCannotStart,
   sandboxerNeedsSetup,
 } from "./SandboxerConnectionSetup";
+import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
+import { GitHubIcon } from "../../icons";
+import pwrGitIcon from "../../assets/pwrgit/pwrgit-app-icon.png";
+import pwrSnapIcon from "../../assets/pwrsnap/pwrsnap-app-icon.png";
+import sandboxerMark from "../../assets/sandboxer/sandboxer-mark.svg";
 import { McpProjectToolApprovals } from "./McpProjectToolApprovals";
 import {
+  GithubCompactRow,
   GithubConnectionFields,
   GithubConnectionTestResult,
   emptyGithubConnectionDraft,
@@ -124,10 +134,42 @@ type ConnectionPendingAction = {
 };
 
 /**
- * What the add form adds: a URL PwrAgent signs in to, a program it runs, or
- * GitHub's MCP server, which neither of those can sign in to by itself.
+ * What the custom-server form adds: a URL PwrAgent signs in to, or a program
+ * it runs. GitHub is not one of these. It is a known server with its own
+ * entry in the plugin store, beside PwrSnap and PwrGit.
  */
-type ConnectionAddKind = "remote" | "local" | "github";
+type ConnectionAddKind = "remote" | "local";
+
+/**
+ * Which page of the plugin store is open: the catalog of known servers,
+ * GitHub's or Sandboxer's setup, or the custom-server form.
+ */
+type PluginStoreView = "catalog" | "github" | "sandboxer" | "custom";
+
+/** One line on what each PwrSuite app gives an agent, for its suggestion and tile. */
+const PWRSUITE_PLUGIN_SUMMARY: Record<"PwrSnap" | "PwrGit", string> = {
+  PwrSnap: "Screenshots and recordings your agent can read \u00b7 PwrDrvr app",
+  PwrGit: "Repositories and live Git status \u00b7 PwrDrvr app",
+};
+
+/** What each service tile in the plugin store says, and what search matches. */
+const STORE_TILE_TEXT = {
+  github: {
+    by: "GitHub's MCP server",
+    description: "Issues, repositories, discussions and workflow skills. Signs in with your GitHub CLI or a token. Add one per account.",
+  },
+  sandboxer: {
+    by: "Paid service",
+    description: "Cloud Linux machines for your agent. Sign in to Sandboxer in your browser, or use its CLI.",
+  },
+  custom: {
+    by: "Any MCP server",
+    description: "A server URL that signs in with OAuth, a local unix:// or pipe:// server, or a program PwrAgent runs, such as npx or uvx.",
+  },
+} as const;
+
+/** How long a row the store pointed at keeps its highlight. */
+const REVEAL_HIGHLIGHT_MS = 2_400;
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -318,6 +360,25 @@ export function PluginsSettings(props: {
   );
   /** The last Test of `localDraft`, cleared by any edit to it. */
   const [localTest, setLocalTest] = useState<TestMcpStdioConnectionResponse>();
+  /** The plugin store dialog and its page, or undefined while it is closed. */
+  const [storeView, setStoreView] = useState<PluginStoreView>();
+  const storeTitleId = useId();
+  /** A row to scroll to and focus once the store has closed. */
+  const [revealConnectionId, setRevealConnectionId] = useState<string>();
+  /** The row the store last pointed at, outlined for a moment. */
+  const [highlightConnectionId, setHighlightConnectionId] = useState<string>();
+  const [storeQuery, setStoreQuery] = useState("");
+  const connectionListRef = useRef<HTMLDivElement>(null);
+  const githubSetupOpen = storeView === "github";
+  const [githubName, setGithubName] = useState("");
+  const githubSetupNameRef = useRef<HTMLInputElement>(null);
+  /**
+   * Counts requests to bring the GitHub form into view. The controls that ask
+   * (a tile, the suggestion's Set up, the probe's Set up GitHub) unmount as
+   * they do, so focus moves to the form's Name field instead of the page,
+   * also when the form was already open.
+   */
+  const [githubSetupFocusRequest, setGithubSetupFocusRequest] = useState(0);
   const [githubDraft, setGithubDraft] = useState<GithubConnectionDraft>(emptyGithubConnectionDraft);
   /** The last Test of `githubDraft`, cleared by any edit to it. */
   const [githubTest, setGithubTest] = useState<TestGithubMcpConnectionResponse>();
@@ -404,6 +465,12 @@ export function PluginsSettings(props: {
     open: connectionRemoveCandidate !== undefined,
     onClose: () => {
       if (!connectionPending) setConnectionRemoveCandidate(undefined);
+    },
+  });
+  const pluginStoreDialogRef = useModalDialog({
+    open: storeView !== undefined,
+    onClose: () => {
+      if (!connectionPending) closePluginStore();
     },
   });
   const selectedProfile = props.snapshot.models.codex.profiles.profiles.find(
@@ -1036,6 +1103,9 @@ export function PluginsSettings(props: {
       setIpcBearerToken("");
       setProbe(undefined);
       await loadConnections();
+      // The sign-in that follows is carried by the new row, so the store
+      // closes onto it.
+      revealConnection(response.connection.id);
       setConnectionPending(undefined);
       // The new row carries the sign-in from here, so "Adding..." is done.
       setConnectionNotice(undefined);
@@ -1082,7 +1152,7 @@ export function PluginsSettings(props: {
     setConnectionPending({ kind: "create" });
     setConnectionNotice({ kind: "working", text: `Adding ${name}...` });
     try {
-      await props.desktopApi.createMcpConnection({
+      const response = await props.desktopApi.createMcpConnection({
         displayName: name,
         stdio: localCommandLaunchInput(localDraft),
       });
@@ -1090,6 +1160,7 @@ export function PluginsSettings(props: {
       setLocalDraft(emptyLocalCommandDraft());
       setLocalTest(undefined);
       await loadConnections();
+      revealConnection(response.connection.id);
       setConnectionNotice({
         kind: "success",
         text: `${name} was added. Offer it to threads, or turn it on in a thread's MCP panel.`,
@@ -1126,13 +1197,129 @@ export function PluginsSettings(props: {
 
   // Inspected once, when a GitHub form first opens. Check again re-reads;
   // an edit to the form must not run gh again.
-  const showGithubForm = connectionAddKind === "github" || Boolean(connectionEdit?.github);
+  const showGithubForm = githubSetupOpen || Boolean(connectionEdit?.github);
   const githubInspectedRef = useRef(false);
   useEffect(() => {
     if (!showGithubForm || githubInspectedRef.current) return;
     githubInspectedRef.current = true;
     void inspectGithub();
   }, [inspectGithub, showGithubForm]);
+
+  /**
+   * The Sandboxer suggestion's Connect: switch to the hosted service and
+   * start its browser sign-in, as the full row's Connect Sandboxer does.
+   */
+  const connectSandboxerHosted = async (connection: McpConnectionStatus) => {
+    const change = props.desktopApi?.setSandboxerTransport;
+    if (!change || connectionPending) return;
+    try {
+      await change({ transport: "hosted" });
+      await loadConnections();
+      void authorizeConnection(connection);
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  /** Open the plugin store at GitHub's setup form. */
+  const openGithubSetup = (name = "") => {
+    setGithubSetupFocusRequest((current) => current + 1);
+    setConnectionNotice(undefined);
+    if (githubSetupOpen) {
+      // Already open: keep what was entered, and only fill an empty name.
+      if (name && !githubName.trim()) setGithubName(name);
+      return;
+    }
+    setGithubName(name);
+    setGithubDraft(emptyGithubConnectionDraft());
+    setGithubTest(undefined);
+    setStoreView("github");
+    // The operator may have run `gh auth login` since the last look.
+    if (githubInspectedRef.current) void inspectGithub();
+  };
+
+  const resetGithubSetup = () => {
+    setGithubName("");
+    setGithubDraft(emptyGithubConnectionDraft());
+    setGithubTest(undefined);
+  };
+
+  const openPluginStore = (view: PluginStoreView = "catalog") => {
+    setConnectionNotice(undefined);
+    setStoreQuery("");
+    setStoreView(view);
+  };
+
+  /** Back to the catalog from GitHub's form or the custom-server form. */
+  const showStoreCatalog = () => {
+    if (githubSetupOpen) resetGithubSetup();
+    setStoreView("catalog");
+  };
+
+  const closePluginStore = () => {
+    if (githubSetupOpen) resetGithubSetup();
+    setStoreView(undefined);
+  };
+
+  /** Close the store and bring a row into view, as a tile's Show does. */
+  const revealConnection = (connectionId: string) => {
+    closePluginStore();
+    setRevealConnectionId(connectionId);
+  };
+
+  useEffect(() => {
+    if (!githubSetupFocusRequest) return;
+    const field = githubSetupNameRef.current;
+    field?.focus();
+    field?.scrollIntoView?.({ block: "nearest" });
+  }, [githubSetupFocusRequest]);
+
+  // Moving between store pages unmounts the control that was pressed, so
+  // focus goes to the new page's first control. GitHub's form has its own
+  // request above, which lands on its Name field.
+  useEffect(() => {
+    if (storeView === undefined || storeView === "github") return;
+    pluginStoreDialogRef.current
+      ?.querySelector<HTMLElement>(".plugin-store__body button:not(:disabled), .plugin-store__body input")
+      ?.focus();
+  }, [pluginStoreDialogRef, storeView]);
+
+  // Declared after the store's dialog hook, whose cleanup returns focus to
+  // the Plugin store button when the store closes; this then moves it on to
+  // the row the store added or pointed at. Every caller reloads the list
+  // before asking, so a row that is not listed now is given up rather than
+  // left waiting: a later reload must not pull focus to it out of the blue.
+  useEffect(() => {
+    if (storeView !== undefined || !revealConnectionId) return;
+    const row = Array.from(
+      connectionListRef.current?.querySelectorAll<HTMLElement>("[data-connection-id]") ?? [],
+    ).find((element) => element.dataset.connectionId === revealConnectionId);
+    setRevealConnectionId(undefined);
+    if (!row) return;
+    setHighlightConnectionId(revealConnectionId);
+    row.scrollIntoView?.({ block: "nearest" });
+    row.querySelector<HTMLElement>("button")?.focus();
+  }, [connections, revealConnectionId, storeView]);
+
+  // Sandboxer's store page closes onto its row once it works, as adding
+  // GitHub or a custom server does.
+  const sandboxerConfiguredId = connections.find(
+    (connection) => connection.kind === "sandboxer" && connection.configured,
+  )?.id;
+  useEffect(() => {
+    if (storeView !== "sandboxer" || !sandboxerConfiguredId) return;
+    setStoreView(undefined);
+    setRevealConnectionId(sandboxerConfiguredId);
+  }, [sandboxerConfiguredId, storeView]);
+
+  useEffect(() => {
+    if (!highlightConnectionId) return;
+    const timer = window.setTimeout(() => setHighlightConnectionId(undefined), REVEAL_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [highlightConnectionId]);
 
   /** Sign in, read the tools and skills, and disconnect. Saves nothing. */
   const testGithubConnection = async () => {
@@ -1144,7 +1331,7 @@ export function PluginsSettings(props: {
         github: githubConnectionInput(githubDraft),
       });
       setGithubTest(result);
-      if (!connectionName.trim()) setConnectionName("GitHub");
+      if (!githubName.trim()) setGithubName("GitHub");
     } catch (error) {
       setConnectionNotice({
         kind: "error",
@@ -1157,18 +1344,18 @@ export function PluginsSettings(props: {
 
   const createGithubConnection = async () => {
     if (connectionPending || !props.desktopApi?.createMcpConnection) return;
-    const name = connectionName.trim() || "GitHub";
+    const name = githubName.trim() || "GitHub";
     setConnectionPending({ kind: "create" });
     setConnectionNotice({ kind: "working", text: `Adding ${name}...` });
     try {
-      await props.desktopApi.createMcpConnection({
+      const response = await props.desktopApi.createMcpConnection({
         displayName: name,
         github: githubConnectionInput(githubDraft),
       });
-      setConnectionName("");
-      setGithubDraft(emptyGithubConnectionDraft());
-      setGithubTest(undefined);
+      // Reload first, so the store closes onto a list that already has the
+      // new row, then bring that row into view.
       await loadConnections();
+      revealConnection(response.connection.id);
       setConnectionNotice({
         kind: "success",
         text: `${name} was added. Offer it to threads, or turn it on in a thread's MCP panel.`,
@@ -1554,6 +1741,233 @@ export function PluginsSettings(props: {
         ? `Waiting for ${pendingAction.name}.`
         : undefined;
 
+  const renderConnectionRow = (
+    connection: McpConnectionStatus,
+    options: { sandboxerSetupOpen?: boolean } = {},
+  ) => (
+    <ManagedMcpConnectionRow
+      key={connection.id}
+      highlighted={highlightConnectionId === connection.id}
+      sandboxerSetupInitiallyOpen={options.sandboxerSetupOpen === true}
+      authorizationError={authorizationErrors[connection.id]}
+      authorizing={authorizing.has(connection.id)}
+      busy={connectionPending?.connectionId === connection.id}
+      connection={connection}
+      desktopApi={props.desktopApi}
+      disabled={Boolean(connectionPending)}
+      gatewayEnabled={gatewayEnabled}
+      signIns={signIns[connection.id] ?? 0}
+      onAuthorize={() => void authorizeConnection(connection)}
+      onCancelAuthorization={() => void cancelAuthorization(connection)}
+      onAvailabilityChange={
+        props.desktopApi?.setMcpConnectionEnabled
+          ? (enabled) =>
+              void setConnectionAvailability(connection, enabled)
+          : undefined
+      }
+      onSelectForNewThreadsChange={
+        props.desktopApi?.setMcpConnectionSelectForNewThreads
+          ? (selectForNewThreads) =>
+              void setConnectionSelectForNewThreads(
+                connection,
+                selectForNewThreads,
+              )
+          : undefined
+      }
+      onToolApprovalChange={
+        props.desktopApi?.setMcpConnectionToolApproval
+          ? (toolApproval) =>
+              void setConnectionToolApproval(connection, toolApproval)
+          : undefined
+      }
+      onProjectToolApprovalChange={
+        props.desktopApi?.setMcpConnectionProjectToolApproval
+          ? async (repository, toolApproval, projectLabel) =>
+              await setConnectionProjectToolApproval(
+                connection,
+                repository,
+                toolApproval,
+                projectLabel,
+              )
+          : undefined
+      }
+      onSandboxerCleanupOnPrCloseChange={
+        connection.kind === "sandboxer"
+        && props.desktopApi?.setSandboxerCleanupOnPrClose
+          ? (enabled) =>
+              void setSandboxerCleanupOnPrClose(connection, enabled)
+          : undefined
+      }
+      onChanged={loadConnections}
+      onDisconnect={() => void disconnectConnection(connection)}
+      onEdit={() =>
+        setConnectionEdit({
+          connectionId: connection.id,
+          displayName: connection.displayName,
+          serverUrl: connection.serverUrl,
+          originalServerUrl: connection.serverUrl,
+          ...(connection.stdio
+            ? {
+                local: {
+                  draft: localCommandDraftFromLaunch(connection.stdio),
+                  runningIn: connection.localProcesses ?? 0,
+                },
+              }
+            : {}),
+          ...(connection.github
+            ? {
+                github: {
+                  draft: githubConnectionDraftFromSettings(connection.github),
+                  runningIn: connection.localProcesses ?? 0,
+                },
+              }
+            : {}),
+        })
+      }
+      onNotice={setConnectionNotice}
+      onRemove={() => setConnectionRemoveCandidate(connection)}
+    />
+  );
+
+  const githubAvailable = Boolean(props.desktopApi?.testGithubMcpConnection);
+  const githubConnections = connections.filter((connection) => connection.kind === "github");
+  const connectionOrder = orderManagedMcpConnections(connections);
+  const installedConnections = connectionOrder.filter(
+    (connection) => !isSuggestedMcpConnection(connection),
+  );
+  const suggestedConnections = connectionOrder.filter(isSuggestedMcpConnection);
+  /** GitHub is suggested until one exists, while this window can set one up. */
+  const suggestGithub = githubAvailable && githubConnections.length === 0;
+  const pwrSuiteConnection = (kind: "pwrsnap" | "pwrgit") =>
+    connections.find((connection) => connection.kind === kind);
+  const sandboxerConnection = connections.find((connection) => connection.kind === "sandboxer");
+  // Search matches every word of the query against a tile's name and text.
+  const storeQueryTerms = storeQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const storeMatches = (...fields: string[]) => {
+    const text = fields.join(" ").toLowerCase();
+    return storeQueryTerms.every((term) => text.includes(term));
+  };
+  const storePwrSuite = (["pwrsnap", "pwrgit"] as const)
+    .map(pwrSuiteConnection)
+    .filter((connection): connection is McpConnectionStatus => connection !== undefined)
+    .filter((connection) => {
+      const app = connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap";
+      return storeMatches(app, PWRSUITE_PLUGIN_SUMMARY[app]);
+    });
+  const storeGithub = githubAvailable
+    && storeMatches("GitHub", STORE_TILE_TEXT.github.by, STORE_TILE_TEXT.github.description);
+  const storeSandboxer = sandboxerConnection
+    && storeMatches("Sandboxer", STORE_TILE_TEXT.sandboxer.by, STORE_TILE_TEXT.sandboxer.description)
+    ? sandboxerConnection
+    : undefined;
+  const storeTiles = {
+    pwrSuite: storePwrSuite,
+    github: storeGithub,
+    sandboxer: storeSandboxer,
+    none: storeQueryTerms.length > 0 && !storePwrSuite.length && !storeGithub && !storeSandboxer,
+  };
+
+  /*
+   * GitHub's setup opens in the plugin store, not as a third type in the
+   * custom-server form: that form is for servers PwrAgent does not know. A
+   * second account or a narrower token opens the same form, which first
+   * names the GitHub connections that already exist.
+   */
+  const githubSetupForm = (
+    <form
+      aria-label={githubConnections.length ? "New GitHub connection" : "Set up GitHub"}
+      className="plugin-store__form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (githubTest?.ok) void createGithubConnection();
+        else void testGithubConnection();
+      }}
+    >
+      {githubConnections.length ? (
+        <div className="plugin-store__existing">
+          <span className="plugin-store__existing-label">Already added</span>
+          <ul className="plugin-store__existing-list">
+            {githubConnections.map((connection) => (
+              <li key={connection.id}>
+                <b>{connection.displayName}</b> {describeGithubMcpConnection(connection)}
+              </li>
+            ))}
+          </ul>
+          <span className="plugin-store__existing-hint">
+            Add another for a second account, or a token with less access than your own.
+          </span>
+        </div>
+      ) : null}
+      <p className="settings-mcp-create__constraint">
+        GitHub&rsquo;s MCP server, signed in with the account your GitHub CLI uses or a
+        token you paste. Test signs in, lists the tools and skills, and disconnects.
+      </p>
+      <div className="settings-mcp-local">
+        <label className="settings-mcp-local__field">
+          <span className="settings-mcp-local__label">Name</span>
+          <span className="settings-mcp-local__control">
+            <input
+              ref={githubSetupNameRef}
+              className="settings-input"
+              disabled={Boolean(connectionPending)}
+              placeholder="GitHub"
+              value={githubName}
+              onChange={(event) => setGithubName(event.target.value)}
+            />
+          </span>
+        </label>
+      </div>
+      <GithubConnectionFields
+        cliUsedBy={githubConnections
+          .filter((connection) => connection.github?.account === "gh_cli")
+          .map((connection) => connection.displayName)}
+        disabled={Boolean(connectionPending)}
+        draft={githubDraft}
+        inspect={githubInspect}
+        inspecting={githubInspecting}
+        test={githubTest}
+        onChange={(next) => {
+          setGithubDraft(next);
+          // A test describes one setup, as a probe does one URL.
+          // Only the toolset disclosure changes nothing tested.
+          if (next.showAllToolsets === githubDraft.showAllToolsets) setGithubTest(undefined);
+        }}
+        onRecheck={() => void inspectGithub()}
+      />
+      {githubTest ? (
+        <GithubConnectionTestResult result={githubTest} skillsRequested={githubDraft.skills} />
+      ) : null}
+      <div className="settings-mcp-local__actions">
+        {githubTest?.ok ? (
+          <button
+            className="button button--ghost"
+            disabled={Boolean(connectionPending)}
+            type="button"
+            onClick={() => void testGithubConnection()}
+          >
+            Test again
+          </button>
+        ) : null}
+        <button
+          className="button button--secondary"
+          disabled={
+            Boolean(connectionPending)
+            || !githubConnectionDraftReady(githubDraft)
+          }
+          type="submit"
+        >
+          {connectionPending?.kind === "testLocal"
+            ? "Testing..."
+            : connectionPending?.kind === "create"
+              ? "Adding..."
+              : githubTest?.ok
+                ? "Add"
+                : "Test"}
+        </button>
+      </div>
+    </form>
+  );
+
   return (
     <SettingsSectionStack
       paneId="plugins"
@@ -1638,7 +2052,7 @@ export function PluginsSettings(props: {
             />
           ) : null}
         </div>
-        <div className="settings-mcp-manage">
+        <div ref={connectionListRef} className="settings-mcp-manage">
           {connectionNotice ? (
             <div
               className={`settings-plugin-notice settings-plugin-notice--${connectionNotice.kind}`}
@@ -1648,401 +2062,92 @@ export function PluginsSettings(props: {
             </div>
           ) : null}
           {/*
-            * The inventory first, then the slot to add to it.
+            * What is set up, then what PwrAgent knows how to set up.
             *
-            * Both used to render as bare children of the card body at the
-            * same weight, with the empty add fields directly above the rows,
-            * so the form read as a fourth connection that had lost its name.
-            * The rows are what the operator came to manage; `--create` is
-            * dashed and unfilled because it is the one block here that is not
-            * yet a thing.
+            * Adding anything starts from the plugin store at the top. The
+            * known servers that are not set up yet stay listed below the
+            * inventory as one-line suggestions with their next step, and
+            * move up once they work.
             */}
+          <div className="settings-mcp-bar">
+            <h3 className="settings-mcp-bar__title">Installed</h3>
+            {connectionsLoading ? null : (
+              <span className="settings-mcp-bar__count">
+                {installedConnections.length === 1
+                  ? "1 connection"
+                  : `${installedConnections.length} connections`}
+              </span>
+            )}
+            <button
+              className="button button--secondary settings-mcp-bar__action"
+              disabled={Boolean(connectionPending)}
+              type="button"
+              onClick={() => openPluginStore()}
+            >
+              Plugin store
+            </button>
+          </div>
           {connectionsLoading ? (
             <p className="settings-empty">Loading connections...</p>
-          ) : connections.length ? (
+          ) : installedConnections.length ? (
             <div className="settings-mcp-list">
-              {connections.map((connection) => (
-                <ManagedMcpConnectionRow
-                  key={connection.id}
-                  authorizationError={authorizationErrors[connection.id]}
-                  authorizing={authorizing.has(connection.id)}
-                  busy={connectionPending?.connectionId === connection.id}
-                  connection={connection}
-                  desktopApi={props.desktopApi}
-                  disabled={Boolean(connectionPending)}
-                  gatewayEnabled={gatewayEnabled}
-                  signIns={signIns[connection.id] ?? 0}
-                  onAuthorize={() => void authorizeConnection(connection)}
-                  onCancelAuthorization={() => void cancelAuthorization(connection)}
-                  onAvailabilityChange={
-                    props.desktopApi?.setMcpConnectionEnabled
-                      ? (enabled) =>
-                          void setConnectionAvailability(connection, enabled)
-                      : undefined
-                  }
-                  onSelectForNewThreadsChange={
-                    props.desktopApi?.setMcpConnectionSelectForNewThreads
-                      ? (selectForNewThreads) =>
-                          void setConnectionSelectForNewThreads(
-                            connection,
-                            selectForNewThreads,
-                          )
-                      : undefined
-                  }
-                  onToolApprovalChange={
-                    props.desktopApi?.setMcpConnectionToolApproval
-                      ? (toolApproval) =>
-                          void setConnectionToolApproval(connection, toolApproval)
-                      : undefined
-                  }
-                  onProjectToolApprovalChange={
-                    props.desktopApi?.setMcpConnectionProjectToolApproval
-                      ? async (repository, toolApproval, projectLabel) =>
-                          await setConnectionProjectToolApproval(
-                            connection,
-                            repository,
-                            toolApproval,
-                            projectLabel,
-                          )
-                      : undefined
-                  }
-                  onSandboxerCleanupOnPrCloseChange={
-                    connection.kind === "sandboxer"
-                    && props.desktopApi?.setSandboxerCleanupOnPrClose
-                      ? (enabled) =>
-                          void setSandboxerCleanupOnPrClose(connection, enabled)
-                      : undefined
-                  }
-                  onChanged={loadConnections}
-                  onDisconnect={() => void disconnectConnection(connection)}
-                  onEdit={() =>
-                    setConnectionEdit({
-                      connectionId: connection.id,
-                      displayName: connection.displayName,
-                      serverUrl: connection.serverUrl,
-                      originalServerUrl: connection.serverUrl,
-                      ...(connection.stdio
-                        ? {
-                            local: {
-                              draft: localCommandDraftFromLaunch(connection.stdio),
-                              runningIn: connection.localProcesses ?? 0,
-                            },
-                          }
-                        : {}),
-                      ...(connection.github
-                        ? {
-                            github: {
-                              draft: githubConnectionDraftFromSettings(connection.github),
-                              runningIn: connection.localProcesses ?? 0,
-                            },
-                          }
-                        : {}),
-                    })
-                  }
-                  onNotice={setConnectionNotice}
-                  onRemove={() => setConnectionRemoveCandidate(connection)}
-                />
-              ))}
+              {installedConnections.map((connection) => renderConnectionRow(connection))}
             </div>
           ) : (
-            <p className="settings-empty">No PwrAgent connections yet.</p>
+            <p className="settings-empty">
+              {suggestedConnections.length || suggestGithub
+                ? "No connections set up yet. Set up a suggestion below, or open the plugin store to add your own server."
+                : "No connections set up yet. Open the plugin store to add one."}
+            </p>
           )}
-          <form
-            className="settings-mcp-create"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (connectionAddKind === "local") {
-                if (localTest?.ok) void createLocalConnection();
-                else void testLocalConnection();
-                return;
-              }
-              if (connectionAddKind === "github") {
-                if (githubTest?.ok) void createGithubConnection();
-                else void testGithubConnection();
-                return;
-              }
-              void createConnection();
-            }}
-          >
-            <h3 className="settings-mcp-create__title">Add an MCP server</h3>
-            <SegmentedControl<ConnectionAddKind>
-              disabled={Boolean(connectionPending)}
-              label="Server type"
-              options={[
-                { label: "Server URL", meta: "HTTP over network or local IPC", value: "remote" },
-                { label: "Local command", meta: "Runs on this computer", value: "local" },
-                ...(props.desktopApi?.testGithubMcpConnection
-                  ? [{ label: "GitHub", meta: "Signs in with your GitHub CLI", value: "github" as const }]
-                  : []),
-              ]}
-              value={connectionAddKind}
-              onChange={(kind) => {
-                setConnectionAddKind(kind);
-                setConnectionNotice(undefined);
-              }}
-            />
-            {connectionAddKind === "remote" ? (
-              <>
-                {/*
-                  * The constraint belongs above the fields: a remote server
-                  * that wants a bearer token cannot be added here, and saying
-                  * so first is cheaper than a discovery failure afterwards.
-                  */}
-                <p className="settings-mcp-create__constraint">
-                  Network servers sign in with OAuth. For local unix:// and pipe://
-                  HTTP servers, approve access in the server app and paste its session token if required.
-                </p>
-                <div className="settings-mcp-create__fields">
-                  <label>
-                    <span>Name</span>
-                    <input
-                      className="settings-input"
+          {!connectionsLoading && (suggestedConnections.length || suggestGithub) ? (
+            <>
+              <div className="settings-mcp-bar">
+                <h3 className="settings-mcp-bar__title">Suggested</h3>
+                <span className="settings-mcp-bar__count">not set up yet</span>
+              </div>
+              <div className="settings-mcp-list">
+                {suggestedConnections
+                  .filter((connection) => connection.kind === "pwrsnap" || connection.kind === "pwrgit")
+                  .map((connection) => (
+                    <SuggestedPwrSuiteRow
+                      key={connection.id}
+                      busy={connectionPending?.connectionId === connection.id}
+                      connection={connection}
+                      desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
-                      placeholder="Datadog"
-                      value={connectionName}
-                      onChange={(event) => setConnectionName(event.target.value)}
+                      onChanged={loadConnections}
+                      onNotice={setConnectionNotice}
                     />
-                  </label>
-                  <label>
-                    <span>MCP server URL</span>
-                    <input
-                      className="settings-input"
+                  ))}
+                {suggestGithub ? (
+                  <GithubCompactRow
+                    disabled={Boolean(connectionPending)}
+                    onSetUp={() => openGithubSetup()}
+                  />
+                ) : null}
+                {suggestedConnections
+                  .filter((connection) => connection.kind !== "pwrsnap" && connection.kind !== "pwrgit")
+                  .map((connection) => connection.kind === "sandboxer" ? (
+                    <SuggestedSandboxerRow
+                      key={connection.id}
+                      authorizationError={authorizationErrors[connection.id]}
+                      authorizing={authorizing.has(connection.id)}
+                      connection={connection}
+                      desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
-                      inputMode="url"
-                      placeholder="https://mcp.example.com/mcp"
-                      value={connectionUrl}
-                      onChange={(event) => {
-                        setConnectionUrl(event.target.value);
-                        setIpcBearerToken("");
-                        // A probe describes one URL. Keeping a stale verdict
-                        // beside an edited field would offer to save
-                        // something that was never checked.
-                        setProbe(undefined);
-                      }}
+                      setupHeadline={resolveMcpConnectionSetup({ connection, gatewayEnabled }).headline}
+                      onCancelAuthorization={() => void cancelAuthorization(connection)}
+                      onConnect={props.desktopApi?.setSandboxerTransport
+                        ? () => void connectSandboxerHosted(connection)
+                        : undefined}
+                      onNotice={setConnectionNotice}
+                      onSetUp={() => openPluginStore("sandboxer")}
                     />
-                  </label>
-                  <button
-                    className="button button--secondary"
-                    disabled={
-                      Boolean(connectionPending)
-                      || !connectionUrl.trim()
-                      || (probe?.ok === true && !connectionName.trim())
-                      || (probe?.ok === true && probe.needsIpcBearer === true && !ipcBearerToken.trim())
-                    }
-                    type="submit"
-                  >
-                    {connectionPending?.kind === "probe"
-                      ? "Checking..."
-                      : connectionPending?.kind === "create"
-                        ? "Adding..."
-                        : probe?.ok
-                          ? probe.authMode === "none" ? "Add connection" : "Add and authorize"
-                          : "Check"}
-                  </button>
-                </div>
-                {isMcpIpcUrl(connectionUrl) ? (
-                  <label>
-                    <span>Session bearer token (optional)</span>
-                    <input className="settings-input" type="password" autoComplete="off"
-                      disabled={Boolean(connectionPending)} value={ipcBearerToken}
-                      onChange={(event) => setIpcBearerToken(event.target.value)} />
-                  </label>
-                ) : null}
-                {probe ? (
-                  <p
-                    className={`settings-mcp-probe settings-mcp-probe--${
-                      probe.ok ? "ok" : "err"
-                    }`}
-                    role={probe.ok ? "status" : "alert"}
-                  >
-                    {probe.ok
-                      ? probe.needsIpcBearer
-                        ? "The same-user HTTP endpoint requires a bearer token. Approve a session in the server app and paste its token above. No authenticated session has been opened."
-                        : `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. ${probe.authMode === "none" ? "Access is approved in the local server app" : "It signs in with OAuth"}${
-                          probe.toolCount === undefined
-                            ? ""
-                            : ` and offers ${probe.toolCount} tools`
-                        }. Nothing is saved yet.`
-                      // The probe's own sentence is written for an agent and
-                      // points it here; this screen offers the conversion.
-                      : probe.problem === "looks_like_stdio"
-                        ? "That looks like a command, not a URL. PwrAgent can run it as a local command."
-                        : probe.problem === "github_server"
-                          ? "This is GitHub's MCP server. Set it up with your GitHub sign-in instead."
-                          : probe.message}
-                  </p>
-                ) : null}
-                {probe && !probe.ok && probe.problem === "looks_like_stdio" ? (
-                  <div className="settings-mcp-create__convert">
-                    <button
-                      className="button button--secondary"
-                      disabled={Boolean(connectionPending)}
-                      type="button"
-                      onClick={() => {
-                        const converted = localCommandDraftFromCommandLine(connectionUrl);
-                        if (!converted) return;
-                        setLocalDraft(converted);
-                        setLocalTest(undefined);
-                        setConnectionUrl("");
-                        setProbe(undefined);
-                        setConnectionAddKind("local");
-                      }}
-                    >
-                      Use as local command
-                    </button>
-                  </div>
-                ) : null}
-                {probe && !probe.ok && probe.problem === "github_server" && props.desktopApi?.testGithubMcpConnection ? (
-                  <div className="settings-mcp-create__convert">
-                    <button
-                      className="button button--secondary"
-                      disabled={Boolean(connectionPending)}
-                      type="button"
-                      onClick={() => {
-                        setConnectionUrl("");
-                        setProbe(undefined);
-                        setGithubTest(undefined);
-                        if (!connectionName.trim()) setConnectionName("GitHub");
-                        setConnectionAddKind("github");
-                      }}
-                    >
-                      Set up GitHub
-                    </button>
-                  </div>
-                ) : null}
-              </>
-            ) : connectionAddKind === "github" ? (
-              <>
-                <p className="settings-mcp-create__constraint">
-                  GitHub&rsquo;s MCP server, signed in with the account your GitHub CLI uses or a
-                  token you paste. Test signs in, lists the tools and skills, and disconnects.
-                </p>
-                <div className="settings-mcp-local">
-                  <label className="settings-mcp-local__field">
-                    <span className="settings-mcp-local__label">Name</span>
-                    <span className="settings-mcp-local__control">
-                      <input
-                        className="settings-input"
-                        disabled={Boolean(connectionPending)}
-                        placeholder="GitHub"
-                        value={connectionName}
-                        onChange={(event) => setConnectionName(event.target.value)}
-                      />
-                    </span>
-                  </label>
-                </div>
-                <GithubConnectionFields
-                  disabled={Boolean(connectionPending)}
-                  draft={githubDraft}
-                  inspect={githubInspect}
-                  inspecting={githubInspecting}
-                  test={githubTest}
-                  onChange={(next) => {
-                    setGithubDraft(next);
-                    // A test describes one setup, as a probe does one URL.
-                    // Only the toolset disclosure changes nothing tested.
-                    if (next.showAllToolsets === githubDraft.showAllToolsets) setGithubTest(undefined);
-                  }}
-                  onRecheck={() => void inspectGithub()}
-                />
-                {githubTest ? (
-                  <GithubConnectionTestResult result={githubTest} skillsRequested={githubDraft.skills} />
-                ) : null}
-                <div className="settings-mcp-local__actions">
-                  {githubTest?.ok ? (
-                    <button
-                      className="button button--ghost"
-                      disabled={Boolean(connectionPending)}
-                      type="button"
-                      onClick={() => void testGithubConnection()}
-                    >
-                      Test again
-                    </button>
-                  ) : null}
-                  <button
-                    className="button button--secondary"
-                    disabled={
-                      Boolean(connectionPending)
-                      || !githubConnectionDraftReady(githubDraft)
-                    }
-                    type="submit"
-                  >
-                    {connectionPending?.kind === "testLocal"
-                      ? "Testing..."
-                      : connectionPending?.kind === "create"
-                        ? "Adding..."
-                        : githubTest?.ok
-                          ? "Add"
-                          : "Test"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="settings-mcp-create__constraint">
-                  A program PwrAgent starts and talks to over its input and
-                  output, such as <code>npx</code>, <code>uvx</code>, or a
-                  server you built.
-                </p>
-                <div className="settings-mcp-local">
-                  <label className="settings-mcp-local__field">
-                    <span className="settings-mcp-local__label">Name</span>
-                    <span className="settings-mcp-local__control">
-                      <input
-                        className="settings-input"
-                        disabled={Boolean(connectionPending)}
-                        placeholder="Project files"
-                        value={connectionName}
-                        onChange={(event) => setConnectionName(event.target.value)}
-                      />
-                    </span>
-                  </label>
-                </div>
-                <LocalCommandFields
-                  desktopApi={props.desktopApi}
-                  disabled={Boolean(connectionPending)}
-                  draft={localDraft}
-                  resolvedCommand={localTest?.ok ? localTest.command : undefined}
-                  onChange={(next) => {
-                    setLocalDraft(next);
-                    // A test describes one launch, as a probe does one URL.
-                    setLocalTest(undefined);
-                  }}
-                />
-                <LocalCommandWhereItRuns />
-                {localTest ? <LocalCommandTestResult result={localTest} /> : null}
-                <div className="settings-mcp-local__actions">
-                  {localCommandTestAllowsAddAnyway(localTest) ? (
-                    <button
-                      className="button button--ghost"
-                      disabled={Boolean(connectionPending) || !connectionName.trim()}
-                      type="button"
-                      onClick={() => void createLocalConnection()}
-                    >
-                      Add anyway
-                    </button>
-                  ) : null}
-                  <button
-                    className="button button--secondary"
-                    disabled={
-                      Boolean(connectionPending)
-                      || !localCommandDraftReady(localDraft)
-                      || (localTest?.ok === true && !connectionName.trim())
-                    }
-                    type="submit"
-                  >
-                    {connectionPending?.kind === "testLocal"
-                      ? "Testing..."
-                      : connectionPending?.kind === "create"
-                        ? "Adding..."
-                        : localTest?.ok
-                          ? "Add"
-                          : "Test"}
-                  </button>
-                </div>
-              </>
-            )}
-          </form>
+                  ) : renderConnectionRow(connection))}
+              </div>
+            </>
+          ) : null}
         </div>
       </SettingsSection>
 
@@ -2209,6 +2314,409 @@ export function PluginsSettings(props: {
               >
                 Remove server
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {storeView ? (
+        <div className="settings-confirm-modal" role="presentation">
+          <div
+            ref={pluginStoreDialogRef}
+            aria-labelledby={storeTitleId}
+            aria-modal="true"
+            className="settings-confirm-dialog plugin-store"
+            role="dialog"
+          >
+            <div className="plugin-store__head">
+              {storeView === "catalog" ? null : (
+                <button
+                  className="button button--ghost"
+                  disabled={Boolean(connectionPending)}
+                  type="button"
+                  onClick={showStoreCatalog}
+                >
+                  &larr; Plugin store
+                </button>
+              )}
+              <h2 id={storeTitleId}>
+                {storeView === "github"
+                  ? "GitHub"
+                  : storeView === "sandboxer"
+                    ? "Sandboxer"
+                    : storeView === "custom" ? "Custom server" : "Plugin store"}
+              </h2>
+              <button
+                className="button button--ghost plugin-store__close"
+                disabled={Boolean(connectionPending)}
+                type="button"
+                onClick={closePluginStore}
+              >
+                Close
+              </button>
+            </div>
+            <div className="plugin-store__body">
+              {connectionNotice && connectionNotice.kind !== "success" ? (
+                <div
+                  className={`settings-plugin-notice settings-plugin-notice--${connectionNotice.kind}`}
+                  role={connectionNotice.kind === "error" ? "alert" : "status"}
+                >
+                  <span>{connectionNotice.text}</span>
+                </div>
+              ) : null}
+              {storeView === "github" ? githubSetupForm : storeView === "sandboxer" ? (
+                sandboxerConnection ? (
+                  <div className="settings-mcp-list">
+                    {renderConnectionRow(sandboxerConnection, { sandboxerSetupOpen: true })}
+                  </div>
+                ) : null
+              ) : storeView === "custom" ? (
+              <form
+                aria-labelledby={storeTitleId}
+                className="settings-mcp-create"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (connectionAddKind === "local") {
+                    if (localTest?.ok) void createLocalConnection();
+                    else void testLocalConnection();
+                    return;
+                  }
+                  void createConnection();
+                }}
+              >
+                <SegmentedControl<ConnectionAddKind>
+                  disabled={Boolean(connectionPending)}
+                  label="Server type"
+                  options={[
+                    { label: "Server URL", meta: "HTTP over network or local IPC", value: "remote" },
+                    { label: "Local command", meta: "Runs on this computer", value: "local" },
+                  ]}
+                  value={connectionAddKind}
+                  onChange={(kind) => {
+                    setConnectionAddKind(kind);
+                    setConnectionNotice(undefined);
+                  }}
+                />
+                {connectionAddKind === "remote" ? (
+                  <>
+                    {/*
+                      * The constraint belongs above the fields: a remote server
+                      * that wants a bearer token cannot be added here, and saying
+                      * so first is cheaper than a discovery failure afterwards.
+                      */}
+                    <p className="settings-mcp-create__constraint">
+                      Network servers sign in with OAuth. For local unix:// and pipe://
+                      HTTP servers, approve access in the server app and paste its session token if required.
+                    </p>
+                    <div className="settings-mcp-create__fields">
+                      <label>
+                        <span>Name</span>
+                        <input
+                          className="settings-input"
+                          disabled={Boolean(connectionPending)}
+                          placeholder="Datadog"
+                          value={connectionName}
+                          onChange={(event) => setConnectionName(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        <span>MCP server URL</span>
+                        <input
+                          className="settings-input"
+                          disabled={Boolean(connectionPending)}
+                          inputMode="url"
+                          placeholder="https://mcp.example.com/mcp"
+                          value={connectionUrl}
+                          onChange={(event) => {
+                            setConnectionUrl(event.target.value);
+                            setIpcBearerToken("");
+                            // A probe describes one URL. Keeping a stale verdict
+                            // beside an edited field would offer to save
+                            // something that was never checked.
+                            setProbe(undefined);
+                          }}
+                        />
+                      </label>
+                      <button
+                        className="button button--secondary"
+                        disabled={
+                          Boolean(connectionPending)
+                          || !connectionUrl.trim()
+                          || (probe?.ok === true && !connectionName.trim())
+                          || (probe?.ok === true && probe.needsIpcBearer === true && !ipcBearerToken.trim())
+                        }
+                        type="submit"
+                      >
+                        {connectionPending?.kind === "probe"
+                          ? "Checking..."
+                          : connectionPending?.kind === "create"
+                            ? "Adding..."
+                            : probe?.ok
+                              ? probe.authMode === "none" ? "Add connection" : "Add and authorize"
+                              : "Check"}
+                      </button>
+                    </div>
+                    {isMcpIpcUrl(connectionUrl) ? (
+                      <label>
+                        <span>Session bearer token (optional)</span>
+                        <input className="settings-input" type="password" autoComplete="off"
+                          disabled={Boolean(connectionPending)} value={ipcBearerToken}
+                          onChange={(event) => setIpcBearerToken(event.target.value)} />
+                      </label>
+                    ) : null}
+                    {probe ? (
+                      <p
+                        className={`settings-mcp-probe settings-mcp-probe--${
+                          probe.ok ? "ok" : "err"
+                        }`}
+                        role={probe.ok ? "status" : "alert"}
+                      >
+                        {probe.ok
+                          ? probe.needsIpcBearer
+                            ? "The same-user HTTP endpoint requires a bearer token. Approve a session in the server app and paste its token above. No authenticated session has been opened."
+                            : `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. ${probe.authMode === "none" ? "Access is approved in the local server app" : "It signs in with OAuth"}${
+                              probe.toolCount === undefined
+                                ? ""
+                                : ` and offers ${probe.toolCount} tools`
+                            }. Nothing is saved yet.`
+                          // The probe's own sentence is written for an agent and
+                          // points it here; this screen offers the conversion.
+                          : probe.problem === "looks_like_stdio"
+                            ? "That looks like a command, not a URL. PwrAgent can run it as a local command."
+                            : probe.problem === "github_server"
+                              ? "This is GitHub's MCP server. PwrAgent has it built in: set it up with your GitHub sign-in."
+                              : probe.message}
+                      </p>
+                    ) : null}
+                    {probe && !probe.ok && probe.problem === "looks_like_stdio" ? (
+                      <div className="settings-mcp-create__convert">
+                        <button
+                          className="button button--secondary"
+                          disabled={Boolean(connectionPending)}
+                          type="button"
+                          onClick={() => {
+                            const converted = localCommandDraftFromCommandLine(connectionUrl);
+                            if (!converted) return;
+                            setLocalDraft(converted);
+                            setLocalTest(undefined);
+                            setConnectionUrl("");
+                            setProbe(undefined);
+                            setConnectionAddKind("local");
+                          }}
+                        >
+                          Use as local command
+                        </button>
+                      </div>
+                    ) : null}
+                    {probe && !probe.ok && probe.problem === "github_server" && githubAvailable ? (
+                      <div className="settings-mcp-create__convert">
+                        <button
+                          className="button button--secondary"
+                          disabled={Boolean(connectionPending)}
+                          type="button"
+                          onClick={() => {
+                            // Turns the store to GitHub's page with the name
+                            // typed here; this form goes back to empty.
+                            openGithubSetup(connectionName.trim());
+                            setConnectionName("");
+                            setConnectionUrl("");
+                            setProbe(undefined);
+                          }}
+                        >
+                          Set up GitHub
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <p className="settings-mcp-create__constraint">
+                      A program PwrAgent starts and talks to over its input and
+                      output, such as <code>npx</code>, <code>uvx</code>, or a
+                      server you built.
+                    </p>
+                    <div className="settings-mcp-local">
+                      <label className="settings-mcp-local__field">
+                        <span className="settings-mcp-local__label">Name</span>
+                        <span className="settings-mcp-local__control">
+                          <input
+                            className="settings-input"
+                            disabled={Boolean(connectionPending)}
+                            placeholder="Project files"
+                            value={connectionName}
+                            onChange={(event) => setConnectionName(event.target.value)}
+                          />
+                        </span>
+                      </label>
+                    </div>
+                    <LocalCommandFields
+                      desktopApi={props.desktopApi}
+                      disabled={Boolean(connectionPending)}
+                      draft={localDraft}
+                      resolvedCommand={localTest?.ok ? localTest.command : undefined}
+                      onChange={(next) => {
+                        setLocalDraft(next);
+                        // A test describes one launch, as a probe does one URL.
+                        setLocalTest(undefined);
+                      }}
+                    />
+                    <LocalCommandWhereItRuns />
+                    {localTest ? <LocalCommandTestResult result={localTest} /> : null}
+                    <div className="settings-mcp-local__actions">
+                      {localCommandTestAllowsAddAnyway(localTest) ? (
+                        <button
+                          className="button button--ghost"
+                          disabled={Boolean(connectionPending) || !connectionName.trim()}
+                          type="button"
+                          onClick={() => void createLocalConnection()}
+                        >
+                          Add anyway
+                        </button>
+                      ) : null}
+                      <button
+                        className="button button--secondary"
+                        disabled={
+                          Boolean(connectionPending)
+                          || !localCommandDraftReady(localDraft)
+                          || (localTest?.ok === true && !connectionName.trim())
+                        }
+                        type="submit"
+                      >
+                        {connectionPending?.kind === "testLocal"
+                          ? "Testing..."
+                          : connectionPending?.kind === "create"
+                            ? "Adding..."
+                            : localTest?.ok
+                              ? "Add"
+                              : "Test"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+              ) : (
+                <>
+                  <input
+                    aria-label="Search plugins"
+                    className="settings-input plugin-store__search"
+                    placeholder="Search plugins"
+                    type="search"
+                    value={storeQuery}
+                    onChange={(event) => setStoreQuery(event.target.value)}
+                  />
+                  {storeTiles.pwrSuite.length ? (
+                    <>
+                      <h3 className="plugin-store__group">PwrSuite</h3>
+                      <div className="plugin-store__grid">
+                        {storeTiles.pwrSuite.map((connection) => (
+                          <PwrSuiteStoreTile
+                            key={connection.id}
+                            connection={connection}
+                            desktopApi={props.desktopApi}
+                            disabled={Boolean(connectionPending)}
+                            onChanged={loadConnections}
+                            onNotice={setConnectionNotice}
+                            onShow={() => revealConnection(connection.id)}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                  {storeTiles.github || storeTiles.sandboxer ? (
+                    <>
+                      <h3 className="plugin-store__group">Services</h3>
+                      <div className="plugin-store__grid">
+                        {storeTiles.github ? (
+                          <PluginStoreTile
+                            by={STORE_TILE_TEXT.github.by}
+                            description={STORE_TILE_TEXT.github.description}
+                            icon={<GitHubIcon aria-hidden="true" className="plugin-store__tile-icon" size={28} />}
+                            name="GitHub"
+                            status={githubConnections.length ? (
+                              <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>
+                                {githubConnections.length} added
+                              </span>
+                            ) : null}
+                          >
+                            <button
+                              aria-label={githubConnections.length ? "Add another GitHub connection" : "Add GitHub"}
+                              className="button button--secondary"
+                              disabled={Boolean(connectionPending)}
+                              type="button"
+                              onClick={() => openGithubSetup()}
+                            >
+                              {githubConnections.length ? "Add another" : "Add"}
+                            </button>
+                          </PluginStoreTile>
+                        ) : null}
+                        {storeTiles.sandboxer ? (
+                          <PluginStoreTile
+                            by={STORE_TILE_TEXT.sandboxer.by}
+                            description={STORE_TILE_TEXT.sandboxer.description}
+                            icon={(
+                              <img
+                                alt=""
+                                aria-hidden="true"
+                                className="plugin-store__tile-icon"
+                                height={28}
+                                src={sandboxerMark}
+                                width={28}
+                              />
+                            )}
+                            name="Sandboxer"
+                            status={storeTiles.sandboxer.configured ? (
+                              <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>Connected</span>
+                            ) : null}
+                          >
+                            {storeTiles.sandboxer.configured ? (
+                              <button
+                                aria-label="Show Sandboxer"
+                                className="button button--secondary"
+                                disabled={Boolean(connectionPending)}
+                                type="button"
+                                onClick={() => revealConnection(storeTiles.sandboxer!.id)}
+                              >
+                                Show
+                              </button>
+                            ) : (
+                              <button
+                                aria-label="Set up Sandboxer"
+                                className="button button--secondary"
+                                disabled={Boolean(connectionPending)}
+                                type="button"
+                                onClick={() => setStoreView("sandboxer")}
+                              >
+                                Set up
+                              </button>
+                            )}
+                          </PluginStoreTile>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
+                  {storeTiles.none ? (
+                    <p className="plugin-store__no-match" role="status">
+                      No plugin matches &ldquo;{storeQuery.trim()}&rdquo;. Add it as a custom server.
+                    </p>
+                  ) : null}
+                  <h3 className="plugin-store__group">Anything else</h3>
+                  <PluginStoreTile
+                    by={STORE_TILE_TEXT.custom.by}
+                    custom
+                    description={STORE_TILE_TEXT.custom.description}
+                    name="Custom server"
+                  >
+                    <button
+                      className="button button--secondary"
+                      disabled={Boolean(connectionPending)}
+                      type="button"
+                      onClick={() => setStoreView("custom")}
+                    >
+                      Add server
+                    </button>
+                  </PluginStoreTile>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2658,6 +3166,10 @@ function ManagedMcpConnectionRow(props: {
   ) => Promise<boolean>;
   /** Sandboxer only. */
   onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
+  /** Sandboxer only: open its setup at once, as the plugin store's page does. */
+  sandboxerSetupInitiallyOpen?: boolean;
+  /** Outlined for a moment after the plugin store pointed at it. */
+  highlighted?: boolean;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -2669,7 +3181,9 @@ function ManagedMcpConnectionRow(props: {
   const toolApprovalLabelId = useId();
   const toolApprovalHintId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(false);
+  const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(
+    props.sandboxerSetupInitiallyOpen === true,
+  );
   const toolApproval = connection.toolApproval ?? "auto";
   const sandboxer = connection.kind === "sandboxer";
   const localSandboxer = sandboxer && connection.authMode === "local_cli";
@@ -2780,6 +3294,7 @@ function ManagedMcpConnectionRow(props: {
   ) {
     return (
       <SandboxerCompactRow
+        connectionId={connection.id}
         desktopApi={props.desktopApi}
         onNotice={props.onNotice}
         disabled={disabled}
@@ -2791,7 +3306,8 @@ function ManagedMcpConnectionRow(props: {
   const toolsMeta = describeManagedMcpConnectionTools(setup, inventory);
   return (
     <article
-      className="settings-mcp-row settings-mcp-row--managed"
+      className={`settings-mcp-row settings-mcp-row--managed${props.highlighted ? " settings-mcp-row--revealed" : ""}`}
+      data-connection-id={connection.id}
       data-health={health}
     >
       <div className="settings-mcp-row__main">
@@ -3246,6 +3762,205 @@ function ManagedMcpConnectionRow(props: {
  * with a connection error and name no cause. The probe itself lives in the
  * row, because the state line needs the same answer.
  */
+/**
+ * PwrSnap or PwrGit before its app's relay is found: one line with what the
+ * app gives an agent and the step that gets it there (Get, Update or Open).
+ */
+function SuggestedPwrSuiteRow(props: {
+  busy: boolean;
+  connection: McpConnectionStatus;
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  onChanged: () => void;
+  onNotice: (notice: ActionNotice) => void;
+}) {
+  const app = props.connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap";
+  const { status, refresh } = useLocalConnectionStatus(app, props.desktopApi);
+  const onChanged = props.onChanged;
+  const refreshStatus = useCallback(() => {
+    void refresh();
+    onChanged();
+  }, [onChanged, refresh]);
+  return (
+    <CompactMcpConnectionRow
+      connectionId={props.connection.id}
+      meta={PWRSUITE_PLUGIN_SUMMARY[app]}
+      name={props.connection.displayName}
+    >
+      <LocalConnectionActions
+        app={app}
+        busy={props.busy}
+        configured={props.connection.configured}
+        desktopApi={props.desktopApi}
+        disabled={props.disabled}
+        status={status}
+        onChanged={refreshStatus}
+        onNotice={props.onNotice}
+      />
+    </CompactMcpConnectionRow>
+  );
+}
+
+/**
+ * Sandboxer before it is signed in: one line with Connect (the hosted
+ * service, in the browser) and Set up, which opens its full setup in the
+ * plugin store. While a sign-in waits, the line holds the wait instead.
+ */
+function SuggestedSandboxerRow(props: {
+  authorizationError?: string;
+  authorizing: boolean;
+  connection: McpConnectionStatus;
+  /** Where setup stands, in the row's own words (`resolveMcpConnectionSetup`). */
+  setupHeadline: string;
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  onCancelAuthorization: () => void;
+  onConnect?: () => void;
+  onNotice: (notice: ActionNotice) => void;
+  onSetUp: () => void;
+}) {
+  if (props.authorizing) {
+    return (
+      <CompactMcpConnectionRow
+        connectionId={props.connection.id}
+        meta="Finish signing in to Sandboxer in your browser."
+        name={props.connection.displayName}
+      >
+        <SignInWait
+          name={props.connection.displayName}
+          title="Stop waiting for Sandboxer. The sign-in page already open in your browser stops working; start again for a fresh one."
+          onCancel={props.onCancelAuthorization}
+        />
+      </CompactMcpConnectionRow>
+    );
+  }
+  // Part way through the Local CLI path, the line says where it stands and
+  // leaves Connect (which would switch to the hosted service) to the full
+  // setup, where the choice between the two is on screen.
+  const localCliInProgress = props.connection.authMode === "local_cli"
+    && props.connection.sandboxerCliState !== "cli_missing";
+  return (
+    <SandboxerCompactRow
+      connectionId={props.connection.id}
+      desktopApi={props.desktopApi}
+      disabled={props.disabled}
+      {...(props.authorizationError ? { error: `Sign-in failed: ${props.authorizationError}` } : {})}
+      {...(localCliInProgress
+        ? { meta: `Local CLI \u00b7 ${props.setupHeadline}` }
+        : props.onConnect ? { onConnect: props.onConnect } : {})}
+      onNotice={props.onNotice}
+      onSetUp={props.onSetUp}
+    />
+  );
+}
+
+/** One entry in the plugin store's catalog. */
+function PluginStoreTile(props: {
+  by: string;
+  children: ReactNode;
+  /** The custom-server entry, drawn dashed because it is not one server. */
+  custom?: boolean;
+  description: string;
+  /**
+   * The product's own mark, where PwrAgent ships one, drawn as published:
+   * an `<img>` of the file under `assets/<vendor>/`, never redrawn.
+   */
+  icon?: ReactNode;
+  name: string;
+  status?: ReactNode;
+}) {
+  return (
+    <section
+      aria-label={props.name}
+      className={`plugin-store__tile${props.custom ? " plugin-store__tile--custom" : ""}`}
+    >
+      <div className="plugin-store__tile-top">
+        {props.icon}
+        <span className="plugin-store__tile-name">{props.name}</span>
+        <span className="plugin-store__tile-by">{props.by}</span>
+      </div>
+      <p className="plugin-store__tile-description">{props.description}</p>
+      <div className="plugin-store__tile-foot">
+        {props.status}
+        <div className="plugin-store__tile-actions">{props.children}</div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * PwrSnap or PwrGit in the store. Set up, it points at its row; otherwise it
+ * offers the same Get, Update or Open step as its suggestion.
+ */
+function PwrSuiteStoreTile(props: {
+  connection: McpConnectionStatus;
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  onChanged: () => void;
+  onNotice: (notice: ActionNotice) => void;
+  onShow: () => void;
+}) {
+  const app = props.connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap";
+  // Set up, the tile only points at its row, which already probes the app.
+  const { status, refresh } = useLocalConnectionStatus(
+    props.connection.configured ? undefined : app,
+    props.desktopApi,
+  );
+  const onChanged = props.onChanged;
+  const refreshStatus = useCallback(() => {
+    void refresh();
+    onChanged();
+  }, [onChanged, refresh]);
+  const installed = status?.availability === "installed" || status?.availability === "running";
+  return (
+    <PluginStoreTile
+      by="PwrDrvr app"
+      description={PWRSUITE_PLUGIN_SUMMARY[app].split(" \u00b7 ")[0]!}
+      icon={(
+        <img
+          alt=""
+          aria-hidden="true"
+          className="plugin-store__tile-icon plugin-store__tile-icon--app"
+          height={28}
+          src={app === "PwrGit" ? pwrGitIcon : pwrSnapIcon}
+          width={28}
+        />
+      )}
+      name={app}
+      status={props.connection.configured ? (
+        <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>Installed</span>
+      ) : status ? (
+        <span className={`settings-pathrow__chip${chipToneClass(installed ? "warn" : "idle")}`}>
+          {installed ? "Update needed" : "Not installed"}
+        </span>
+      ) : null}
+    >
+      {props.connection.configured ? (
+        <button
+          aria-label={`Show ${app}`}
+          className="button button--secondary"
+          disabled={props.disabled}
+          type="button"
+          onClick={props.onShow}
+        >
+          Show
+        </button>
+      ) : (
+        <LocalConnectionActions
+          app={app}
+          busy={false}
+          configured={props.connection.configured}
+          desktopApi={props.desktopApi}
+          disabled={props.disabled}
+          status={status}
+          onChanged={refreshStatus}
+          onNotice={props.onNotice}
+        />
+      )}
+    </PluginStoreTile>
+  );
+}
+
 function LocalConnectionActions(props: {
   app: "PwrSnap" | "PwrGit";
   busy: boolean;

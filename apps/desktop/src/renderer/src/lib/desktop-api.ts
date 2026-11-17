@@ -1,5 +1,5 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchRun, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
+import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchRunBoard, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
@@ -1055,12 +1055,15 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   searchResearch?: (request: ResearchSearchRequest) => Promise<ResearchSearchPage>;
   readResearchItem?: (request: ResearchItemReadRequest) => Promise<ResearchItemContext>;
   updateResearchItem?: (request: ResearchWorkRequest) => Promise<ResearchItemContext>;
-  researchSnapshot?: (thread: ResearchThread) => Promise<ResearchSnapshot>;
+  /** Run summaries for the thread and the board of `runId` (or the newest run). No journal. */
+  researchSnapshot?: (request: ResearchSnapshotRequest) => Promise<ResearchSnapshot>;
+  /** One page of a run's journal, newest first. */
+  readResearchEvents?: (request: ResearchEventsRequest) => Promise<ResearchEventPage>;
   researchHarnessStatus?: () => Promise<ResearchHarnessStatus>;
-  startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchRun>;
+  startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchRunBoard>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
   withdrawResearch?: (thread: ResearchThread) => Promise<void>;
-  updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchRun>;
+  updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchRunBoard>;
   openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
   onResearchChanged?: (callback: (thread: ResearchThread) => void) => () => void;
   getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;

@@ -597,6 +597,16 @@ function createSettingsState(
   };
 }
 
+
+/** Open Plugin store → Custom server, where the URL and local-command form lives. */
+async function openCustomServerForm(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog", { name: "Plugin store" }))
+      .getByRole("button", { name: "Add server" }),
+  );
+}
+
 describe("SettingsScreen agent forge tools", () => {
   it("writes the family switch and each group's access level", async () => {
     const settings = createSettingsState();
@@ -1734,6 +1744,48 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: { appearance: { terminalMinimumContrast: true } },
+      });
+    });
+  });
+
+  it("waxes the context moon by default and writes the lunar cycle when chosen", async () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        calmMotion: false,
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const group = screen.getByRole("radiogroup", { name: "Context moon" });
+    expect(within(group).getByRole("radio", { name: /^Wax to full/ }))
+      .toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(group).getByRole("radio", { name: /^Lunar cycle/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { appearance: { contextMoon: "lunar-cycle" } },
       });
     });
   });
@@ -10586,6 +10638,7 @@ describe("SettingsScreen", () => {
         listMcpConnections: vi.fn(async () => ({ connections })),
         listCodexMcpServers: vi.fn(async () => ({ codexHome: "/fixture", detail: "toolsAndAuthOnly" as const, servers: [] })),
       }} initialSection="plugins" settings={createSettingsState()} onClose={() => undefined} />);
+    await openCustomServerForm();
     fireEvent.change(await screen.findByPlaceholderText("https://mcp.example.com/mcp"), { target: { value: connection.serverUrl } });
     fireEvent.change(screen.getByPlaceholderText("Datadog"), { target: { value: "Native app" } });
     fireEvent.change(screen.getByLabelText("Session bearer token (optional)"), { target: { value: "approved-session-ticket" } });
@@ -10653,6 +10706,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    await openCustomServerForm();
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Datadog" },
     });
@@ -10733,6 +10787,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    await openCustomServerForm();
     fireEvent.change(await screen.findByLabelText("MCP server URL"), {
       target: { value: "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'" },
     });
@@ -10815,6 +10870,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    await openCustomServerForm();
     fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
     fireEvent.change(screen.getByPlaceholderText("Project files"), {
       target: { value: "Fixture server" },
@@ -10871,6 +10927,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    await openCustomServerForm();
     fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
     const commandLine = screen.getByLabelText(/^Command line/);
     fireEvent.change(commandLine, {

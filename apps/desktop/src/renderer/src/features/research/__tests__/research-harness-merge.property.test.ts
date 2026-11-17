@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { projectResearchRun, type ResearchEvent } from "@pwragent/shared";
+import { projectResearchRun, researchEventPage, researchRunBoard, type ResearchEvent } from "@pwragent/shared";
 import { researchActivityRows, researchMapBranches } from "../research-view-model";
 import { harnessRun } from "./research-harness-fixture";
 
@@ -8,14 +8,15 @@ it("retains source lifecycle and observation events in reverse order within the 
   fc.assert(fc.property(fc.array(fc.boolean(), { minLength: 101, maxLength: 130, size: "max" }), (kinds) => {
     const run = harnessRun();
     const { provenance, ...template } = run.events[3]!;
-    const events: ResearchEvent[] = kinds.map((observation, index) => ({ ...template, seq: index + 1, at: 1000 + index,
+    const events: ResearchEvent[] = kinds.map((observation, index) => ({ ...template, seq: index + 2, at: 1000 + index,
       ...(observation ? { provenance: { ...provenance!, seq: index + 1, at: 1000 + index } } : {}),
       data: observation ? { type: "harness_observation", event: "fixture", text: `source-${index}` }
         : { type: "harness", state: { ...run.harness!, note: `source-${index}` } },
     }));
     const expected = events.slice(-100).reverse().map((event) => ({ seq: event.seq,
       text: event.data.type === "harness" ? event.data.state.note : event.data.type === "harness_observation" ? event.data.text : "unreachable" }));
-    expect(researchActivityRows({ ...run, events }).map(({ seq, text }) => ({ seq, text }))).toEqual(expected);
+    const projected = projectResearchRun(run.id, [run.events[0]!, ...events]);
+    expect(researchActivityRows(researchRunBoard(projected), researchEventPage(projected, { limit: 100 }).events).map(({ seq, text }) => ({ seq, text }))).toEqual(expected);
   }), { numRuns: 30 });
 });
 
@@ -28,6 +29,24 @@ it("maps only admitted source members, never reserved native worker slots", () =
       approaches: Array.from({ length: slots }, (_, index) => ({ ...fixture.approaches[0]!, id: `a${index + 1}`, state: index < members ? "ended" : "stopped" })),
       harness: { ...fixture.harness!, members: Array.from({ length: members }, (_, index) => `m${index + 1}`) },
     } }]);
-    expect(researchMapBranches(run).map((branch) => branch.approach.id)).toEqual(run.approaches.slice(0, members).map((approach) => approach.id));
+    expect(researchMapBranches(researchRunBoard(run)).map((branch) => branch.approach.id)).toEqual(run.approaches.slice(0, members).map((approach) => approach.id));
+  }));
+});
+
+it("keeps source item provenance on the selected board without copying the journal", () => {
+  fc.assert(fc.property(fc.nat(), (value) => {
+    const run = harnessRun();
+    const expected: Record<string, unknown> = {};
+    run.harness!.members = [`m${value}`];
+    for (const event of run.events) {
+      if (!event.provenance) continue;
+      event.provenance = { ...event.provenance, member: `m${value}`, digest: value.toString(16).padStart(64, "0") };
+      if (event.data.type === "finding") expected[event.data.finding.id] = event.provenance;
+      if (event.data.type === "submission") expected[event.data.submission.id] = event.provenance;
+    }
+    const board = researchRunBoard(run);
+    expect(Reflect.get(board, "itemProvenance")).toEqual(expected);
+    expect(Object.hasOwn(board, "events")).toBe(false);
+    expect(Object.hasOwn(board, "items")).toBe(false);
   }));
 });

@@ -134,6 +134,16 @@ function createDesktopApi(
 }
 
 /** The PwrGit row in Settings → Plugins. It has no URL to find it by. */
+
+/** Open Plugin store → Custom server, where the URL and local-command form lives. */
+async function openCustomServerForm(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog", { name: "Plugin store" }))
+      .getByRole("button", { name: "Add server" }),
+  );
+}
+
 async function findPwrGitRow(): Promise<HTMLElement> {
   return await waitFor(() => {
     const found = screen.getAllByText("PwrGit")
@@ -203,11 +213,33 @@ describe("PluginsSettings", () => {
   // PwrGit signs in to nothing: it approves each session itself. `configured`
   // means this machine's PwrGit ships the relay. Only states the Codex list
   // has no word for -- missing, not running, too old -- keep a headline chip.
+  // Before its relay is found PwrGit is a suggestion: one line with its next
+  // step, below the installed connections, with no switches to set yet.
   it.each([
-    ["not_installed", false, true, ["Not installed"]],
-    ["installed", false, true, ["Update needed"]],
+    ["not_installed", "Get PwrGit"],
+    ["installed", "Update PwrGit"],
+    ["running", "Update PwrGit"],
+  ] as const)("lists PwrGit as a suggestion while %s without its relay", async (availability, action) => {
+    const api = createDesktopApi([]);
+    api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue({
+      connectionId: "pwrgit", displayName: "PwrGit", availability, configured: false,
+    });
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [pwrGitRecord(false)] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+    const article = await findPwrGitRow();
+    const row = within(article);
+    expect(await row.findByRole("button", { name: action })).toBeInTheDocument();
+    expect(article.querySelectorAll(".settings-pathrow__chip")).toHaveLength(0);
+    expect(row.queryByRole("switch")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Suggested" }).compareDocumentPosition(article)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText("No connections set up yet.", { exact: false })).toBeInTheDocument();
+  });
+
+  it.each([
     ["installed", true, true, ["Not running", "Approves in PwrGit"]],
-    ["running", false, true, ["Update needed"]],
     ["running", true, true, ["Approves in PwrGit"]],
   ] as const)(
     "resolves one state line for %s (configured=%s, gateway=%s)",
@@ -842,11 +874,11 @@ describe("PluginsSettings", () => {
     expect(screen.queryByRole("button", { name: "Stop waiting" }))
       .not.toBeInTheDocument();
 
-    // Every other row, and the add form, stay usable.
+    // Every other row, and the plugin store, stay usable.
     for (const name of ["Reauthorize", "Disconnect", "Edit", "Remove"]) {
       expect(datadogRow.getByRole("button", { name })).toBeEnabled();
     }
-    expect(screen.getByLabelText("MCP server URL")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Plugin store" })).toBeEnabled();
 
     // So a second sign-in can run beside the first.
     fireEvent.click(datadogRow.getByRole("button", { name: "Reauthorize" }));
@@ -1057,15 +1089,27 @@ describe("PluginsSettings", () => {
       api.cancelMcpConnectionAuthorization = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
       api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
       render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
-      const row = within((await screen.findByText("Sandboxer")).closest("article")!);
+      // Not signed in, it is a one-line suggestion that connects from there.
+      const suggestion = (await screen.findByText("Sandboxer")).closest("article")!;
+      expect(within(suggestion).getByText(/paid service/)).toBeInTheDocument();
+      expect(within(suggestion).queryByRole("switch")).toBeNull();
+      fireEvent.click(within(suggestion).getByRole("button", { name: "Connect Sandboxer" }));
+      await waitFor(() => expect(api.setSandboxerTransport).toHaveBeenCalledWith({ transport: "hosted" }));
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
+      const waiting = (await screen.findByRole("button", { name: "Cancel sign-in to Sandboxer" })).closest("article")!;
+      expect(within(waiting).getByText("Finish signing in to Sandboxer in your browser.")).toBeInTheDocument();
+      fireEvent.click(within(waiting).getByRole("button", { name: "Cancel sign-in to Sandboxer" }));
+      await waitFor(() => expect(api.cancelMcpConnectionAuthorization).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
+
+      // Its full setup opens in the plugin store, with the hosted path only.
+      fireEvent.click(within(screen.getByText("Sandboxer").closest("article")!)
+        .getByRole("button", { name: "Set up Sandboxer" }));
+      const row = within(within(screen.getByRole("dialog", { name: "Sandboxer" })).getByRole("article"));
       expect(row.getByText(/separate from your PwrAgent/)).toBeInTheDocument();
       expect(row.queryByRole("button", { name: "Get Sandboxer CLI" })).toBeNull();
       expect(row.queryByRole("button", { name: "Copy setup command" })).toBeNull();
       expect(row.queryByRole("button", { name: "Refresh status" })).toBeNull();
-      fireEvent.click(row.getByRole("button", { name: "Connect Sandboxer" }));
-      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
-      fireEvent.click(await row.findByRole("button", { name: "Cancel sign-in to Sandboxer" }));
-      await waitFor(() => expect(api.cancelMcpConnectionAuthorization).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
+      expect(row.getByRole("button", { name: "Connect Sandboxer" })).toBeInTheDocument();
     });
 
     it("offers explicit hosted/local selection and hosted reauthorization and disconnect", async () => {
@@ -1157,7 +1201,7 @@ describe("PluginsSettings", () => {
       await waitFor(() => expect(api.openSandboxerLink).toHaveBeenCalledWith("home"));
 
       fireEvent.click(within(compact).getByRole("button", { name: "Set up Sandboxer" }));
-      const row = screen.getByText("Sandboxer", { selector: ".settings-mcp-row__name" }).closest("article")!;
+      const row = within(screen.getByRole("dialog", { name: "Sandboxer" })).getByRole("article");
       expect(within(row).getByText(/runs cloud Linux machines/)).toBeInTheDocument();
       expect(within(row).queryByRole("button", { name: "Test connection" })).toBeNull();
       const ladder = within(row).getByRole("list", { name: "Sandboxer setup" });
@@ -1170,6 +1214,47 @@ describe("PluginsSettings", () => {
       // Setup happens in a terminal; coming back to the window checks again.
       fireEvent.focus(window);
       await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "builtin:sandboxer" }));
+    });
+
+    it("keeps a Local CLI setup's state in its suggestion and leaves Connect to the full setup", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", sandboxerCliState: "not_signed_in", configured: false,
+        state: "disconnected", enabled: false, toolApproval: "prompt",
+      });
+      const api = managedApi([sandboxer]);
+      api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const suggestion = (await screen.findByText("Sandboxer")).closest("article")!;
+      expect(within(suggestion).getByText("Local CLI \u00b7 Not signed in")).toBeInTheDocument();
+      // Connect would switch to the hosted service; the choice lives in Set up.
+      expect(within(suggestion).queryByRole("button", { name: "Connect Sandboxer" })).toBeNull();
+      expect(within(suggestion).getByRole("button", { name: "Set up Sandboxer" })).toBeInTheDocument();
+      expect(api.setSandboxerTransport).not.toHaveBeenCalled();
+    });
+
+    it("closes Sandboxer's store page onto its row once it is connected", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "oauth",
+        serverUrl: "https://sandboxer.com/mcp", configured: false, state: "disconnected", enabled: false,
+      });
+      const connected = { ...sandboxer, configured: true, state: "ready" as const, enabled: true };
+      const api = managedApi([sandboxer]);
+      api.listMcpConnections = vi.fn()
+        .mockResolvedValueOnce({ connections: [sandboxer] })
+        .mockResolvedValue({ connections: [connected] });
+      api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      api.authorizeMcpConnection = vi.fn(async () => ({ connection: connected }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      fireEvent.click(within((await screen.findByText("Sandboxer")).closest("article")!)
+        .getByRole("button", { name: "Set up Sandboxer" }));
+      const page = screen.getByRole("dialog", { name: "Sandboxer" });
+      fireEvent.click(within(page).getByRole("button", { name: "Connect Sandboxer" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      const row = document.querySelector("[data-connection-id='builtin:sandboxer']")!;
+      await waitFor(() => expect(row).toHaveClass("settings-mcp-row--revealed"));
+      expect(screen.queryByRole("heading", { name: "Suggested" })).not.toBeInTheDocument();
     });
 
     it("copies sbx onboard for an operator who still needs an account or a plan", async () => {
@@ -1188,7 +1273,10 @@ describe("PluginsSettings", () => {
         const copyText = vi.fn().mockResolvedValue(undefined);
         api.copyText = copyText;
         const view = render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
-        const row = (await screen.findByText("Sandboxer")).closest("article")!;
+        // Until it works, its setup lives in the plugin store.
+        fireEvent.click(within((await screen.findByText("Sandboxer")).closest("article")!)
+          .getByRole("button", { name: "Set up Sandboxer" }));
+        const row = within(screen.getByRole("dialog", { name: "Sandboxer" })).getByRole("article");
         expect(within(row).getByText(headline)).toBeInTheDocument();
         const ladder = within(row).getByRole("list", { name: "Sandboxer setup" });
         expect(within(ladder).getByText(step).closest("li")).toHaveAttribute("aria-current", "step");
@@ -1837,20 +1925,240 @@ describe("PluginsSettings GitHub connection", () => {
     } as unknown as DesktopApi;
   }
 
+  function status(overrides: Partial<McpConnectionStatus> = {}): McpConnectionStatus {
+    return {
+      id: "datadog",
+      displayName: "Datadog",
+      serverUrl: "https://mcp.example.com/mcp",
+      kind: "remote",
+      authMode: "oauth",
+      enabled: true,
+      configured: true,
+      state: "ready",
+      createdAt: 0,
+      updatedAt: 0,
+      ...overrides,
+    };
+  }
+
+  function githubConnection(): McpConnectionStatus {
+    return status({
+      id: "github",
+      displayName: "GitHub",
+      serverUrl: "github:github",
+      kind: "github",
+      authMode: "none",
+      github: {
+        account: "gh_cli",
+        server: "hosted",
+        toolsets: ["context", "repos", "issues", "users"],
+        readOnly: false,
+        skills: true,
+      },
+    });
+  }
+
+  function rowNames() {
+    return screen.getAllByRole("article")
+      .map((row) => row.querySelector(".settings-mcp-row__name")?.textContent);
+  }
+
+  it("lists set-up connections, then the built-ins that are not, with GitHub suggested until added", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none", configured: false }),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+          status(),
+        ],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    const setUp = await screen.findByRole("button", { name: "Set up GitHub" });
+    expect(rowNames()).toEqual(["PwrGit", "Datadog", "PwrSnap", "GitHub"]);
+    const suggested = screen.getByRole("heading", { name: "Suggested" });
+    expect(suggested.compareDocumentPosition(screen.getByText("PwrSnap")) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    // No add form in the card: adding starts from the plugin store.
+    expect(screen.queryByRole("radiogroup", { name: "Server type" })).not.toBeInTheDocument();
+    // Nothing runs gh until setup opens.
+    expect(desktopApi.inspectGithubMcpSetup).not.toHaveBeenCalled();
+
+    fireEvent.click(setUp);
+    const store = screen.getByRole("dialog", { name: "GitHub" });
+    const setup = within(store).getByRole("form", { name: "Set up GitHub" });
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
+    expect(await within(setup).findByText("Signed in as @octo-dev")).toBeInTheDocument();
+
+    fireEvent.click(within(store).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // Opening it again reads gh again: the operator may have signed in since.
+    fireEvent.click(screen.getByRole("button", { name: "Set up GitHub" }));
+    await waitFor(() => expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(2));
+  });
+
+  it("offers the known plugins and a custom server in the plugin store", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none", configured: false }),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+          status({ id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", configured: false }),
+        ],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+    const store = screen.getByRole("dialog", { name: "Plugin store" });
+    expect(within(store).getAllByRole("region").map((tile) => tile.getAttribute("aria-label")))
+      .toEqual(["PwrSnap", "PwrGit", "GitHub", "Sandboxer", "Custom server"]);
+    // Each known plugin wears its own published mark; Custom server is not
+    // one product, so it has none.
+    expect(within(store).getAllByRole("region").map((tile) =>
+      tile.querySelector("img.plugin-store__tile-icon") !== null))
+      .toEqual([true, true, true, true, false]);
+    expect(within(within(store).getByRole("region", { name: "PwrGit" })).getByText("Installed"))
+      .toBeInTheDocument();
+    expect(within(store).getByRole("button", { name: "Add GitHub" })).toBeInTheDocument();
+
+    fireEvent.click(within(store).getByRole("button", { name: "Add server" }));
+    const custom = screen.getByRole("dialog", { name: "Custom server" });
+    const types = within(within(custom).getByRole("radiogroup", { name: "Server type" })).getAllByRole("radio");
+    expect(types.map((radio) => radio.textContent)).toEqual([
+      expect.stringMatching(/^Server URL/),
+      expect.stringMatching(/^Local command/),
+    ]);
+
+    // Back returns to the catalog; Show closes the store onto the row.
+    fireEvent.click(within(custom).getByRole("button", { name: /Plugin store/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Plugin store" }))
+      .getByRole("button", { name: "Show PwrGit" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement?.closest("[data-connection-id]"))
+      .toHaveAttribute("data-connection-id", "builtin:pwrgit"));
+  });
+
+  it("adds another GitHub connection from the plugin store", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status(),
+          githubConnection(),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+        ],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+    expect(rowNames()).toEqual(["PwrGit", "GitHub", "Datadog"]);
+    expect(screen.queryByRole("button", { name: "Set up GitHub" })).not.toBeInTheDocument();
+    const store = screen.getByRole("dialog", { name: "Plugin store" });
+    const tile = within(store).getByRole("region", { name: "GitHub" });
+    expect(within(tile).getByText("1 added")).toBeInTheDocument();
+
+    fireEvent.click(within(tile).getByRole("button", { name: "Add another GitHub connection" }));
+    const setup = screen.getByRole("form", { name: "New GitHub connection" });
+    expect(within(setup).getByText("Already added")).toBeInTheDocument();
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
+    fireEvent.change(within(setup).getByPlaceholderText("GitHub"), { target: { value: "GitHub (bot)" } });
+    fireEvent.click(await within(setup).findByRole("button", { name: "Test" }));
+    expect(await within(setup).findByText(/Read 52 tools and 14 skills/)).toBeInTheDocument();
+    fireEvent.click(within(setup).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(desktopApi.createMcpConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ displayName: "GitHub (bot)" }),
+    ));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("narrows the plugin store as you type and points anything else at Custom server", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none" }),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+          status({ id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", configured: false }),
+        ],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+    const store = screen.getByRole("dialog", { name: "Plugin store" });
+    const search = within(store).getByRole("searchbox", { name: "Search plugins" });
+    expect(search).toHaveFocus();
+    const tiles = () => within(store).getAllByRole("region").map((tile) => tile.getAttribute("aria-label"));
+
+    fireEvent.change(search, { target: { value: "git" } });
+    expect(tiles()).toEqual(["PwrGit", "GitHub", "Custom server"]);
+    fireEvent.change(search, { target: { value: "linux machines" } });
+    expect(tiles()).toEqual(["Sandboxer", "Custom server"]);
+    fireEvent.change(search, { target: { value: "datadog" } });
+    expect(tiles()).toEqual(["Custom server"]);
+    expect(within(store).getByRole("status")).toHaveTextContent("No plugin matches \u201cdatadog\u201d. Add it as a custom server.");
+  });
+
+  it("names who each GitHub connection acts as, and flags a CLI sign-in already in use", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [{ ...githubConnection(), githubAccount: { source: "gh_cli", state: "ready", login: "octo-dev" } }],
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add another GitHub connection" }));
+    const setup = screen.getByRole("form", { name: "New GitHub connection" });
+    expect(await within(setup).findByText("Signed in as @octo-dev")).toBeInTheDocument();
+    expect(within(setup).getByRole("listitem")).toHaveTextContent(
+      "GitHub Acts as @octo-dev through your GitHub CLI sign-in. Toolsets: context, repos, issues, users.",
+    );
+    expect(within(setup).getByRole("radio", { name: /GitHub CLI sign-in/ }))
+      .toHaveTextContent("Already used by GitHub. Choose it again only for different toolsets or access.");
+  });
+
+  it("outlines the row a store tile pointed at, then lets it go", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const desktopApi = githubApi({
+        listMcpConnections: vi.fn().mockResolvedValue({
+          connections: [status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" })],
+        }),
+      });
+      render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show PwrGit" }));
+      const row = document.querySelector("[data-connection-id='builtin:pwrgit']")!;
+      await waitFor(() => expect(row).toHaveClass("settings-mcp-row--revealed"));
+      act(() => {
+        vi.advanceTimersByTime(2_500);
+      });
+      expect(row).not.toHaveClass("settings-mcp-row--revealed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("offers GitHub for its hosted URL, then tests and adds it with the defaults", async () => {
     const desktopApi = githubApi();
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
 
+    await openCustomServerForm();
     fireEvent.change(await screen.findByPlaceholderText("https://mcp.example.com/mcp"), {
       target: { value: "https://api.githubcopilot.com/mcp/" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
-    expect(await screen.findByText("This is GitHub's MCP server. Set it up with your GitHub sign-in instead."))
-      .toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Set up GitHub" }));
+    expect(await screen.findByText(
+      "This is GitHub's MCP server. PwrAgent has it built in: set it up with your GitHub sign-in.",
+    )).toBeInTheDocument();
+    const addForm = screen.getByRole("form", { name: "Custom server" });
+    fireEvent.click(within(addForm).getByRole("button", { name: "Set up GitHub" }));
 
-    expect(within(screen.getByRole("radiogroup", { name: "Server type" })).getByRole("radio", { name: /GitHub/ }))
-      .toHaveAttribute("aria-checked", "true");
+    // The store turns to GitHub's form, and the custom form is gone.
+    const setup = within(screen.getByRole("dialog", { name: "GitHub" }))
+      .getByRole("form", { name: "Set up GitHub" });
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
+    expect(screen.queryByPlaceholderText("https://mcp.example.com/mcp")).not.toBeInTheDocument();
     expect(await screen.findByText("Signed in as @octo-dev")).toBeInTheDocument();
     expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(1);
     const account = screen.getByRole("radio", { name: /GitHub CLI sign-in/ });
@@ -1902,8 +2210,7 @@ describe("PluginsSettings GitHub connection", () => {
       }),
     });
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
-    fireEvent.click(within(await screen.findByRole("radiogroup", { name: "Server type" }))
-      .getByRole("radio", { name: /GitHub/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up GitHub" }));
 
     expect(await screen.findByText("Not signed in")).toBeInTheDocument();
     expect(screen.getByText(/gh is installed but not signed in to github\.com/)).toBeInTheDocument();

@@ -31,6 +31,7 @@ import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
+  DesktopContextMoonStyle,
   DesktopDecisionModelSettings,
   DesktopOpenAIDecisionsSettings,
   DesktopFederationMode,
@@ -68,6 +69,7 @@ import {
   DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
@@ -76,6 +78,7 @@ import {
   isDesktopLightTheme,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
+  isDesktopContextMoonStyle,
   isDesktopCodexProfileModel,
   isDesktopFederationMode,
   isFederationGatewayEndpointUrl,
@@ -164,6 +167,7 @@ export type DesktopSettingsConfig = {
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
+      contextMoon?: DesktopContextMoonStyle;
     };
     codexProfileModel?: DesktopCodexProfileModel;
     messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
@@ -1100,6 +1104,23 @@ export function desktopSettingsPatchToEdits(
       set(
         ["general", "appearance", "transcript_text_size"],
         patch.general.appearance.transcriptTextSize,
+      );
+    }
+  }
+
+  if (patch.general?.appearance?.contextMoon !== undefined) {
+    if (
+      patch.general.appearance.contextMoon
+        === DESKTOP_CONTEXT_MOON_STYLE_DEFAULT
+    ) {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "context_moon"],
+      });
+    } else {
+      set(
+        ["general", "appearance", "context_moon"],
+        patch.general.appearance.contextMoon,
       );
     }
   }
@@ -2373,6 +2394,7 @@ function normalizeDesktopConfig(
         transcriptTextSize: readTextSize(
           generalAppearance?.transcript_text_size,
         ),
+        contextMoon: readContextMoonStyle(generalAppearance?.context_moon),
       },
       codexProfileModel: readCodexProfileModel(general?.codex_profile_model),
       messagingAcknowledgment: readMessagingAcknowledgment(
@@ -3259,6 +3281,14 @@ function readTextSize(
   value: TomlScalar | undefined,
 ): DesktopTextSize | undefined {
   return typeof value === "string" && isDesktopTextSize(value)
+    ? value
+    : undefined;
+}
+
+function readContextMoonStyle(
+  value: TomlScalar | undefined,
+): DesktopContextMoonStyle | undefined {
+  return typeof value === "string" && isDesktopContextMoonStyle(value)
     ? value
     : undefined;
 }

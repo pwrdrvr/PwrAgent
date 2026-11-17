@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { RESEARCH_HARNESS_REVISION, projectResearchRun, type ResearchHarnessRequest } from "@pwragent/shared";
+import { RESEARCH_HARNESS_REVISION, projectResearchRun, summarizeResearchRun, type ResearchHarnessRequest } from "@pwragent/shared";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { ResearchHarnessService, type ResearchHarnessConnection, type ResearchHarnessPorts } from "@pwragent/owner-core/research-harness-service";
 import { ResearchService } from "@pwragent/owner-core/research-service";
@@ -43,6 +43,22 @@ function setup(options: { records?: unknown[]; enabled?: () => boolean; hello?: 
 }
 
 describe("Harness lifecycle and real SQLite oracle", () => {
+  it("keeps Harness run summaries compact and selected-board provenance intact without snapshot writes", async () => {
+    const { service, store } = setup({ records: harnessRecords() });
+    const run = await service.start(request("import"), fixture.tempDir);
+    const native = new ResearchService(store, { ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, isOwnerAlive: () => true,
+      spawn: async () => { throw new Error("Snapshot reads must not dispatch"); }, stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
+      changed: () => {}, schedule: () => () => {}, onError: () => {} });
+    try {
+      const measured = await measureSqliteWrites(() => native.snapshot(actor));
+      expect(measured.result.runs).toEqual([summarizeResearchRun(run)]);
+      expect(measured.result.runs.every((summary) => !Object.hasOwn(summary, "harness"))).toBe(true);
+      expect(measured.result.selected).not.toHaveProperty("events");
+      const finding = run.events.find((event) => event.data.type === "finding")!;
+      expect(Reflect.get(measured.result.selected!, "itemProvenance")).toMatchObject({ "h:4": finding.provenance });
+      expect(measured.writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
+    } finally { native.close(); }
+  });
   it.each(["import", "execute"] as const)("refuses disabled %s admission before any intent or process effect", async (mode) => {
     const { service, store, ports } = setup({ enabled: () => false });
     const result = await measureSqliteWrites(async () => {

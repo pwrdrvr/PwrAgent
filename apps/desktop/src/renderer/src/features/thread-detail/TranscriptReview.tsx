@@ -12,6 +12,7 @@ import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
 import {
   parsePlainReview,
+  reviewEntryFailure,
   reviewEntryFindings,
   reviewFindingTag,
 } from "../../../../shared/review-output";
@@ -181,6 +182,7 @@ function ReviewVerdictBadge(props: {
 }
 
 export function TranscriptReview(props: TranscriptReviewProps) {
+  const failure = reviewEntryFailure(props.entry);
   const reviewTarget = props.threadLinkSource
     ? { scope: "remote" as const, instanceId: props.threadLinkSource.instanceId }
     : props.fileViewerContext?.federationTarget;
@@ -189,9 +191,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         ...(reviewTarget?.scope === "remote" ? { federationTarget: reviewTarget } : {}),
       }
     : undefined;
-  const tracking = useTrackedReview(reviewThread, { sourceKey: props.entry.id });
+  const tracking = useTrackedReview(failure ? undefined : reviewThread, { sourceKey: props.entry.id });
   // A review still running: the owner says whether it will auto-fix.
-  const runningTurnId = props.entry.turn?.status === "in_progress" ? props.entry.turn.id : undefined;
+  const runningTurnId = !failure && props.entry.turn?.status === "in_progress" ? props.entry.turn.id : undefined;
   const autoFix = useReviewAutoFix(runningTurnId ? reviewThread : undefined);
   const armed = runningTurnId !== undefined && autoFix.status?.armedTurnIds.includes(runningTurnId) === true;
   const editorApplication = useMemo(
@@ -227,7 +229,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     },
     [editorApplication, props.desktopApi]
   );
-  const output = props.entry.output;
+  const output = failure ? undefined : props.entry.output;
   const plainReview = useMemo(
     () => (output ? undefined : parsePlainReview(props.entry.review)),
     [output, props.entry.review],
@@ -235,24 +237,26 @@ export function TranscriptReview(props: TranscriptReviewProps) {
   // One array feeds the rows and both copy buttons, so the tag is dropped once
   // for all three. Review tracking records the same list, in the same order.
   const findings = useMemo(
-    () => reviewEntryFindings({
+    () => failure ? [] : reviewEntryFindings({
       output,
       review: props.entry.review,
       reviewer: props.entry.reviewer,
     }),
-    [output, props.entry.review, props.entry.reviewer],
+    [failure, output, props.entry.review, props.entry.reviewer],
   );
   const findingCount = output?.findings.length;
   const displayText = props.entry.displayText;
-  const summary =
-    (displayText && pullRequestReviewPromptUrl(displayText)
+  const summary = failure
+    ? failure === "stopped" ? "Review stopped" : failure === "failed" ? "Review failed" : "Review did not complete"
+    : (displayText && pullRequestReviewPromptUrl(displayText)
       ? normalizeReviewDisplayText(displayText)
       : displayText) ??
     (findingCount === undefined
       ? "Code review"
       : `${findingCount} review ${findingCount === 1 ? "finding" : "findings"}`);
-  const body =
-    output?.overall_explanation ??
+  const body = failure
+    ? "Run the review again and let it finish to get a result."
+    : output?.overall_explanation ??
     (shouldHideReviewBody(summary, props.entry.review)
       ? ""
       : plainReview?.explanation ?? props.entry.review);
@@ -372,7 +376,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         </div>
       ) : null}
 
-      {tracking.review ? (
+      {!failure && tracking.review ? (
         <ReviewStatusRow review={tracking.review} busy={tracking.busy} update={tracking.update} />
       ) : null}
       {armed ? (
@@ -382,7 +386,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           onDisarm={() => void autoFix.disarm(runningTurnId)}
         />
       ) : null}
-      {tracking.error ? (
+      {!failure && tracking.error ? (
         <p className="review-status__error" role="alert">{tracking.error}</p>
       ) : null}
 

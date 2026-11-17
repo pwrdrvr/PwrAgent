@@ -121,6 +121,10 @@
   --status-warning-text: var(--status-warning);
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
+  /* What the critical context moon's red is dimmed toward: the dark side of
+     the scheme, so the eclipsed moon reads darker than a full one in every
+     color theme, whatever its --status-error. */
+  --context-moon-umbra: var(--bg-input);
   /* Usage Activity chart series: the five costliest threads, then the rest. */
   --usage-series-1: var(--accent);
   --usage-series-2: #7aa7e0;
@@ -513,6 +517,7 @@
   --status-warning: #a86b00;
   --status-suspended: #6b6660;
   --status-error: #a8472a;
+  --context-moon-umbra: var(--text-primary);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
   --usage-series-3: #11806f;
@@ -1937,6 +1942,21 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* The document is exactly one viewport tall in the full layout, so the root
+   has no offset to keep. `body` is `overflow: hidden` there, which stops the
+   wheel but not a scroll the page already had: below 820px the shell stacks
+   and the body scrolls, and widening again keeps whatever offset still fits.
+
+   `flow-root` keeps a child's top margin inside `#root`. On win32 and linux
+   `.app-shell` clears the painted title strip with `margin-top`, and that
+   margin used to collapse through `#root` and `body`. Then `body` started
+   40px down and the document overflowed the viewport by the strip's height.
+   After a scroll at 300% zoom and a zoom back out, the shell stayed 40px up
+   under the strip, with a 40px band below it and no way to scroll back. */
+#root {
+  display: flow-root;
 }
 
 /* Every window's own edge, on the one platform that draws us none.
@@ -18416,13 +18436,6 @@ a.button {
   border-radius: 8px;
 }
 
-.settings-mcp-create__title {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .settings-mcp-create__fields {
   display: grid;
   grid-template-columns: minmax(140px, .6fr) minmax(240px, 1.4fr) auto;
@@ -19226,6 +19239,245 @@ a.button {
  */
 .settings-mcp-row__toggle--static {
   cursor: default;
+}
+
+/*
+ * The managed-connections card lists what is set up, then what PwrAgent
+ * knows how to set up. Each list has a small heading bar; the first holds
+ * the plugin store, the one way to add a server.
+ */
+.settings-mcp-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.settings-mcp-bar__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-mcp-bar__count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-mcp-bar__action {
+  margin-left: auto;
+}
+
+/*
+ * The plugin store: known servers as tiles, then GitHub's form or the
+ * custom-server form on their own page of the same dialog.
+ */
+.settings-confirm-dialog.plugin-store {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+}
+
+.plugin-store__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-store__close {
+  margin-left: auto;
+}
+
+.plugin-store__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.plugin-store__body .settings-plugin-notice {
+  margin: 0;
+}
+
+/* The dialog's own paragraph rule spaces with margins; the store's body
+   spaces with its gap, and its hints keep the card's smaller type. */
+.settings-confirm-dialog.plugin-store p {
+  margin: 0;
+}
+
+.settings-confirm-dialog.plugin-store p.settings-mcp-create__constraint {
+  font-size: 11.5px;
+}
+
+.plugin-store__group {
+  margin: 2px 0 -4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.plugin-store__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.plugin-store__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.plugin-store__tile--custom {
+  border-style: dashed;
+  background: transparent;
+}
+
+.plugin-store__tile-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A product's own mark, as published: sized, never recolored or redrawn. */
+.plugin-store__tile-icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+/* App icons are full-bleed squares; round them as the PwrSuite tiles do. */
+.plugin-store__tile-icon--app {
+  border-radius: 6px;
+}
+
+.plugin-store__tile-name {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plugin-store__tile-by {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-confirm-dialog p.plugin-store__tile-description {
+  flex: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.plugin-store__tile-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-store__tile-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.plugin-store__form,
+.plugin-store__body > .settings-mcp-create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* In the store the custom form needs no box of its own: the dialog is it. */
+.plugin-store__body > .settings-mcp-create {
+  padding: 0;
+  border: 0;
+}
+
+.plugin-store__existing {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.plugin-store__existing-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.plugin-store__existing-hint {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.plugin-store__existing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.plugin-store__existing-list b {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.plugin-store__search {
+  width: 100%;
+}
+
+.settings-confirm-dialog p.plugin-store__no-match {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* The row the plugin store pointed at, outlined for a moment. */
+.settings-mcp-row {
+  transition: border-color 600ms ease, box-shadow 600ms ease;
+}
+
+.settings-mcp-row--revealed {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-mcp-row {
+    transition: none;
+  }
 }
 
 .settings-sandboxer-about {
@@ -48619,87 +48871,42 @@ button.composer__subthread-source-parent:hover {
   opacity: 0.72;
 }
 
-.context-window-moon__disc::after {
+/* The shadow covers the unlit share of the disc. Its path comes from
+   context-window-moon.ts, which follows Settings → Appearance → Context
+   moon, and spans the disc inside its rim. */
+.context-window-moon__shadow {
   position: absolute;
-  inset: -1px auto -1px var(--context-window-moon-shadow-left, -1px);
-  width: var(--context-window-moon-shadow-width, 100%);
-  border-radius: var(--context-window-moon-shadow-radius, 50%);
-  background: var(--bg-input);
-  box-shadow:
-    var(--context-window-moon-terminator-glow, 1px 0 3px rgba(255, 169, 79, 0.18)),
-    inset var(--context-window-moon-shadow-inset, -1px 0 2px) var(--accent-bg-medium);
-  content: "";
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--bg-input);
 }
 
-.context-window-moon__sprite--phase-0 .context-window-moon__disc {
+.context-window-moon__sprite--new .context-window-moon__disc {
   background:
     radial-gradient(circle at 60% 36%, color-mix(in srgb, var(--accent) 8%, transparent) 0 2px, transparent 3px),
     color-mix(in srgb, var(--accent) 8%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.context-window-moon__sprite--phase-0 .context-window-moon__disc::after {
-  --context-window-moon-shadow-width: 100%;
-}
-
-.context-window-moon__sprite--phase-1 {
-  --context-window-moon-shadow-width: 76%;
-}
-
-.context-window-moon__sprite--phase-2 {
-  --context-window-moon-shadow-radius: 0;
-  --context-window-moon-shadow-width: 50%;
-}
-
-.context-window-moon__sprite--phase-3 {
-  --context-window-moon-shadow-width: 24%;
-}
-
-.context-window-moon__sprite--phase-4 {
-  --context-window-moon-shadow-width: 0%;
-}
-
-.context-window-moon__sprite--phase-5 {
-  --context-window-moon-shadow-left: auto;
-  --context-window-moon-shadow-inset: 1px 0 2px;
-  --context-window-moon-shadow-width: 24%;
-  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
-}
-
-.context-window-moon__sprite--phase-5 .context-window-moon__disc::after,
-.context-window-moon__sprite--phase-6 .context-window-moon__disc::after,
-.context-window-moon__sprite--phase-7 .context-window-moon__disc::after {
-  right: -1px;
-}
-
-.context-window-moon__sprite--phase-6 {
-  --context-window-moon-shadow-left: auto;
-  --context-window-moon-shadow-inset: 1px 0 2px;
-  --context-window-moon-shadow-radius: 0;
-  --context-window-moon-shadow-width: 50%;
-  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
-}
-
-.context-window-moon__sprite--phase-7 {
-  --context-window-moon-shadow-left: auto;
-  --context-window-moon-shadow-inset: 1px 0 2px;
-  --context-window-moon-shadow-width: 76%;
-  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
-}
-
-.context-window-moon__sprite--phase-4 .context-window-moon__disc,
-.context-window-moon__sprite--phase-8 .context-window-moon__disc {
+.context-window-moon__sprite--full .context-window-moon__disc {
   border-color: var(--accent-strong);
 }
 
-.context-window-moon__sprite--phase-8 {
-  --context-window-moon-shadow-width: 0%;
-}
-
-.context-window-moon__sprite--phase-8 .context-window-moon__disc {
+/* Critical is a blood moon: the eclipsed full moon, red and dimmer than the
+   full moon at 50%, so the two never read alike. */
+.context-window-moon__sprite--critical .context-window-moon__disc {
+  border-color: var(--status-error);
+  background:
+    radial-gradient(
+      circle at 40% 36%,
+      color-mix(in srgb, var(--status-error) 88%, var(--context-moon-umbra)) 0%,
+      color-mix(in srgb, var(--status-error) 66%, var(--context-moon-umbra)) 62%,
+      color-mix(in srgb, var(--status-error) 46%, var(--context-moon-umbra)) 100%
+    );
   box-shadow:
-    0 0 12px color-mix(in srgb, var(--accent) 48%, transparent),
-    inset 0 0 4px rgba(255, 243, 220, 0.34);
+    0 0 10px color-mix(in srgb, var(--status-error) 55%, transparent),
+    inset 0 0 3px color-mix(in srgb, var(--status-error) 45%, transparent);
 }
 
 .context-window-moon__label {

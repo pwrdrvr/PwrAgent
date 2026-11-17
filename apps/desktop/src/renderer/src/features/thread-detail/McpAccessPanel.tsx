@@ -3,6 +3,7 @@ import {
   canIsolateMcpProviderServers,
   backendLoadsMcpConnections,
   mcpSelectionApplyTiming,
+  orderManagedMcpConnections,
   type AppServerBackendKind,
   type DescribeThreadMcpConnectionsResponse,
   type McpConnectionStatus,
@@ -132,8 +133,10 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
     }
   };
 
-  const available = connections?.filter((connection) => connection.enabled);
-  const parked = connections?.filter((connection) => !connection.enabled);
+  // The same order as Settings: PwrSnap and PwrGit, then GitHub, then the rest.
+  const ordered = connections && orderManagedMcpConnections(connections);
+  const available = ordered?.filter((connection) => connection.enabled);
+  const parked = ordered?.filter((connection) => !connection.enabled);
   // A selected connection that has since been parked or removed keeps riding
   // along on every write. Nothing prunes it from the thread, and the bridge
   // for it is refused on every turn, so it needs a row of its own — without

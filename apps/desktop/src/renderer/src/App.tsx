@@ -61,6 +61,7 @@ import {
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
   type SubmitServerRequestRequest,
+  DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
   resolveToolIncidentVisibility,
   SUBTHREAD_LAUNCHPAD_KEY_PREFIX,
   toolOutputWarningChars,
@@ -194,6 +195,7 @@ import {
   type InteractiveSvgPreferences,
 } from "./lib/interactive-svg-preferences";
 import { TerminalPreferencesProvider } from "./lib/terminal-preferences";
+import { ContextMoonPreferencesProvider } from "./lib/context-moon-preferences";
 import { HtmlPreviewPreferencesProvider } from "./lib/html-preview-preferences";
 import {
   useThreadNavigation,
@@ -4884,7 +4886,14 @@ function DesktopAppShell(props: {
                           ?.value ?? false
                       }
                     >
-                      <ThreadViewComponent {...threadViewProps} />
+                      <ContextMoonPreferencesProvider
+                        style={
+                          settings.snapshot?.general.appearance.contextMoon?.value
+                            ?? DESKTOP_CONTEXT_MOON_STYLE_DEFAULT
+                        }
+                      >
+                        <ThreadViewComponent {...threadViewProps} />
+                      </ContextMoonPreferencesProvider>
                     </TerminalPreferencesProvider>
                   </HtmlPreviewPreferencesProvider>
                 </InteractiveSvgPreferencesProvider>

@@ -233,6 +233,7 @@ export const RESEARCH_WORK_CHANNEL = "research:work";
 export const RESEARCH_HARNESS_STATUS_CHANNEL = "research:harness-status";
 export const RESEARCH_HARNESS_START_CHANNEL = "research:harness-start";
 export const RESEARCH_WITHDRAW_CHANNEL = "research:withdraw";
+export const RESEARCH_EVENTS_CHANNEL = "research:events";
 /** A thread's armed reviews and Auto-fix runs, read from its owner. */
 export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
 /** Don't auto-fix: turns Auto-fix off for one running review. */

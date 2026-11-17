@@ -118,34 +118,6 @@ const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "item/fileChange/requestApproval",
 ]);
 
-export function getContextWindowMoonPhase(usedPercent: number): number {
-  if (usedPercent < 10) {
-    return 0;
-  }
-  if (usedPercent < 22.5) {
-    return 1;
-  }
-  if (usedPercent < 35) {
-    return 2;
-  }
-  if (usedPercent < 47.5) {
-    return 3;
-  }
-  if (usedPercent < 60) {
-    return 4;
-  }
-  if (usedPercent < 72.5) {
-    return 5;
-  }
-  if (usedPercent < 85) {
-    return 6;
-  }
-  if (usedPercent < 97.5) {
-    return 7;
-  }
-  return 8;
-}
-
 export type ThreadViewportState = {
   distanceFromBottom: number;
   isGluedToBottom?: boolean;
@@ -162,7 +134,6 @@ export type ThreadContextWindowState = {
   inputTokens?: number;
   modelContextWindow: number;
   outputTokens?: number;
-  phase: number;
   reasoningOutputTokens?: number;
   remainingPercent?: number;
   remainingTokens?: number;
@@ -3323,7 +3294,6 @@ function contextWindowFill(
 ): Pick<
   ThreadContextWindowState,
   | "modelContextWindow"
-  | "phase"
   | "remainingPercent"
   | "remainingTokens"
   | "totalTokens"
@@ -3333,7 +3303,6 @@ function contextWindowFill(
   const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
   return {
     modelContextWindow,
-    phase: getContextWindowMoonPhase(rawUsedPercent),
     remainingPercent: Math.max(
       0,
       Math.min(100, (remainingTokens / modelContextWindow) * 100)

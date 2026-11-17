@@ -138,7 +138,32 @@ export type ResearchRun = {
 };
 /** The operator's bound request, waiting for this thread to call research_start. Owner memory only. */
 export type ResearchPendingRequest = Omit<PrepareResearchRequest, "backend" | "threadId"> & { preparedAt: number; expiresAt: number };
-export type ResearchSnapshot = { runs: ResearchRun[]; writableRunIds: string[]; pending?: ResearchPendingRequest };
+/** A run header with the review counts the run list needs to name its phase. */
+export type ResearchRunSummary = Omit<ResearchRunHeader, "harness"> & { unreviewed: number; accepted: number };
+/**
+ * One run's board: its projection without the event journal, which Activity
+ * reads in pages, or the item projection, whose records repeat approaches,
+ * findings and submissions. `createdSeq` names every item and keeps the order
+ * of its creation across those three lists. Work state is read per item.
+ */
+export type ResearchRunBoard = Omit<ResearchRun, "events" | "items"> & {
+  createdSeq: Record<string, number>;
+  /** Original finding/candidate provenance, without copying their journal events. */
+  itemProvenance?: Record<string, ResearchProvenance>;
+};
+/** An item as the board holds it: its record from approaches, findings or submissions. */
+export type ResearchBoardEntry =
+  | { id: string; type: "approach"; record: ResearchApproach; createdSeq: number }
+  | { id: string; type: "finding"; record: ResearchFinding; createdSeq: number }
+  | { id: string; type: "submission"; record: ResearchSubmission; createdSeq: number };
+/** The thread's run summaries, plus the board of the selected run (or the newest when none is named). */
+export type ResearchSnapshot = { runs: ResearchRunSummary[]; writableRunIds: string[]; pending?: ResearchPendingRequest; selected?: ResearchRunBoard };
+export type ResearchSnapshotRequest = ResearchThread & { runId?: string };
+/** Events with afterSeq < seq < beforeSeq, newest first. Journal entries never change once appended. */
+export type ResearchEventRange = { beforeSeq?: number; afterSeq?: number; limit?: number };
+/** `nextBeforeSeq` is set while older events remain inside the range; pass it as the next `beforeSeq`. */
+export type ResearchEventPage = { runId: string; revision: number; events: ResearchEvent[]; nextBeforeSeq?: number };
+export type ResearchEventsRequest = ResearchThread & { runId: string; range: ResearchEventRange };
 export type ResearchUpdateRequest = ResearchThread & { runId: string; requestId: string; command: ResearchCommand };
 export type ResearchEvidenceRequest = ResearchThread & { runId: string; itemId: string; pathIndex: number };
 export type ResearchItemReadRequest = ResearchThread & { runId: string; itemId: string };
@@ -309,6 +334,62 @@ export function searchResearchItems(runId: string, items: ResearchItem[], revisi
   const last = page.at(-1);
   return { runId, revision, total: filtered.length, items: page.map(researchSearchHit),
     ...(last && remaining.length > q.limit ? { nextCursor: { revision, seq: last.createdSeq, id: last.id, filters: q.filters } } : {}) };
+}
+
+export const RESEARCH_EVENT_PAGE_DEFAULT = 100;
+export const RESEARCH_EVENT_PAGE_MAX = 200;
+
+export function normalizeResearchEventRange(range: ResearchEventRange): { beforeSeq?: number; afterSeq: number; limit: number } {
+  if (!range || typeof range !== "object") throw new Error("Supply an event range");
+  const limit = range.limit ?? RESEARCH_EVENT_PAGE_DEFAULT;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > RESEARCH_EVENT_PAGE_MAX) throw new Error(`Event page limit must be 1–${RESEARCH_EVENT_PAGE_MAX}`);
+  for (const [key, value] of [["beforeSeq", range.beforeSeq], ["afterSeq", range.afterSeq]] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) throw new Error(`Invalid research ${key}`);
+  }
+  return { ...(range.beforeSeq !== undefined ? { beforeSeq: range.beforeSeq } : {}), afterSeq: range.afterSeq ?? 0, limit };
+}
+
+/** The in-memory oracle for paged journal reads. */
+export function researchEventPage(run: Pick<ResearchRun, "id" | "revision" | "events">, range: ResearchEventRange): ResearchEventPage {
+  const r = normalizeResearchEventRange(range);
+  const matching = run.events.filter((event) => event.seq > r.afterSeq && (r.beforeSeq === undefined || event.seq < r.beforeSeq)).reverse();
+  const events = matching.slice(0, r.limit);
+  const oldest = events.at(-1);
+  return { runId: run.id, revision: run.revision, events, ...(oldest && matching.length > r.limit ? { nextBeforeSeq: oldest.seq } : {}) };
+}
+
+export function researchRunBoard(run: ResearchRun): ResearchRunBoard {
+  const { events, items, ...board } = run;
+  const provenance = run.harness ? events.flatMap((event) => {
+    if (!event.provenance) return [];
+    const id = event.data.type === "finding" ? event.data.finding.id : event.data.type === "submission" ? event.data.submission.id : undefined;
+    return id ? [[id, event.provenance] as const] : [];
+  }) : [];
+  return { ...board, createdSeq: Object.fromEntries(items.map((item) => [item.id, item.createdSeq])),
+    ...(provenance.length ? { itemProvenance: Object.fromEntries(provenance) } : {}) };
+}
+
+/** Every item's record by id. Build it once when looking up many items. */
+export function researchBoardIndex(board: Pick<ResearchRunBoard, "approaches" | "findings" | "submissions" | "createdSeq">): Map<string, ResearchBoardEntry> {
+  const index = new Map<string, ResearchBoardEntry>();
+  const seq = (id: string) => Object.hasOwn(board.createdSeq, id) ? board.createdSeq[id] : undefined;
+  for (const record of board.approaches) { const createdSeq = seq(record.id); if (createdSeq !== undefined) index.set(record.id, { id: record.id, type: "approach", record, createdSeq }); }
+  for (const record of board.submissions) { const createdSeq = seq(record.id); if (createdSeq !== undefined) index.set(record.id, { id: record.id, type: "submission", record, createdSeq }); }
+  for (const record of board.findings) { const createdSeq = seq(record.id); if (createdSeq !== undefined) index.set(record.id, { id: record.id, type: "finding", record, createdSeq }); }
+  return index;
+}
+
+/** The board's record for one item id, or undefined when the run has no such item. */
+export function researchBoardEntry(board: Pick<ResearchRunBoard, "approaches" | "findings" | "submissions" | "createdSeq">, id: string): ResearchBoardEntry | undefined {
+  return Object.hasOwn(board.createdSeq, id) ? researchBoardIndex(board).get(id) : undefined;
+}
+
+/** The in-memory oracle for a stored run summary. */
+export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
+  return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
+    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, deadlineAt: run.deadlineAt, workspaceMode: run.workspaceMode, status: run.status,
+    workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
+    unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length };
 }
 
 export function sameResearchThread(a: ResearchThread, b: ResearchThread): boolean {

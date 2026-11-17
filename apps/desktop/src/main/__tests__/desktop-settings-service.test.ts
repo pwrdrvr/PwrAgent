@@ -3348,6 +3348,7 @@ describe("DesktopSettingsService", () => {
           calmMotion: true,
           density: "compact",
           sidebarTextSize: "lg",
+          contextMoon: "lunar-cycle",
         },
       },
     });
@@ -3362,6 +3363,7 @@ describe("DesktopSettingsService", () => {
     expect(writtenFile).toContain("calm_motion = true");
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
+    expect(writtenFile).toContain('context_moon = "lunar-cycle"');
 
     const afterWrite = await service.readSettingsProjection();
     expect(afterWrite.general.appearance.theme).toEqual({
@@ -3396,6 +3398,10 @@ describe("DesktopSettingsService", () => {
       value: "lg",
       source: "config",
     });
+    expect(afterWrite.general.appearance.contextMoon).toEqual({
+      value: "lunar-cycle",
+      source: "config",
+    });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "light",
       darkTheme: "solarized-dark",
@@ -3419,6 +3425,7 @@ describe("DesktopSettingsService", () => {
           calmMotion: false,
           density: "mission-control",
           sidebarTextSize: "md",
+          contextMoon: "wax",
         },
       },
     });
@@ -3432,6 +3439,7 @@ describe("DesktopSettingsService", () => {
     expect(restoredFile).not.toContain("calm_motion");
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
+    expect(restoredFile).not.toContain("context_moon");
 
     const afterRestore = await service.readSettingsProjection();
     expect(afterRestore.general.appearance.theme.source).toBe("default");
@@ -3443,6 +3451,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(afterRestore.general.appearance.terminalMinimumContrast).toEqual({
       value: false,
+      source: "default",
+    });
+    expect(afterRestore.general.appearance.contextMoon).toEqual({
+      value: "wax",
       source: "default",
     });
     expect(afterRestore.general.appearance.calmMotion).toEqual({

@@ -18,10 +18,7 @@ import type {
 import type { DesktopApi } from "../desktop-api";
 import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  getContextWindowMoonPhase,
-  useThreadSessionState,
-} from "../useThreadSessionState";
+import { useThreadSessionState } from "../useThreadSessionState";
 import {
   DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
   THREAD_HISTORY_PAGE_LIMIT,
@@ -431,28 +428,6 @@ describe("useThreadSessionState", () => {
   afterEach(async () => {
     await flushReactUpdates();
     vi.restoreAllMocks();
-  });
-
-  it("maps context window moon phases to explicit fill thresholds", () => {
-    expect(getContextWindowMoonPhase(0)).toBe(0);
-    expect(getContextWindowMoonPhase(9.99)).toBe(0);
-    expect(getContextWindowMoonPhase(10)).toBe(1);
-    expect(getContextWindowMoonPhase(22.49)).toBe(1);
-    expect(getContextWindowMoonPhase(22.5)).toBe(2);
-    expect(getContextWindowMoonPhase(34.99)).toBe(2);
-    expect(getContextWindowMoonPhase(35)).toBe(3);
-    expect(getContextWindowMoonPhase(47.49)).toBe(3);
-    expect(getContextWindowMoonPhase(47.5)).toBe(4);
-    expect(getContextWindowMoonPhase(59.99)).toBe(4);
-    expect(getContextWindowMoonPhase(60)).toBe(5);
-    expect(getContextWindowMoonPhase(72.49)).toBe(5);
-    expect(getContextWindowMoonPhase(72.5)).toBe(6);
-    expect(getContextWindowMoonPhase(84.99)).toBe(6);
-    expect(getContextWindowMoonPhase(85)).toBe(7);
-    expect(getContextWindowMoonPhase(97.49)).toBe(7);
-    expect(getContextWindowMoonPhase(97.5)).toBe(8);
-    expect(getContextWindowMoonPhase(100)).toBe(8);
-    expect(getContextWindowMoonPhase(100.01)).toBe(8);
   });
 
   it("keeps the first successful thread-read duration across later hydrations", async () => {
@@ -16566,7 +16541,6 @@ describe("useThreadSessionState", () => {
       inputTokens: undefined,
       modelContextWindow: 128_000,
       outputTokens: undefined,
-      phase: 6,
       reasoningOutputTokens: undefined,
       remainingPercent: 25,
       remainingTokens: 32_000,
@@ -16627,7 +16601,6 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.contextWindow).toEqual({
       modelContextWindow: 262_144,
-      phase: 2,
       remainingPercent: 75,
       remainingTokens: 196_608,
       totalTokens: 65_536,
@@ -16698,7 +16671,6 @@ describe("useThreadSessionState", () => {
       inputTokens: 1_200,
       modelContextWindow: 258_400,
       outputTokens: 12,
-      phase: 0,
       reasoningOutputTokens: undefined,
       remainingPercent: ((258_400 - 1_212) / 258_400) * 100,
       remainingTokens: 258_400 - 1_212,
@@ -16778,7 +16750,6 @@ describe("useThreadSessionState", () => {
       inputTokens: 20_663,
       modelContextWindow: 258_400,
       outputTokens: 45,
-      phase: 0,
       totalTokens: 20_708,
       usedPercent: (20_708 / 258_400) * 100,
     });
