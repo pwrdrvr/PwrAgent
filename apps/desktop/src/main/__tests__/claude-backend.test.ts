@@ -22,6 +22,7 @@ import { buildForgeToolDefinitions } from "../agent-tools/pwragent-forge-pr-agen
 import { FORGE_PR_WRITE_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
+import { reviewEntryFailure } from "../../shared/review-output";
 
 const roots: string[] = [];
 const backends: ClaudeBackend[] = [];
@@ -798,6 +799,24 @@ describe("Claude SDK backend", () => {
         turn: expect.objectContaining({ status: "completed" }),
       })]);
       await backend.close();
+    });
+
+    it("preserves a completed findings report when subsequent fix work fails", async () => {
+      const f = await fixture(async function* () {
+        yield* report("review-1", { level: "high", findings }).slice(0, -1);
+        throw new Error("Subsequent fix work failed.");
+      });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high --fix" }] });
+      await f.waitForTurn();
+      expect(reviewItems(f.events)).toHaveLength(1);
+      for (const backend of [f.backend, f.openBackend()]) {
+        const entry = (await backend.readThread(threadId)).entries.find((item) => item.type === "review");
+        expect(entry).toMatchObject({ type: "review", turn: { status: "failed" }, reviewer: { backend: "claude" } });
+        if (!entry || entry.type !== "review") throw new Error("Missing published review");
+        expect(entry.output?.findings).toHaveLength(2);
+        expect(reviewEntryFailure(entry)).toBeUndefined();
+      }
     });
 
     it("resolves the card's context from the pull requests the /code-review named", async () => {

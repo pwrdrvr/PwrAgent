@@ -4,12 +4,16 @@ import type { AppServerReviewOutput, AppServerReviewFinding, AppServerThreadRevi
  * Exiting review mode is not proof that a review completed. Codex emits its
  * no-response artifact before the interrupted turn's terminal notification.
  * Replay has the turn status too; both paths must keep it out of tracking.
+ * Claude's structured ReportFindings artifact is already complete when it
+ * is published; subsequent --fix work can fail or stop its enclosing turn.
  */
 export function reviewEntryFailure(
-  entry: Pick<AppServerThreadReviewEntry, "review" | "turn" | "status">,
+  entry: Pick<AppServerThreadReviewEntry, "review" | "turn" | "status" | "reviewer" | "output">,
 ): "stopped" | "failed" | "incomplete" | undefined {
-  if (entry.turn?.status === "interrupted" || entry.status === "cancelled") return "stopped";
-  if (entry.turn?.status === "failed" || entry.status === "failed") return "failed";
+  const publishedClaudeReport = entry.reviewer?.backend === "claude" && entry.output !== undefined;
+  const parentStatus = publishedClaudeReport ? undefined : entry.turn?.status;
+  if (parentStatus === "interrupted" || entry.status === "cancelled") return "stopped";
+  if (parentStatus === "failed" || entry.status === "failed") return "failed";
   if (entry.review.trim() === "Reviewer failed to output a response.") return "incomplete";
   return undefined;
 }

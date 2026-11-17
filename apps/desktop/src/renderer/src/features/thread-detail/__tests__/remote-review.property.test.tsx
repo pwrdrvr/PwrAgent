@@ -62,3 +62,29 @@ it("shows unsuccessful reviews without a clean verdict or completion actions on 
     },
   ), { numRuns: 12 });
 });
+
+it("keeps a completed Claude report visible after the parent turn fails or stops", () => {
+  fc.assert(fc.property(
+    fc.boolean(),
+    fc.constantFrom("failed" as const, "cancelled" as const, "interrupted" as const),
+    (remote, status) => {
+      const view = render(<TranscriptReview
+        entry={{ type: "review", id: "report", review: "Published findings.",
+          reviewer: { backend: "claude" }, turn: { id: "turn", status },
+          output: { overall_correctness: "patch is incorrect", overall_explanation: "Published findings.",
+            findings: [{ title: "Keep published findings", body: "A later fix failed.", confidence_score: 1,
+              code_location: { absolute_file_path: "/repo/a.ts", line_range: { start: 3, end: 3 } },
+            }],
+          },
+        }}
+        {...(remote ? { threadLinkSource: { backend: "claude" as const, instanceId: "peer" } } : {})} />);
+      try {
+        expect(view.getByText("Keep published findings")).toBeTruthy();
+        expect(view.getByText("Patch needs work")).toBeTruthy();
+        expect(view.queryByText(/Review stopped|Review failed|Review did not complete/)).toBeNull();
+      } finally {
+        view.unmount();
+      }
+    },
+  ), { numRuns: 12 });
+});
