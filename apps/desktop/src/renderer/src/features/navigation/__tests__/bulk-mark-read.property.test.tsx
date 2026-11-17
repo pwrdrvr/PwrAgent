@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import { _resetKeybindingsStoreForTests } from "../../../lib/keybindings-store";
 
 afterEach(() => {
   cleanup();
   Reflect.deleteProperty(window, "__pwragentFederationTarget");
+  act(() => _resetKeybindingsStoreForTests());
 });
 
 function thread(index: number, unread: boolean, remote = false): NavigationThreadSummary {
@@ -73,16 +75,26 @@ describe("bulk Mark Read", () => {
 
   it("marks exactly the selected unread rows supported by the window's read action", async () => {
     // The bulk action must have the same eligibility as Mark Read on each
-    // individual row: unread, callback present, and owned by this window.
+    // individual row: unread, callback present, and a reachable owner that
+    // grants navigation. An unread remote row is not inherently ineligible.
     await fc.assert(fc.asyncProperty(
-      fc.array(fc.record({ unread: fc.boolean(), remote: fc.boolean() }), { minLength: 2, maxLength: 4 }),
+      fc.array(fc.record({ unread: fc.boolean(), remote: fc.boolean(), connected: fc.boolean(), canNavigate: fc.boolean() }),
+        { minLength: 2, maxLength: 4 }),
       fc.boolean(),
       async (rows, hasHandler) => {
         try {
-          const threads = [...rows.map((row, index) => thread(index, row.unread, row.remote)), thread(99, true)];
+          const threads = [...rows.map((row, index) => {
+            const candidate = thread(index, row.unread, row.remote);
+            if (candidate.federation) {
+              candidate.federation.peerStatus = row.connected ? "connected" : "disconnected";
+              candidate.federation.capabilities = row.canNavigate ? ["thread_navigation"] : ["turn_control"];
+            }
+            return candidate;
+          }), thread(99, true)];
           const onMarkThreadsSeen = vi.fn(async (_threads: NavigationThreadSummary[]) => undefined);
           openSelection(threads, hasHandler ? onMarkThreadsSeen : undefined);
-          const expected = threads.slice(0, -1).filter((row) => row.inbox.inInbox && !row.federation);
+          const expected = threads.slice(0, -1).filter((_, index) => rows[index].unread
+            && (!rows[index].remote || (rows[index].connected && rows[index].canNavigate)));
           const action = screen.queryByRole("menuitem", { name: /^Mark \d+ Threads? Read$/ });
           expect(Boolean(action)).toBe(hasHandler && expected.length > 0);
           if (action) {
@@ -101,6 +113,50 @@ describe("bulk Mark Read", () => {
         }
       },
     ), { numRuns: 25 });
+  });
+
+  it.each(["menu", "keyboard"])("marks a remote Attention thread read from the main window via %s", async (path) => {
+    const remote = thread(0, true, true);
+    const onMarkThreadsSeen = vi.fn(async (_threads: NavigationThreadSummary[]) => undefined);
+    act(() => _resetKeybindingsStoreForTests({
+      overrides: { "threads.toggle_unread": ["Alt+U"] }, filePath: "/tmp/keybindings.toml",
+    }));
+    openSelection([remote, thread(99, true)], onMarkThreadsSeen);
+
+    if (path === "menu") {
+      const action = screen.queryByRole("menuitem", { name: "Mark Read" });
+      expect(action).not.toBeNull();
+      await act(async () => { fireEvent.click(action!); });
+    } else {
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      const row = screen.getByRole("button", { name: /^Batch thread 0(?:,|$)/ });
+      row.focus();
+      await act(async () => { fireEvent.keyDown(row, { key: "u", code: "KeyU", altKey: true }); });
+    }
+    expect(onMarkThreadsSeen).toHaveBeenCalledExactlyOnceWith([remote]);
+  });
+
+  it.each([false, true])("marks eligible rows in a mixed local and remote selection (local unread: %s)", async (localUnread) => {
+    const threads = [thread(0, localUnread), thread(1, true, true), thread(99, true)];
+    const onMarkThreadsSeen = vi.fn(async (_threads: NavigationThreadSummary[]) => undefined);
+    openSelection(threads, onMarkThreadsSeen);
+
+    const action = screen.queryByRole("menuitem", { name: localUnread ? "Mark 2 Threads Read" : "Mark 1 Thread Read" });
+    expect(action).not.toBeNull();
+    await act(async () => { fireEvent.click(action!); });
+
+    expect(onMarkThreadsSeen).toHaveBeenCalledExactlyOnceWith(threads.slice(localUnread ? 0 : 1, 2));
+  });
+
+  it.each(["disconnected", "no navigation grant"])("omits single-thread Mark Read when the peer has %s", (reason) => {
+    const remote = thread(0, true, true);
+    if (reason === "disconnected") remote.federation!.peerStatus = "disconnected";
+    else remote.federation!.capabilities = ["turn_control"];
+    const onMarkThreadsSeen = vi.fn(async (_threads: NavigationThreadSummary[]) => undefined);
+    openSelection([remote, thread(99, true)], onMarkThreadsSeen);
+
+    expect(screen.queryByRole("menuitem", { name: "Mark Read" })).toBeNull();
+    expect(onMarkThreadsSeen).not.toHaveBeenCalled();
   });
 
   it("marks selected peer threads read in a window mounted on their owner", async () => {

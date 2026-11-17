@@ -2574,6 +2574,10 @@ export function Sidebar(props: SidebarProps) {
   const threadCanRename = (thread: NavigationThreadSummary): boolean =>
     Boolean(props.onRenameThread)
     && threadSupportsRename(thread, threadBackends(thread), Boolean(federationTarget));
+  const threadCanMarkRead = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onMarkThreadsSeen)
+    && thread.inbox.inInbox
+    && threadCanRouteRemoteCapability(thread, "thread_navigation");
 
   /**
    * Rename in place: in the thread's sidebar row when the list shows one,
@@ -2692,7 +2696,7 @@ export function Sidebar(props: SidebarProps) {
         break;
       case "threads.toggle_unread":
         if (single && thread.inbox.inInbox) {
-          handled = Boolean(props.onMarkThreadsSeen) && !(thread.federation && !federationTarget);
+          handled = threadCanMarkRead(thread);
           if (handled) void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
         } else if (single) {
           handled = Boolean(props.onMarkThreadUnread)
@@ -2802,9 +2806,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanMarkRead = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
-      !contextMenuIsMainWindowRemoteRow &&
-      contextMenu.thread.inbox.inInbox &&
-      props.onMarkThreadsSeen,
+      threadCanMarkRead(contextMenu.thread),
   );
   // A transfer needs an idle Codex thread this window owns: a peer's row
   // belongs to its owner, and a native sub-agent belongs to its parent.
@@ -3252,11 +3254,8 @@ export function Sidebar(props: SidebarProps) {
   );
   const bulkArchivableThreads = contextMenuThreads.filter((thread) =>
     canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control"));
-  // Match the single-row action: peer rows in the main window do not
-  // expose Mark Read; a window mounted on their owner does.
-  const bulkMarkReadableThreads = contextMenuThreads.filter((thread) =>
-    thread.inbox.inInbox && (!thread.federation || federationTarget));
-  const bulkCanMarkRead = Boolean(props.onMarkThreadsSeen && bulkMarkReadableThreads.length > 0);
+  const bulkMarkReadableThreads = contextMenuThreads.filter(threadCanMarkRead);
+  const bulkCanMarkRead = bulkMarkReadableThreads.length > 0;
   const bulkHasPinActions =
     bulkCanPin &&
     (bulkPinnedThreads.length > 0 || bulkUnpinnedThreads.length > 0);

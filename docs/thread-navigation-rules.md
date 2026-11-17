@@ -170,6 +170,8 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 - In Attention, clear unread state automatically only after the operator sends a reply.
 - The operator can explicitly choose Mark Read for one thread or the selected set.
 - For a selected set, mark only its unread threads that support the single-thread action.
+- Remote threads support Mark Read from the main window when their peer is connected
+  and grants `thread_navigation`; send the read watermark to each thread's owner.
 - The composer reports accepted sends and steers through `onUserRepliedToThread`.
 - That callback calls `markThreadsSeen`.
 - Do not apply reply-only clearing to other lenses.
