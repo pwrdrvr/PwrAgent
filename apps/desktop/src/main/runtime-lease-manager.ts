@@ -37,7 +37,7 @@ export class RuntimeLeaseManager extends OwnerRuntimeLeaseManager {
         ?? process.env[PWRAGENT_INSTANCE_ROOT_ENV] ?? process.cwd(),
       now,
       store: options.store ?? getDesktopRuntimeLeaseStorage(),
-      systemBootedAt: options.systemBootedAt ?? now() - os.uptime() * 1_000,
+      systemBootedAt: options.systemBootedAt ?? systemBootedAt(now),
       exitedInstanceIds: options.exitedInstanceIds,
       runtimeIdentityIsAlive: options.runtimeIdentityIsAlive
         ?? (options.processIsAlive
@@ -47,6 +47,17 @@ export class RuntimeLeaseManager extends OwnerRuntimeLeaseManager {
             now: now(),
           })),
     });
+  }
+}
+
+function systemBootedAt(now: () => number): number {
+  try {
+    return now() - os.uptime() * 1_000;
+  } catch {
+    // Sandboxed macOS can deny uv_uptime. Without boot-time evidence, no
+    // owner is conclusively pre-boot; identity checks and the dead-owner
+    // grace still apply. Zero would misclassify negative wall-clock starts.
+    return Number.NEGATIVE_INFINITY;
   }
 }
 

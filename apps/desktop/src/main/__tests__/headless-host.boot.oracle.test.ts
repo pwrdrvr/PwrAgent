@@ -44,7 +44,7 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
     plugins: [{ name: "child-test-hooks", setup(builder) {
       builder.onResolve({ filter: /^vitest$/ }, () => ({ path: "hooks", namespace: "child-test" }));
       builder.onLoad({ filter: /.*/, namespace: "child-test" }, () => ({
-        contents: `export const afterEach = () => {}; export const afterAll = fn => process.once("exit", () => { try { fn(); } catch (error) { console.error(error.message); process.exitCode = 1; } });`,
+        contents: `export const afterEach = () => {}; export const afterAll = fn => process.once("exit", () => { try { fn(); } catch (error) { require("node:fs").writeSync(2, error.message + "\\n"); process.exitCode = 1; } });`,
         loader: "js",
       }));
     } }],
@@ -71,6 +71,8 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
     }), { numRuns: 40, seed: 3650 }),
   ];
   const driver = path.join(root, "driver.cjs");
+  // Startup redirects console.error to a file and Vitest mutes its console
+  // transport. Write failures to stderr directly so the parent can report them.
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
     const names = specs => specs.flatMap(s => s.type === "namespace" ? s.tools.map(t => s.name + "/" + t.name) : [s.name]);
     app.startHeadlessHost().then(async services => {
@@ -87,12 +89,13 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
       }
       const pdfServer = await registry.registerPdfMcpClient({});
       process.send({ ready: true, advertised, responses, pdfServerOffered: pdfServer !== undefined, pdfServerWired: Boolean(registry.pdfToolMcpServer), errors: await services.settings.readFederationKeyAccessErrors(), leaseHeld: services.leaseManager.snapshot("federation").leaseHeld, messagingHeld: services.leaseManager.snapshot("messaging").leaseHeld });
-    }).catch(error => { console.error(error.stack); process.exitCode = 1; });`);
+    }).catch(error => { require("node:fs").writeSync(2, error.stack + "\\n"); process.exitCode = 1; });`);
   const child = fork(driver, [], { env, execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"] });
   let output = "";
   child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
-  const exited = once(child, "exit");
+  // Wait for stdio to drain before reporting a startup failure.
+  const exited = once(child, "close");
   onTestFinished(async () => { if (child.connected) child.send({ stop: true }); await exited; });
   const ready = await Promise.race([once(child, "message").then(([value]) => value), exited.then(([code]) => { throw new Error(`Node owner exited before ready (${code}): ${output}`); })]);
   expect(ready).toMatchObject({ ready: true, leaseHeld: true, messagingHeld: true, errors: [
