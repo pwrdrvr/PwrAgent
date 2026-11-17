@@ -118,9 +118,12 @@ fails. An explicit tool retry remains permitted; fallback cannot be claimed
 twice. Completion routing is cleared at the original terminal-cleanup boundary.
 
 Live origins and pending receipts cannot be evicted. Authoritative turn cleanup
-retires a record; settled history is bounded at 1,000 entries in admission
-order. A missing record cannot claim fallback. Held text is independently
-bounded at 256 payloads in first-hold order, preserving the existing map policy;
+retires a record; settled history is bounded at 1,000 entries in settlement
+order. The reducer emits `retainHistory` when a terminal turn has no pending
+effects, including when its final delivery returns after the terminal event.
+The owner appends that record to history then. Repeated terminal events do not
+refresh history. A missing record cannot claim fallback. Held text is
+independently bounded at 256 payloads in first-hold order, preserving the map policy;
 evicting a payload retains its turn's claim evidence. Detach retains a live
 origin until its terminal event, as before. Shutdown disposes both owners, and
 generation receipts reject late effects without recreating records. Request
@@ -137,7 +140,7 @@ No private test cast or spy reached a retired collection. The test-only
 
 Run `node scripts/mutate-messaging-private-responses.mjs --baseline` for the
 baseline sequential oracle and both assertion-failing production
-counterexamples. Without flags it checks 15 deliberate transition, bound,
+counterexamples. Without flags it checks 17 deliberate transition, bound,
 receipt, ordering, caller and host-port mutations. `--only <pattern>` selects
 one mutation. The script rejects bootstrap/import errors and timeouts as proof,
 restores sources in `finally` and verifies both protected fixture hashes. Logs
@@ -150,10 +153,27 @@ responses and terminal cleanup, explicit retries, claim release, real history
 and text bounds, detach and shutdown. Scheduler settlement uses `setImmediate`;
 there are no property polling loops, retries or increased timeouts.
 
-Private-state verification passes the required static checks, 100 protected
-test files (4,852 passing tests, two skipped), and the full suite (2,062 passing
-files, 28,882 passing tests, 107 skipped). Both protected fixtures are byte
-identical to the pinned baseline. No test timeout required an isolation run.
+The review of #3810 exposed another production counterexample at head
+`3a22f787cb0d92b21965f35a24048f9d888f1c05`: an older turn delivers privately
+after 1,000 newer turns settle, then its own terminal cleanup immediately
+evicts that fresh evidence in admission order. A repeated final item publishes
+the private body to the source. The production property failed at `[1000]`
+(seed `405300016`, path `0`); the independent FIFO settlement model shrank to
+`deliver(old-1), finish(old-1), retire(old-1)` after history pressure. Named
+regressions cover both finish/terminal orderings and source privacy. Run
+`node scripts/mutate-messaging-private-responses.mjs --retention-baseline` to
+prove both model and router assertion failures on that pre-fix owner. The two
+additional mutations remove settlement recency or refresh replayed terminals;
+both must fail assertions. No delivery effect, await or persistence is added.
+
+Private-state verification passes 24 focused tests, the required static checks
+and 100 protected test files (4,852 passing tests, two skipped). In the latest
+full suite, 2,062 files and 28,887 tests passed, with 107 skipped and one
+unrelated failure in `mcp-gateway-skills.property.test.ts`: 24,001 bytes against
+its 24,000-byte limit. A seeded replay confirms that failure on unchanged
+gateway code, and a separate handoff card proposes the fix to its existing
+owner. Both protected fixtures are byte identical to the pinned baseline. No
+test timeout required an isolation run.
 
 ## Remaining state-machine work
 

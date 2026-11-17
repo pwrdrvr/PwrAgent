@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const baseline = "b54346c56247fef9e6ee8c925aad5ea37a37595c";
+const retentionBaseline = "3a22f787cb0d92b21965f35a24048f9d888f1c05";
 const directory = ".local/pwr-149-private/mutations";
 const core = "apps/desktop/src/main/messaging/core/";
 const tests = "apps/desktop/src/main/__tests__/";
@@ -39,6 +40,8 @@ function run(name, selected, expected, pattern) {
 const stateTests = ["messaging-private-response-state.property.test.ts"];
 const observable = ["messaging-private-response-observable.property.test.ts"];
 const mutations = [
+  ["settlement-recency", state, 'if (result.effects.includes("retainHistory")) this.entries.delete(key);', 'false && this.entries.delete(key);', ["messaging-private-response-history.property.test.ts", "messaging-private-response-eviction.property.test.ts"]],
+  ["terminal-replay-recency", state, 'effects: state.lifetime === "live" && state.pending === 0 ? ["retainHistory"] : [],', 'effects: state.pending === 0 ? ["retainHistory"] : [],', ["messaging-private-response-history.property.test.ts"]],
   ["fallback-reclaim", state, 'state.status === "fallbackHeld"\n        ? { state:', '(state.status === "fallbackHeld" || state.status === "fallbackAttempted")\n        ? { state:', stateTests],
   ["terminal-downgrade", state, '...withPhase(base, state?.status === "terminal" ?', '...withPhase(base, false ?', stateTests],
   ["live-eviction", state, 'return state.lifetime === "settled" && state.pending === 0', 'return state.pending === 0', stateTests],
@@ -57,7 +60,11 @@ const mutations = [
 ];
 const results = [];
 try {
-  if (process.argv.includes("--baseline")) {
+  if (process.argv.includes("--retention-baseline")) {
+    writeFileSync(state, execFileSync("git", ["show", `${retentionBaseline}:${state}`], { encoding: "utf8" }));
+    results.push(run("retention-pre-fix-model", ["messaging-private-response-history.property.test.ts"], "assertion"));
+    results.push(run("retention-pre-fix-router", ["messaging-private-response-eviction.property.test.ts"], "assertion", "late private"));
+  } else if (process.argv.includes("--baseline")) {
     for (const file of [controller, router, context]) writeFileSync(file, execFileSync("git", ["show", `${baseline}:${file}`], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }));
     results.push(run("baseline-sequential-oracle", observable, "pass", "preserves explicit-tool"));
     results.push(run("baseline-inflight-counterexample", observable, "assertion", "withholds source text"));
@@ -75,7 +82,8 @@ try {
   }
 } finally {
   restore();
-  writeFileSync(`${directory}/results${process.argv.includes("--baseline") ? "-baseline" : ""}.json`, `${JSON.stringify(results, null, 2)}\n`);
+  const suffix = process.argv.includes("--retention-baseline") ? "-retention-baseline" : process.argv.includes("--baseline") ? "-baseline" : "";
+  writeFileSync(`${directory}/results${suffix}.json`, `${JSON.stringify(results, null, 2)}\n`);
 }
-console.log(JSON.stringify({ baseline, attempted: results.length, detected: results.filter(result => result.passed).length, protectedFixturesUnchanged: true }));
+console.log(JSON.stringify({ baseline: process.argv.includes("--retention-baseline") ? retentionBaseline : baseline, attempted: results.length, detected: results.filter(result => result.passed).length, protectedFixturesUnchanged: true }));
 if (!results.length || results.some(result => !result.passed)) process.exitCode = 1;

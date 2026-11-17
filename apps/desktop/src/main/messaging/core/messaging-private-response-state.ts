@@ -34,7 +34,7 @@ export type PrivateResponseEvent =
   | { readonly type: "evict" }
   | { readonly type: "dispose" };
 
-export type PrivateResponseEffect = "deliverFallback" | "remove";
+export type PrivateResponseEffect = "deliverFallback" | "retainHistory" | "remove";
 
 function withPhase(state: PrivateResponseState, phase: ResponsePhase): PrivateResponseState {
   return { lifetime: state.lifetime, replyCompletion: state.replyCompletion, pending: state.pending, ...phase };
@@ -82,7 +82,7 @@ export function transitionPrivateResponse(
         state: state.status === "claimed" && pending === 0
           ? { ...withPhase(state, { status: state.path === "fallback" ? "fallbackAttempted" : "completed" }), pending }
           : { ...state, pending },
-        effects: [],
+        effects: pending === 0 && state.pending > 0 && state.lifetime === "settled" ? ["retainHistory"] : [],
       };
     }
     case "finishFallback":
@@ -92,7 +92,10 @@ export function transitionPrivateResponse(
         effects: [],
       };
     case "retire":
-      return { state: { ...state, lifetime: "settled", replyCompletion: false }, effects: [] };
+      return {
+        state: { ...state, lifetime: "settled", replyCompletion: false },
+        effects: state.lifetime === "live" && state.pending === 0 ? ["retainHistory"] : [],
+      };
     case "completeReply":
       return { state: { ...state, replyCompletion: false }, effects: [] };
     case "evictText":
@@ -110,8 +113,9 @@ export interface PrivateResponseReceipt {
 }
 
 // Live origins and pending effects are never eviction candidates. Only settled
-// history is bounded. A missing record cannot claim a fallback; evicting text
-// drops a payload, never the turn's delivery evidence. No persistence or timers.
+// history is bounded in settlement order. A missing record cannot claim a
+// fallback; evicting text drops a payload, never the turn's delivery evidence.
+// No persistence or timers.
 export class MessagingPrivateResponses {
   private readonly entries = new Map<string, { readonly generation: object; readonly state: PrivateResponseState }>();
   private disposed = false;
@@ -187,8 +191,12 @@ export class MessagingPrivateResponses {
     if (this.disposed && event.type !== "dispose") return [];
     const previous = this.entries.get(key);
     const result = transitionPrivateResponse(previous?.state, event);
-    if (result.state) this.entries.set(key, { generation: previous?.generation ?? {}, state: result.state });
-    else this.entries.delete(key);
+    if (result.state) {
+      // A newly settled turn enters history now, even when admitted before
+      // every retained record. Replayed terminal events do not refresh it.
+      if (result.effects.includes("retainHistory")) this.entries.delete(key);
+      this.entries.set(key, { generation: previous?.generation ?? {}, state: result.state });
+    } else this.entries.delete(key);
     return result.effects;
   }
 

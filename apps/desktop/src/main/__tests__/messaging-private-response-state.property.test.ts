@@ -117,7 +117,9 @@ describe("private-response state protocol", () => {
     expect(real.state("retired-pending")?.pending).toBe(1);
     real.delivered(pending);
     real.finishTool(pending);
-    expect(real.state("retired-pending")).toBeUndefined();
+    expect(real.state("retired-pending")?.status).toBe("terminal");
+    expect(real.state("history-1")).toBeUndefined();
+    expect(real.state("history-2")).toBeDefined();
     real.finishTool(live);
     expect(real.isTerminal("old-live")).toBe(true);
     const retry = real.beginTool("old-live");

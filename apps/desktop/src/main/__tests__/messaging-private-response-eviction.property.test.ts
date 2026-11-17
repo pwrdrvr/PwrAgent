@@ -29,10 +29,39 @@ async function runEvictionScenario(count: number): Promise<void> {
   }
 }
 
+async function runLateCompletionScenario(count: number): Promise<void> {
+  const f = await privateResponseHarness();
+  try {
+    const old = await f.start("old-thread", "DM me the fixture answer");
+    for (let n = 0; n < count; n += 1) {
+      const next = await f.start("fill-thread");
+      const response = await f.controller.handlePwrAgentMessagingRequest({
+        operation: "send_private_response", context: { backend: "codex", threadId: "fill-thread", turnId: next },
+        args: { text: "Fixture newer private answer" },
+      });
+      expect(response.ok).toBe(true);
+      await f.complete("fill-thread", next);
+    }
+    await f.answer("old-thread", old, "Fixture late private answer");
+    await f.complete("old-thread", old);
+    await f.answer("old-thread", old, "Fixture late private answer");
+    expect(f.privateTexts.filter(text => text === "Fixture late private answer")).toHaveLength(1);
+    expect(f.sourceTexts, "terminal cleanup must retain newly delivered privacy evidence").not.toContain("Fixture late private answer");
+  } finally { await f.close(); }
+}
+
 // Counterexample to the at-most-once promise, kept separate from the intended
 // sequential/interleaved observable model. These are real public controller
 // calls and real SQLite bindings, with contrived provider protocol data.
 describe("private-response fallback eviction", () => {
+  it("keeps a late private answer private after 1,000 newer turns settle", async () => {
+    await runLateCompletionScenario(1_000);
+  });
+
+  it("preserves late private delivery through cleanup under generated history pressure", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1_000, max: 1_002 }), runLateCompletionScenario), { numRuns: 1 });
+  });
+
   it("retains the old turn after exactly 1,000 other private turns complete", async () => {
     await runEvictionScenario(1_000);
   });
