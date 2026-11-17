@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -33,6 +33,10 @@ const LAUNCH_SIZE = { width: 1440, height: 900 };
 test("keeps the archive group confirmation usable at every window size and zoom", async ({ browserName: _browserName }) => {
   test.setTimeout(240_000);
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-group-layout-"));
+  const projectPath = path.join(root, "Harbor");
+  await mkdir(projectPath);
+  // A summary always carries its linked directories; main iterates them.
+  const linkedDirectories = [{ id: projectPath, path: projectPath, label: "Harbor", kind: "local" as const }];
   const threads = GROUPS.flatMap((group, groupIndex) => [
     { id: `root-${groupIndex}`, parent: undefined as string | undefined, title: group.root },
     ...Array.from({ length: group.size - 1 }, (_, index) => ({
@@ -41,8 +45,8 @@ test("keeps the archive group confirmation usable at every window size and zoom"
       // Every fifth row is long enough to have to truncate.
       title: index % 5 === 0 ? `Step ${index + 1}: ${LONG_TITLE}` : `Step ${index + 1} of ${group.root}`,
     })),
-  ]).map((thread, index) => ({ ...thread, titleSource: "explicit", source: "codex", executionMode: "default",
-    updatedAt: 10_000 - index }));
+  ]).map((thread, index) => ({ ...thread, linkedDirectories, titleSource: "explicit", source: "codex",
+    executionMode: "default", updatedAt: 10_000 - index }));
   const fixturePath = path.join(root, "archive-group-layout.fixture.json");
   await writeFile(fixturePath, JSON.stringify({
     metadata: { backend: "codex", scenario: "archive-group-dialog-layout", threadId: "root-0" },
