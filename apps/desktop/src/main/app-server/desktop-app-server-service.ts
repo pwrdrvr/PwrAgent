@@ -358,7 +358,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -2317,6 +2317,8 @@ class DesktopAppServerService {
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
+        await awaitStartupProviderCoverage({ query: request.query,
+          deadlineAt: rpcOptions?.deadlineAt ?? request.deadlineAt, signal: rpcOptions?.signal });
         const summaries = request.inventory === "viewer"
           ? getDesktopFederationRuntime().remoteThreadSummaries() : undefined;
         const index = await loadLocalNavigationQueryIndex({
