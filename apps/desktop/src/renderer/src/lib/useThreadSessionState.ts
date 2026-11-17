@@ -118,32 +118,28 @@ const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "item/fileChange/requestApproval",
 ]);
 
+/**
+ * Names the context-window moon's phase. The moon only waxes: its lit share
+ * is the share of the window in use, so a new moon is empty and a full moon
+ * is full. Phases index `CONTEXT_MOON_PHASES` in the composer.
+ */
 export function getContextWindowMoonPhase(usedPercent: number): number {
   if (usedPercent < 10) {
     return 0;
   }
-  if (usedPercent < 22.5) {
+  if (usedPercent < 40) {
     return 1;
   }
-  if (usedPercent < 35) {
+  if (usedPercent < 60) {
     return 2;
   }
-  if (usedPercent < 47.5) {
+  if (usedPercent < 90) {
     return 3;
   }
-  if (usedPercent < 60) {
+  if (usedPercent < 97.5) {
     return 4;
   }
-  if (usedPercent < 72.5) {
-    return 5;
-  }
-  if (usedPercent < 85) {
-    return 6;
-  }
-  if (usedPercent < 97.5) {
-    return 7;
-  }
-  return 8;
+  return 5;
 }
 
 export type ThreadViewportState = {

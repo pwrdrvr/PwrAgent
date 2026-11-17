@@ -32,6 +32,7 @@ import {
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { contextWindowMoonShadow } from "./context-window-moon";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -929,9 +930,6 @@ const CONTEXT_MOON_PHASES = [
   "first quarter",
   "waxing gibbous",
   "full moon",
-  "waning gibbous",
-  "third quarter",
-  "waning crescent",
   "critical",
 ] as const;
 
@@ -16134,6 +16132,7 @@ function ContextWindowMoon({
   const phase = Math.min(CONTEXT_MOON_PHASES.length - 1, Math.max(0, contextWindow.phase));
   const phaseLabel = CONTEXT_MOON_PHASES[phase];
   const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
+  const shadow = contextWindowMoonShadow(contextWindow.usedPercent);
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
@@ -16151,7 +16150,16 @@ function ContextWindowMoon({
         aria-hidden="true"
         className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
       >
-        <span className="context-window-moon__disc" />
+        <span className="context-window-moon__disc">
+          <svg
+            className="context-window-moon__shadow"
+            focusable="false"
+            preserveAspectRatio="none"
+            viewBox="-1 -1 2 2"
+          >
+            <path d={shadow.path} />
+          </svg>
+        </span>
       </span>
       <span className="context-window-moon__label">{percentLabel}</span>
       {tooltipNode}

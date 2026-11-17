@@ -6120,7 +6120,7 @@ describe("Composer", () => {
           backends={[backendSummary("codex")]}
           contextWindow={{
             modelContextWindow: 128_000,
-            phase: 2,
+            phase: 1,
             remainingPercent: 75,
             remainingTokens: 96_000,
             totalTokens: 32_000,
@@ -6167,7 +6167,7 @@ describe("Composer", () => {
         backends={[backendSummary("codex")]}
         contextWindow={{
           modelContextWindow: 128_000,
-          phase: 2,
+          phase: 1,
           remainingPercent: 75,
           remainingTokens: 96_000,
           totalTokens: 32_000,
@@ -6211,7 +6211,7 @@ describe("Composer", () => {
           inputTokens: 63_000,
           modelContextWindow: 128_000,
           outputTokens: 1_000,
-          phase: 4,
+          phase: 2,
           remainingPercent: 50,
           remainingTokens: 64_000,
           totalTokens: 64_000,
@@ -6232,7 +6232,7 @@ describe("Composer", () => {
     );
 
     const moon = screen.getByRole("img", {
-      name: "Context window 50% full, 64k/128k tokens, full moon",
+      name: "Context window 50% full, 64k/128k tokens, first quarter",
     });
     expect(moon).toBeInTheDocument();
     expect(moon).not.toHaveAttribute("title");
@@ -6243,7 +6243,7 @@ describe("Composer", () => {
     fireEvent.mouseEnter(moon);
     const card = screen.getByRole("tooltip");
     expect(within(card).getByText("Context window")).toBeInTheDocument();
-    expect(within(card).getByText("full moon")).toBeInTheDocument();
+    expect(within(card).getByText("first quarter")).toBeInTheDocument();
     expect(within(card).getByText("50% full")).toBeInTheDocument();
     expect(within(card).getByText("64k left")).toBeInTheDocument();
     expect(within(card).getByText("64k of 128k tokens")).toBeInTheDocument();
@@ -6293,7 +6293,7 @@ describe("Composer", () => {
     const { rerender } = render(
       composerFor({
         modelContextWindow: 128_000,
-        phase: 4,
+        phase: 2,
         remainingPercent: 50,
         remainingTokens: 64_000,
         totalTokens: 64_000,
@@ -6309,7 +6309,7 @@ describe("Composer", () => {
     rerender(
       composerFor({
         modelContextWindow: 128_000,
-        phase: 6,
+        phase: 3,
         remainingPercent: 25,
         remainingTokens: 32_000,
         totalTokens: 96_000,
