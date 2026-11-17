@@ -3847,672 +3847,676 @@ export function Sidebar(props: SidebarProps) {
           </div>
         </section>
 
-        {contextMenu ? (
-          <div
-            ref={contextMenuRef}
-            className={`thread-context-menu${
-              contextMenuHasCheckSection ? " thread-context-menu--check-column" : ""
-            }${contextMenu.pullRequest ? " thread-context-menu--pull-request" : ""}`}
-            role="menu"
-            aria-label={
-              contextMenuIsBulk
-                ? `Actions for ${formatThreadCount(contextMenuThreads.length).toLowerCase()} selected`
-                : undefined
-            }
-            style={{
-              left: contextMenu.position?.x ?? contextMenu.requestedPosition.x,
-              top: contextMenu.position?.y ?? contextMenu.requestedPosition.y,
-              visibility: contextMenu.position ? undefined : "hidden",
-            }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {contextMenuIsBulk ? (
-              <>
-                {bulkRemovableRemotePins.length > 0 ? (
+        {(function renderThreadContextMenu() {
+          return (
+            contextMenu ? (
+              <div
+                ref={contextMenuRef}
+                className={`thread-context-menu${
+                  contextMenuHasCheckSection ? " thread-context-menu--check-column" : ""
+                }${contextMenu.pullRequest ? " thread-context-menu--pull-request" : ""}`}
+                role="menu"
+                aria-label={
+                  contextMenuIsBulk
+                    ? `Actions for ${formatThreadCount(contextMenuThreads.length).toLowerCase()} selected`
+                    : undefined
+                }
+                style={{
+                  left: contextMenu.position?.x ?? contextMenu.requestedPosition.x,
+                  top: contextMenu.position?.y ?? contextMenu.requestedPosition.y,
+                  visibility: contextMenu.position ? undefined : "hidden",
+                }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                {contextMenuIsBulk ? (
                   <>
-                    <div className="thread-context-menu__section">
-                      <button
-                        aria-label={`Remove ${formatThreadCount(bulkRemovableRemotePins.length)} from My List. Threads on their owning instances are untouched.`}
-                        className="thread-context-menu__button--stacked"
-                        role="menuitem"
-                        type="button"
-                        onClick={() => removeRemotePinsFromContextMenu(bulkRemovableRemotePins)}
-                      >
-                        <span>Remove {formatThreadCount(bulkRemovableRemotePins.length)} from My List</span>
-                        <span className="thread-context-menu__item-detail">
-                          Keeps {bulkRemovableRemotePins.length === 1 ? "the thread on its instance" : "threads on their owning instances"}
-                        </span>
-                      </button>
-                    </div>
-                    <div className="thread-context-menu__separator" role="separator" />
-                  </>
-                ) : null}
-                {bulkHasPinActions ? (
-                  <div className="thread-context-menu__section">
-                    {bulkPinnedThreads.length > 0 ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() => unpinThreadsFromContextMenu(bulkPinnedThreads)}
-                      >
-                        Unpin {formatThreadCount(bulkPinnedThreads.length)}
-                      </button>
-                    ) : null}
-                    {bulkUnpinnedThreads.length > 0 ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() => pinThreadsFromContextMenu(bulkUnpinnedThreads)}
-                      >
-                        Pin {formatThreadCount(bulkUnpinnedThreads.length)}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {bulkHasPinActions && bulkHasManagementActions ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                {bulkHasManagementActions ? (
-                  <div className="thread-context-menu__section">
-                    {bulkCanMarkRead ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() => markReadFromContextMenu(bulkMarkReadableThreads)}
-                      >
-                        Mark {formatThreadCount(bulkMarkReadableThreads.length)} Read
-                      </button>
-                    ) : null}
-                    {bulkUnlinkableThreads.length > 0
-                      && (props.onUnlinkThreads || props.onSetThreadParent) ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          unlinkThreadsFromContextMenu(bulkUnlinkableThreads)
-                        }
-                      >
-                        Unlink {formatThreadCount(bulkUnlinkableThreads.length)} from
-                        Parent
-                      </button>
-                    ) : null}
-                    {bulkArchivableThreads.length > 0 ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          archiveThreadsFromContextMenu(bulkArchivableThreads)
-                        }
-                      >
-                        Archive {formatThreadCount(bulkArchivableThreads.length)}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {bulkHasPinActions || bulkHasManagementActions ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                <div className="thread-context-menu__section">
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(bulkThreadLinks.join("\n"))}
-                  >
-                    Copy Thread Links
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(bulkThreadIds.join("\n"))}
-                  >
-                    Copy Thread IDs
-                  </button>
-                  {bulkThreadPaths.length > 0 ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => copyFromContextMenu(bulkThreadPaths.join("\n"))}
-                    >
-                      Copy Thread Paths
-                    </button>
-                  ) : null}
-                  {bulkBranchNames.length > 0 ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => copyFromContextMenu(bulkBranchNames.join("\n"))}
-                    >
-                      Copy Branch Names
-                    </button>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <>
-                {contextMenuCanRemoveRemotePin ? (
-                  <div className="thread-context-menu__section">
-                    <button
-                      aria-label="Remove from My List. The thread on the owning instance is untouched."
-                      className="thread-context-menu__button--stacked"
-                      role="menuitem"
-                      type="button"
-                      onClick={() =>
-                        removeRemotePinsFromContextMenu([contextMenu.thread])
-                      }
-                    >
-                      <span>Remove from My List</span>
-                      <span className="thread-context-menu__item-detail">
-                        Keeps the thread on{" "}
-                        {contextMenu.thread.federation?.instanceLabel ??
-                          "its instance"}
-                      </span>
-                    </button>
-                  </div>
-                ) : null}
-                {contextMenuCanRemoveRemotePin && contextMenuHasCheckSection ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                {contextMenuHasCheckSection ? (
-                  <div className="thread-context-menu__section">
-                    {contextMenuHasPinAction ? (
-                    <button
-                      role="menuitemcheckbox"
-                      aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_pin")}
-                      type="button"
-                      onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
-                      onKeyDown={closeContextMenuOnEnter}
-                    >
-                      <span className="thread-context-menu__check" aria-hidden="true">
-                        <CheckIcon size={12} strokeWidth={3} />
-                      </span>
-                      <span>Pinned</span>
-                      {menuShortcut("threads.toggle_pin")}
-                    </button>
-                    ) : null}
-                    {contextMenuCanKeepAtTop ? (
-                      <button
-                        role="menuitemcheckbox"
-                        aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_keep_at_top")}
-                        type="button"
-                        onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
-                        onKeyDown={closeContextMenuOnEnter}
-                      >
-                        <span className="thread-context-menu__check" aria-hidden="true">
-                          <CheckIcon size={12} strokeWidth={3} />
-                        </span>
-                        <span>Keep at Top</span>
-                        {menuShortcut("threads.toggle_keep_at_top")}
-                      </button>
-                    ) : null}
-                    {contextMenuCanKeepAwake ? (
-                      <button
-                        role="menuitemcheckbox"
-                        aria-checked={Boolean(contextMenuPinThread!.keepCheckoutAwake)}
-                        type="button"
-                        onClick={() => toggleKeepCheckoutAwakeFromContextMenu(contextMenuPinThread!)}
-                        onKeyDown={closeContextMenuOnEnter}
-                      >
-                        <span className="thread-context-menu__check" aria-hidden="true">
-                          <CheckIcon size={12} strokeWidth={3} />
-                        </span>
-                        <span>Keep Checkout Awake</span>
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {contextMenuHasCheckSection &&
-                (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                {contextMenuHasCreationActions ? (
-                  <div className="thread-context-menu__section">
-                    {contextMenuCanCreateSubthread ? (
+                    {bulkRemovableRemotePins.length > 0 ? (
                       <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() => createSubthreadFromContextMenu(
-                            contextMenu.thread,
-                            contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
-                          )}
-                        >
-                          {contextMenuHasWorktreeWorkspace
-                            ? "Sub-thread in Same Worktree"
-                            : "Sub-thread in This Directory"}
-                        </button>
-                        {subthreadMachines ? (
-                          <SubthreadMachineCascade
-                            label={canCreateContextMenuWorktree
-                              ? "Sub-thread in New Worktree"
-                              : "Sub-thread in New Workspace"}
-                            groupLabel={subthreadWorktreeFlyout
-                              ? "New worktree on"
-                              : "New workspace on"}
-                            rowDisabled={checkingWorktreeAvailability}
-                            machines={subthreadMachines}
-                            onSelect={() => createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
-                            )}
-                            onSelectMachine={(machine) => createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              subthreadWorktreeFlyout ? "new-worktree" : "new-workspace",
-                              {
-                                ...(machine.instanceId ? { instanceId: machine.instanceId } : {}),
-                                ...(subthreadWorktreeFlyout && machine.baseBranch
-                                  ? { baseBranch: machine.baseBranch }
-                                  : {}),
-                              },
-                            )}
-                            onOpenChange={onSubthreadFlyoutOpenChange}
-                          />
-                        ) : (
+                        <div className="thread-context-menu__section">
+                          <button
+                            aria-label={`Remove ${formatThreadCount(bulkRemovableRemotePins.length)} from My List. Threads on their owning instances are untouched.`}
+                            className="thread-context-menu__button--stacked"
+                            role="menuitem"
+                            type="button"
+                            onClick={() => removeRemotePinsFromContextMenu(bulkRemovableRemotePins)}
+                          >
+                            <span>Remove {formatThreadCount(bulkRemovableRemotePins.length)} from My List</span>
+                            <span className="thread-context-menu__item-detail">
+                              Keeps {bulkRemovableRemotePins.length === 1 ? "the thread on its instance" : "threads on their owning instances"}
+                            </span>
+                          </button>
+                        </div>
+                        <div className="thread-context-menu__separator" role="separator" />
+                      </>
+                    ) : null}
+                    {bulkHasPinActions ? (
+                      <div className="thread-context-menu__section">
+                        {bulkPinnedThreads.length > 0 ? (
                           <button
                             role="menuitem"
                             type="button"
-                            disabled={checkingWorktreeAvailability}
-                            onClick={() => createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
-                            )}
+                            onClick={() => unpinThreadsFromContextMenu(bulkPinnedThreads)}
                           >
-                            {canCreateContextMenuWorktree
-                              ? "Sub-thread in New Worktree"
-                              : "Sub-thread in New Workspace"}
+                            Unpin {formatThreadCount(bulkPinnedThreads.length)}
                           </button>
-                        )}
-                      </>
-                    ) : null}
-                    {contextMenuCanFork ? (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() => forkThreadFromContextMenu(
-                            contextMenu.thread,
-                            contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
-                          )}
-                        >
-                          {contextMenuHasWorktreeWorkspace
-                            ? "Fork into Same Worktree"
-                            : "Fork in This Directory"}
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          disabled={checkingWorktreeAvailability}
-                          onClick={() => forkThreadFromContextMenu(
-                            contextMenu.thread,
-                            canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
-                          )}
-                        >
-                          {canCreateContextMenuWorktree
-                            ? "Fork into New Worktree"
-                            : "Fork in New Workspace"}
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-                {contextMenuHasCreationActions && contextMenuHasManagementActions ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                {contextMenuHasManagementActions ? (
-                  <div className="thread-context-menu__section">
-                    {contextMenuCanUnlinkSubthread ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          unlinkSubthreadFromContextMenu(contextMenu.thread)
-                        }
-                      >
-                        Unlink from Parent
-                      </button>
-                    ) : null}
-                    {contextMenuShowMoveItems ? (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
-                          disabled={!contextMenuCanMoveUp}
-                          onClick={() =>
-                            moveThreadFromContextMenu(contextMenu.thread, "up")
-                          }
-                        >
-                          <span>Move Up</span>
-                          {menuShortcut("threads.move_up")}
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
-                          disabled={!contextMenuCanMoveDown}
-                          onClick={() =>
-                            moveThreadFromContextMenu(contextMenu.thread, "down")
-                          }
-                        >
-                          <span>Move Down</span>
-                          {menuShortcut("threads.move_down")}
-                        </button>
-                      </>
-                    ) : null}
-                    {contextMenuCanRename ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.rename")}
-                        onClick={() =>
-                          requestRenameFromContextMenu(contextMenu.thread)
-                        }
-                      >
-                        <span>Rename Thread</span>
-                        {menuShortcut("threads.rename")}
-                      </button>
-                    ) : null}
-                    {contextMenuCanLock && contextMenu.thread.lock ? (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
-                          onClick={() => unlockFromContextMenu(contextMenu.thread)}
-                        >
-                          <span>Unlock Thread</span>
-                          {menuShortcut("threads.lock")}
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            requestLockFromContextMenu(contextMenu.thread, "edit")
-                          }
-                        >
-                          Edit Lock Note…
-                        </button>
-                      </>
-                    ) : contextMenuCanLock ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
-                        onClick={() =>
-                          requestLockFromContextMenu(contextMenu.thread, "lock")
-                        }
-                      >
-                        <span>Lock Thread…</span>
-                        {menuShortcut("threads.lock")}
-                      </button>
-                    ) : null}
-                    {contextMenuCanContinueAfter ? (
-                      <button
-                        aria-label={contextMenuDependencyCount > 0
-                          ? `Continue After, ${contextMenuDependencyCount} waiting`
-                          : undefined}
-                        role="menuitem"
-                        type="button"
-                        onClick={() => {
-                          const target = contextMenu.thread;
-                          setContextMenu(undefined);
-                          props.onContinueAfter!(target, contextMenuOpenerRef);
-                        }}
-                      >
-                        <span>Continue After…</span>
-                        {contextMenuDependencyCount > 0 ? (
-                          <span className="thread-context-menu__aside">
-                            {contextMenuDependencyCount} waiting
-                          </span>
                         ) : null}
-                      </button>
+                        {bulkUnpinnedThreads.length > 0 ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => pinThreadsFromContextMenu(bulkUnpinnedThreads)}
+                          >
+                            Pin {formatThreadCount(bulkUnpinnedThreads.length)}
+                          </button>
+                        ) : null}
+                      </div>
                     ) : null}
-                    {contextMenuCanMarkUnread ? (
+                    {bulkHasPinActions && bulkHasManagementActions ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    {bulkHasManagementActions ? (
+                      <div className="thread-context-menu__section">
+                        {bulkCanMarkRead ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => markReadFromContextMenu(bulkMarkReadableThreads)}
+                          >
+                            Mark {formatThreadCount(bulkMarkReadableThreads.length)} Read
+                          </button>
+                        ) : null}
+                        {bulkUnlinkableThreads.length > 0
+                          && (props.onUnlinkThreads || props.onSetThreadParent) ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() =>
+                              unlinkThreadsFromContextMenu(bulkUnlinkableThreads)
+                            }
+                          >
+                            Unlink {formatThreadCount(bulkUnlinkableThreads.length)} from
+                            Parent
+                          </button>
+                        ) : null}
+                        {bulkArchivableThreads.length > 0 ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() =>
+                              archiveThreadsFromContextMenu(bulkArchivableThreads)
+                            }
+                          >
+                            Archive {formatThreadCount(bulkArchivableThreads.length)}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {bulkHasPinActions || bulkHasManagementActions ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    <div className="thread-context-menu__section">
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
-                        onClick={() =>
-                          markUnreadFromContextMenu(contextMenu.thread)
-                        }
+                        onClick={() => copyFromContextMenu(bulkThreadLinks.join("\n"))}
                       >
-                        <span>Mark Unread</span>
-                        {menuShortcut("threads.toggle_unread")}
+                        Copy Thread Links
                       </button>
-                    ) : null}
-                    {contextMenuCanMarkRead ? (
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
-                        onClick={() =>
-                          markReadFromContextMenu([contextMenu.thread])
-                        }
+                        onClick={() => copyFromContextMenu(bulkThreadIds.join("\n"))}
                       >
-                        <span>Mark Read</span>
-                        {menuShortcut("threads.toggle_unread")}
+                        Copy Thread IDs
                       </button>
-                    ) : null}
-                    {contextMenuCanSendToMachine ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() => {
-                          const target = contextMenu.thread;
-                          setContextMenu(undefined);
-                          props.onSendThreadToMachine!(target);
-                        }}
-                      >
-                        Send to Another Machine…
-                      </button>
-                    ) : null}
-                    {contextMenuCanArchive && contextMenuHasChildThreads ? (
-                      <>
-                        <button
-                          aria-label={`Archive Thread Only. ${contextMenuUngroupLabel}`}
-                          className="thread-context-menu__button--stacked"
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            archiveFromContextMenu(contextMenu.thread, {
-                              includeSubthreads: false,
-                            })
-                          }
-                        >
-                          <span>Archive Thread Only</span>
-                          <span className="thread-context-menu__item-detail">
-                            {contextMenuUngroupLabel}
-                          </span>
-                        </button>
-                        <button
-                          aria-label={`Archive Thread and Sub-Threads. ${contextMenuArchiveGroupLabel}`}
-                          className="thread-context-menu__button--stacked"
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            archiveFromContextMenu(contextMenu.thread, {
-                              includeSubthreads: true,
-                            })
-                          }
-                        >
-                          <span>Archive Thread + Sub-Threads</span>
-                          <span className="thread-context-menu__item-detail">
-                            {contextMenuArchiveGroupLabel}
-                          </span>
-                        </button>
-                      </>
-                    ) : contextMenuCanArchive ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
-                        onClick={() => archiveFromContextMenu(contextMenu.thread)}
-                      >
-                        <span>Archive Thread</span>
-                        {menuShortcut("threads.archive")}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {contextMenuHasTopActions && contextMenuHasBindings ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                {contextMenuHasBindings ? (
-                  <div className="thread-context-menu__section">
-                    {(contextMenu.thread.messagingBindings ?? []).map((binding) => {
-                      const action = `Unbind from ${formatPlatformLabel(binding.platform)}`;
-                      const name = binding.conversationTitle
-                        ? `(${binding.conversationTitle})`
-                        : undefined;
-                      return (
-                        <button
-                          key={binding.bindingId}
-                          role="menuitem"
-                          type="button"
-                          className={name ? "tooltip-target" : undefined}
-                          data-tooltip={name ? `${action} ${name}` : undefined}
-                          onClick={() => {
-                            const target = contextMenu.thread;
-                            setContextMenu(undefined);
-                            void props.onUnbindMessagingBinding!(target, binding);
-                          }}
-                        >
-                          <span className="thread-context-menu__binding-platform">
-                            {action}
-                          </span>
-                          {name ? (
-                            <>
-                              {" "}
-                              <span className="thread-context-menu__binding-name">
-                                {name}
-                              </span>
-                            </>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {contextMenuHasTopActions || contextMenuHasBindings ? (
-                  <div className="thread-context-menu__separator" role="separator" />
-                ) : null}
-                <div className="thread-context-menu__section">
-                  {contextMenuPullRequest ? (
-                    <>
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
-                      >
-                        Copy Pull Request URL
-                      </button>
-                      <PullRequestWatchMenuItems
-                        thread={contextMenu.thread}
-                        pr={contextMenuPullRequest}
-                        onClose={() => setContextMenu(undefined)}
-                      />
-                      {props.onDetachPullRequest ? (
+                      {bulkThreadPaths.length > 0 ? (
                         <button
                           role="menuitem"
                           type="button"
-                          onClick={() =>
-                            detachPullRequests(contextMenu.thread, [contextMenuPullRequest])
-                          }
+                          onClick={() => copyFromContextMenu(bulkThreadPaths.join("\n"))}
                         >
-                          Detach Pull Request
+                          Copy Thread Paths
                         </button>
                       ) : null}
-                    </>
-                  ) : null}
-                  {contextMenuRowPullRequests.length > 0 ? (
-                    <PullRequestCopyMenuItems
-                      thread={contextMenu.thread}
-                      prs={contextMenuRowPullRequests}
-                      onCopy={copyFromContextMenu}
-                    />
-                  ) : null}
-                  {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() =>
-                        detachPullRequests(contextMenu.thread, contextMenuRowPullRequests)
-                      }
-                    >
-                      {contextMenuRowPullRequests.length === 1
-                        ? `Detach Pull Request #${contextMenuRowPullRequests[0]!.number}`
-                        : "Detach All Pull Requests"}
-                    </button>
-                  ) : null}
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() =>
-                      copyFromContextMenu(
-                        buildThreadUrl({
-                          backend: contextMenu.thread.source,
-                          threadId: contextMenu.thread.id,
-                        }),
-                      )
-                    }
-                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
-                  >
-                    <span>Copy Thread Link</span>
-                    {menuShortcut("threads.copy_link")}
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(contextMenu.thread.id)}
-                  >
-                    Copy Thread ID
-                  </button>
-                  {contextMenuWorktreeCopyPath ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => copyFromContextMenu(contextMenuWorktreeCopyPath)}
-                    >
-                      Copy Worktree Path
-                    </button>
-                  ) : null}
-                  {contextMenuLocalPath ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => copyFromContextMenu(contextMenuLocalPath)}
-                    >
-                      Copy Local Path
-                    </button>
-                  ) : null}
-                  {contextMenuBranchName ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => copyFromContextMenu(contextMenuBranchName)}
-                    >
-                      Copy Branch Name
-                    </button>
-                  ) : null}
-                  {props.onCopyThreadDiagnostics ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        const thread = contextMenu.thread;
-                        setContextMenu(undefined);
-                        props.onCopyThreadDiagnostics?.(thread);
-                      }}
-                    >
-                      Copy Diagnostics Info
-                    </button>
-                  ) : null}
-                </div>
-              </>
-            )}
-          </div>
-        ) : null}
+                      {bulkBranchNames.length > 0 ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => copyFromContextMenu(bulkBranchNames.join("\n"))}
+                        >
+                          Copy Branch Names
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {contextMenuCanRemoveRemotePin ? (
+                      <div className="thread-context-menu__section">
+                        <button
+                          aria-label="Remove from My List. The thread on the owning instance is untouched."
+                          className="thread-context-menu__button--stacked"
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            removeRemotePinsFromContextMenu([contextMenu.thread])
+                          }
+                        >
+                          <span>Remove from My List</span>
+                          <span className="thread-context-menu__item-detail">
+                            Keeps the thread on{" "}
+                            {contextMenu.thread.federation?.instanceLabel ??
+                              "its instance"}
+                          </span>
+                        </button>
+                      </div>
+                    ) : null}
+                    {contextMenuCanRemoveRemotePin && contextMenuHasCheckSection ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    {contextMenuHasCheckSection ? (
+                      <div className="thread-context-menu__section">
+                        {contextMenuHasPinAction ? (
+                        <button
+                          role="menuitemcheckbox"
+                          aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
+                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_pin")}
+                          type="button"
+                          onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
+                          onKeyDown={closeContextMenuOnEnter}
+                        >
+                          <span className="thread-context-menu__check" aria-hidden="true">
+                            <CheckIcon size={12} strokeWidth={3} />
+                          </span>
+                          <span>Pinned</span>
+                          {menuShortcut("threads.toggle_pin")}
+                        </button>
+                        ) : null}
+                        {contextMenuCanKeepAtTop ? (
+                          <button
+                            role="menuitemcheckbox"
+                            aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
+                            aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_keep_at_top")}
+                            type="button"
+                            onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
+                            onKeyDown={closeContextMenuOnEnter}
+                          >
+                            <span className="thread-context-menu__check" aria-hidden="true">
+                              <CheckIcon size={12} strokeWidth={3} />
+                            </span>
+                            <span>Keep at Top</span>
+                            {menuShortcut("threads.toggle_keep_at_top")}
+                          </button>
+                        ) : null}
+                        {contextMenuCanKeepAwake ? (
+                          <button
+                            role="menuitemcheckbox"
+                            aria-checked={Boolean(contextMenuPinThread!.keepCheckoutAwake)}
+                            type="button"
+                            onClick={() => toggleKeepCheckoutAwakeFromContextMenu(contextMenuPinThread!)}
+                            onKeyDown={closeContextMenuOnEnter}
+                          >
+                            <span className="thread-context-menu__check" aria-hidden="true">
+                              <CheckIcon size={12} strokeWidth={3} />
+                            </span>
+                            <span>Keep Checkout Awake</span>
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {contextMenuHasCheckSection &&
+                    (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    {contextMenuHasCreationActions ? (
+                      <div className="thread-context-menu__section">
+                        {contextMenuCanCreateSubthread ? (
+                          <>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onClick={() => createSubthreadFromContextMenu(
+                                contextMenu.thread,
+                                contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
+                              )}
+                            >
+                              {contextMenuHasWorktreeWorkspace
+                                ? "Sub-thread in Same Worktree"
+                                : "Sub-thread in This Directory"}
+                            </button>
+                            {subthreadMachines ? (
+                              <SubthreadMachineCascade
+                                label={canCreateContextMenuWorktree
+                                  ? "Sub-thread in New Worktree"
+                                  : "Sub-thread in New Workspace"}
+                                groupLabel={subthreadWorktreeFlyout
+                                  ? "New worktree on"
+                                  : "New workspace on"}
+                                rowDisabled={checkingWorktreeAvailability}
+                                machines={subthreadMachines}
+                                onSelect={() => createSubthreadFromContextMenu(
+                                  contextMenu.thread,
+                                  canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                                )}
+                                onSelectMachine={(machine) => createSubthreadFromContextMenu(
+                                  contextMenu.thread,
+                                  subthreadWorktreeFlyout ? "new-worktree" : "new-workspace",
+                                  {
+                                    ...(machine.instanceId ? { instanceId: machine.instanceId } : {}),
+                                    ...(subthreadWorktreeFlyout && machine.baseBranch
+                                      ? { baseBranch: machine.baseBranch }
+                                      : {}),
+                                  },
+                                )}
+                                onOpenChange={onSubthreadFlyoutOpenChange}
+                              />
+                            ) : (
+                              <button
+                                role="menuitem"
+                                type="button"
+                                disabled={checkingWorktreeAvailability}
+                                onClick={() => createSubthreadFromContextMenu(
+                                  contextMenu.thread,
+                                  canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                                )}
+                              >
+                                {canCreateContextMenuWorktree
+                                  ? "Sub-thread in New Worktree"
+                                  : "Sub-thread in New Workspace"}
+                              </button>
+                            )}
+                          </>
+                        ) : null}
+                        {contextMenuCanFork ? (
+                          <>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onClick={() => forkThreadFromContextMenu(
+                                contextMenu.thread,
+                                contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
+                              )}
+                            >
+                              {contextMenuHasWorktreeWorkspace
+                                ? "Fork into Same Worktree"
+                                : "Fork in This Directory"}
+                            </button>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              disabled={checkingWorktreeAvailability}
+                              onClick={() => forkThreadFromContextMenu(
+                                contextMenu.thread,
+                                canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                              )}
+                            >
+                              {canCreateContextMenuWorktree
+                                ? "Fork into New Worktree"
+                                : "Fork in New Workspace"}
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {contextMenuHasCreationActions && contextMenuHasManagementActions ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    {contextMenuHasManagementActions ? (
+                      <div className="thread-context-menu__section">
+                        {contextMenuCanUnlinkSubthread ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() =>
+                              unlinkSubthreadFromContextMenu(contextMenu.thread)
+                            }
+                          >
+                            Unlink from Parent
+                          </button>
+                        ) : null}
+                        {contextMenuShowMoveItems ? (
+                          <>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
+                              disabled={!contextMenuCanMoveUp}
+                              onClick={() =>
+                                moveThreadFromContextMenu(contextMenu.thread, "up")
+                              }
+                            >
+                              <span>Move Up</span>
+                              {menuShortcut("threads.move_up")}
+                            </button>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
+                              disabled={!contextMenuCanMoveDown}
+                              onClick={() =>
+                                moveThreadFromContextMenu(contextMenu.thread, "down")
+                              }
+                            >
+                              <span>Move Down</span>
+                              {menuShortcut("threads.move_down")}
+                            </button>
+                          </>
+                        ) : null}
+                        {contextMenuCanRename ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.rename")}
+                            onClick={() =>
+                              requestRenameFromContextMenu(contextMenu.thread)
+                            }
+                          >
+                            <span>Rename Thread</span>
+                            {menuShortcut("threads.rename")}
+                          </button>
+                        ) : null}
+                        {contextMenuCanLock && contextMenu.thread.lock ? (
+                          <>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
+                              onClick={() => unlockFromContextMenu(contextMenu.thread)}
+                            >
+                              <span>Unlock Thread</span>
+                              {menuShortcut("threads.lock")}
+                            </button>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onClick={() =>
+                                requestLockFromContextMenu(contextMenu.thread, "edit")
+                              }
+                            >
+                              Edit Lock Note…
+                            </button>
+                          </>
+                        ) : contextMenuCanLock ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
+                            onClick={() =>
+                              requestLockFromContextMenu(contextMenu.thread, "lock")
+                            }
+                          >
+                            <span>Lock Thread…</span>
+                            {menuShortcut("threads.lock")}
+                          </button>
+                        ) : null}
+                        {contextMenuCanContinueAfter ? (
+                          <button
+                            aria-label={contextMenuDependencyCount > 0
+                              ? `Continue After, ${contextMenuDependencyCount} waiting`
+                              : undefined}
+                            role="menuitem"
+                            type="button"
+                            onClick={() => {
+                              const target = contextMenu.thread;
+                              setContextMenu(undefined);
+                              props.onContinueAfter!(target, contextMenuOpenerRef);
+                            }}
+                          >
+                            <span>Continue After…</span>
+                            {contextMenuDependencyCount > 0 ? (
+                              <span className="thread-context-menu__aside">
+                                {contextMenuDependencyCount} waiting
+                              </span>
+                            ) : null}
+                          </button>
+                        ) : null}
+                        {contextMenuCanMarkUnread ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
+                            onClick={() =>
+                              markUnreadFromContextMenu(contextMenu.thread)
+                            }
+                          >
+                            <span>Mark Unread</span>
+                            {menuShortcut("threads.toggle_unread")}
+                          </button>
+                        ) : null}
+                        {contextMenuCanMarkRead ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
+                            onClick={() =>
+                              markReadFromContextMenu([contextMenu.thread])
+                            }
+                          >
+                            <span>Mark Read</span>
+                            {menuShortcut("threads.toggle_unread")}
+                          </button>
+                        ) : null}
+                        {contextMenuCanSendToMachine ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => {
+                              const target = contextMenu.thread;
+                              setContextMenu(undefined);
+                              props.onSendThreadToMachine!(target);
+                            }}
+                          >
+                            Send to Another Machine…
+                          </button>
+                        ) : null}
+                        {contextMenuCanArchive && contextMenuHasChildThreads ? (
+                          <>
+                            <button
+                              aria-label={`Archive Thread Only. ${contextMenuUngroupLabel}`}
+                              className="thread-context-menu__button--stacked"
+                              role="menuitem"
+                              type="button"
+                              onClick={() =>
+                                archiveFromContextMenu(contextMenu.thread, {
+                                  includeSubthreads: false,
+                                })
+                              }
+                            >
+                              <span>Archive Thread Only</span>
+                              <span className="thread-context-menu__item-detail">
+                                {contextMenuUngroupLabel}
+                              </span>
+                            </button>
+                            <button
+                              aria-label={`Archive Thread and Sub-Threads. ${contextMenuArchiveGroupLabel}`}
+                              className="thread-context-menu__button--stacked"
+                              role="menuitem"
+                              type="button"
+                              onClick={() =>
+                                archiveFromContextMenu(contextMenu.thread, {
+                                  includeSubthreads: true,
+                                })
+                              }
+                            >
+                              <span>Archive Thread + Sub-Threads</span>
+                              <span className="thread-context-menu__item-detail">
+                                {contextMenuArchiveGroupLabel}
+                              </span>
+                            </button>
+                          </>
+                        ) : contextMenuCanArchive ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
+                            onClick={() => archiveFromContextMenu(contextMenu.thread)}
+                          >
+                            <span>Archive Thread</span>
+                            {menuShortcut("threads.archive")}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {contextMenuHasTopActions && contextMenuHasBindings ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    {contextMenuHasBindings ? (
+                      <div className="thread-context-menu__section">
+                        {(contextMenu.thread.messagingBindings ?? []).map((binding) => {
+                          const action = `Unbind from ${formatPlatformLabel(binding.platform)}`;
+                          const name = binding.conversationTitle
+                            ? `(${binding.conversationTitle})`
+                            : undefined;
+                          return (
+                            <button
+                              key={binding.bindingId}
+                              role="menuitem"
+                              type="button"
+                              className={name ? "tooltip-target" : undefined}
+                              data-tooltip={name ? `${action} ${name}` : undefined}
+                              onClick={() => {
+                                const target = contextMenu.thread;
+                                setContextMenu(undefined);
+                                void props.onUnbindMessagingBinding!(target, binding);
+                              }}
+                            >
+                              <span className="thread-context-menu__binding-platform">
+                                {action}
+                              </span>
+                              {name ? (
+                                <>
+                                  {" "}
+                                  <span className="thread-context-menu__binding-name">
+                                    {name}
+                                  </span>
+                                </>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    {contextMenuHasTopActions || contextMenuHasBindings ? (
+                      <div className="thread-context-menu__separator" role="separator" />
+                    ) : null}
+                    <div className="thread-context-menu__section">
+                      {contextMenuPullRequest ? (
+                        <>
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
+                          >
+                            Copy Pull Request URL
+                          </button>
+                          <PullRequestWatchMenuItems
+                            thread={contextMenu.thread}
+                            pr={contextMenuPullRequest}
+                            onClose={() => setContextMenu(undefined)}
+                          />
+                          {props.onDetachPullRequest ? (
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onClick={() =>
+                                detachPullRequests(contextMenu.thread, [contextMenuPullRequest])
+                              }
+                            >
+                              Detach Pull Request
+                            </button>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {contextMenuRowPullRequests.length > 0 ? (
+                        <PullRequestCopyMenuItems
+                          thread={contextMenu.thread}
+                          prs={contextMenuRowPullRequests}
+                          onCopy={copyFromContextMenu}
+                        />
+                      ) : null}
+                      {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            detachPullRequests(contextMenu.thread, contextMenuRowPullRequests)
+                          }
+                        >
+                          {contextMenuRowPullRequests.length === 1
+                            ? `Detach Pull Request #${contextMenuRowPullRequests[0]!.number}`
+                            : "Detach All Pull Requests"}
+                        </button>
+                      ) : null}
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          copyFromContextMenu(
+                            buildThreadUrl({
+                              backend: contextMenu.thread.source,
+                              threadId: contextMenu.thread.id,
+                            }),
+                          )
+                        }
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
+                      >
+                        <span>Copy Thread Link</span>
+                        {menuShortcut("threads.copy_link")}
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => copyFromContextMenu(contextMenu.thread.id)}
+                      >
+                        Copy Thread ID
+                      </button>
+                      {contextMenuWorktreeCopyPath ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => copyFromContextMenu(contextMenuWorktreeCopyPath)}
+                        >
+                          Copy Worktree Path
+                        </button>
+                      ) : null}
+                      {contextMenuLocalPath ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => copyFromContextMenu(contextMenuLocalPath)}
+                        >
+                          Copy Local Path
+                        </button>
+                      ) : null}
+                      {contextMenuBranchName ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => copyFromContextMenu(contextMenuBranchName)}
+                        >
+                          Copy Branch Name
+                        </button>
+                      ) : null}
+                      {props.onCopyThreadDiagnostics ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => {
+                            const thread = contextMenu.thread;
+                            setContextMenu(undefined);
+                            props.onCopyThreadDiagnostics?.(thread);
+                          }}
+                        >
+                          Copy Diagnostics Info
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null
+          );
+        })()}
 
         {pendingDetachPullRequest ? (
           <DetachPullRequestWarning
