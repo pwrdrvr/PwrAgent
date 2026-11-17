@@ -403,7 +403,10 @@ describe("owner index source event admission", () => {
         prKey: "github.com/a/b#1", watchId: "ci", notifyOn: ["success", "failure"], createdAt: 1, runAttempt: 2,
       }]);
       expect(local.find((thread) => thread.id === "merge-only")?.prCiWatches).toBeUndefined();
-      expect(index.threads.find((thread) => thread.federation)?.prCiWatches).toBe(ownerMarks);
+      // Pool snapshots detach even peer-owned metadata before certification.
+      const peerMarks = index.threads.find((thread) => thread.federation)?.prCiWatches;
+      expect(peerMarks).toEqual(ownerMarks);
+      expect(peerMarks).not.toBe(ownerMarks);
       expect(mocks.store.listAllActivePrStatusWatches).toHaveBeenCalledTimes(1);
 
       // A failed read serves the rows without marks.

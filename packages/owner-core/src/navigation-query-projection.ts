@@ -64,6 +64,99 @@ export type NavigationQueryIndex = {
   observedAt?: number;
 };
 
+type ProjectionIndex = {
+  threadsByIdentity: Map<string, NavigationThreadSummary>;
+  threadsByLegacyKey: Map<string, NavigationThreadSummary>;
+  parentCandidates: Map<string, NavigationThreadSummary[]>;
+  repositories: ReturnType<typeof repositoryIdentitiesByPath>;
+  childCountByParent: Map<string, number>;
+  viewerChildCountByParent: Map<string, number>;
+};
+
+export type NavigationProjectionWork = (stage: "index" | "children", threads: number) => void;
+
+// Only detached, deeply frozen snapshots enter this table. A mutable provider
+// array (or a caller reusing its index object after a mutation) never does.
+// The existing index pool owns their lifetime; this is not another index pool.
+const snapshots = new WeakMap<NavigationQueryIndex, { token: symbol; projection?: ProjectionIndex; bytes: number; onWork?: NavigationProjectionWork }>();
+const SNAPSHOT_SET_READ_METHODS = new Set([
+  "has", "keys", "values", "entries", "union", "intersection",
+  "difference", "symmetricDifference", "isSubsetOf", "isSupersetOf", "isDisjointFrom",
+]);
+
+function freezeSnapshot(value: unknown): boolean {
+  if (value && typeof value === "object") {
+    const prototype: unknown = Object.getPrototypeOf(value);
+    // Freezing a Date, Map or typed array does not freeze its backing data.
+    // Compact inventories are JSON records; unfamiliar backing uses the
+    // ordinary uncached projection rather than receiving certification.
+    if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return false;
+    for (const child of Object.values(value)) if (!freezeSnapshot(child)) return false;
+    Object.freeze(value);
+  }
+  return true;
+}
+
+/** A detached immutable inventory, admitted under the index pool's byte budget. */
+export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWork?: NavigationProjectionWork): NavigationQueryIndex {
+  const { inputRequestThreadKeys, ...json } = index;
+  const copy: NavigationQueryIndex = structuredClone(json);
+  for (const child of Object.values(copy)) if (!freezeSnapshot(child)) return index;
+  if (inputRequestThreadKeys) {
+    // Object.freeze(Set) still permits add/delete. Expose only read operations
+    // on a private copy so the certification also covers approval membership.
+    const keys = new Set(inputRequestThreadKeys);
+    const readers = new Map<PropertyKey, unknown>();
+    copy.inputRequestThreadKeys = Object.freeze(new Proxy(keys, {
+      get(target, property, receiver) {
+        if (property === "size") return target.size;
+        if (property === "add" || property === "delete" || property === "clear") {
+          return () => { throw new TypeError("Navigation snapshot membership is immutable."); };
+        }
+        if (property === "forEach") return (callback: (value: string, key: string, set: ReadonlySet<string>) => void, thisArg?: unknown) => {
+          target.forEach((key) => callback.call(thisArg, key, key, copy.inputRequestThreadKeys!));
+        };
+        // Bind only Set's read methods, never Object.valueOf (which would
+        // expose the backing Set) or the constructor. This also supports the
+        // newer non-mutating Set operations when provided by the runtime.
+        if (property === Symbol.iterator || SNAPSHOT_SET_READ_METHODS.has(String(property))) {
+          if (readers.has(property)) return readers.get(property);
+          const method = Reflect.get(target, property, target) as unknown;
+          const reader: unknown = typeof method === "function" ? method.bind(target) : method;
+          readers.set(property, reader);
+          return reader;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    }));
+  }
+  Object.freeze(copy);
+  // JSON size is the pool's existing inventory charge. Charge auxiliary maps
+  // conservatively as well: references/buckets plus UTF-16 identity/path keys.
+  const projection = buildProjectionIndex(copy, onWork);
+  let bytes = 1_024 + 512 * copy.threads.length + 256 * copy.directories.length;
+  for (const map of Object.values(projection)) for (const key of map.keys()) bytes += 2 * key.length;
+  snapshots.set(copy, { token: Symbol("navigation-index"), projection, bytes, onWork });
+  return copy;
+}
+
+/** Identity only: Attention views must not extend an inventory's retention. */
+export function navigationQuerySnapshotToken(index: NavigationQueryIndex): symbol | undefined {
+  return snapshots.get(index)?.token;
+}
+
+export function navigationQuerySnapshotAuxiliaryBytes(index: NavigationQueryIndex): number {
+  return snapshots.get(index)?.bytes ?? 0;
+}
+
+/** The pool may keep a large inventory without its optional acceleration. */
+export function releaseNavigationQuerySnapshotProjection(index: NavigationQueryIndex): void {
+  const snapshot = snapshots.get(index);
+  if (!snapshot) return;
+  snapshot.projection = undefined;
+  snapshot.bytes = 0;
+}
+
 function hashValue(value: unknown): string {
   return createHash("sha256")
     .update(JSON.stringify(value))
@@ -977,6 +1070,43 @@ function buildParentCandidates(index: NavigationQueryIndex): Map<string, Navigat
   return parentCandidates;
 }
 
+function buildChildCounts(
+  threads: readonly NavigationThreadSummary[] | ReadonlySet<NavigationThreadSummary>,
+  prepared: Pick<ProjectionIndex, "threadsByIdentity" | "parentCandidates">,
+  onWork?: NavigationProjectionWork,
+): Pick<ProjectionIndex, "childCountByParent" | "viewerChildCountByParent"> {
+  const childCountByParent = new Map<string, number>();
+  const viewerChildCountByParent = new Map<string, number>();
+  const scoped = threads instanceof Set ? threads : undefined;
+  onWork?.("children", scoped ? scoped.size : (threads as readonly NavigationThreadSummary[]).length);
+  for (const thread of threads) {
+    const parent = parentIdentity(thread, prepared.parentCandidates);
+    if (!parent || !isOrdinaryThread(thread)) continue;
+    if (scoped) {
+      const parentThread = prepared.threadsByIdentity.get(identityKey(parent));
+      if (!parentThread || !scoped.has(parentThread)) continue;
+    }
+    const key = identityKey(parent);
+    childCountByParent.set(key, (childCountByParent.get(key) ?? 0) + 1);
+    if (parent.ownerInstanceId && navigationIdentity(thread).ownerInstanceId !== parent.ownerInstanceId) {
+      viewerChildCountByParent.set(key, (viewerChildCountByParent.get(key) ?? 0) + 1);
+    }
+  }
+  return { childCountByParent, viewerChildCountByParent };
+}
+
+function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationProjectionWork, includeChildCounts = true): ProjectionIndex {
+  onWork?.("index", index.threads.length);
+  const maps = {
+    threadsByIdentity: new Map(index.threads.map((thread) => [threadKey(thread), thread])),
+    threadsByLegacyKey: buildThreadsByLegacyKey(index),
+    parentCandidates: buildParentCandidates(index),
+    repositories: repositoryIdentitiesByPath(index),
+  };
+  return { ...maps, ...(includeChildCounts ? buildChildCounts(index.threads, maps, onWork)
+    : { childCountByParent: new Map<string, number>(), viewerChildCountByParent: new Map<string, number>() }) };
+}
+
 /** Code vocabulary only: a reason never carries a thread ID, title or path. */
 export type NavigationAnchorMissingReason =
   | "not-indexed"
@@ -1034,6 +1164,7 @@ export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
   attentionOrder?: NavigationAttentionOrder;
+  onIndexWork?: NavigationProjectionWork;
 }): NavigationQueryMaterialization {
   const query = params.request.query;
   if (query.kind === "model-inventory") {
@@ -1041,29 +1172,15 @@ export function projectNavigationQuery(params: {
       && (!params.request.backend || params.request.backend === "all" || params.request.backend === thread.source));
     return { coverage: params.index.coverage ?? { state: "complete" }, counts: countsForThreads(owned), directories: [], entries: [], modelGroups: buildModelInventory(owned), queryKey: navigationQueryKey(params.request) };
   }
-  const threadsByIdentity = new Map(
-    params.index.threads.map((thread) => [threadKey(thread), thread]),
-  );
-  const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
-  const parentCandidates = buildParentCandidates(params.index);
-  const repositories = repositoryIdentitiesByPath(params.index);
-  const childCountByParent = new Map<string, number>();
-  const viewerChildCountByParent = new Map<string, number>();
+  const snapshot = snapshots.get(params.index);
+  const onWork = params.onIndexWork ?? snapshot?.onWork;
+  const prepared = snapshot?.projection ?? buildProjectionIndex(params.index, onWork, false);
+  const { threadsByIdentity, threadsByLegacyKey, parentCandidates, repositories } = prepared;
   const scopedDirectory = queryDirectory({ query, index: params.index, threadsByLegacyKey });
   const scopedMembers = scopedDirectory ? new Set(directoryMemberThreads(scopedDirectory, threadsByLegacyKey)) : undefined;
-  for (const thread of params.index.threads) {
-    const parent = parentIdentity(thread, parentCandidates);
-    if (!parent || !isOrdinaryThread(thread)) continue;
-    if (scopedMembers) {
-      const parentThread = threadsByIdentity.get(identityKey(parent));
-      if (!scopedMembers.has(thread) || !parentThread || !scopedMembers.has(parentThread)) continue;
-    }
-    const key = identityKey(parent);
-    childCountByParent.set(key, (childCountByParent.get(key) ?? 0) + 1);
-    if (parent.ownerInstanceId && navigationIdentity(thread).ownerInstanceId !== parent.ownerInstanceId) {
-      viewerChildCountByParent.set(key, (viewerChildCountByParent.get(key) ?? 0) + 1);
-    }
-  }
+  const { childCountByParent, viewerChildCountByParent } = scopedMembers
+    ? buildChildCounts(scopedMembers, prepared, onWork)
+    : snapshot?.projection ?? buildChildCounts(params.index.threads, prepared, onWork);
   const lensRootOf = query.kind === "lens" && query.roots
     ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
   const selectedThreads = selectQueryThreads({
