@@ -217,7 +217,11 @@ carries only the thread.
   `(version, item_id)` in pages of at most 500. Its last page carries, for each
   approach that changed, its contribution count and newest six leaves for the
   Map. A caller ahead of the run is told to start again from nothing.
-- `research:search` pages Findings, newest first, twenty at a time.
+- `research:search` pages the unfiltered Findings list, newest first, twenty
+  at a time. A filter reads nothing: the window's store holds every item, so
+  the view matches the filter against what each finding's card shows (kind,
+  text, approach title, evidence paths and the line for a related finding)
+  and draws the matches twenty at a time.
 - `research:events` pages Activity, at most 200 events, newest first, while
   the Activity view is open. Journal entries never change once appended, so a
   `beforeSeq` page stays valid while the run grows.

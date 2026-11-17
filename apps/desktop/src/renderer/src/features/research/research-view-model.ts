@@ -200,11 +200,53 @@ export function researchItemText(item: ResearchItem): string {
   return item.type === "approach" ? item.record.title : item.record.text;
 }
 
+/** What a finding's own record puts on its card, lower-cased. An item is replaced when it changes, so this is built once per version. */
+const findingCardText = new WeakMap<ResearchItem, string>();
+
+/** The line a finding's card shows for the finding it relates to. */
+export function researchFindingRelation(run: Pick<ResearchRunView, "items">, finding: ResearchFinding): string | undefined {
+  if (!finding.relatesTo) return undefined;
+  const related = run.items.get(finding.relatesTo);
+  return `${researchLabel(finding.relation ?? "related")}: ${related?.type === "finding" ? excerpt(related.record.text, 80) : "an earlier finding"}`;
+}
+
 /**
- * The loaded part of the findings list: one contiguous stretch, newest first,
- * from the newest finding that matches `key`'s filter. `next` continues it
- * while older findings remain. `revision` is the board revision of the last
- * page merged, which a continuing search must name.
+ * The findings whose card shows `query`, newest first. A card shows the
+ * finding's kind, its text, its evidence paths, the title of its approach and
+ * a line for the finding it relates to, so each of those matches. The
+ * window's store holds every item, so this reads no page from the owner; the
+ * caller draws as many as it shows.
+ */
+export function researchFindingMatches(run: Pick<ResearchRunView, "items">, query: string): ResearchFinding[] {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return [];
+  const titled = new Map<string, boolean>();
+  const titleMatches = (approachId: string) => {
+    let matches = titled.get(approachId);
+    if (matches === undefined) {
+      matches = approachTitle(run, approachId).toLowerCase().includes(wanted);
+      titled.set(approachId, matches);
+    }
+    return matches;
+  };
+  const found: Array<{ id: string; createdSeq: number; record: ResearchFinding }> = [];
+  for (const item of run.items.values()) {
+    if (item.type !== "finding") continue;
+    let text = findingCardText.get(item);
+    if (text === undefined) {
+      text = [item.record.kind, researchLabel(item.record.kind), item.record.text, ...item.record.paths].join("\n").toLowerCase();
+      findingCardText.set(item, text);
+    }
+    if (text.includes(wanted) || titleMatches(item.record.approachId) || researchFindingRelation(run, item.record)?.toLowerCase().includes(wanted)) found.push({ id: item.id, createdSeq: item.createdSeq, record: item.record });
+  }
+  return found.sort((a, b) => b.createdSeq - a.createdSeq || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map((entry) => entry.record);
+}
+
+/**
+ * The loaded part of the unfiltered findings list: one contiguous stretch,
+ * newest first, from the newest finding. `next` continues it while older
+ * findings remain. `revision` is the board revision of the last page merged,
+ * which a continuing search must name.
  */
 export type ResearchFindingsWindow = { key: string; hits: ResearchSearchHit[]; total: number; revision: number; loaded: boolean; next?: NonNullable<ResearchSearchQuery["cursor"]> };
 
@@ -220,9 +262,7 @@ export function emptyResearchFindings(key: string): ResearchFindingsWindow {
  * from the page, and Show more reaches the rest.
  *
  * Below the first page the window is as it was read. Findings are only ever
- * added and keep their order, so that is exact for the unfiltered list. Under
- * a text filter, a finding below the first page whose progress note starts or
- * stops matching is picked up when the filter next changes.
+ * added and keep their order, so that is exact.
  */
 export function mergeResearchFindingsHead(window: ResearchFindingsWindow, page: ResearchSearchPage): ResearchFindingsWindow {
   const fromPage = (): ResearchFindingsWindow => ({ key: window.key, hits: page.items, total: page.total, revision: page.revision, loaded: true, ...(page.nextCursor ? { next: page.nextCursor } : {}) });

@@ -148,7 +148,7 @@ test("a long run's Map, Findings and Activity show its newest work first and pag
     await expect(map.locator(".research-node")).toHaveCount(6);
     await expect(map.locator(".research-node").first()).toContainText(`Delivery attempt ${findings} completed`);
     await expect(panel.getByRole("button", { name: `${findings - 6} more from Retry timing`, exact: true })).toBeVisible();
-    // Findings are read a page at a time, and the filter searches all of them.
+    // Findings are read a page at a time, and the filter matches what every finding's card shows.
     await panel.getByRole("tab", { name: "Findings", exact: true }).click();
     const list = panel.getByLabel("Shared findings");
     await expect(panel.getByText(`Showing the latest 20 of ${findings} findings.`, { exact: true })).toBeVisible();
@@ -159,6 +159,11 @@ test("a long run's Map, Findings and Activity show its newest work first and pag
     await panel.getByLabel("Filter this view").fill("Delivery attempt 5 completed");
     await expect(panel.getByText("All 1 matching finding.", { exact: true })).toBeVisible();
     await expect(list.getByRole("article")).toHaveCount(1);
+    // Every card names its approach, so the approach's title finds them all.
+    await panel.getByLabel("Filter this view").fill("retry timing");
+    await expect(panel.getByText(`Showing the latest 20 of ${findings} matching findings.`, { exact: true })).toBeVisible();
+    await expect(list.getByRole("article").first()).toContainText(`Delivery attempt ${findings} completed`);
+    await panel.getByLabel("Filter this view").fill("");
     await panel.getByRole("tab", { name: "Activity", exact: true }).click();
     const activity = panel.getByLabel("Research activity");
     await expect(activity.getByRole("listitem")).toHaveCount(100);

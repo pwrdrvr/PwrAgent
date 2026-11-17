@@ -6,37 +6,26 @@ import {
 } from "./research-view-model";
 
 export const RESEARCH_FINDINGS_PAGE = 20;
-const FILTER_DELAY_MS = 150;
-/** The owner's search refuses a longer query, so the filter matches on its first 300 characters. */
-const FILTER_MAX = 300;
-const filterText = (filter: string) => filter.trim().slice(0, FILTER_MAX);
 
 /**
- * Findings are read in pages through the indexed item search while they are
- * on screen, newest first. A new finding reads only the first page and goes
- * on top of the loaded window; Show more reads the page below it. The filter
- * is the search's own text match, so it covers every finding, loaded or not.
- * Reads run one at a time, so each merge sees the window the previous one left.
+ * The unfiltered findings list, read in pages through the indexed item
+ * search while it is on screen, newest first. A new finding reads only the
+ * first page and goes on top of the loaded window; Show more reads the page
+ * below it. Reads run one at a time, so each merge sees the window the
+ * previous one left. A filter is matched in the window by the view and reads
+ * nothing here.
  */
-export function useResearchFindings(api: DesktopApi | undefined, thread: ResearchThread, runId: string, findings: number, filter: string) {
+export function useResearchFindings(api: DesktopApi | undefined, thread: ResearchThread, runId: string, findings: number) {
   const search = api?.searchResearch;
   const { backend, threadId } = thread;
-  const [text, setText] = useState(() => filterText(filter));
-  useEffect(() => {
-    const next = filterText(filter);
-    if (next === text) return;
-    const timer = window.setTimeout(() => setText(next), FILTER_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [filter, text]);
-  const key = JSON.stringify([runId, text]);
+  const key = runId;
   const [loaded, setLoaded] = useState<ResearchFindingsWindow>(() => emptyResearchFindings(key));
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState("");
   const current = useRef(loaded);
-  const latest = useRef({ key, text });
-  latest.current = { key, text };
+  const latest = useRef(key);
+  latest.current = key;
   const queue = useRef<Promise<void>>(Promise.resolve());
-  // A head read waiting in the queue reads whatever the filter is when it runs.
   const headQueued = useRef(false);
   const live = useRef(true);
   useEffect(() => {
@@ -53,9 +42,9 @@ export function useResearchFindings(api: DesktopApi | undefined, thread: Researc
     current.current = next;
     if (live.current) setLoaded(next);
   }, []);
-  const read = useCallback(async (query: string, cursor?: ResearchSearchQuery["cursor"]) => {
+  const read = useCallback(async (cursor?: ResearchSearchQuery["cursor"]) => {
     if (!search) throw new Error("Findings are unavailable in this window");
-    return await search({ backend, threadId, runId, query: { type: "finding", query: query || undefined, limit: RESEARCH_FINDINGS_PAGE, ...(cursor ? { cursor } : {}) } });
+    return await search({ backend, threadId, runId, query: { type: "finding", limit: RESEARCH_FINDINGS_PAGE, ...(cursor ? { cursor } : {}) } });
   }, [search, backend, threadId, runId]);
 
   useEffect(() => {
@@ -67,13 +56,13 @@ export function useResearchFindings(api: DesktopApi | undefined, thread: Researc
       const wanted = latest.current;
       if (!live.current) return;
       try {
-        const page = await read(wanted.text);
-        // The filter changed while this page was in flight; its own read is queued.
-        if (latest.current.key !== wanted.key || current.current.key !== wanted.key) return;
+        const page = await read();
+        // Another run came on screen while this page was in flight; its own read is queued.
+        if (latest.current !== wanted || current.current.key !== wanted) return;
         commit(mergeResearchFindingsHead(current.current, page));
         if (live.current) setError("");
       } catch (failure) {
-        if (live.current && latest.current.key === wanted.key) setError(failure instanceof Error ? failure.message : "Findings could not be read");
+        if (live.current && latest.current === wanted) setError(failure instanceof Error ? failure.message : "Findings could not be read");
       }
     });
   }, [key, findings, search, read, enqueue, commit]);
@@ -85,19 +74,19 @@ export function useResearchFindings(api: DesktopApi | undefined, thread: Researc
       const wanted = latest.current;
       try {
         let cursor = researchFindingsOlderCursor(current.current);
-        if (current.current.key !== wanted.key || !cursor) return;
+        if (current.current.key !== wanted || !cursor) return;
         let page;
-        try { page = await read(wanted.text, cursor); }
+        try { page = await read(cursor); }
         catch {
           // The board changed since the window's last read. Bring the window up to date, then continue below it.
-          const head = await read(wanted.text);
-          if (latest.current.key !== wanted.key || current.current.key !== wanted.key) return;
+          const head = await read();
+          if (latest.current !== wanted || current.current.key !== wanted) return;
           commit(mergeResearchFindingsHead(current.current, head));
           cursor = researchFindingsOlderCursor(current.current);
           if (!cursor) return;
-          page = await read(wanted.text, cursor);
+          page = await read(cursor);
         }
-        if (latest.current.key !== wanted.key || current.current.key !== wanted.key) return;
+        if (latest.current !== wanted || current.current.key !== wanted) return;
         commit(appendResearchFindingsOlder(current.current, page));
         if (live.current) setError("");
       } catch (failure) {
@@ -108,5 +97,5 @@ export function useResearchFindings(api: DesktopApi | undefined, thread: Researc
     });
   }, [search, read, enqueue, commit]);
 
-  return { loaded: loaded.key === key ? loaded : emptyResearchFindings(key), filtered: Boolean(text), loadingOlder, error, showOlder, available: Boolean(search) };
+  return { loaded: loaded.key === key ? loaded : emptyResearchFindings(key), loadingOlder, error, showOlder, available: Boolean(search) };
 }

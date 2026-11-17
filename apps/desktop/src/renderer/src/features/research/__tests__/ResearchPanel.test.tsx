@@ -354,7 +354,7 @@ describe("Research panel", () => {
     expect(mocks.researchChanges).toHaveBeenLastCalledWith(expect.objectContaining({ sinceRevision: 0, after: expect.objectContaining({ version: expect.any(Number) }) }));
   });
 
-  it("pages the findings newest first through the item search, and filters through it too", async () => {
+  it("pages the findings newest first through the item search, and filters every finding by what its card shows", async () => {
     const { api, mocks } = apiFor(snapshot(1000));
     render(<ResearchPanel desktopApi={api} thread={thread} />);
     await screen.findByLabelText("Research map");
@@ -363,24 +363,39 @@ describe("Research panel", () => {
     expect(await screen.findByText("Showing the latest 20 of 1000 findings.")).toBeInTheDocument();
     expect(list.querySelectorAll("article")).toHaveLength(20);
     expect(within(list).getAllByRole("article")[0]).toHaveTextContent("Counterexample 999");
-    expect(mocks.searchResearch).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "run", query: { type: "finding", query: undefined, limit: 20 } });
+    expect(mocks.searchResearch).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "run", query: { type: "finding", limit: 20 } });
     fireEvent.click(screen.getByRole("button", { name: "Show more" }));
     expect(await screen.findByText("Showing the latest 40 of 1000 findings.")).toBeInTheDocument();
     expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ cursor: expect.objectContaining({ id: "f980" }) }) }));
     expect(within(list).getAllByRole("article")[39]).toHaveTextContent("Counterexample 960");
+    const reads = mocks.searchResearch.mock.calls.length;
     fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "Counterexample 99" } });
     // The filter reaches findings that were never loaded: 99 and 990 to 999.
     expect(await screen.findByText("All 11 matching findings.")).toBeInTheDocument();
-    expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: { type: "finding", query: "Counterexample 99", limit: 20 } }));
     expect(within(list).getAllByRole("article").at(-1)).toHaveTextContent("Counterexample 99");
     expect(screen.queryByText("Counterexample 1", { exact: true })).not.toBeInTheDocument();
+    // Every card shows its approach, its kind and its evidence, so each of those finds the cards that show it.
+    for (const shown of ["events", "Counterexample", "evidence.txt"]) {
+      fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: shown } });
+      expect(await screen.findByText("Showing the latest 20 of 1000 matching findings.")).toBeInTheDocument();
+      expect(within(list).getAllByRole("article")[0]).toHaveTextContent("Counterexample 999");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Showing the latest 40 of 1000 matching findings.")).toBeInTheDocument();
+    expect(within(list).getAllByRole("article")[39]).toHaveTextContent("Counterexample 960");
+    // Another filter starts again from one page.
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "events" } });
+    expect(await screen.findByText("Showing the latest 20 of 1000 matching findings.")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "nothing matches this" } });
     expect(await screen.findByText("No findings match this filter.")).toBeInTheDocument();
-    // The owner's search refuses a query over 300 characters, so a longer filter is cut to that, not answered with an error.
+    // A filter of any length is matched in the window and reads nothing from the owner.
     fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "x".repeat(400) } });
-    await waitFor(() => expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ query: "x".repeat(300) }) })));
     expect(await screen.findByText("No findings match this filter.")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(mocks.searchResearch.mock.calls).toHaveLength(reads);
+    // Without the filter, the pages read earlier are still there.
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "" } });
+    expect(await screen.findByText("Showing the latest 40 of 1000 findings.")).toBeInTheDocument();
   });
 
   it("reads summaries with no items or journal, and the chosen run through its own change stream", async () => {

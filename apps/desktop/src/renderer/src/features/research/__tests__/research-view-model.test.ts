@@ -8,7 +8,7 @@ import {
 import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb } from "../../../../../../../../packages/shared/src/__tests__/research-journal-arbitraries";
 import {
   appendResearchActivityOlder, appendResearchFindingsOlder, emptyResearchActivity, emptyResearchFindings, mergeResearchActivityHead, mergeResearchFindingsHead, researchActivityHeadRange,
-  researchActivityRows, researchFindingsOlderCursor, researchMapBranches, researchRunPhase, researchRunView, researchTimeLeft,
+  researchActivityRows, researchFindingMatches, researchFindingsOlderCursor, researchMapBranches, researchRunPhase, researchRunView, researchTimeLeft,
   type ResearchActivityWindow, type ResearchFindingsWindow, type ResearchMapBranch, type ResearchPhaseInput,
 } from "../research-view-model";
 
@@ -254,6 +254,102 @@ describe("research activity paging", () => {
     const synced = applyResearchChanges(partial, { ...researchChangePage(run, 0, partial.cursor, 5), writable: true });
     expect(researchRunView(summary, synced)?.approaches.map((approach) => approach.id)).toEqual(["a1", "a2"]);
     expect(researchRunView({ ...summary, id: "other" }, synced)).toBeUndefined();
+  });
+});
+
+describe("research findings filter", () => {
+  const queryArb = fc.record({
+    pick: fc.nat(), part: fc.constantFrom("text", "title", "path", "kind", "relation", "absent"), start: fc.nat(40), length: fc.integer({ min: 1, max: 14 }), upper: fc.boolean(),
+  });
+  /** The card's line for the finding it relates to, from the replayed run. */
+  const relationLine = (run: ResearchRun, finding: ResearchFinding) => {
+    if (!finding.relatesTo) return undefined;
+    const related = run.findings.find((other) => other.id === finding.relatesTo)?.text;
+    return `${finding.relation ?? "related"}: ${related === undefined ? "an earlier finding" : related.length > 80 ? `${related.slice(0, 80).trimEnd()}…` : related}`;
+  };
+  /** What the card of `finding` shows, from the replayed run: its kind as labelled, its text, its approach's title, its relation line and its evidence paths. */
+  const cardParts = (run: ResearchRun, finding: ResearchFinding) => [
+    finding.kind, finding.kind.replaceAll("_", " "), finding.text, run.approaches.find((approach) => approach.id === finding.approachId)?.title ?? finding.approachId,
+    relationLine(run, finding) ?? "", ...finding.paths,
+  ];
+
+  it("lists exactly the findings whose card shows the filter text, newest first, as the run changes", () => {
+    let cut = 0;
+    let byTitle = 0;
+    let byPath = 0;
+    let byLabel = 0;
+    let byRelation = 0;
+    fc.assert(fc.property(fc.array(fc.record({ steps: fc.array(researchJournalStepArb, { minLength: 1, maxLength: 8 }), queries: fc.array(queryArb, { minLength: 1, maxLength: 4 }) }), { minLength: 1, maxLength: 6 }), (rounds) => {
+      const journal = [researchCreatedEvent(3)];
+      let store = emptyResearchRunStore("run");
+      for (const round of rounds) {
+        for (const step of round.steps) journal.push(nextResearchEvent(projectResearchRun("run", journal), step));
+        const run = projectResearchRun("run", journal);
+        // The window's store follows by delta, so most items are the objects an earlier round matched against.
+        store = applyResearchChanges(store, { ...researchChangePage(run, store.revision), writable: true });
+        const view = researchRunView(summarizeResearchRun(run), store)!;
+        for (const wanted of round.queries) {
+          const source = run.findings.length ? run.findings[wanted.pick % run.findings.length] : undefined;
+          const parts = source ? cardParts(run, source) : [];
+          const whole = wanted.part === "absent" || !source ? "no card shows this"
+            : wanted.part === "kind" ? parts[1]! : wanted.part === "title" ? parts[3]! : wanted.part === "relation" ? parts[4] || source.text
+            : wanted.part === "path" ? source.paths[0] ?? source.text : source.text;
+          const piece = wanted.part === "kind" || wanted.part === "absent" ? whole : whole.slice(wanted.start % whole.length, wanted.start % whole.length + wanted.length);
+          const query = wanted.upper ? piece.toUpperCase() : piece;
+          const needle = query.trim().toLowerCase();
+          const expected = needle ? [...run.findings].reverse().filter((finding) => cardParts(run, finding).some((part) => part.toLowerCase().includes(needle))) : [];
+          expect(researchFindingMatches(view, query).map((finding) => finding.id)).toEqual(expected.map((finding) => finding.id));
+          if (needle && source && wanted.part !== "absent") {
+            // The text was cut from this finding's card, so the filter must list it.
+            expect(expected.map((finding) => finding.id)).toContain(source.id);
+            cut++;
+            if (!source.text.toLowerCase().includes(needle) && wanted.part === "title") byTitle++;
+            if (!source.text.toLowerCase().includes(needle) && wanted.part === "path" && source.paths.length) byPath++;
+            if (wanted.part === "kind" && source.kind.includes("_")) byLabel++;
+            if (!source.text.toLowerCase().includes(needle) && wanted.part === "relation" && source.relatesTo) byRelation++;
+          }
+        }
+      }
+    }), { numRuns: 150 });
+    // The generated filters reached each thing a card shows beyond the finding's own text.
+    expect(cut).toBeGreaterThan(100);
+    expect(byTitle).toBeGreaterThan(10);
+    expect(byPath).toBeGreaterThan(10);
+    expect(byLabel).toBeGreaterThan(3);
+    expect(byRelation).toBeGreaterThan(3);
+  });
+
+  it("finds a finding by its approach's title and by an evidence path", () => {
+    const journal = [researchCreatedEvent(2)];
+    journal.push(nextResearchEvent(projectResearchRun("run", journal), { kind: "finding", pick: 1, other: 0, variant: 4, flag: false }));
+    const run = projectResearchRun("run", journal);
+    const view = researchRunView(summarizeResearchRun(run), applyResearchChanges(emptyResearchRunStore("run"), { ...researchChangePage(run), writable: true }))!;
+    const finding = run.findings[0]!;
+    expect(finding).toMatchObject({ approachId: "a2", paths: ["notes/a.md", "notes/b.md"] });
+    expect(researchFindingMatches(view, "approach 2")).toEqual([finding]);
+    expect(researchFindingMatches(view, "notes/b.md")).toEqual([finding]);
+    expect(researchFindingMatches(view, "approach 1")).toEqual([]);
+    expect(researchFindingMatches(view, "  ")).toEqual([]);
+  });
+
+  it("matches the line for a related finding as the card cuts it", () => {
+    const journal = [researchCreatedEvent(2)];
+    const share = (change: Partial<ResearchFinding>) => {
+      const event = nextResearchEvent(projectResearchRun("run", journal), { kind: "finding", pick: 0, other: 0, variant: 1, flag: false });
+      if (event.data.type !== "finding") throw new Error("expected a finding");
+      const data = { type: "finding" as const, finding: { ...event.data.finding, ...change } };
+      journal.push({ ...event, signature: JSON.stringify(data), data });
+      return data.finding.id;
+    };
+    // Eighty-four characters, then a tail the relation line leaves out.
+    const first = share({ text: `${"long evidence ".repeat(6)}tail past the cut` });
+    const second = share({ text: "A shorter result", relatesTo: first, relation: "contradicts" });
+    const run = projectResearchRun("run", journal);
+    const view = researchRunView(summarizeResearchRun(run), applyResearchChanges(emptyResearchRunStore("run"), { ...researchChangePage(run), writable: true }))!;
+    const ids = (query: string) => researchFindingMatches(view, query).map((finding) => finding.id);
+    expect(ids("Contradicts: long evidence")).toEqual([second]);
+    expect(ids("long evidence")).toEqual([second, first]);
+    expect(ids("tail past the cut")).toEqual([first]);
   });
 });
 

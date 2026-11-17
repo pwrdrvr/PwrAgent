@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ResearchApproach, ResearchFinding, ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";
-import { useResearchFindings } from "./useResearchFindings";
-import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchLabel, researchMapBranches, type ResearchMapBranch, type ResearchRunView } from "./research-view-model";
+import { RESEARCH_FINDINGS_PAGE, useResearchFindings } from "./useResearchFindings";
+import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchFindingMatches, researchFindingRelation, researchLabel, researchMapBranches, type ResearchMapBranch, type ResearchRunView } from "./research-view-model";
 
 type Open = (itemId: string) => void;
 
@@ -58,13 +58,29 @@ function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = fals
   </div>;
 }
 
-/** Newest first, a page at a time. Each card's record comes from the run's store; the search decides which and in what order. */
+/**
+ * Newest first, a page at a time. Unfiltered, the owner's search pages the
+ * list and each card's record comes from the run's store. A filter matches
+ * what the cards show, across every finding of the run, in the window.
+ */
 export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
   api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
-  const findings = useResearchFindings(api, thread, run.id, run.findings, filter);
-  const { hits, total, loaded } = findings.loaded;
-  const more = findings.loaded.next !== undefined;
+  const query = filter.trim().toLowerCase();
+  const paged = useResearchFindings(api, thread, run.id, run.findings);
+  const matches = useMemo(() => query ? researchFindingMatches(run, query) : undefined, [run, query]);
+  // How many matches are drawn. A new filter starts again from one page.
+  const [drawn, setDrawn] = useState({ query, count: RESEARCH_FINDINGS_PAGE });
+  const count = drawn.query === query ? drawn.count : RESEARCH_FINDINGS_PAGE;
+  const shown = matches
+    ? matches.slice(0, count)
+    // A hit read just ahead of the store draws once its item arrives.
+    : paged.loaded.hits.flatMap((hit) => { const item = run.items.get(hit.id); return item?.type === "finding" ? [item.record] : []; });
+  const total = matches ? matches.length : paged.loaded.total;
+  const more = matches ? count < matches.length : paged.loaded.next !== undefined;
+  const loaded = Boolean(matches) || paged.loaded.loaded;
+  const loadingOlder = !matches && paged.loadingOlder;
+  const error = matches ? "" : paged.error;
   const list = useRef<HTMLDivElement>(null);
   // Show more disappears with the last page; keep focus in the list instead of dropping it to the page.
   const requestedMore = useRef(false);
@@ -73,21 +89,23 @@ export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailab
     requestedMore.current = false;
     list.current?.focus();
   }, [more]);
+  const showMore = () => {
+    requestedMore.current = true;
+    if (matches) setDrawn({ query, count: count + RESEARCH_FINDINGS_PAGE });
+    else paged.showOlder();
+  };
+  const noun = matches ? "matching finding" : "finding";
   return <div ref={list} tabIndex={-1} className="research-list" aria-label="Shared findings">
-    {findings.error && <p role="alert" className="research-error">{findings.error}</p>}
-    {hits.map((hit) => {
-      // A hit read just ahead of the store draws once its item arrives.
-      const item = run.items.get(hit.id);
-      return item?.type === "finding" ? <FindingCard key={hit.id} run={run} finding={item.record} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} /> : null;
-    })}
-    {!findings.available && <p className="context-empty">Findings are unavailable in this window.</p>}
-    {findings.available && !loaded && !findings.error && <p role="status" className="context-empty">Loading findings…</p>}
+    {error && <p role="alert" className="research-error">{error}</p>}
+    {shown.map((finding) => <FindingCard key={finding.id} run={run} finding={finding} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />)}
+    {!matches && !paged.available && <p className="context-empty">Findings are unavailable in this window.</p>}
+    {!matches && paged.available && !loaded && !error && <p role="status" className="context-empty">Loading findings…</p>}
     {loaded && !run.findings && <p className="context-empty">Findings appear here as workers share evidence.</p>}
-    {loaded && run.findings > 0 && !hits.length && <p className="context-empty">No findings match this filter.</p>}
-    {hits.length > 0 && <div className="research-activity__footer">
-      <span className="research-muted">{more ? `Showing the latest ${hits.length} of ${total} ${findings.filtered ? "matching findings" : "findings"}.` : `All ${plural(hits.length, findings.filtered ? "matching finding" : "finding")}.`}</span>
-      {more && <button type="button" className="research-button" disabled={findings.loadingOlder} onClick={() => { requestedMore.current = true; findings.showOlder(); }}>
-        {findings.loadingOlder ? "Loading…" : "Show more"}
+    {matches && run.findings > 0 && !shown.length && <p className="context-empty">No findings match this filter.</p>}
+    {shown.length > 0 && <div className="research-activity__footer">
+      <span className="research-muted">{more ? `Showing the latest ${shown.length} of ${total} ${noun}s.` : `All ${plural(shown.length, noun)}.`}</span>
+      {more && <button type="button" className="research-button" disabled={loadingOlder} onClick={showMore}>
+        {loadingOlder ? "Loading…" : "Show more"}
       </button>}
     </div>}
   </div>;
@@ -96,14 +114,11 @@ export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailab
 function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEvidence }: {
   run: ResearchRunView; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
-  const relatedItem = finding.relatesTo ? run.items.get(finding.relatesTo) : undefined;
-  const related = relatedItem?.type === "finding" ? relatedItem.record : undefined;
+  const relation = researchFindingRelation(run, finding);
   return <article className="research-entry" aria-label={`${researchLabel(finding.kind)} from ${approachTitle(run, finding.approachId)}`}>
     <div className="research-entry__meta"><span className="research-chip">{researchLabel(finding.kind)}</span><span>{approachTitle(run, finding.approachId)}</span></div>
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(finding.id)}>{finding.text}</button>
-    {finding.relatesTo && <button type="button" className="research-link" onClick={() => onOpenItem(finding.relatesTo!)}>
-      {researchLabel(finding.relation ?? "related")}: {related ? excerpt(related.text, 80) : "an earlier finding"}
-    </button>}
+    {relation && <button type="button" className="research-link" onClick={() => onOpenItem(finding.relatesTo!)}>{relation}</button>}
     {finding.paths.length > 0 && <EvidenceList paths={finding.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(finding.id, index)} />}
     {finding.author && <ResearchThreadButton thread={finding.author} title="Open source thread" label={`Open source thread: ${approachTitle(run, finding.approachId)}`} />}
   </article>;
