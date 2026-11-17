@@ -10637,6 +10637,24 @@ a.button {
   margin-top: 18px;
 }
 
+/* The backdrop scrolls only behind this dialog. At high zoom the minimum
+   window is a 320x213 CSS viewport, shorter than the heading, description
+   and buttons alone, and the shared fixed backdrop would leave Cancel and
+   Archive below it with no way to reach them. `safe` keeps the heading from
+   centering above the top edge once the dialog overflows. */
+.rename-thread-backdrop:has(> .archive-group-dialog) {
+  overflow: auto;
+  place-items: safe center;
+}
+
+/* A column capped to the backdrop's padded height, so the member list gives
+   up its rows before the buttons leave the window. */
+.archive-group-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
+}
+
 .archive-group-dialog:focus {
   outline: none;
 }
@@ -10647,12 +10665,30 @@ a.button {
   font-size: 13px;
 }
 
+/* An inset well with scroll-edge shades. macOS hides overlay scrollbars at
+   rest, and a cut that lands on a row divider made 4 of 40 threads look like
+   the whole list. Each `local` cover scrolls with the rows and hides its
+   `scroll` shade at that end, so a shade shows only where rows remain. */
 .archive-group-dialog__members {
+  flex: 0 1 auto;
+  min-height: 0;
   max-height: min(45vh, 360px);
   overflow: auto;
   margin: 0;
-  padding: 0;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background:
+    linear-gradient(var(--bg-panel) 30%, transparent) center top / 100% 28px no-repeat local,
+    linear-gradient(transparent, var(--bg-panel) 70%) center bottom / 100% 28px no-repeat local,
+    linear-gradient(color-mix(in srgb, var(--text-primary) 18%, transparent), transparent) center top / 100% 10px no-repeat scroll,
+    linear-gradient(transparent, color-mix(in srgb, var(--text-primary) 18%, transparent)) center bottom / 100% 10px no-repeat scroll,
+    var(--bg-panel);
   list-style: none;
+}
+
+.archive-group-dialog__members:focus-visible {
+  outline-offset: 1px;
 }
 
 .archive-group-dialog__members li {
@@ -10663,6 +10699,10 @@ a.button {
   color: var(--text-primary);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.archive-group-dialog__members li:last-child {
+  border-bottom: 0;
 }
 
 .archive-group-dialog__members small {
