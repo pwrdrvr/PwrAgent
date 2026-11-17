@@ -296,7 +296,9 @@ const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
 // Rank familiar models, but let the server decide which models are available.
 // An allowlist here would silently hide every newly released model on refresh.
 const PREFERRED_CODEX_MODEL_ORDER = [
+  "gpt-6.2-astra",
   "gpt-6-astra",
+  "gpt-6.2-sol",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6.1-terra",
