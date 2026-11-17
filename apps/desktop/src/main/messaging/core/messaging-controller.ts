@@ -1,7 +1,31 @@
+import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
+import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
+import {
+  threadIdForBackendEvent,
+  asPlainRecord,
+  turnIdForBackendEvent,
+  bindingMatchesFederationTarget,
+  federationTargetForBinding,
+  turnQueueUpdateForBackendEvent,
+  threadKeyForBackendEvent,
+  rememberBoundedKey,
+  isTerminalTurnLifecycle,
+  assistantStreamKey,
+  agentMessagingTurnKey,
+  MAX_TRACKED_TURN_PROSE,
+  TYPING_ACTIVITY_REFRESH_MS,
+  type MessagingTaskMonitorLifecycle,
+  type AssistantStreamDelta,
+  type MessagingDeliveryGuard,
+  type MessagingCancellationSignal,
+  type AssistantStreamBuffer,
+  type AssistantMessageDeliveryIdentity,
+  type ActiveAgentMessagingOrigin,
+  type MessagingControllerLogger,
+} from "./messaging-backend-event-helpers";
 import { containedMessagingBindingMatches } from "@pwragent/shared";
-import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
+import { automatedWorkStartedLabel, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
-import { finalTurnOutputText } from "@pwragent/shared";
 import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
 import { isThreadLockRefusal } from "@pwragent/shared";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
@@ -27,8 +51,6 @@ import {
   isAppServerBackendKind,
   isCodexAsyncQuestionAnswered,
   isMessagingBindingTargetKind,
-  readCodexAsyncQuestionRepliesFromNotification,
-  readCodexAsyncQuestionsFromNotification,
   normalizeRenamedTitleSource,
   parseCodexTurnErrorMessage,
   readProviderResponseBlockNotification,
@@ -51,8 +73,6 @@ import type {
   AppServerTurnInputItem,
   ThreadIncomingWorkSummary,
   AppServerBackendKind,
-  AppServerThreadPlanEntry,
-  AppServerThreadReviewEntry,
   AppServerReviewTarget,
   ModelSettingsRecent,
   AutomationMessagingConversationSnapshot,
@@ -211,25 +231,17 @@ import {
   buildWorkingCardIntent,
 } from "./messaging-renderer.js";
 import {
-  artifactFromPlanEntry,
-  artifactFromReviewEntry,
   buildArtifactDeliveryIntent,
   buildArtifactInlineFallbackIntent,
-  planEntryFromUpdate,
   type MessagingArtifact,
   type MessagingArtifactMessageIntent,
 } from "./messaging-artifact-renderer.js";
-import {
-  artifactFromMarkdownFileSelection,
-  MessagingMarkdownFileAttachmentSelector,
-} from "./messaging-markdown-file-attachment-selector.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
 import {
-  normalizeReviewOutputRecord,
   parseReviewCommand,
 } from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
@@ -350,10 +362,6 @@ import {
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
-const TYPING_ACTIVITY_REFRESH_MS = 10_000;
-// Discrete item lifecycle events are cheap provider lease renewals, not
-// visible message sends. Let them through a little sooner than noisy deltas.
-const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 // Upper bound on retained admission stage marks. A turn that is queued behind a
 // busy thread, or that fails before `startTurn`, never reaches the log that
@@ -420,14 +428,6 @@ type MessagingAdmissionTimingRecord = {
     number
   >>;
 };
-// Upper bound on retained automation start/final delivery-dedup keys. Each entry
-// embeds the full rendered message text and is only consulted while a run's
-// terminal events are in flight; oldest-first eviction reclaims keys for runs
-// that completed long ago so a long-lived controller does not grow without
-// bound (one entry per automation run).
-const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
-const MAX_TRACKED_REVIEW_TURNS = 1_000;
-const MAX_TRACKED_TURN_PROSE = 256;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 
 type MessagingTurnProseState = {
@@ -506,46 +506,9 @@ type MonitorStateOptions = Pick<
   | "showStatusLine"
 >;
 
-type AssistantStreamDelta = {
-  delta: string;
-  itemId: string;
-  streamKey: string;
-  threadId: ThreadIdentifier;
-  turnId: string;
-};
-
-type AssistantStreamBuffer = AssistantStreamDelta & {
-  // Earliest time a non-final `stream_update` may be emitted for this message.
-  // Deltas arriving before it are coalesced into `text`; see
-  // {@link coalesceBackoffMs}. The final flush ignores this and emits at once.
-  nextReleaseAt: number;
-  // Count of non-final edits already emitted for this message, driving the
-  // exponential backoff between successive coalesced releases.
-  releaseCount: number;
-  sequence: number;
-  surface?: MessagingSurfaceRef;
-  text: string;
-};
-
-type AssistantMessageDeliveryIdentity = {
-  itemId?: string;
-  threadId?: string;
-  turnId?: string;
-};
-
 type AutomationTurnMessagingContext = {
   automationName?: string;
   automationRunId?: string;
-};
-
-type ActiveAgentMessagingOrigin = {
-  source?: MessagingRequestSource;
-  binding?: MessagingBindingRecord;
-  deliveryBinding?: MessagingBindingRecord;
-  event: MessagingInboundEvent;
-  privateReplyContinuationBindingId?: string;
-  privateResponseRequested?: boolean;
-  reportedStartFailureText?: string;
 };
 
 type AgentMessagingOriginResolution =
@@ -688,27 +651,6 @@ function federationRefsMatch(
         leftTarget.instanceId === rightTarget.instanceId));
 }
 
-function federationTargetForBinding(
-  binding: MessagingBindingRecord,
-): FederationTarget | undefined {
-  return binding.federatedThread?.target.scope === "remote"
-    ? binding.federatedThread.target
-    : undefined;
-}
-
-function bindingMatchesFederationTarget(
-  binding: MessagingBindingRecord,
-  target: FederationTarget | undefined,
-): boolean {
-  const bindingTarget = federationTargetForBinding(binding);
-  if (!bindingTarget) {
-    return !target || target.scope === "local";
-  }
-  return target?.scope === "remote" &&
-    bindingTarget.scope === "remote" &&
-    bindingTarget.instanceId === target.instanceId;
-}
-
 function federationTargetForThread(
   thread: NavigationThreadSummary,
 ): FederationTarget | undefined {
@@ -767,12 +709,6 @@ function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok
     },
   };
 }
-
-type MessagingControllerLogger = {
-  debug?(message: string, data?: Record<string, unknown>): void;
-  info?(message: string, data?: Record<string, unknown>): void;
-  warn?(message: string, data?: Record<string, unknown>): void;
-};
 
 type MessagingToolUpdateDefaultModeResolver =
   | MessagingToolUpdateMode
@@ -953,19 +889,9 @@ type PendingNewThreadPromptBundle = {
   session: MessagingBrowseSessionRecord;
 };
 
-type MessagingDeliveryGuard = {
-  isCancelled: () => boolean;
-  onCancelledDelivery?: (result: MessagingDeliveryResult) => Promise<void>;
-  whenCancelled?: Promise<void>;
-};
-
 type DeliveryLaneState = {
   lane?: MessagingDeliveryLane;
   ticket?: MessagingDeliveryLaneTicket;
-};
-
-type MessagingCancellationSignal = MessagingDeliveryGuard & {
-  cancel: () => void;
 };
 
 export type MessagingControllerOptions = {
@@ -1054,6 +980,7 @@ export type MessagingControllerOptions = {
 };
 
 export class MessagingController {
+  private readonly backendEventRouter: MessagingBackendEventRouter;
   private readonly authorizedActorIds: Set<string>;
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly statusRenderLock = new PerKeyAsyncLock();
@@ -1096,10 +1023,6 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
-  private readonly pendingTurnFailureHandlersByThreadKey = new Map<
-    string,
-    Set<Promise<void>>
-  >();
   private readonly privateReplyCompletionTurnKeys = new Set<string>();
   private readonly privateReplyClaims = new Set<string>();
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
@@ -1125,19 +1048,6 @@ export class MessagingController {
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
-  private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
-  // Codex emits a review result twice on the live protocol: first as an
-  // exitedReviewMode artifact, then as the turn's final agentMessage. Hold the
-  // pair by turn so messaging providers receive one enriched artifact intent.
-  private readonly pendingReviewArtifactsByTurnKey = new Map<
-    string,
-    AppServerThreadReviewEntry
-  >();
-  private readonly pendingReviewAssistantTextByTurnKey = new Map<string, string>();
-  private readonly completedReviewTurnKeys = new Set<string>();
-  private readonly reviewTurnKeys = new Set<string>();
-  private readonly markdownFileAttachmentSelector =
-    new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly preparingTurnActivity = new Map<string, {
     attempts: Set<symbol>;
@@ -1217,6 +1127,15 @@ export class MessagingController {
   private readonly unregisterAutomationTargetMessageDeliveryHandler: () => void;
 
   constructor(private readonly options: MessagingControllerOptions) {
+    const readStore = () => this.options.store;
+    const readNow = () => this.now;
+    const readLogger = () => this.logger;
+    this.backendEventRouter = new MessagingBackendEventRouter({
+      get store() { return readStore(); },
+      get now() { return readNow(); },
+      get logger() { return readLogger(); },
+      host: () => this.backendEventHost(),
+    });
     this.authorizedActorIds = new Set(options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
     this.now = options.now ?? Date.now;
@@ -1569,906 +1488,85 @@ export class MessagingController {
     };
   }
 
-  handleBackendEvent(event: AgentEvent): Promise<void> {
-    const handling = this.handleBackendEventNow(event);
-    const threadId = threadIdForBackendEvent(event);
-    if (!threadId || event.notification.method !== "turn/failed") {
-      return handling;
-    }
-    const threadKey = threadKeyForBackendEvent(event, threadId);
-    let pending = this.pendingTurnFailureHandlersByThreadKey.get(threadKey);
-    if (!pending) {
-      pending = new Set();
-      this.pendingTurnFailureHandlersByThreadKey.set(threadKey, pending);
-    }
-    pending.add(handling);
-    const removePending = (): void => {
-      pending.delete(handling);
-      if (pending.size === 0) {
-        this.pendingTurnFailureHandlersByThreadKey.delete(threadKey);
-      }
+  private backendEventPorts?: MessagingBackendEventHost;
+
+  private backendEventHost(): MessagingBackendEventHost {
+    if (this.backendEventPorts) return this.backendEventPorts;
+    const readController = () => this;
+    return this.backendEventPorts = {
+      refreshStatusSurfacesForBackend: (...args) => this.refreshStatusSurfacesForBackend(...args),
+      retireAnsweredAsyncQuestionnaires: (...args) => this.retireAnsweredAsyncQuestionnaires(...args),
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
+      reconcileQueuedAgentMessagingOrigin: (...args) => this.reconcileQueuedAgentMessagingOrigin(...args),
+      rememberContextUsageSummary: (...args) => this.rememberContextUsageSummary(...args),
+      handleBackendRequestResolved: (...args) => this.handleBackendRequestResolved(...args),
+      handleExecutionModeQueued: (...args) => this.handleExecutionModeQueued(...args),
+      refreshStatusSurfacesForThread: (...args) => this.refreshStatusSurfacesForThread(...args),
+      handleExecutionModeQueueCleared: (...args) => this.handleExecutionModeQueueCleared(...args),
+      bindingsForAgentTurn: (...args) => this.bindingsForAgentTurn(...args),
+      getActiveTurn: (...args) => this.getActiveTurn(...args),
+      isTerminalPrivateResponseTurn: (...args) => this.isTerminalPrivateResponseTurn(...args),
+      isPrivateResponseFallbackTurn: (...args) => this.isPrivateResponseFallbackTurn(...args),
+      isPrivateReplyCompletionTurn: (...args) => this.isPrivateReplyCompletionTurn(...args),
+      isAutomationTurn: (...args) => this.isAutomationTurn(...args),
+      get deliveredThreadNoticeKeys() { return readController().deliveredThreadNoticeKeys; },
+      resolveToolUpdateDefaultMode: (...args) => this.resolveToolUpdateDefaultMode(...args),
+      get toolUpdatePolicy() { return readController().toolUpdatePolicy; },
+      deliverToolUpdateDelivery: (...args) => this.deliverToolUpdateDelivery(...args),
+      deliverIncomingWork: (...args) => this.deliverIncomingWork(...args),
+      suppressTaskMonitorLifecycle: (...args) => this.suppressTaskMonitorLifecycle(...args),
+      handleAutomationRunUpdated: (...args) => this.handleAutomationRunUpdated(...args),
+      handleAutomationTurnStarted: (...args) => this.handleAutomationTurnStarted(...args),
+      handleAutomationTurnTerminal: (...args) => this.handleAutomationTurnTerminal(...args),
+      isAutomationTurnEvent: (...args) => this.isAutomationTurnEvent(...args),
+      setActiveTurn: (...args) => this.setActiveTurn(...args),
+      logBindingTurnStateChange: (...args) => this.logBindingTurnStateChange(...args),
+      deliverToolActivityForBackendEvent: (...args) => this.deliverToolActivityForBackendEvent(...args),
+      flushToolUpdatesForBinding: (...args) => this.flushToolUpdatesForBinding(...args),
+      finalizeWorkingCard: (...args) => this.finalizeWorkingCard(...args),
+      clearTurnProse: (...args) => this.clearTurnProse(...args),
+      turnProseKey: (...args) => this.turnProseKey(...args),
+      get workingUpdateCancellationSignals() { return readController().workingUpdateCancellationSignals; },
+      get workingUpdateDeliveries() { return readController().workingUpdateDeliveries; },
+      get workingUpdateSurfaces() { return readController().workingUpdateSurfaces; },
+      get workingUpdateCancellationFailures() { return readController().workingUpdateCancellationFailures; },
+      waitForAssistantStreamDeliveriesForEvent: (...args) => this.waitForAssistantStreamDeliveriesForEvent(...args),
+      assistantStreamBufferKeysForEvent: (...args) => this.assistantStreamBufferKeysForEvent(...args),
+      get assistantStreamBuffers() { return readController().assistantStreamBuffers; },
+      get assistantStreamDeliveryQueues() { return readController().assistantStreamDeliveryQueues; },
+      get assistantStreamCancellationSignals() { return readController().assistantStreamCancellationSignals; },
+      deliverAssistantStreamUpdate: (...args) => this.deliverAssistantStreamUpdate(...args),
+      get heldPrivateResponseFallbackTextByTurnKey() { return readController().heldPrivateResponseFallbackTextByTurnKey; },
+      deliverPrivateResponseFallback: (...args) => this.deliverPrivateResponseFallback(...args),
+      takeBufferedAssistantTextForTerminalEvent: (...args) => this.takeBufferedAssistantTextForTerminalEvent(...args),
+      markAssistantMessageDelivered: (...args) => this.markAssistantMessageDelivered(...args),
+      resolveAssistantMessageImages: (...args) => this.resolveAssistantMessageImages(...args),
+      deliverAssistantImages: (...args) => this.deliverAssistantImages(...args),
+      deliverAsyncQuestionnaire: (...args) => this.deliverAsyncQuestionnaire(...args),
+      flushAssistantStreamForEvent: (...args) => this.flushAssistantStreamForEvent(...args),
+      deliverAssistantMessage: (...args) => this.deliverAssistantMessage(...args),
+      deliverAssistantProseForBackendEvent: (...args) => this.deliverAssistantProseForBackendEvent(...args),
+      flushBufferedAssistantStreamsForTerminalEvent: (...args) => this.flushBufferedAssistantStreamsForTerminalEvent(...args),
+      deliverTurnFailureMessage: (...args) => this.deliverTurnFailureMessage(...args),
+      deliverResponseBlockedNotice: (...args) => this.deliverResponseBlockedNotice(...args),
+      deliverArtifactForBinding: (...args) => this.deliverArtifactForBinding(...args),
+      renderAutomaticBindingStatus: (...args) => this.renderAutomaticBindingStatus(...args),
+      threadContextWithNameFromEvent: (...args) => this.threadContextWithNameFromEvent(...args),
+      signalTurnActivity: (...args) => this.signalTurnActivity(...args),
+      scheduleNextQueuedTurn: (...args) => this.scheduleNextQueuedTurn(...args),
+      get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
+      completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
+      get privateReplyCompletionTurnKeys() { return readController().privateReplyCompletionTurnKeys; },
+      forgetAutomationTurn: (...args) => this.forgetAutomationTurn(...args),
+      forgetAgentMessagingOrigin: (...args) => this.forgetAgentMessagingOrigin(...args),
     };
-    void handling.then(removePending, removePending);
-    return handling;
   }
 
-  private async handleBackendEventNow(event: AgentEvent): Promise<void> {
-    const threadId = threadIdForBackendEvent(event);
-    if (!threadId && event.notification.method === "account/updated") {
-      await this.refreshStatusSurfacesForBackend(
-        event.backend,
-        event.notification.method,
-        event.federationTarget,
-      );
-      return;
-    }
-    if (!threadId && event.notification.method === "account/rateLimits/updated") {
-      this.logger.debug?.("messaging skipped bound status refresh for backend rate limits", {
-        backend: event.backend,
-        method: event.notification.method,
-      });
-      return;
-    }
-    if (!threadId) {
-      return;
-    }
-    if (
-      event.notification.method === "item/transientMessage/updated"
-      || event.notification.method === "thread/subAgents/updated"
-      || isPrivateTaskMonitorEvent(event)
-    ) {
-      // Private monitor/sub-agent activity and transient transcript text
-      // belong to desktop surfaces, not the parent messaging transcript.
-      // It is intentionally not translated into a messaging intent: remote
-      // delivery would give it durable-message queueing, retry, and budget
-      // semantics that it must never inherit.
-      return;
-    }
-    const asyncQuestionReplies = readCodexAsyncQuestionRepliesFromNotification(event.notification);
-    if (asyncQuestionReplies) {
-      await this.retireAnsweredAsyncQuestionnaires(
-        event,
-        threadId,
-        asyncQuestionReplies,
-      );
-    }
-    const scheduledAction = scheduledActionForBackendEvent(event);
-    if (
-      scheduledAction?.origin === "messaging"
-      && scheduledAction.status === "failed"
-    ) {
-      const bindings = this.filterBindingsForChannel(
-        await this.options.store.findActiveBindingsForThread({
-          backend: event.backend,
-          threadId,
-        }),
-      ).filter((binding) =>
-        bindingMatchesFederationTarget(binding, event.federationTarget)
-        && bindingMatchesScheduledActionOrigin(binding, scheduledAction)
-      );
-      for (const binding of bindings) {
-        await this.deliver(
-          buildErrorIntent({
-            id: this.newIntentId("scheduled-message-dispatch-failed"),
-            createdAt: this.now(),
-            title: "Scheduled message could not be sent",
-            body: [
-              scheduledAction.displayText,
-              scheduledAction.errorMessage
-                ?? "The backend rejected the scheduled message.",
-            ].filter(Boolean).join("\n\n"),
-            recoverable: true,
-          }),
-          binding,
-        );
-      }
-      return;
-    }
-    const eventTurnId = turnIdForBackendEvent(event);
-    const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
-    if (turnQueueUpdate) {
-      if (turnQueueUpdate.queueEntryId && (turnQueueUpdate.status === "started" || turnQueueUpdate.status === "cancelled" || turnQueueUpdate.status === "failed")) {
-        const key = `${threadKeyForBackendEvent(event, threadId)}:${turnQueueUpdate.queueEntryId}`;
-        await this.applySharedQueueNoticeEvent(key, {
-          type: "ownerOutcome", outcome: { status: turnQueueUpdate.status, turnId: turnQueueUpdate.turnId },
-        });
-      }
-      await this.reconcileQueuedAgentMessagingOrigin({
-        backend: event.backend,
-        threadId,
-        update: turnQueueUpdate,
-      });
-    }
-    const eventTurnKey = eventTurnId
-      ? artifactTurnKey(event.backend, threadId, eventTurnId)
-      : undefined;
-    if (eventTurnKey && isReviewTurnMarkerEvent(event)) {
-      rememberBoundedKey(
-        this.reviewTurnKeys,
-        eventTurnKey,
-        MAX_TRACKED_REVIEW_TURNS,
-      );
-    }
-    const reviewTurnEvent = Boolean(
-      eventTurnKey && this.reviewTurnKeys.has(eventTurnKey),
-    );
-    const reviewTurnCompleted = Boolean(
-      eventTurnKey && this.completedReviewTurnKeys.has(eventTurnKey),
-    );
-    const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
-    if (eventTurnKey && reviewArtifact && !reviewTurnCompleted) {
-      rememberBoundedMap(
-        this.pendingReviewArtifactsByTurnKey,
-        eventTurnKey,
-        reviewArtifact,
-        MAX_TRACKED_REVIEW_TURNS,
-      );
-    }
-    const rawAssistantText = assistantTextForBackendEvent(event);
-    const isFinalReviewAssistant = Boolean(
-      eventTurnKey
-      && reviewTurnEvent
-      && rawAssistantText
-      && !isNonFinalAssistantTextForBackendEvent(event),
-    );
-    if (
-      eventTurnKey
-      && rawAssistantText
-      && isFinalReviewAssistant
-      && !reviewTurnCompleted
-    ) {
-      rememberBoundedMap(
-        this.pendingReviewAssistantTextByTurnKey,
-        eventTurnKey,
-        rawAssistantText,
-        MAX_TRACKED_REVIEW_TURNS,
-      );
-    }
-    const lifecycle = turnLifecycleForBackendEvent(event, this.now());
-    const pendingReviewArtifact = eventTurnKey
-      ? this.pendingReviewArtifactsByTurnKey.get(eventTurnKey)
-      : undefined;
-    const pendingReviewAssistantText = eventTurnKey
-      ? this.pendingReviewAssistantTextByTurnKey.get(eventTurnKey)
-      : undefined;
-    const reviewCompletionReady = Boolean(
-      eventTurnKey
-      && reviewTurnEvent
-      && lifecycle?.status === "completed",
-    );
-    const reviewCompletionDiscarded = Boolean(
-      eventTurnKey
-      && reviewTurnEvent
-      && isTerminalTurnLifecycle(lifecycle)
-      && lifecycle?.status !== "completed",
-    );
-    const completedReviewArtifact = !eventTurnKey
-      ? reviewArtifact
-      : reviewCompletionReady && pendingReviewArtifact
-        ? {
-            ...pendingReviewArtifact,
-            ...(pendingReviewAssistantText
-              ? { review: pendingReviewAssistantText }
-              : {}),
-          }
-        : undefined;
-    const standaloneReviewAssistantText =
-      reviewCompletionReady && !pendingReviewArtifact
-        ? pendingReviewAssistantText
-        : undefined;
-    if ((reviewCompletionReady || reviewCompletionDiscarded) && eventTurnKey) {
-      this.pendingReviewArtifactsByTurnKey.delete(eventTurnKey);
-      this.pendingReviewAssistantTextByTurnKey.delete(eventTurnKey);
-      rememberBoundedKey(
-        this.completedReviewTurnKeys,
-        eventTurnKey,
-        MAX_TRACKED_REVIEW_TURNS,
-      );
-    }
-    if (completedReviewArtifact && pendingReviewAssistantText) {
-      this.logger.debug?.(
-        "messaging grouped review artifact with final assistant text",
-        {
-          backend: event.backend,
-          method: event.notification.method,
-          threadId,
-          turnId: eventTurnId,
-        },
-      );
-    }
-    if (event.notification.method === "thread/archived") {
-      await this.options.store.revokeDefaultAgentAssignmentsForTarget({
-        backend: event.backend,
-        threadId,
-        revokedAt: this.now(),
-      });
-    }
-    if (event.notification.method === "thread/tokenUsage/updated") {
-      this.rememberContextUsageSummary(event);
-      return;
-    }
-    if (event.notification.method === "serverRequest/resolved") {
-      await this.handleBackendRequestResolved(event);
-      return;
-    }
-    const queuedParams = readExecutionModeQueuedParams(event.notification);
-    if (queuedParams) {
-      await this.handleExecutionModeQueued(event.backend, queuedParams);
-      await this.refreshStatusSurfacesForThread(
-        event.backend,
-        threadId,
-        event.notification.method,
-        event.federationTarget,
-      );
-      return;
-    }
-    const queueClearedParams = readExecutionModeQueueClearedParams(event.notification);
-    if (queueClearedParams) {
-      await this.handleExecutionModeQueueCleared(event.backend, queueClearedParams);
-      await this.refreshStatusSurfacesForThread(
-        event.backend,
-        threadId,
-        event.notification.method,
-        event.federationTarget,
-      );
-      return;
-    }
-    // Status surfaces show nothing about a hibernated checkout. A send from
-    // a conversation restores it on the owner like any other send.
-    if (event.notification.method === "thread/checkoutHibernation/updated") return;
-    if (
-      event.notification.method === "thread/executionMode/updated" ||
-      event.notification.method === "thread/modelSettings/updated" ||
-      event.notification.method === "thread/lock/updated" ||
-      event.notification.method === "thread/rewound" ||
-      event.notification.method === "thread/prAutoDispatch/updated" ||
-      event.notification.method === "thread/prAutoDispatch/pendingUpdated" ||
-      event.notification.method === "thread/codexEnvironment/updated" ||
-      event.notification.method === "thread/parent/set" ||
-      event.notification.method === "thread/parent/cleared" ||
-      event.notification.method === "thread/subthreadOrder/updated" ||
-      event.notification.method === "thread/subthreadsCollapsed/updated"
-    ) {
-      await this.refreshStatusSurfacesForThread(
-        event.backend,
-        threadId,
-        event.notification.method,
-        event.federationTarget,
-      );
-      return;
-    }
-
-    const persistentBindings = this.filterBindingsForChannel(
-      await this.options.store.findActiveBindingsForThread({
-        backend: event.backend,
-        threadId,
-      }),
-    ).filter((binding) =>
-      bindingMatchesFederationTarget(binding, event.federationTarget)
-    );
-    const bindings = this.bindingsForAgentTurn(
-      event.backend,
-      threadId,
-      eventTurnId,
-      persistentBindings,
-    );
-    // Supplemental delivery receipts are status, not final assistant answers.
-    // Their full body and attachments remain available in the desktop transcript.
-    const receipt = correspondenceNotice(event);
-    if (receipt) {
-      for (const binding of bindings) {
-        const turnId = eventTurnId ?? this.getActiveTurn(binding)?.turnId;
-        if (
-          this.isTerminalPrivateResponseTurn(event.backend, threadId, turnId)
-          || this.isPrivateResponseFallbackTurn(event.backend, threadId, turnId)
-          || this.isPrivateReplyCompletionTurn(event.backend, threadId, turnId)
-          || this.isAutomationTurn(event.backend, threadId, turnId)
-        ) continue;
-        const key = `${binding.id}\0${receipt.id}\0${receipt.state}`;
-        if (this.deliveredThreadNoticeKeys.has(key)) continue;
-        rememberBoundedKey(this.deliveredThreadNoticeKeys, key);
-        if (receipt.state === "failed" || receipt.state === "held") {
-          await this.deliver({
-            id: this.newIntentId("thread-delivery"),
-            kind: "message",
-            bindingId: binding.id,
-            createdAt: this.now(),
-            role: "system",
-            parts: [{ type: "text", text: receipt.text, markdown: "plain" }],
-          }, binding);
-          continue;
-        }
-        const mode = resolveMessagingToolUpdateMode(
-          binding,
-          await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
-        );
-        const activeTurn = this.getActiveTurn(binding);
-        const sourceTurnActive = activeTurn?.turnId === turnId
-          && (activeTurn?.status === "working" || activeTurn?.status === "waiting");
-        const deliveries = this.toolUpdatePolicy.processActivity({
-          ...(sourceTurnActive ? {} : { lifecycle: "window" as const }),
-          activity: { id: key, kind: "tool", status: "completed", title: receipt.text },
-          bindingId: binding.id,
-          mode,
-          turnId: turnId ?? receipt.id,
-        });
-        for (const delivery of deliveries) await this.deliverToolUpdateDelivery(delivery, binding);
-      }
-      return;
-    }
-    if (event.notification.method === "thread/incomingWork") {
-      const params = event.notification.params as { deliveryId: string; incomingWork: ThreadIncomingWorkSummary };
-      for (const binding of bindings) await this.deliverIncomingWork(binding, params.deliveryId, params.incomingWork);
-      return;
-    }
-    // Monitor lifecycle notices are working activity, never parent turn
-    // completions. Sharing the active turn also shares its Some allowance.
-    const monitorLifecycle = taskMonitorLifecycleActivityForBackendEvent(event);
-    if (monitorLifecycle) {
-      // Remember suppression even without bindings: a monitor may complete
-      // after its parent's private/automation tracking has been cleared.
-      if (this.suppressTaskMonitorLifecycle(event, threadId, monitorLifecycle)) {
-        return;
-      }
-      for (const binding of bindings) {
-        const activeTurn = this.getActiveTurn(binding);
-        if (this.suppressTaskMonitorLifecycle(
-          event,
-          threadId,
-          monitorLifecycle,
-          activeTurn?.turnId,
-        )) {
-          continue;
-        }
-        const turnId = activeTurn?.status === "working"
-          ? activeTurn.turnId
-          : `monitor-lifecycle:${threadId}`;
-        const mode = resolveMessagingToolUpdateMode(
-          binding,
-          await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
-        );
-        const deliveries = this.toolUpdatePolicy.processActivity({
-          activity: monitorLifecycle.activity,
-          bindingId: binding.id,
-          mode,
-          turnId,
-        });
-        for (const delivery of deliveries) {
-          await this.deliverToolUpdateDelivery(delivery, binding);
-        }
-      }
-      return;
-    }
-    const reviewStartOutcome = reviewStartOutcomeForBackendEvent(event);
-    if (reviewStartOutcome) {
-      if (
-        reviewStartOutcome.status === "failed"
-        || reviewStartOutcome.status === "cancelled"
-      ) {
-        for (const binding of bindings) {
-          await this.deliver(
-            buildErrorIntent({
-              id: this.newIntentId("queued-review-terminal"),
-              createdAt: this.now(),
-              title:
-                reviewStartOutcome.status === "failed"
-                  ? "Queued review could not start"
-                  : "Queued review cancelled",
-              body:
-                reviewStartOutcome.error
-                ?? (
-                  reviewStartOutcome.status === "failed"
-                    ? "The queued review failed to start."
-                    : "The active turn did not complete successfully, so the queued review was cancelled."
-                ),
-              recoverable: reviewStartOutcome.status === "failed",
-            }),
-            binding,
-          );
-        }
-      }
-      return;
-    }
-    const automationRunUpdate = automationRunUpdateForBackendEvent(event);
-    if (automationRunUpdate) {
-      await this.handleAutomationRunUpdated({
-        bindings,
-        event,
-        runId: automationRunUpdate.runId,
-        finalText: automationRunUpdate.finalText,
-        outputDecision: automationRunUpdate.outputDecision,
-        status: automationRunUpdate.status,
-        suppressBindingBroadcast: automationRunUpdate.suppressBindingBroadcast,
-      });
-      return;
-    }
-    if (turnQueueUpdate) {
-      const incomingWork = turnQueueUpdate.incomingWork ?? (turnQueueUpdate.messageOrigin?.kind === "agent"
-        ? { messages: [{ origin: turnQueueUpdate.messageOrigin, preview: "Full instructions are in the thread." }], omittedMessageCount: 0 }
-        : undefined);
-      if (turnQueueUpdate.status === "started" && incomingWork) {
-        for (const binding of bindings) await this.deliverIncomingWork(binding,
-          turnQueueUpdate.queueEntryId ?? turnQueueUpdate.turnId ?? "incoming-work", incomingWork);
-      }
-      if (
-        turnQueueUpdate.origin === "automation" &&
-        turnQueueUpdate.messageOrigin?.kind !== "agent" &&
-        turnQueueUpdate.status === "started" &&
-        turnQueueUpdate.turnId
-      ) {
-        await this.handleAutomationTurnStarted({
-          messageOrigin: turnQueueUpdate.messageOrigin,
-          automationName: turnQueueUpdate.automationName,
-          automationRunId: turnQueueUpdate.automationRunId,
-          backend: event.backend,
-          bindings,
-          threadId,
-          turnId: turnQueueUpdate.turnId,
-          suppressBindingBroadcast: turnQueueUpdate.suppressBindingBroadcast,
-        });
-      }
-      if (
-        turnQueueUpdate.origin === "automation" &&
-        turnQueueUpdate.messageOrigin?.kind !== "agent" &&
-        turnQueueUpdate.status === "terminal" &&
-        turnQueueUpdate.turnId
-      ) {
-        await this.handleAutomationTurnTerminal({
-          automationRunId: turnQueueUpdate.automationRunId,
-          backend: event.backend,
-          bindings,
-          event,
-          finalText: turnQueueUpdate.finalText,
-          threadId,
-          turnId: turnQueueUpdate.turnId,
-          suppressBindingBroadcast: turnQueueUpdate.suppressBindingBroadcast,
-        });
-      }
-      return;
-    }
-    const planUpdate = planEntryForBackendEvent(event, this.now());
-    if (planUpdate) {
-      this.planArtifactsByTurnKey.set(
-        artifactTurnKey(event.backend, threadId, planUpdate.turn?.id ?? planUpdate.id),
-        planUpdate,
-      );
-    }
-    const markdownFileArtifactSelection =
-      this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
-    const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
-      ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
-      : undefined;
-    for (const binding of bindings) {
-      let activeTurn = this.getActiveTurn(binding);
-      let turnStateChanged = false;
-      const automationTurnEvent = this.isAutomationTurnEvent(
-        event,
-        binding,
-        eventTurnId ?? lifecycle?.turnId ?? activeTurn?.turnId,
-      );
-      if (lifecycle && !automationTurnEvent) {
-        const previousTurn = activeTurn;
-        activeTurn = lifecycle;
-        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
-        if (turnStateChanged) {
-          this.setActiveTurn(binding, activeTurn);
-          this.logBindingTurnStateChange(
-            binding,
-            previousTurn,
-            activeTurn,
-            event.notification.method,
-          );
-        }
-      } else if (isThreadStatusIdleEvent(event) && activeTurn) {
-        const previousTurn = activeTurn;
-        activeTurn = {
-          ...activeTurn,
-          status: "completed",
-          updatedAt: this.now(),
-        };
-        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
-        if (turnStateChanged) {
-          this.setActiveTurn(binding, activeTurn);
-          this.logBindingTurnStateChange(
-            binding,
-            previousTurn,
-            activeTurn,
-            event.notification.method,
-          );
-        }
-      }
-
-      const terminalPrivateResponse = this.isTerminalPrivateResponseTurn(
-        event.backend,
-        binding.threadId,
-        eventTurnId ?? activeTurn?.turnId,
-      );
-      const privateResponseFallback = this.isPrivateResponseFallbackTurn(
-        event.backend,
-        binding.threadId,
-        eventTurnId ?? activeTurn?.turnId,
-      );
-      const privateReplyCompletion = this.isPrivateReplyCompletionTurn(
-        event.backend,
-        binding.threadId,
-        eventTurnId ?? activeTurn?.turnId,
-      );
-      const suppressSourceResponse =
-        terminalPrivateResponse || privateResponseFallback;
-      if (!suppressSourceResponse && !privateReplyCompletion) {
-        await this.deliverToolActivityForBackendEvent(
-          event,
-          binding,
-          activeTurn?.turnId,
-        );
-      }
-      if (
-        turnStateChanged &&
-        (isTerminalTurnLifecycle(lifecycle) ||
-          (isThreadStatusIdleEvent(event) && activeTurn))
-      ) {
-        const terminalTurnId = turnIdForBackendEvent(event) ?? activeTurn?.turnId;
-        if (suppressSourceResponse && terminalTurnId) {
-          this.toolUpdatePolicy.flush({
-            bindingId: binding.id,
-            clear: true,
-            turnId: terminalTurnId,
-          });
-        } else {
-          await this.flushToolUpdatesForBinding(binding, {
-            clear: true,
-            turnId: terminalTurnId,
-          });
-        }
-        if (terminalTurnId) {
-          await this.finalizeWorkingCard(
-            binding,
-            terminalTurnId,
-            lifecycle?.status === "failed" || lifecycle?.status === "interrupted"
-              ? "failed"
-              : "completed",
-          );
-          this.clearTurnProse(binding.id, terminalTurnId);
-          if (!privateResponseFallback) {
-            const workingUpdateKey = this.turnProseKey(
-              binding.id,
-              terminalTurnId,
-            );
-            this.workingUpdateCancellationSignals.delete(workingUpdateKey);
-            this.workingUpdateDeliveries.delete(workingUpdateKey);
-            this.workingUpdateSurfaces.delete(workingUpdateKey);
-            this.workingUpdateCancellationFailures.delete(workingUpdateKey);
-          }
-        }
-      }
-
-      if (isNonFinalAssistantTextForBackendEvent(event)) {
-        // A provider may reveal the phase only at item completion. Keep the
-        // legacy unphased live path, but do not flush its interim accumulator
-        // as an answer on a later terminal event.
-        const itemId = (event.notification.params as { item?: { id?: string } }).item?.id;
-        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
-        for (const key of this.assistantStreamBufferKeysForEvent(event, binding)) {
-          const buffer = this.assistantStreamBuffers.get(key);
-          if (itemId && buffer?.itemId === itemId) {
-            this.assistantStreamBuffers.delete(key);
-            this.assistantStreamDeliveryQueues.delete(key);
-            this.assistantStreamCancellationSignals.delete(
-              this.turnProseKey(binding.id, buffer.turnId),
-            );
-          }
-        }
-      }
-
-      const assistantDelta = assistantDeltaForBackendEvent(event);
-      if (
-        assistantDelta
-        && !reviewTurnEvent
-        && !terminalPrivateResponse
-        && !privateReplyCompletion
-      ) {
-        if (!automationTurnEvent) {
-          await this.deliverAssistantStreamUpdate(assistantDelta, binding, {
-            bufferOnly: privateResponseFallback,
-          });
-        }
-      }
-
-      const assistantText = standaloneReviewAssistantText ?? (
-        isFinalReviewAssistant ? undefined : rawAssistantText
-      );
-      // A question waits on the operator, so it is delivered like a final
-      // reply whatever its phase, never through the Working Updates dial.
-      const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
-      const deliversAsReply =
-        Boolean(asyncQuestions)
-        || !isNonFinalAssistantTextForBackendEvent(event);
-      if (
-        assistantText
-        && privateResponseFallback
-        && !terminalPrivateResponse
-        && !isNonFinalAssistantTextForBackendEvent(event)
-      ) {
-        const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
-        if (fallbackTurnId && isUnphasedAssistantMessageEvent(event)) {
-          // Only the first fallback is sent, and an unphased message can be a
-          // progress note: Claude reports every message this way. Hold the
-          // latest one until the turn ends.
-          rememberBoundedMap(
-            this.heldPrivateResponseFallbackTextByTurnKey,
-            agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
-            assistantText,
-            MAX_TRACKED_TURN_PROSE,
-          );
-        } else if (fallbackTurnId) {
-          await this.deliverPrivateResponseFallback({
-            binding,
-            event,
-            text: assistantText,
-            turnId: fallbackTurnId,
-          });
-        }
-      } else if (
-        privateResponseFallback
-        && !terminalPrivateResponse
-        && isTerminalTurnLifecycle(activeTurn)
-        && !assistantDelta
-      ) {
-        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
-        const bufferedText = this.takeBufferedAssistantTextForTerminalEvent(
-          event,
-          binding,
-        );
-        const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
-        const fallbackText = fallbackTurnId
-          ? this.heldPrivateResponseFallbackTextByTurnKey.get(
-              agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
-            ) ?? bufferedText
-          : undefined;
-        if (fallbackText && fallbackTurnId) {
-          await this.deliverPrivateResponseFallback({
-            binding,
-            event,
-            text: fallbackText,
-            turnId: fallbackTurnId,
-          });
-        }
-      } else if (
-        assistantText
-        && !suppressSourceResponse
-        && (!privateReplyCompletion || deliversAsReply)
-      ) {
-        if (deliversAsReply) {
-          // Claim the stable backend item before image resolution yields. A
-          // nearly-simultaneous idle/terminal event may flush the same buffered
-          // deltas while this lookup is in flight; both paths must contend for
-          // one item identity before either can create a provider message.
-          const assistantMessageClaimed = this.markAssistantMessageDelivered(
-            event,
-            binding,
-            assistantText,
-          );
-          const assistantImages = await this.resolveAssistantMessageImages(
-            assistantText,
-            event,
-            binding,
-          );
-          if (!assistantMessageClaimed) {
-            await this.deliverAssistantImages(assistantImages, event, binding);
-          } else if (asyncQuestions) {
-            // Codex writes the questions into the message text as well; the
-            // questionnaire presents the same content with answer controls.
-            await this.deliverAsyncQuestionnaire(
-              asyncQuestions,
-              event,
-              binding,
-              eventTurnId ?? activeTurn?.turnId,
-            );
-            await this.deliverAssistantImages(assistantImages, event, binding);
-          } else {
-            const deliveredFinalStream = await this.flushAssistantStreamForEvent(
-              event,
-              binding,
-              assistantText,
-            );
-            if (deliveredFinalStream) {
-              await this.deliverAssistantImages(
-                assistantImages,
-                event,
-                binding,
-                undefined,
-                true,
-              );
-            } else {
-              await this.deliverAssistantMessage(
-                assistantText,
-                event,
-                binding,
-                assistantImages,
-                undefined,
-                true,
-              );
-            }
-          }
-        } else if (!automationTurnEvent) {
-          // NON-final agentMessage completions (commentary and partial answers
-          // the agent emits while thinking) are the agent's in-turn prose. They
-          // flow through the Working Updates dial: suppressed at None, coalesced
-          // into batches at Less/Some/More, sent individually at All — the same
-          // policy that governs tool activity. This replaces the old outright
-          // drop that was added to stop the "pinged a dozen times" flood; the
-          // coalescing preserves that anti-flood intent at low dial settings.
-          await this.deliverAssistantProseForBackendEvent(
-            event,
-            binding,
-            assistantText,
-            activeTurn?.turnId,
-          );
-        }
-      } else {
-        if (
-          !suppressSourceResponse &&
-          isFinalAssistantImageResolutionEvent(event)
-          && !reviewTurnEvent
-        ) {
-          const assistantImages = await this.resolveAssistantMessageImages(
-            "",
-            event,
-            binding,
-          );
-          await this.deliverAssistantImages(assistantImages, event, binding);
-        }
-        if (
-          !suppressSourceResponse &&
-          isTerminalTurnLifecycle(activeTurn)
-          && !assistantDelta
-          && !reviewTurnEvent
-        ) {
-          // Only flush buffered stream text on a genuine terminal event (e.g.
-          // turn/completed, idle) — never on an assistant delta. Deltas are
-          // mid-stream content owned by deliverAssistantStreamUpdate's buffer;
-          // when the turn lifecycle is already terminal but the backend keeps
-          // emitting deltas, letting each delta run the terminal flush re-posts
-          // the (growing) buffer as a brand-new message every time — the
-          // multi-message channel flood (and the budget starvation it caused).
-          await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
-          await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
-        }
-      }
-
-      // Automation turns surface their own terminal output (incl. errors) via
-      // handleAutomationTurnTerminal, so skip them here to avoid a double post.
-      if (
-        !suppressSourceResponse
-        && !automationTurnEvent
-        && activeTurn?.status === "failed"
-      ) {
-        const turnFailureText = errorTextForBackendEvent(event);
-        if (turnFailureText) {
-          await this.deliverTurnFailureMessage(turnFailureText, event, binding);
-        }
-      }
-
-      // A recovered content-filter block changes what the agent answers, so
-      // say why. A block that ends the turn is reported as the turn failure.
-      const responseBlock = readProviderResponseBlockNotification(event.notification);
-      if (
-        responseBlock
-        && !responseBlock.turnEnded
-        && !suppressSourceResponse
-        && !automationTurnEvent
-      ) {
-        await this.deliverResponseBlockedNotice(responseBlock, event, binding);
-      }
-
-      if (completedPlan && !automationTurnEvent && !suppressSourceResponse) {
-        await this.deliverArtifactForBinding({
-          artifact: artifactFromPlanEntry(completedPlan),
-          binding,
-          intentId: `artifact:plan:${completedPlan.turn?.id ?? completedPlan.id}:${binding.id}`,
-        });
-      }
-
-      if (
-        completedReviewArtifact
-        && !automationTurnEvent
-        && !suppressSourceResponse
-      ) {
-        await this.deliverArtifactForBinding({
-          artifact: artifactFromReviewEntry(completedReviewArtifact),
-          binding,
-          intentId: `artifact:review:${completedReviewArtifact.id}:${binding.id}`,
-        });
-      }
-
-      if (
-        markdownFileArtifactSelection
-        && !automationTurnEvent
-        && !suppressSourceResponse
-      ) {
-        await this.deliverArtifactForBinding({
-          artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
-          binding,
-          intentId: `artifact:markdown-file:${markdownFileArtifactSelection.path}:${binding.id}`,
-        });
-      }
-
-      if (isThreadNameUpdatedEvent(event)) {
-        await this.renderAutomaticBindingStatus(
-          binding,
-          undefined,
-          await this.threadContextWithNameFromEvent(binding, event),
-        );
-        continue;
-      }
-
-      // A terminal private response owns the visible completion for this turn.
-      // Backend work events may continue after the tool returns, but must not
-      // re-arm provider typing/activity on either the source binding or the
-      // newly-created private continuation. Terminal lifecycle still flows
-      // through below so any existing activity lease is explicitly cleared.
-      if (suppressSourceResponse && activeTurn?.status === "working") {
-        continue;
-      }
-
-      if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
-        await this.signalTurnActivity(binding, activeTurn!, {
-          reason: event.notification.method,
-          force: true,
-        });
-        if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
-          await this.renderAutomaticBindingStatus(binding);
-        }
-        this.scheduleNextQueuedTurn(binding);
-      } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
-        const previousTurn = activeTurn;
-        activeTurn = {
-          ...activeTurn,
-          status: "working",
-          updatedAt: this.now(),
-        };
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          event.notification.method,
-        );
-        await this.signalTurnActivity(binding, activeTurn, {
-          reason: event.notification.method,
-          force: true,
-        });
-      } else {
-        const latestActiveTurn = this.getActiveTurn(binding);
-        if (latestActiveTurn?.status !== "working") {
-          continue;
-        }
-        if (eventTurnId && latestActiveTurn.turnId !== eventTurnId) {
-          continue;
-        }
-        await this.signalTurnActivity(binding, latestActiveTurn, {
-          reason: event.notification.method,
-          refreshMs: typingActivityRefreshMsForBackendEvent(event),
-        });
-      }
-    }
-    if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
-      const turnKey = agentMessagingTurnKey(
-        event.backend,
-        threadId,
-        lifecycle.turnId,
-      );
-      const origin = this.activeAgentMessagingOriginsByTurnKey.get(turnKey);
-      if (origin?.privateReplyContinuationBindingId) {
-        await this.completePrivateReplyContinuation(
-          origin.privateReplyContinuationBindingId,
-        );
-      }
-      this.privateReplyCompletionTurnKeys.delete(turnKey);
-      this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
-      this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
-      this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
-    }
+  handleBackendEvent(event: AgentEvent): Promise<void> {
+    return this.backendEventRouter.handleBackendEvent(event);
   }
 
   private async refreshStatusSurfacesForBackend(
@@ -5537,15 +4635,8 @@ export class MessagingController {
     );
   }
 
-  private async waitForPendingTurnFailureHandlers(
-    binding: MessagingBindingRecord,
-  ): Promise<void> {
-    const pending = this.pendingTurnFailureHandlersByThreadKey.get(
-      this.threadKeyForBinding(binding),
-    );
-    if (pending?.size) {
-      await Promise.allSettled([...pending]);
-    }
+  private async waitForPendingTurnFailureHandlers(binding: MessagingBindingRecord): Promise<void> {
+    await this.backendEventRouter.waitForPendingTurnFailureHandlers(binding);
   }
 
   private async adoptStartedTurn(params: {
@@ -8966,7 +8057,7 @@ export class MessagingController {
     this.taskMonitorMessagingOrigins.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.startingAgentMessagingOriginsByThreadKey.clear();
-    this.pendingTurnFailureHandlersByThreadKey.clear();
+    this.backendEventRouter.dispose();
     this.privateReplyCompletionTurnKeys.clear();
     this.privateReplyClaims.clear();
     this.terminalPrivateResponseTurnKeys.clear();
@@ -21321,59 +20412,6 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   return match?.[1]?.toLowerCase();
 }
 
-
-/**
- * Narrow an `AppServerNotification` to the `thread/executionMode/queued`
- * variant and return its strongly-typed params. The shared union is
- * tricky to narrow because `AppServerPendingRequestNotification` widens
- * `method: string`, so we look at the params shape too.
- */
-function readExecutionModeQueuedParams(
-  notification: AgentEvent["notification"],
-):
-  | { threadId: ThreadIdentifier; queuedExecutionMode: ThreadExecutionMode; queuedAt: number }
-  | undefined {
-  if (notification.method !== "thread/executionMode/queued") {
-    return undefined;
-  }
-  const params = notification.params as {
-    threadId?: unknown;
-    queuedExecutionMode?: unknown;
-    queuedAt?: unknown;
-  };
-  if (
-    typeof params.threadId === "string" &&
-    (params.queuedExecutionMode === "default" || params.queuedExecutionMode === "auto" || params.queuedExecutionMode === "full-access") &&
-    typeof params.queuedAt === "number"
-  ) {
-    return {
-      threadId: params.threadId,
-      queuedExecutionMode: params.queuedExecutionMode,
-      queuedAt: params.queuedAt,
-    };
-  }
-  return undefined;
-}
-
-function readExecutionModeQueueClearedParams(
-  notification: AgentEvent["notification"],
-): { threadId: ThreadIdentifier; reason: "applied" | "cancelled" } | undefined {
-  if (notification.method !== "thread/executionMode/queueCleared") {
-    return undefined;
-  }
-  const params = notification.params as {
-    threadId?: unknown;
-    reason?: unknown;
-  };
-  if (
-    typeof params.threadId === "string" &&
-    (params.reason === "applied" || params.reason === "cancelled")
-  ) {
-    return { threadId: params.threadId, reason: params.reason };
-  }
-  return undefined;
-}
-
 /**
  * Format a wall-clock timestamp as `HH:MM AM/PM` for messaging audit
  * messages. Mirrors the format the user sees in the desktop transcript.
@@ -22931,78 +21969,12 @@ function sharedConversationMentionInstruction(
   return capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
-function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
-  const params = event.notification.params as {
-    action?: unknown;
-    parentThreadId?: unknown;
-    threadId?: unknown;
-  };
-  if (typeof params.threadId === "string") {
-    return params.threadId;
-  }
-  if (typeof params.parentThreadId === "string") return params.parentThreadId;
-  const action = params.action as { threadId?: unknown } | undefined;
-  return typeof action?.threadId === "string" ? action.threadId : undefined;
-}
-
-function scheduledActionForBackendEvent(
-  event: AgentEvent,
-): ScheduledThreadAction | undefined {
-  if (event.notification.method !== "thread/scheduledAction/updated") {
-    return undefined;
-  }
-  const action = (event.notification.params as { action?: unknown }).action;
-  return action && typeof action === "object"
-    ? action as ScheduledThreadAction
-    : undefined;
-}
-
-function bindingMatchesScheduledActionOrigin(
-  binding: MessagingBindingRecord,
-  action: ScheduledThreadAction,
-): boolean {
-  const origin = action.turn?.messageOrigin?.messaging;
-  if (!origin) return true;
-  return binding.channel.channel === origin.platform
-    && binding.channel.conversation.id === origin.surface.id;
-}
-
 function scheduledActionFailureMessage(
   action: ScheduledThreadAction,
 ): string | undefined {
   return action.status === "failed"
     ? action.errorMessage ?? "The scheduled action could not be dispatched."
     : undefined;
-}
-
-function reviewStartOutcomeForBackendEvent(
-  event: AgentEvent,
-):
-  | {
-      status: "started" | "cancelled" | "failed";
-      error?: string;
-    }
-  | undefined {
-  if (event.notification.method !== "thread/reviewStart/updated") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    status?: unknown;
-    error?: unknown;
-  };
-  if (
-    params.status !== "started"
-    && params.status !== "cancelled"
-    && params.status !== "failed"
-  ) {
-    return undefined;
-  }
-  return {
-    status: params.status,
-    ...(typeof params.error === "string"
-      ? { error: params.error }
-      : {}),
-  };
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
@@ -23101,180 +22073,8 @@ function readNumberField(
   return undefined;
 }
 
-function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
 function formatContextUsageNumber(value: number): string {
   return Math.round(value).toLocaleString();
-}
-
-function planEntryForBackendEvent(
-  event: AgentEvent,
-  createdAt: number,
-): AppServerThreadPlanEntry | undefined {
-  if (event.notification.method !== "turn/plan/updated") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    plan?: {
-      explanation?: unknown;
-      steps?: unknown;
-    };
-    turnId?: unknown;
-  };
-  if (typeof params.turnId !== "string" || !Array.isArray(params.plan?.steps)) {
-    return undefined;
-  }
-  const explanation = typeof params.plan.explanation === "string"
-    ? params.plan.explanation.trim()
-    : undefined;
-  const steps = params.plan.steps.flatMap((step): AppServerThreadPlanEntry["steps"] => {
-    if (!step || typeof step !== "object") {
-      return [];
-    }
-    const record = step as { status?: unknown; step?: unknown };
-    if (
-      typeof record.step !== "string" ||
-      !isPlanStepStatus(record.status) ||
-      !record.step.trim()
-    ) {
-      return [];
-    }
-    return [{ step: record.step.trim(), status: record.status }];
-  });
-  if (!explanation && steps.length === 0) {
-    return undefined;
-  }
-  return planEntryFromUpdate({
-    createdAt,
-    id: `plan:${params.turnId}`,
-    ...(explanation ? { explanation } : {}),
-    steps,
-    turnId: params.turnId,
-  });
-}
-
-function reviewArtifactForBackendEvent(
-  event: AgentEvent,
-  createdAt: number,
-): AppServerThreadReviewEntry | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    item?: unknown;
-    turnId?: unknown;
-  };
-  if (!params.item || typeof params.item !== "object") {
-    return undefined;
-  }
-  const item = params.item as {
-    data?: unknown;
-    id?: unknown;
-    review?: unknown;
-    review_output?: unknown;
-    reviewOutput?: unknown;
-    text?: unknown;
-    type?: unknown;
-  };
-  if (typeof item.id !== "string" || typeof item.type !== "string") {
-    return undefined;
-  }
-  const normalizedType = normalizeReviewItemType(item.type);
-  if (
-    normalizedType !== "exitedreviewmode" &&
-    normalizedType !== "review" &&
-    normalizedType !== "reviewartifact"
-  ) {
-    return undefined;
-  }
-  const reviewOutput = normalizeStructuredReviewOutput(item as Record<string, unknown>);
-  const review = (typeof item.review === "string" ? item.review.trim() : "") ||
-    (typeof item.text === "string" ? item.text.trim() : "") ||
-    reviewOutput?.overall_explanation.trim() ||
-    "";
-  if (!review) {
-    return undefined;
-  }
-  return {
-    type: "review",
-    id: item.id,
-    createdAt,
-    review,
-    displayText: "Code review completed",
-    ...(reviewOutput ? { output: reviewOutput } : {}),
-    ...(typeof params.turnId === "string"
-      ? {
-          turn: {
-            id: params.turnId,
-          },
-        }
-      : {}),
-  };
-}
-
-function normalizeStructuredReviewOutput(
-  item: Record<string, unknown>,
-): AppServerThreadReviewEntry["output"] | undefined {
-  const data = asPlainRecord(item.data);
-  const reviewOutput =
-    asPlainRecord(data?.reviewOutput) ??
-    asPlainRecord(data?.review_output) ??
-    asPlainRecord(item.reviewOutput) ??
-    asPlainRecord(item.review_output);
-  return normalizeReviewOutputRecord(reviewOutput);
-}
-
-function isPlanStepStatus(value: unknown): value is AppServerThreadPlanEntry["steps"][number]["status"] {
-  return value === "pending" || value === "in_progress" || value === "completed";
-}
-
-function normalizeReviewItemType(type: string): string {
-  return type.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function isReviewTurnMarkerEvent(event: AgentEvent): boolean {
-  if (
-    event.notification.method !== "item/started"
-    && event.notification.method !== "item/completed"
-  ) {
-    return false;
-  }
-  const item = (event.notification.params as {
-    item?: { type?: unknown };
-  }).item;
-  if (typeof item?.type !== "string") {
-    return false;
-  }
-  const normalizedType = normalizeReviewItemType(item.type);
-  return (
-    normalizedType === "enteredreviewmode"
-    || normalizedType === "exitedreviewmode"
-    || normalizedType === "review"
-    || normalizedType === "reviewartifact"
-  );
-}
-
-function artifactTurnKey(
-  backend: AppServerBackendKind,
-  threadId: ThreadIdentifier,
-  turnId: string,
-): string {
-  return `${backend}:${threadId}:${turnId}`;
-}
-
-function turnIdForBackendEvent(event: AgentEvent): string | undefined {
-  const params = event.notification.params as {
-    turn?: { id?: unknown };
-    turnId?: unknown;
-  };
-  if (typeof params.turnId === "string") {
-    return params.turnId;
-  }
-  return typeof params.turn?.id === "string" ? params.turn.id : undefined;
 }
 
 function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {
@@ -23373,34 +22173,11 @@ function automationTurnKey(params: {
   return `${params.backend}:${params.threadId}:${params.turnId}`;
 }
 
-function agentMessagingTurnKey(
-  backend: AppServerBackendKind,
-  threadId: ThreadIdentifier,
-  turnId: string,
-): string {
-  return `${backend}:${threadId}:${turnId}`;
-}
-
 function agentMessagingThreadKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
 ): string {
   return buildThreadIdentityKey(backend, threadId);
-}
-
-function threadKeyForBackendEvent(
-  event: AgentEvent,
-  threadId: ThreadIdentifier,
-): string {
-  return event.federationTarget?.scope === "remote"
-    ? federatedThreadIdentityKey(
-        buildFederatedThreadRef({
-          backend: event.backend,
-          instanceId: event.federationTarget.instanceId,
-          threadId,
-        }),
-      )
-    : buildThreadIdentityKey(event.backend, threadId);
 }
 
 function agentMessagingQueueKey(
@@ -23617,204 +22394,6 @@ function managedConversationUnavailableMessage(
   return "PwrAgent cannot create a native child conversation in the current messaging location.";
 }
 
-function turnQueueUpdateForBackendEvent(event: AgentEvent): {
-  messageOrigin?: AppServerThreadMessageOrigin;
-  incomingWork?: ThreadIncomingWorkSummary;
-  automationName?: string;
-  automationRunId?: string;
-  errorMessage?: string;
-  finalText?: string;
-  origin?: string;
-  queueEntryId?: string;
-  status?: string;
-  suppressBindingBroadcast?: boolean;
-  turnId?: string;
-} | undefined {
-  if (event.notification.method !== "thread/turnQueue/updated") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    messageOrigin?: AppServerThreadMessageOrigin;
-    incomingWork?: ThreadIncomingWorkSummary;
-    automationName?: unknown;
-    automationRunId?: unknown;
-    errorMessage?: unknown;
-    finalText?: unknown;
-    origin?: unknown;
-    queueEntryId?: unknown;
-    status?: unknown;
-    suppressBindingBroadcast?: unknown;
-    turnId?: unknown;
-  };
-  return {
-    messageOrigin: params.messageOrigin,
-    incomingWork: params.incomingWork,
-    automationName:
-      typeof params.automationName === "string" ? params.automationName : undefined,
-    automationRunId:
-      typeof params.automationRunId === "string" ? params.automationRunId : undefined,
-    errorMessage:
-      typeof params.errorMessage === "string" ? params.errorMessage : undefined,
-    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
-    origin: typeof params.origin === "string" ? params.origin : undefined,
-    queueEntryId:
-      typeof params.queueEntryId === "string" ? params.queueEntryId : undefined,
-    status: typeof params.status === "string" ? params.status : undefined,
-    suppressBindingBroadcast: params.suppressBindingBroadcast === true,
-    turnId: typeof params.turnId === "string" ? params.turnId : undefined,
-  };
-}
-
-function automationRunUpdateForBackendEvent(event: AgentEvent): {
-  finalText?: string;
-  outputDecision?: AutomationRunOutputDecision;
-  runId: string;
-  status: string;
-  suppressBindingBroadcast?: boolean;
-} | undefined {
-  if (event.notification.method !== "automation/run/updated") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    finalText?: unknown;
-    outputDecision?: unknown;
-    runId?: unknown;
-    status?: unknown;
-    suppressBindingBroadcast?: unknown;
-  };
-  if (typeof params.runId !== "string" || typeof params.status !== "string") {
-    return undefined;
-  }
-  return {
-    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
-    outputDecision: isAutomationRunOutputDecision(params.outputDecision)
-      ? params.outputDecision
-      : undefined,
-    runId: params.runId,
-    status: params.status,
-    suppressBindingBroadcast: params.suppressBindingBroadcast === true,
-  };
-}
-
-function isAutomationRunOutputDecision(
-  value: unknown,
-): value is AutomationRunOutputDecision {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const kind = (value as { kind?: unknown }).kind;
-  return kind === "post_card" || kind === "quiet" || kind === "parse_failed";
-}
-
-/**
- * True for a mid-stream (non-final) `agentMessage` completion — a phased item
- * whose phase is neither `final` nor `final_answer` (e.g. Codex `commentary`).
- * These are suppressed on messaging so a turn posts one answer, not a message
- * per intermediate phase.
- *
- * Assumption: a backend marks its user-facing answer with the `final` /
- * `final_answer` phase (or no phase). If a future backend used a different phase
- * string for its terminal text, this would treat it as intermediate — but the
- * answer would still reach messaging via the `turn/completed` output text (see
- * {@link assistantTextForBackendEvent}), so nothing is lost, only slightly
- * delayed to turn end. Widen the allowlist here if that assumption changes.
- */
-function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
-  if (event.notification.method !== "item/completed") {
-    return false;
-  }
-  const params = event.notification.params as {
-    item?: {
-      phase?: unknown;
-      type?: unknown;
-    };
-  };
-  if (params.item?.type !== "agentMessage") {
-    return false;
-  }
-  const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
-  return Boolean(phase && phase !== "final" && phase !== "final_answer");
-}
-
-/** An `agentMessage` completion with no phase, which may be a progress note. */
-function isUnphasedAssistantMessageEvent(event: AgentEvent): boolean {
-  if (event.notification.method !== "item/completed") {
-    return false;
-  }
-  const item = (event.notification.params as {
-    item?: { phase?: unknown; type?: unknown };
-  }).item;
-  return item?.type === "agentMessage" && typeof item.phase !== "string";
-}
-
-function isFinalAssistantImageResolutionEvent(event: AgentEvent): boolean {
-  if (event.notification.method === "turn/completed") {
-    return true;
-  }
-  if (event.notification.method !== "item/completed") {
-    return false;
-  }
-  const item = (event.notification.params as {
-    item?: { type?: unknown };
-  }).item;
-  return item?.type === "agentMessage"
-    && !isNonFinalAssistantTextForBackendEvent(event);
-}
-
-function taskMonitorItemData(item: unknown): Record<string, unknown> | undefined {
-  const data = asPlainRecord(asPlainRecord(item)?.data);
-  return data?.source === "pwragent_task_monitor" ? data : undefined;
-}
-
-type MessagingTaskMonitorLifecycle = {
-  activity: MessagingToolActivity;
-  monitorId: string;
-  parentTurnId?: string;
-};
-
-function taskMonitorLifecycleActivityForBackendEvent(
-  event: AgentEvent,
-): MessagingTaskMonitorLifecycle | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = asPlainRecord((event.notification.params as { item?: unknown }).item);
-  const data = taskMonitorItemData(item);
-  if (!item || !data || typeof data.monitorId !== "string") {
-    return undefined;
-  }
-  const created = item.type === "taskMonitorCreated";
-  const completed = item.type === "taskMonitorCompletion"
-    && (data.outcome === "success" || data.outcome === "failure");
-  if (!created && !completed) {
-    return undefined;
-  }
-  const task = typeof data.task === "string" ? data.task : "Job";
-  const phase = created ? "Created" : data.outcome === "failure" ? "Failed" : "Succeeded";
-  return {
-    monitorId: data.monitorId,
-    ...(typeof data.parentTurnId === "string" ? { parentTurnId: data.parentTurnId } : {}),
-    activity: {
-      // Dedup lifecycle replays independently of timestamped backend item ids.
-      id: `monitor:${data.monitorId}:${phase}`,
-      kind: "tool",
-      status: data.outcome === "failure" ? "failed" : "completed",
-      title: `Monitor · ${task} · ${phase}`,
-    },
-  };
-}
-
-function isPrivateTaskMonitorEvent(event: AgentEvent): boolean {
-  if (taskMonitorLifecycleActivityForBackendEvent(event)) {
-    return false;
-  }
-  const params = event.notification.params as { item?: unknown };
-  return Boolean(
-    taskMonitorItemData(params.item)
-    || turnIdForBackendEvent(event)?.startsWith("monitor:"),
-  );
-}
-
 /**
  * Stable id for an in-turn prose activity so the coalescing policy dedups
  * re-emitted events. Prefers the backend item id; falls back to a
@@ -23839,54 +22418,6 @@ function proseActivityIdForBackendEvent(
     }
   }
   return `prose:${turnId}:${text.length}:${text.slice(0, 24)}`;
-}
-
-function isTerminalTurnLifecycle(
-  lifecycle: MessagingActiveTurnSummary | undefined,
-): boolean {
-  return Boolean(
-    lifecycle &&
-      ["completed", "failed", "interrupted"].includes(lifecycle.status),
-  );
-}
-
-function rememberBoundedKey(
-  set: Set<string>,
-  key: string,
-  maxSize = MAX_DELIVERED_AUTOMATION_KEYS,
-): void {
-  set.add(key);
-  while (set.size > maxSize) {
-    const oldest = set.values().next().value;
-    if (oldest === undefined) break;
-    set.delete(oldest);
-  }
-}
-
-function isSameActiveTurnState(
-  previous: MessagingActiveTurnSummary | undefined,
-  next: MessagingActiveTurnSummary | undefined,
-): boolean {
-  return Boolean(
-    previous &&
-      next &&
-      previous.turnId === next.turnId &&
-      previous.status === next.status,
-  );
-}
-
-function isThreadNameUpdatedEvent(event: AgentEvent): boolean {
-  return event.notification.method === "thread/name/updated";
-}
-
-function shouldRenderStatusForTurnStateChange(
-  event: AgentEvent,
-  lifecycle: MessagingActiveTurnSummary | undefined,
-): boolean {
-  if (event.notification.method === "thread/status/changed") {
-    return false;
-  }
-  return Boolean(lifecycle && ["failed", "interrupted"].includes(lifecycle.status));
 }
 
 function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
@@ -24134,57 +22665,6 @@ function sleepUntil(
   });
 }
 
-/**
- * The questions a Codex `request_user_input_async` message asked. The reply
- * names each question by this item id, so a message without one cannot be
- * answered and stays ordinary assistant text.
- */
-function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
-  if (event.notification.method === "item/completed") {
-    const params = event.notification.params as {
-      item?: {
-        text?: unknown;
-        type?: unknown;
-      };
-    };
-    if (params.item?.type !== "agentMessage" || typeof params.item.text !== "string") {
-      return undefined;
-    }
-    return params.item.text.trim() || undefined;
-  }
-
-  if (event.notification.method === "turn/completed") {
-    // Claude reports each assistant message of the turn as its own part, and
-    // each one already arrived through item/completed. The answer is the last.
-    const params = event.notification.params as { turn?: { output?: unknown } };
-    return finalTurnOutputText(params.turn?.output);
-  }
-
-  return undefined;
-}
-
-/**
- * The user-facing error text for a failed terminal turn, or undefined when the
- * event is not a turn failure. Codex turn failures are normalized to
- * `turn/failed` at the adapter boundary, so keying on that single method covers
- * both Codex and synthetic (start-failure / ACP) failures. The message is run
- * through {@link parseCodexTurnErrorMessage} to unwrap provider JSON envelopes;
- * the parse is idempotent for already-clean messages.
- */
-function errorTextForBackendEvent(event: AgentEvent): string | undefined {
-  if (event.notification.method !== "turn/failed") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    turn?: { error?: { message?: unknown } };
-  };
-  const message = params.turn?.error?.message;
-  if (typeof message !== "string" || !message.trim()) {
-    return undefined;
-  }
-  return parseCodexTurnErrorMessage(message);
-}
-
 function isClaudeSessionGoneFailure(event: AgentEvent): boolean {
   if (event.backend !== "claude" || event.notification.method !== "turn/failed") {
     return false;
@@ -24192,50 +22672,6 @@ function isClaudeSessionGoneFailure(event: AgentEvent): boolean {
   const turn = asPlainRecord(event.notification.params.turn);
   const error = asPlainRecord(turn?.error);
   return error?.recovery === "claudeSessionGone";
-}
-
-function assistantDeltaForBackendEvent(
-  event: AgentEvent,
-): AssistantStreamDelta | undefined {
-  if (event.notification.method !== "item/agentMessage/delta") {
-    return undefined;
-  }
-  const params = event.notification.params as {
-    delta?: unknown;
-    itemId?: unknown;
-    phase?: unknown;
-    threadId?: unknown;
-    turnId?: unknown;
-  };
-  // Interim prose is delivered at item completion through Working Updates.
-  // Never accumulate it in the answer stream or a terminal fallback can post it.
-  if (
-    params.phase === "commentary"
-    || params.phase === "partial"
-    || params.phase === "partial_answer"
-  ) {
-    return undefined;
-  }
-  if (
-    typeof params.threadId !== "string" ||
-    typeof params.turnId !== "string" ||
-    typeof params.itemId !== "string" ||
-    typeof params.delta !== "string" ||
-    params.delta.length === 0
-  ) {
-    return undefined;
-  }
-  return {
-    delta: params.delta,
-    itemId: params.itemId,
-    streamKey: assistantStreamKey({
-      backend: event.backend,
-      threadId: params.threadId,
-      turnId: params.turnId,
-    }),
-    threadId: params.threadId,
-    turnId: params.turnId,
-  };
 }
 
 function assistantStreamKeysForBackendEvent(event: AgentEvent): string[] {
@@ -24281,19 +22717,6 @@ function assistantStreamFilterForBackendEvent(
         ? params.turn.id
         : undefined,
   };
-}
-
-function assistantStreamKey(params: {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
-  turnId?: string;
-}): string {
-  return [
-    params.backend,
-    params.threadId,
-    params.turnId ?? "",
-    "assistant-text",
-  ].join(":");
 }
 
 function compactLogPreview(text: string, limit = 96): string {
@@ -24486,133 +22909,6 @@ function assistantMessageThreadId(
   return identity?.threadId
     ?? (typeof params.threadId === "string" ? params.threadId : "");
 }
-
-function isThreadStatusIdleEvent(event: AgentEvent): boolean {
-  if (event.notification.method !== "thread/status/changed") {
-    return false;
-  }
-  const params = event.notification.params as {
-    status?: {
-      type?: unknown;
-    };
-  };
-  return params.status?.type === "idle";
-}
-
-function isTurnWorkActivityEvent(
-  event: AgentEvent,
-  activeTurn: MessagingActiveTurnSummary,
-): boolean {
-  const params = event.notification.params as {
-    turn?: {
-      id?: unknown;
-    };
-    turnId?: unknown;
-  };
-  const turnId =
-    typeof params.turnId === "string"
-      ? params.turnId
-      : typeof params.turn?.id === "string"
-        ? params.turn.id
-        : undefined;
-  if (turnId !== activeTurn.turnId) {
-    return false;
-  }
-
-  return (
-    event.notification.method.startsWith("item/") ||
-    event.notification.method.startsWith("turn/") ||
-    event.notification.method.startsWith("thread/")
-  );
-}
-
-function typingActivityRefreshMsForBackendEvent(event: AgentEvent): number {
-  const method = event.notification.method;
-  return method.startsWith("item/") && !isHighFrequencyItemActivityEvent(method)
-    ? TYPING_ACTIVITY_CONTINUATION_REFRESH_MS
-    : TYPING_ACTIVITY_REFRESH_MS;
-}
-
-function isHighFrequencyItemActivityEvent(method: string): boolean {
-  return (
-    method.endsWith("/delta") ||
-    method.endsWith("Delta") ||
-    method.endsWith("/progress")
-  );
-}
-
-function turnLifecycleForBackendEvent(
-  event: AgentEvent,
-  now: number,
-): MessagingActiveTurnSummary | undefined {
-  switch (event.notification.method) {
-    case "turn/started": {
-      const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn?.id;
-      if (!turnId) {
-        return undefined;
-      }
-      return {
-        turnId,
-        status: "working",
-        startedAt: params.turn?.startedAt ?? undefined,
-        updatedAt: now,
-      };
-    }
-    case "turn/completed": {
-      const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn?.id;
-      if (!turnId) {
-        return undefined;
-      }
-      // Codex answers turn/interrupt with turn/completed, status
-      // interrupted: the turn stopped, it did not finish.
-      return {
-        turnId,
-        status: params.turn?.status === "interrupted" ? "interrupted" : "completed",
-        startedAt: params.turn?.startedAt ?? undefined,
-        updatedAt: now,
-      };
-    }
-    case "turn/failed": {
-      const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn?.id;
-      if (!turnId) {
-        return undefined;
-      }
-      return {
-        turnId,
-        status: "failed",
-        startedAt: params.turn?.startedAt ?? undefined,
-        updatedAt: now,
-      };
-    }
-    case "turn/cancelled": {
-      const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn?.id;
-      if (!turnId) {
-        return undefined;
-      }
-      return {
-        turnId,
-        status: "interrupted",
-        startedAt: params.turn?.startedAt ?? undefined,
-        updatedAt: now,
-      };
-    }
-    default:
-      return undefined;
-  }
-}
-
-type TurnLifecycleParams = {
-  turnId?: string | null;
-  turn?: {
-    id?: string | null;
-    startedAt?: number | null;
-    status?: string | null;
-  };
-};
 
 function buildMessagingStartedThreadContext(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
