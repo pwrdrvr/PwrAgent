@@ -341,6 +341,14 @@ describe("action → permission lookup tables", () => {
     expect(permissionForDynamicTool("thread_inspection", "mark_project_read")).toBe(
       "thread.control.organize",
     );
+    // The agent's own /schedule: a contact who may not schedule cannot have
+    // the agent schedule for them.
+    expect(permissionForDynamicTool("thread_inspection", "schedule_follow_up")).toBe(
+      permissionForCommandVerb("schedule"),
+    );
+    expect(permissionForDynamicTool("thread_inspection", "schedule_follow_up")).toBe(
+      "thread.control.schedule",
+    );
     expect(permissionForDynamicTool("thread_inspection", "apply_thread_maintenance")).toBe(
       "thread.control.archive",
     );

@@ -24,7 +24,10 @@ export const THREAD_PENDING_WAKE_TEXT_MAX_CHARS = 600;
 
 /** Source-owned compact scheduled rows; execution inputs never enter this list. */
 export type PendingWakeScheduledAction = Pick<ScheduledThreadAction,
-  "id" | "kind" | "origin" | "status" | "scheduledFor" | "displayText" | "createdAt" | "updatedAt" | "queueEntryId">;
+  "id" | "kind" | "origin" | "status" | "scheduledFor" | "displayText" | "createdAt" | "updatedAt" | "queueEntryId"> & {
+  /** An agent follow-up the thread's loop guard keeps from firing. */
+  followUpSuspended?: true;
+};
 export type PendingWakeScheduledActions = { actions: PendingWakeScheduledAction[]; incomplete?: true };
 
 export const THREAD_PENDING_WAKE_SOURCE_METHODS: ReadonlySet<string> = new Set([
@@ -112,6 +115,11 @@ export type ThreadPendingWakeSource =
       /** `held` waits for the operator to release it, not for a time. */
       status: "held" | "scheduled";
       displayText: string;
+      /**
+       * An agent follow-up that loop protection keeps from firing until the
+       * local operator rearms the thread.
+       */
+      followUpSuspended?: true;
     }
   | { kind: "backend_task"; task: AppServerBackgroundTask }
   | {
@@ -188,6 +196,16 @@ export type ThreadPendingWakesRequest =
       /** Set for a peer's thread; its owner stops the wake. */
       federationTarget?: FederationTarget;
       key: string;
+    }
+  | {
+      /**
+       * Clears a tripped agent follow-up loop guard. Only the local operator
+       * of the owning instance may; a peer or an agent is refused.
+       */
+      action: "rearm_follow_ups";
+      backend: AppServerBackendKind;
+      threadId: string;
+      federationTarget?: FederationTarget;
     };
 
 export type ThreadPendingWakesErrorCode =
@@ -197,7 +215,7 @@ export type ThreadPendingWakesErrorCode =
   | "failed";
 
 export type ThreadPendingWakesResponse =
-  | ({ ok: true } & Partial<ThreadPendingWakesList> & { stopped?: boolean })
+  | ({ ok: true } & Partial<ThreadPendingWakesList> & { stopped?: boolean; rearmed?: boolean })
   | { ok: false; error: { code: ThreadPendingWakesErrorCode; message: string } };
 
 /**

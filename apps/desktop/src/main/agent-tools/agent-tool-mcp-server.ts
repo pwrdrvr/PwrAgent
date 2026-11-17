@@ -56,6 +56,9 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
     + (has("manage_thread_dependencies")
       ? " Other local threads/PRs: manage_thread_dependencies (Continue After), mode all for multiple PRs."
       : "")
+    + (has("schedule_follow_up")
+      ? " A wait that is only a time: schedule_follow_up."
+      : "")
     + (has("create_monitor_delegation")
       ? " Other long jobs: create_monitor_delegation."
       : "")

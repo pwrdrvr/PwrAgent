@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentEvent,
+  AgentFollowUpProtection,
+  AppServerBackendKind,
+  AppServerThreadMessageOrigin,
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
@@ -9,12 +12,20 @@ import type {
   ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
-import { isThreadLockRefusal } from "@pwragent/shared";
+import {
+  AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD,
+  AGENT_FOLLOW_UP_MAX_DELAY_MS,
+  AGENT_FOLLOW_UP_MIN_DELAY_MS,
+  AGENT_FOLLOW_UP_PROMPT_MAX_CHARS,
+  isThreadLockRefusal,
+} from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import { AgentFollowUpRefusal } from "./agent-follow-up-refusal.js";
+import { buildAgentFollowUpToolHandler } from "./agent-follow-up-tool.js";
 
 const scheduledActionLog = getMainLogger("pwragent:scheduled-actions");
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -26,6 +37,8 @@ const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 // exact same-process ownership available so a sibling service cannot recover
 // work from a scheduler that is still active after resume.
 const activeSchedulerOwnerIds = new Set<string>();
+
+type FollowUpThread = { backend: AppServerBackendKind; threadId: string };
 
 export type ScheduledThreadActionServiceOptions = {
   registry: DesktopBackendRegistry;
@@ -60,6 +73,7 @@ export function initializeScheduledThreadActionService(
     registry.setScheduledThreadActionCreator((request, options) =>
       nextService.create(request, options),
     );
+    registry.setAgentFollowUpToolHandler(buildAgentFollowUpToolHandler(nextService));
     service = nextService;
     serviceRegistry = registry;
   }
@@ -69,6 +83,7 @@ export function initializeScheduledThreadActionService(
 export function disposeScheduledThreadActionService(): void {
   service?.dispose();
   serviceRegistry?.setScheduledThreadActionCreator(undefined);
+  serviceRegistry?.setAgentFollowUpToolHandler(undefined);
   service = null;
   serviceRegistry = null;
 }
@@ -145,11 +160,103 @@ export class ScheduledThreadActionService {
     return this.options.store.get(id);
   }
 
+  /**
+   * An agent's one-shot wake for its own thread. The caller supplies the
+   * thread from the tool call's trusted context, never from tool arguments.
+   * `provenance` carries the messaging source of the turn that asked, so the
+   * woken turn stays under that contact's permissions.
+   */
+  async createAgentFollowUp(request: FollowUpThread & {
+    scheduledFor: number;
+    prompt: string;
+    provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
+  }): Promise<ScheduledThreadAction> {
+    const now = this.now();
+    const prompt = request.prompt.trim();
+    if (!prompt) {
+      throw new AgentFollowUpRefusal("invalid_arguments", "Provide prompt: what this thread should do when the follow-up fires, written so a reader without this conversation can act on it.");
+    }
+    if (prompt.length > AGENT_FOLLOW_UP_PROMPT_MAX_CHARS) {
+      throw new AgentFollowUpRefusal("invalid_arguments", `The follow-up prompt is limited to ${AGENT_FOLLOW_UP_PROMPT_MAX_CHARS} characters.`);
+    }
+    if (!Number.isFinite(request.scheduledFor)) {
+      throw new AgentFollowUpRefusal("invalid_arguments", "Provide delayMinutes or an ISO 8601 time in at.");
+    }
+    if (request.scheduledFor < now + AGENT_FOLLOW_UP_MIN_DELAY_MS) {
+      throw new AgentFollowUpRefusal("invalid_arguments", "A follow-up fires at least one minute from now. Do work that is ready now in this turn.");
+    }
+    if (request.scheduledFor > now + AGENT_FOLLOW_UP_MAX_DELAY_MS) {
+      throw new AgentFollowUpRefusal("invalid_arguments", "A follow-up fires within a year. Ask the operator for an automation for a longer or recurring schedule.");
+    }
+    const created = this.options.store.createAgentFollowUp({
+      id: `scheduled-action:${randomUUID()}`,
+      backend: request.backend,
+      threadId: request.threadId,
+      kind: "turn",
+      origin: "agent",
+      scheduledFor: request.scheduledFor,
+      displayText: prompt,
+      turn: {
+        input: [{ type: "text", text: prompt }],
+        messageOrigin: { kind: "pwragent", ...request.provenance },
+      },
+      now,
+    }, AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD);
+    if ("refused" in created) {
+      throw new AgentFollowUpRefusal("forbidden", `This thread already has ${created.active} follow-ups waiting; the limit is ${AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD}. Cancel one first, or let one fire.`);
+    }
+    await this.publish(created.action);
+    this.scheduleNextTimer();
+    return created.action;
+  }
+
+  /**
+   * An agent cancels only a follow-up an agent set on this same thread, and
+   * only before it is dispatched. Everything else is the operator's.
+   */
+  async cancelAgentFollowUp(thread: FollowUpThread, id: string): Promise<ScheduledThreadAction> {
+    const current = this.options.store.get(id);
+    if (!current || current.backend !== thread.backend || current.threadId !== thread.threadId) {
+      throw new AgentFollowUpRefusal("not_found", "No follow-up with that id waits on this thread. Use action list.");
+    }
+    if (current.origin !== "agent") {
+      throw new AgentFollowUpRefusal("forbidden", "The operator scheduled that action. Only the operator can cancel it.");
+    }
+    if (current.status !== "scheduled" && current.status !== "held" && current.status !== "queued") {
+      throw new AgentFollowUpRefusal("not_found", `That follow-up is already ${current.status}. Cancel cannot undo a turn that started.`);
+    }
+    return (await this.cancel({ id })).action;
+  }
+
+  agentFollowUpProtection(thread: FollowUpThread): AgentFollowUpProtection {
+    return this.options.store.agentFollowUpProtection(thread, this.now());
+  }
+
+  countActiveAgentFollowUps(thread: FollowUpThread): number {
+    return this.options.store.countActiveAgentFollowUps(thread);
+  }
+
+  /**
+   * Clears a tripped loop guard. Callers must have established that the
+   * request came from the local operator; no agent or peer path reaches this.
+   */
+  async rearmAgentFollowUps(thread: FollowUpThread): Promise<void> {
+    this.options.store.rearmAgentFollowUps(thread);
+    await this.publishFollowUpGuardChange(thread);
+    this.scheduleNextTimer();
+    await this.evaluateDueActions();
+  }
+
   async create(
     request: CreateScheduledThreadActionRequest,
     options?: { id?: string },
   ): Promise<ScheduledThreadActionMutationResponse> {
     validateScheduledActionRequest(request);
+    // The desktop, messaging and peer surfaces share this path. Only
+    // createAgentFollowUp, which applies the agent limits, writes this origin.
+    if (request.origin === "agent") {
+      throw new Error("Agent follow-ups are created with schedule_follow_up.");
+    }
     const now = this.now();
     const id = options?.id ?? `scheduled-action:${randomUUID()}`;
     const existing = this.options.store.get(id);
@@ -301,7 +408,16 @@ export class ScheduledThreadActionService {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     const claimed = this.options.store.claim(request.id, this.claimParams());
+    await this.publishSuspendedFollowUpThreads();
     if (!claimed) {
+      const current = this.options.store.get(request.id);
+      if (
+        current?.origin === "agent"
+        && (current.status === "scheduled" || current.status === "held")
+        && this.options.store.agentFollowUpProtection(current, this.now()).suspendedAt !== undefined
+      ) {
+        throw new Error("Agent follow-ups are suspended on this thread. Rearm them in Waiting for first.");
+      }
       throw new Error("The scheduled action is no longer scheduled.");
     }
     await this.publish(claimed);
@@ -320,6 +436,7 @@ export class ScheduledThreadActionService {
     try {
       while (true) {
         const action = this.options.store.claimNextDue(this.claimParams());
+        await this.publishSuspendedFollowUpThreads();
         if (!action) break;
         await this.publish(action);
         await this.dispatch(action);
@@ -513,11 +630,11 @@ export class ScheduledThreadActionService {
         this.now(),
       );
     } else if (params.status === "started") {
-      updated = this.options.store.markStarted(
-        actionId,
-        typeof params.turnId === "string" ? params.turnId : undefined,
-        this.now(),
-      );
+      const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+      updated = this.options.store.markStarted(actionId, turnId, this.now())
+        // An unlock starts what the lock held without a new claim. Without
+        // this the action stays held after its turn has started.
+        ?? this.options.store.markHeldStarted(actionId, params.queueEntryId, turnId, this.now());
     } else if (params.status === "failed") {
       updated = this.options.store.markFailed(
         actionId,
@@ -598,6 +715,27 @@ export class ScheduledThreadActionService {
       notification: {
         method: "thread/scheduledAction/updated",
         params: { action },
+      },
+    });
+  }
+
+  /** Waiting for redraws when a claim trips a thread's loop guard. */
+  private async publishSuspendedFollowUpThreads(): Promise<void> {
+    for (const thread of this.options.store.takeSuspendedAgentFollowUpThreads()) {
+      scheduledActionLog.warn("agent follow-ups suspended by loop protection", {
+        backend: thread.backend,
+        threadId: thread.threadId,
+      });
+      await this.publishFollowUpGuardChange(thread);
+    }
+  }
+
+  private async publishFollowUpGuardChange(thread: FollowUpThread): Promise<void> {
+    await this.options.registry.publishLocalEvent({
+      backend: thread.backend,
+      notification: {
+        method: "navigation/invalidated",
+        params: { sourceMethod: "thread/scheduledAction/updated", threadId: thread.threadId },
       },
     });
   }

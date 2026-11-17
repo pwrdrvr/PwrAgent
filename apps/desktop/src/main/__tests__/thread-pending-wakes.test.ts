@@ -309,6 +309,27 @@ describe("buildThreadPendingWakes", () => {
   });
 });
 
+describe("agent follow-ups", () => {
+  it("lists a follow-up as set by the agent, cancellable, and marks one the loop guard suspends", async () => {
+    const list = await buildThreadPendingWakes(readers({
+      scheduledActions: () => ({ actions: [
+        scheduled({ id: "follow-up-1", origin: "agent" }),
+        { ...scheduled({ id: "follow-up-2", origin: "agent", scheduledFor: 9_500 }), followUpSuspended: true as const },
+        scheduled({ id: "operator-1", origin: "desktop", scheduledFor: 9_900 }),
+        scheduled({ id: "follow-up-sent", origin: "agent", status: "started" }),
+      ] }),
+    }), THREAD);
+
+    expect(list.wakes).toEqual([
+      expect.objectContaining({ key: "scheduled_action:follow-up-1", createdBy: "agent", durable: true, stop: "cancel" }),
+      expect.objectContaining({ key: "scheduled_action:follow-up-2", createdBy: "agent", followUpSuspended: true }),
+      expect.objectContaining({ key: "scheduled_action:operator-1", createdBy: "operator" }),
+    ]);
+    expect(list.wakes[0]).not.toHaveProperty("followUpSuspended");
+    expect(list.ended).toEqual([expect.objectContaining({ key: "scheduled_action:follow-up-sent", summary: "Agent follow-up sent" })]);
+  });
+});
+
 describe("held wakes", () => {
   it("lists what a lock holds first, and marks every wake the lock keeps from starting", async () => {
     const list = await buildThreadPendingWakes(readers({

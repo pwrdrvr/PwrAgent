@@ -191,6 +191,13 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(THREAD_PENDING_WAKES_CHANNEL, async (event, request: ThreadPendingWakesRequest): Promise<ThreadPendingWakesResponse> => {
     const target = request?.federationTarget;
     if (target && isRemoteFederationTarget(target)) {
+      // Only the local operator of the owning instance rearms loop protection.
+      if (request.action === "rearm_follow_ups") {
+        return {
+          ok: false,
+          error: { code: "federation_unsupported", message: "Rearm agent follow-ups on the instance that owns the thread." },
+        };
+      }
       // A peer's list arrives with its selected detail; only Stop comes here.
       if (request.action !== "stop" || typeof request.key !== "string") {
         return {

@@ -190,6 +190,7 @@ function scheduledWakes(actions: readonly PendingWakeScheduledAction[]): ThreadP
       displayText: clip(action.displayText, THREAD_PENDING_WAKE_TEXT_MAX_CHARS),
       createdAt: action.createdAt,
       ...(action.status === "scheduled" ? { wakesAt: action.scheduledFor } : {}),
+      ...(action.followUpSuspended ? { followUpSuspended: true as const } : {}),
       createdBy: action.origin === "messaging" ? "messaging" : action.origin === "agent" ? "agent" : "operator",
       durable: true,
       stop: "cancel",
@@ -453,7 +454,8 @@ function endedDependency(dependency: ThreadDependency): ThreadPendingWakeEnded[]
 
 function endedScheduledAction(action: PendingWakeScheduledAction): ThreadPendingWakeEnded[] {
   if (action.status !== "started" && action.status !== "cancelled" && action.status !== "failed") return [];
-  const noun = action.kind === "review" ? "Scheduled review" : "Scheduled message";
+  const noun = action.kind === "review" ? "Scheduled review"
+    : action.origin === "agent" ? "Agent follow-up" : "Scheduled message";
   const summary = action.status === "started"
     ? action.kind === "review" ? `${noun} started` : `${noun} sent`
     : action.status === "cancelled" ? `${noun} cancelled` : `${noun} failed`;

@@ -25,6 +25,28 @@ describe("PwrAgent thread agent tools", () => {
       .buildMcpTools().some((tool) => tool.name === "rename_current_thread")).toBe(false);
   });
 
+  it("offers schedule_follow_up in the unified namespace only, with no thread, actor or role input", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { followUps: {
+      activeAgentFollowUps: 0, firedInLastDay: 0, limits: { maxActive: 8, minDelayMinutes: 1, maxFiredPerDay: 12 },
+    } } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    const tool = router.buildMcpTools().find((candidate) => candidate.name === "schedule_follow_up");
+    if (!tool) throw new Error("Expected schedule_follow_up");
+    const schema = tool.inputSchema as { additionalProperties: boolean; properties: Record<string, unknown> };
+    expect(schema.additionalProperties).toBe(false);
+    expect(Object.keys(schema.properties).sort()).toEqual(["action", "at", "delayMinutes", "followUpId", "prompt"]);
+    // The description is where an agent learns the prompt must stand alone.
+    expect(tool.description).toContain("The prompt must stand alone");
+    expect(tool.description).toContain("compacted");
+    const args = { action: "create", delayMinutes: 120, prompt: "Check the canary and report." };
+    await router.handleMcpToolCall({ backend: "codex", threadId: "waiting", turnId: "turn-1", tool: "schedule_follow_up", args });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({
+      operation: "schedule_follow_up", context: { backend: "codex", threadId: "waiting", turnId: "turn-1" }, args,
+    });
+    expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" }).buildMcpTools()
+      .some((candidate) => candidate.name === "schedule_follow_up")).toBe(false);
+  });
+
   it.each(["ci_passed", "compaction_completed"])("exposes %s registrations through the unified dynamic and MCP contracts only", async (when) => {
     const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
     const router = buildPwrAgentThreadToolRouter(handler);

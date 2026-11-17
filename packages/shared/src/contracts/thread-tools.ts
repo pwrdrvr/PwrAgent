@@ -58,6 +58,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "watch_thread_pull_request",
   "rename_current_thread",
   "manage_thread_dependencies",
+  "schedule_follow_up",
   "mutate_thread",
   "mark_project_read",
   "scan_thread_maintenance",
@@ -973,6 +974,7 @@ export type ThreadReadEvaluationTokenMiser = {
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {
   manage_thread_dependencies: import("./thread-dependencies").ManageThreadDependenciesRequest;
+  schedule_follow_up: import("./scheduled-thread-actions").ScheduleFollowUpToolArgs;
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
@@ -1011,6 +1013,9 @@ export type PwrAgentThreadInspectionResponse =
             threadDependencies: import("./thread-dependencies").ManageThreadDependenciesResponse;
             /** Why the stored PR conditions wait, when the project holds PR watches. */
             projectNotice?: string;
+          }
+        | {
+            followUps: import("./scheduled-thread-actions").ScheduleFollowUpToolResult;
           }
         | {
             threads: ThreadInspectionSummary[];

@@ -101,8 +101,9 @@ function controller(
   state: ThreadPendingWakesState,
   stop: (key: string) => Promise<ThreadPendingWakesResponse> = async () => ({ ok: true, stopped: true }),
   ended: (key: string) => void = () => {},
+  rearmFollowUps: () => Promise<ThreadPendingWakesResponse> = async () => ({ ok: true, rearmed: true }),
 ): ThreadPendingWakesController {
-  return { state, stop, ended };
+  return { state, stop, ended, rearmFollowUps };
 }
 
 const ready = (wakes = WAKES, ended = ENDED, peer = false): ThreadPendingWakesState =>
@@ -157,6 +158,59 @@ describe("WaitingForPanel", () => {
     render(<WaitingForPanel thread={thread} controller={controller(ready(CLAUDE_WAKES, [], true))} ownerLabel="studio-mac" now={NOW} />);
     expect(screen.getAllByText(/Ends if studio-mac quits or Claude restarts\./)).toHaveLength(2);
     expect(screen.queryByText(/Stop them there\./)).not.toBeInTheDocument();
+  });
+
+  describe("agent follow-ups", () => {
+    const followUp = (overrides: Partial<Extract<ThreadPendingWake, { kind: "scheduled_action" }>> = {}): ThreadPendingWake => ({
+      kind: "scheduled_action", key: "scheduled_action:f1", actionId: "f1", actionKind: "turn", status: "scheduled",
+      displayText: "Check the canary error rate and roll back if it is above 2%.",
+      createdAt: at(15, 30), wakesAt: at(17, 30), createdBy: "agent", durable: true, stop: "cancel",
+      ...overrides,
+    });
+
+    it("names a follow-up, says the agent set it, and lets the operator cancel it", async () => {
+      const stop = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, stopped: true }));
+      render(<WaitingForPanel thread={thread} controller={controller(ready([followUp()], []), stop)} now={NOW} />);
+
+      const scheduled = screen.getByRole("group", { name: "Scheduled" });
+      expect(within(scheduled).getByRole("button", { name: "Follow-up at 5:30 PM" })).toBeInTheDocument();
+      expect(within(scheduled).getByText(/Set by the agent, 3:30 PM\./)).toBeInTheDocument();
+      expect(screen.queryByText("Agent follow-ups suspended")).not.toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel: Follow-up at 5:30 PM" }));
+      });
+      expect(stop).toHaveBeenCalledWith("scheduled_action:f1");
+    });
+
+    it("keeps calling the operator's own scheduled message a message", () => {
+      render(<WaitingForPanel thread={thread} controller={controller(ready([followUp({ createdBy: "operator" })], []))} now={NOW} />);
+      expect(screen.getByRole("button", { name: "Message at 5:30 PM" })).toBeInTheDocument();
+      expect(screen.getByText(/You, 3:30 PM\./)).toBeInTheDocument();
+    });
+
+    it("says loop protection suspended follow-ups and rearms them for the local operator", async () => {
+      const rearm = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, rearmed: true }));
+      const wakes = [followUp({ wakesAt: at(15, 45), followUpSuspended: true })];
+      render(<WaitingForPanel thread={thread} controller={controller(ready(wakes, []), undefined, undefined, rearm)} now={NOW} />);
+
+      const notice = screen.getByRole("note");
+      expect(within(notice).getByText("Agent follow-ups suspended")).toBeInTheDocument();
+      expect(within(notice).getByText(/woke this thread 12 times in 24 hours/)).toBeInTheDocument();
+      expect(screen.getByText(/Suspended by loop protection\./)).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(within(notice).getByRole("button", { name: "Rearm follow-ups" }));
+      });
+      expect(rearm).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers a viewer of a peer's thread no rearm, and names where to do it", () => {
+      const wakes = [followUp({ followUpSuspended: true })];
+      render(<WaitingForPanel thread={thread} ownerLabel="Mac Mini" controller={controller(ready(wakes, [], true))} now={NOW} />);
+
+      expect(screen.getByText("Agent follow-ups suspended")).toBeInTheDocument();
+      expect(screen.getByText(/Rearm on Mac Mini\./)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Rearm follow-ups" })).not.toBeInTheDocument();
+    });
   });
 
   it("stops a wake through its source and shows why a stop failed", async () => {

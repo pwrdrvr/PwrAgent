@@ -5276,7 +5276,7 @@ class DesktopAppServerService {
   ): Promise<ThreadPendingWakesResponse> {
     if (
       !request
-      || (request.action !== "list" && request.action !== "stop")
+      || (request.action !== "list" && request.action !== "stop" && request.action !== "rearm_follow_ups")
       || !isAppServerBackendKind(request.backend)
       || typeof request.threadId !== "string"
       || !request.threadId.trim()
@@ -5286,6 +5286,18 @@ class DesktopAppServerService {
     const thread = { backend: request.backend, threadId: request.threadId.trim() };
     if (request.action === "list") {
       return { ok: true, ...await this.listThreadPendingWakes(thread, request.endedLimit) };
+    }
+    if (request.action === "rearm_follow_ups") {
+      // Reached only from this instance's own window; the IPC handler refuses
+      // a peer target and a federation window before calling here.
+      try {
+        await getScheduledThreadActionService().rearmAgentFollowUps(thread);
+        return { ok: true, rearmed: true };
+      } catch (error) {
+        return { ok: false, error: { code: "failed", message: error instanceof Error ? error.message : String(error) } };
+      } finally {
+        this.pendingWakesCache.invalidate(thread);
+      }
     }
     if (typeof request.key !== "string") {
       return { ok: false, error: { code: "invalid_arguments", message: "key is required." } };
