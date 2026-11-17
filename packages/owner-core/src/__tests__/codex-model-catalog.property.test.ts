@@ -1,4 +1,5 @@
 import fc from "fast-check";
+import { buildModelMenu } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import type { CodexClientHost, CodexClientTransport } from "../codex-app-server/host";
@@ -13,7 +14,7 @@ function model(id: string, overrides: Record<string, unknown> = {}): Record<stri
   };
 }
 
-function fixture() {
+function fixture(version = "0.169.0") {
   let response: unknown = { data: [], nextCursor: null };
   let receive: (message: string) => void = () => undefined;
   const transport: CodexClientTransport = {
@@ -26,7 +27,7 @@ function fixture() {
       if (request.id === undefined) return;
       expect(["initialize", "model/list"]).toContain(request.method);
       const result = request.method === "model/list" ? response : {
-        userAgent: "codex/0.169.0", codexHome: "/fixture/codex-home",
+        userAgent: `codex/${version}`, codexHome: "/fixture/codex-home",
         platformFamily: "unix", platformOs: "macos",
       };
       receive(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
@@ -51,6 +52,47 @@ function fixture() {
 }
 
 describe("Codex model catalog compatibility", () => {
+  const familyCatalog = [
+    "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna",
+    "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-sol", "gpt-5.6-luna", "future-model",
+  ];
+  const familyMenu = {
+    primary: [
+      "gpt-6.2-astra", "gpt-6-astra", "gpt-6.2-sol", "gpt-6.1-sol",
+      "gpt-6.1-terra", "gpt-6-luna", "future-model",
+    ],
+    other: ["gpt-6-sol", "gpt-5.6-luna"],
+  };
+
+  async function readFamilyMenu(ids: string[], version?: string) {
+    const { client, respond } = fixture(version);
+    respond({ data: ids.map((id) => model(id)), nextCursor: null });
+    try {
+      const menu = buildModelMenu({ kind: "codex", models: await client.listModels() });
+      return {
+        primary: menu.primary.map((entry) => entry.id),
+        other: menu.other.map((entry) => entry.id),
+      };
+    } finally {
+      await client.close();
+    }
+  }
+
+  it("places GPT-6.2 beside its Astra and Sol siblings while keeping 6.1 primary", async () => {
+    expect(await readFamilyMenu(familyCatalog)).toEqual(familyMenu);
+  });
+
+  it.each(["0.143.0", "0.169.0"])("keeps family order regardless of catalog order on Codex %s", async (version) => {
+    // Rule: newest Astra and Sol variants precede their siblings, independent
+    // of provider ordering. Keep 6.1 primary during the 6.2 evaluation period.
+    await fc.assert(fc.asyncProperty(
+      fc.shuffledSubarray(familyCatalog, { minLength: familyCatalog.length, maxLength: familyCatalog.length }),
+      async (ids) => {
+        expect(await readFamilyMenu(ids, version)).toEqual(familyMenu);
+      },
+    ));
+  });
+
   it("keeps GPT-6.2 Sol with audio beside GPT-6.2 Astra and warns about audio", async () => {
     const { client, respond, logger } = fixture();
     respond({ data: [
