@@ -52,17 +52,22 @@ it("the portable emitted startup graph excludes optional code and loads each fea
   expect(result.optionalChunks).toBeGreaterThan(6);
 });
 
-it("keeps executable CJS entry paths, ESM direct execution, and source-map suppression", async () => {
+it("emits native ESM at every established entry path without wrappers or source maps", async () => {
   const files = fs.readdirSync(directory);
   expect(files.filter(file => file.endsWith(".map"))).toEqual([]);
-  for (const entry of ["index.js", "index.mjs"]) {
-    const { stdout } = await execute(process.execPath, [path.join(directory, entry), "--version"]);
-    expect(stdout.trim()).toBe(JSON.parse(fs.readFileSync(path.join(directory, "runtime.json"), "utf8")).appVersion);
-  }
+  expect(JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8")).type).toBe("module");
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, "chunks.json"), "utf8")) as {
+    entries: Record<string, string>; chunks: Record<string, unknown>;
+  };
+  for (const [name, file] of Object.entries(manifest.entries)) expect(file).toBe(`${name}.js`);
+  expect(files.filter(file => /\.[cm]?js$/.test(file)).sort()).toEqual(Object.keys(manifest.chunks).sort());
+  const { stdout } = await execute(process.execPath, [path.join(directory, manifest.entries.index), "--version"]);
+  expect(stdout.trim()).toBe(JSON.parse(fs.readFileSync(path.join(directory, "runtime.json"), "utf8")).appVersion);
 });
 
 it("shared Outpost test preparation emits the real package without source maps", () => {
   const files = fs.readdirSync(path.join(packageRoot, "dist"));
-  expect(files).toContain("index.mjs");
+  expect(files).toContain("index.js");
+  expect(JSON.parse(fs.readFileSync(path.join(packageRoot, "dist/package.json"), "utf8")).type).toBe("module");
   expect(files.filter(file => file.endsWith(".map"))).toEqual([]);
 });

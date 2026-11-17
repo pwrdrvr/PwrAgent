@@ -13,7 +13,7 @@ const optionalInput = /messaging\/providers\/|node_modules\/(?:discord\.js|gramm
 export function assertPortableStartupLoads(directory, urls) {
   const root = realpathSync(directory);
   const manifest = JSON.parse(readFileSync(path.join(root, "chunks.json"), "utf8"));
-  assert.ok(urls.includes(pathToFileURL(path.join(root, "index.mjs")).href), "Trace must observe the real owner entry");
+  assert.ok(urls.includes(pathToFileURL(path.join(root, "index.js")).href), "Trace must observe the real owner entry");
   for (const url of urls) {
     assert.ok(!optionalInput.test(url.replaceAll("\\", "/")), `Daemon startup loaded optional package: ${url}`);
     if (!url.startsWith("file:")) continue;
@@ -30,6 +30,8 @@ export async function checkPortableRuntime(directory) {
   const root = realpathSync(directory);
   const manifest = JSON.parse(readFileSync(path.join(root, "chunks.json"), "utf8"));
   assert.equal(manifest.version, 1);
+  assert.equal(manifest.entries.index, "index.js", "The public owner entry must be the emitted ESM module");
+  assert.equal(JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).type, "module");
   const closure = new Set();
   function visit(file) {
     if (closure.has(file)) return;
@@ -52,16 +54,18 @@ export async function checkPortableRuntime(directory) {
   const hook = registerHooks({
     load(url, context, nextLoad) {
       loaded.add(url);
-      return nextLoad(url, context);
+      const result = nextLoad(url, context);
+      if (url.startsWith("file:") && path.dirname(fileURLToPath(url)) === root) {
+        assert.equal(result.format, "module", `Portable runtime loaded a CommonJS wrapper: ${url}`);
+      }
+      return result;
     },
   });
   try {
     const require = createRequire(path.join(root, "index.js"));
-    const owner = require("./index.js");
+    const owner = await import(pathToFileURL(path.join(root, manifest.entries.index)).href);
     assert.equal(typeof owner.startHeadlessHost, "function");
     assert.equal(typeof owner.shutdownHeadlessHost, "function");
-    const importedOwner = await import(pathToFileURL(path.join(root, "index.js")).href);
-    assert.equal(importedOwner.startHeadlessHost, owner.startHeadlessHost, "Daemon import and CJS consumers share one owner");
     for (const file of closure) assert.ok(loaded.has(pathToFileURL(path.join(root, file)).href), `Startup probe missed ${file}`);
     for (const [file] of optional) assert.ok(!loaded.has(pathToFileURL(path.join(root, file)).href), `Startup loaded optional chunk: ${file}`);
     for (const url of loaded) assert.ok(!optionalInput.test(url.replaceAll("\\", "/")), `Startup loaded optional package: ${url}`);
