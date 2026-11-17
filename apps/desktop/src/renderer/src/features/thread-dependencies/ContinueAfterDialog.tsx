@@ -11,18 +11,21 @@ import type {
   CompactionRecoveryProtection,
 } from "@pwragent/shared";
 import {
-  THREAD_DEPENDENCY_CONDITION_PHRASES,
   THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH,
   THREAD_DEPENDENCY_MAX_STEPS,
   THREAD_DEPENDENCY_STEP_MAX_LENGTH,
   THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH,
   pullRequestMatchesRepositoryKey,
+  summarizeThreadDependencyCiRun,
+  threadDependencyConditionName,
+  threadDependencyConditionPhrase,
   threadDependencyDeliveryTarget,
   threadDependencyMarkDoneIndex,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { Select } from "../../components/Select";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { openExternalUrl } from "../../lib/open-external-url";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { useThreadLinks } from "../../lib/thread-links";
 import { ThreadChip } from "../thread-detail/ThreadChip";
@@ -61,6 +64,8 @@ const DEPENDENT_PHRASES: Record<When, string> = {
   pr_merged: "until it is merged",
   marked_done: "until it is marked done",
   compaction_completed: "after its compaction finishes",
+  // A CI run names no thread, so no thread lists it as a dependent.
+  ci_run: "until its run reaches its milestone",
 };
 const MAX_CONDITIONS = 16;
 const MAX_TITLE_LENGTH = 200;
@@ -884,8 +889,11 @@ function DependencyCard(props: {
         {dependency.conditions.map((condition, index) => {
           const evidence = evidenceFor(dependency, index);
           const state = evidence?.state ?? "waiting";
-          // A marked-done prerequisite shows what finished; others, why they wait.
-          const reason = evidence && (state !== "satisfied" || condition.when === "marked_done") ? evidence.reason : undefined;
+          // A marked-done prerequisite shows what finished, and a CI run what
+          // it reached; others, why they wait.
+          const reason = evidence && (state !== "satisfied" || condition.when === "marked_done" || condition.ciRun) ? evidence.reason : undefined;
+          // A waiting CI run carries its owner's latest check, in memory.
+          const run = state === "waiting" ? evidence?.ciRun : undefined;
           const markable = props.onMarkDone && threadDependencyMarkDoneIndex(dependency, index) !== undefined;
           return (
             <li className="thread-dependencies__condition" key={index}>
@@ -895,7 +903,16 @@ function DependencyCard(props: {
                 role="img"
               />
               <span className="thread-dependencies__condition-head">
-                {condition.subject !== undefined ? (
+                {condition.ciRun ? (
+                  <button
+                    className="thread-dependencies__thread thread-dependencies__run"
+                    title={condition.ciRun.url}
+                    type="button"
+                    onClick={() => openExternalUrl(condition.ciRun!.url)}
+                  >
+                    {threadDependencyConditionName(condition)}
+                  </button>
+                ) : condition.subject !== undefined ? (
                   <span className="thread-dependencies__thread">{condition.subject}</span>
                 ) : (
                   <DependencyThreadLink
@@ -906,13 +923,17 @@ function DependencyCard(props: {
                     onNavigate={props.onNavigate}
                   />
                 )}
-                <span className="thread-dependencies__when">{THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}</span>
+                <span className="thread-dependencies__when">{threadDependencyConditionPhrase(condition)}</span>
               </span>
+              {condition.ciRun?.environments?.length ? (
+                <span className="thread-dependencies__reason">{`Approval gates: ${condition.ciRun.environments.join(", ")} only`}</span>
+              ) : null}
               {reason ? (
                 <span className="thread-dependencies__reason">
                   {reason}{evidence?.headSha ? ` · ${evidence.headSha.slice(0, 8)}` : ""}
                 </span>
               ) : null}
+              {run ? <span className="thread-dependencies__reason">{summarizeThreadDependencyCiRun(run)}</span> : null}
               {markable ? (
                 <span className="context-list__actions">
                   <button

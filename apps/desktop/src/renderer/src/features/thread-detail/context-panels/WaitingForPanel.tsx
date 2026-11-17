@@ -1,10 +1,13 @@
 import { memo, useState, type ReactNode } from "react";
 import {
-  THREAD_DEPENDENCY_CONDITION_PHRASES,
   THREAD_PR_WATCH_CONTROL_CAPABILITY,
   buildPullRequestStatusKey,
   graphemePrefix,
+  isThreadDependencyThreadCondition,
   isThreadPendingWakeLive,
+  summarizeThreadDependencyCiRun,
+  threadDependencyConditionName,
+  threadDependencyConditionPhrase,
   type NavigationThreadSummary,
   type ThreadPendingWake,
   type ThreadPendingWakeHold,
@@ -295,11 +298,16 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   );
 });
 
-const GROUP_ORDER: Array<{ id: string; label: string; kinds: ThreadPendingWakeKind[] }> = [
+/** A Continue After wait on CI runs alone names no thread, so it has its own group. */
+const isCiRunWait = (wake: ThreadPendingWake): boolean =>
+  wake.kind === "dependency" && wake.dependency.conditions.every((condition) => condition.ciRun !== undefined);
+
+const GROUP_ORDER: Array<{ id: string; label: string; kinds: ThreadPendingWakeKind[]; match?: (wake: ThreadPendingWake) => boolean }> = [
   { id: "held", label: "Held", kinds: ["held_message"] },
   { id: "scheduled", label: "Scheduled", kinds: ["scheduled_action", "backend_wake"] },
   { id: "prs", label: "Pull requests", kinds: ["pr_watch", "pr_auto_fix"] },
-  { id: "threads", label: "Other threads", kinds: ["dependency"] },
+  { id: "ci_runs", label: "CI runs", kinds: ["dependency"], match: isCiRunWait },
+  { id: "threads", label: "Other threads", kinds: ["dependency"], match: (wake) => !isCiRunWait(wake) },
   { id: "running", label: "Running", kinds: ["monitor", "backend_task"] },
 ];
 
@@ -369,7 +377,7 @@ function describeRowHold(wake: ThreadPendingWake, canSend: boolean): string | un
 function groupWakes(wakes: readonly ThreadPendingWake[], thread: NavigationThreadSummary): Group[] {
   const groups: Group[] = [];
   for (const spec of GROUP_ORDER) {
-    const members = wakes.filter((wake) => spec.kinds.includes(wake.kind));
+    const members = wakes.filter((wake) => spec.kinds.includes(wake.kind) && (spec.match?.(wake) ?? true));
     if (members.length === 0) continue;
     if (spec.id !== "prs") {
       groups.push({ id: spec.id, label: spec.label, wakes: members });
@@ -598,16 +606,16 @@ function describeDependencyTitle(
   const lead = deliver === "operator" ? "Remind you after" : "Continue after";
   if (conditions.length !== 1) {
     // "Something else" is not a thread.
-    const threads = conditions.every((condition) => condition.subject === undefined);
+    const threads = conditions.every(isThreadDependencyThreadCondition);
     return wake.dependency.mode === "any"
       ? `${lead} any of ${conditions.length} ${threads ? "threads" : "prerequisites"}`
       : threads ? `${lead} ${conditions.length} threads finish` : `${lead} ${conditions.length} prerequisites`;
   }
   const condition = conditions[0]!;
-  const self = condition.subject === undefined && !condition.target
+  const self = isThreadDependencyThreadCondition(condition) && !condition.target
     && condition.backend === thread.source && condition.threadId === thread.id;
-  const name = self ? "this thread" : condition.subject?.trim() || condition.title?.trim() || "another thread";
-  return `${lead} ${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
+  const name = self ? "this thread" : threadDependencyConditionName(condition) || "another thread";
+  return `${lead} ${name} ${threadDependencyConditionPhrase(condition)}`;
 }
 
 function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now: number): ReactNode {
@@ -627,12 +635,16 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
               ? slot : undefined;
             const met = evidence?.state === "satisfied";
             const failed = evidence?.state === "failed";
-            const name = condition.subject?.trim() || condition.title?.trim() || "Another thread";
+            const name = threadDependencyConditionName(condition) || "Another thread";
+            // A waiting CI run carries its owner's latest check, in memory.
+            const run = evidence?.state === "waiting" ? evidence.ciRun : undefined;
             return (
               <span className={`waiting-for-panel__cond${met ? " is-met" : ""}${failed ? " is-failed" : ""}`} key={`${condition.threadId}:${condition.when}:${index}`}>
                 <span className="waiting-for-panel__cond-dot" aria-hidden="true" />
-                {`${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`}
-                {met ? ` · ${formatWatchTime(evidence!.observedAt, now)}` : failed ? ` · ${evidence!.reason}` : ""}
+                {`${name} ${threadDependencyConditionPhrase(condition)}`}
+                {condition.ciRun?.environments?.length ? ` · ${condition.ciRun.environments.join(", ")} only` : ""}
+                {met ? ` · ${condition.ciRun ? `${evidence!.reason} · ` : ""}${formatWatchTime(evidence!.observedAt, now)}` : failed ? ` · ${evidence!.reason}` : ""}
+                {run ? ` · ${summarizeThreadDependencyCiRun(run)} · checked ${formatWatchTime(run.checkedAt, now)}` : ""}
               </span>
             );
           })}
