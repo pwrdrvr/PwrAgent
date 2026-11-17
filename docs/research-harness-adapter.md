@@ -185,10 +185,12 @@ measurements as JSON, including failures. These are fixture performance budgets;
 deployed model execution and source-service compatibility require separate evidence.
 
 The production authorized execution bridge and deployed Harness acceptance remain
-outstanding until an accessible, authorized Linux/Open Math OS composition is
-provided. The read-only UI bridge cannot acquire those capabilities. Passing
-fixture tests or upstream wire deserialization does not establish live execution,
-remote cancellation, or hosted-model compatibility.
+outstanding. The authenticated MathOS Platform probe below establishes access to
+the deployed runtime, but that deployment's window API does not expose the
+execution/cancellation or discovery operations required for Phase 2 acceptance.
+The read-only UI bridge cannot acquire those capabilities. Passing fixture tests
+or upstream wire deserialization does not establish live execution, remote
+cancellation, or hosted-model compatibility.
 
 The opt-in `research-harness-live.integration.test.ts` accepts a private JSON
 configuration path in `PWRAGENT_TEST_HARNESS_ACCEPTANCE_CONFIG`. It requires the
@@ -198,3 +200,55 @@ It runs the real process/model adapters, requests scoped stop after active
 execution, and retains a digest-only result alongside the private journal. Reusing
 the request identity never replays an unknown start. A failed or interrupted
 acceptance run requires source reconciliation before any new identity is used.
+
+### Authenticated Platform compatibility probe — 2026-11-17
+
+The operator-supplied **MathOS Platform API Key** authenticated both platform
+metadata and the runtime's `whoami` operation. This credential was never used
+against the OpenAI-compatible model API. A contrived project named
+`PwrAgent contrived Harness acceptance 2026-11-17` was created once, with a
+durable local intent before dispatch and an HTTP 200 confirmation. There was no
+retry of project creation. No model work was started.
+
+The [sanitized probe evidence](research-harness-platform-compatibility-2026-11-17.json)
+records runtime version `0.58.0`, IPC version `6`, and its reported bundle hash.
+The deployed Git revision is unknown; the investigated upstream revision remains
+the bridge contract pin, not a claim about the deployed bytes. The evidence omits
+credentials, runtime tickets, account/team/project identifiers and private content.
+
+Platform metadata uses HTTPS `POST /v1/<operation>`. Runtime operations instead
+use the ticket returned by `open` over WebSocket
+`/v1/runtime/<environment>?ticket=<ticket>`, subprotocol `agent-vm-runtime-v1`,
+and binary UTF-8 JSON lines. The public web client's transport established this
+distinction; HTTPS 404 responses for runtime operation names did not establish
+their availability. The authenticated probe used the existing `ws` dependency;
+no dependency or runtime was added to distribution. `open` used `wake: false`.
+
+The probe then established these narrower facts:
+
+- `swarm.status`, scoped to the contrived project/default session, was recognized
+  and returned `invalid_input: this session has started no swarm`.
+- `runs.list`, scoped to that project, was rejected as an unknown operation. The
+  runtime's reported handles contained no discovery endpoint, and its parser's
+  enumerated operations contained no `runs.*` operation.
+- That same enumeration exposed only `swarm.status` and `swarm.records` for
+  swarms. Although a reported swarm handle included `stop`, the window dispatcher
+  exposed no `swarm.stop` or `swarm.start`. A handle alone is insufficient evidence
+  of a callable operation. No mutation was attempted to test that absence.
+
+This is an authenticated compatibility result, not a successful live acceptance
+run. There were no source records to import in the new project, and no hosted
+function-calling, execution, reconnect or remote-cancellation acceptance was
+performed. A conversation/session stop is not evidence that one exact swarm's
+owned work has stopped. Starting an agent with prompt-only worker/deadline limits
+would not satisfy the owner's admission contract either.
+
+Completing Phase 2 requires an authorized deployment/service path that exposes
+bounded execution, the small research-function dispatcher and exact-run stop
+acknowledgement, plus a deployment exposing the required discovery reads. That
+path must preserve the service grants and member confinement. A window credential
+must not be relabelled or used to fabricate those grants. Once available, run the
+existing opt-in acceptance scenario with explicit model configuration and a
+stable request identity. Until then the PR remains a draft and Phase 2 remains
+incomplete. The temporary credential file and in-memory probe processes were
+removed after this probe.

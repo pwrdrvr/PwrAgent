@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-11-17T05:09:43.258298+00:00",
+  "origin": "https://os.openmathmodel.org",
+  "fixture": {
+    "displayName": "PwrAgent contrived Harness acceptance 2026-11-17",
+    "projectCreate": "confirmed HTTP 200",
+    "modelWorkStarted": false
+  },
+  "runtime": {
+    "version": "0.58.0",
+    "ipc_version": 6,
+    "bundle_sha256": "3ede95e00748b26ec94c1e3ff6155e67e3f4aeef43ae044c90fa073df4cf4541"
+  },
+  "authentication": {
+    "platformMetadata": "HTTP 200",
+    "runtimeWhoami": "ok"
+  },
+  "transport": {
+    "platform": "HTTPS POST /v1/<operation>",
+    "runtime": "WebSocket /v1/runtime/<environment>?ticket=<ticket>",
+    "subprotocol": "agent-vm-runtime-v1",
+    "frames": "binary UTF-8 JSON lines",
+    "client": "existing ws 8.22.2; no dependency added"
+  },
+  "scopedStatus": {
+    "code": "invalid_input",
+    "message": "this session has started no swarm"
+  },
+  "discoveryList": {
+    "code": "invalid_input",
+    "message": "unknown variant `runs.list`"
+  },
+  "relevantHandles": [
+    {
+      "endpoint": "swarm",
+      "actions": [
+        "records",
+        "status",
+        "stop"
+      ]
+    }
+  ],
+  "exposedResearchWindowOperations": [
+    "swarm.records",
+    "swarm.status"
+  ],
+  "sourceRevision": {
+    "investigatedContract": "687f2a20dc6ff552d3c881e10910b46c13e84e2a",
+    "deployedGitRevision": null
+  },
+  "limits": [
+    "No model capability probe or model execution was attempted.",
+    "No execution, cancellation, reconnect, record-page import or discovery snapshot acceptance is established.",
+    "Handles alone do not establish exposed window operations.",
+    "Team/account/project identifiers, credentials, tickets and private content are omitted."
+  ]
+}
