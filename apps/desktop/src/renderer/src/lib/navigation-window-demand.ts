@@ -5,15 +5,16 @@ import type {
 import { navigationIdentityKey } from "./navigation-query-state";
 import type { NavigationPresentedThread } from "./navigation-loaded-rows";
 
-/** Disclosure is window state; child counts are read from each collection scope. */
+/** Directories use scoped collection counts; other lenses use accepted owner counts. */
 export function projectDisclosedNavigationParents(
   rows: ReadonlyMap<string, NavigationPresentedThread> | undefined,
   previous: readonly NavigationIdentity[],
+  directoryScoped = false,
 ): readonly NavigationIdentity[] {
   let index = 0;
   let same = true;
   for (const thread of rows?.values() ?? []) {
-    if (thread.subthreadsCollapsed) continue;
+    if (thread.subthreadsCollapsed || (!directoryScoped && !thread.ordinaryChildCount)) continue;
     const ref = previous[index++];
     const owner = thread.federation?.ref.target;
     if (!ref || ref.backend !== thread.source || ref.threadId !== thread.id
@@ -22,7 +23,7 @@ export function projectDisclosedNavigationParents(
   if (same && index === previous.length) return previous;
   const refs: NavigationIdentity[] = [];
   for (const thread of rows?.values() ?? []) {
-    if (thread.subthreadsCollapsed) continue;
+    if (thread.subthreadsCollapsed || (!directoryScoped && !thread.ordinaryChildCount)) continue;
     const owner = thread.federation?.ref.target;
     refs.push({ backend: thread.source, threadId: thread.id,
       ...(owner?.scope === "remote" ? { ownerInstanceId: owner.instanceId } : {}) });
@@ -200,7 +201,9 @@ export function visibleDisclosedNavigationParents(params: {
     for (const entry of page?.entries ?? []) {
       const key = navigationIdentityKey(entry.row.ref);
       const parent = candidates.get(key);
-      if (!parent || !entry.row.ordinaryChildCount || visible.has(key)) continue;
+      // A viewer lens can mount only the remote root. Its zero count cannot
+      // veto the native owner's tray; directory membership alone is scoped.
+      if (!parent || (directoryKey !== undefined && !entry.row.ordinaryChildCount) || visible.has(key)) continue;
       visible.set(key, parent);
       if (directoryKey) params.directoryKeysByParent?.set(key, directoryKey);
       pending.push(...[`children:${key}`, `children:${key}:viewer`].map((childId) => ({ id: childId, directoryKey })));

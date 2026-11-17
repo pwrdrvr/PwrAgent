@@ -145,7 +145,7 @@ it("keeps scoped child demand independent of global counts, and respects collaps
   fc.assert(fc.property(fc.integer({ min: 0, max: 30 }), fc.integer({ min: 0, max: 30 }), fc.boolean(),
     fc.boolean(), (viewerCount, ownerCount, collapsed, otherOwner) => {
       const row = { ...thread("parent"), ordinaryChildCount: ownerCount, subthreadsCollapsed: collapsed };
-      const candidates = projectDisclosedNavigationParents(new Map([["parent", row]]), []);
+      const candidates = projectDisclosedNavigationParents(new Map([["parent", row]]), [], true);
       const population = [thread("parent"), ...Array.from({ length: viewerCount }, (_, i) => thread(`child-${i}`, "parent"))];
       const page = navigationQueryFixture(request({ kind: "directory", directoryKey: directory.key, roots: "pinned" }),
         { directories: [directory], threads: population });

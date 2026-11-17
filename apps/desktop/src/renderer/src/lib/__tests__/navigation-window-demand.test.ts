@@ -22,9 +22,10 @@ it("retains disclosure identities across metadata changes and replaces them for 
   expect(first).toEqual([{ backend: "codex", threadId: "parent" }]);
   expect(project({ ...thread, title: "Renamed", threadStatus: "active", ordinaryChildCount: 2 }, first)).toBe(first);
   expect(project({ ...thread, subthreadsCollapsed: true }, first)).toEqual([]);
-  // A zero from another directory is not disclosure state. The visible
-  // collection separately decides whether this candidate has children.
-  expect(project({ ...thread, ordinaryChildCount: 0 }, first)).toBe(first);
+  expect(project({ ...thread, ordinaryChildCount: 0 }, first)).toEqual([]);
+  // A zero from another directory is not directory disclosure state. Its
+  // visible collection separately decides whether this candidate has children.
+  expect(projectDisclosedNavigationParents(new Map([[thread.id, { ...thread, ordinaryChildCount: 0 }]]), first, true)).toBe(first);
   expect(project({ ...thread, source: "acp:grok" }, first)).toEqual([{ backend: "acp:grok", threadId: "parent" }]);
   const remote: NavigationPresentedThread = { ...thread, federation: { instanceLabel: "Peer", peerStatus: "connected",
     ref: { backend: "codex", threadId: thread.id, target: { scope: "remote", instanceId: "peer" } } } };

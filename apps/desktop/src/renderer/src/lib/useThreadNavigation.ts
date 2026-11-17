@@ -3853,8 +3853,8 @@ export function useThreadNavigation(
   const removedDirectoryKeySet = removedDirectoryKeysRef.current;
   const removedDirectoryKeys = useMemo(() => [...removedDirectoryKeySet], [removedDirectoryKeySet]);
   const disclosedParentsRef = useRef<ReturnType<typeof projectDisclosedNavigationParents>>([]);
-  const disclosedParents = useMemo(() => projectDisclosedNavigationParents(state.rows?.threadRows, disclosedParentsRef.current),
-    [state.rows?.threadRows]);
+  const disclosedParents = useMemo(() => projectDisclosedNavigationParents(state.rows?.threadRows, disclosedParentsRef.current, browseMode === "directories"),
+    [state.rows?.threadRows, browseMode]);
   disclosedParentsRef.current = disclosedParents;
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     loadedRowsByQuery, onLoadMore: rememberLoadedRows, onRangeReset: forgetLoadedRows,
