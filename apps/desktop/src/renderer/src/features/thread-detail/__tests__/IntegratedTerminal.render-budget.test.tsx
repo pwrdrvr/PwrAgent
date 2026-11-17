@@ -20,7 +20,8 @@ import type { Terminal } from "@xterm/xterm";
 // - The device-pixel-ratio media query.
 //
 // Counters: `widthReads` is one WidthCache measurement (a measureText call on
-// a 1x1 canvas). `rowRenders` is one row element rebuilt with content.
+// a 1x1 canvas). `rowRenders` is one rendered row element; emptying the rows
+// in xterm's clear() is not a render.
 
 const SESSION = "session-budget";
 const CHAR_WIDTH = 7;
@@ -40,7 +41,7 @@ const SCREEN = [
   "plain ascii abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ",
 ].join("\r\n");
 
-const xtermState = vi.hoisted(() => ({ instances: [] as Terminal[] }));
+const xtermState = vi.hoisted(() => ({ instances: [] as Terminal[], clearing: false }));
 
 vi.mock("@xterm/xterm", async (importActual) => {
   const actual = await importActual<typeof import("@xterm/xterm")>();
@@ -48,6 +49,20 @@ vi.mock("@xterm/xterm", async (importActual) => {
     constructor(...args: ConstructorParameters<typeof actual.Terminal>) {
       super(...args);
       xtermState.instances.push(this);
+    }
+    override open(parent: HTMLElement) {
+      super.open(parent);
+      // The DOM renderer's clear() empties each row. Mark it so the row
+      // counter can tell it from a render, which empties blank rows too.
+      const renderer = (this as unknown as {
+        _core: { _renderService: { _renderer: { value?: { clear(): void } } } };
+      })._core._renderService._renderer.value;
+      if (!renderer) return;
+      const clear = renderer.clear.bind(renderer);
+      renderer.clear = () => {
+        xtermState.clearing = true;
+        try { clear(); } finally { xtermState.clearing = false; }
+      };
     }
   }
   return { ...actual, Terminal: TrackedTerminal };
@@ -166,8 +181,7 @@ function installBrowserModel() {
   const replaceChildren = Element.prototype.replaceChildren;
   defineOn(Element.prototype, "replaceChildren", {
     value(this: Element, ...nodes: Array<Node | string>) {
-      // Emptying a row, as xterm's clear() does, builds nothing.
-      if (nodes.length > 0 && this.parentElement?.classList.contains("xterm-rows")) {
+      if (!xtermState.clearing && this.parentElement?.classList.contains("xterm-rows")) {
         counters.rowRenders += 1;
       }
       return replaceChildren.apply(this, nodes);
@@ -537,7 +551,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
 
     show({ visible: true });
     await settle();
-    expect(budget().widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm) + 1);
+    expect(budget().widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
     expect(spacingCorrections(container)).toEqual([]);
   });
 
