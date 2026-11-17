@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchBoardIndex, sameResearchThread, type ResearchApproach, type ResearchBoardEntry, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchRunSummary, type ResearchSubmission } from "@pwragent/shared";
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
 export type ResearchPhase = { label: string; tone: ResearchTone };
@@ -19,17 +19,25 @@ export function unreviewedCandidates(run: Pick<ResearchRun, "submissions">): Res
   return run.submissions.filter((submission) => !submission.review);
 }
 
+/** What names a run's phase. A summary carries it directly; a board through `researchPhaseInput`. */
+export type ResearchPhaseInput = Pick<ResearchRunSummary, "status" | "activeWorkers" | "unreviewed" | "accepted">;
+
+export function researchPhaseInput(run: Pick<ResearchRunBoard, "status" | "approaches" | "submissions">): ResearchPhaseInput {
+  return { status: run.status, activeWorkers: run.approaches.filter(researchApproachOccupiesSlot).length,
+    unreviewed: unreviewedCandidates(run).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length };
+}
+
 /**
  * The operator-facing phase. A running run with no worker holding a slot is
  * waiting on the coordinator: "Awaiting review" while any candidate is
  * undecided, "Ready to finish" once one is accepted and none is undecided.
  * An approach with an unresolved revision delivery still holds its slot.
  */
-export function researchRunPhase(run: Pick<ResearchRun, "status" | "approaches" | "submissions">): ResearchPhase {
+export function researchRunPhase(run: ResearchPhaseInput): ResearchPhase {
   if (run.status === "running") {
-    if (run.approaches.some(researchApproachOccupiesSlot)) return { label: "Running", tone: "live" };
-    if (unreviewedCandidates(run).length) return { label: "Awaiting review", tone: "attention" };
-    if (run.submissions.some((s) => s.review?.decision === "accepted")) return { label: "Ready to finish", tone: "attention" };
+    if (run.activeWorkers > 0) return { label: "Running", tone: "live" };
+    if (run.unreviewed) return { label: "Awaiting review", tone: "attention" };
+    if (run.accepted) return { label: "Ready to finish", tone: "attention" };
     return { label: "Running", tone: "live" };
   }
   switch (run.status) {
@@ -58,7 +66,7 @@ export function formatClock(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export function researchRunCounts(run: ResearchRun) {
+export function researchRunCounts(run: ResearchRunBoard) {
   return {
     slotsInUse: run.activeWorkers,
     workerLimit: run.workerLimit,
@@ -70,13 +78,13 @@ export function researchRunCounts(run: ResearchRun) {
 }
 
 /** Why Finish is unavailable, or undefined when it is. */
-export function researchFinishBlocker(run: ResearchRun): string | undefined {
+export function researchFinishBlocker(run: ResearchRunBoard): string | undefined {
   if (!run.submissions.some((s) => s.review?.decision === "accepted")) return "Accept a candidate to finish the run.";
   return undefined;
 }
 
 /** Why a revision cannot be requested for this candidate, or undefined when it can. */
-export function researchRevisionBlocker(run: ResearchRun, submission: ResearchSubmission, live: boolean): string | undefined {
+export function researchRevisionBlocker(run: ResearchRunBoard, submission: ResearchSubmission, live: boolean): string | undefined {
   if (!live || run.status !== "running") return "Revisions need a running run.";
   const approach = run.approaches.find((a) => a.id === submission.approachId);
   if (!approach?.worker) return "This candidate's worker is unavailable.";
@@ -107,12 +115,16 @@ export function excerpt(text: string, max = 100): string {
 
 export type ResearchActivityRow = { seq: number; at: number; kind: string; actor: string; text: string; itemId?: string };
 
-/** Newest first. Approach IDs are replaced with their titles. */
-export function researchActivityRows(run: ResearchRun, limit = 100): ResearchActivityRow[] {
+/** One row per loaded event, newest first as given. Approach IDs are replaced with their titles. */
+export function researchActivityRows(run: ResearchRunBoard, events: readonly ResearchEvent[]): ResearchActivityRow[] {
   const title = (id: string) => approachTitle(run, id);
+  let index: Map<string, ResearchBoardEntry> | undefined;
+  const itemExcerpt = (itemId: string) => {
+    const entry = (index ??= researchBoardIndex(run)).get(itemId);
+    return entry ? excerpt(researchItemText(entry), 80) : itemId;
+  };
   const rows: ResearchActivityRow[] = [];
-  for (let index = run.events.length - 1; index >= 0 && rows.length < limit; index--) {
-    const event = run.events[index]!;
+  for (const event of events) {
     const data = event.data;
     // Worker admission and delivery receipts are recorded by the owner, whoever triggered them.
     const system = data.type === "worker" || data.type === "delivery" || data.type === "delivery_failed";
@@ -126,22 +138,58 @@ export function researchActivityRows(run: ResearchRun, limit = 100): ResearchAct
       case "review": rows.push(row(researchLabel(data.decision), data.reason, data.submissionId)); break;
       case "abandoned": rows.push(row("Abandoned", `${title(data.approachId)}: ${data.reason}`, data.approachId)); break;
       case "direction": rows.push(row("Direction changed", `${data.title} · ${data.reason}`, data.approachId)); break;
-      case "status": rows.push(row(researchRunPhase({ status: data.status, approaches: [], submissions: [] }).label, data.reason)); break;
+      case "status": rows.push(row(researchRunPhase({ status: data.status, activeWorkers: 0, unreviewed: 0, accepted: 0 }).label, data.reason)); break;
       case "delivery_failed": rows.push(row("Delivery unconfirmed", data.reason)); break;
       case "delivery": rows.push(row("Revision feedback", `${data.delivery.approachId ? `${title(data.delivery.approachId)}: ` : ""}${researchLabel(data.delivery.state)}`, data.delivery.approachId)); break;
       case "assignment": rows.push(row("Child assigned", data.task, data.itemId)); break;
-      case "item_work": rows.push(row(researchLabel(data.work.state), data.work.note ?? itemExcerpt(run, data.itemId), data.itemId)); break;
+      case "item_work": rows.push(row(researchLabel(data.work.state), data.work.note ?? itemExcerpt(data.itemId), data.itemId)); break;
     }
   }
   return rows;
 }
 
-function itemExcerpt(run: ResearchRun, itemId: string): string {
-  const item = run.items.find((entry) => entry.id === itemId);
-  return item ? excerpt(researchItemText(item), 80) : itemId;
+/**
+ * The loaded part of a run's journal: one contiguous stretch, newest first,
+ * that ends at the newest event the window has read. `nextBeforeSeq` is set
+ * while older events remain.
+ */
+export type ResearchActivityWindow = { runId: string; events: ResearchEvent[]; nextBeforeSeq?: number };
+
+export function emptyResearchActivity(runId: string): ResearchActivityWindow {
+  return { runId, events: [] };
 }
 
-export function researchItemText(item: ResearchItem): string {
+/** The range that reads what was appended since the window's newest event. */
+export function researchActivityHeadRange(window: ResearchActivityWindow, limit: number) {
+  const top = window.events[0]?.seq;
+  return top === undefined ? { limit } : { afterSeq: top, limit };
+}
+
+/**
+ * Merge a head read (`researchActivityHeadRange`). New events go on top. If
+ * more arrived than one page holds, the page leaves a gap above the old
+ * window, so the window restarts from the page; Show older reaches the rest.
+ */
+export function mergeResearchActivityHead(window: ResearchActivityWindow, page: ResearchEventPage): ResearchActivityWindow {
+  if (page.runId !== window.runId) return window;
+  const top = window.events[0]?.seq ?? 0;
+  const fresh = page.events.filter((event) => event.seq > top);
+  if (!window.events.length || (fresh.length && page.nextBeforeSeq !== undefined && page.nextBeforeSeq > top + 1)) {
+    return { runId: window.runId, events: page.events, ...(page.nextBeforeSeq !== undefined ? { nextBeforeSeq: page.nextBeforeSeq } : {}) };
+  }
+  if (!fresh.length) return window;
+  return { ...window, events: [...fresh, ...window.events] };
+}
+
+/** Append an older page. A page that does not continue the window, such as one read before a restart, is ignored. */
+export function appendResearchActivityOlder(window: ResearchActivityWindow, page: ResearchEventPage): ResearchActivityWindow {
+  const oldest = window.events.at(-1);
+  if (page.runId !== window.runId || !oldest || window.nextBeforeSeq !== oldest.seq || page.events[0]?.seq !== oldest.seq - 1) return window;
+  const { nextBeforeSeq: _previous, ...rest } = window;
+  return { ...rest, events: [...window.events, ...page.events], ...(page.nextBeforeSeq !== undefined ? { nextBeforeSeq: page.nextBeforeSeq } : {}) };
+}
+
+export function researchItemText(item: ResearchItem | ResearchBoardEntry): string {
   return item.type === "approach" ? item.record.title : item.record.text;
 }
 
@@ -158,11 +206,12 @@ export type ResearchMapBranch = { approach: ResearchApproach; leaves: ResearchMa
  * sources loops, stays reachable as a top-level branch. Only the newest
  * `leafLimit` contributions of a branch render; `hidden` counts the rest.
  */
-export function researchMapBranches(run: ResearchRun, leafLimit = 6): ResearchMapBranch[] {
-  const items = new Map(run.items.map((item) => [item.id, item]));
+export function researchMapBranches(run: ResearchRunBoard, leafLimit = 6): ResearchMapBranch[] {
+  const known = (id: string) => Object.hasOwn(run.createdSeq, id);
+  const createdSeq = (id: string) => run.createdSeq[id] ?? 0;
   const childrenOf = new Map<string, ResearchApproach[]>();
   for (const approach of run.approaches) {
-    if (!approach.itemId || approach.itemId === approach.id || !items.has(approach.itemId)) continue;
+    if (!approach.itemId || approach.itemId === approach.id || !known(approach.itemId)) continue;
     childrenOf.set(approach.itemId, [...(childrenOf.get(approach.itemId) ?? []), approach]);
   }
   const placed = new Set<string>();
@@ -173,7 +222,7 @@ export function researchMapBranches(run: ResearchRun, leafLimit = 6): ResearchMa
       ...run.findings.filter((f) => f.approachId === approach.id).map((record) => ({ type: "finding" as const, record })),
       ...run.submissions.filter((s) => s.approachId === approach.id).map((record) => ({ type: "submission" as const, record })),
     ];
-    contributions.sort((a, b) => (items.get(b.record.id)?.createdSeq ?? 0) - (items.get(a.record.id)?.createdSeq ?? 0));
+    contributions.sort((a, b) => createdSeq(b.record.id) - createdSeq(a.record.id));
     const assignments = nest(approach.id);
     // Children of hidden contributions still render; they attach to the branch instead.
     const leaves = contributions.map((entry) => ({ ...entry, children: nest(entry.record.id) }) as ResearchMapLeaf);
@@ -181,7 +230,7 @@ export function researchMapBranches(run: ResearchRun, leafLimit = 6): ResearchMa
     for (const leaf of leaves.slice(leafLimit)) assignments.push(...leaf.children);
     return { approach, leaves: shown, hidden: leaves.length - shown.length, assignments };
   };
-  const roots = run.approaches.filter((a) => !a.itemId || a.itemId === a.id || !items.has(a.itemId));
+  const roots = run.approaches.filter((a) => !a.itemId || a.itemId === a.id || !known(a.itemId));
   const branches = roots.map(build);
   // A loop of children whose sources are each other has no root; keep each reachable.
   for (const approach of run.approaches) if (!placed.has(approach.id)) branches.push(build(approach));

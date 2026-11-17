@@ -1,6 +1,6 @@
 import { ipcMain, shell } from "electron";
-import type { ResearchThread, ResearchUpdateRequest, ResearchEvidenceRequest, PrepareResearchRequest, ResearchSearchRequest, ResearchItemReadRequest, ResearchWorkRequest } from "@pwragent/shared";
-import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL } from "../../../shared/ipc";
+import { researchRunBoard, type ResearchThread, type ResearchSnapshotRequest, type ResearchEventsRequest, type ResearchUpdateRequest, type ResearchEvidenceRequest, type PrepareResearchRequest, type ResearchSearchRequest, type ResearchItemReadRequest, type ResearchWorkRequest } from "@pwragent/shared";
+import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL } from "../../../shared/ipc";
 import { getResearchService } from "../../research/research-runtime";
 import { resolveResearchEvidencePath } from "../../research/research-evidence-path";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
@@ -38,16 +38,25 @@ export function registerResearchIpcHandlers(): void {
     validateThread(request);
     getResearchService().withdraw(request);
   });
-  ipcMain.handle(RESEARCH_SNAPSHOT_CHANNEL, (event, request: ResearchThread) => {
+  ipcMain.handle(RESEARCH_SNAPSHOT_CHANNEL, (event, request: ResearchSnapshotRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
-    return getResearchService().snapshot(request);
+    if (request.runId !== undefined && (typeof request.runId !== "string" || request.runId.length > 300)) throw new Error("Invalid research run");
+    return getResearchService().snapshot({ backend: request.backend, threadId: request.threadId, ...(request.runId ? { runId: request.runId } : {}) });
+  });
+  ipcMain.handle(RESEARCH_EVENTS_CHANNEL, (event, request: ResearchEventsRequest) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateThread(request);
+    if (typeof request.runId !== "string" || !request.range || typeof request.range !== "object") throw new Error("Invalid research activity range");
+    const { beforeSeq, afterSeq, limit } = request.range;
+    return getResearchService().readEvents(request.runId, { beforeSeq, afterSeq, limit }, { backend: request.backend, threadId: request.threadId, kind: "operator" });
   });
   ipcMain.handle(RESEARCH_UPDATE_CHANNEL, async (event, request: ResearchUpdateRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
     if (typeof request.runId !== "string" || typeof request.requestId !== "string" || !request.command || typeof request.command !== "object") throw new Error("Invalid research update");
-    return await getResearchService().update(request.runId, `operator:${request.requestId}`, request.command, { backend: request.backend, threadId: request.threadId, kind: "operator" });
+    // The board, not the journal: Activity reads events in pages.
+    return researchRunBoard(await getResearchService().update(request.runId, `operator:${request.requestId}`, request.command, { backend: request.backend, threadId: request.threadId, kind: "operator" }));
   });
   ipcMain.handle(RESEARCH_OPEN_EVIDENCE_CHANNEL, async (event, request: ResearchEvidenceRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
@@ -67,7 +76,7 @@ export function registerResearchIpcHandlers(): void {
   });
 }
 export function disposeResearchIpcHandlers(): void {
-  for (const channel of [RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL]) ipcMain.removeHandler(channel);
+  for (const channel of [RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL]) ipcMain.removeHandler(channel);
 }
 function validateThread(request: ResearchThread): void {
   if (getDesktopSettingsService().resolveResearchEnabled?.() !== true) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental with Codex Tool Discovery.");

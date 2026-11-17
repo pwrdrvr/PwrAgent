@@ -1,6 +1,7 @@
 import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
-import { applyResearchItemEvent, normalizeResearchSearch, projectResearchRun, researchItemSearchText, researchSearchHit,
+import { applyResearchItemEvent, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchItemSearchText, researchSearchHit,
   type ResearchEvent, type ResearchRun, type ResearchThread, type ResearchRunHeader, type ResearchItem, type ResearchSearchQuery, type ResearchSearchPage,
+  type ResearchRunSummary, type ResearchEventRange, type ResearchEventPage,
 } from "@pwragent/shared/research";
 import type { StateDb } from "./state-db";
 
@@ -87,11 +88,38 @@ export class ResearchStore implements ResearchStorage {
       .get(id, thread.backend, thread.threadId, id, thread.backend, thread.threadId));
   }
   summaries(thread: ResearchThread): ResearchRunHeader[] {
+    return this.threadRunIds(thread, 20).map((id) => this.header(id)!).filter(Boolean);
+  }
+  runSummaries(thread: ResearchThread, limit: number): ResearchRunSummary[] {
+    return this.stateDb.raw.transaction(() => this.threadRunIds(thread, limit).flatMap((id) => {
+      const header = this.header(id);
+      if (!header) return [];
+      const counts = this.stateDb.raw.prepare(`SELECT
+        coalesce(sum(review_state = 'unreviewed'), 0) AS unreviewed, coalesce(sum(review_state = 'accepted'), 0) AS accepted
+        FROM research_items WHERE run_id = ? AND item_type = 'submission'`).get(id) as { unreviewed: number; accepted: number };
+      return [{ ...header, ...counts }];
+    })).deferred();
+  }
+  events(id: string, range: ResearchEventRange): ResearchEventPage {
+    const r = normalizeResearchEventRange(range);
+    return this.stateDb.raw.transaction(() => {
+      const revision = (this.stateDb.raw.prepare("SELECT MAX(seq) AS revision FROM research_events WHERE run_id = ?").get(id) as { revision: number | null }).revision;
+      if (revision === null) throw new Error("Research run not found");
+      // One extra row says whether older events remain inside the range.
+      const rows = this.stateDb.raw.prepare(`SELECT payload FROM research_events WHERE run_id = @id AND seq > @after
+        AND (@before IS NULL OR seq < @before) ORDER BY seq DESC LIMIT @limit`)
+        .all({ id, after: r.afterSeq, before: r.beforeSeq ?? null, limit: r.limit + 1 }) as Array<{ payload: string }>;
+      const events = rows.slice(0, r.limit).map((row) => JSON.parse(row.payload) as ResearchEvent);
+      const oldest = events.at(-1);
+      return { runId: id, revision, events, ...(oldest && rows.length > r.limit ? { nextBeforeSeq: oldest.seq } : {}) };
+    }).deferred();
+  }
+  private threadRunIds(thread: ResearchThread, limit: number): string[] {
     const rows = this.stateDb.raw.prepare(`SELECT run_id FROM research_runs
       WHERE (coordinator_backend = ? AND coordinator_thread_id = ?)
         OR run_id IN (SELECT run_id FROM research_workers WHERE backend = ? AND thread_id = ?)
-      ORDER BY created_at DESC, run_id DESC LIMIT 20`).all(thread.backend, thread.threadId, thread.backend, thread.threadId) as { run_id: string }[];
-    return rows.map((row) => this.header(row.run_id)!).filter(Boolean);
+      ORDER BY created_at DESC, run_id DESC LIMIT ?`).all(thread.backend, thread.threadId, thread.backend, thread.threadId, limit) as { run_id: string }[];
+    return rows.map((row) => row.run_id);
   }
   members(id: string): ResearchThread[] {
     return this.stateDb.raw.prepare(`SELECT coordinator_backend AS backend, coordinator_thread_id AS threadId FROM research_runs WHERE run_id = ?

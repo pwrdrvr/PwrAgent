@@ -2,14 +2,21 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { projectResearchRun, searchResearchItems, type NavigationThreadSummary, type ResearchEvent, type ResearchSnapshot, type ResearchItemContext } from "@pwragent/shared";
+import { projectResearchRun, researchEventPage, researchRunBoard, searchResearchItems, summarizeResearchRun, type NavigationThreadSummary, type ResearchEvent, type ResearchRun, type ResearchSnapshot, type ResearchSnapshotRequest, type ResearchItemContext } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption } from "../../../test/select";
 import { ResearchPanel } from "../ResearchPanel";
 
 const thread = { id: "parent", source: "codex", title: "Queue investigation" } as NavigationThreadSummary;
 const actor = { backend: "codex", threadId: "parent", kind: "agent" } as const;
-function snapshot(findings = 1): ResearchSnapshot {
+/** What the owner holds: complete runs. The fake API answers only as the owner's IPC does, through the shared oracles. */
+type OwnerState = { runs: ResearchRun[]; writableRunIds: string[]; pending?: ResearchSnapshot["pending"] };
+function ownerSnapshot(data: OwnerState, request?: Pick<ResearchSnapshotRequest, "runId">): ResearchSnapshot {
+  const selected = data.runs.find((run) => run.id === request?.runId) ?? data.runs[0];
+  return { runs: data.runs.map(summarizeResearchRun), writableRunIds: data.writableRunIds, ...(data.pending ? { pending: data.pending } : {}),
+    ...(selected ? { selected: researchRunBoard(selected) } : {}) };
+}
+function snapshot(findings = 1): OwnerState {
   const records: ResearchEvent[] = [];
   const add = (data: ResearchEvent["data"]) => records.push({ seq: records.length + 1, commandId: `e${records.length}`, signature: "test", at: 1000, actor, data });
   add({ type: "created", objective: "Investigate queue ordering", coordinator: actor, ownerId: "owner", ownerPid: 1, deadlineAt: 601_000, workspaceMode: "none",
@@ -18,15 +25,16 @@ function snapshot(findings = 1): ResearchSnapshot {
   add({ type: "submission", submission: { id: "s1", approachId: "a1", text: "Preserve the original event order", paths: [] } });
   return { runs: [projectResearchRun("run", records)], writableRunIds: ["run"] };
 }
-function apiFor(data = snapshot()) {
+function apiFor(data: OwnerState = snapshot()) {
   let changed: (() => void) | undefined;
   const unsubscribe = vi.fn();
   const api = {
-    researchSnapshot: vi.fn(async () => data),
+    researchSnapshot: vi.fn<NonNullable<DesktopApi["researchSnapshot"]>>(async (request) => ownerSnapshot(data, request)),
+    readResearchEvents: vi.fn<NonNullable<DesktopApi["readResearchEvents"]>>(async (request) => researchEventPage(data.runs.find((run) => run.id === request.runId)!, request.range)),
     prepareResearch: vi.fn(async () => ({ intentId: "prepared-intent" })),
     withdrawResearch: vi.fn(async () => {}),
     onResearchChanged: vi.fn((callback) => { changed = () => callback({ backend: "codex", threadId: "parent" }); return unsubscribe; }),
-    updateResearch: vi.fn(async () => data.runs[0]!),
+    updateResearch: vi.fn(async () => researchRunBoard(data.runs[0]!)),
     submitThreadReply: vi.fn<NonNullable<DesktopApi["submitThreadReply"]>>(async () => ({ backend: "codex", threadId: "parent", queueStatus: "queued", queueEntryId: "queue" })),
     openResearchEvidence: vi.fn(async () => ({ opened: true })),
     searchResearch: vi.fn<NonNullable<DesktopApi["searchResearch"]>>(async (request) => searchResearchItems(request.runId, data.runs[0]!.items, data.runs[0]!.revision, request.query)),
@@ -71,7 +79,7 @@ describe("Research panel", () => {
     expect(screen.getByRole("tab", { name: "Items" })).toHaveAttribute("aria-selected", "true");
     expect(mocks.readResearchItem).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: "f1" }));
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
-    fireEvent.click(screen.getByRole("button", { name: "Counterexample 0" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Counterexample 0" }));
     await waitFor(() => expect(mocks.readResearchItem).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: "f0" })));
   });
 
@@ -174,13 +182,16 @@ describe("Research panel", () => {
   it("does not carry a stop confirmation over to another run", async () => {
     const first = snapshot();
     const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));
-    const data: ResearchSnapshot = { runs: [first.runs[0]!, second], writableRunIds: ["run", "other-run"] };
+    const data: OwnerState = { runs: [first.runs[0]!, second], writableRunIds: ["run", "other-run"] };
     data.runs.forEach((run) => { run.deadlineAt = Date.now() + 600_000; });
     const { api, mocks } = apiFor(data);
     render(<ResearchPanel desktopApi={api} thread={thread} />);
     fireEvent.click(await screen.findByRole("button", { name: "Stop run…" }));
     expect(screen.getByRole("group", { name: "Confirm stopping the run" })).toBeInTheDocument();
     chooseSelectOption(screen.getByRole("combobox", { name: "Run" }), /Second objective/);
+    // The previous run's controls leave with the choice, before the chosen board arrives.
+    expect(screen.queryByRole("button", { name: "Stop run" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Second objective", { selector: ".research-objective" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Confirm stopping the run" })).not.toBeInTheDocument();
     expect(mocks.updateResearch).not.toHaveBeenCalled();
   });
@@ -282,15 +293,83 @@ describe("Research panel", () => {
     expect(screen.queryByText("Counterexample 1")).not.toBeInTheDocument();
   });
 
+  it("sends summaries and one board, never a journal, and reads the chosen run's board", async () => {
+    const first = snapshot(3);
+    const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));
+    const { api, mocks } = apiFor({ runs: [first.runs[0]!, second], writableRunIds: ["run"] });
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    const response = await mocks.researchSnapshot.mock.results[0]!.value;
+    expect(JSON.stringify(response)).not.toContain("\"events\"");
+    expect(response.runs.map((run: { id: string }) => run.id)).toEqual(["run", "other-run"]);
+    chooseSelectOption(screen.getByRole("combobox", { name: "Run" }), /Second objective/);
+    await waitFor(() => expect(mocks.researchSnapshot).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "other-run" }));
+    expect(await screen.findByText("Second objective", { selector: ".research-objective" })).toBeInTheDocument();
+    expect(screen.getByText("This run’s owner is not running in this window’s process.", { exact: false })).toBeInTheDocument();
+  });
+
+  it("pages Activity newest first, reads only new events on a change, and reaches the first event with Show older", async () => {
+    const data = snapshot(250);
+    const { api, mocks, changed } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    expect(mocks.readResearchEvents).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    const list = await screen.findByLabelText("Research activity");
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(100));
+    expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("Preserve the original event order");
+    expect(screen.getByText("Showing the latest 100 of 252 events.")).toBeInTheDocument();
+    // The board changes between page reads: the new event lands on top, and the older page continues where the window ended.
+    const records = [...data.runs[0]!.events, { seq: 253, commandId: "late", signature: "t", at: 2000, actor,
+      data: { type: "finding", finding: { id: "late", approachId: "a1", kind: "note", text: "Arrived between pages", paths: [] } } } as ResearchEvent];
+    data.runs[0] = projectResearchRun("run", records);
+    act(changed);
+    await waitFor(() => expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("Arrived between pages"));
+    expect(mocks.readResearchEvents).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "run", range: { afterSeq: 252, limit: 100 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Show older" }));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(201));
+    expect(mocks.readResearchEvents).toHaveBeenLastCalledWith(expect.objectContaining({ range: { beforeSeq: 153, limit: 100 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Show older" }));
+    await waitFor(() => expect(screen.getByText("All 253 events.")).toBeInTheDocument());
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(253);
+    expect(rows.at(-1)).toHaveTextContent("Run requested");
+    expect(screen.queryByRole("button", { name: "Show older" })).not.toBeInTheDocument();
+    expect(list).toHaveFocus();
+  });
+
+  it("counts events the Activity read found beyond the board it was given", async () => {
+    const data = snapshot(250);
+    const { api, mocks } = apiFor(data);
+    // The journal grew after the board was read: the head page already holds seq 253.
+    const grown = projectResearchRun("run", [...data.runs[0]!.events, { seq: 253, commandId: "late", signature: "t", at: 2000, actor,
+      data: { type: "finding", finding: { id: "late", approachId: "a1", kind: "note", text: "Newer than the board", paths: [] } } } as ResearchEvent]);
+    mocks.readResearchEvents.mockImplementation(async (request) => researchEventPage(grown, request.range));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByText("Showing the latest 100 of 253 events.")).toBeInTheDocument();
+    expect(screen.getByText("Showing the latest 100 of 253 events.")).not.toHaveAttribute("role");
+  });
+
+  it("says Activity is unavailable when the window cannot read events", async () => {
+    const { api } = apiFor();
+    render(<ResearchPanel desktopApi={{ ...api, readResearchEvents: undefined }} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByText("Activity is unavailable in this window.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading activity…")).not.toBeInTheDocument();
+  });
+
   it("discards a read that completes after the selected thread changes", async () => {
     const first = Promise.withResolvers<ResearchSnapshot>();
     const second = snapshot();
     second.runs[0]!.objective = "New thread's run";
-    const researchSnapshot = vi.fn(async ({ threadId }: { threadId: string }) => threadId === "parent" ? await first.promise : second);
+    const researchSnapshot = vi.fn(async ({ threadId }: { threadId: string }) => threadId === "parent" ? await first.promise : ownerSnapshot(second));
     const { rerender } = render(<ResearchPanel desktopApi={{ researchSnapshot } as DesktopApi} thread={thread} />);
     rerender(<ResearchPanel desktopApi={{ researchSnapshot } as DesktopApi} thread={{ ...thread, id: "other" }} />);
     await screen.findAllByText("New thread's run");
-    await act(async () => first.resolve(snapshot()));
+    await act(async () => first.resolve(ownerSnapshot(snapshot())));
     expect(screen.queryByText("Investigate queue ordering")).not.toBeInTheDocument();
   });
 });
