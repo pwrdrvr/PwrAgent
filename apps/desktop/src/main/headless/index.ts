@@ -63,7 +63,10 @@ function requireRuntime(): NodeRuntimeMetadata {
   return runtime;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const moduleFile = fileURLToPath(import.meta.url);
+const invokedFile = process.argv[1] && path.resolve(process.argv[1]);
+// The portable package keeps its historical CJS entry beside the ESM graph.
+if (invokedFile === moduleFile || invokedFile === moduleFile.replace(/\.mjs$/, ".js")) {
   if (process.argv.includes("--version")) {
     process.stdout.write(`${requireRuntime().version}\n`);
   } else {

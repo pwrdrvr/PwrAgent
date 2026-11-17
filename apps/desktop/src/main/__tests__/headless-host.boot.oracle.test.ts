@@ -28,7 +28,7 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "headless-host-boot-"));
   onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
   const outputDirectory = path.join(root, "runtime");
-  await buildHeadless({ outputDirectory, plugins: [{ name: "owned-codex-protocol", setup(builder) {
+  await buildHeadless({ outputDirectory, sourcemap: false, logLevel: "warning", plugins: [{ name: "owned-codex-protocol", setup(builder) {
     builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "owned-codex" }));
     builder.onLoad({ filter: /.*/, namespace: "owned-codex" }, () => ({
       contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts"))};`,
