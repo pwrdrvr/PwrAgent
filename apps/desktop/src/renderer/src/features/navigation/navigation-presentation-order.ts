@@ -1,6 +1,7 @@
 import type { NavigationQueryEntry } from "@pwragent/shared";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 
 export type NavigationPresentationEntry = {
   key: string;
@@ -35,16 +36,43 @@ export function retainNavigationPresentationOrder(frozen: NavigationPresentation
 export function readOwnerChildOrder(
   resources: NavigationWindowQueriesState["resources"],
   presentation: NavigationPresentationOrder,
+  threadsByKey?: ReadonlyMap<string, NavigationPresentedThread>,
 ): Map<string, string[]> {
   const order = new Map<string, Set<string>>();
   const scopedParents = new Set([...resources.values()].flatMap(({ state: { request: { query } } }) =>
     query.kind === "children" && query.directoryKey !== undefined ? [navigationThreadSelectionKey(query.parent)] : []));
   const ranked = new Map<string, Map<string, number>>();
+  // A replacement exact batch has no page until it lands. Preserve the last
+  // accepted position only for admitted children under a scoped parent,
+  // carrying that same owner/parent relationship in current row data.
+  for (const resource of resources.values()) {
+    const { query, inventory } = resource.state.request;
+    if (!(query.kind === "children" && query.directoryKey !== undefined)
+      && !(query.kind === "exact" && inventory === "owner")) continue;
+    for (const entry of presentation.get(resource.id) ?? []) {
+      if (entry.placement.kind !== "child") continue;
+      const row = threadsByKey?.get(entry.key);
+      const position = row?.ownerSiblingPosition;
+      const parent = entry.placement.parent;
+      const parentKey = navigationThreadSelectionKey(parent);
+      const owner = row?.federation?.ref.target;
+      if (!scopedParents.has(parentKey) || !row || !position || owner?.scope !== "remote" || owner.instanceId !== parent.ownerInstanceId
+        || position.parentKey !== parentKey || row.parentThreadId !== parent.threadId
+        || (row.parentThreadBackend !== undefined && row.parentThreadBackend !== parent.backend)
+        || (row.parentThreadInstanceId ?? owner.instanceId) !== parent.ownerInstanceId) continue;
+      const children = ranked.get(parentKey) ?? new Map<string, number>();
+      children.set(entry.key, position.position);
+      ranked.set(parentKey, children);
+    }
+  }
   for (const resource of resources.values()) {
     const request = resource.state.request;
     if (request.inventory !== "owner" || request.query.kind !== "exact") continue;
     const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
     for (const entry of presentation.get(resource.id) ?? []) {
+      // Accepted rows also fence cached exact pages: restoring a previous
+      // selection supplies membership, not a newer owner observation.
+      if (threadsByKey?.get(entry.key)?.ownerSiblingPosition !== undefined) continue;
       if (entry.siblingOrder === undefined || entry.placement.kind !== "child"
         || entry.placement.parent.ownerInstanceId !== owner) continue;
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);

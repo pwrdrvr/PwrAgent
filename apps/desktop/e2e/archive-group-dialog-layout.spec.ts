@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import type { Page } from "@playwright/test";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
@@ -11,7 +12,6 @@ import {
 } from "./fixtures/archive-group-dialog-layout-oracle";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { sizeWindowAtZoom, type WindowZoomSize } from "./fixtures/window-zoom";
-import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
@@ -84,20 +84,9 @@ test("keeps the archive group confirmation usable at every window size and zoom"
   });
   const sizeWindow = (size: WindowZoomSize) => sizeWindowAtZoom(app.electronApp, app.window, size);
   try {
-    // Rows can render while startup provider discovery is still checking.
-    // Archive planning intentionally refuses that incomplete membership, so
-    // row visibility alone is not readiness to open the confirmation.
-    await expect.poll(() => app.window.evaluate(async () => {
-      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
-      const consumerId = "archive-group-layout-ready";
-      try {
-        const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
-          query: { kind: "directory-index" }, pageSize: 10 }, consumerId);
-        return page.coverage.state;
-      } finally {
-        await api.releaseNavigationQuery?.(consumerId);
-      }
-    }), { message: "Archive layout setup requires complete owner membership" }).toBe("complete");
+    // A visible first page may have checking coverage. Archive discovery
+    // correctly refuses it; wait for the inventories, not just a root row.
+    await waitForArchiveInventories(app.window);
     const dialog = app.window.getByRole("dialog", { name: /^Archive \d+ Threads\?$/ });
     for (const group of GROUPS) {
       await sizeWindow({ ...LAUNCH_SIZE, zoom: 100 });
@@ -134,6 +123,25 @@ test("keeps the archive group confirmation usable at every window size and zoom"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+async function waitForArchiveInventories(window: Page): Promise<void> {
+  const inventories = ["owner", "viewer"] as const;
+  try {
+    await expect.poll(async () => window.evaluate(async (inventories) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return Promise.all(inventories.map(async (inventory) => {
+        const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory,
+          query: { kind: "directory-index" }, pageSize: 1 }, `archive-layout-readiness:${inventory}`);
+        return page.coverage.state;
+      }));
+    }, inventories), { message: "archive discovery requires complete owner and viewer inventories" }).toEqual(["complete", "complete"]);
+  } finally {
+    await window.evaluate(async (inventories) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      await Promise.all(inventories.map((inventory) => api.releaseNavigationQuery!(`archive-layout-readiness:${inventory}`)));
+    }, inventories);
+  }
+}
 
 /**
  * The sidebar pages its threads behind a "Load more threads" button, so a

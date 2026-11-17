@@ -195,6 +195,31 @@ async function settleHarness(
   }
 }
 
+/**
+ * Runs one property example against its own harness over an in-memory
+ * StateDb, then settles that harness and closes the database. A test that
+ * has timed out keeps running, so this starts nothing once `signal` aborts.
+ */
+async function withExampleHarness<T>(
+  signal: AbortSignal,
+  options: Omit<NonNullable<Parameters<typeof createHarness>[0]>, "store">,
+  run: (harness: Awaited<ReturnType<typeof createHarness>>) => Promise<T>,
+): Promise<T> {
+  signal.throwIfAborted();
+  const db = openInMemoryStateDb();
+  let created: Awaited<ReturnType<typeof createHarness>> | undefined;
+  try {
+    created = await createHarness({ ...options, store: new SqliteMessagingStore(db) });
+    return await run(created);
+  } finally {
+    try {
+      await settleHarness(created);
+    } finally {
+      db.close();
+    }
+  }
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await settleHarnessWork();
@@ -243,9 +268,10 @@ describe("MessagingController", () => {
     const errorEntered = createDeferred<void>();
     const errorDelivery = createDeferred<void>();
     let handling: Promise<void> | undefined;
+    let created: Awaited<ReturnType<typeof createHarness>> | undefined;
     try {
       const store = new SqliteMessagingStore(db);
-      const harness = await createHarness({
+      const harness = created = await createHarness({
         store,
         startTurn: async (request) => {
           startupEntered.resolve();
@@ -289,7 +315,7 @@ describe("MessagingController", () => {
       startup.resolve();
       errorDelivery.resolve();
       await handling;
-      await settleHarnessWork();
+      await settleHarness(created);
       db.close();
       if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
       else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
@@ -1155,56 +1181,46 @@ describe("MessagingController", () => {
     expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ afterReview: "auto-fix" }));
   });
 
-  it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async () => {
+  it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async ({ signal }) => {
     // Model: new reviews fix by default; only a toggle changes that choice.
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("toggle", "scope", "mode", "reviewer"), { maxLength: 6 }),
-      async (steps) => {
-        // This property checks picker state, not file persistence. Repeating
-        // the JSON store's reads and atomic rewrites for 25 examples can
-        // exhaust the test timeout while other survey files are doing I/O.
-        const db = openInMemoryStateDb();
-        try {
-          const harness = await createHarness({ store: new SqliteMessagingStore(db), listBackends: async () => ({
-            fetchedAt: 1000, backends: [
-              buildBackendSummary({ capabilities: {
-                ...buildBackendSummary().capabilities, reviewRunner: true,
-                reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
-              } }),
-              buildBackendSummary({ kind: "acp:grok", capabilities: {
-                ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
-              } }),
-            ],
-          }) });
-          await bindThread(harness);
-          await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
-          let autoFix = true;
-          for (const step of steps) {
-            const actions = step === "toggle" ? ["review:summary:auto-fix"]
-              : step === "scope" ? ["review:summary:target", "review:target:current-changes"]
-                : step === "mode" ? ["review:summary:mode", "review:mode:pwragent-sub-agent"]
-                  : ["review:summary:reviewer", "review:reviewer:provider:1", "review:reviewer:model:default"];
-            for (const actionId of actions) {
-              await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
-            }
-            if (step === "toggle") autoFix = !autoFix;
-            expect(harness.delivered.at(-1)).toMatchObject({
-              review: { afterReview: autoFix ? "auto-fix" : "wait" },
-              body: expect.stringContaining(`Auto-fix findings: ${autoFix ? "On" : "Off"}`),
-            });
+      // This property checks picker state, not file persistence. Repeating
+      // the JSON store's reads and atomic rewrites for 25 examples can
+      // exhaust the test timeout while other survey files are doing I/O.
+      async (steps) => await withExampleHarness(signal, { listBackends: async () => ({
+        fetchedAt: 1000, backends: [
+          buildBackendSummary({ capabilities: {
+            ...buildBackendSummary().capabilities, reviewRunner: true,
+            reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
+          } }),
+          buildBackendSummary({ kind: "acp:grok", capabilities: {
+            ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
+          } }),
+        ],
+      }) }, async (harness) => {
+        await bindThread(harness);
+        await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+        let autoFix = true;
+        for (const step of steps) {
+          const actions = step === "toggle" ? ["review:summary:auto-fix"]
+            : step === "scope" ? ["review:summary:target", "review:target:current-changes"]
+              : step === "mode" ? ["review:summary:mode", "review:mode:pwragent-sub-agent"]
+                : ["review:summary:reviewer", "review:reviewer:provider:1", "review:reviewer:model:default"];
+          for (const actionId of actions) {
+            await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
           }
-          await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
-          expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({
-            afterReview: autoFix ? "auto-fix" : "wait",
-          }));
-        } finally {
-          try {
-            await settleHarnessWork();
-          } finally {
-            db.close();
-          }
+          if (step === "toggle") autoFix = !autoFix;
+          expect(harness.delivered.at(-1)).toMatchObject({
+            review: { afterReview: autoFix ? "auto-fix" : "wait" },
+            body: expect.stringContaining(`Auto-fix findings: ${autoFix ? "On" : "Off"}`),
+          });
         }
-      },
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+        expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({
+          afterReview: autoFix ? "auto-fix" : "wait",
+        }));
+      }),
     ), { numRuns: 25 });
   });
 
@@ -1236,8 +1252,9 @@ describe("MessagingController", () => {
     const { tempDir, dbPath } = createTempStateDb("pwragent-review-autofix-writes-");
     tempDirs.push(tempDir);
     const db = StateDb.open(dbPath);
+    let created: Awaited<ReturnType<typeof createHarness>> | undefined;
     try {
-      const harness = await createHarness({
+      const harness = created = await createHarness({
         store: new SqliteMessagingStore(db),
         listBackends: async () => ({
           fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
@@ -1256,7 +1273,7 @@ describe("MessagingController", () => {
         writes,
       });
     } finally {
-      await settleHarnessWork();
+      await settleHarness(created);
       db.close();
       if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
       else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
@@ -21091,7 +21108,7 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("keeps delivered text unchanged under arbitrary backend event redeliveries", async () => {
+  it("keeps delivered text unchanged under arbitrary backend event redeliveries", async ({ signal }) => {
     const turn = fc.array(fc.record({
       text: fc.string({ maxLength: 24 }),
       // Retry any previously seen event here, including after turn/completed.
@@ -21120,9 +21137,12 @@ describe("MessagingController", () => {
           } },
         }];
 
+        // This property checks delivery deduplication, not file persistence.
+        // The JSON store serializes a read, or a read and an atomic rewrite,
+        // for each store operation: about 1,500 file operations across 25
+        // examples, which exceeded the timeout under full-suite I/O load.
         async function deliver(withRetries: boolean): Promise<string[]> {
-          const harness = await createHarness();
-          try {
+          return await withExampleHarness(signal, {}, async (harness) => {
             await bindThread(harness);
             harness.delivered.length = 0;
             for (const [index, event] of events.entries()) {
@@ -21139,9 +21159,7 @@ describe("MessagingController", () => {
               .filter((intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
                 intent.kind === "message" && intent.role === "assistant")
               .flatMap((intent) => intent.parts.flatMap((part) => "text" in part ? [part.text] : []));
-          } finally {
-            await settleHarnessWork();
-          }
+          });
         }
 
         const unique = await deliver(false);
@@ -21151,6 +21169,55 @@ describe("MessagingController", () => {
         expect(unique).toEqual(texts);
       },
     ), { numRuns: 25 });
+  });
+
+  it("settles one test harness without disposing another test's harness", async () => {
+    // A property that times out keeps running into the next test. Its
+    // per-run teardown once disposed every registered controller, so the next
+    // test's controller delivered nothing.
+    const leftover = await createHarness();
+    const current = await createHarness();
+    for (const harness of [leftover, current]) {
+      await bindThread(harness);
+      harness.delivered.length = 0;
+    }
+
+    await settleHarness(leftover);
+    const event = {
+      backend: "codex",
+      notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "item-1", type: "agentMessage", phase: "final", text: "Still delivered." },
+      } },
+    } satisfies AgentEvent;
+    await leftover.controller.handleBackendEvent(event);
+    await current.controller.handleBackendEvent(event);
+
+    // The settled harness is disposed and no longer registered for teardown.
+    expect(leftover.delivered).toEqual([]);
+    expect(harnessControllers).not.toContain(leftover.controller);
+    expect(harnessControllers).toContain(current.controller);
+    expect(current.delivered).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ text: "Still delivered." })],
+      }),
+    ]);
+  });
+
+  it("starts no property example once its test's signal has aborted", async () => {
+    // A timed-out test keeps running into later tests. Its property loop must
+    // stop creating harnesses instead of competing with them.
+    const timedOut = new AbortController();
+    timedOut.abort(new Error("Test timed out"));
+    const registered = harnessControllers.length;
+    const run = vi.fn(async () => undefined);
+
+    await expect(withExampleHarness(timedOut.signal, {}, run)).rejects.toThrow("Test timed out");
+
+    expect(run).not.toHaveBeenCalled();
+    expect(harnessControllers).toHaveLength(registered);
   });
 
   it("posts one final response when turn completion repeats it with commentary", async () => {

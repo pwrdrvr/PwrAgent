@@ -1184,7 +1184,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       .filter((label): label is string => Boolean(label))
       .join(", ");
     const expandedThreadModel =
-      expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey, children: pagedChildren }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
+      expanded ? buildPagedDirectoryPresentation({ directory, selectionAncestry: props.pagedNavigation?.selectionAncestry, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey, children: pagedChildren }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey, ownerChildOrder, ordinaryChildCounts } = expandedThreadModel;
     // One tray per top-level row, holding its whole descendant subtree in
     // depth-first order. The owner keys each child under its *true* parent, so
