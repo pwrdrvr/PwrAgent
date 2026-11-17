@@ -446,11 +446,26 @@ export class MessagingCallbackHandlers {
       // A provider's durable handle or the clicked surface must identify
       // this exact proposal; an old button must never approve a newer one.
       const handle = await this.resolveCallbackHandleForEvent(event);
-      if (handle?.pendingIntentId) {
-        return handle.pendingIntentId === newest.id ? newest : undefined;
-      }
-      return clicked && newest.surface && isSameMessagingSurface(clicked, newest.surface)
-        ? newest : undefined;
+      const identifies = (candidate: MessagingPendingIntentRecord) => handle?.pendingIntentId
+        ? handle.pendingIntentId === candidate.id
+        : Boolean(clicked && isSameMessagingSurface(clicked, candidate.surface));
+      if (identifies(newest)) return newest;
+      // Creation time establishes supersession only when it is strictly
+      // later. The store's first row in a tie is not the clicked proposal.
+      // Resolve another live card in that same binding and time cohort by
+      // identity, keeping actor/channel/expiry filtering in the store.
+      const candidates = await this.context.store.findActivePendingIntentsForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.context.now(),
+      });
+      if (candidates.some(candidate => candidate.createdAt > newest.createdAt)) return undefined;
+      return candidates.find(candidate =>
+        candidate.intent.kind === "approval"
+        && candidate.bindingId === newest.bindingId
+        && candidate.createdAt === newest.createdAt
+        && identifies(candidate)
+      );
     }
     if (
       !clicked

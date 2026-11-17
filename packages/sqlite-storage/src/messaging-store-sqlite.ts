@@ -815,12 +815,20 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
     channel: Records["channel"];
     now?: number;
   }): Promise<Records["pendingIntent"] | undefined> {
+    return (await this.findActivePendingIntentsForChannel(params))[0];
+  }
+
+  async findActivePendingIntentsForChannel(params: {
+    actorId: string;
+    channel: Records["channel"];
+    now?: number;
+  }): Promise<Records["pendingIntent"][]> {
     const channelKey = this.policy.buildMessagingConversationKey(params.channel);
     const now = params.now ?? Date.now();
     const rows = this.stateDb.raw
       .prepare("SELECT payload FROM pending_intents WHERE expires_at > ?")
       .all(now) as { payload: string }[];
-    const matches = rows
+    return rows
       .map((r) => JSON.parse(r.payload) as Records["pendingIntent"])
       .filter(
         (intent) =>
@@ -829,7 +837,6 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
           this.policy.buildMessagingConversationKey(intent.channel) === channelKey,
       )
       .sort((a, b) => b.createdAt - a.createdAt);
-    return matches[0];
   }
 
   async findActivePendingIntentsForRequest(params: {
