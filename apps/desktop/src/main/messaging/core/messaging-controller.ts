@@ -1,6 +1,6 @@
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
-import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, buildQueuedInputPreview, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, federationRefsMatch, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type PreparedInputStartResult, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage, type PendingNewThreadPromptWindow, type PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
+import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, buildQueuedInputPreview, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type PreparedInputStartResult, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage, type PendingNewThreadPromptWindow, type PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
 import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
@@ -45,81 +45,8 @@ import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } f
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  buildReviewBranchOptions,
-  buildFederatedThreadRef,
-  buildThreadIdentityKey,
-  codexAsyncQuestionItemId,
-  findPreferredReviewWorkspaceCwd,
-  findPrimaryReviewWorkspaceCwd,
-  federatedThreadIdentityKey,
-  formatCodexAsyncQuestionReply,
-  isAcpBackendId,
-  isAppServerBackendKind,
-  isCodexAsyncQuestionAnswered,
-  isMessagingBindingTargetKind,
-  normalizeRenamedTitleSource,
-  parseCodexTurnErrorMessage,
-  readProviderResponseBlockNotification,
-  describeProviderResponseBlock,
-  permissionForDynamicTool,
-  permissionsForThreadMutation,
-  toolArgsTargetRemoteInstance,
-  resolveNewThreadBackend,
-  selectableNewThreadBackends,
-  stripCodexGitActionDirectives,
-  summarizeCodexAsyncQuestionReply,
-  type CodexAsyncQuestion,
-  type CodexAsyncQuestionReply,
-} from "@pwragent/shared";
-import type {
-  AgentEvent,
-  AppServerTurnInputItem,
-  ThreadIncomingWorkSummary,
-  AppServerBackendKind,
-  AppServerReviewTarget,
-  ModelSettingsRecent,
-  AutomationMessagingConversationSnapshot,
-  AutomationRunSourceMetadata,
-  AutomationRunOutputDecision,
-  CodexEnvironmentSetupProgressEvent,
-  BackendAcpRuntimeOptionSource,
-  BackendAcpSessionRuntimeState,
-  BackendSummary,
-  AppServerPendingRequestNotification,
-  AppServerThreadMessageOrigin,
-  AppServerToolRequestUserInputNotification,
-  FederatedThreadRef,
-  FederationTarget,
-  HandoffThreadWorkspaceRequest,
-  HandoffThreadWorkspaceResponse,
-  LinkedDirectorySummary,
-  LaunchpadWorkMode,
-  MaterializedDirectoryLaunchpadThread,
-  MessagingBindingTargetKind,
-  MessagingDynamicToolCategory,
-  MessagingPermissionId,
-  MessagingToolUpdateMode,
-  PwrAgentMessagingBoundThreadSummary,
-  PwrAgentMessagingConversationCapabilitiesSummary,
-  PwrAgentMessagingLocationSummary,
-  PwrAgentMessagingManagedConversationSummary,
-  PwrAgentMessagingOutboundAttachmentSummary,
-  PwrAgentMessagingRequest,
-  PwrAgentMessagingResponse,
-  ListMessagingSurfacesResult,
-  NavigationDirectorySummary,
-  NavigationLaunchpadDraft,
-  NavigationLaunchpadConfiguration,
-  NavigationSelectedDetailRequest,
-  NavigationSnapshot,
-  NavigationThreadSummary,
-  RbacResolution,
-  ThreadMessagingBindingTransition,
-  ThreadExecutionMode,
-  ThreadIdentifier,
-  UpdateDirectoryLaunchpadRequest,
-} from "@pwragent/shared";
+import { buildReviewBranchOptions, buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, parseCodexTurnErrorMessage, readProviderResponseBlockNotification, describeProviderResponseBlock, permissionForDynamicTool, permissionsForThreadMutation, toolArgsTargetRemoteInstance, resolveNewThreadBackend, selectableNewThreadBackends, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
+import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, CodexEnvironmentSetupProgressEvent, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendSummary, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, LinkedDirectorySummary, LaunchpadWorkMode, MaterializedDirectoryLaunchpadThread, MessagingDynamicToolCategory, MessagingPermissionId, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationDirectorySummary, NavigationLaunchpadDraft, NavigationLaunchpadConfiguration, NavigationSelectedDetailRequest, NavigationThreadSummary, RbacResolution, ThreadExecutionMode, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type {
@@ -228,9 +155,7 @@ import {
 } from "./messaging-artifact-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
-import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
-
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildBoundedResumeIntent,
@@ -240,34 +165,7 @@ import {
   resumeBrowserPageSize,
   selectProjectFromValue,
 } from "./messaging-resume-browser.js";
-import {
-  buildBindingStatusIntent,
-  buildNewThreadEnvironmentPickerIntent,
-  buildStatusAcpRuntimeModePickerIntent,
-  buildBranchPickerPage,
-  buildHandoffBranchPickerIntent,
-  buildHandoffConfirmationIntent,
-  buildHandoffOverviewIntent,
-  buildHandoffProjectPickerIntent,
-  buildStatusModelPickerIntent,
-  buildStatusPermissionsPickerIntent,
-  buildStatusReasoningPickerIntent,
-  buildStatusResponseModePickerIntent,
-  buildStatusToolUpdateModePickerIntent,
-  formatExecutionModeLabel,
-  formatMessagingToolUpdateModeLabel,
-  formatPermissionsActionDisplayLabel,
-  formatPermissionsLineDisplayLabel,
-  handoffRequestFromValue,
-  messagingStreamingResponsesEnabled,
-  messagingToolUpdateModeChoices,
-  nextMessagingStreamingResponseMode,
-  resolveMessagingResponseMode,
-  resolveMessagingStreamingResponseMode,
-  resolveMessagingToolUpdateMode,
-  shouldShowStreamingControl,
-  type MessagingWorkspaceHandoffContext,
-} from "./messaging-status-card.js";
+import { buildNewThreadEnvironmentPickerIntent, buildStatusAcpRuntimeModePickerIntent, buildBranchPickerPage, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, handoffRequestFromValue, messagingStreamingResponsesEnabled, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, shouldShowStreamingControl, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
 import {
   acpBackendDeclaresExecutionMode,
   acpBackendUsesExecutionModePermissions,
@@ -336,6 +234,10 @@ import {
   registerAutomationSourceMessageDeliveryHandler,
   registerAutomationTargetMessageDeliveryHandler,
 } from "../../automations/automation-action-executor.js";
+import { MessagingBindingService } from "./messaging-binding-service";
+import type { MessagingBindingHost } from "./messaging-binding-context";
+import { threadContextForAdmissionState, normalizeConversationTitle, isDefaultAgentRouteBinding, handoffContextForBinding, type MessagingToolUpdateDefaultModeResolver } from "./messaging-binding-helpers";
+
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -576,13 +478,6 @@ function turnSettingsForThread(
   };
 }
 
-function threadContextForAdmissionState(
-  _binding: MessagingBindingRecord,
-  state: MessagingThreadAdmissionState,
-): MessagingThreadContext {
-  return { kind: "thread", thread: state.thread };
-}
-
 function federationTargetForThread(
   thread: NavigationThreadSummary,
 ): FederationTarget | undefined {
@@ -641,12 +536,6 @@ function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok
     },
   };
 }
-
-type MessagingToolUpdateDefaultModeResolver =
-  | MessagingToolUpdateMode
-  | ((
-    targetKind: MessagingBindingTargetKind,
-  ) => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
 type MessagingFullAccessControlsResolverFn = () =>
   | MessagingFullAccessControls
@@ -793,7 +682,6 @@ export class MessagingController {
   private readonly backendEventRouter: MessagingBackendEventRouter;
   private readonly authorizedActorIds: Set<string>;
   private readonly capabilityProfile: MessagingCapabilityProfile;
-  private readonly statusRenderLock = new PerKeyAsyncLock();
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   /** Turns whose final assistant item already resolved its images, per binding. */
   private readonly finalAssistantImageTurns = new Map<string, true>();
@@ -938,6 +826,8 @@ export class MessagingController {
   private readonly commandHandlers: MessagingCommandHandlers;
   private commandHostPorts?: MessagingCommandHost;
 
+  private readonly bindingService: MessagingBindingService;
+  private bindingHostPorts?: MessagingBindingHost;
   private readonly callbackHandlers: MessagingCallbackHandlers;
   private callbackHostPorts?: MessagingCallbackHost;
 
@@ -969,6 +859,17 @@ export class MessagingController {
       get now() { return readNow(); },
       get logger() { return readLogger(); },
       host: () => this.callbackHost(),
+    });
+    const readBindingConfig = () => this.options;
+    this.bindingService = new MessagingBindingService({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      get config() { return readBindingConfig(); },
+      host: () => this.bindingHost(),
     });
     this.authorizedActorIds = new Set(options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
@@ -1164,7 +1065,7 @@ export class MessagingController {
     update: MessagingInboundChannelMetadataUpdate,
   ): Promise<void> {
     try {
-      await this.refreshBindingChannelMetadata(
+      await this.bindingService.refreshBindingChannelMetadata(
         update.channel,
         update.routingState,
         update.observedAt,
@@ -1330,7 +1231,7 @@ export class MessagingController {
       requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
       handleStatusCallback: (...args) => this.callbackHandlers.handleStatusCallback(...args),
       presentStatus: (...args) => this.presentStatus(...args),
-      detachBinding: (...args) => this.detachBinding(...args),
+      detachBinding: (...args) => this.bindingService.detachBinding(...args),
       presentResumeBrowser: (...args) => this.presentResumeBrowser(...args),
       presentAgentBrowser: (...args) => this.presentAgentBrowser(...args),
       rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
@@ -1356,6 +1257,32 @@ export class MessagingController {
     };
   }
 
+  private bindingHost(): MessagingBindingHost {
+    const readController = () => this;
+    return this.bindingHostPorts ??= {
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      readBoundNavigationThread: (...args) => this.readBoundNavigationThread(...args),
+      getActiveTurn: (...args) => this.getActiveTurn(...args),
+      disableChannelMonitorSubscription: (...args) => this.disableChannelMonitorSubscription(...args),
+      signalTurnActivity: (...args) => this.signalTurnActivity(...args),
+      flushToolUpdatesForBinding: (...args) => this.flushToolUpdatesForBinding(...args),
+      stopMonitoringForBinding: (...args) => this.stopMonitoringForBinding(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
+      get showStreamingOptionConfig() { return readController().showStreamingOptionConfig; },
+      contextUsageSummaryForBinding: (...args) => this.contextUsageSummaryForBinding(...args),
+      responseModeForConversation: (...args) => this.responseModeForConversation(...args),
+      reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
+      getBackendSummary: (...args) => this.getBackendSummary(...args),
+      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
+      get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
+      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      desktopActivityLog: (...args) => this.desktopActivityLog(...args),
+    };
+  }
+
   private callbackHost(): MessagingCallbackHost {
     const readController = () => this;
     return this.callbackHostPorts ??= {
@@ -1369,8 +1296,8 @@ export class MessagingController {
       requirePermission: (...args) => this.requirePermission(...args),
       canResumeFullAccessThreads: (...args) => this.canResumeFullAccessThreads(...args),
       deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
-      bindChannelToThread: (...args) => this.bindChannelToThread(...args),
-      renderBindingStatus: (...args) => this.renderBindingStatus(...args),
+      bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
+      renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
       submitApprovalAction: (...args) => this.submitApprovalAction(...args),
       retireApprovalIntent: (...args) => this.retireApprovalIntent(...args),
@@ -1411,19 +1338,19 @@ export class MessagingController {
       presentNewThreadReasoningPicker: (...args) => this.presentNewThreadReasoningPicker(...args),
       deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
       loadDefaultAgentBackendSummaries: (...args) => this.loadDefaultAgentBackendSummaries(...args),
-      notifyBindingChanged: (...args) => this.notifyBindingChanged(...args),
+      notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
       ensureFullAccessEscalationAllowed: (...args) => this.ensureFullAccessEscalationAllowed(...args),
-      updateBindingPreferences: (...args) => this.updateBindingPreferences(...args),
+      updateBindingPreferences: (...args) => this.bindingService.updateBindingPreferences(...args),
       stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
       enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
       deliverInvalidTopicApproval: (...args) => this.deliverInvalidTopicApproval(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
-      detachBinding: (...args) => this.detachBinding(...args),
+      detachBinding: (...args) => this.bindingService.detachBinding(...args),
       rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
       dismissActiveSkillsWorkflow: (...args) => this.dismissActiveSkillsWorkflow(...args),
-      clearActiveBindingSubmodeIntent: (...args) => this.clearActiveBindingSubmodeIntent(...args),
+      clearActiveBindingSubmodeIntent: (...args) => this.bindingService.clearActiveBindingSubmodeIntent(...args),
       presentSkillsBrowser: (...args) => this.presentSkillsBrowser(...args),
       presentSkillsSearchPrompt: (...args) => this.presentSkillsSearchPrompt(...args),
       selectPendingSkill: (...args) => this.selectPendingSkill(...args),
@@ -1452,7 +1379,7 @@ export class MessagingController {
       stopActiveTurn: (...args) => this.stopActiveTurn(...args),
       compactThread: (...args) => this.compactThread(...args),
       toggleThreadLock: (...args) => this.toggleThreadLock(...args),
-      syncConversationName: (...args) => this.syncConversationName(...args),
+      syncConversationName: (...args) => this.bindingService.syncConversationName(...args),
       deliverInvalidStatusSelection: (...args) => this.deliverInvalidStatusSelection(...args),
       deliverStaleFullAccessWarning: (...args) => this.deliverStaleFullAccessWarning(...args),
       get pendingFullAccessNewThreadPrompts() { return readController().pendingFullAccessNewThreadPrompts; },
@@ -1492,7 +1419,7 @@ export class MessagingController {
       rememberContextUsageSummary: (...args) => this.rememberContextUsageSummary(...args),
       handleBackendRequestResolved: (...args) => this.handleBackendRequestResolved(...args),
       handleExecutionModeQueued: (...args) => this.handleExecutionModeQueued(...args),
-      refreshStatusSurfacesForThread: (...args) => this.refreshStatusSurfacesForThread(...args),
+      refreshStatusSurfacesForThread: (...args) => this.bindingService.refreshStatusSurfacesForThread(...args),
       handleExecutionModeQueueCleared: (...args) => this.handleExecutionModeQueueCleared(...args),
       bindingsForAgentTurn: (...args) => this.bindingsForAgentTurn(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
@@ -1501,7 +1428,7 @@ export class MessagingController {
       isPrivateReplyCompletionTurn: (...args) => this.isPrivateReplyCompletionTurn(...args),
       isAutomationTurn: (...args) => this.isAutomationTurn(...args),
       get deliveredThreadNoticeKeys() { return readController().deliveredThreadNoticeKeys; },
-      resolveToolUpdateDefaultMode: (...args) => this.resolveToolUpdateDefaultMode(...args),
+      resolveToolUpdateDefaultMode: (...args) => this.bindingService.resolveToolUpdateDefaultMode(...args),
       get toolUpdatePolicy() { return readController().toolUpdatePolicy; },
       deliverToolUpdateDelivery: (...args) => this.deliverToolUpdateDelivery(...args),
       deliverIncomingWork: (...args) => this.deliverIncomingWork(...args),
@@ -1541,8 +1468,8 @@ export class MessagingController {
       deliverTurnFailureMessage: (...args) => this.deliverTurnFailureMessage(...args),
       deliverResponseBlockedNotice: (...args) => this.deliverResponseBlockedNotice(...args),
       deliverArtifactForBinding: (...args) => this.deliverArtifactForBinding(...args),
-      renderAutomaticBindingStatus: (...args) => this.renderAutomaticBindingStatus(...args),
-      threadContextWithNameFromEvent: (...args) => this.threadContextWithNameFromEvent(...args),
+      renderAutomaticBindingStatus: (...args) => this.bindingService.renderAutomaticBindingStatus(...args),
+      threadContextWithNameFromEvent: (...args) => this.bindingService.threadContextWithNameFromEvent(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       scheduleNextQueuedTurn: (...args) => this.scheduleNextQueuedTurn(...args),
       get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
@@ -1588,7 +1515,7 @@ export class MessagingController {
           );
           navigationByThreadKey.set(threadKey, navigation);
         }
-        await this.renderBindingStatus(binding, undefined, navigation);
+        await this.bindingService.renderBindingStatus(binding, undefined, navigation);
       } catch (error) {
         this.logger.debug?.("messaging backend status refresh failed", {
           backend,
@@ -1729,7 +1656,7 @@ export class MessagingController {
         await this.signalTurnActivity(binding, activeTurn, {
           force: true,
         });
-        await this.renderAutomaticBindingStatus(binding);
+        await this.bindingService.renderAutomaticBindingStatus(binding);
       }
     }
   }
@@ -1740,7 +1667,7 @@ export class MessagingController {
     let observeManagedTopicFromInboundMs = 0;
     try {
       const refreshStartedAt = this.now();
-      await this.refreshBindingFromInbound(event);
+      await this.bindingService.refreshBindingFromInbound(event);
       refreshBindingFromInboundMs = this.now() - refreshStartedAt;
 
       const observeStartedAt = this.now();
@@ -1761,91 +1688,6 @@ export class MessagingController {
         totalMs: this.now() - startedAt,
       });
     }
-  }
-
-  /**
-   * Self-heal stored bindings from the freshest data on every inbound.
-   * The adapter populates `parentTitle` / `ancestorTitle` (supergroup
-   * / server / channel breadcrumbs) on every inbound channel ref;
-   * legacy bindings stored before those fields existed don't have
-   * them. Merge in any new fields the binding doesn't already have so
-   * the navigation snapshot's binding chip can render full
-   * breadcrumbs without waiting for an explicit unbind/rebind.
-   */
-  private async refreshBindingFromInbound(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.refreshBindingChannelMetadata(
-      event.channel,
-      event.routingState,
-      event.receivedAt,
-    );
-  }
-
-  private async refreshBindingChannelMetadata(
-    channel: MessagingChannelRef,
-    routingStateUpdate?: MessagingAdapterState,
-    observedAt = this.now(),
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(
-      channel,
-    );
-    if (!binding) return;
-    const incoming = channel.conversation;
-    // Incoming wins when present. Adapters fetch fresher metadata
-    // than we stored at bind time:
-    //   - Discord publishes channel/parent/guild names through the
-    //     post-dispatch metadata hook after bounded-LRU REST enrichment,
-    //     so a server or channel rename reaches us without delaying admission.
-    //   - Telegram caches forum-topic names from `forum_topic_created`
-    //     and `forum_topic_edited` service messages, so renames done
-    //     in the Telegram client propagate to subsequent inbound
-    //     messages.
-    // When `incoming` doesn't carry a field (e.g. a regular Telegram
-    // topic message that doesn't ship the topic name and the cache
-    // missed), the store merge keeps the current value so we never
-    // lose data we already have. The read/compare/write is one store
-    // transaction: this off-path task cannot restore a binding that
-    // routing revoked or overwrite a newer preference update.
-    //
-    // Loop safety: the store's `changed` guard means an inbound
-    // whose values match what's stored produces no write and no
-    // broadcast — so the gateway echo of our own `editForumTopic`
-    // call (which carries the same name we just wrote in
-    // `syncConversationName`) is a no-op, not a refresh storm.
-    const managedTopic =
-      incoming.kind === "topic" && incoming.parentId
-        ? await this.options.store.findManagedTopicByConversation({
-            channel: channel.channel,
-            supergroupId: incoming.parentId,
-            topicId: incoming.id,
-          })
-        : undefined;
-    const managedConversation = managedTopic?.conversation;
-    // Root-conversation fallback lookup can resolve a DM binding from a
-    // thread-shaped Agent Session event. Passing `binding.channel` keeps the
-    // merge's identity guard satisfied so those fresher titles land — but it
-    // also makes that guard a self-comparison, so the caller has to decide
-    // for itself whether this event describes the binding's own
-    // conversation. Routing state is the part that must not cross over:
-    // adopting a thread's `threadTs` here would silently re-anchor every
-    // later status card, reply, and working card into that thread.
-    const describesSameConversation =
-      buildMessagingConversationKey(binding.channel)
-      === buildMessagingConversationKey(channel);
-    const merged = await this.options.store.mergeBindingChannelMetadata({
-      ancestorTitle: incoming.ancestorTitle ?? managedConversation?.ancestorTitle,
-      bindingId: binding.id,
-      channel: binding.channel,
-      observedAt,
-      parentTitle: incoming.parentTitle ?? managedConversation?.parentTitle,
-      routingState: describesSameConversation ? routingStateUpdate : undefined,
-      title: incoming.title ?? managedConversation?.title,
-    });
-    if (!merged?.changed) return;
-    // The chip now has fresher breadcrumbs in the store; nudge the
-    // renderer to refetch so the tooltip / label reflect them.
-    this.notifyBindingChanged("refresh-from-inbound");
   }
 
   private async presentReviewPicker(
@@ -2722,7 +2564,7 @@ export class MessagingController {
             assignmentId: assignment.id,
             revokedAt: this.now(),
           });
-          this.notifyBindingChanged("default-agent-cleared");
+          this.bindingService.notifyBindingChanged("default-agent-cleared");
         }
       },
     );
@@ -2998,7 +2840,7 @@ export class MessagingController {
     // An empty array is still truthy, and a start can fail on a channel whose
     // assignment was already retired -- announce a change only when one moved.
     if (revoked.length > 0) {
-      this.notifyBindingChanged("default-agent-cleared");
+      this.bindingService.notifyBindingChanged("default-agent-cleared");
     }
   }
 
@@ -3299,7 +3141,7 @@ export class MessagingController {
     });
     if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
-      await this.renderAutomaticBindingStatus(updatedBinding, bundle.events[0]);
+      await this.bindingService.renderAutomaticBindingStatus(updatedBinding, bundle.events[0]);
     }
   }
 
@@ -3668,7 +3510,7 @@ export class MessagingController {
       bindingId: binding.id,
       revokedAt: this.now(),
     });
-    this.notifyBindingChanged("private-reply-expired");
+    this.bindingService.notifyBindingChanged("private-reply-expired");
     return undefined;
   }
 
@@ -3688,7 +3530,7 @@ export class MessagingController {
       });
     }
     if (expired.length > 0) {
-      this.notifyBindingChanged("private-reply-expired");
+      this.bindingService.notifyBindingChanged("private-reply-expired");
     }
   }
 
@@ -4029,7 +3871,7 @@ export class MessagingController {
           force: true,
         });
       }
-      await this.renderAutomaticBindingStatus(
+      await this.bindingService.renderAutomaticBindingStatus(
         deliveryBinding,
         undefined,
         navigation,
@@ -4141,7 +3983,7 @@ export class MessagingController {
       currentTurn?.turnId === params.turnId &&
       isTerminalTurnLifecycle(currentTurn)
     ) {
-      await this.renderAutomaticBindingStatus(
+      await this.bindingService.renderAutomaticBindingStatus(
         params.binding,
         undefined,
         params.navigation,
@@ -4164,7 +4006,7 @@ export class MessagingController {
     await this.signalTurnActivity(params.binding, activeTurn, {
       force: true,
     });
-    await this.renderAutomaticBindingStatus(
+    await this.bindingService.renderAutomaticBindingStatus(
       params.binding,
       undefined,
       params.navigation,
@@ -5673,60 +5515,6 @@ export class MessagingController {
       response: action.response ?? { decision },
     });
     return decision;
-  }
-
-  /**
-   * Re-render status surfaces for every binding tied to a thread on this
-   * controller's channel. Used by the thread-state update bus to fan out
-   * cross-surface refreshes when state changes anywhere — desktop UI,
-   * Telegram callback, Discord callback — so every surface reflects the new
-   * value. The reason is logged for audit only.
-   */
-  private async refreshStatusSurfacesForThread(
-    backend: AppServerBackendKind,
-    threadId: ThreadIdentifier,
-    reason: string,
-    federationTarget?: FederationTarget,
-  ): Promise<void> {
-    const bindings = this.filterBindingsForChannel(
-      await this.options.store.findActiveBindingsForThread({
-        backend,
-        threadId,
-      }),
-    ).filter((binding) =>
-      bindingMatchesFederationTarget(binding, federationTarget)
-    );
-    const renderableBindings = bindings.filter(
-      (binding) => binding.statusSurface || binding.pinnedStatusSurface,
-    );
-    if (renderableBindings.length === 0) {
-      return;
-    }
-    // Resolve one targeted thread projection and reuse it across every
-    // binding. Thread-state bus fan-out must not rebuild unrelated navigation,
-    // Git, PR, launchpad, or federation state just to repaint a status card.
-    const admissionState = await this.options.backend.getThreadAdmissionState({
-      backend,
-      ...(federationTarget ? { federationTarget } : {}),
-      threadId,
-    });
-    const navigation = threadContextForAdmissionState(
-      renderableBindings[0]!,
-      admissionState,
-    );
-    for (const binding of renderableBindings) {
-      try {
-        await this.renderBindingStatus(binding, undefined, navigation);
-      } catch (error) {
-        this.logger.debug?.("messaging status refresh failed", {
-          backend,
-          bindingId: binding.id,
-          error: error instanceof Error ? error.message : String(error),
-          reason,
-          threadId,
-        });
-      }
-    }
   }
 
   /**
@@ -7512,11 +7300,11 @@ export class MessagingController {
       return session.preferences.toolUpdateMode;
     }
     if (isNewAgentThreadLaunchAction(session.launchAction)) {
-      return await this.resolveToolUpdateDefaultMode("agent_thread");
+      return await this.bindingService.resolveToolUpdateDefaultMode("agent_thread");
     }
     return (
       directory?.launchpad?.messagingToolUpdateMode
-      ?? await this.resolveToolUpdateDefaultMode("thread")
+      ?? await this.bindingService.resolveToolUpdateDefaultMode("thread")
     );
   }
 
@@ -7849,7 +7637,7 @@ export class MessagingController {
     );
     const showStreaming = shouldShowStreamingControl(
       effectiveSession.preferences?.streamingResponses ?? "inherit",
-      await this.resolveShowStreamingOption(),
+      await this.bindingService.resolveShowStreamingOption(),
       effectiveSession.preferences?.streamingControlRevealed,
     );
     await this.options.store.upsertBrowseSession(effectiveSession);
@@ -8926,7 +8714,7 @@ export class MessagingController {
       if (boundThread) {
         return boundThread;
       }
-      const binding = await this.bindChannelToThread(event, {
+      const binding = await this.bindingService.bindChannelToThread(event, {
         backend: started.backend,
         threadId: started.threadId,
         ...(project.federationTarget?.scope === "remote" ? { federatedThread: buildFederatedThreadRef({
@@ -8937,7 +8725,7 @@ export class MessagingController {
       });
       await retireBrowseSession();
       let updatedBinding = preferences
-        ? await this.updateBindingPreferences(binding, preferences)
+        ? await this.bindingService.updateBindingPreferences(binding, preferences)
         : binding;
       if (bundle.session.surface) {
         updatedBinding = await this.options.store.upsertBinding({
@@ -9070,12 +8858,12 @@ export class MessagingController {
         event,
         materialized,
       });
-      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
     }
     if (materialized?.turnStartFailure) {
       const activeTurn = this.getActiveTurn(updatedBinding);
       if (activeTurn?.status === "failed") {
-        await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+        await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
         return;
       }
       await this.deliver(
@@ -9089,7 +8877,7 @@ export class MessagingController {
         updatedBinding,
         event,
       );
-      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
       return;
     }
     if (materialized?.turnId) {
@@ -9287,7 +9075,7 @@ export class MessagingController {
       return;
     }
 
-    await this.recreateBindingStatus(binding, event);
+    await this.bindingService.recreateBindingStatus(binding, event);
   }
 
   private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
@@ -9692,7 +9480,7 @@ export class MessagingController {
       return "conflict";
     }
 
-    await this.bindChannelToThread(
+    await this.bindingService.bindChannelToThread(
       {
         ...event,
         id: `${event.id}:topic-bind:${topic.id}`,
@@ -10199,54 +9987,6 @@ export class MessagingController {
     });
   }
 
-  private async clearActiveBindingSubmodeIntent(
-    event: MessagingInboundEvent,
-    binding: MessagingBindingRecord,
-  ): Promise<void> {
-    while (true) {
-      const pendingIntent =
-        await this.options.store.findActivePendingIntentForChannel({
-          actorId: event.actor.platformUserId,
-          channel: event.channel,
-          now: this.now(),
-        });
-      if (
-        !pendingIntent ||
-        pendingIntent.bindingId !== binding.id ||
-        pendingIntent.intent.requestContext
-      ) {
-        return;
-      }
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-    }
-  }
-
-  private async hasActiveBindingSubmodeIntent(
-    binding: MessagingBindingRecord,
-  ): Promise<boolean> {
-    const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;
-    if (!statusSurface) {
-      return false;
-    }
-    for (const actorId of binding.authorizedActorIds) {
-      const pendingIntent =
-        await this.options.store.findActivePendingIntentForChannel({
-          actorId,
-          channel: binding.channel,
-          now: this.now(),
-        });
-      if (
-        pendingIntent?.bindingId === binding.id &&
-        !pendingIntent.intent.requestContext &&
-        pendingIntent.surface?.channel === statusSurface.channel &&
-        pendingIntent.surface.id === statusSurface.id
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   private async dismissActiveSkillsWorkflow(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
@@ -10339,7 +10079,7 @@ export class MessagingController {
       return;
     }
 
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       {
         ...buildHandoffOverviewIntent({
           id: this.newIntentId("handoff-overview"),
@@ -10380,7 +10120,7 @@ export class MessagingController {
       pageSize: Math.min(8, (this.capabilityProfile ? capabilityProfilePageSize(this.capabilityProfile, 4, 8) : 8) || 8),
       pageIndex,
     });
-    await this.deliverAndStoreStatusSubmode({
+    await this.bindingService.deliverAndStoreStatusSubmode({
       ...buildHandoffProjectPickerIntent({
         id: this.newIntentId("handoff-projects"),
         capabilityProfile: this.capabilityProfile,
@@ -10413,7 +10153,7 @@ export class MessagingController {
       return;
     }
 
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       {
         ...buildHandoffBranchPickerIntent({
           id: this.newIntentId("handoff-branch"),
@@ -10453,7 +10193,7 @@ export class MessagingController {
       return;
     }
 
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       {
         ...buildHandoffConfirmationIntent({
           id: this.newIntentId("handoff-confirm"),
@@ -10547,7 +10287,7 @@ export class MessagingController {
       });
       await this.clearActiveHandoffIntent(event);
       const refreshedNavigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(currentBinding) };
-      const updatedBinding = await this.updateBindingAfterHandoff(
+      const updatedBinding = await this.bindingService.updateBindingAfterHandoff(
         currentBinding,
         result,
       );
@@ -10568,7 +10308,7 @@ export class MessagingController {
         updatedBinding,
         event,
       );
-      await this.renderBindingStatus(updatedBinding, event, refreshedNavigation);
+      await this.bindingService.renderBindingStatus(updatedBinding, event, refreshedNavigation);
     } catch (error) {
       await this.deliver(
         {
@@ -10589,52 +10329,6 @@ export class MessagingController {
         event,
       );
     }
-  }
-
-  private async updateBindingAfterHandoff(
-    binding: MessagingBindingRecord,
-    _result: HandoffThreadWorkspaceResponse,
-  ): Promise<MessagingBindingRecord> {
-    // Live navigation now owns status display metadata; keep the binding current
-    // without restoring legacy threadDisplay cache fields that the store strips.
-    return await this.options.store.upsertBinding({
-      ...binding,
-      updatedAt: this.now(),
-    });
-  }
-
-  private async deliverAndStoreStatusSubmode(
-    intent: MessagingSurfaceIntent,
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    const activeIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
-    if (
-      activeIntent &&
-      activeIntent.id !== intent.id &&
-      activeIntent.bindingId === binding.id &&
-      !activeIntent.intent.requestContext
-    ) {
-      await this.options.store.deletePendingIntent(activeIntent.id);
-    }
-    const pendingIntent = await this.storePendingIntent(intent, binding, event);
-    const result = await this.deliver(intent, binding, event);
-    if (!result.surface) {
-      return;
-    }
-    await this.options.store.upsertPendingIntent({
-      ...pendingIntent,
-      surface: result.surface,
-    });
-    await this.options.store.upsertBinding({
-      ...binding,
-      statusSurface: result.surface,
-      updatedAt: this.now(),
-    });
   }
 
   private async deliverAndStoreSkillsWorkflow(
@@ -10804,7 +10498,7 @@ export class MessagingController {
       defaultBackendModel(models);
     const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && efforts.length === 0) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     const fallbackEfforts = efforts.length > 0 ? efforts : ["low", "medium", "high"];
@@ -10858,7 +10552,7 @@ export class MessagingController {
       return;
     }
 
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       buildStatusAcpRuntimeModePickerIntent({
         id: this.newIntentId("status-runtime-picker"),
         capabilityProfile: this.capabilityProfile,
@@ -10882,7 +10576,7 @@ export class MessagingController {
       thread?.queuedExecutionMode ??
       executionModeForBinding(binding, navigation) ??
       "default";
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       buildStatusPermissionsPickerIntent({
         id: this.newIntentId("status-permissions-picker"),
         capabilityProfile: this.capabilityProfile,
@@ -10901,9 +10595,9 @@ export class MessagingController {
   ): Promise<void> {
     const currentMode = resolveMessagingToolUpdateMode(
       binding,
-      await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
+      await this.bindingService.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
     );
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       buildStatusToolUpdateModePickerIntent({
         id: this.newIntentId("status-tools-picker"),
         capabilityProfile: this.capabilityProfile,
@@ -10920,7 +10614,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    await this.deliverAndStoreStatusSubmode(
+    await this.bindingService.deliverAndStoreStatusSubmode(
       buildStatusResponseModePickerIntent({
         id: this.newIntentId("status-response-mode-picker"),
         capabilityProfile: this.capabilityProfile,
@@ -10951,10 +10645,10 @@ export class MessagingController {
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption = models.find((candidate) => candidate.id === model);
     if (summary && !modelOption) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
-    let updatedBinding = await this.updateBindingPreferences(binding, { model });
+    let updatedBinding = await this.bindingService.updateBindingPreferences(binding, { model });
     const settingsResponse = await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
       federationTarget: federationTargetForBinding(binding),
@@ -10968,7 +10662,7 @@ export class MessagingController {
       settingsResponse &&
       reasoningEffort !== updatedBinding.preferences?.reasoningEffort
     ) {
-      updatedBinding = await this.updateBindingPreferences(updatedBinding, {
+      updatedBinding = await this.bindingService.updateBindingPreferences(updatedBinding, {
         reasoningEffort,
       });
     }
@@ -10976,8 +10670,8 @@ export class MessagingController {
       ...navigation,
       thread: { ...navigation.thread, model, ...(settingsResponse ? { reasoningEffort } : {}) },
     };
-    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
-    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+    await this.bindingService.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async setBindingReasoning(
@@ -11003,11 +10697,11 @@ export class MessagingController {
       defaultBackendModel(models);
     const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && !efforts.includes(reasoningEffort)) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
 
-    const updatedBinding = await this.updateBindingPreferences(binding, {
+    const updatedBinding = await this.bindingService.updateBindingPreferences(binding, {
       reasoningEffort,
     });
     await this.options.backend.setThreadModelSettings?.({
@@ -11023,8 +10717,8 @@ export class MessagingController {
       ...navigation,
       thread: { ...navigation.thread, reasoningEffort },
     };
-    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
-    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+    await this.bindingService.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async setBindingAcpRuntimeMode(
@@ -11039,7 +10733,7 @@ export class MessagingController {
       return;
     }
     if (!isAcpBackendId(binding.backend) || !this.options.backend.setAcpSessionRuntimeOption) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
 
@@ -11096,7 +10790,7 @@ export class MessagingController {
     selection: AcpRuntimeRiskWarningContext & { kind: "thread" },
   ): Promise<void> {
     if (!isAcpBackendId(binding.backend) || !this.options.backend.setAcpSessionRuntimeOption) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     const navigation = await this.readBoundThreadConfiguration(binding);
@@ -11116,7 +10810,7 @@ export class MessagingController {
         : currentRuntime?.currentModeId,
       updatedAt: this.now(),
     };
-    const updatedBinding = await this.updateBindingPreferences(binding, {
+    const updatedBinding = await this.bindingService.updateBindingPreferences(binding, {
       acpRuntime,
     });
     await this.options.backend.setAcpSessionRuntimeOption({
@@ -11131,8 +10825,8 @@ export class MessagingController {
       ...navigation,
       thread: { ...navigation.thread, acpRuntime },
     };
-    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
-    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+    await this.bindingService.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async toggleFastMode(
@@ -11147,7 +10841,7 @@ export class MessagingController {
       summary &&
       summary.kind !== "codex"
     ) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     const navigation = await this.readBoundThreadConfiguration(binding);
@@ -11166,11 +10860,11 @@ export class MessagingController {
       model, summary?.codexFastAllowed !== false, summary?.launchpadOptions?.supportsFastMode ?? true,
     );
     if (speeds.length < 2) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     const speedPatch = codexSpeedSettings(nextCodexSpeed(speeds, currentSettings));
-    const updatedBinding = await this.updateBindingPreferences(binding, speedPatch);
+    const updatedBinding = await this.bindingService.updateBindingPreferences(binding, speedPatch);
     await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
       federationTarget: federationTargetForBinding(binding),
@@ -11188,7 +10882,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     if (isAcpBackendId(binding.backend)) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     const navigation = await this.readBoundThreadConfiguration(binding);
@@ -11226,7 +10920,7 @@ export class MessagingController {
     // before applying — the pre-flip here matches the optimistic-UI
     // behavior the desktop renderer uses, and the bus refresh pulls
     // canonical state on the apply or cancel transition.
-    await this.updateBindingPreferences(binding, {
+    await this.bindingService.updateBindingPreferences(binding, {
       executionMode,
       permissionsMode: nextMode,
     });
@@ -11256,8 +10950,8 @@ export class MessagingController {
       executionModeForBinding(binding, navigation) ??
       "default";
     if (executionMode === currentMode) {
-      await this.clearActiveBindingSubmodeIntent(event, binding);
-      await this.renderBindingStatus(binding, event, navigation);
+      await this.bindingService.clearActiveBindingSubmodeIntent(event, binding);
+      await this.bindingService.renderBindingStatus(binding, event, navigation);
       return;
     }
     if (
@@ -11288,11 +10982,11 @@ export class MessagingController {
         return;
       }
     }
-    await this.updateBindingPreferences(binding, {
+    await this.bindingService.updateBindingPreferences(binding, {
       executionMode,
       permissionsMode: executionMode,
     });
-    await this.clearActiveBindingSubmodeIntent(event, binding);
+    await this.bindingService.clearActiveBindingSubmodeIntent(event, binding);
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
       federationTarget: federationTargetForBinding(binding),
@@ -11735,7 +11429,7 @@ export class MessagingController {
         ? activeTurn
         : undefined;
     if (!targetTurn) {
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     try {
@@ -11765,7 +11459,7 @@ export class MessagingController {
         binding,
         event,
       );
-      await this.renderBindingStatus(binding, event);
+      await this.bindingService.renderBindingStatus(binding, event);
       return;
     }
     if (
@@ -11782,7 +11476,7 @@ export class MessagingController {
         force: true,
       });
     }
-    await this.renderBindingStatus(binding, event);
+    await this.bindingService.renderBindingStatus(binding, event);
   }
 
   private async toggleThreadLock(
@@ -11858,99 +11552,7 @@ export class MessagingController {
     await this.signalTurnActivity(binding, activeTurn, {
       force: true,
     });
-    await this.renderBindingStatus(binding, event);
-  }
-
-  private async syncConversationName(
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    if (!this.adapter.setConversationTitle) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("status-sync-name-unavailable"),
-          createdAt: this.now(),
-          title: "Name sync unavailable",
-          body: "This messaging provider does not support syncing the conversation name.",
-          recoverable: true,
-        }),
-        binding,
-        event,
-      );
-      return;
-    }
-
-    const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
-    const threadState = resolveMessagingThreadState({
-      activeTurn: this.getActiveTurn(binding),
-      binding,
-      navigation,
-    });
-    const threadTitle = normalizeConversationTitle(threadState.title);
-    if (!threadTitle) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("status-sync-name-missing-title"),
-          createdAt: this.now(),
-          title: "Name sync unavailable",
-          body: "This thread does not have a Codex thread name to sync yet.",
-          recoverable: true,
-        }),
-        binding,
-        event,
-      );
-      return;
-    }
-
-    const result = await this.adapter.setConversationTitle({
-      actor: event.actor,
-      channel: binding.channel,
-      routingState: event.routingState ?? binding.routingState,
-      title: threadTitle,
-    });
-    if (result.outcome !== "updated") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("status-sync-name-failed"),
-          createdAt: this.now(),
-          title: "Name sync unavailable",
-          body:
-            result.errorMessage ??
-            `This ${conversationKindLabel(binding.channel.conversation.kind)} cannot be renamed from messaging.`,
-          recoverable: true,
-        }),
-        binding,
-        event,
-      );
-      return;
-    }
-
-    const updatedBinding = await this.options.store.upsertBinding({
-      ...binding,
-      channel: {
-        ...binding.channel,
-        conversation: {
-          ...binding.channel.conversation,
-          title: result.title,
-        },
-      },
-      updatedAt: this.now(),
-    });
-    // Title changed — make the chip's label/tooltip pick up the new
-    // value without waiting for the next backend tick.
-    this.notifyBindingChanged("sync-conversation-name");
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("status-sync-name-confirmed"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Name synced",
-        body: `Set this ${conversationKindLabel(binding.channel.conversation.kind)} name to "${result.title}".`,
-      }),
-      updatedBinding,
-      event,
-    );
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.bindingService.renderBindingStatus(binding, event);
   }
 
   private async cycleToolUpdateMode(
@@ -11969,11 +11571,11 @@ export class MessagingController {
       await this.deliverInvalidStatusSelection(event);
       return;
     }
-    const updatedBinding = await this.updateBindingPreferences(binding, {
+    const updatedBinding = await this.bindingService.updateBindingPreferences(binding, {
       toolUpdateMode,
     });
-    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.bindingService.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.bindingService.renderBindingStatus(updatedBinding, event);
   }
 
   private async setBindingResponseMode(
@@ -12002,8 +11604,8 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
-    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.bindingService.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.bindingService.renderBindingStatus(updatedBinding, event);
   }
 
   private async cycleStreamingResponseMode(
@@ -12022,26 +11624,11 @@ export class MessagingController {
       binding.preferences?.streamingControlRevealed ||
       currentMode === "enabled" ||
       nextMode === "enabled";
-    const updatedBinding = await this.updateBindingPreferences(binding, {
+    const updatedBinding = await this.bindingService.updateBindingPreferences(binding, {
       streamingResponses: nextMode,
       ...(streamingControlRevealed ? { streamingControlRevealed: true } : {}),
     });
-    await this.renderBindingStatus(updatedBinding, event);
-  }
-
-  private async updateBindingPreferences(
-    binding: MessagingBindingRecord,
-    patch: Partial<NonNullable<MessagingBindingRecord["preferences"]>>,
-  ): Promise<MessagingBindingRecord> {
-    return await this.options.store.upsertBinding({
-      ...binding,
-      preferences: {
-        ...binding.preferences,
-        ...patch,
-        updatedAt: this.now(),
-      },
-      updatedAt: this.now(),
-    });
+    await this.bindingService.renderBindingStatus(updatedBinding, event);
   }
 
   private async getBackendSummary(
@@ -12167,135 +11754,6 @@ export class MessagingController {
     );
   }
 
-  private async detachBinding(event: MessagingInboundEvent): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    const channelMonitor =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
-    const hasThread = Boolean(binding);
-    const hasChannelMonitor = channelMonitor?.monitor.enabled === true;
-    const hasBindingMonitor = binding?.monitor?.enabled === true;
-    const hasMonitor = hasChannelMonitor || hasBindingMonitor;
-    if (!hasThread && !hasMonitor) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("detach-unbound"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Nothing attached",
-          body: "Neither a thread nor Monitor is attached to this conversation.",
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    if (channelMonitor && hasChannelMonitor) {
-      await this.disableChannelMonitorSubscription(channelMonitor, event);
-    }
-    if (binding) {
-      await this.runDetachPipeline(binding, event, {
-        deliverConfirmation: false,
-        deliverMonitorStatus: false,
-      });
-    }
-
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("detached"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: hasThread && hasMonitor
-          ? "Thread and Monitor detached"
-          : hasThread
-            ? "Thread detached"
-            : "Monitor detached",
-        body: hasThread && hasMonitor
-          ? "Messages in this conversation will no longer route to PwrAgent, and recent thread updates will no longer post here."
-          : hasThread
-            ? "Messages in this conversation will no longer route to PwrAgent."
-            : "Recent thread updates will no longer post to this conversation.",
-      }),
-      binding,
-      event,
-    );
-  }
-
-  /**
-   * Platform-agnostic detach pipeline. Called by both the inbound
-   * `/detach` slash-command path and the bus-driven UI / archive
-   * paths. The only seam for platform-specific behavior is
-   * `this.adapter.deliver`, which the registered adapter
-   * implements per the messaging contract — adding a new platform
-   * requires zero changes to this method. `event` is supplied only
-   * when the detach was initiated by an inbound command (used for
-   * audit context and reply targeting); for non-inbound origins
-   * (`requestBindingRevoke` from IPC, archive flows) the binding's
-   * own channel is the routing source.
-   */
-  private async runDetachPipeline(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    options: {
-      deliverConfirmation?: boolean;
-      deliverMonitorStatus?: boolean;
-    } = {},
-  ): Promise<void> {
-    const activeTurn = this.getActiveTurn(binding);
-    if (activeTurn) {
-      await this.signalTurnActivity(
-        binding,
-        {
-          ...activeTurn,
-          status: "interrupted",
-          updatedAt: this.now(),
-        },
-        { force: true },
-      );
-    }
-    await this.deliver(
-      buildActivityIntent({
-        id: this.newIntentId("activity-closed"),
-        activity: "typing",
-        bindingId: binding.id,
-        createdAt: this.now(),
-        sessionState: "closed",
-        state: "idle",
-      }),
-      binding,
-      event,
-    );
-    await this.flushToolUpdatesForBinding(binding, { clear: true });
-    await this.stopMonitoringForBinding(binding, event, {
-      deliverStatus: options.deliverMonitorStatus,
-    });
-    await this.retireBindingStatus(
-      binding,
-      event,
-      { kind: "thread", thread: await this.readBoundNavigationThread(binding) },
-    );
-
-    await this.options.store.revokeBinding({
-      bindingId: binding.id,
-      revokedAt: this.now(),
-    });
-    await this.recordBindingTransition("unbound", binding);
-    this.notifyBindingChanged("detach");
-    if (options.deliverConfirmation !== false) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("detached"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Thread detached",
-          body: "Messages in this conversation will no longer route to PwrAgent.",
-        }),
-        binding,
-        event,
-      );
-    }
-  }
-
   /**
    * Bus-driven entry point used by the runtime when an UI / archive
    * caller emits `requestBindingRevoke`. Returns true if this
@@ -12306,272 +11764,8 @@ export class MessagingController {
    */
   async handleBindingRevokeRequest(
     binding: MessagingBindingRecord,
-  ): Promise<boolean> {
-    if (!this.isChannelInScope(binding.channel)) {
-      return false;
-    }
-    await this.runDetachPipeline(binding, undefined);
-    return true;
-  }
-
-  private async recreateBindingStatus(
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
-  ): Promise<MessagingBindingRecord> {
-    await this.clearActiveBindingSubmodeIntent(event, binding);
-    const snapshot: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
-    const retiredBinding = await this.retireBindingStatus(binding, event, snapshot);
-    return await this.renderBindingStatus(retiredBinding, event, snapshot);
-  }
-
-  private async resolveToolUpdateDefaultMode(
-    targetKind: MessagingBindingTargetKind = "thread",
-  ): Promise<MessagingToolUpdateMode> {
-    const configured = this.options.toolUpdateDefaultMode;
-    if (!configured) {
-      return targetKind === "agent_thread" ? "show_none" : "show_some";
-    }
-
-    try {
-      return typeof configured === "function"
-        ? await configured(targetKind)
-        : configured;
-    } catch (error) {
-      this.logger.debug?.("messaging tool update default resolution failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return targetKind === "agent_thread" ? "show_none" : "show_some";
-    }
-  }
-
-  /**
-   * Resolve the global "show streaming option on thread cards" setting. Resolved
-   * live (like {@link resolveToolUpdateDefaultMode}) rather than snapshotted at
-   * construction, so toggling it in Settings takes effect on the next status
-   * render instead of only after a messaging restart.
-   */
-  private async resolveShowStreamingOption(): Promise<boolean> {
-    const configured = this.showStreamingOptionConfig;
-    try {
-      return typeof configured === "function" ? await configured() : configured;
-    } catch (error) {
-      this.logger.debug?.("messaging show-streaming-option resolution failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
-  }
-
-  private async retireBindingStatus(
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent | undefined,
-    navigation: MessagingNavigationContext,
-  ): Promise<MessagingBindingRecord> {
-    const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;
-    if (!statusSurface) {
-      return binding;
-    }
-
-    try {
-      await this.deliver(
-        {
-          ...buildBindingStatusIntent({
-            id: this.newIntentId("status-retire"),
-            binding,
-            capabilityProfile: this.capabilityProfile,
-            contextUsageSummary: this.contextUsageSummaryForBinding(binding),
-            createdAt: this.now(),
-            responseModeDefault: await this.responseModeForConversation(
-              binding.channel,
-            ),
-            threadState: resolveMessagingThreadState({
-              activeTurn: this.getActiveTurn(binding),
-              binding,
-              navigation,
-            }),
-            toolUpdateMode: await this.resolveToolUpdateDefaultMode(
-              binding.targetKind ?? "thread",
-            ),
-          }),
-          actions: [],
-          delivery: {
-            mode: "update",
-            replaceMarkup: true,
-            fallback: "fail",
-          },
-          targetSurface: statusSurface,
-        },
-        binding,
-        event,
-      );
-    } catch (error) {
-      this.logger.debug?.("messaging status retirement update failed", {
-        bindingId: binding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
-    }
-
-    if (binding.pinnedStatusSurface) {
-      try {
-        await this.deliver(
-          {
-            id: this.newIntentId("status-unpin"),
-            kind: "dismiss",
-            bindingId: binding.id,
-            createdAt: this.now(),
-            delivery: {
-              mode: "dismiss",
-              unpin: true,
-            },
-            reason: "status_recreated",
-            targetSurface: binding.pinnedStatusSurface,
-          },
-          binding,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging status retirement unpin failed", {
-          bindingId: binding.id,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: binding.threadId,
-        });
-      }
-    }
-
-    return await this.options.store.upsertBinding({
-      ...binding,
-      pinnedStatusSurface: undefined,
-      statusSurface: undefined,
-      updatedAt: this.now(),
-    });
-  }
-
-  private async renderBindingStatus(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingNavigationContext,
-  ): Promise<MessagingBindingRecord> {
-    return await this.statusRenderLock.run(binding.id, async () => {
-      const latestBinding = await this.options.store.getBinding(binding.id);
-      if (latestBinding?.revokedAt) {
-        return latestBinding;
-      }
-      return await this.renderBindingStatusUnlocked(
-        latestBinding ?? binding,
-        event,
-        navigation,
-      );
-    });
-  }
-
-  private async renderBindingStatusUnlocked(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingNavigationContext,
-  ): Promise<MessagingBindingRecord> {
-    if (isDefaultAgentRouteBinding(binding)) {
-      return binding;
-    }
-    if (!event && await this.hasActiveBindingSubmodeIntent(binding)) {
-      this.logger.debug?.("messaging deferred automatic status refresh during active interaction", {
-        bindingId: binding.id,
-        threadId: binding.threadId,
-      });
-      return await this.options.store.getBinding(binding.id) ?? binding;
-    }
-    const federationTarget = federationTargetForBinding(binding);
-    const snapshot = navigation ?? { kind: "thread" as const, thread: await this.readBoundNavigationThread(binding) };
-    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
-      binding,
-      "status_refresh",
-    );
-    const backendSummary = await this.getBackendSummary(
-      binding.backend,
-      federationTarget,
-    );
-    const intent = buildBindingStatusIntent({
-      id: this.newIntentId("status"),
-      allowFullAccessEscalation: (await this.resolveFullAccessControls())
-        .allowEscalation,
-      backendSummary,
-      binding,
-      capabilityProfile: this.capabilityProfile,
-      contextUsageSummary: this.contextUsageSummaryForBinding(binding),
-      createdAt: this.now(),
-      handoff: this.options.backend.handoffThreadWorkspace
-        ? handoffContextForBinding(binding, snapshot)
-        : undefined,
-      responseModeDefault: await this.responseModeForConversation(
-        binding.channel,
-      ),
-      streamingResponsesDefault: this.streamingResponsesDefault,
-      showStreamingOption: await this.resolveShowStreamingOption(),
-      threadState: resolveMessagingThreadState({
-        activeTurn,
-        binding,
-        navigation: snapshot,
-      }),
-      toolUpdateMode: await this.resolveToolUpdateDefaultMode(
-        binding.targetKind ?? "thread",
-      ),
-    });
-    const result = await this.deliver(intent, binding, event);
-    const latestBinding = await this.options.store.getBinding(binding.id);
-    if (latestBinding?.revokedAt) {
-      return latestBinding;
-    }
-    if (!result.surface) {
-      return latestBinding ?? binding;
-    }
-
-    const currentBinding = latestBinding ?? binding;
-    return await this.options.store.upsertBinding({
-      ...currentBinding,
-      pinnedStatusSurface:
-        result.outcome === "pinned"
-          ? result.surface
-          : currentBinding.pinnedStatusSurface,
-      statusSurface: result.surface,
-      updatedAt: this.now(),
-    });
-  }
-
-  private async renderAutomaticBindingStatus(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingNavigationContext,
-  ): Promise<MessagingBindingRecord> {
-    if (
-      binding.statusPresentation === "on_demand"
-      && !binding.statusSurface
-      && !binding.pinnedStatusSurface
-    ) {
-      return binding;
-    }
-    const targetedNavigation = navigation
-      ?? threadContextForAdmissionState(
-        binding,
-        await this.options.backend.getThreadAdmissionState({
-          backend: binding.backend,
-          federationTarget: federationTargetForBinding(binding),
-          threadId: binding.threadId,
-        }),
-      );
-    return await this.renderBindingStatus(binding, event, targetedNavigation);
-  }
-
-  private async threadContextWithNameFromEvent(
-    binding: MessagingBindingRecord,
-    event: AgentEvent,
-  ): Promise<MessagingThreadContext> {
-    const thread = await this.readBoundNavigationThread(binding);
-    const params = event.notification.params as { threadId?: unknown; threadName?: unknown; titleSource?: unknown };
-    if (!thread || params.threadId !== thread.id || typeof params.threadName !== "string" || !params.threadName.trim()) {
-      return { kind: "thread", thread };
-    }
-    return { kind: "thread", thread: { ...thread, title: params.threadName.trim(),
-      titleSource: normalizeRenamedTitleSource(params.titleSource) } };
+  ): Promise<boolean>{
+    return await this.bindingService.handleBindingRevokeRequest(binding);
   }
 
   private async readMonitorRows(monitor?: MessagingMonitorState, federationTarget?: FederationTarget): Promise<MessagingMonitorRows> {
@@ -13475,7 +12669,7 @@ export class MessagingController {
       bindingId,
       revokedAt: this.now(),
     });
-    this.notifyBindingChanged("private-reply-completed");
+    this.bindingService.notifyBindingChanged("private-reply-completed");
   }
 
   private async deliverPrivateReplyButtonState(
@@ -13978,194 +13172,6 @@ export class MessagingController {
     );
   }
 
-  /**
-   * Best-effort fan-out to the runtime's bindings-changed listener.
-   * Wrapped so a misbehaving listener (e.g. closed BrowserWindow) can
-   * never abort the mutation that produced the event.
-   */
-  private notifyBindingChanged(reason: string): void {
-    if (!this.options.onBindingChanged) return;
-    try {
-      this.options.onBindingChanged();
-    } catch (error) {
-      this.logger.debug?.("messaging onBindingChanged listener threw", {
-        reason,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private async recordBindingTransition(
-    action: ThreadMessagingBindingTransition["action"],
-    binding: MessagingBindingRecord,
-    occurredAt: number = this.now(),
-  ): Promise<void> {
-    const conversation = binding.channel.conversation;
-    const transition: ThreadMessagingBindingTransition = {
-      id: randomUUID(),
-      action,
-      bindingId: binding.id,
-      platform: binding.channel.channel,
-      conversationKind: conversation.kind,
-      conversationTitle: conversation.title,
-      parentTitle: conversation.parentTitle,
-      ancestorTitle: conversation.ancestorTitle,
-      occurredAt,
-    };
-    if (this.options.backend.recordMessagingBindingTransition) {
-      try {
-        await this.options.backend.recordMessagingBindingTransition({
-          backend: binding.backend,
-          threadId: binding.threadId,
-          transition,
-        });
-      } catch (error) {
-        this.logger.debug?.("messaging binding-transition audit failed", {
-          action,
-          bindingId: binding.id,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: binding.threadId,
-        });
-      }
-    }
-    this.recordBindingActivity(action, binding, occurredAt);
-  }
-
-  private async bindChannelToThread(
-    event: MessagingInboundEvent,
-    target: {
-      backend: AppServerBackendKind;
-      federatedThread?: FederatedThreadRef;
-      recordTransition?: boolean;
-      statusPresentation?: MessagingBindingRecord["statusPresentation"];
-      threadId: ThreadIdentifier;
-      targetKind?: MessagingBindingRecord["targetKind"];
-    },
-  ): Promise<MessagingBindingRecord> {
-    // Scope backstop. EVERY bind funnels through here, so a caller that forgets
-    // the gate still cannot create a remote binding. Interactive entry points
-    // check first and deliver a proper denial; reaching this throw means a path
-    // was missed, so it fails closed loudly (the runtime's inbound dispatch
-    // logs it) instead of quietly binding a peer's thread.
-    if (
-      !(await this.requireRemoteScope(
-        event,
-        target.federatedThread?.target,
-        "bind:remote-instance",
-      ))
-    ) {
-      throw new Error(
-        "Refusing to bind a thread on another instance: actor lacks federation.remote_control.",
-      );
-    }
-    const now = this.now();
-    const previousBinding = await this.options.store.findActiveBindingForChannel(
-      event.channel,
-    );
-    const targetIdentity = target.federatedThread
-      ? federatedThreadIdentityKey(target.federatedThread)
-      : buildThreadIdentityKey(target.backend, target.threadId);
-    const binding: MessagingBindingRecord = {
-      id: `binding:${buildMessagingConversationKey(event.channel)}:${targetIdentity}`,
-      channel: event.channel,
-      targetKind: target.targetKind ?? "thread",
-      backend: target.backend,
-      threadId: target.threadId,
-      federatedThread: target.federatedThread,
-      authorizedActorIds: [event.actor.platformUserId],
-      routingState: event.routingState,
-      statusPresentation: target.statusPresentation,
-      createdAt: now,
-      updatedAt: now,
-      displayName: event.actor.displayName ?? event.actor.username,
-    };
-    if (
-      previousBinding &&
-      (previousBinding.id !== binding.id ||
-        previousBinding.backend !== binding.backend ||
-        previousBinding.threadId !== binding.threadId ||
-        !federationRefsMatch(
-          previousBinding.federatedThread,
-          binding.federatedThread,
-        ))
-    ) {
-      await this.options.store.revokeBinding({
-        bindingId: previousBinding.id,
-        revokedAt: now,
-      });
-    }
-    const upserted = await this.options.store.upsertBinding(binding);
-    if (
-      target.recordTransition !== false &&
-      previousBinding &&
-      (previousBinding.backend !== upserted.backend ||
-        previousBinding.threadId !== upserted.threadId ||
-        !federationRefsMatch(
-          previousBinding.federatedThread,
-          upserted.federatedThread,
-        ))
-    ) {
-      await this.recordBindingTransition("unbound", previousBinding, now);
-    }
-    if (
-      target.recordTransition !== false &&
-      (
-        !previousBinding ||
-        previousBinding.backend !== upserted.backend ||
-        previousBinding.threadId !== upserted.threadId ||
-        !federationRefsMatch(
-          previousBinding.federatedThread,
-          upserted.federatedThread,
-        )
-      )
-    ) {
-      await this.recordBindingTransition("bound", upserted, now);
-    }
-    // Retire any channel-scoped pending intents that pre-date this
-    // bind. Without this, the resume browser's pending intent (and any
-    // other pre-binding picker intent) survives the bind, and the next
-    // text inbound on this channel matches the stale picker — making
-    // the bot bounce "Choose an option" instead of routing to the new
-    // binding. Best-effort: log and continue if the cleanup fails so
-    // the bind itself still succeeds (fresh binding is the source of
-    // truth; stale intents will eventually be evicted by TTL GC).
-    //
-    // Not transactional with `upsertBinding` on purpose: the store
-    // API doesn't expose a transaction boundary for cross-row work,
-    // and adding one would push transaction plumbing into the
-    // messaging interface — over-architecture for a recovery window
-    // measured in minutes. If the process crashes between these two
-    // writes, the next bind on the same channel re-runs the cleanup,
-    // and the TTL GC catches anything missed within 15 minutes.
-    try {
-      const removed = await this.options.store.deletePendingIntentsForChannel({
-        channel: event.channel,
-      });
-      if (removed.length > 0) {
-        this.logger.debug?.("messaging retired channel pending intents on bind", {
-          bindingId: upserted.id,
-          channel: event.channel.channel,
-          removedCount: removed.length,
-        });
-      }
-    } catch (error) {
-      this.logger.debug?.(
-        "messaging channel pending-intent cleanup failed on bind",
-        {
-          bindingId: upserted.id,
-          channel: event.channel.channel,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
-    // Renderer's binding chip is fed by the navigation snapshot. The
-    // snapshot only refetches on backend events — and binding creation
-    // doesn't emit one. Fan out a bindings-changed notification so the
-    // UI picks up the new chip immediately (issue #191).
-    this.notifyBindingChanged("bind");
-    return upserted;
-  }
-
   private defaultAgentRouteBinding(
     event: MessagingInboundEvent,
     target: {
@@ -14267,38 +13273,6 @@ export class MessagingController {
     } catch {
       // Activity log is best-effort observability; never break delivery
       // because the summary write threw.
-    }
-  }
-
-  private recordBindingActivity(
-    action: ThreadMessagingBindingTransition["action"],
-    binding: MessagingBindingRecord,
-    occurredAt: number,
-  ): void {
-    try {
-      const conversation = binding.channel.conversation;
-      const log = this.desktopActivityLog();
-      if (!log) return;
-      log.record({
-        platform: binding.channel.channel,
-        kind: "binding",
-        backend: binding.backend,
-        threadId: binding.threadId,
-        bindingId: binding.id,
-        conversationId: conversation.id,
-        conversationTitle: conversation.title,
-        summary: `Channel ${action}: ${describeConversation(conversation)} / ${binding.threadId}`,
-        createdAt: occurredAt,
-        payload: {
-          action,
-          conversationKind: conversation.kind,
-          conversationParentId: conversation.parentId,
-          parentTitle: conversation.parentTitle,
-          ancestorTitle: conversation.ancestorTitle,
-        },
-      });
-    } catch {
-      // Activity log is best-effort observability.
     }
   }
 
@@ -14631,8 +13605,8 @@ export class MessagingController {
           bindingId: binding.id,
           revokedAt: this.now(),
         });
-        await this.recordBindingTransition("unbound", binding);
-        this.notifyBindingChanged("permanent-delivery-failure");
+        await this.bindingService.recordBindingTransition("unbound", binding);
+        this.bindingService.notifyBindingChanged("permanent-delivery-failure");
         this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
           bindingId: binding.id,
           channel: binding.channel.channel,
@@ -14784,7 +13758,7 @@ export class MessagingController {
 
     const mode = resolveMessagingToolUpdateMode(
       binding,
-      await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
+      await this.bindingService.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
     );
     const deliveries = this.toolUpdatePolicy.processActivity({
       activity,
@@ -14831,7 +13805,7 @@ export class MessagingController {
 
     const mode = resolveMessagingToolUpdateMode(
       binding,
-      await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
+      await this.bindingService.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
     );
     const deliveries = this.toolUpdatePolicy.processActivity({
       activity,
@@ -15531,14 +14505,14 @@ export class MessagingController {
 
     if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
       || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
-    const binding = await this.bindChannelToThread(attachEvent, {
+    const binding = await this.bindingService.bindChannelToThread(attachEvent, {
       backend: args.backend,
       federatedThread: target.federatedThread,
       threadId: args.threadId,
       targetKind,
     });
     await this.restoreAttachedTurnActivity(binding);
-    const visibleBinding = await this.renderBindingStatus(binding);
+    const visibleBinding = await this.bindingService.renderBindingStatus(binding);
     await this.repostLastAssistantMessageForResume(visibleBinding, {
       important: true,
     });
@@ -15638,13 +14612,13 @@ export class MessagingController {
       if (origin.origin.deliveryBinding?.id === updatedBinding.id) {
         origin.origin.deliveryBinding = updatedBinding;
       }
-      this.notifyBindingChanged("agent-rename-conversation");
+      this.bindingService.notifyBindingChanged("agent-rename-conversation");
       // Binding-local mutation with no registry event behind it, so the
       // status card needs the inline render too — the bus never fires for
       // this, and the provider's own rename echo (Slack's
       // `agent_session_title_changed`) only fires for a participant's
       // rename, never for ours.
-      await this.renderBindingStatus(updatedBinding, origin.origin.event);
+      await this.bindingService.renderBindingStatus(updatedBinding, origin.origin.event);
     }
 
     return {
@@ -15960,7 +14934,7 @@ export class MessagingController {
       }
       if (sourceBinding && result.continuation) {
         try {
-          let continuationBinding = await this.bindChannelToThread(
+          let continuationBinding = await this.bindingService.bindChannelToThread(
             {
               ...privateEvent,
               id: `${privateEvent.id}:continuation`,
@@ -15992,7 +14966,7 @@ export class MessagingController {
               },
               updatedAt: this.now(),
             });
-            this.notifyBindingChanged("private-reply-awaiting");
+            this.bindingService.notifyBindingChanged("private-reply-awaiting");
           }
           await this.clearTerminalPrivateResponseActivity(
             continuationBinding,
@@ -17650,83 +16624,6 @@ function fullAccessRiskPresentationForContext(
   return { surface: context.session.surface };
 }
 
-function handoffContextForBinding(
-  binding: MessagingBindingRecord,
-  navigation: MessagingNavigationContext,
-): MessagingWorkspaceHandoffContext | undefined {
-  const thread = findThreadForBinding(navigation, binding);
-  if (!thread || thread.workspaceHandoff?.available === false) {
-    return undefined;
-  }
-
-  const worktreeDirectory = thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree" || Boolean(directory.worktreePath),
-  );
-  if (worktreeDirectory) {
-    const repositoryPath = worktreeDirectory.path;
-    const workingDirectoryPath = worktreeDirectory.worktreePath ?? worktreeDirectory.path;
-    const branch = thread.observedGitBranch ?? thread.gitBranch;
-    if (!repositoryPath || !workingDirectoryPath) {
-      return undefined;
-    }
-    return {
-      backend: binding.backend,
-      branch,
-      leaveLocalBranches: [],
-      projectLabel: worktreeDirectory.label,
-      repositoryPath,
-      threadId: binding.threadId,
-      threadTitle: thread.title,
-      workingDirectoryPath,
-      workspaceKind: "worktree",
-    };
-  }
-
-  const localDirectory =
-    thread.linkedDirectories.find((directory) => directory.kind === "local") ??
-    thread.linkedDirectories[0];
-  const sourcePath = localDirectory?.path ?? thread.projectKey;
-  if (!sourcePath) return undefined;
-  const directorySummary = isMessagingThreadContext(navigation) ? navigation.directory : localDirectory ? findNavigationDirectory(navigation, localDirectory) : undefined;
-  const branch =
-    thread.observedGitBranch ??
-    thread.gitBranch ??
-    directorySummary?.gitStatus?.currentBranch;
-  const leaveLocalBranches = (
-    directorySummary?.gitStatus?.handoffBranches ??
-    directorySummary?.gitStatus?.branches?.filter((candidate) => candidate !== branch) ??
-    []
-  ).filter(
-    (candidate, index, branches) =>
-      candidate !== "HEAD" && candidate !== branch && branches.indexOf(candidate) === index,
-  );
-  const leaveLocalBranchChoices = branch ? ["HEAD", ...leaveLocalBranches] : [];
-
-  return {
-    backend: binding.backend,
-    branch,
-    leaveLocalBranches: leaveLocalBranchChoices,
-    projectLabel: localDirectory?.label,
-    repositoryPath: sourcePath,
-    threadId: binding.threadId,
-    threadTitle: thread.title,
-    workingDirectoryPath: sourcePath,
-    workspaceKind: "local",
-  };
-}
-
-function findNavigationDirectory(
-  navigation: NavigationSnapshot,
-  linkedDirectory: LinkedDirectorySummary,
-): NavigationDirectorySummary | undefined {
-  return navigation.directories.find(
-    (directory) =>
-      directory.key === linkedDirectory.id ||
-      directory.path === linkedDirectory.path ||
-      (linkedDirectory.worktreePath && directory.path === linkedDirectory.worktreePath),
-  );
-}
-
 function reviewWorkspaceMatches(
   directoryPath: string | undefined,
   cwd: string | undefined,
@@ -18108,24 +17005,6 @@ function newThreadBranchChoices(
   return branches.filter((branch, index) => branches.indexOf(branch) === index);
 }
 
-function normalizeConversationTitle(title: string | undefined): string | undefined {
-  const normalized = title?.replace(/\s+/g, " ").trim();
-  return normalized || undefined;
-}
-
-function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversation"]["kind"]): string {
-  switch (kind) {
-    case "topic":
-      return "topic";
-    case "thread":
-      return "thread";
-    case "channel":
-      return "channel";
-    case "dm":
-      return "conversation";
-  }
-}
-
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
   const explicitSummary = findStringField(value, "summary");
   if (explicitSummary) {
@@ -18335,10 +17214,6 @@ function agentMessagingQueueKey(
   queueEntryId: string,
 ): string {
   return `${backend}:${threadId}:${queueEntryId}`;
-}
-
-function isDefaultAgentRouteBinding(binding: MessagingBindingRecord): boolean {
-  return binding.id.startsWith("default-agent-route:");
 }
 
 function privateReplySourceFromBinding(
@@ -19367,15 +18242,4 @@ function requestsExplicitPrivateResponse(
   return !NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN.test(
     prefix.slice(clauseStart + 1),
   );
-}
-
-function describeConversation(
-  conversation: MessagingBindingRecord["channel"]["conversation"],
-): string {
-  const pieces = [
-    conversation.ancestorTitle,
-    conversation.parentTitle,
-    conversation.title,
-  ].filter((piece): piece is string => Boolean(piece));
-  return pieces.length > 0 ? pieces.join(" / ") : conversation.id;
 }

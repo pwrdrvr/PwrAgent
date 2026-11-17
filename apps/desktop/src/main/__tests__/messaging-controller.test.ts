@@ -1,3 +1,4 @@
+import { messagingModules } from "./fixtures/messaging-controller-modules";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
@@ -12375,11 +12376,7 @@ describe("MessagingController", () => {
       },
     });
 
-    await (
-      harness.controller as unknown as {
-        refreshBindingFromInbound(event: MessagingInboundEvent): Promise<void>;
-      }
-    ).refreshBindingFromInbound(event);
+    await messagingModules(harness.controller).bindings.refreshBindingFromInbound(event);
 
     expect(upsertBinding).not.toHaveBeenCalled();
   });
@@ -28906,14 +28903,7 @@ describe("RBAC capability enforcement", () => {
       });
       const event = buildCommandEvent("/status");
       await expect(
-        (
-          harness.controller as unknown as {
-            bindChannelToThread: (
-              event: unknown,
-              target: unknown,
-            ) => Promise<unknown>;
-          }
-        ).bindChannelToThread(event, {
+        messagingModules(harness.controller).bindings.bindChannelToThread(event, {
           backend: "codex",
           threadId: "thread-1",
           federatedThread: {

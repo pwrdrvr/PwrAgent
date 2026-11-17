@@ -724,7 +724,7 @@ because it feeds the chips every thread shows.
 
 ### Single platform-agnostic detach pipeline
 
-The detach flow — retire the channel's status surface, revoke the binding in the store, deliver a "Thread detached" confirmation — has exactly one implementation: `MessagingController.runDetachPipeline`. Every detach origin (Discord `/detach`, Telegram `/detach`, the desktop right-click "Unbind" chip, future archive-on-delete flows, future "Unbind all") routes through it.
+The detach flow — retire the channel's status surface, revoke the binding in the store, deliver a "Thread detached" confirmation — has exactly one implementation: `MessagingBindingService.runDetachPipeline`. `MessagingController` routes every detach origin (Discord `/detach`, Telegram `/detach`, the desktop right-click "Unbind" chip, future archive-on-delete flows, future "Unbind all") through this owner.
 
 The pipeline is platform-agnostic because the only platform-shaped seam is `adapter.deliver(intent)`, which every adapter already implements as part of the inbound-message contract. **A new platform inherits detach for free** by registering as an adapter — no detach-specific code is required in any provider, controller, IPC handler, or runtime call site.
 
@@ -925,6 +925,9 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-callback-handlers.ts` | Callback dispatch, approval identity, browse/help navigation, queue/status controls, risk confirmations, monitor actions and private replies |
 | `apps/desktop/src/main/messaging/core/messaging-callback-context.ts` | Lazy callback collaborators and exact workflow/data ports; queue and private-response state remain in their existing owners |
 | `apps/desktop/src/main/messaging/core/messaging-callback-helpers.ts` | Pure callback payload readers, surface/owner identity checks and provider-aware new-thread option normalization |
+| `apps/desktop/src/main/messaging/core/messaging-binding-service.ts` | Binding creation, metadata, preferences, status surfaces and their render lock, name sync, binding audits and the single detach pipeline |
+| `apps/desktop/src/main/messaging/core/messaging-binding-context.ts` | Narrow store/backend/adapter ports, lazy configuration and exact workflow collaborators for binding effects |
+| `apps/desktop/src/main/messaging/core/messaging-binding-helpers.ts` | Targeted thread projection, conversation labels and workspace handoff context |
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
 | `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
 | `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |
