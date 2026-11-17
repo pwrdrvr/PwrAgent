@@ -189,6 +189,7 @@ async function settleHarness(
   harness.controller.dispose();
   await harness.controller.whenToolUpdatesSettled();
   await harness.controller.whenQueuedTurnActionsSettled();
+  await harness.controller.whenQueuedTurnDrainsSettled();
   if (harness.store instanceof MessagingStore) {
     const storeIndex = tempStores.indexOf(harness.store);
     if (storeIndex >= 0) tempStores.splice(storeIndex, 1);
@@ -219,15 +220,31 @@ function propertyExample<Args extends unknown[]>(
   return async (...args) => {
     signal.throwIfAborted();
     const scope: PropertyExampleScope = { harnesses: [], databases: [] };
+    let bodyFailure: { error: unknown } | undefined;
     try {
       await propertyExampleScope.run(scope, async () => await body(...args));
-    } finally {
+    } catch (error) {
+      bodyFailure = { error };
+    }
+    // Settle every harness and close every database even when one step fails,
+    // and report the example's own failure ahead of any teardown failure.
+    const teardownErrors: unknown[] = [];
+    for (const harness of scope.harnesses.reverse()) {
       try {
-        for (const harness of scope.harnesses.reverse()) await settleHarness(harness);
-      } finally {
-        for (const db of scope.databases) db.close();
+        await settleHarness(harness);
+      } catch (error) {
+        teardownErrors.push(error);
       }
     }
+    for (const db of scope.databases) {
+      try {
+        db.close();
+      } catch (error) {
+        teardownErrors.push(error);
+      }
+    }
+    if (bodyFailure) throw bodyFailure.error;
+    if (teardownErrors.length > 0) throw teardownErrors[0];
   };
 }
 
@@ -17971,7 +17988,6 @@ describe("MessagingController", () => {
         acknowledge();
         await delivery;
         await harness.controller.whenQueuedTurnDrainsSettled();
-        harness.controller.dispose();
       }
     })), { numRuns: 4 });
   });
