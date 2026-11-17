@@ -18,7 +18,7 @@ import {
 } from "@pwragent/shared";
 import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
-import { describeCiRunObservation, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl } from "./thread-dependency-ci-runs";
+import { CI_RUN_URL_FORMS, describeCiRunObservation, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, type CiRunUrlOptions } from "./thread-dependency-ci-runs";
 
 export type DependencyThreadSnapshot = {
   activeTurnId?: string;
@@ -104,6 +104,8 @@ type Options = {
    * `handleCiRunObservation`. Without it, `ci_run` registrations are refused.
    */
   readCiRun?: (url: string) => Promise<ThreadDependencyCiRunObservation>;
+  /** The GitHub Enterprise hosts the operator authorized for run URLs, read at each registration. */
+  ciRunUrlOptions?: () => CiRunUrlOptions;
   /** Registration checked this run, so the poller can wait before the next check. */
   ciRunChecked?: (url: string) => void;
   now?: () => number;
@@ -186,7 +188,7 @@ export class ThreadDependencyCoordinator {
         await this.options.changed(changed);
         return response;
       }
-      validateDependencyCreate(request);
+      validateDependencyCreate(request, this.options.ciRunUrlOptions);
       const deliver = request.deliver ?? "agent";
       if (deliver === "operator" && !this.options.operatorTodos) throw new Error("Operator reminders are not available on this instance.");
       // Validate the consumer too: a mistyped id must never become a durable wake target.
@@ -278,7 +280,7 @@ export class ThreadDependencyCoordinator {
   private async checkNewCiRun(condition: ThreadDependencyCondition): Promise<ThreadDependencyCondition> {
     const read = this.options.readCiRun;
     if (!read) throw new Error("CI run prerequisites are not available on this instance.");
-    const ref = parseCiRunUrl(condition.ciRun!.url)!;
+    const ref = parseCiRunUrl(condition.ciRun!.url, this.options.ciRunUrlOptions?.())!;
     let observation: ThreadDependencyCiRunObservation;
     try {
       observation = await read(ref.url);
@@ -781,7 +783,8 @@ function settledCompaction(item: ThreadDependency, turnId?: string, error?: stri
   };
 }
 
-export function validateDependencyCreate(request: ManageThreadDependenciesRequest): void {
+/** `ciRunUrls` is read only when a request names a CI run. */
+export function validateDependencyCreate(request: ManageThreadDependenciesRequest, ciRunUrls?: () => CiRunUrlOptions): void {
   if (request.action !== "create") throw new Error("action must be create, list, cancel, dismiss, or mark_done.");
   if (request.deliver !== undefined && !THREAD_DEPENDENCY_DELIVERY_TARGETS.includes(request.deliver)) throw new Error("deliver must be agent or operator.");
   if (request.handoff !== undefined && typeof request.handoff !== "boolean") throw new Error("handoff must be true or false.");
@@ -814,7 +817,7 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
     if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun"].includes(field))) throw new Error("Unknown prerequisite condition field.");
     if (condition.when === "ci_run" || condition.ciRun !== undefined) {
-      validateCiRunCondition(condition);
+      validateCiRunCondition(condition, ciRunUrls?.());
       continue;
     }
     if (condition.subject !== undefined) {
@@ -841,7 +844,7 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
   }
 }
 
-function validateCiRunCondition(condition: ThreadDependencyCondition): void {
+function validateCiRunCondition(condition: ThreadDependencyCondition, urls?: CiRunUrlOptions): void {
   const ciRun = condition.ciRun as Record<string, unknown> | undefined;
   if (condition.when !== "ci_run" || !ciRun || typeof ciRun !== "object" || Array.isArray(ciRun)) {
     throw new Error("A CI run prerequisite is when: \"ci_run\" with ciRun: { url, on?, environments? }.");
@@ -852,8 +855,8 @@ function validateCiRunCondition(condition: ThreadDependencyCondition): void {
   }
   if (Object.keys(ciRun).some((field) => !["url", "on", "environments"].includes(field))) throw new Error("Unknown ciRun field.");
   if (condition.title !== undefined && (typeof condition.title !== "string" || condition.title.length > 200)) throw new Error("A prerequisite title must be text of at most 200 characters.");
-  if (typeof ciRun.url !== "string" || ciRun.url.length > 2000 || !parseCiRunUrl(ciRun.url)) {
-    throw new Error("ciRun.url must be a GitHub Actions run on github.com: https://github.com/<owner>/<repo>/actions/runs/<id>.");
+  if (typeof ciRun.url !== "string" || ciRun.url.length > 2000 || !parseCiRunUrl(ciRun.url, urls)) {
+    throw new Error(`ciRun.url must be a GitHub Actions run or a GitLab pipeline: ${CI_RUN_URL_FORMS}.`);
   }
   if (ciRun.on !== undefined && (!Array.isArray(ciRun.on) || ciRun.on.length < 1
     || ciRun.on.some((outcome) => !(THREAD_DEPENDENCY_CI_RUN_OUTCOMES as readonly unknown[]).includes(outcome)))) {

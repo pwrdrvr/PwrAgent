@@ -2448,6 +2448,14 @@ export class DesktopSettingsService {
     ).value;
   }
 
+  /**
+   * `[git] github_enterprise_hosts`, as written. The CI run URL parser
+   * validates each entry and matches hosts exactly.
+   */
+  resolveGithubEnterpriseHosts(): string[] {
+    return this.configStore.read("git")?.githubEnterpriseHosts ?? [];
+  }
+
   resolveDefaultPrAutoDispatchEnabled(): boolean {
     const git = this.configStore.read("git");
     return this.resolveConfigBoolean(

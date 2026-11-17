@@ -1228,6 +1228,10 @@ have:
   replace this origin allowlist with GitLab URL syntax or a hostname prefix.
 - Self-hosted references can still display navigation status and use explicit
   attachments. Display-only parsing must not authorize automatic fetching.
+- A `ci_run` Continue After wait reads an agent-supplied run URL. It admits
+  github.com, gitlab.com, and the exact GitHub Enterprise hosts the operator
+  listed in `[git] github_enterprise_hosts` (`parseCiRunUrl`). A CLI login is
+  not authorization. Never match that list by pattern, suffix or subdomain.
 - The renderer resolves status authority per PR across all navigation rows:
   local primary-workspace attachments win, then peer observations, then other
   local attachments. Use `pullRequestMatchesRepositoryKey` with main's

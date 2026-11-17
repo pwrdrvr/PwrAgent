@@ -219,6 +219,12 @@ export class ForgeCiClient {
     return this.admit(r, signal, () => this.github(r, request, signal));
   }
 
+  /** A GitLab GET through the same admission as CI reads. `endpoint` is built by first-party code, never an agent. */
+  async readGitlab(r: ForgeRepository, endpoint: string, signal?: AbortSignal): Promise<unknown> {
+    if (r.provider !== "gitlab") throw new ForgeReadError("unsupported_provider", "This read supports GitLab projects only.");
+    return this.read(r, endpoint, signal);
+  }
+
   /** Run other work for a host (a gh subprocess) under the same admission. */
   async withGithubAdmission<T>(r: ForgeRepository, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
     return this.admit(r, signal, work);

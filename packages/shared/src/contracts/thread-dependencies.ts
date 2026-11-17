@@ -20,11 +20,18 @@ export const THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS = 8;
 
 /** A CI run prerequisite. PwrAgent checks the run itself; no model polls it. */
 export type ThreadDependencyCiRun = {
-  /** A GitHub Actions run: https://github.com/<owner>/<repo>/actions/runs/<id>. */
+  /**
+   * A GitHub Actions run, `https://github.com/<owner>/<repo>/actions/runs/<id>`
+   * (or the same path on an authorized GitHub Enterprise host), or a GitLab
+   * pipeline, `https://gitlab.com/<group>/<project>/-/pipelines/<id>`.
+   */
   url: string;
   /** Omit for all three outcomes. */
   on?: ThreadDependencyCiRunOutcome[];
-  /** `approval_gate` only for these environments; omit for any gate. */
+  /**
+   * `approval_gate` only for these gates; omit for any gate. A gate is named
+   * by its environment, or on GitLab by a manual job's name.
+   */
   environments?: string[];
 };
 
@@ -32,13 +39,19 @@ export type ThreadDependencyCiRun = {
 export type ThreadDependencyCiRunObservation = {
   runId: number;
   name?: string;
-  /** The provider's run status: queued, in_progress, waiting, completed, … */
+  /**
+   * The run status in GitHub's words, whatever the forge: queued,
+   * in_progress, waiting, completed, …
+   */
   status: string;
   conclusion?: string;
   attempt?: number;
   headSha?: string;
   branch?: string;
-  /** Deployments waiting for approval, from the run's pending deployments. */
+  /**
+   * What waits for a person: GitHub's pending deployments, or GitLab's
+   * blocked deployments and playable manual jobs.
+   */
   gates?: { environment: string; reviewers: string[]; waitTimerMinutes?: number }[];
   jobs?: { total: number; passed: number; failed: number; running: number; queued: number; waiting: number; skipped: number };
   failedJobs?: { name: string; url: string; failedStep?: string }[];
@@ -71,7 +84,7 @@ export function threadDependencyCiRunPhrase(ciRun: Pick<ThreadDependencyCiRun, "
 
 /** The run id in a CI run URL, for labels; undefined when the URL names none. */
 export function threadDependencyCiRunId(url: string): string | undefined {
-  return url.match(/\/actions\/runs\/(\d+)/)?.[1];
+  return url.match(/\/(?:actions\/runs|-\/pipelines)\/(\d+)(?:\/attempts\/\d+)?\/?$/)?.[1];
 }
 
 /** "Waiting for approval: windows-signing · 2 passed, 1 running" from one check. */
