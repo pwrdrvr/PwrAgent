@@ -80,16 +80,28 @@ const CONNECTION_ERROR_OMITTED = "Unavailable. Search this connectionId alone fo
 /** MCP recommends tool names of at most 128 characters, so a notice names no more. */
 const MAX_NOTICE_TOOL_NAME_CHARS = 128;
 
+/**
+ * A search returns at most this many tools, the tool contract's own limit.
+ * The budget's room for notices assumes no more.
+ */
+const MAX_SEARCH_LIMIT = 5;
+
 type McpGatewayUnavailable = McpGatewaySearchResult["unavailable"][number];
 
 /** What a search says about a tool whose exact schema the result has no room for. */
 function schemaBudgetNotice(tool: McpGatewaySource): McpGatewayUnavailable {
-  const name = tool.toolName.length > MAX_NOTICE_TOOL_NAME_CHARS
-    ? `${tool.toolName.slice(0, MAX_NOTICE_TOOL_NAME_CHARS - 1)}…`
-    : tool.toolName;
+  // Counted in code points, so a cut never leaves half a surrogate pair.
+  const characters = Array.from(tool.toolName);
+  if (characters.length <= MAX_NOTICE_TOOL_NAME_CHARS) {
+    return {
+      connectionId: tool.connectionId,
+      message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.`,
+    };
+  }
+  const name = `${characters.slice(0, MAX_NOTICE_TOOL_NAME_CHARS - 1).join("")}…`;
   return {
     connectionId: tool.connectionId,
-    message: `The exact schema for ${name} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.`,
+    message: `The exact schema for ${name} exceeds this result's size budget. Search part of its name with this connectionId alone, or use native MCP invocation.`,
   };
 }
 
@@ -229,8 +241,12 @@ export class McpGatewayToolService {
         || a.tool.connectionId.localeCompare(b.tool.connectionId) || a.tool.toolName.localeCompare(b.tool.toolName));
       // The tools below start from the failed connections' entries, so those
       // are fitted first, into a share that leaves room for every notice.
+      // They are fitted in selection order, not the order the fan-out
+      // finished in, so the same failures keep the same errors each search.
+      const selectionOrder = new Map(ids.map((id, index) => [id, index]));
+      unavailable.sort((left, right) => selectionOrder.get(left.connectionId)! - selectionOrder.get(right.connectionId)!);
       const result: McpGatewaySearchResult = { tools: [], unavailable: fitConnectionErrors(unavailable, MAX_CONNECTION_ERROR_BYTES) };
-      const picked = ranked.slice(0, args.limit ?? 3);
+      const picked = ranked.slice(0, Math.min(args.limit ?? 3, MAX_SEARCH_LIMIT));
       // A tool turned away adds its notice to `unavailable` after the tools
       // before it were measured, so each admission keeps room for the notice
       // of every candidate still to come, and for the comma before each one

@@ -118,27 +118,62 @@ describe("gateway search skills", () => {
   });
 
   // Built by hand: shrinking 62 long errors outlasts the test timeout. On
-  // the previous code this search came to 28,276 bytes.
+  // the previous code this search came to 28,276 bytes. Later connections
+  // fail first, so the entries are fitted in selection order, not in the
+  // order the fan-out finished in.
   it("names every failed connection within the budget when their errors alone would pass it", async () => {
     const failed = Array.from({ length: 24 }, (_, index) => `f${String(index).padStart(63, "0")}`);
     const found = await new McpGatewayToolService({
-      connections: { requestGatewayToolOperation: async () => { throw new Error("\u0001".repeat(400)); } },
+      connections: {
+        requestGatewayToolOperation: async (params) => {
+          for (let tick = failed.indexOf(params.connectionId); tick < failed.length; tick += 1) await Promise.resolve();
+          throw new Error("\u0001".repeat(400));
+        },
+      },
       approve: async () => false,
       selectedConnections: async () => failed,
     }).search({ query: "lookup" }, context);
     expect(Buffer.byteLength(JSON.stringify(found))).toBeLessThanOrEqual(24_000);
-    expect(found.unavailable.map((entry) => entry.connectionId).sort()).toEqual(failed);
+    expect(found.unavailable.map((entry) => entry.connectionId)).toEqual(failed);
+    // The first entries keep their own errors; the rest give the short form.
+    expect(found.unavailable[0]!.message).toBe("\u0001".repeat(180));
+    expect(found.unavailable.at(-1)!.message).toBe("Unavailable. Search this connectionId alone for the error.");
   });
 
   // Five turned-away tools with long names would otherwise spend their own
   // notices' worth of the budget on names alone.
   it("names at most 128 characters of a turned-away tool", async () => {
-    const name = `lookup_${"n".repeat(1_000)}`;
-    const found = await search([{ id: "a", routed: true, tools: [{ name, description: "x".repeat(30_000) }] }], "lookup", 1, true);
-    expect(found.unavailable).toEqual([{
-      connectionId: "a",
-      message: `The exact schema for ${name.slice(0, 127)}… exceeds this result's size budget. Search its exact name alone or use native MCP invocation.`,
-    }]);
+    // Emoji are two UTF-16 units each; a cut by units would split one.
+    for (const name of [`lookup_${"n".repeat(1_000)}`, `lookup_${"😀".repeat(1_000)}`]) {
+      const found = await search([{ id: "a", routed: true, tools: [{ name, description: "x".repeat(30_000) }] }], "lookup", 1, true);
+      expect(found.unavailable).toEqual([{
+        connectionId: "a",
+        message: `The exact schema for ${Array.from(name).slice(0, 127).join("")}… exceeds this result's size budget. Search part of its name with this connectionId alone, or use native MCP invocation.`,
+      }]);
+      expect(found.unavailable[0]!.message.isWellFormed()).toBe(true);
+    }
+  });
+
+  // The budget's own worst case: the most failures with the longest escaped
+  // errors, beside the most turned-away tools with long escaped names. The
+  // limit asked for is past the contract's five, which the search keeps to.
+  it("fits the most failures beside five turned-away tools with long names", async () => {
+    const failed = Array.from({ length: 62 }, (_, index) => `f${String(index).padStart(63, "0")}`);
+    const names = Array.from({ length: 20 }, (_, index) => `lookup${String(index).padStart(2, "0")}${"\u0001".repeat(2_000)}`);
+    const found = await new McpGatewayToolService({
+      connections: {
+        requestGatewayToolOperation: async (params) => {
+          if (params.connectionId !== "a") throw new Error("\u0001".repeat(400));
+          return catalog({ id: "a", routed: true, tools: names.map((name) => ({ name, description: "x".repeat(30_000) })) }, false);
+        },
+      },
+      approve: async () => false,
+      selectedConnections: async () => ["a", ...failed],
+    }).search({ query: "lookup", limit: 20 }, context);
+    expect(Buffer.byteLength(JSON.stringify(found))).toBeLessThanOrEqual(24_000);
+    expect(found.tools).toEqual([]);
+    expect(found.unavailable.filter((entry) => entry.connectionId === "a")).toHaveLength(5);
+    expect(found.unavailable.filter((entry) => entry.connectionId !== "a").map((entry) => entry.connectionId)).toEqual(failed);
   });
 
   // A search names each selected connection that fails, with its error.
