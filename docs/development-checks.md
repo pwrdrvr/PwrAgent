@@ -103,6 +103,20 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Dependency-boundary checks run uncached so resolution configuration changes
   always rebuild the graph.
 
+### Main function bytecode budget
+
+- Run `pnpm check:main-bytecode` after main-process or reachable first-party
+  helper changes. CI's Lint job runs it and retains the full JSON report.
+- The command rebuilds shipped main, measures actual desktop-main Vitest SSR
+  on Node, and compiles production ESM on Node and Electron. It shares the
+  compiler mechanism with the renderer while preserving their transforms.
+- Every first-party function, including anonymous/nested functions and newly
+  extracted helper modules, has the same 25,600-byte early operational budget.
+  Unmapped functions retain the budget. Synthetic frames and third-party
+  dependencies are measured and reported separately.
+- This is a chosen policy, not a V8 hard cutoff or a latency claim. See
+  [the main audit, exact maxima, coverage and limits](main-bytecode-budget.md).
+
 ### Renderer function bytecode budget
 
 - Run `pnpm check:renderer-bytecode` after changing `DesktopAppShell`, `Sidebar`,
