@@ -39,7 +39,7 @@ command. “Warm” repeats the same command without deleting it. Dependencies,
 Git archives and the staged Git inventory are already present. These are not
 controlled OS cold-cache, fresh-install or download measurements. The owner
 command retains all global setup, including the map-free test package build,
-and includes three tests plus their startup and preparation costs.
+and includes seven tests plus their startup and preparation costs.
 
 Logs are capped at 120,000 characters per command. A benchmark lock prevents
 multiple measurement drivers from deleting the same outputs. If a driver is
@@ -151,7 +151,10 @@ helper reuse must not replace any Git verification or runtime peer checks.
 The normal native build/output oracles and existing helper-path/peer-verification
 suites passed on native macOS arm64: 21 passed, with three existing
 platform/privilege-dependent skips in the peer suite. All five new oracles
-passed without skips. The normal standalone packed installation passed its
+passed without skips. After rebasing onto current main, the combined native
+and owner boot/concurrency selection passed 28 tests with the same three
+existing skips. The package suite passed all 42 tests. The normal standalone
+packed installation passed its
 portable loader, workers, bridge/hook, native modules, PDF/WASM, sandbox, lock,
 durable acceptance and CLI probes. Syntax lint, typed lint, native typecheck,
 license checks and dependency boundaries passed.
