@@ -1,14 +1,11 @@
 import type {
+  AppServerTurnInputItem,
   AutomationPriorRunContext,
   AutomationRunSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import type { AutomationGateRunResult } from "@pwragent/shared";
 import { automationSuppressesBindingBroadcast } from "@pwragent/shared";
-import type {
-  ThreadTurnQueueEntry,
-  ThreadTurnQueueSubmissionResult,
-} from "@pwragent/owner-core/thread-turn-queue";
 import { getMainLogger } from "../log.js";
 import { buildAutomationTurnInput } from "./automation-prompt.js";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
@@ -28,15 +25,17 @@ export type AutomationRunner = {
  * A runner starts the run or throws. Waiting is the scheduler's concern: a
  * run that cannot start yet is held in its automation's own lane.
  */
-export type AutomationRunStartResult =
-  Extract<ThreadTurnQueueSubmissionResult, { status: "started" }> & {
-    backendThreadId?: string;
-  };
+export type AutomationRunStartResult = {
+  status: "started";
+  queueEntryId: string;
+  turnId: string;
+  backendThreadId?: string;
+};
 
 /** What the scheduler reports for a run: started, or queued in its lane. */
 export type AutomationRunSubmissionResult =
   | AutomationRunStartResult
-  | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>;
+  | { status: "queued"; queueEntryId: string; position: number };
 
 export type HeadlessAutomationLauncher = {
   startAutomationHeadlessTurn(params: {
@@ -47,7 +46,7 @@ export type HeadlessAutomationLauncher = {
     cwd?: string;
     executionMode?: ThreadExecutionMode;
     fastMode?: boolean;
-    input: ThreadTurnQueueEntry["input"];
+    input: AppServerTurnInputItem[];
     model?: string;
     reasoningEffort?: string;
     serviceTier?: string;
@@ -119,16 +118,7 @@ export class HeadlessAutomationRunner implements AutomationRunner {
     return {
       status: "started",
       backendThreadId: result.headlessThreadId,
-      entry: {
-        id: result.queueEntryId,
-        backend: params.automation.backend,
-        threadId: params.automation.threadId,
-        origin: "automation",
-        automationRunId: params.run.id,
-        automationName: params.automation.name,
-        input,
-        createdAt: Date.now(),
-      },
+      queueEntryId: result.queueEntryId,
       turnId: result.turnId,
     };
   }

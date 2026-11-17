@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import {
   HeadlessAutomationRunner,
   type HeadlessAutomationLauncher,
@@ -117,16 +116,12 @@ describe("AutomationScheduler", () => {
             if (submissionStatus === "failed") {
               throw new Error("Submission acknowledgement failed");
             }
-            const entry: ThreadTurnQueueEntry = {
-              id: "queue-1",
-              backend: automation.backend,
-              threadId: automation.threadId,
-              origin: "automation",
-              automationRunId: run.id,
-              input: [],
-              createdAt: 0,
+            return {
+              status: "started",
+              queueEntryId: "queue-1",
+              turnId: "turn-1",
+              backendThreadId: "headless-1",
             };
-            return { status: "started", entry, turnId: "turn-1", backendThreadId: "headless-1" };
           },
         },
       });

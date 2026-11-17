@@ -155,7 +155,6 @@ export class AutomationScheduler {
         now,
       });
       return buildLaneQueuedResult({
-        automation,
         run: queued ?? run,
         position: 1,
       });
@@ -193,7 +192,7 @@ export class AutomationScheduler {
         queuedAt: now,
         now,
       });
-      return buildLaneQueuedResult({ automation, run: queued ?? run, position: 1 });
+      return buildLaneQueuedResult({ run: queued ?? run, position: 1 });
     }
     return await this.submitRun({ automation, runId: run.id, windows: [], now });
   }
@@ -297,7 +296,6 @@ export class AutomationScheduler {
         now,
       });
       return buildLaneQueuedResult({
-        automation: params.automation,
         run: queued ?? run,
         position: 1,
       });
@@ -614,7 +612,6 @@ export class AutomationScheduler {
         now: params.now,
       });
       return buildLaneQueuedResult({
-        automation: params.automation,
         run: queued ?? run,
         position: 1,
       });
@@ -640,7 +637,6 @@ export class AutomationScheduler {
           now: params.now,
         });
         return buildLaneQueuedResult({
-          automation: params.automation,
           run: queued ?? run,
           position: 1,
         });
@@ -655,7 +651,7 @@ export class AutomationScheduler {
         runId: params.runId,
         backendThreadId: result.backendThreadId,
         backendTurnId: result.turnId,
-        queueEntryId: result.entry.id,
+        queueEntryId: result.queueEntryId,
         startedAt: params.now,
         now: params.now,
       });
@@ -663,7 +659,7 @@ export class AutomationScheduler {
         automationId: params.automation.id,
         automationName: params.automation.name,
         backend: params.automation.backend,
-        queueEntryId: result.entry.id,
+        queueEntryId: result.queueEntryId,
         runId: params.runId,
         status: result.status,
         threadId: params.automation.threadId,
@@ -940,7 +936,6 @@ function toBatchedEntry(
 }
 
 function buildLaneQueuedResult(params: {
-  automation: AutomationRecord;
   position: number;
   run: {
     id: string;
@@ -948,16 +943,7 @@ function buildLaneQueuedResult(params: {
 }): AutomationRunSubmissionResult {
   return {
     status: "queued",
-    entry: {
-      id: buildLaneQueueEntryId(params.run.id),
-      backend: params.automation.backend,
-      threadId: params.automation.threadId,
-      origin: "automation",
-      automationRunId: params.run.id,
-      automationName: params.automation.name,
-      input: [],
-      createdAt: Date.now(),
-    },
+    queueEntryId: buildLaneQueueEntryId(params.run.id),
     position: params.position,
   };
 }
