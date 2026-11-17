@@ -193,6 +193,7 @@ test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter ex
   try {
     await openExistingThread(app);
     const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
     await textbox.focus();
     await pasteIntoReply(app.window, {
       html: "<h2><strong>Copied heading</strong></h2>", text: "Copied heading",
@@ -209,18 +210,24 @@ test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter ex
     await app.electronApp.evaluate((_electron, text) => {
       globalThis.__PWRAGENT_E2E_CLIPBOARD__ = { text, html: "<h1>Heading</h1><strong>literal bold</strong>" };
     }, literal);
-    await textbox.fill("");
+    // Clear through the editor's keyboard path and wait for its published
+    // document before asking the native menu to insert another paste.
+    await textbox.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await textbox.press("Delete");
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
     await app.electronApp.evaluate(({ Menu }) => {
       const paste = Menu.getApplicationMenu()?.items.flatMap((item) => item.submenu?.items ?? [])
         .find((item) => item.label === "Paste Without Formatting");
       if (!paste) throw new Error("Paste Without Formatting menu item missing");
       paste.click();
     });
-    await expect(app.window.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", literal);
+    await expect(tiptapInput).toHaveAttribute("data-value", literal);
     await expect(textbox.locator("h1, strong")).toHaveCount(0);
-    await textbox.fill("");
+    await textbox.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await textbox.press("Delete");
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
     await app.window.keyboard.press(process.platform === "darwin" ? "Meta+Shift+V" : "Control+Shift+V");
-    await expect(app.window.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", literal);
+    await expect(tiptapInput).toHaveAttribute("data-value", literal);
     await expect(textbox.locator("h1, strong")).toHaveCount(0);
   } finally {
     await app.close();
