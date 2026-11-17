@@ -1,8 +1,5 @@
-import type {
-  NavigationThreadSummary,
-} from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
+import type { NavigationDirectoryView as NavigationDirectorySummary, NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import {
   retainNavigationPresentationOrder,
   type NavigationPresentationOrder,
@@ -12,7 +9,7 @@ export type HoverStableSidebarSnapshot = {
   order: NavigationPresentationOrder;
   visibleKeys: string[];
   directories: NavigationDirectorySummary[];
-  threads: NavigationThreadSummary[];
+  threads: NavigationPresentedThread[];
 };
 
 export type HydrateHoverStableSidebarOptions = {
@@ -84,6 +81,7 @@ export function hydrateHoverStableSidebarSnapshot(
           && (options?.refreshThreadPinRanks || latestThread.pinnedRank === thread.pinnedRank)
           && latestThread.codexNativeSubAgents === thread.codexNativeSubAgents
           && latestThread.subthreadsCollapsed === thread.subthreadsCollapsed
+          && latestThread.ownerSiblingPosition === thread.ownerSiblingPosition
           && latestThread.subthreadOrder === thread.subthreadOrder) return [latestThread];
         return [
           {
@@ -98,6 +96,7 @@ export function hydrateHoverStableSidebarSnapshot(
             codexNativeSubAgents: thread.codexNativeSubAgents,
             subthreadsCollapsed: thread.subthreadsCollapsed,
             subthreadOrder: thread.subthreadOrder,
+            ownerSiblingPosition: thread.ownerSiblingPosition,
           },
         ];
       }),

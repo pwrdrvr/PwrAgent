@@ -1,6 +1,6 @@
 import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationThreadSummary } from "@pwragent/shared";
 import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
@@ -34,11 +34,12 @@ export type PagedDirectoryChildInputs = {
 function projectPagedDirectoryChildren<Row>(
   params: PagedDirectoryChildInputs,
   resolve: (key: string) => Row | undefined,
+  threadsByKey: ReadonlyMap<string, NavigationThreadSummary>,
 ): Map<string, DirectoryChildren<Row>> {
   const presentation = params.presentationOrder ?? readNavigationPresentationOrder(params.resources);
   const directories = new Map<string, DirectoryChildren<Row>>();
   const seenByScopeAndParent = new Map<string, Set<string>>();
-  const ownerChildOrder = readOwnerChildOrder(params.resources, presentation);
+  const ownerChildOrder = readOwnerChildOrder(params.resources, presentation, threadsByKey);
   for (const resource of params.resources.values()) {
     const query = resource.state.request.query;
     if (query.kind !== "children" || query.directoryKey === undefined) continue;
@@ -70,10 +71,10 @@ function projectPagedDirectoryChildren<Row>(
 export function buildPagedDirectoryChildren(params: PagedDirectoryChildInputs & {
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): PagedDirectoryChildren {
-  return projectPagedDirectoryChildren(params, (key) => params.threadsByKey.get(key));
+  return projectPagedDirectoryChildren(params, (key) => params.threadsByKey.get(key), params.threadsByKey);
 }
 
-/** Membership and owner order do not depend on the latest row metadata. */
+/** Membership and order use placements and accepted owner positions, independent of live row content. */
 export function buildPagedDirectoryChildKeys(params: PagedDirectoryChildInputs & {
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): { directories: Map<string, DirectoryChildren<string>>; admissionKeys: string[] } {
@@ -81,13 +82,14 @@ export function buildPagedDirectoryChildKeys(params: PagedDirectoryChildInputs &
   const directories = projectPagedDirectoryChildren(params, (key) => {
     admissionKeys.push(key);
     return params.threadsByKey.has(key) ? key : undefined;
-  });
+  }, params.threadsByKey);
   return { directories, admissionKeys };
 }
 
 /** Presentation of admitted entries only. Placement and counts remain owner authority. */
 export function buildPagedDirectoryPresentation(params: {
   directory: NavigationDirectoryView;
+  selectionAncestry?: NavigationQueryPage | null;
   presentationOrder?: NavigationPresentationOrder;
   resources: NavigationWindowQueriesState["resources"];
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
@@ -116,8 +118,8 @@ export function buildPagedDirectoryPresentation(params: {
   // Selection is an independent exact read, not a replacement pin range.
   // Admit only its root in this directory; keep page membership and cursors
   // untouched so revealing a newly appended pin cannot discard earlier pins.
-  const selected = params.resources.get("selected-viewer-mount")?.state.page
-    ?? params.resources.get("selected-context")?.state.page;
+  const selected = params.selectionAncestry !== undefined ? params.selectionAncestry
+    : params.resources.get("selected-viewer-mount")?.state.page ?? params.resources.get("selected-context")?.state.page;
   const selectedEntry = selected?.entries.find((entry) => entry.placement.kind === "root");
   const selectedThread = selectedEntry && params.threadsByKey.get(navigationThreadSelectionKey(selectedEntry.row.ref));
   const pinResource = params.resources.get(`directory-pins:${params.directory.key}`);

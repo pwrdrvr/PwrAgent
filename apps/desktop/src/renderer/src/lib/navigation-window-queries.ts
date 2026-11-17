@@ -1,7 +1,7 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
-import type { AgentEvent, FederationTarget, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent, FederationTarget, NavigationIdentity, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {
@@ -163,6 +163,73 @@ export class NavigationWindowQueries {
 
   private retainedKey(id: string, requestKey: string): string {
     return JSON.stringify([id, requestKey]);
+  }
+
+  /** Presentation ancestry only, never a response to the new exact query.
+   * Borrow from the existing bounded range pool while a clicked, admitted
+   * child resolves. Its current scoped placement must still reach that root. */
+  selectionAncestry(selection: NavigationIdentity, target: FederationTarget | undefined,
+    snapshot: NavigationWindowQueriesState): NavigationQueryPage | undefined {
+    if (this.disposed) return undefined;
+    const id = selection.ownerInstanceId && target?.scope !== "remote" ? "selected-viewer-mount" : "selected-context";
+    const selectedResource = snapshot.resources.get(id);
+    const selected = selectedResource?.state;
+    const matches = (state: NavigationPageState | undefined): boolean => state?.request.query.kind === "exact"
+      && state.request.query.identities.length === 1 && navigationIdentitiesEqual(state.request.query.identities[0]!, selection);
+    if (!selectedResource?.restoredFromCache && matches(selected) && federationTargetsEqual(selected?.request.federationTarget, target)
+      && (selected?.page || selected?.error)) return selected.error ? undefined : selected.page;
+    const ownerResource = snapshot.resources.get("selected-context");
+    const owner = ownerResource?.state;
+    if (matches(owner) && owner?.error) return undefined;
+    // Restored ranges supply provisional membership. Their old absence or
+    // relationship cannot supersede the child the operator just clicked.
+    const freshOwner = matches(owner) && !ownerResource?.restoredFromCache && !owner?.stale;
+    const ownerRow = freshOwner && owner?.page
+      ? owner.page.entries.find(({ row }) => navigationIdentitiesEqual(row.ref, selection))?.row : undefined;
+    if (freshOwner && owner?.page && !ownerRow) return undefined;
+    const candidates = [selected, ...[...this.retained.values()].reverse().map((entry) => entry.state)];
+    const scopedPlacements = new Map<string, Map<string, NavigationQueryEntry>>();
+    for (const candidate of candidates) {
+      const query = candidate?.request.query;
+      const page = candidate?.page;
+      if (!candidate || candidate.error || query?.kind !== "exact" || query.identities.length !== 1 || !query.includeAncestry || query.ancestryScope !== "directory"
+        || candidate.request.inventory !== (target?.scope === "remote" ? "owner" : "viewer")
+        || !federationTargetsEqual(candidate.request.federationTarget, target) || !page?.selectionDirectory) continue;
+      const root = page.entries.find((entry) => entry.placement.kind === "root");
+      if (!root) continue;
+      let placements = scopedPlacements.get(page.selectionDirectory.key);
+      if (!placements) {
+        placements = new Map();
+        scopedPlacements.set(page.selectionDirectory.key, placements);
+        for (const resource of snapshot.resources.values()) {
+          const request = resource.state.request;
+          if (request.query.kind !== "children" || request.query.directoryKey !== page.selectionDirectory.key
+            || !federationTargetsEqual(request.federationTarget, target)) continue;
+          for (const entry of resource.state.page?.entries ?? []) placements.set(navigationIdentityKey(entry.row.ref), entry);
+        }
+      }
+      const clicked = placements.get(navigationIdentityKey(selection));
+      if (!clicked) continue;
+      // A fresh owner's relationship supersedes the old viewer observation.
+      // Optional legacy qualifiers do not themselves change that relationship.
+      const parentBackend = clicked.row.parentThreadBackend
+        ?? (clicked.placement.kind === "child" && clicked.placement.parent.threadId === clicked.row.parentThreadId
+          ? clicked.placement.parent.backend : clicked.row.source);
+      if (ownerRow && (ownerRow.parentThreadId !== clicked.row.parentThreadId
+        || (ownerRow.parentThreadBackend !== undefined && ownerRow.parentThreadBackend !== parentBackend)
+        || (ownerRow.parentThreadInstanceId ?? ownerRow.ref.ownerInstanceId)
+          !== (clicked.row.parentThreadInstanceId ?? clicked.row.ref.ownerInstanceId))) continue;
+      const visited = new Set<string>();
+      let ref = selection;
+      while (!visited.has(navigationIdentityKey(ref))) {
+        if (navigationIdentitiesEqual(ref, root.row.ref)) return page;
+        visited.add(navigationIdentityKey(ref));
+        const entry = placements.get(navigationIdentityKey(ref));
+        if (entry?.placement.kind !== "child") break;
+        ref = entry.placement.parent;
+      }
+    }
+    return undefined;
   }
 
   /** Pages enter through IPC or immutable range merges; measure each owned value exactly once. */
