@@ -136,7 +136,7 @@ export interface MessagingCallbackHost {
 }
 
 export interface MessagingCallbackContext {
-  readonly store: Pick<MessagingStoreLike, "findActivePendingIntentForChannel" | "deletePendingIntent" | "findActiveBindingForChannel" | "findActivePendingAsyncQuestionnaires" | "upsertDefaultAgentAssignment" | "deleteBrowseSession" | "getBrowseSession" | "findActiveBrowseSessionForChannel" | "resolveCallbackHandle" | "getTopicCleanupProposal" | "getManagedTopic" | "upsertManagedTopic" | "upsertTopicCleanupProposal" | "getBinding" | "findActiveBindings">;
+  readonly store: Pick<MessagingStoreLike, "findActivePendingIntentForChannel" | "findActivePendingIntentsForChannel" | "deletePendingIntent" | "findActiveBindingForChannel" | "findActivePendingAsyncQuestionnaires" | "upsertDefaultAgentAssignment" | "deleteBrowseSession" | "getBrowseSession" | "findActiveBrowseSessionForChannel" | "resolveCallbackHandle" | "getTopicCleanupProposal" | "getManagedTopic" | "upsertManagedTopic" | "upsertTopicCleanupProposal" | "getBinding" | "findActiveBindings">;
   readonly backend: Pick<MessagingBackendBridge, "cancelQueuedTurn" | "readQueuedTurn" | "steerTurn" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "setThreadExecutionMode" | "cancelThreadExecutionModeQueue">;
   readonly adapter: Pick<MessagingAdapter, "closeManagedConversation" | "deleteManagedConversation">;
   readonly capabilityProfile: MessagingCapabilityProfile;

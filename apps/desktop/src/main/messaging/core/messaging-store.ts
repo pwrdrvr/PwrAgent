@@ -547,10 +547,18 @@ export class MessagingStore {
     channel: MessagingChannelRef;
     now?: number;
   }): Promise<MessagingPendingIntentRecord | undefined> {
+    return (await this.findActivePendingIntentsForChannel(params))[0];
+  }
+
+  async findActivePendingIntentsForChannel(params: {
+    actorId: string;
+    channel: MessagingChannelRef;
+    now?: number;
+  }): Promise<MessagingPendingIntentRecord[]> {
     const channelKey = buildMessagingConversationKey(params.channel);
     const now = params.now ?? Date.now();
     return await this.withReadData((data) =>
-      cloneOptional(
+      structuredClone(
         Object.values(data.pendingIntents)
           .filter(
             (intent) =>
@@ -559,7 +567,7 @@ export class MessagingStore {
               intent.channel &&
               buildMessagingConversationKey(intent.channel) === channelKey,
           )
-          .sort((a, b) => b.createdAt - a.createdAt)[0],
+          .sort((a, b) => b.createdAt - a.createdAt),
       ),
     );
   }
