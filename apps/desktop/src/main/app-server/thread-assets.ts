@@ -17,6 +17,14 @@ export function threadArtifactDirectory(owner: ThreadAssetOwner): string {
   return path.join(threadAssetRoot(owner), "ci-artifacts");
 }
 
+/**
+ * decisions_invoke batch results, one JSONL file per batch. The agent reads
+ * them with its own tools; permanent thread deletion removes them.
+ */
+export function threadDecisionBatchDirectory(owner: ThreadAssetOwner): string {
+  return path.join(threadAssetRoot(owner), "decision-batches");
+}
+
 function assetIdentitySegment(value: string): string {
   if (!value) throw new Error("Thread asset identity cannot be empty.");
   const encoded = encodeURIComponent(value).replace(/\./g, "%2E");

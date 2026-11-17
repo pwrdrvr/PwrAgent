@@ -104,7 +104,7 @@ import {
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
-import { decisionBatchSubAgentId, isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
+import { decisionBatchIdFromSubAgentId, decisionBatchSubAgentId, isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import {
   buildProjectPausedThreadMessageRefusal,
@@ -12509,8 +12509,18 @@ export class DesktopBackendRegistry {
     return this.subAgentMonitorService.listPendingTaskMonitorWakes(params);
   }
 
-  stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {
-    return this.subAgentMonitorService.stopSubAgent(params);
+  async stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {
+    const batchId = decisionBatchIdFromSubAgentId(params.monitorId);
+    if (batchId === undefined) return await this.subAgentMonitorService.stopSubAgent(params);
+    // A decision batch runs in this owner's decisions service, not in a
+    // thread turn. The card's own thread is the batch's caller, so a stop
+    // can reach only that thread's batch.
+    const stopped = await this.openAIDecisionsHandler?.stopBatch(
+      { backend: params.backend, threadId: params.threadId },
+      batchId,
+    );
+    if (stopped !== "stopped") throw new Error("Sub-agent is no longer running.");
+    return { backend: params.backend, threadId: params.threadId, monitorId: params.monitorId, stoppedAt: Date.now() };
   }
 
   async compactThread(params: {

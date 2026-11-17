@@ -36,8 +36,9 @@ beforeEach(() => {
     invoke: async (caller, args, signal, onProgress) => await service.invoke(caller, args, signal, onProgress),
     update: (caller, args) => service.update(caller, args),
     delete: (caller, args) => service.delete(caller, args),
-    batchResults: (caller, args) => service.batchResults(caller, args),
+    batchResults: async (caller, args) => await service.batchResults(caller, args),
     cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
+    stopBatch: async (caller, batchId) => await service.stopBatch(caller, batchId),
   };
 });
 afterEach(() => db.close());

@@ -50,6 +50,16 @@ import {
   type DecisionBatchRecord,
   type DecisionBatchStatusFilter,
 } from "./decision-batches";
+import {
+  DecisionBatchFileWriter,
+  batchEndEntry,
+  batchHeaderEntry,
+  batchItemEntry,
+  decisionBatchFilePath,
+  isDecisionBatchId,
+  listDecisionBatchFileIds,
+  readDecisionBatchFile,
+} from "./decision-batch-files";
 import type { SystemOneTarget } from "../decision/system-one";
 import { buildSystemOneDecisionRequest, postSystemOneDecision } from "./system-one-decisions";
 import {
@@ -132,6 +142,11 @@ export type OpenAIDecisionsServiceOptions = {
   reportBatch?: (report: DecisionBatchCardReport) => Promise<void>;
   /** Starts or queues a turn on the thread whose background batch ended. */
   wakeThread?: (caller: DecisionBatchCaller, wake: { batchId: string; text: string }) => Promise<void>;
+  /**
+   * The thread's directory for batch result files. Each batch is appended
+   * there as JSONL; without it, batches live in memory only.
+   */
+  batchResultsDirectory?: (caller: DecisionBatchCaller) => string;
   newBatchId?: () => string;
 };
 
@@ -169,6 +184,8 @@ export class OpenAIDecisionsService {
   private readonly runs = new Map<string, Promise<void>>();
   /** Batches their caller cancelled: no wake-up follows. */
   private readonly silentBatches = new Set<string>();
+  /** Each running batch's result file writer. */
+  private readonly writers = new Map<string, DecisionBatchFileWriter>();
   private closing = false;
 
   constructor(private readonly options: OpenAIDecisionsServiceOptions) {
@@ -377,6 +394,7 @@ export class OpenAIDecisionsService {
     // awaits between this check and inLane's own, so they cannot disagree.
     this.assertLaneHasRoom(record.decisionId);
     this.batches.add(batch);
+    this.openBatchFile(batch);
     if (background) {
       const done = this.inLane(batch.decisionId, batch.controller.signal, async () =>
         await this.runBatch(batch, validated, run))
@@ -419,7 +437,7 @@ export class OpenAIDecisionsService {
    * Reads a batch this thread started: its totals and a page of finished
    * items. Without batchId, lists this thread's batches, newest first.
    */
-  batchResults(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+  async batchResults(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
     for (const key of Object.keys(args)) {
       if (!BATCH_RESULTS_KEYS.has(key)) throw new OpenAIDecisionsError("invalid_input", `Unknown property "${key}".`);
     }
@@ -429,7 +447,7 @@ export class OpenAIDecisionsService {
           throw new OpenAIDecisionsError("invalid_input", `${key} needs a batchId.`);
         }
       }
-      return { batches: this.batches.list(caller).map((batch) => summarizeBatch(batch)) };
+      return { batches: (await this.listBatches(caller)).map((batch) => summarizeBatch(batch)) };
     }
     const status = parseStatusFilter(args.status);
     const from = parseIndex(args.from, "from", 0);
@@ -441,7 +459,7 @@ export class OpenAIDecisionsService {
       );
     }
     const detail = parseDetail(args.detail) ?? "compact";
-    const batch = this.ownBatch(caller, args.batchId);
+    const batch = await this.ownBatch(caller, args.batchId);
     const page = pageBatchResults(batch, { from, limit, status, detail });
     return {
       ...summarizeBatch(batch),
@@ -458,17 +476,33 @@ export class OpenAIDecisionsService {
    * unsent items are skipped; finished items stay readable. No wake-up
    * turn follows, since the caller asked for the stop.
    */
-  async cancelBatch(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+  async cancelBatch(
+    caller: OpenAIDecisionCaller,
+    args: Record<string, unknown>,
+    reason = "cancelled with decisions_batch_cancel",
+  ) {
     for (const key of Object.keys(args)) {
       if (key !== "batchId") throw new OpenAIDecisionsError("invalid_input", `Unknown property "${key}".`);
     }
-    const batch = this.ownBatch(caller, args.batchId);
+    const batch = await this.ownBatch(caller, args.batchId);
     if (isFinishedBatch(batch)) return { ...summarizeBatch(batch), alreadyFinished: true };
-    batch.cancelReason ??= "cancelled with decisions_batch_cancel";
+    batch.cancelReason ??= reason;
     this.silentBatches.add(batch.batchId);
     batch.controller.abort();
     await this.runs.get(batch.batchId);
     return summarizeBatch(batch);
+  }
+
+  /**
+   * The operator's Stop on a batch's card: cancels it as decisions_batch_cancel
+   * does, with no wake-up. "not_running" when the thread has no running
+   * batch with that id, such as one that already ended.
+   */
+  async stopBatch(caller: OpenAIDecisionCaller, batchId: string): Promise<"stopped" | "not_running"> {
+    const batch = this.batches.get(caller, batchId);
+    if (!batch || isFinishedBatch(batch)) return "not_running";
+    await this.cancelBatch(caller, { batchId }, "stopped from the thread");
+    return "stopped";
   }
 
   /**
@@ -485,18 +519,65 @@ export class OpenAIDecisionsService {
     await this.usage.close();
   }
 
-  private ownBatch(caller: OpenAIDecisionCaller, batchId: unknown) {
+  /** The caller's batch from memory, else from its result file. */
+  private async ownBatch(caller: OpenAIDecisionCaller, batchId: unknown) {
     if (typeof batchId !== "string" || batchId.length === 0) {
       throw new OpenAIDecisionsError("invalid_input", "batchId must be a string.");
     }
-    const batch = this.batches.get(caller, batchId);
+    const batch = this.batches.get(caller, batchId) ?? await this.readBatchFile(caller, batchId);
     if (!batch) {
       throw new OpenAIDecisionsError(
         "batch_not_found",
-        "This thread has no batch with that id. Batches are kept until PwrAgent quits, for 24 hours, and the latest 10 per thread. Call decisions_batch_results without batchId to list them.",
+        "This thread has no batch with that id. Result files keep the latest 20 batches per thread. Call decisions_batch_results without batchId to list them.",
       );
     }
     return batch;
+  }
+
+  private async readBatchFile(caller: OpenAIDecisionCaller, batchId: string) {
+    const directory = this.options.batchResultsDirectory?.(caller);
+    // Only an id PwrAgent could have generated becomes a path.
+    if (!directory || !isDecisionBatchId(batchId)) return undefined;
+    return await readDecisionBatchFile(decisionBatchFilePath(directory, batchId), caller);
+  }
+
+  /** Batches in memory, plus those only in result files, newest first. */
+  private async listBatches(caller: OpenAIDecisionCaller): Promise<DecisionBatchRecord[]> {
+    const inMemory = this.batches.list(caller);
+    const directory = this.options.batchResultsDirectory?.(caller);
+    if (!directory) return inMemory;
+    const known = new Set(inMemory.map((batch) => batch.batchId));
+    const onDisk = await Promise.all((await listDecisionBatchFileIds(directory))
+      .filter((batchId) => !known.has(batchId))
+      .map(async (batchId) => await this.readBatchFile(caller, batchId)));
+    return [...inMemory, ...onDisk.filter((batch): batch is DecisionBatchRecord => batch !== undefined)]
+      .sort((left, right) => right.createdAt - left.createdAt);
+  }
+
+  /** Starts the batch's result file with its header line. */
+  private openBatchFile(batch: DecisionBatchRecord): void {
+    const directory = this.options.batchResultsDirectory?.(batch.caller);
+    if (!directory) return;
+    batch.resultsFile = decisionBatchFilePath(directory, batch.batchId);
+    const writer = new DecisionBatchFileWriter(batch.resultsFile, {
+      keep: () => new Set(this.batches.unfinished().map((running) => running.batchId)),
+      onError: (error) => {
+        // A batch whose file failed still runs; its summary stops naming the file.
+        delete batch.resultsFile;
+        this.options.log?.warn("decision batch results file not written", {
+          decisionId: batch.decisionId,
+          batchId: batch.batchId,
+          error: error instanceof Error ? error.name : "unknown",
+        });
+      },
+    });
+    writer.append(batchHeaderEntry(batch));
+    this.writers.set(batch.batchId, writer);
+  }
+
+  /** Records an item once, in memory and in the batch's file. */
+  private recordItem(batch: DecisionBatchRecord, item: DecisionBatchItem): void {
+    if (recordBatchItem(batch, item)) this.writers.get(batch.batchId)?.append(batchItemEntry(item));
   }
 
   private newBatch(
@@ -682,7 +763,7 @@ export class OpenAIDecisionsService {
     }
     const mapper = new IterableMapper(pending(), async (index: number): Promise<number> => {
       try {
-        recordBatchItem(batch, { index, ok: true, ...batchItemData(await run(inputs[index])) });
+        this.recordItem(batch, { index, ok: true, ...batchItemData(await run(inputs[index])) });
       } catch (error) {
         // Any failure stays with its item: earlier items were sent and
         // billed, and their answers must not be lost to one bad item.
@@ -693,9 +774,9 @@ export class OpenAIDecisionsService {
             index,
             error: error instanceof Error ? error.name : "unknown",
           });
-          recordBatchItem(batch, { index, ok: false, code: "internal_error", message: "The item failed unexpectedly." });
+          this.recordItem(batch, { index, ok: false, code: "internal_error", message: "The item failed unexpectedly." });
         } else {
-          recordBatchItem(batch, { index, ok: false, code: error.code, message: error.message });
+          this.recordItem(batch, { index, ok: false, code: error.code, message: error.message });
           if (BATCH_STOPPING_CODES.has(error.code)) batch.stoppedBy ??= { code: error.code, message: error.message };
         }
       }
@@ -719,7 +800,7 @@ export class OpenAIDecisionsService {
       : `Skipped because ${batch.cancelReason ?? "the call was cancelled"}.`;
     for (let index = 0; index < batch.count; index += 1) {
       if (batch.results[index] === undefined) {
-        recordBatchItem(batch, { index, ok: false, code: "skipped", message: skippedReason });
+        this.recordItem(batch, { index, ok: false, code: "skipped", message: skippedReason });
       }
     }
     // A cancel that came after every item was answered cancelled nothing.
@@ -729,6 +810,11 @@ export class OpenAIDecisionsService {
         ? "cancelled"
         : "completed";
     batch.finishedAt = this.now();
+    // The end line goes out even at shutdown: the file is what survives it.
+    const writer = this.writers.get(batch.batchId);
+    writer?.append(batchEndEntry(batch));
+    await writer?.settle();
+    this.writers.delete(batch.batchId);
     this.batches.evict();
     this.options.log?.info("decision batch finished", {
       decisionId: batch.decisionId,

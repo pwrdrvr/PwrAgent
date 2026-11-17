@@ -35,8 +35,10 @@ export type PwrAgentOpenAIDecisionsHandler = {
   update: (caller: DecisionCaller, args: Record<string, unknown>) => unknown;
   delete: (caller: DecisionCaller, args: Record<string, unknown>) => unknown;
   /** Reads a batch the calling thread started, or lists its batches. */
-  batchResults: (caller: DecisionCaller, args: Record<string, unknown>) => unknown;
+  batchResults: (caller: DecisionCaller, args: Record<string, unknown>) => Promise<unknown>;
   cancelBatch: (caller: DecisionCaller, args: Record<string, unknown>) => Promise<unknown>;
+  /** The operator's Stop on a batch card. Not a tool: the thread's Stop button calls it. */
+  stopBatch: (caller: DecisionCaller, batchId: string) => Promise<"stopped" | "not_running">;
 };
 
 /** An error that carries a stable tool failure code, such as `decision_not_found`. */
@@ -101,7 +103,7 @@ async function dispatch(
     case "decisions_invoke": return await handler.invoke(caller, args, context.signal, context.reportProgress);
     case "decisions_update": return handler.update(caller, args);
     case "decisions_delete": return handler.delete(caller, args);
-    case "decisions_batch_results": return handler.batchResults(caller, args);
+    case "decisions_batch_results": return await handler.batchResults(caller, args);
     case "decisions_batch_cancel": return await handler.cancelBatch(caller, args);
   }
 }
@@ -147,6 +149,7 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "For a longer or unknown one, pass background true: the call returns the batchId at once, so end your turn.",
     "PwrAgent then starts a turn on this thread when the batch ends.",
     "If a batch call is cancelled or times out, its finished answers are kept.",
+    "Every batch is also appended to resultsFile, a JSONL file you can read directly.",
     "Call decisions_batch_results without arguments to find the batchId.",
     "A refusal for one question is still a success.",
     "OpenAI calls bill the operator's API project, and Jev calls bill their TypeSafe account.",
@@ -173,7 +176,7 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "A page also stops at 64 KiB. Pass nextFrom back as from for the rest.",
     "Items are compact, answers and confidence only. Pass detail full for response bodies and per-item usage.",
     "Without batchId, lists this thread's batches, newest first.",
-    "Batches are kept in memory until PwrAgent quits, for 24 hours, and the latest 10 per thread.",
+    "Batches survive a restart: each is a JSONL file in the thread's storage, and the latest 20 are kept.",
     "Reading makes no API call.",
   ].join(" "),
   decisions_batch_cancel: [

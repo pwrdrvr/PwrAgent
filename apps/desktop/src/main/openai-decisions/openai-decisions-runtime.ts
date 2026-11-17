@@ -1,4 +1,5 @@
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { AppServerBackendKind, ThreadUsageLineRecord } from "@pwragent/shared";
+import { threadDecisionBatchDirectory } from "../app-server/thread-assets";
 import {
   readSystemOneTarget,
   resolveDefaultDecisionProvider,
@@ -62,6 +63,11 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     recordUsageLines: params.recordUsageLines,
     ...(params.reportBatch ? { reportBatch: params.reportBatch } : {}),
     ...(params.wakeThread ? { wakeThread: params.wakeThread } : {}),
+    // Each batch's answers as JSONL in its thread's storage, removed with the thread.
+    batchResultsDirectory: (caller) => threadDecisionBatchDirectory({
+      backend: caller.backend as AppServerBackendKind,
+      threadId: caller.threadId,
+    }),
     log: {
       info: (message, fields) => openAIDecisionsLog.info(message, fields),
       warn: (message, fields) => openAIDecisionsLog.warn(message, fields),
@@ -74,7 +80,8 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     invoke: async (caller, args, signal, onProgress) => await service.invoke(caller, args, signal, onProgress),
     update: (caller, args) => service.update(caller, args),
     delete: (caller, args) => service.delete(caller, args),
-    batchResults: (caller, args) => service.batchResults(caller, args),
+    batchResults: async (caller, args) => await service.batchResults(caller, args),
     cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
+    stopBatch: async (caller, batchId) => await service.stopBatch(caller, batchId),
   };
 }

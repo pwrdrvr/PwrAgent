@@ -59,6 +59,8 @@ export type DecisionBatchRecord = {
   skipped: number;
   /** Cancels a background run. A blocking run follows its call's signal. */
   controller: AbortController;
+  /** The batch's JSONL file in its thread's storage, while it is being written. */
+  resultsFile?: string;
 };
 
 /** Retention. Running batches are never evicted. */
@@ -207,9 +209,9 @@ function sameCaller(left: DecisionBatchCaller, right: DecisionBatchCaller): bool
   return left.backend === right.backend && left.threadId === right.threadId;
 }
 
-/** Records one finished item and keeps the counts in step. */
-export function recordBatchItem(record: DecisionBatchRecord, item: DecisionBatchItem): void {
-  if (record.results[item.index] !== undefined) return;
+/** Records one finished item and keeps the counts in step. False when already recorded. */
+export function recordBatchItem(record: DecisionBatchRecord, item: DecisionBatchItem): boolean {
+  if (record.results[item.index] !== undefined) return false;
   record.results[item.index] = item;
   if (item.ok) {
     record.succeeded += 1;
@@ -217,6 +219,7 @@ export function recordBatchItem(record: DecisionBatchRecord, item: DecisionBatch
     record.failed += 1;
     if (item.code === "skipped") record.skipped += 1;
   }
+  return true;
 }
 
 export function finishedItems(record: Pick<DecisionBatchRecord, "succeeded" | "failed">): number {
@@ -246,6 +249,7 @@ export function summarizeBatch(record: DecisionBatchRecord) {
       ? { elapsedMs: record.finishedAt - record.startedAt }
       : {}),
     usage: batchUsage(record.results),
+    ...(record.resultsFile ? { resultsFile: record.resultsFile } : {}),
   };
 }
 
@@ -375,7 +379,7 @@ export function batchCardMessage(record: DecisionBatchRecord): string {
         ? `Finished: ${record.succeeded} answered, ${record.failed} failed.`
         : record.state === "stopped"
           ? `Stopped by ${record.stoppedBy?.code ?? "an error"} after ${finishedItems(record) - record.skipped} items; ${record.skipped} skipped.`
-          : `Cancelled after ${finishedItems(record) - record.skipped} items; ${record.skipped} skipped.`;
+          : `Cancelled after ${finishedItems(record) - record.skipped} items (${record.cancelReason ?? "cancelled"}); ${record.skipped} skipped.`;
   return `${state} Batch ${record.batchId}.`;
 }
 
@@ -398,5 +402,6 @@ export function batchWakeupText(record: DecisionBatchRecord): string {
     `${record.succeeded} of ${record.count} items answered, ${record.failed} failed (${record.skipped} skipped).${cost}`,
     `Read the answers with decisions_batch_results { "batchId": "${record.batchId}" }.`,
     "Pass status \"failed\" to see only the failures, and from to read the next page.",
+    ...(record.resultsFile ? [`Every item is also in ${record.resultsFile} (JSONL, one line per item).`] : []),
   ].join("\n");
 }

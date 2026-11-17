@@ -685,6 +685,30 @@ describe("ActiveSubAgentsStrip", () => {
       expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
+    it("offers Stop on a running decision batch, which has no thread or turn", async () => {
+      const stopSubAgent = vi.fn().mockResolvedValue({ ok: true });
+      const task = "Decision batch triage: 120 of 500 done";
+      render(
+        <ActiveSubAgentsStrip
+          desktopApi={{ stopSubAgent } as unknown as DesktopApi}
+          thread={buildThread([
+            buildSubAgent({
+              monitorId: "system:decision-batch:batch_1",
+              task,
+              monitorThreadId: undefined,
+              monitorTurnId: undefined,
+            }),
+          ])}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: `Stop sub-agent: ${task}` }));
+      await waitFor(() => expect(stopSubAgent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "parent-thread",
+        monitorId: "system:decision-batch:batch_1",
+      }));
+    });
+
     it("offers Stop while a monitor reports pending external work", () => {
       render(
         <ActiveSubAgentsStrip
