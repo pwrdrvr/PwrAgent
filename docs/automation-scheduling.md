@@ -84,9 +84,13 @@ Renderer components only create, edit, and inspect trigger records through IPC.
 ## Local-Only Timing
 
 When PwrAgent is closed, scheduled ticks do not fire and are not replayed on the
-next launch. Startup computes the next future occurrence for enabled
-automations. This avoids surprising launch-time work after the app has been
-closed overnight or over a weekend.
+next launch. Startup moves an enabled automation to its next future occurrence
+when the stored time is missing or already past. A stored time still ahead is
+kept unless it is later than the schedule's next occurrence, which happens only
+after a clock or time-zone change. A launch that missed nothing therefore
+writes nothing, and a second instance on the profile does not move a live
+instance's schedule. This avoids surprising launch-time work after the app has
+been closed overnight or over a weekend.
 
 If the app stays open but the event loop wakes late, the scheduler evaluates the
 missed windows up to the current time and applies the automation's backlog
@@ -119,13 +123,37 @@ status, queue/start/completion timestamps, backend turn id when available,
 errors, source messaging metadata for inbound runs, output-action results, and
 the scheduled windows covered by coalesced runs.
 
-On app restart, stale local pending, queued, or running automation records are
-closed as cancelled because queued desktop-local work is not durable across
-process lifetimes (`reconcileStartup` in
-`packages/sqlite-storage/src/automation-store.ts`). This includes runs that a
-trigger queued while a quit was pending: `quiesceDispatch` holds them so that
-cancelling the quit can start them, and a completed quit leaves them to be
-cancelled at the next start.
+Each run records the process that created it: runtime instance ID, process ID
+and process start time, the identity of the profile runtime marker. At startup
+PwrAgent changes only the pending, queued and running runs whose owner it has
+proved dead, with the check Research runs use (`reconcileStartup` in
+`packages/sqlite-storage/src/automation-store.ts`). A run with no recorded
+owner, or an owner recorded without a start time, cannot prove a live owner and
+counts as dead. A live owner's runs and every terminal run are left as they
+are.
+
+A runtime marker expires 45 seconds after its last heartbeat, so a live owner
+can lack a fresh one: the machine has just woken, or its main thread was busy.
+An owner with no matching marker whose process ID is still alive is therefore
+left alone at startup and checked once more 30 seconds later
+(`readAutomationRunOwnerLiveness`). A live owner has rewritten its marker by
+then. One that still has none is a reused process ID, and its runs are
+interrupted.
+
+A dead owner's run becomes `failed` with `failureReason: "interrupted"`, and
+run history shows it as interrupted. It is a reason on `failed` rather than a
+new status so that older builds still read the profile. The run then takes the
+path of any failed run: its artifact is recorded, the automation's output
+actions run, and `automation/run/updated` reaches the Agent thread, where the
+failed-automation row appears above the composer, and the thread's bound
+conversations. Nothing is resumed or replayed. All of a launch's runs change in
+one transaction, and a launch that lost nothing writes nothing. A launch that
+stops between interrupting a run and reporting it leaves the report to the
+next launch, which reports every interrupted run that has no failed artifact.
+
+This includes runs that a trigger queued while a quit was pending:
+`quiesceDispatch` holds them so that cancelling the quit can start them, and a
+completed quit leaves them to be reported as interrupted at the next start.
 
 ## Output Actions
 

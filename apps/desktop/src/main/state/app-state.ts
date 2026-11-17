@@ -11,6 +11,7 @@ import {
 } from "../profile";
 import fs from "node:fs";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store.js";
+import { getAutomationRunOwner } from "../automations/automation-run-owner.js";
 import { AutomationStore } from "../storage/automation-store.js";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store.js";
 import { SqliteMessagingStore } from "../storage/messaging-store-sqlite.js";
@@ -126,7 +127,9 @@ export function initializeAppState(
     overlayStore.migrateLegacyLaunchpadExecutionModes();
   }
   runtimeInstanceStore = new AppRuntimeInstanceStore(stateDb);
-  automationStore = new AutomationStore(stateDb);
+  // Each run records the process that created it, so a later launch changes
+  // only the runs of a process it has proved dead.
+  automationStore = new AutomationStore(stateDb, { runOwner: getAutomationRunOwner() });
   scheduledThreadActionStore = new ScheduledThreadActionStore(stateDb);
   activeMode = mode;
 

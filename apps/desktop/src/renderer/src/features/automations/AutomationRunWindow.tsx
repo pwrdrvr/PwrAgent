@@ -107,7 +107,7 @@ export function AutomationRunWindow() {
                   <span
                     className={`automation-run-status automation-run-status--${run.status}`}
                   >
-                    {formatRunStatus(run.status)}
+                    {formatRunStatus(run.status, run.failureReason)}
                   </span>
                   <span>
                     {run.trigger} ·{" "}

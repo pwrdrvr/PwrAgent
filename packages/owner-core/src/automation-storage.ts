@@ -10,6 +10,7 @@ import type {
   AutomationOutputActionResult,
   AutomationRunArtifact,
   AutomationRunOutputDecision,
+  AutomationRunOwner,
   AutomationRunSkipReason,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
@@ -103,7 +104,28 @@ export type CreateAutomationRunInput = {
 
 export type StartupReconciliationInput = {
   now?: number;
+  /**
+   * Next run for each enabled schedule, computed from now. Written only where
+   * the stored time is missing, already due, or later than this value, so a
+   * launch with nothing missed writes nothing and a second instance cannot
+   * move a live instance's schedule.
+   */
   nextRunAtByAutomationId?: Record<string, number | undefined>;
+  /**
+   * Whether the process that created a run is still running. Runs of a live
+   * owner are left alone. Absent, every recorded owner counts as dead. A run
+   * with no recorded owner is always dead.
+   */
+  isOwnerAlive?: (owner: AutomationRunOwner) => boolean;
+};
+
+export type StartupReconciliationResult = {
+  /** Runs this call moved from pending, queued or running to interrupted. */
+  interruptedRuns: AutomationRunSummary[];
+  /** Unfinished runs left alone because their owner is alive. */
+  liveOwnerRunCount: number;
+  /** Schedules whose stored next run was missing, due or too late. */
+  rescheduledAutomationCount: number;
 };
 
 export type UpsertAutomationRunArtifactInput = {
@@ -225,7 +247,13 @@ export interface AutomationStorage {
     threadId: ThreadIdentifier;
     limit?: number;
   }): AutomationRunSummary[];
-  reconcileStartup(input?: StartupReconciliationInput): void;
+  reconcileStartup(input?: StartupReconciliationInput): StartupReconciliationResult;
+  /**
+   * Interrupted runs whose report never finished: no artifact records the
+   * failed outcome. A launch that stopped between interrupting a run and
+   * reporting it leaves these for the next one.
+   */
+  listUnreportedInterruptedRuns(): AutomationRunSummary[];
   buildThreadSummaries(): Record<string, AutomationThreadSummary>;
   setRunUsage(params: {
     runId: string;

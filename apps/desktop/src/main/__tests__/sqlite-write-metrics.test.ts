@@ -2971,6 +2971,113 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("reconciles a launch in one commit and writes nothing when no run was lost", async () => {
+    const deadOwner = { instanceId: "runtime-v2-previous", processId: 4_242, startedAt: 1 };
+    const liveOwner = { instanceId: "runtime-v2-live", processId: 4_243, startedAt: 2 };
+    const previous = new AutomationStore(stateDb, { runOwner: deadOwner });
+    const live = new AutomationStore(stateDb, { runOwner: liveOwner });
+    const launching = new AutomationStore(stateDb);
+    for (let index = 0; index < 5; index += 1) {
+      previous.createAutomation({
+        id: `automation-reconcile-${index}`,
+        backend: "codex",
+        threadId: `thread-${index}`,
+        name: "Check email",
+        taskPrompt: "Check mail",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+        // Automations 0 to 2 missed a window while the app was closed.
+        nextRunAt: index < 3 ? 500 : 50_000,
+        now: 0,
+      });
+      const owner = index < 3 ? previous : live;
+      owner.createRun({ id: `run-reconcile-${index}`, automationId: `automation-reconcile-${index}`, trigger: "manual", now: 0 });
+      owner.markRunStarted({ runId: `run-reconcile-${index}`, backendTurnId: `turn-${index}`, now: 100 });
+    }
+    const input = {
+      now: 1_000,
+      isOwnerAlive: (owner: { instanceId: string }) => owner.instanceId === liveOwner.instanceId,
+      nextRunAtByAutomationId: Object.fromEntries(
+        Array.from({ length: 5 }, (_, index) => [`automation-reconcile-${index}`, 301_000]),
+      ),
+    };
+
+    const recovery = await measureSqliteWrites(() => {
+      expect(launching.reconcileStartup(input)).toMatchObject({
+        liveOwnerRunCount: 2,
+        rescheduledAutomationCount: 3,
+      });
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-reconcile",
+      note: "One launch after a crash that interrupted three running runs and missed three schedule windows, with two runs owned by a live instance: one commit however many runs were lost. One per launch, not per run or timer; 0 MB/day while running.",
+      writes: recovery.writes,
+    });
+
+    // The next launch, or a second instance beside a live one.
+    const idle = await measureSqliteWrites(() => {
+      expect(launching.reconcileStartup({ ...input, now: 2_000 })).toEqual({
+        interruptedRuns: [],
+        liveOwnerRunCount: 2,
+        rescheduledAutomationCount: 0,
+      });
+    });
+    expectSqliteWriteBudget({
+      scenario: "automation-startup-reconcile-nothing-lost",
+      note: "A launch with no dead owner's run and no missed schedule window, including a second instance beside a live one: zero commits, 0 MB/day.",
+      writes: idle.writes,
+    });
+  });
+
+  it("reports each interrupted run with the artifact writes a failed run makes", async () => {
+    const previous = new AutomationStore(stateDb, {
+      runOwner: { instanceId: "runtime-v2-previous", processId: 4_242, startedAt: 1 },
+    });
+    for (let index = 0; index < 2; index += 1) {
+      previous.createAutomation({
+        id: `automation-report-${index}`,
+        backend: "codex",
+        threadId: `thread-${index}`,
+        name: "Check email",
+        taskPrompt: "Check mail",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+        nextRunAt: Date.now() + 60_000,
+        now: 0,
+      });
+      previous.createRun({ id: `run-report-${index}`, automationId: `automation-report-${index}`, trigger: "manual", now: 0 });
+      previous.markRunStarted({ runId: `run-report-${index}`, backendTurnId: `turn-${index}`, now: 100 });
+    }
+    const reported: string[] = [];
+    const registry = {
+      onEvent: () => () => undefined,
+      publishLocalEvent: async (event: { notification: { method: string; params: { runId?: string } } }) => {
+        if (event.notification.method === "automation/run/updated") {
+          reported.push(event.notification.params.runId ?? "");
+        }
+      },
+      setAutomationInspectionHandler: () => undefined,
+    } as unknown as ConstructorParameters<
+      typeof DesktopAutomationService
+    >[0]["registry"];
+    const service = new DesktopAutomationService({
+      registry,
+      store: new AutomationStore(stateDb),
+      runOwnerLiveness: () => "dead",
+    });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        service.start();
+        await vi.waitFor(() => expect(reported).toEqual(["run-report-0", "run-report-1"]));
+      });
+      expectSqliteWriteBudget({
+        scenario: "automation-startup-interrupted-run-reports",
+        note: "A whole launch that finds two interrupted runs: the one reconcile commit, then per run the artifact and action-result commits a failed run already makes. Per lost run, once; a launch that lost nothing stays at zero.",
+        writes,
+      });
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
     vi.useFakeTimers();
     const automationStore = new AutomationStore(stateDb);
