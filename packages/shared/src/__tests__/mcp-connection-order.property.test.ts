@@ -1,7 +1,11 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { McpConnectionKind, McpConnectionStatus } from "../contracts/mcp-connections";
-import { groupManagedMcpConnections, orderManagedMcpConnections } from "../mcp-connection-order";
+import {
+  groupManagedMcpConnections,
+  isSuggestedMcpConnection,
+  orderManagedMcpConnections,
+} from "../mcp-connection-order";
 
 const KINDS: McpConnectionKind[] = ["remote", "pwrsnap", "pwrgit", "sandboxer", "stdio", "github"];
 
@@ -47,6 +51,31 @@ describe("managed MCP connection order properties", () => {
       expect(groups.rest.some((item) => item.kind === "github" || item.kind === "pwrsnap" || item.kind === "pwrgit"))
         .toBe(false);
       expect(orderManagedMcpConnections(connections).map((item) => item.id)).toEqual(drawn);
+    }));
+  });
+
+  // Settings lists a connection under Suggested only when it is a built-in
+  // PwrAgent can set up (PwrSnap, PwrGit, Sandboxer) that does not work yet.
+  // Anything the operator added is installed, working or not.
+  it("suggests only built-ins that are not set up", () => {
+    fc.assert(fc.property(fc.constantFrom(...KINDS), fc.boolean(), (kind, configured) => {
+      const builtIn = kind === "pwrsnap" || kind === "pwrgit" || kind === "sandboxer";
+      expect(isSuggestedMcpConnection({ ...connection(kind, 0), configured }))
+        .toBe(builtIn && !configured);
+    }));
+  });
+
+  it("splits a list into installed and suggested without losing or reordering any", () => {
+    const lists = fc.array(fc.tuple(fc.constantFrom(...KINDS), fc.boolean()), { maxLength: 24 })
+      .map((entries) => entries.map(([kind, configured], index) => ({ ...connection(kind, index), configured })));
+    fc.assert(fc.property(lists, (connections) => {
+      const ordered = orderManagedMcpConnections(connections);
+      const installed = ordered.filter((item) => !isSuggestedMcpConnection(item));
+      const suggested = ordered.filter(isSuggestedMcpConnection);
+      expect([...installed, ...suggested].map((item) => item.id).sort())
+        .toEqual(connections.map((item) => item.id).sort());
+      expect(installed.map((item) => item.id)).toEqual(oracle(installed));
+      expect(suggested.map((item) => item.id)).toEqual(oracle(suggested));
     }));
   });
 

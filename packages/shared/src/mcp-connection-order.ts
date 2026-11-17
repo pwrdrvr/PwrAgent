@@ -38,3 +38,18 @@ export function orderManagedMcpConnections<T extends McpConnectionStatus>(
   const groups = groupManagedMcpConnections(connections);
   return [...groups.pwrSuite, ...groups.github, ...groups.rest] as T[];
 }
+
+/**
+ * A built-in that Settings lists under Suggested, with its next step, until
+ * it works: PwrSnap or PwrGit before their app's relay is found, Sandboxer
+ * before it is signed in. GitHub is suggested by the window while no GitHub
+ * connection exists, since it has no record until one is added. Every other
+ * connection is one the operator added, so it is always listed as installed.
+ */
+export function isSuggestedMcpConnection(connection: McpConnectionStatus): boolean {
+  return (
+    connection.kind === "pwrsnap"
+    || connection.kind === "pwrgit"
+    || connection.kind === "sandboxer"
+  ) && !connection.configured;
+}

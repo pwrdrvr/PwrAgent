@@ -134,6 +134,16 @@ function createDesktopApi(
 }
 
 /** The PwrGit row in Settings → Plugins. It has no URL to find it by. */
+
+/** Open Plugin store → Custom server, where the URL and local-command form lives. */
+async function openCustomServerForm(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog", { name: "Plugin store" }))
+      .getByRole("button", { name: "Add server" }),
+  );
+}
+
 async function findPwrGitRow(): Promise<HTMLElement> {
   return await waitFor(() => {
     const found = screen.getAllByText("PwrGit")
@@ -203,11 +213,33 @@ describe("PluginsSettings", () => {
   // PwrGit signs in to nothing: it approves each session itself. `configured`
   // means this machine's PwrGit ships the relay. Only states the Codex list
   // has no word for -- missing, not running, too old -- keep a headline chip.
+  // Before its relay is found PwrGit is a suggestion: one line with its next
+  // step, below the installed connections, with no switches to set yet.
   it.each([
-    ["not_installed", false, true, ["Not installed"]],
-    ["installed", false, true, ["Update needed"]],
+    ["not_installed", "Get PwrGit"],
+    ["installed", "Update PwrGit"],
+    ["running", "Update PwrGit"],
+  ] as const)("lists PwrGit as a suggestion while %s without its relay", async (availability, action) => {
+    const api = createDesktopApi([]);
+    api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue({
+      connectionId: "pwrgit", displayName: "PwrGit", availability, configured: false,
+    });
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [pwrGitRecord(false)] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+    const article = await findPwrGitRow();
+    const row = within(article);
+    expect(await row.findByRole("button", { name: action })).toBeInTheDocument();
+    expect(article.querySelectorAll(".settings-pathrow__chip")).toHaveLength(0);
+    expect(row.queryByRole("switch")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Suggested" }).compareDocumentPosition(article)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText("No connections set up yet.", { exact: false })).toBeInTheDocument();
+  });
+
+  it.each([
     ["installed", true, true, ["Not running", "Approves in PwrGit"]],
-    ["running", false, true, ["Update needed"]],
     ["running", true, true, ["Approves in PwrGit"]],
   ] as const)(
     "resolves one state line for %s (configured=%s, gateway=%s)",
@@ -842,11 +874,11 @@ describe("PluginsSettings", () => {
     expect(screen.queryByRole("button", { name: "Stop waiting" }))
       .not.toBeInTheDocument();
 
-    // Every other row, and the add form, stay usable.
+    // Every other row, and the plugin store, stay usable.
     for (const name of ["Reauthorize", "Disconnect", "Edit", "Remove"]) {
       expect(datadogRow.getByRole("button", { name })).toBeEnabled();
     }
-    expect(screen.getByLabelText("MCP server URL")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Plugin store" })).toBeEnabled();
 
     // So a second sign-in can run beside the first.
     fireEvent.click(datadogRow.getByRole("button", { name: "Reauthorize" }));
@@ -1875,11 +1907,11 @@ describe("PluginsSettings GitHub connection", () => {
       .map((row) => row.querySelector(".settings-mcp-row__name")?.textContent);
   }
 
-  it("lists GitHub as a built-in after PwrSnap and PwrGit, not as a server type", async () => {
+  it("lists set-up connections, then the built-ins that are not, with GitHub suggested until added", async () => {
     const desktopApi = githubApi({
       listMcpConnections: vi.fn().mockResolvedValue({
         connections: [
-          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none" }),
+          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none", configured: false }),
           status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
           status(),
         ],
@@ -1888,49 +1920,66 @@ describe("PluginsSettings GitHub connection", () => {
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
 
     const setUp = await screen.findByRole("button", { name: "Set up GitHub" });
-    expect(rowNames()).toEqual(["PwrSnap", "PwrGit", "GitHub", "Datadog"]);
-    const types = within(screen.getByRole("radiogroup", { name: "Server type" })).getAllByRole("radio");
-    expect(types.map((radio) => radio.textContent)).toEqual([
-      expect.stringMatching(/^Server URL/),
-      expect.stringMatching(/^Local command/),
-    ]);
+    expect(rowNames()).toEqual(["PwrGit", "Datadog", "PwrSnap", "GitHub"]);
+    const suggested = screen.getByRole("heading", { name: "Suggested" });
+    expect(suggested.compareDocumentPosition(screen.getByText("PwrSnap")) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    // No add form in the card: adding starts from the plugin store.
+    expect(screen.queryByRole("radiogroup", { name: "Server type" })).not.toBeInTheDocument();
     // Nothing runs gh until setup opens.
     expect(desktopApi.inspectGithubMcpSetup).not.toHaveBeenCalled();
 
     fireEvent.click(setUp);
-    const setup = screen.getByRole("form", { name: "Set up GitHub" });
+    const store = screen.getByRole("dialog", { name: "GitHub" });
+    const setup = within(store).getByRole("form", { name: "Set up GitHub" });
     expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
     expect(await within(setup).findByText("Signed in as @octo-dev")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Set up GitHub" })).not.toBeInTheDocument();
 
-    fireEvent.click(within(setup).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("form", { name: "Set up GitHub" })).not.toBeInTheDocument();
+    fireEvent.click(within(store).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     // Opening it again reads gh again: the operator may have signed in since.
     fireEvent.click(screen.getByRole("button", { name: "Set up GitHub" }));
     await waitFor(() => expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(2));
   });
 
-  it("keeps an open setup's choices when the URL probe asks for GitHub again", async () => {
-    const desktopApi = githubApi();
-    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Set up GitHub" }));
-    const setup = screen.getByRole("form", { name: "Set up GitHub" });
-    fireEvent.click(within(setup).getByRole("button", { name: "projects" }));
-    expect(within(setup).getByRole("button", { name: "projects" })).toHaveAttribute("aria-pressed", "true");
-
-    const addForm = screen.getByRole("form", { name: "Add an MCP server" });
-    fireEvent.change(within(addForm).getByPlaceholderText("https://mcp.example.com/mcp"), {
-      target: { value: "https://api.githubcopilot.com/mcp/" },
+  it("offers the known plugins and a custom server in the plugin store", async () => {
+    const desktopApi = githubApi({
+      listMcpConnections: vi.fn().mockResolvedValue({
+        connections: [
+          status({ id: "builtin:pwrsnap", displayName: "PwrSnap", kind: "pwrsnap", authMode: "none", configured: false }),
+          status({ id: "builtin:pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+          status({ id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", configured: false }),
+        ],
+      }),
     });
-    fireEvent.click(within(addForm).getByRole("button", { name: "Check" }));
-    fireEvent.click(await within(addForm).findByRole("button", { name: "Set up GitHub" }));
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
+    const store = screen.getByRole("dialog", { name: "Plugin store" });
+    expect(within(store).getAllByRole("region").map((tile) => tile.getAttribute("aria-label")))
+      .toEqual(["PwrSnap", "PwrGit", "GitHub", "Sandboxer", "Custom server"]);
+    expect(within(within(store).getByRole("region", { name: "PwrGit" })).getByText("Installed"))
+      .toBeInTheDocument();
+    expect(within(store).getByRole("button", { name: "Add GitHub" })).toBeInTheDocument();
 
-    expect(within(setup).getByRole("button", { name: "projects" })).toHaveAttribute("aria-pressed", "true");
-    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
+    fireEvent.click(within(store).getByRole("button", { name: "Add server" }));
+    const custom = screen.getByRole("dialog", { name: "Custom server" });
+    const types = within(within(custom).getByRole("radiogroup", { name: "Server type" })).getAllByRole("radio");
+    expect(types.map((radio) => radio.textContent)).toEqual([
+      expect.stringMatching(/^Server URL/),
+      expect.stringMatching(/^Local command/),
+    ]);
+
+    // Back returns to the catalog; Show closes the store onto the row.
+    fireEvent.click(within(custom).getByRole("button", { name: /Plugin store/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Plugin store" }))
+      .getByRole("button", { name: "Show PwrGit" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement?.closest("[data-connection-id]"))
+      .toHaveAttribute("data-connection-id", "builtin:pwrgit"));
   });
 
-  it("adds another GitHub connection under the ones already listed", async () => {
+  it("adds another GitHub connection from the plugin store", async () => {
     const desktopApi = githubApi({
       listMcpConnections: vi.fn().mockResolvedValue({
         connections: [
@@ -1942,15 +1991,17 @@ describe("PluginsSettings GitHub connection", () => {
     });
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
 
-    const another = await screen.findByRole("button", { name: "Add another GitHub connection" });
+    fireEvent.click(await screen.findByRole("button", { name: "Plugin store" }));
     expect(rowNames()).toEqual(["PwrGit", "GitHub", "Datadog"]);
     expect(screen.queryByRole("button", { name: "Set up GitHub" })).not.toBeInTheDocument();
+    const store = screen.getByRole("dialog", { name: "Plugin store" });
+    const tile = within(store).getByRole("region", { name: "GitHub" });
+    expect(within(tile).getByText("1 added")).toBeInTheDocument();
 
-    fireEvent.click(another);
+    fireEvent.click(within(tile).getByRole("button", { name: "Add another GitHub connection" }));
     const setup = screen.getByRole("form", { name: "New GitHub connection" });
-    expect(rowNames()).toEqual(["PwrGit", "GitHub", "Datadog"]);
-    expect(setup.compareDocumentPosition(screen.getByText("Datadog")) & Node.DOCUMENT_POSITION_FOLLOWING)
-      .toBeTruthy();
+    expect(within(setup).getByText("Already added")).toBeInTheDocument();
+    expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
     fireEvent.change(within(setup).getByPlaceholderText("GitHub"), { target: { value: "GitHub (bot)" } });
     fireEvent.click(await within(setup).findByRole("button", { name: "Test" }));
     expect(await within(setup).findByText(/Read 52 tools and 14 skills/)).toBeInTheDocument();
@@ -1958,13 +2009,14 @@ describe("PluginsSettings GitHub connection", () => {
     await waitFor(() => expect(desktopApi.createMcpConnection).toHaveBeenCalledWith(
       expect.objectContaining({ displayName: "GitHub (bot)" }),
     ));
-    await waitFor(() => expect(screen.queryByRole("form", { name: "New GitHub connection" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("offers GitHub for its hosted URL, then tests and adds it with the defaults", async () => {
     const desktopApi = githubApi();
     render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
 
+    await openCustomServerForm();
     fireEvent.change(await screen.findByPlaceholderText("https://mcp.example.com/mcp"), {
       target: { value: "https://api.githubcopilot.com/mcp/" },
     });
@@ -1972,14 +2024,14 @@ describe("PluginsSettings GitHub connection", () => {
     expect(await screen.findByText(
       "This is GitHub's MCP server. PwrAgent has it built in: set it up with your GitHub sign-in.",
     )).toBeInTheDocument();
-    const addForm = screen.getByRole("form", { name: "Add an MCP server" });
+    const addForm = screen.getByRole("form", { name: "Custom server" });
     fireEvent.click(within(addForm).getByRole("button", { name: "Set up GitHub" }));
 
-    // The GitHub row's own setup opens; the add form is left empty.
-    const setup = screen.getByRole("form", { name: "Set up GitHub" });
+    // The store turns to GitHub's form, and the custom form is gone.
+    const setup = within(screen.getByRole("dialog", { name: "GitHub" }))
+      .getByRole("form", { name: "Set up GitHub" });
     expect(within(setup).getByPlaceholderText("GitHub")).toHaveFocus();
-    expect(screen.getByPlaceholderText("https://mcp.example.com/mcp")).toHaveValue("");
-    expect(within(addForm).queryByText(/GitHub/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("https://mcp.example.com/mcp")).not.toBeInTheDocument();
     expect(await screen.findByText("Signed in as @octo-dev")).toBeInTheDocument();
     expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(1);
     const account = screen.getByRole("radio", { name: /GitHub CLI sign-in/ });

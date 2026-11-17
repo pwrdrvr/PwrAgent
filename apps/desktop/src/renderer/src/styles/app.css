@@ -18348,13 +18348,6 @@ a.button {
   border-radius: 8px;
 }
 
-.settings-mcp-create__title {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .settings-mcp-create__fields {
   display: grid;
   grid-template-columns: minmax(140px, .6fr) minmax(240px, 1.4fr) auto;
@@ -19161,27 +19154,187 @@ a.button {
 }
 
 /*
- * GitHub is a built-in, so its setup opens inside its own row of the list
- * rather than as a type in the dashed add form. The form sits under the
- * row's line behind the same hairline as the policy block.
+ * The managed-connections card lists what is set up, then what PwrAgent
+ * knows how to set up. Each list has a small heading bar; the first holds
+ * the plugin store, the one way to add a server.
  */
-.settings-mcp-row--setup {
+.settings-mcp-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.settings-mcp-bar__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-mcp-bar__count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-mcp-bar__action {
+  margin-left: auto;
+}
+
+/*
+ * The plugin store: known servers as tiles, then GitHub's form or the
+ * custom-server form on their own page of the same dialog.
+ */
+.settings-confirm-dialog.plugin-store {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+}
+
+.plugin-store__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-store__close {
+  margin-left: auto;
+}
+
+.plugin-store__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.plugin-store__body .settings-plugin-notice {
+  margin: 0;
+}
+
+/* The dialog's own paragraph rule spaces with margins; the store's body
+   spaces with its gap, and its hints keep the card's smaller type. */
+.settings-confirm-dialog.plugin-store p {
+  margin: 0;
+}
+
+.settings-confirm-dialog.plugin-store p.settings-mcp-create__constraint {
+  font-size: 11.5px;
+}
+
+.plugin-store__group {
+  margin: 2px 0 -4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.plugin-store__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.plugin-store__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.plugin-store__tile--custom {
+  border-style: dashed;
+  background: transparent;
+}
+
+.plugin-store__tile-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.plugin-store__tile-name {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plugin-store__tile-by {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-confirm-dialog p.plugin-store__tile-description {
+  flex: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.plugin-store__tile-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-store__tile-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.plugin-store__form,
+.plugin-store__body > .settings-mcp-create {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.settings-mcp-row__setup {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0 0 4px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
+/* In the store the custom form needs no box of its own: the dialog is it. */
+.plugin-store__body > .settings-mcp-create {
+  padding: 0;
+  border: 0;
 }
 
-.settings-mcp-list__add {
+.plugin-store__existing {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.plugin-store__existing-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.plugin-store__existing-hint {
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 
 .settings-sandboxer-about {

@@ -12,8 +12,11 @@ test("MCP server URL form accepts local IPC syntax", async () => {
     await page.getByRole("button", { name: "Open settings", exact: true }).click();
     const nav = page.getByRole("navigation", { name: "Settings sections" });
     await nav.getByRole("button", { name: "Plugins", exact: true }).click();
-    const add = page.getByRole("button", { name: "Add MCP server", exact: true });
-    if (await add.isVisible()) await add.click();
+    await page.getByRole("button", { name: "Plugin store", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Plugin store" })
+      .getByRole("button", { name: "Add server", exact: true })
+      .click();
     await expect(page.getByText("HTTP over network or local IPC", { exact: true })).toBeVisible();
     const url = page.getByPlaceholder("https://mcp.example.com/mcp");
     await url.fill("unix:///run/user/1000/example-mcp/server.sock#/mcp");

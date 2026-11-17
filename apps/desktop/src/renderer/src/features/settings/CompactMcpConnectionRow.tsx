@@ -6,12 +6,17 @@ import type { ReactNode } from "react";
  * two read as the same kind of row.
  */
 export function CompactMcpConnectionRow(props: {
+  /** Lets Settings find the row to bring it into view. */
+  connectionId?: string;
   name: string;
   meta: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <article className="settings-mcp-row settings-mcp-row--managed settings-mcp-row--compact">
+    <article
+      className="settings-mcp-row settings-mcp-row--managed settings-mcp-row--compact"
+      data-connection-id={props.connectionId}
+    >
       <div className="settings-mcp-row__main">
         <span className="settings-mcp-row__toggle settings-mcp-row__toggle--static">
           <span className="settings-mcp-row__name">{props.name}</span>

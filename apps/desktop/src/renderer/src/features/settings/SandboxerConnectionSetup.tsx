@@ -342,6 +342,7 @@ export function SandboxerDrawerDetail(props: {
  * with chips and switches for a service they may never use.
  */
 export function SandboxerCompactRow(props: {
+  connectionId?: string;
   disabled?: boolean;
   onConnect?: () => void;
   desktopApi?: DesktopApi;
@@ -350,6 +351,7 @@ export function SandboxerCompactRow(props: {
 }) {
   return (
     <CompactMcpConnectionRow
+      {...(props.connectionId ? { connectionId: props.connectionId } : {})}
       meta={<>Cloud Linux machines for your agent &middot; paid service</>}
       name="Sandboxer"
     >
