@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { readJsonRpcLines } from "../apps/desktop/scripts/json-rpc-lines.mjs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { setFlagsFromString } from "node:v8";
 import { Script } from "node:vm";
 
@@ -55,7 +55,7 @@ async function checkBytecode() {
   const components = scope.roots.map(([name, file]) => [name, `apps/desktop/src/renderer/src/${file}`]);
   const { createVitest } = await import("vitest/node");
   const viteRequire = createRequire(import.meta.resolve("vite"));
-  const { minifySync } = await import(viteRequire.resolve("rolldown/utils"));
+  const { minifySync } = await import(pathToFileURL(viteRequire.resolve("rolldown/utils")).href);
   const context = await createVitest({
     root: repoRoot,
     config: resolve(repoRoot, "vitest.workspace.ts"),
