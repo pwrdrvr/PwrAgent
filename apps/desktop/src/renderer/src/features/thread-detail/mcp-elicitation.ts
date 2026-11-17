@@ -384,9 +384,20 @@ function redactDisplayString(value: string, key?: string): string {
       .replace(BEARER_CREDENTIAL, "$1[redacted]");
   }
   // A tool's display-name argument is not a credential merely because it is
-  // long. Explicit bearer/credential assignments remain hidden in any field.
-  if (looksSecret(value, key === "name")) return "[redacted]";
+  // long, and neither is a commit id under a key that names one: the
+  // operator must see which head a merge approval pins. Explicit
+  // bearer/credential assignments remain hidden in any field.
+  if (looksSecret(value, key === "name" || isGitObjectId(value, key))) return "[redacted]";
   return redactUrl(value);
+}
+
+// Both halves are required. A 40-hex value alone may be a classic GitHub
+// personal access token, so the key must say it holds a commit.
+const COMMIT_KEY = /(?:sha|oid|commit|rev|revision)$/iu;
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+
+function isGitObjectId(value: string, key: string | undefined): boolean {
+  return COMMIT_KEY.test(key ?? "") && GIT_OBJECT_ID.test(value.trim());
 }
 
 function baseState(
