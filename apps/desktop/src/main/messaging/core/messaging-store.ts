@@ -1,8 +1,10 @@
 import { isAsyncQuestionnaireForThread } from "./messaging-pending-intent-match.js";
 export { isAsyncQuestionnaireForThread } from "./messaging-pending-intent-match.js";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { MessagingBindingWriteOptions } from "@pwragent/owner-core/messaging-storage";
 import type {
   MessagingAdapterState,
   MessagingBindingRecord,
@@ -51,10 +53,23 @@ export class MessagingStore {
 
   async upsertBinding(
     binding: MessagingBindingRecord,
+    options?: MessagingBindingWriteOptions<MessagingBindingRecord>,
   ): Promise<MessagingBindingRecord> {
-    const sanitized = sanitizeBinding(binding);
-    const channelKey = buildMessagingConversationKey(sanitized.channel);
+    let sanitized = sanitizeBinding(binding);
+    const expected = options
+      ? JSON.parse(JSON.stringify(sanitizeBinding(options.expectedActiveBinding))) as MessagingBindingRecord
+      : undefined;
     return await this.withData((data) => {
+      const current = data.bindings[sanitized.id];
+      if (options && current) {
+        if (current.revokedAt !== undefined) return structuredClone(current);
+        if (!isDeepStrictEqual(current, expected)) {
+          const merged = options.mergeActiveBinding?.(current, expected!, sanitized);
+          if (!merged) return structuredClone(current);
+          sanitized = sanitizeBinding(merged);
+        }
+      }
+      const channelKey = buildMessagingConversationKey(sanitized.channel);
       for (const existing of Object.values(data.bindings)) {
         if (
           existing.id !== sanitized.id &&

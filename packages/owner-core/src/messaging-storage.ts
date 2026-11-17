@@ -21,9 +21,20 @@ export interface MessagingStorageRecords {
   snapshot: unknown;
 }
 
+export type MessagingBindingWriteOptions<Binding> = {
+  expectedActiveBinding: Binding;
+  // Pure reconciliation of concurrent changes, inside the store mutation.
+  // Returning undefined rejects the write; revoked records never reach it.
+  mergeActiveBinding?: (current: Binding, expected: Binding, replacement: Binding) => Binding | undefined;
+};
+
 export interface MessagingStorage<Records extends MessagingStorageRecords> {
   upsertBinding(
     binding: Records["binding"],
+    // Async completions may replace an existing row only while that same
+    // snapshot is active or a pure merge reconciles the active canonical row.
+    // Rejected replacements return the canonical row.
+    options?: MessagingBindingWriteOptions<Records["binding"]>,
   ): Promise<Records["binding"]>;
 
   mergeBindingChannelMetadata(

@@ -1,9 +1,38 @@
+import { isDeepStrictEqual } from "node:util";
 import { findThreadForBinding } from "./messaging-callback-helpers";
 import type { LinkedDirectorySummary, MessagingBindingTargetKind, MessagingToolUpdateMode, NavigationDirectorySummary, NavigationSnapshot } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
 import { isMessagingThreadContext, type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
+
+export function mergeRetiredBindingStatus(
+  current: MessagingBindingRecord,
+  expected: MessagingBindingRecord,
+  replacement: MessagingBindingRecord,
+): MessagingBindingRecord | undefined {
+  if (
+    current.revokedAt !== undefined
+    || current.id !== expected.id
+    || current.createdAt !== expected.createdAt
+    || current.backend !== expected.backend
+    || current.threadId !== expected.threadId
+    || current.channel.channel !== expected.channel.channel
+    || current.channel.conversation.id !== expected.channel.conversation.id
+    || current.channel.conversation.kind !== expected.channel.conversation.kind
+    || !isDeepStrictEqual(current.federatedThread, expected.federatedThread)
+    || !isDeepStrictEqual(current.statusSurface, expected.statusSurface)
+    || !isDeepStrictEqual(current.pinnedStatusSurface, expected.pinnedStatusSurface)
+  ) {
+    return undefined;
+  }
+  return {
+    ...current,
+    pinnedStatusSurface: undefined,
+    statusSurface: undefined,
+    updatedAt: Math.max(current.updatedAt, replacement.updatedAt),
+  };
+}
 
 export function threadContextForAdmissionState(
   _binding: MessagingBindingRecord,

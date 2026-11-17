@@ -1,4 +1,5 @@
-import type { MessagingStorage, MessagingStorageRecords } from "@pwragent/owner-core/messaging-storage";
+import { isDeepStrictEqual } from "node:util";
+import type { MessagingBindingWriteOptions, MessagingStorage, MessagingStorageRecords } from "@pwragent/owner-core/messaging-storage";
 import { federatedThreadIdentityKey, type FederatedThreadRef } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 
@@ -86,25 +87,51 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
 
   async upsertBinding(
     binding: Records["binding"],
+    options?: MessagingBindingWriteOptions<Records["binding"]>,
   ): Promise<Records["binding"]> {
-    const sanitized = this.policy.sanitizeBinding(binding);
-    const channel = sanitized.channel;
-    this.stateDb.raw
-      .prepare(
-        `INSERT OR REPLACE INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, revoked_at, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        sanitized.id,
-        channel.channel,
-        this.policy.buildChannelId(channel),
-        sanitized.threadId,
-        sanitized.revokedAt ? "revoked" : "active",
-        sanitized.createdAt,
-        sanitized.updatedAt,
-        sanitized.revokedAt ?? null,
-        JSON.stringify(sanitized),
-      );
+    let sanitized = this.policy.sanitizeBinding(binding);
+    const expected = options
+      ? JSON.parse(JSON.stringify(this.policy.sanitizeBinding(options.expectedActiveBinding))) as Records["binding"]
+      : undefined;
+    const persist = () => {
+      if (options) {
+        const row = this.stateDb.raw.prepare("SELECT payload FROM bindings WHERE binding_id = ?")
+          .get(sanitized.id) as { payload: string } | undefined;
+        const current = row ? JSON.parse(row.payload) as Records["binding"] : undefined;
+        if (current) {
+          if (current.revokedAt !== undefined) return current;
+          if (!isDeepStrictEqual(current, expected)) {
+            const merged = options.mergeActiveBinding?.(current, expected!, sanitized);
+            if (!merged) return current;
+            sanitized = this.policy.sanitizeBinding(merged);
+          }
+        }
+      }
+      const channel = sanitized.channel;
+      this.stateDb.raw
+        .prepare(
+          `INSERT OR REPLACE INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, revoked_at, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          sanitized.id,
+          channel.channel,
+          this.policy.buildChannelId(channel),
+          sanitized.threadId,
+          sanitized.revokedAt ? "revoked" : "active",
+          sanitized.createdAt,
+          sanitized.updatedAt,
+          sanitized.revokedAt ?? null,
+          JSON.stringify(sanitized),
+        );
+      return sanitized;
+    };
+    // Hold only the synchronous store mutation, never provider delivery. The
+    // admission read and replacement must be atomic across database connections.
+    const persisted = options ? this.stateDb.raw.transaction(persist).immediate() : persist();
+    if (persisted !== sanitized) {
+      return structuredClone(persisted);
+    }
     if (!sanitized.revokedAt) {
       await this.upsertObservedSurface(sanitized.channel, sanitized.updatedAt);
     }
