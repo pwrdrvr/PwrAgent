@@ -26,7 +26,8 @@ import { cssRuleBody } from "./css-rule-body";
  * buttons unreachable) and at 960x640 with 40 threads (unbounded list). A
  * first version of this fix, a height cap with no list minimum, squeezed the
  * list to an empty 2px frame at 320x213; the peek rule caught it. jsdom
- * performs no layout, so this suite pins the declarations instead.
+ * performs no layout, so this suite pins the declarations, and
+ * `e2e/archive-group-dialog-layout.spec.ts` checks those rules in the app.
  */
 describe("archive group dialog layout contract", () => {
   it("caps the dialog to the backdrop's padded height so the list shrinks first", () => {
