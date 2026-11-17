@@ -1,6 +1,7 @@
 import { TestRunner } from "vitest";
 import type { RunnerTask, RunnerTaskResultPack, RunnerTaskEventPack, RunnerTestFile, RunnerTestSuite } from "vitest";
 import { getActWarningGuard } from "./act-warning-guard";
+import { getEditorTeardown } from "./editor-teardown";
 
 /** Finalize after afterEach, onTestFinished, fixture cleanup, and afterAll. */
 export default class ActWarningRunner extends TestRunner {
@@ -21,6 +22,7 @@ export default class ActWarningRunner extends TestRunner {
 
   override async onAfterRunFiles(files: RunnerTestFile[]): Promise<void> {
     super.onAfterRunFiles(files);
+    getEditorTeardown().dispose();
     const lastFile = files.at(-1);
     if (!lastFile) return;
     const updates = getActWarningGuard().report(lastFile);
