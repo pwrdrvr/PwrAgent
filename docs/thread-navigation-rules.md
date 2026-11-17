@@ -167,7 +167,9 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 - Show unread state as an orange cookie on thread rows in every lens.
 - In all lenses except Attention, clear unread state when the thread gets focus.
 - In Attention, keep unread state when the thread gets focus.
-- In Attention, clear unread state only after the operator sends a reply.
+- In Attention, clear unread state automatically only after the operator sends a reply.
+- The operator can explicitly choose Mark Read for one thread or the selected set.
+- For a selected set, mark only its unread threads that support the single-thread action.
 - The composer reports accepted sends and steers through `onUserRepliedToThread`.
 - That callback calls `markThreadsSeen`.
 - Do not apply reply-only clearing to other lenses.

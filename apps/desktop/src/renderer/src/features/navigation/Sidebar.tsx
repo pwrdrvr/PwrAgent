@@ -2079,9 +2079,9 @@ export function Sidebar(props: SidebarProps) {
     void revealHoverStableSnapshot(() => props.onMarkThreadUnread?.(thread));
   };
 
-  const markReadFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const markReadFromContextMenu = (threads: NavigationThreadSummary[]): void => {
     setContextMenu(undefined);
-    void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
+    void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.(threads));
   };
 
   const removeRemotePinsFromContextMenu = (
@@ -3252,13 +3252,19 @@ export function Sidebar(props: SidebarProps) {
   );
   const bulkArchivableThreads = contextMenuThreads.filter((thread) =>
     canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control"));
+  // Match the single-row action: peer rows in the main window do not
+  // expose Mark Read; a window mounted on their owner does.
+  const bulkMarkReadableThreads = contextMenuThreads.filter((thread) =>
+    thread.inbox.inInbox && (!thread.federation || federationTarget));
+  const bulkCanMarkRead = Boolean(props.onMarkThreadsSeen && bulkMarkReadableThreads.length > 0);
   const bulkHasPinActions =
     bulkCanPin &&
     (bulkPinnedThreads.length > 0 || bulkUnpinnedThreads.length > 0);
   const bulkHasManagementActions = Boolean(
     (bulkUnlinkableThreads.length > 0
       && (props.onUnlinkThreads || props.onSetThreadParent)) ||
-      bulkArchivableThreads.length > 0,
+      bulkArchivableThreads.length > 0 ||
+      bulkCanMarkRead,
   );
   const bulkThreadLinks = uniqueContextMenuValues(
     contextMenuThreads.map((thread) =>
@@ -3909,6 +3915,15 @@ export function Sidebar(props: SidebarProps) {
                 ) : null}
                 {bulkHasManagementActions ? (
                   <div className="thread-context-menu__section">
+                    {bulkCanMarkRead ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => markReadFromContextMenu(bulkMarkReadableThreads)}
+                      >
+                        Mark {formatThreadCount(bulkMarkReadableThreads.length)} Read
+                      </button>
+                    ) : null}
                     {bulkUnlinkableThreads.length > 0
                       && (props.onUnlinkThreads || props.onSetThreadParent) ? (
                       <button
@@ -4273,7 +4288,7 @@ export function Sidebar(props: SidebarProps) {
                         type="button"
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
                         onClick={() =>
-                          markReadFromContextMenu(contextMenu.thread)
+                          markReadFromContextMenu([contextMenu.thread])
                         }
                       >
                         <span>Mark Read</span>
