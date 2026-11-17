@@ -52,6 +52,7 @@ import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } 
 import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
+import { readRemoteNavigationPageWithinBudget } from "../federation/federation-navigation-query";
 import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -153,7 +154,6 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type NavigationDirectoryRow,
-  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationQueryPage,
@@ -2262,6 +2262,21 @@ class DesktopAppServerService {
     request: NavigationQueryRequest,
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
+    if (!request.federationTarget || !isRemoteFederationTarget(request.federationTarget)) {
+      return this.readNavigationQueryPageOnce(request, rpcOptions);
+    }
+    // A remote page is measured as this viewer serves it. Stamping and viewer
+    // overlays grow it past what its owner measured.
+    return readRemoteNavigationPageWithinBudget({
+      request,
+      read: (sized) => this.readNavigationQueryPageOnce(sized, rpcOptions),
+    });
+  }
+
+  private async readNavigationQueryPageOnce(
+    request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
+  ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       // Owner resolution reads this machine's peers for its own viewer. It must
       // never become a request this instance sends to an owner.
@@ -2310,12 +2325,8 @@ class DesktopAppServerService {
         return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
           ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
       };
-      const result = { ...page, directories: page.directories?.map(apply),
+      return { ...page, directories: page.directories?.map(apply),
         selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
-      if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
-        throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
-      }
-      return result;
     }
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {
