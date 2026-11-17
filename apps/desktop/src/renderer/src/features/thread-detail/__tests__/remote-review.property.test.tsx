@@ -30,3 +30,35 @@ it("reads a mounted review from its thread owner regardless of the project path"
     },
   ), { numRuns: 25 });
 });
+
+it("shows unsuccessful reviews without a clean verdict or completion actions on local and remote threads", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.boolean(),
+    fc.constantFrom("interrupted" as const, "failed" as const, undefined),
+    fc.boolean(),
+    async (remote, status, structured) => {
+      const listThreadReviews = vi.fn(async () => ({ reviews: [{
+        id: "tracked", sourceKey: "artifact", backend: "codex", threadId: "thread",
+        title: "Code review", status: "open", items: [], createdAt: 1, updatedAt: 1,
+      }] }));
+      Object.assign(window, { pwragent: { listThreadReviews } });
+      const view = render(<TranscriptReview
+        entry={{ type: "review", id: "artifact", review: "Reviewer failed to output a response.",
+          ...(status ? { turn: { id: "turn", status } } : {}),
+          ...(structured ? { output: { findings: [], overall_correctness: "patch is correct",
+            overall_explanation: "No issues found." } } : {}),
+        }}
+        parentThreadId="thread" parentThreadBackend="codex"
+        {...(remote ? { threadLinkSource: { backend: "codex" as const, instanceId: "peer" } } : {})} />);
+      try {
+        expect(view.getByText(status === "interrupted" ? "Review stopped"
+          : status === "failed" ? "Review failed" : "Review did not complete")).toBeTruthy();
+        await waitFor(() => expect(view.queryByText(/Mark handled/i)).toBeNull());
+        expect(view.queryByText(/Patch correct|No issues found|0 findings/)).toBeNull();
+        expect(listThreadReviews).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+      }
+    },
+  ), { numRuns: 12 });
+});
