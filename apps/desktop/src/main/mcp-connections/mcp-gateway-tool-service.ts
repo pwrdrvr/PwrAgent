@@ -67,6 +67,67 @@ export type McpGatewayToolServiceOptions = {
 /** Exact schemas are indivisible, so a result that would pass this drops a tool instead. */
 const MAX_SEARCH_RESULT_BYTES = 24_000;
 
+/**
+ * The connections that fail during a search take at most this much of the
+ * result, so their errors cannot crowd out every tool. Sixty-four failures
+ * with 64-character ids fit in their short form.
+ */
+const MAX_CONNECTION_ERROR_BYTES = 10_000;
+
+/** What a failed connection says once its own error no longer fits. */
+const CONNECTION_ERROR_OMITTED = "Unavailable. Search this connectionId alone for the error.";
+
+/** MCP recommends tool names of at most 128 characters, so a notice names no more. */
+const MAX_NOTICE_TOOL_NAME_CHARS = 128;
+
+/**
+ * A search returns at most this many tools, the tool contract's own limit.
+ * The budget's room for notices assumes no more.
+ */
+const MAX_SEARCH_LIMIT = 5;
+
+type McpGatewayUnavailable = McpGatewaySearchResult["unavailable"][number];
+
+/** What a search says about a tool whose exact schema the result has no room for. */
+function schemaBudgetNotice(tool: McpGatewaySource): McpGatewayUnavailable {
+  // Counted in code points, so a cut never leaves half a surrogate pair.
+  const characters = Array.from(tool.toolName);
+  if (characters.length <= MAX_NOTICE_TOOL_NAME_CHARS) {
+    return {
+      connectionId: tool.connectionId,
+      message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.`,
+    };
+  }
+  const name = `${characters.slice(0, MAX_NOTICE_TOOL_NAME_CHARS - 1).join("")}…`;
+  return {
+    connectionId: tool.connectionId,
+    message: `The exact schema for ${name} exceeds this result's size budget. Search part of its name with this connectionId alone, or use native MCP invocation.`,
+  };
+}
+
+/**
+ * Fits the failed connections' entries into `room` bytes of JSON, in order.
+ * Every failed connection keeps an entry. Its own error stays while it fits
+ * beside the short form of every entry after it; otherwise the entry says
+ * only that the connection is unavailable.
+ */
+function fitConnectionErrors(entries: McpGatewayUnavailable[], room: number): McpGatewayUnavailable[] {
+  const omitted = entries.map((entry) => ({ connectionId: entry.connectionId, message: CONNECTION_ERROR_OMITTED }));
+  const omittedBytes = omitted.map((entry) => Buffer.byteLength(JSON.stringify(entry)));
+  // Every later entry in its short form, with the comma before it.
+  let laterBytes = omittedBytes.reduce((sum, bytes) => sum + bytes + 1, 0);
+  // "[]" is the empty list's own two bytes.
+  let bytes = 2;
+  return entries.map((entry, index) => {
+    laterBytes -= omittedBytes[index] + 1;
+    const comma = index > 0 ? 1 : 0;
+    const full = Buffer.byteLength(JSON.stringify(entry));
+    const fitted = bytes + comma + full + laterBytes <= room ? entry : omitted[index];
+    bytes += comma + (fitted === entry ? full : omittedBytes[index]);
+    return fitted;
+  });
+}
+
 type McpGatewaySearchServer = NonNullable<McpGatewaySearchResult["servers"]>[number];
 
 function serverEntry(
@@ -178,8 +239,25 @@ export class McpGatewayToolService {
         return { tool, score };
       }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score
         || a.tool.connectionId.localeCompare(b.tool.connectionId) || a.tool.toolName.localeCompare(b.tool.toolName));
-      const result: McpGatewaySearchResult = { tools: [], unavailable };
-      for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
+      // The tools below start from the failed connections' entries, so those
+      // are fitted first, into a share that leaves room for every notice.
+      // They are fitted in selection order, not the order the fan-out
+      // finished in, so the same failures keep the same errors each search.
+      const selectionOrder = new Map(ids.map((id, index) => [id, index]));
+      unavailable.sort((left, right) => selectionOrder.get(left.connectionId)! - selectionOrder.get(right.connectionId)!);
+      const result: McpGatewaySearchResult = { tools: [], unavailable: fitConnectionErrors(unavailable, MAX_CONNECTION_ERROR_BYTES) };
+      const picked = ranked.slice(0, Math.min(args.limit ?? 3, MAX_SEARCH_LIMIT));
+      // A tool turned away adds its notice to `unavailable` after the tools
+      // before it were measured, so each admission keeps room for the notice
+      // of every candidate still to come, and for the comma before each one
+      // that will not be the list's first entry.
+      const noticeBytes = picked.map(({ tool }) => Buffer.byteLength(JSON.stringify(schemaBudgetNotice(tool))));
+      let laterNoticeBytes = noticeBytes.reduce((sum, bytes) => sum + bytes, 0);
+      for (const [index, { tool }] of picked.entries()) {
+        laterNoticeBytes -= noticeBytes[index];
+        const later = picked.length - index - 1;
+        const reserved = later === 0 ? 0
+          : laterNoticeBytes + later - (result.unavailable.length === 0 ? 1 : 0);
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
         const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
@@ -191,8 +269,9 @@ export class McpGatewayToolService {
           ? [...(result.serverInstructions ?? []), { connectionId: tool.connectionId, ...guidance }]
           : result.serverInstructions;
         // Exact schemas are indivisible. Never return truncated valid-looking JSON.
-        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers })) > MAX_SEARCH_RESULT_BYTES) {
-          result.unavailable.push({ connectionId: tool.connectionId, message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.` });
+        const bytes = Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers }));
+        if (bytes + reserved > MAX_SEARCH_RESULT_BYTES) {
+          result.unavailable.push(schemaBudgetNotice(tool));
           continue;
         }
         result.tools.push(entry);
