@@ -1939,6 +1939,21 @@ body,
   margin: 0;
 }
 
+/* The document is exactly one viewport tall in the full layout, so the root
+   has no offset to keep. `body` is `overflow: hidden` there, which stops the
+   wheel but not a scroll the page already had: below 820px the shell stacks
+   and the body scrolls, and widening again keeps whatever offset still fits.
+
+   `flow-root` keeps a child's top margin inside `#root`. On win32 and linux
+   `.app-shell` clears the painted title strip with `margin-top`, and that
+   margin used to collapse through `#root` and `body`. Then `body` started
+   40px down and the document overflowed the viewport by the strip's height.
+   After a scroll at 300% zoom and a zoom back out, the shell stayed 40px up
+   under the strip, with a 40px band below it and no way to scroll back. */
+#root {
+  display: flow-root;
+}
+
 /* Every window's own edge, on the one platform that draws us none.
 
    Electron gives a frameless Linux window an `OpaqueFrameView`: no border, no
