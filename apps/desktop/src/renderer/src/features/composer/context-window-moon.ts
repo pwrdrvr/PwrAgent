@@ -12,16 +12,19 @@ import type { DesktopContextMoonStyle } from "@pwragent/shared";
  *   window runs out. Its lit area is the real moon's illuminated fraction,
  *   `(1 - cos θ) / 2` with `θ = 2π · used`.
  *
- * In both, a window at or past `CONTEXT_MOON_CRITICAL_PERCENT` is critical.
- * The lunar cycle shows a full disc there, as it always has, so the critical
- * glow is not wasted on a sliver.
+ * In both, a window at or past `CONTEXT_MOON_CRITICAL_PERCENT` is critical
+ * and shows a full disc that the stylesheet paints as an eclipsed "blood
+ * moon". Critical starts at 85% because providers compact before a window
+ * fills, so a later mark would never show. It also ends the lunar cycle
+ * early: its last moon before critical is a crescent about a quarter lit,
+ * never the near-dark sliver that read as the empty moon at 0%.
  *
  * The shadow is drawn over the lit disc in a `-1 -1 2 2` view box (unit
  * radius, centered on the origin). It is the unlit half of the disc plus or
  * minus a half-ellipse terminator with x-radius `|1 - 2k|`, where `k` is the
  * lit fraction. Its area is `π(1 - k)`, so the lit share is exactly `k`.
  */
-export const CONTEXT_MOON_CRITICAL_PERCENT = 97.5;
+export const CONTEXT_MOON_CRITICAL_PERCENT = 85;
 
 export type ContextWindowMoonPhaseKind =
   | "new"
@@ -48,12 +51,16 @@ type PhaseBand = {
   label: string;
 };
 
+// Wax to full has no "full moon" band: a full window is the critical moon.
 const WAX_PHASES: readonly PhaseBand[] = [
   { below: 10, kind: "new", label: "new moon" },
   { below: 40, kind: "waxing", label: "waxing crescent" },
   { below: 60, kind: "waxing", label: "first quarter" },
-  { below: 90, kind: "waxing", label: "waxing gibbous" },
-  { below: CONTEXT_MOON_CRITICAL_PERCENT, kind: "full", label: "full moon" },
+  {
+    below: CONTEXT_MOON_CRITICAL_PERCENT,
+    kind: "waxing",
+    label: "waxing gibbous",
+  },
 ];
 
 const LUNAR_CYCLE_PHASES: readonly PhaseBand[] = [
@@ -63,7 +70,7 @@ const LUNAR_CYCLE_PHASES: readonly PhaseBand[] = [
   { below: 47.5, kind: "waxing", label: "waxing gibbous" },
   { below: 60, kind: "full", label: "full moon" },
   { below: 72.5, kind: "waning", label: "waning gibbous" },
-  { below: 85, kind: "waning", label: "third quarter" },
+  { below: 80, kind: "waning", label: "third quarter" },
   {
     below: CONTEXT_MOON_CRITICAL_PERCENT,
     kind: "waning",
@@ -115,10 +122,13 @@ export function contextWindowMoonFace(
 
   let litFraction: number;
   let litSide: "left" | "right";
-  if (style === "lunar-cycle") {
+  if (critical) {
+    litFraction = 1;
+    litSide = "right";
+  } else if (style === "lunar-cycle") {
     const cycle = used / 100;
-    litFraction = critical ? 1 : (1 - Math.cos(2 * Math.PI * cycle)) / 2;
-    litSide = critical || cycle <= 0.5 ? "right" : "left";
+    litFraction = (1 - Math.cos(2 * Math.PI * cycle)) / 2;
+    litSide = cycle <= 0.5 ? "right" : "left";
   } else {
     litFraction = used / 100;
     litSide = "right";

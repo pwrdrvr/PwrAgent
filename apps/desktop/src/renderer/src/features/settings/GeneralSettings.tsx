@@ -481,6 +481,7 @@ export function GeneralSettings(props: {
             <SegmentedField
               label="Context moon"
               sub="How the moon beside the composer tracks the context window. Wax to full lights the share of the window in use. Lunar cycle runs a whole month across the window, so the moon wanes as the window runs out."
+              help="From 85% full, both styles show a red eclipsed moon."
               source={sourceBadge(contextMoon)}
               disabled={props.saving}
               options={CONTEXT_MOON_OPTIONS}

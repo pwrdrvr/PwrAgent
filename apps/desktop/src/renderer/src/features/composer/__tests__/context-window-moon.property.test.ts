@@ -13,11 +13,14 @@ import {
  *                use, lit from the right. More usage never shows less moon.
  *   lunar-cycle  One lunar month across the window: the lit share is
  *                (1 - cos 2πu) / 2, lit from the right up to full at 50% and
- *                from the left after it. A window at the critical mark shows
- *                a full disc.
+ *                from the left after it.
+ *   both         From the critical mark the moon is a full disc of its own
+ *                kind, the blood moon, never the 50% full moon.
  *
  * Before the setting, the moon ran the lunar cycle with no way to choose, so
- * a window 75% full showed less moon than one 50% full.
+ * a window 75% full showed less moon than one 50% full. The first cut of the
+ * setting then let the lunar cycle wane to a 6% sliver at 92%, which read as
+ * the empty moon at 0%, and drew critical as the 50% full moon.
  */
 
 type Point = { x: number; y: number };
@@ -79,11 +82,14 @@ function litGeometry(path: string): { share: number; centroidX: number } {
 }
 
 const usage = fc.double({ min: 0, max: 100, noNaN: true });
+const beforeCritical = (min: number) =>
+  fc.double({ min, max: CONTEXT_MOON_CRITICAL_PERCENT, noNaN: true })
+    .filter((usedPercent) => usedPercent < CONTEXT_MOON_CRITICAL_PERCENT);
 
 describe("context window moon: wax", () => {
   it("lights the share of the disc that matches context usage", () => {
     fc.assert(
-      fc.property(usage, (usedPercent) => {
+      fc.property(beforeCritical(0), (usedPercent) => {
         const { path } = contextWindowMoonFace(usedPercent, "wax");
         expect(litGeometry(path).share).toBeCloseTo(usedPercent / 100, 3);
       }),
@@ -101,7 +107,7 @@ describe("context window moon: wax", () => {
 
   it("is lit from the right and never names a waning phase", () => {
     fc.assert(
-      fc.property(fc.double({ min: 1, max: 99, noNaN: true }), (usedPercent) => {
+      fc.property(beforeCritical(1), (usedPercent) => {
         const face = contextWindowMoonFace(usedPercent, "wax");
         expect(face.phaseKind).not.toBe("waning");
         expect(litGeometry(face.path).centroidX).toBeGreaterThan(0);
@@ -120,8 +126,7 @@ describe("context window moon: lunar cycle", () => {
   it("lights the real moon's illuminated fraction across one month", () => {
     fc.assert(
       fc.property(
-        fc.double({ min: 0, max: CONTEXT_MOON_CRITICAL_PERCENT, noNaN: true })
-          .filter((usedPercent) => usedPercent < CONTEXT_MOON_CRITICAL_PERCENT),
+        beforeCritical(0),
         (usedPercent) => {
           const { path } = contextWindowMoonFace(usedPercent, "lunar-cycle");
           const expected = (1 - Math.cos((2 * Math.PI * usedPercent) / 100)) / 2;
@@ -133,7 +138,7 @@ describe("context window moon: lunar cycle", () => {
 
   it("is lit from the right while waxing and from the left while waning", () => {
     fc.assert(
-      fc.property(fc.double({ min: 2, max: 95, noNaN: true }), (usedPercent) => {
+      fc.property(beforeCritical(2), (usedPercent) => {
         fc.pre(Math.abs(usedPercent - 50) > 1);
         const face = contextWindowMoonFace(usedPercent, "lunar-cycle");
         const { centroidX } = litGeometry(face.path);
@@ -149,15 +154,28 @@ describe("context window moon: lunar cycle", () => {
 
   it("mirrors the waxing half in the waning half", () => {
     fc.assert(
-      fc.property(fc.double({ min: 3, max: 50, noNaN: true }), (usedPercent) => {
-        const waxing = litGeometry(
-          contextWindowMoonFace(usedPercent, "lunar-cycle").path,
-        );
-        const waning = litGeometry(
-          contextWindowMoonFace(100 - usedPercent, "lunar-cycle").path,
-        );
-        expect(waning.share).toBeCloseTo(waxing.share, 3);
-        expect(waning.centroidX).toBeCloseTo(-waxing.centroidX, 3);
+      fc.property(
+        // The waning partner, 100 - u, must stay below the critical mark.
+        fc.double({ min: 100 - CONTEXT_MOON_CRITICAL_PERCENT + 0.01, max: 50, noNaN: true }),
+        (usedPercent) => {
+          const waxing = litGeometry(
+            contextWindowMoonFace(usedPercent, "lunar-cycle").path,
+          );
+          const waning = litGeometry(
+            contextWindowMoonFace(100 - usedPercent, "lunar-cycle").path,
+          );
+          expect(waning.share).toBeCloseTo(waxing.share, 3);
+          expect(waning.centroidX).toBeCloseTo(-waxing.centroidX, 3);
+        },
+      ),
+    );
+  });
+
+  it("never wanes to a sliver that reads as the empty moon before critical", () => {
+    fc.assert(
+      fc.property(beforeCritical(50), (usedPercent) => {
+        const { path } = contextWindowMoonFace(usedPercent, "lunar-cycle");
+        expect(litGeometry(path).share).toBeGreaterThan(0.2);
       }),
     );
   });
@@ -165,7 +183,7 @@ describe("context window moon: lunar cycle", () => {
   it("names the old phases: full at half, waning after it", () => {
     expect(contextWindowMoonFace(50, "lunar-cycle").phaseLabel).toBe("full moon");
     expect(contextWindowMoonFace(75, "lunar-cycle").phaseLabel).toBe("third quarter");
-    expect(contextWindowMoonFace(90, "lunar-cycle").phaseLabel).toBe("waning crescent");
+    expect(contextWindowMoonFace(82, "lunar-cycle").phaseLabel).toBe("waning crescent");
   });
 });
 
@@ -180,7 +198,12 @@ describe("context window moon: both styles", () => {
           expect(face.critical).toBe(usedPercent >= CONTEXT_MOON_CRITICAL_PERCENT);
           expect(face.phaseKind === "critical").toBe(face.critical);
           if (face.critical) {
-            expect(litGeometry(face.path).share).toBeGreaterThan(0.97);
+            // A whole disc, but its own kind: the stylesheet paints it as
+            // the blood moon, never as the full moon at 50%.
+            expect(litGeometry(face.path).share).toBeCloseTo(1, 6);
+            expect(face.phaseKind).not.toBe(
+              contextWindowMoonFace(50, "lunar-cycle").phaseKind,
+            );
           }
         },
       ),
@@ -190,7 +213,7 @@ describe("context window moon: both styles", () => {
   it("names each band from its lower edge", () => {
     const labels = (style: "wax" | "lunar-cycle", edges: number[]) =>
       edges.map((usedPercent) => contextWindowMoonFace(usedPercent, style).phaseLabel);
-    expect(labels("wax", [0, 9.99, 10, 39.99, 40, 59.99, 60, 89.99, 90, 97.49, 97.5, 100])).toEqual([
+    expect(labels("wax", [0, 9.99, 10, 39.99, 40, 59.99, 60, 84.99, 85, 100])).toEqual([
       "new moon",
       "new moon",
       "waxing crescent",
@@ -199,12 +222,10 @@ describe("context window moon: both styles", () => {
       "first quarter",
       "waxing gibbous",
       "waxing gibbous",
-      "full moon",
-      "full moon",
       "critical",
       "critical",
     ]);
-    expect(labels("lunar-cycle", [9.99, 10, 22.5, 35, 47.5, 60, 72.5, 85, 97.49, 97.5])).toEqual([
+    expect(labels("lunar-cycle", [9.99, 10, 22.5, 35, 47.5, 60, 72.5, 80, 84.99, 85])).toEqual([
       "new moon",
       "waxing crescent",
       "first quarter",
