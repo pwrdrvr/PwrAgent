@@ -176,6 +176,13 @@ export interface MessagingStorage<Records extends MessagingStorageRecords> {
     now?: number;
   }): Promise<Records["pendingIntent"] | undefined>;
 
+  /** Newest creation time first; equal timestamps do not establish identity. */
+  findActivePendingIntentsForChannel(params: {
+    actorId: string;
+    channel: Records["channel"];
+    now?: number;
+  }): Promise<Records["pendingIntent"][]>;
+
   findActivePendingIntentsForRequest(params: {
     backend: Records["binding"]["backend"];
     threadId: Records["binding"]["threadId"];
@@ -295,6 +302,7 @@ export type MessagingStoreLike<Records extends MessagingStorageRecords> = Pick<
   | "upsertPendingIntent"
   | "getPendingIntent"
   | "findActivePendingIntentForChannel"
+  | "findActivePendingIntentsForChannel"
   | "findActivePendingIntentsForRequest"
   | "findActivePendingAsyncQuestionnaires"
   | "deletePendingIntent"

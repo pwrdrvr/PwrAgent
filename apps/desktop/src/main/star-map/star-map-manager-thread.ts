@@ -24,9 +24,11 @@ const MANAGER_WORKSPACE_DIR = "star-map-manager";
 
 /**
  * The manager's standing instructions reach the model through an instruction
- * file in its own workspace, not through the thread's `agent` metadata: that
- * metadata marks a thread as a persona thread for search and the Agents
- * browser, but nothing injects it into a turn.
+ * file in its own workspace. The thread's `agent` metadata marks it as a
+ * persona thread for search and the Agents browser, and is not a delivery the
+ * manager depends on, because not every backend is known to receive it. The
+ * Claude turn-start path in backend-registry does append `agent.instructions`
+ * to the system prompt, so a manager on Claude receives this text from both.
  *
  * Written under every name the supported backends read, because there is no
  * single one. Codex and Claude take AGENTS.md and CLAUDE.md — the repository

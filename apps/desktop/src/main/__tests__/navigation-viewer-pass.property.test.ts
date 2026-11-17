@@ -5,6 +5,7 @@ import {
   buildThreadIdentityKey,
   type AgentEvent,
   type NavigationQueryRequest,
+  type NavigationSnapshot,
   type NavigationThreadSummary,
   type ProjectForgeAutomation,
 } from "@pwragent/shared";
@@ -93,6 +94,12 @@ async function fixture(n: number) {
     pinnedRank: `owner-${i}`, federation: { ref: buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: `remote-${i}` }),
       instanceLabel: "Peer", peerStatus: "connected" } }));
   const provider = vi.fn(async () => rows);
+  let ownerReadScheduler: fc.Scheduler | undefined;
+  const fetchPinnedSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => {
+    const snapshot: NavigationSnapshot = { backend: "all", fetchedAt: 1, unchanged: false,
+      threads: ownerRows, directories: [], inboxThreadKeys: [], launchpadDefaults: { backend: "codex", executionMode: "default" } };
+    return ownerReadScheduler ? await ownerReadScheduler.schedule(Promise.resolve(snapshot), "owner snapshot") : snapshot;
+  });
   current.registry = {
     listThreads: provider,
     onEvent: (listener: (event: AgentEvent) => void) => { listeners.add(listener); return () => listeners.delete(listener); },
@@ -103,8 +110,7 @@ async function fixture(n: number) {
   } as unknown as DesktopBackendRegistry;
   const cache = current.cache = new RemoteThreadSummaryCache({
     peers: () => connected ? [{ target: { scope: "remote", instanceId: "peer" }, label: "Peer", capabilities: ["thread_navigation"] }] : [],
-    fetchSnapshot: vi.fn(), fetchPinnedSnapshot: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
-      threads: ownerRows, directories: [], inboxThreadKeys: [], launchpadDefaults: { backend: "codex", executionMode: "default" } }),
+    fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
     fetchArchivedThreads: async () => [], peerStatus: () => ({ status: connected ? "connected" : "disconnected", label: "Peer" }),
     onPinnedSummariesRefreshed: () => { published++; publish(); },
   });
@@ -136,9 +142,21 @@ async function fixture(n: number) {
         notification: { method: "federation/peerStatus/changed", params: { instanceId: "peer", status: "disconnected" } } });
     },
     remote: async (i: number, title: string, active: boolean) => {
+      const threadStatus = active ? "active" : "idle";
+      const changed = !connected || ownerRows[i]!.title !== title || ownerRows[i]!.threadStatus !== threadStatus;
       connected = true;
-      ownerRows = ownerRows.map((row, j) => j === i ? { ...row, title, threadStatus: active ? "active" : "idle" } : row);
-      const before = published; cache.invalidate("peer"); await until(() => published > before);
+      ownerRows = ownerRows.map((row, j) => j === i ? { ...row, title, threadStatus } : row);
+      const before = published;
+      const reads = fetchPinnedSnapshot.mock.calls.length;
+      // Completion of an owner read does not imply a publication: identical
+      // rows stay silent. Control the read and drain its reachable work.
+      const scheduler = ownerReadScheduler = fc.schedulerFor([1]);
+      try {
+        cache.invalidate("peer");
+        await scheduler.waitIdle();
+      } finally { ownerReadScheduler = undefined; }
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(reads + 1);
+      expect(published - before).toBe(changed ? 1 : 0);
     },
     change: (i: number) => { rows = rows.map((row) => row.id === `root-${i}` ? { ...row, threadStatus: "idle" } : row); },
     close: () => { queries.dispose(); cache.dispose(); for (const listener of [...listeners]) listener({ backend: "codex",
@@ -390,6 +408,29 @@ it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i di
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "root-0" }] } });
     expect(exact.entries[0]?.row.threadStatus).toBe("idle");
   } finally { f.close(); vi.useRealTimers(); }
+});
+
+it("keeps an unchanged owner refresh silent and publishes the next changed row", async () => {
+  const f = await fixture(2);
+  const ref = buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: "remote-0" });
+  try {
+    f.queries.setDemand(f.requests); await until(f.idle);
+    for (const change of [
+      { title: "5", active: true },
+      { title: "5", active: true },
+      { title: " ", active: false },
+    ]) {
+      await f.remote(0, change.title, change.active);
+      await f.store.setRemoteThreadLocalPin({ ref, pinned: false });
+      const exact = await f.read({ protocol: 2, inventory: "viewer", consumer: "main-sidebar",
+        query: { kind: "exact", identities: [0, 1].map((i) => ({ backend: "codex", threadId: `remote-${i}`, ownerInstanceId: "peer" })) } });
+      expect(exact.entries.map(({ row }) => ({ id: row.id, title: row.title, status: row.threadStatus, pinned: Boolean(row.pinnedRank) })))
+        .toEqual([
+          { id: "remote-0", title: change.title, status: change.active ? "active" : "idle", pinned: false },
+          { id: "remote-1", title: "remote-1", status: "idle", pinned: false },
+        ]);
+    }
+  } finally { f.close(); }
 });
 
 it("matches the owning peer and viewer pin model after generated publications and pin edits, including off-page identities", async () => {
