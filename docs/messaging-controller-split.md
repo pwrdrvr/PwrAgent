@@ -381,10 +381,91 @@ are unchanged. Card `41ed7f56-1d31-4342-a395-5380d981f147` proposes the new
 evidence to its existing native-suite owner. The final full run is not reported
 as passing. No timeout or concurrency setting is changed.
 
+## Inbound owner and observable protocol
+
+The inbound extraction starts at main
+`c7219ed95c1d7f70f10fd6648eb65e7317857cfc`, after the binding service merged.
+`MessagingInboundTurns` receives 40 methods, the admission timing map and the
+two pending-prompt maps. Forty-three shared declarations move to
+`messaging-inbound-helpers.ts`. The controller remains the public event router.
+The turn admission queue, turn liveness, queue notices and drain scheduling
+retain their existing owners for the later state-machine change.
+
+Run `node scripts/inventory-messaging-inbound.mjs --verify`. Its TypeScript
+checker records 159 resolved method references, 1,105 effects/branches, 12
+store operations, ten backend members and 45 host ports. Contextual adapter
+analysis also records the attachment processor's complete adapter signature;
+the inbound context needs only its required structural members and optional
+download operation. The audit retains casts, overrides, spies and stand-ins,
+including field accesses. The one direct facade prompt-buffer cast now targets
+the actual inbound owner through `messagingModules`.
+
+Verification checks every moved signature and body, shared declaration,
+retained caller, retained field and helper, constructor order, both staged
+cleanup operations and each host port. Store, backend, adapter, capability,
+logger and configuration resolve lazily. Configuration retains the original
+object and callback receiver. The clock calls the facade's clock with its
+original receiver. Optional PDF-support getters keep their original catch
+boundary; attachment downloads keep their native receiver. No new module
+imports the facade.
+
+The independent observable protocol runs through real public controller entry
+points and SQLite. Its valid command model covers text/media requests,
+started/queued/failed acceptance, completion/failure/cancellation and repeated
+terminal evidence for both owner-queue and legacy backends. Other protocols
+cover provider mention capabilities, conversation response mode, Full Access
+resume policy, typing before acceptance, post-acceptance failures, replacement
+overlays after awaited reads, optional metadata failures, default Agents,
+recoverable new-thread prompts and remote owner identity. The final nine-test
+oracle passes pinned original production and extracted production.
+
+The owner tests cover construction laziness, replaced hosts after permission
+awaits, failed private-claim retry, permission/scope denials, optional getter
+exceptions, metadata effect ordering, native download/configuration/clock
+receivers, timing consumption and cardinality, coalescing and shutdown cleanup.
+The timing generator always crosses the 256-entry bound. Pure properties cover
+explicit slash arguments, bare mention commands, affirmative private-response
+language, target-specific missing-thread evidence and in-memory routing state.
+
+Run `node scripts/mutate-messaging-inbound.mjs --baseline` for the pinned
+observable oracle, or omit the flag for extracted production and 22 deliberate
+mutations. Every mutation fails an assertion, including gates, acceptance,
+claim retry, effect order, cardinality, lifecycle callers and lazy/native ports.
+`--check` verifies anchors and `--only` selects a subset. Missing-owner errors,
+import failures and timeouts do not count. Sources restore in `finally` and
+protected fixture hashes are checked. Logs stay in `.local/pwr-149-inbound/`;
+do not run mutations alongside other source checks.
+
+The final tested base is main
+`1025a96c3cdba8ca430beeec31a9101f6bd692b4`, including the later property-owner
+and blob-receiver teardown fixes. Its messaging production sources are
+unchanged from the pinned extraction baseline. Main also added two CI-run
+write-budget rows in #3840; this change preserves the current fixture exactly.
+
+The controller falls from 18,245 to 15,307 lines. The inbound owner, helpers
+and context are 2,349, 542 and 92 lines. Original method and helper comments
+move with their declarations. All required static checks and the bytecode
+check pass; the largest measured function is 23,846 bytes against the
+25,600-byte budget. Protected/focused verification passes 179 files and
+5,561 tests, with two skipped, including every current SQLite-budget caller.
+Both protected fixtures remain byte-identical to the final main base.
+
+The full suite passes 2,104 files and 29,274 tests, with eight files and 107
+tests skipped. Five tests reach their five-second deadlines: selection
+publication, the held-updater model, private-response history, listing overlay
+reads and quit-dialog default action. Those five files pass together in
+isolation: 51 tests in 11.65 seconds. No fast-check seed is printed by the
+timeouts. Their sources are unchanged by this extraction; an isolated pass
+does not establish the cause. Card `a2e8dc7e-2b4b-4b9d-a7d5-a9a9806d7ae9`
+proposes the retained evidence to the existing native-suite investigation
+owner. `.local/pwr-149-inbound/full-timeouts.json` records the cases and raw
+log hashes. The full run is not reported as passing, and no timeout, worker,
+retry, concurrency or property-bound setting is changed.
+
 ## Remaining state-machine work
 
-The turn/drain machine, canonical queue retirement, the two remaining named
-extractions, controller size reduction and the parent's registry/test size
+The turn/drain machine, canonical queue retirement, access-control extraction,
+controller size reduction and the parent's registry/test size
 criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is
 changed. There is no new persistence, timer or filesystem access in production:

@@ -1,7 +1,7 @@
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
-import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, buildQueuedInputPreview, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type PreparedInputStartResult, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage, type PendingNewThreadPromptWindow, type PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
+import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
 import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
@@ -9,34 +9,11 @@ import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
-import {
-  threadIdForBackendEvent,
-  asPlainRecord,
-  turnIdForBackendEvent,
-  bindingMatchesFederationTarget,
-  federationTargetForBinding,
-  turnQueueUpdateForBackendEvent,
-  threadKeyForBackendEvent,
-  rememberBoundedKey,
-  isTerminalTurnLifecycle,
-  assistantStreamKey,
-  agentMessagingTurnKey,
-  MAX_TRACKED_TURN_PROSE,
-  TYPING_ACTIVITY_REFRESH_MS,
-  type MessagingTaskMonitorLifecycle,
-  type AssistantStreamDelta,
-  type MessagingDeliveryGuard,
-  type MessagingCancellationSignal,
-  type AssistantStreamBuffer,
-  type AssistantMessageDeliveryIdentity,
-  type ActiveAgentMessagingOrigin,
-  type MessagingControllerLogger,
-} from "./messaging-backend-event-helpers";
+import { threadIdForBackendEvent, asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, isTerminalTurnLifecycle, assistantStreamKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type AssistantStreamDelta, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantStreamBuffer, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { containedMessagingBindingMatches } from "@pwragent/shared";
 import { automatedWorkStartedLabel, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
-import { isThreadLockRefusal } from "@pwragent/shared";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
@@ -46,269 +23,54 @@ import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } f
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildReviewBranchOptions, buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, parseCodexTurnErrorMessage, readProviderResponseBlockNotification, describeProviderResponseBlock, permissionForDynamicTool, permissionsForThreadMutation, toolArgsTargetRemoteInstance, resolveNewThreadBackend, selectableNewThreadBackends, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
-import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, CodexEnvironmentSetupProgressEvent, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendSummary, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, LinkedDirectorySummary, LaunchpadWorkMode, MaterializedDirectoryLaunchpadThread, MessagingDynamicToolCategory, MessagingPermissionId, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationDirectorySummary, NavigationLaunchpadDraft, NavigationLaunchpadConfiguration, NavigationSelectedDetailRequest, NavigationThreadSummary, RbacResolution, ThreadExecutionMode, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
+import { buildReviewBranchOptions, buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, readProviderResponseBlockNotification, describeProviderResponseBlock, permissionForDynamicTool, permissionsForThreadMutation, toolArgsTargetRemoteInstance, resolveNewThreadBackend, selectableNewThreadBackends, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
+import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendSummary, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingPermissionId, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationDirectorySummary, NavigationSelectedDetailRequest, NavigationThreadSummary, RbacResolution, ThreadExecutionMode, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type {
-  MessagingBindingRecord,
-  MessagingBrowseSessionRecord,
-  MessagingActiveTurnSummary,
-  MessagingApprovalDecision,
-  MessagingChannelKind,
-  MessagingChannelRef,
-  MessagingConfirmationIntent,
-  MessagingDeliveryScope,
-  MessagingDeliveryResult,
-  MessagingDefaultAgentAssignmentRecord,
-  MessagingInboundCallbackEvent,
-  MessagingInboundCommandEvent,
-  MessagingInboundChannelMetadataUpdate,
-  MessagingInboundEvent,
-  MessagingInboundMediaEvent,
-  MessagingInboundTextEvent,
-  MessagingImagePart,
-  MessagingAdapterState,
-  MessagingJsonValue,
-  MessagingManagedConversationOperationSupport,
-  MessagingManagedTopicRecord,
-  MessagingMonitorState,
-  MessagingMonitorSubscriptionRecord,
-  MessagingPendingIntentRecord,
-  MessagingPrivateConversationResolveResult,
-  MessagingPrivateReplySource,
-  MessagingQuestionnaireAnswer,
-  MessagingQuestionnaireIntent,
-  MessagingReviewIntent,
-  MessagingResponseMode,
-  MessagingStreamUpdateIntent,
-  MessagingSurfaceAction,
-  MessagingSurfaceRef,
-  MessagingSurfaceIntent,
-  MessagingTopicCleanupProposalItem,
-  MessagingTopicCleanupProposalRecord,
-} from "@pwragent/messaging-interface";
-import {
-  applyActionCapabilityLimits,
-  capabilityProfilePageSize,
-  evictStaleStreamAnchors,
-  MESSAGING_CALLBACK_HANDLE_TTL_MS,
-  messagingQuestionnaireAnswerComplete,
-  normalizeMessagingQuestionnaireIntent,
-} from "@pwragent/messaging-interface";
-import {
-  matchMessagingCommandVerb,
-} from "./messaging-command-catalog.js";
-import {
-  buildMonitorStatusIntent,
-  MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
-  MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
-  MESSAGING_MONITOR_INTERVAL_MS,
-  nextMonitorIntervalMs,
-  nextMonitorThreadLimit,
-  normalizeMonitorIntervalMs,
-  normalizeMonitorThreadLimit,
-  selectMonitorThreads,
-  type MessagingMonitorNavigation,
-  type MessagingMonitorRows,
-} from "./messaging-monitor-card.js";
+import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingPrivateConversationResolveResult, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingReviewIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
+import { applyActionCapabilityLimits, capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
+import { buildMonitorStatusIntent, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT, MESSAGING_MONITOR_INTERVAL_MS, nextMonitorIntervalMs, nextMonitorThreadLimit, normalizeMonitorIntervalMs, normalizeMonitorThreadLimit, selectMonitorThreads, type MessagingMonitorNavigation, type MessagingMonitorRows } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
-import {
-  resolveMessagingOutboundFile,
-  resolveMessagingOutboundBytes,
-  validateMessagingFileMetadata,
-  type MessagingOutboundFileAccess,
-} from "./messaging-outbound-file.js";
+import { resolveMessagingOutboundFile, resolveMessagingOutboundBytes, validateMessagingFileMetadata, type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
 import { resolveScratchProjectsRoots } from "../../app-server/scratch-projects.js";
-import {
-  defaultAgentBackendSupport,
-  defaultAgentScopeForChannel,
-  type MessagingDefaultAgentScopeKind,
-} from "./messaging-default-agent.js";
+import { defaultAgentBackendSupport, defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
-import type {
-  MessagingAdapter,
-  MessagingBackendBridge,
-  MessagingLastAssistantReply,
-  MessagingThreadAdmissionState,
-} from "./messaging-adapter.js";
+import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply, MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { MessagingFederatedThreadTargetError } from "./messaging-adapter.js";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
-import {
-  buildActivityIntent,
-  buildApprovalIntent,
-  buildAsyncQuestionnaireIntent,
-  buildConfirmationIntent,
-  buildErrorIntent,
-  buildQuestionnaireIntent,
-  buildReviewStartConfirmationIntent,
-  messagingReviewStartTarget,
-  buildStatusIntent,
-  buildToolUpdateBatchMessageIntent,
-  buildToolUpdateMessageIntent,
-  buildWorkingCardIntent,
-} from "./messaging-renderer.js";
-import {
-  buildArtifactDeliveryIntent,
-  buildArtifactInlineFallbackIntent,
-  type MessagingArtifact,
-  type MessagingArtifactMessageIntent,
-} from "./messaging-artifact-renderer.js";
+import { buildActivityIntent, buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent, buildReviewStartConfirmationIntent, messagingReviewStartTarget, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
+import { buildArtifactDeliveryIntent, buildArtifactInlineFallbackIntent, type MessagingArtifact, type MessagingArtifactMessageIntent } from "./messaging-artifact-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
-import {
-  buildBoundedResumeIntent,
-  isNewAgentThreadLaunchAction,
-  isNewThreadLaunchAction,
-  parseResumeCommandArgs,
-  resumeBrowserPageSize,
-  selectProjectFromValue,
-} from "./messaging-resume-browser.js";
-import { buildNewThreadEnvironmentPickerIntent, buildStatusAcpRuntimeModePickerIntent, buildBranchPickerPage, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, handoffRequestFromValue, messagingStreamingResponsesEnabled, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, shouldShowStreamingControl, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
-import {
-  acpBackendDeclaresExecutionMode,
-  acpBackendUsesExecutionModePermissions,
-  buildMessagingAcpRuntimeModeSummary,
-  messagingAcpRuntimeValueLooksPrivileged,
-} from "./messaging-acp-runtime.js";
-import {
-  buildSkillRemovedIntent,
-  buildSkillSelectedIntent,
-  buildSkillsBrowserIntent,
-  buildSkillsSearchPromptIntent,
-  flattenSkillEntries,
-  formatSkillInputPrefix,
-  isSkillSelectionNoticeIntent,
-  isSkillsSearchIntent,
-  isSkillsWorkflowIntent,
-  skillSelectionFromValue,
-} from "./messaging-skills-browser.js";
-import {
-  resolveMessagingThreadState,
-  isMessagingThreadContext,
-  type MessagingNavigationContext,
-  type MessagingThreadContext,
-  type MessagingResolvedThreadState,
-} from "./messaging-thread-state.js";
+import { buildBoundedResumeIntent, isNewAgentThreadLaunchAction, isNewThreadLaunchAction, parseResumeCommandArgs, resumeBrowserPageSize, selectProjectFromValue } from "./messaging-resume-browser.js";
+import { buildNewThreadEnvironmentPickerIntent, buildStatusAcpRuntimeModePickerIntent, buildBranchPickerPage, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, handoffRequestFromValue, messagingStreamingResponsesEnabled, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, shouldShowStreamingControl, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
+import { acpBackendDeclaresExecutionMode, acpBackendUsesExecutionModePermissions, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
+import { buildSkillRemovedIntent, buildSkillSelectedIntent, buildSkillsBrowserIntent, buildSkillsSearchPromptIntent, flattenSkillEntries, isSkillsWorkflowIntent, skillSelectionFromValue } from "./messaging-skills-browser.js";
+import { resolveMessagingThreadState, isMessagingThreadContext, type MessagingNavigationContext, type MessagingThreadContext, type MessagingResolvedThreadState } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
 import type { MessagingToolActivity } from "./messaging-tool-activity.js";
-import {
-  MessagingToolUpdatePolicy,
-  type MessagingToolUpdatePolicyDelivery,
-} from "./messaging-tool-update-policy.js";
-import {
-  isDeferrableDeliveryPriority,
-  MessagingDeliveryBudget,
-  type MessagingDeliveryPriority,
-} from "./messaging-delivery-budget.js";
-import {
-  MessagingDeliveryLane,
-  type MessagingDeliveryLaneTicket,
-} from "./messaging-delivery-lane.js";
+import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
+import { isDeferrableDeliveryPriority, MessagingDeliveryBudget, type MessagingDeliveryPriority } from "./messaging-delivery-budget.js";
+import { MessagingDeliveryLane, type MessagingDeliveryLaneTicket } from "./messaging-delivery-lane.js";
 import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
-import {
-  DEFAULT_MESSAGING_ATTACHMENT_POLICY,
-  formatOriginalAttachmentGuidance,
-  processMessagingAttachments,
-  type MessagingAttachmentPolicy,
-  type MessagingAttachmentRejection,
-} from "./messaging-attachment-processor.js";
-import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentInput, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
-import {
-  PdfAttachmentStore,
-  type PendingPdfAttachment,
-} from "../../pdf/pdf-attachment-store.js";
-import {
-  MessagingTurnAdmission,
-  threadKeyForBinding,
-  type MessagingQueuedTurnEntry,
-  type MessagingTurnAdmissionBundle,
-  type MessagingTurnInputEvent,
-} from "./messaging-turn-admission.js";
-import {
-  renderAutomationDecisionForMessaging,
-  renderAutomationOutputForMessaging,
-} from "../../automations/automation-output-decision.js";
-import {
-  registerAutomationSourceMessageDeliveryHandler,
-  registerAutomationTargetMessageDeliveryHandler,
-} from "../../automations/automation-action-executor.js";
+import { type MessagingAttachmentPolicy } from "./messaging-attachment-processor.js";
+import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
+import { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
+import { MessagingTurnAdmission, threadKeyForBinding, type MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import { renderAutomationDecisionForMessaging, renderAutomationOutputForMessaging } from "../../automations/automation-output-decision.js";
+import { registerAutomationSourceMessageDeliveryHandler, registerAutomationTargetMessageDeliveryHandler } from "../../automations/automation-action-executor.js";
 import { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingBindingHost } from "./messaging-binding-context";
 import { threadContextForAdmissionState, normalizeConversationTitle, isDefaultAgentRouteBinding, handoffContextForBinding, type MessagingToolUpdateDefaultModeResolver } from "./messaging-binding-helpers";
+import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, originalAttachmentActorKey, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, turnSettingsForThread, isPromiseLike, DEFAULT_MESSAGING_AGENT_NAME, truncateText, type MessagingFullAccessControlsResolver, type FullAccessRiskPresentationMode } from "./messaging-inbound-helpers";
+import { MessagingInboundTurns } from "./messaging-inbound-turns";
+import type { MessagingInboundHost } from "./messaging-inbound-context";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
-const DEFAULT_INPUT_DEBOUNCE_MS = 500;
-// Upper bound on retained admission stage marks. A turn that is queued behind a
-// busy thread, or that fails before `startTurn`, never reaches the log that
-// consumes its marks, so the ceiling cannot depend on the happy path. Oldest
-// entry is evicted first; each holds one fixed, bounded set of stage/subspan
-// numbers.
-const ADMISSION_STAGE_MARK_LIMIT = 256;
-
-/**
- * Stage marks for one inbound message's trip from receipt to `startTurn`.
- *
- * `pwragentReceivedToStartTurnIssueMs` already measures that whole trip, which
- * is enough to see that it is slow and not enough to see where. A slow trip is
- * ambiguous between work this process chooses to do (resolving the route,
- * preparing the input, reading admission state, enforcing policy) and a wait it
- * merely schedules (the input debounce). These marks separate them, so one log
- * line says which stage owns the latency instead of requiring a bisect.
- *
- * Marks are keyed by inbound event id, not by the event object: the command and
- * media paths re-spread the event into a new object, so object identity does
- * not survive the trip and a `WeakMap` would silently record nothing.
- */
-type MessagingAdmissionStage =
-  | "handled"
-  | "routed"
-  | "bundleReady"
-  | "inputPrepared"
-  | "admissionStateResolved"
-  | "queued"
-  | "occupancyResolved"
-  | "originBuilt"
-  | "policyResolved";
-
-type MessagingHandledToRoutedSubspan =
-  | "handledAutomationInboundMs"
-  | "handledBindingLookupMs"
-  | "handledDefaultAgentAssignmentsMs"
-  | "handledDefaultAgentBackendValidationMs"
-  | "handledDefaultAgentRevocationsMs"
-  | "handledDefaultAgentTargetValidationMs"
-  | "handledPendingIntentReadMs"
-  | "handledPendingNewThreadReadMs"
-  | "handledPrivateContinuationExpirationMs"
-  | "handledRemoteScopeMs"
-  | "handledRequirePermissionMs"
-  | "handledResponseModeMs"
-  | "handledSharedMessagePolicyMs"
-  | "handledTextParsingMs"
-  | "finalAdmissionAppendAwaitMs";
-
-type MessagingInputPreparationSpan =
-  | "inputPrepPendingSkillBindingReloadMs"
-  | "inputPrepPdfHandlingResolutionMs"
-  | "inputPrepPdfAnalysisPolicyMs"
-  | "inputPrepPdfToolSupportProbeMs"
-  | "inputPrepPrivateResponseMs"
-  | "inputPrepTextConstructionMs"
-  | "inputPrepAttachmentProcessingMs";
-
-type MessagingAdmissionTimingRecord = {
-  marks: Partial<Record<MessagingAdmissionStage, number>>;
-  subspans: Partial<Record<
-    MessagingHandledToRoutedSubspan | MessagingInputPreparationSpan,
-    number
-  >>;
-};
-const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 
 type MessagingTurnProseState = {
   latest?: { activityId: string; text: string };
@@ -320,39 +82,7 @@ export type MessagingWorkingCardState = {
   omittedTaskCount: number;
   sequence: number;
 };
-const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
-const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
-  "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
-const PRIVATE_RESPONSE_FALLBACK_INSTRUCTION =
-  "PwrAgent detected an explicit request for a private terminal response. "
-  + "Do not include sensitive response content in commentary or working updates. "
-  + "Use send_private_response if it is available. If that tool is unavailable, "
-  + "put the intended private content only in your final answer; PwrAgent will "
-  + "deliver that final privately and suppress it on the source surface.";
 const PRIVATE_REPLY_CONTINUATION_TTL_MS = 24 * 60 * 60 * 1_000;
-const PRIVATE_REPLY_COMPLETION_INSTRUCTION =
-  "PwrAgent is completing a one-shot private reply requested by this Agent. "
-  + "Treat the user's following message as the private response to your earlier request. "
-  + "Your final answer will be delivered to the originating messaging surface, not this private thread. "
-  + "Do not quote or expose private reply content there unless the initiating instructions explicitly require it. "
-  + "Do not emit commentary, working updates, or partial answers containing the private reply. "
-  + "If the private exchange is not complete, call send_private_response again with awaitReply and new replyInstructions; otherwise answer finally to complete the callback on the originating surface.";
-const EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN = new RegExp(
-  [
-    "\\b(?:dm|direct[\\s-]+message|private[\\s-]+message)\\s+me\\b",
-    "\\bsend\\s+me(?:\\s+\\S+){0,3}\\s+(?:dm|direct[\\s-]+message|private[\\s-]+message)\\b",
-    "\\b(?:send|reply|respond)(?:\\s+\\S+){0,6}\\s+privately\\b",
-    "\\bsend(?:\\s+\\S+){0,6}\\s+(?:only|just)\\s+to\\s+me\\b",
-  ].join("|"),
-  "i",
-);
-const NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN = new RegExp(
-  [
-    "\\b(?:(?:do\\s+not|don't|dont|never)(?:\\s+\\w+){0,8}(?:\\s+to)?",
-    "|not(?:\\s+(?:asking|requesting|telling|wanting|going|trying|supposed|allowed|permitted|send|reply|respond|dm)){1,8}(?:\\s+to)?)\\s*$",
-  ].join(""),
-  "i",
-);
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const messagingControllerLog = getMainLogger("pwragent:messaging");
@@ -398,30 +128,6 @@ function attachTargetNotFound(
   };
 }
 
-type ExecutionModeResolution = {
-  mode: ThreadExecutionMode | undefined;
-  source: "thread" | "binding-preferences" | "permissions-mode" | "unset";
-};
-
-function resolveExecutionModeForThread(
-  binding: MessagingBindingRecord,
-  thread: NavigationThreadSummary | undefined,
-): ExecutionModeResolution {
-  if (thread?.executionMode) {
-    return { mode: thread.executionMode, source: "thread" };
-  }
-  if (binding.preferences?.executionMode) {
-    return { mode: binding.preferences.executionMode, source: "binding-preferences" };
-  }
-  if (binding.preferences?.permissionsMode === "full-access") {
-    return { mode: "full-access", source: "permissions-mode" };
-  }
-  if (binding.preferences?.permissionsMode === "default") {
-    return { mode: "default", source: "permissions-mode" };
-  }
-  return { mode: undefined, source: "unset" };
-}
-
 function resolveExecutionModeForBinding(
   binding: MessagingBindingRecord,
   navigation?: MessagingNavigationContext,
@@ -457,28 +163,6 @@ function turnSettingsForBinding(
   );
 }
 
-function turnSettingsForThread(
-  binding: MessagingBindingRecord,
-  thread: NavigationThreadSummary | undefined,
-  executionResolution: ExecutionModeResolution,
-): {
-  executionMode?: ThreadExecutionMode;
-  fastMode?: boolean;
-  model?: string;
-  reasoningEffort?: string;
-  serviceTier?: string;
-} {
-  return {
-    executionMode: executionResolution.mode,
-    fastMode: thread?.fastMode ?? binding.preferences?.fastMode,
-    model: thread?.model ?? binding.preferences?.model,
-    reasoningEffort: thread?.reasoningEffort ?? binding.preferences?.reasoningEffort,
-    serviceTier: thread?.fastMode !== undefined
-      ? thread.serviceTier
-      : thread?.serviceTier ?? binding.preferences?.serviceTier,
-  };
-}
-
 function federationTargetForThread(
   thread: NavigationThreadSummary,
 ): FederationTarget | undefined {
@@ -493,14 +177,6 @@ function threadKeyForNavigationThread(
   return thread.federation
     ? federatedThreadIdentityKey(thread.federation.ref)
     : buildThreadIdentityKey(thread.source, thread.id);
-}
-
-function formatAttachmentRejections(
-  rejections: MessagingAttachmentRejection[],
-): string {
-  return rejections
-    .map((rejection) => `${rejection.name}: ${rejection.reason}`)
-    .join("\n");
 }
 
 function readPdfToolString(value: unknown): string | undefined {
@@ -538,15 +214,6 @@ function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok
   };
 }
 
-type MessagingFullAccessControlsResolverFn = () =>
-  | MessagingFullAccessControls
-  | undefined
-  | Promise<MessagingFullAccessControls | undefined>;
-
-type MessagingFullAccessControlsResolver =
-  | MessagingFullAccessControls
-  | MessagingFullAccessControlsResolverFn;
-
 function normalizeMessagingFullAccessControls(
   resolved: MessagingFullAccessControls | undefined,
 ): MessagingFullAccessControls {
@@ -560,16 +227,10 @@ function normalizeMessagingFullAccessControls(
   };
 }
 
-function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
-  return typeof (value as PromiseLike<T>)?.then === "function";
-}
-
 type FullAccessRiskPresentation = {
   binding?: MessagingBindingRecord;
   surface?: MessagingSurfaceRef;
 };
-
-type FullAccessRiskPresentationMode = "surface" | "message";
 
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
@@ -732,10 +393,6 @@ export class MessagingController {
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
-  private readonly admissionStageMarks = new Map<
-    string,
-    MessagingAdmissionTimingRecord
-  >();
   private readonly pendingIntentTtlMs: number;
   private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly queuedTurnActions = new Set<Promise<void>>();
@@ -781,11 +438,6 @@ export class MessagingController {
   private readonly queuedTurnDrains = new Map<string, Promise<void>>();
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
-  private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
-  private readonly pendingFullAccessNewThreadPrompts = new Map<
-    string,
-    PendingNewThreadPromptBundle
-  >();
   private readonly monitorTimersByBindingId = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -823,6 +475,9 @@ export class MessagingController {
   >();
   private readonly unregisterAutomationSourceMessageDeliveryHandler: () => void;
   private readonly unregisterAutomationTargetMessageDeliveryHandler: () => void;
+
+  private readonly inboundTurns: MessagingInboundTurns;
+  private inboundHostPorts?: MessagingInboundHost;
 
   private readonly commandHandlers: MessagingCommandHandlers;
   private commandHostPorts?: MessagingCommandHost;
@@ -872,6 +527,17 @@ export class MessagingController {
       get config() { return readBindingConfig(); },
       host: () => this.bindingHost(),
     });
+    const readInboundConfig = () => this.options;
+    this.inboundTurns = new MessagingInboundTurns({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      get config() { return readInboundConfig(); },
+      host: () => this.inboundHost(),
+    });
     this.authorizedActorIds = new Set(options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
     this.now = options.now ?? Date.now;
@@ -886,7 +552,7 @@ export class MessagingController {
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
       now: this.now,
       onBundleReady: async (bundle) => {
-        await this.handleAdmittedTurnBundle(bundle);
+        await this.inboundTurns.handleAdmittedTurnBundle(bundle);
       },
     });
     this.toolUpdatePolicy = new MessagingToolUpdatePolicy({
@@ -951,7 +617,7 @@ export class MessagingController {
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
-    await this.cleanupExpiredPrivateReplyContinuations();
+    await this.inboundTurns.cleanupExpiredPrivateReplyContinuations();
     if (this.options.channel) {
       const subscriptions =
         await this.options.store.findActiveMonitorSubscriptionsForChannelKind({
@@ -1001,7 +667,7 @@ export class MessagingController {
     // actor's traffic is not a turn anyone is timing, and marking it would let
     // a burst of rejected events push the entries this map exists to hold out
     // of it.
-    this.markAdmissionStage(event, "handled");
+    this.inboundTurns.markAdmissionStage(event, "handled");
     // An actor's next action owns the surface. Late browse arrivals must not
     // overwrite a selection, cancellation, query edit, or a newer browser.
     this.progressiveBrowseByConversation.delete(buildMessagingConversationKey(event.channel));
@@ -1012,9 +678,9 @@ export class MessagingController {
     // events retain ordering because commands such as `/monitor topics` can
     // intentionally promote an observed topic to owned state.
     if (event.kind === "text" || event.kind === "media") {
-      void this.refreshInboundMetadata(event);
+      void this.inboundTurns.refreshInboundMetadata(event);
     } else {
-      await this.refreshInboundMetadata(event);
+      await this.inboundTurns.refreshInboundMetadata(event);
     }
 
     if (event.kind === "command") {
@@ -1042,7 +708,7 @@ export class MessagingController {
       (event.kind === "text" || event.kind === "media") &&
       this.options.automationInboundHandler
     ) {
-      const automationMatched = await this.measureHandledToRoutedSubspan(
+      const automationMatched = await this.inboundTurns.measureHandledToRoutedSubspan(
         event,
         "handledAutomationInboundMs",
         async () => await this.options.automationInboundHandler?.(event) ?? false,
@@ -1053,12 +719,12 @@ export class MessagingController {
     }
 
     if (event.kind === "media") {
-      await this.handleMedia(event);
+      await this.inboundTurns.handleMedia(event);
       return;
     }
 
     if (event.kind === "text") {
-      await this.handleText(event);
+      await this.inboundTurns.handleText(event);
     }
   }
 
@@ -1226,6 +892,57 @@ export class MessagingController {
 
   private backendEventPorts?: MessagingBackendEventHost;
 
+  private inboundHost(): MessagingInboundHost {
+    const readController = () => this;
+    return this.inboundHostPorts ??= {
+      get commandHandlers() { return readController().commandHandlers; },
+      get interactionMapper() { return readController().interactionMapper; },
+      get callbackHandlers() { return readController().callbackHandlers; },
+      presentSkillsBrowser: (...args) => this.presentSkillsBrowser(...args),
+      handleReviewTextAnswer: (...args) => this.handleReviewTextAnswer(...args),
+      handleQuestionnaireTextAnswer: (...args) => this.handleQuestionnaireTextAnswer(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      cycleToolUpdateMode: (...args) => this.cycleToolUpdateMode(...args),
+      cycleStreamingResponseMode: (...args) => this.cycleStreamingResponseMode(...args),
+      requirePermission: (...args) => this.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      get bindingService() { return readController().bindingService; },
+      defaultAgentRouteBinding: (...args) => this.defaultAgentRouteBinding(...args),
+      get privateReplyClaims() { return readController().privateReplyClaims; },
+      rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
+      get turnAdmission() { return readController().turnAdmission; },
+      completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
+      clearPendingSkillSelection: (...args) => this.clearPendingSkillSelection(...args),
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      buildAgentMessagingOrigin: (...args) => this.buildAgentMessagingOrigin(...args),
+      get startingAgentMessagingOriginsByThreadKey() { return readController().startingAgentMessagingOriginsByThreadKey; },
+      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
+      deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
+      beginTurnPreparationActivity: (...args) => this.beginTurnPreparationActivity(...args),
+      rememberQueuedAgentMessagingOrigin: (...args) => this.rememberQueuedAgentMessagingOrigin(...args),
+      applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
+      deliverQueuedTurnNotice: (...args) => this.deliverQueuedTurnNotice(...args),
+      get pdfAttachmentStore() { return readController().pdfAttachmentStore; },
+      rememberAgentMessagingOrigin: (...args) => this.rememberAgentMessagingOrigin(...args),
+      setActiveTurn: (...args) => this.setActiveTurn(...args),
+      getActiveTurn: (...args) => this.getActiveTurn(...args),
+      signalTurnActivity: (...args) => this.signalTurnActivity(...args),
+      reconcileActiveTurnFromThreadStatus: (...args) => this.reconcileActiveTurnFromThreadStatus(...args),
+      get backendEventRouter() { return readController().backendEventRouter; },
+      observeManagedTopicFromInbound: (...args) => this.observeManagedTopicFromInbound(...args),
+      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      loadNewThreadBackendChoices: (...args) => this.loadNewThreadBackendChoices(...args),
+      deliverSelectedNewThreadBackendUnavailable: (...args) => this.deliverSelectedNewThreadBackendUnavailable(...args),
+      resolveNewThreadBackendForSession: (...args) => this.resolveNewThreadBackendForSession(...args),
+      ensureNewThreadProjectLaunchpad: (...args) => this.ensureNewThreadProjectLaunchpad(...args),
+      resolveNewThreadToolUpdateMode: (...args) => this.resolveNewThreadToolUpdateMode(...args),
+      get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
+      resolveFullAccessRiskForSession: (...args) => this.resolveFullAccessRiskForSession(...args),
+      presentFullAccessRiskWarning: (...args) => this.presentFullAccessRiskWarning(...args),
+    };
+  }
+
   private commandHost(): MessagingCommandHost {
     return this.commandHostPorts ??= {
       requirePermission: (...args) => this.requirePermission(...args),
@@ -1238,8 +955,8 @@ export class MessagingController {
       rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
-      shouldHandleAmbientSharedMessage: (...args) => this.shouldHandleAmbientSharedMessage(...args),
-      admitTurnInput: (...args) => this.admitTurnInput(...args),
+      shouldHandleAmbientSharedMessage: (...args) => this.inboundTurns.shouldHandleAmbientSharedMessage(...args),
+      admitTurnInput: (...args) => this.inboundTurns.admitTurnInput(...args),
       reviewSupportedForBinding: (...args) => this.reviewSupportedForBinding(...args),
       deliverReviewUnsupported: (...args) => this.deliverReviewUnsupported(...args),
       submitMessagingReview: (...args) => this.submitMessagingReview(...args),
@@ -1274,7 +991,7 @@ export class MessagingController {
       isChannelInScope: (...args) => this.isChannelInScope(...args),
       get showStreamingOptionConfig() { return readController().showStreamingOptionConfig; },
       contextUsageSummaryForBinding: (...args) => this.contextUsageSummaryForBinding(...args),
-      responseModeForConversation: (...args) => this.responseModeForConversation(...args),
+      responseModeForConversation: (...args) => this.inboundTurns.responseModeForConversation(...args),
       reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
       getBackendSummary: (...args) => this.getBackendSummary(...args),
       resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
@@ -1308,7 +1025,7 @@ export class MessagingController {
       get turnAdmission() { return readController().turnAdmission; },
       get sharedQueueNotices() { return readController().sharedQueueNotices; },
       requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
-      startPreparedInput: (...args) => this.startPreparedInput(...args),
+      startPreparedInput: (...args) => this.inboundTurns.startPreparedInput(...args),
       retireQueuedTurnNotice: (...args) => this.retireQueuedTurnNotice(...args),
       trackQueuedTurnAction: (...args) => this.trackQueuedTurnAction(...args),
       steerQueuedTurn: (...args) => this.steerQueuedTurn(...args),
@@ -1338,7 +1055,7 @@ export class MessagingController {
       presentNewThreadModelPicker: (...args) => this.presentNewThreadModelPicker(...args),
       presentNewThreadReasoningPicker: (...args) => this.presentNewThreadReasoningPicker(...args),
       deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
-      loadDefaultAgentBackendSummaries: (...args) => this.loadDefaultAgentBackendSummaries(...args),
+      loadDefaultAgentBackendSummaries: (...args) => this.inboundTurns.loadDefaultAgentBackendSummaries(...args),
       notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
       ensureFullAccessEscalationAllowed: (...args) => this.ensureFullAccessEscalationAllowed(...args),
@@ -1383,13 +1100,13 @@ export class MessagingController {
       syncConversationName: (...args) => this.bindingService.syncConversationName(...args),
       deliverInvalidStatusSelection: (...args) => this.deliverInvalidStatusSelection(...args),
       deliverStaleFullAccessWarning: (...args) => this.deliverStaleFullAccessWarning(...args),
-      get pendingFullAccessNewThreadPrompts() { return readController().pendingFullAccessNewThreadPrompts; },
+      get pendingFullAccessNewThreadPrompts() { return readController().inboundTurns.pendingFullAccessNewThreadPrompts; },
       withNewThreadPromptCaptureExpiry: (...args) => this.withNewThreadPromptCaptureExpiry(...args),
       resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
       resolveFullAccessWarning: (...args) => this.resolveFullAccessWarning(...args),
       deliverMissingFullAccessPrompt: (...args) => this.deliverMissingFullAccessPrompt(...args),
-      createNewThreadFromPromptBundle: (...args) => this.createNewThreadFromPromptBundle(...args),
-      deliverNewThreadPromptFailure: (...args) => this.deliverNewThreadPromptFailure(...args),
+      createNewThreadFromPromptBundle: (...args) => this.inboundTurns.createNewThreadFromPromptBundle(...args),
+      deliverNewThreadPromptFailure: (...args) => this.inboundTurns.deliverNewThreadPromptFailure(...args),
       applyNewThreadAcpRuntimeMode: (...args) => this.applyNewThreadAcpRuntimeMode(...args),
       applyBindingAcpRuntimeMode: (...args) => this.applyBindingAcpRuntimeMode(...args),
       recordFullAccessPolicyViolation: (...args) => this.recordFullAccessPolicyViolation(...args),
@@ -1402,7 +1119,7 @@ export class MessagingController {
       get privateReplyClaims() { return readController().privateReplyClaims; },
       deliverPrivateReplyButtonState: (...args) => this.deliverPrivateReplyButtonState(...args),
       completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
-      admitTurnInput: (...args) => this.admitTurnInput(...args),
+      admitTurnInput: (...args) => this.inboundTurns.admitTurnInput(...args),
     };
   }
 
@@ -1659,35 +1376,6 @@ export class MessagingController {
         });
         await this.bindingService.renderAutomaticBindingStatus(binding);
       }
-    }
-  }
-
-  private async refreshInboundMetadata(event: MessagingInboundEvent): Promise<void> {
-    const startedAt = this.now();
-    let refreshBindingFromInboundMs = 0;
-    let observeManagedTopicFromInboundMs = 0;
-    try {
-      const refreshStartedAt = this.now();
-      await this.bindingService.refreshBindingFromInbound(event);
-      refreshBindingFromInboundMs = this.now() - refreshStartedAt;
-
-      const observeStartedAt = this.now();
-      await this.observeManagedTopicFromInbound(event);
-      observeManagedTopicFromInboundMs = this.now() - observeStartedAt;
-    } catch (error) {
-      this.logger.debug?.("messaging inbound metadata refresh failed", {
-        eventId: event.id,
-        platform: event.channel.channel,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      this.logger.debug?.("messaging off-path inbound metadata timing", {
-        eventId: event.id,
-        platform: event.channel.channel,
-        refreshBindingFromInboundMs,
-        observeManagedTopicFromInboundMs,
-        totalMs: this.now() - startedAt,
-      });
     }
   }
 
@@ -2238,1795 +1926,6 @@ export class MessagingController {
     };
   }
 
-  private async handleText(event: MessagingInboundTextEvent): Promise<void> {
-    const command = this.measureHandledToRoutedSyncSubspan(
-      event,
-      "handledTextParsingMs",
-      () => parseTextCommand(event.text),
-    );
-    if (command) {
-      await this.commandHandlers.handleCommand({
-        ...event,
-        kind: "command",
-        command,
-        args: parseTextCommandArgs(event.text),
-        rawText: event.text,
-      });
-      return;
-    }
-
-    const mentionCommand = this.measureHandledToRoutedSyncSubspan(
-      event,
-      "handledTextParsingMs",
-      () => event.botMention ? parseMentionCommand(event.text) : undefined,
-    );
-    if (mentionCommand) {
-      await this.commandHandlers.handleCommand({
-        ...event,
-        kind: "command",
-        command: mentionCommand.command,
-        args: mentionCommand.args,
-        rawText: `/${[mentionCommand.command, ...mentionCommand.args].join(" ")}`,
-      });
-      return;
-    }
-
-    const [pendingNewThread, pendingIntent] = await Promise.all([
-      this.measureHandledToRoutedSubspan(
-        event,
-        "handledPendingNewThreadReadMs",
-        async () => await this.findPendingNewThreadSession(event),
-      ),
-      this.measureHandledToRoutedSubspan(
-        event,
-        "handledPendingIntentReadMs",
-        async () =>
-          await this.options.store.findActivePendingIntentForChannel({
-            actorId: event.actor.platformUserId,
-            channel: event.channel,
-            now: this.now(),
-          }),
-      ),
-    ]);
-    if (pendingIntent) {
-      if (isSkillsSearchIntent(pendingIntent.intent)) {
-        const mapped = await this.interactionMapper.mapText({
-          intent: pendingIntent.intent,
-          text: event.text,
-        });
-        if (mapped.kind === "matched") {
-          await this.callbackHandlers.handleCallback({
-            ...event,
-            kind: "callback",
-            interaction: {
-              channel: event.channel.channel,
-              id: mapped.action.id,
-            },
-            sourceSurface: pendingIntent.surface,
-            actionId: mapped.action.id,
-            value: mapped.action.value,
-          });
-          return;
-        }
-
-        const binding = pendingIntent.bindingId
-          ? await this.options.store.getBinding(pendingIntent.bindingId)
-          : undefined;
-        await this.options.store.deletePendingIntent(pendingIntent.id);
-        if (binding && !binding.revokedAt) {
-          await this.presentSkillsBrowser(binding, event, {
-            pageIndex: 0,
-            query: event.text,
-            targetSurface: pendingIntent.surface,
-          });
-          return;
-        }
-      } else {
-        const mapped = await this.interactionMapper.mapText({
-          intent: pendingIntent.intent,
-          text: event.text,
-        });
-        if (mapped.kind === "matched") {
-          await this.callbackHandlers.handleCallback({
-            ...event,
-            kind: "callback",
-            interaction: {
-              channel: event.channel.channel,
-              id: mapped.action.id,
-            },
-            sourceSurface: pendingIntent.surface,
-            actionId: mapped.action.id,
-            value: mapped.action.value,
-          });
-          return;
-        }
-        if (
-          pendingIntent.intent.kind === "review" &&
-          await this.handleReviewTextAnswer(pendingIntent, event)
-        ) {
-          return;
-        }
-        if (
-          pendingIntent.intent.kind === "questionnaire" &&
-          await this.handleQuestionnaireTextAnswer(pendingIntent, event)
-        ) {
-          return;
-        }
-        if (pendingNewThread) {
-          await this.appendPendingNewThreadPrompt(pendingNewThread, event);
-          return;
-        }
-        if (isSkillSelectionNoticeIntent(pendingIntent.intent)) {
-          await this.options.store.deletePendingIntent(pendingIntent.id);
-        } else if (mapped.kind === "ambiguous") {
-          await this.deliver(
-            buildConfirmationIntent({
-              id: this.newIntentId("ambiguous-reply"),
-              capabilityProfile: this.capabilityProfile,
-              createdAt: this.now(),
-              title: "Choose an option",
-              body: pendingIntent.intent.fallbackText ?? "Reply with one of the shown options.",
-              fallbackText: pendingIntent.intent.fallbackText,
-            }),
-            undefined,
-            event,
-          );
-          return;
-        }
-      }
-    }
-
-    if (pendingNewThread) {
-      await this.appendPendingNewThreadPrompt(pendingNewThread, event);
-      return;
-    }
-
-    let binding = await this.measureHandledToRoutedSubspan(
-      event,
-      "handledBindingLookupMs",
-      async () => await this.options.store.findActiveBindingForChannel(event.channel),
-    );
-    binding = await this.measureHandledToRoutedSubspan(
-      event,
-      "handledPrivateContinuationExpirationMs",
-      async () => await this.revokeExpiredPrivateReplyContinuation(binding),
-    );
-    binding = bindingWithInboundRoutingState(binding, event.routingState);
-    if (!binding) {
-      if (!await this.measureHandledToRoutedSubspan(
-        event,
-        "handledSharedMessagePolicyMs",
-        async () => await this.shouldHandleAmbientSharedMessage(event),
-      )) {
-        return;
-      }
-      if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
-        return;
-      }
-      await this.commandHandlers.presentHelp(event);
-      return;
-    }
-
-    if (!await this.measureHandledToRoutedSubspan(
-      event,
-      "handledSharedMessagePolicyMs",
-      async () => await this.shouldHandleAmbientSharedMessage(event, binding),
-    )) {
-      return;
-    }
-
-    if (isToolsFallbackText(event.text)) {
-      await this.cycleToolUpdateMode(binding, event);
-      return;
-    }
-    if (isStreamFallbackText(event.text)) {
-      await this.cycleStreamingResponseMode(binding, event);
-      return;
-    }
-
-    // RBAC floor: sending a turn to the agent needs `message.reply`. Silent
-    // drop (no reply) so an under-permissioned sender can't be spammed with
-    // rejections in a shared channel.
-    if (!(await this.measureHandledToRoutedSubspan(
-      event,
-      "handledRequirePermissionMs",
-      async () =>
-        await this.requirePermission(
-          event,
-          "message.reply",
-          "message:reply",
-          { notify: false },
-        ),
-    ))) {
-      return;
-    }
-    // A turn into a remote-bound thread runs on the peer's machine.
-    if (
-      !(await this.measureHandledToRoutedSubspan(
-        event,
-        "handledRemoteScopeMs",
-        async () =>
-          await this.requireRemoteScopeForBinding(
-            event,
-            binding,
-            "message:reply:remote-instance",
-            { notify: false },
-          ),
-      ))
-    ) {
-      return;
-    }
-
-    await this.admitTurnInput({ binding, event });
-  }
-
-  private async bootstrapDefaultAgentForAcceptedMessage(
-    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
-  ): Promise<boolean> {
-    const assignments =
-      await this.measureHandledToRoutedSubspan(
-        event,
-        "handledDefaultAgentAssignmentsMs",
-        async () =>
-          await this.options.store.findActiveDefaultAgentAssignmentsForChannel(
-            event.channel,
-          ),
-      );
-    if (assignments.length === 0) {
-      return false;
-    }
-    if (
-      !(await this.measureHandledToRoutedSubspan(
-        event,
-        "handledRequirePermissionMs",
-        async () =>
-          await this.requirePermission(
-            event,
-            "message.reply",
-            event.kind === "media" ? "media:reply" : "message:reply",
-            { notify: false },
-          ),
-      ))
-    ) {
-      return true;
-    }
-
-    let selected:
-      | {
-          assignment: MessagingDefaultAgentAssignmentRecord;
-        }
-      | undefined;
-    let backendSummaries: BackendSummary[] | undefined;
-    let backendSummariesLoaded = false;
-    // Revocations are buffered, not applied as they are decided. Every
-    // iteration reads backend state that can fail, and a failure part-way
-    // through used to leave the channel half-revoked: the assignments already
-    // rejected were gone, the ones not yet examined survived, and the operator
-    // saw only "Default Agent unavailable". Deciding first and writing after
-    // makes the pass all-or-nothing.
-    const revocations: MessagingDefaultAgentAssignmentRecord[] = [];
-    for (const assignment of assignments) {
-      let targetIsAgentThread: boolean;
-      try {
-        targetIsAgentThread =
-          await this.measureHandledToRoutedSubspan(
-            event,
-            "handledDefaultAgentTargetValidationMs",
-            async () =>
-              await this.defaultAgentTargetIsAgentThread(assignment.target),
-          );
-      } catch (error) {
-        await this.deliverDefaultAgentBootstrapError(
-          event,
-          "Default Agent unavailable",
-          error instanceof Error ? error.message : String(error),
-        );
-        return true;
-      }
-      if (
-        isAcpBackendId(assignment.target.backend)
-        && !backendSummariesLoaded
-      ) {
-        backendSummaries = await this.measureHandledToRoutedSubspan(
-          event,
-          "handledDefaultAgentBackendValidationMs",
-          async () => await this.loadDefaultAgentBackendSummaries(),
-        );
-        backendSummariesLoaded = true;
-      }
-      const backendSupport = defaultAgentBackendSupport(
-        assignment.target.backend,
-        backendSummaries,
-      );
-      if (
-        assignment.target.kind === "agent"
-        && targetIsAgentThread
-        && backendSupport === "supported"
-      ) {
-        selected = { assignment };
-        break;
-      }
-      if (targetIsAgentThread && backendSupport === "unknown") {
-        await this.deliverDefaultAgentBootstrapError(
-          event,
-          "Default Agent unavailable",
-          "PwrAgent could not confirm that this Agent backend currently exposes the required tools. The default assignment was preserved.",
-        );
-        return true;
-      }
-      revocations.push(assignment);
-    }
-    await this.measureHandledToRoutedSubspan(
-      event,
-      "handledDefaultAgentRevocationsMs",
-      async () => {
-        for (const assignment of revocations) {
-          await this.options.store.revokeDefaultAgentAssignment({
-            assignmentId: assignment.id,
-            revokedAt: this.now(),
-          });
-          this.bindingService.notifyBindingChanged("default-agent-cleared");
-        }
-      },
-    );
-    if (!selected) {
-      return false;
-    }
-
-    const binding = this.defaultAgentRouteBinding(event, {
-      backend: selected.assignment.target.backend,
-      threadId: selected.assignment.target.threadId,
-      toolUpdateMode: selected.assignment.toolUpdateMode,
-    });
-    await this.admitTurnInput({
-      binding,
-      event,
-    });
-    return true;
-  }
-
-  /**
-   * Does this assignment still point at an agent thread?
-   *
-   * Answered from what this process already knows about the one thread whose
-   * id the assignment carries. Deciding to start or queue a turn needs the
-   * target's identity, settings and occupancy; it does not need Git state,
-   * pull-request status, launchpads or the rest of the fleet.
-   *
-   * This used to call `getNavigationSnapshot({ backend: "all" })` on every
-   * accepted message, which enumerates every thread on every backend and then
-   * hydrates overlays, canonicalizes pull requests, probes Git working state,
-   * refreshes directory status and hydrates launchpads — all to answer one
-   * yes-or-no question about one thread. Opening the same thread in the app
-   * does none of that.
-   *
-   * ## What the listing proved, and what replaces it
-   *
-   * The listing proved two things at once: the thread still has an agent, and
-   * the provider still serves it. Only the first survives here, and the
-   * difference is deliberate rather than overlooked.
-   *
-   * `agent` is desktop-owned state that lives in the thread's overlay row, and
-   * a navigation row reads it from that same row — so the targeted answer and
-   * the listing's answer are the same answer.
-   *
-   * Existence is the one this cannot prove. `admission.thread` is built from
-   * the overlay when no listing row is remembered, and nothing deletes an
-   * overlay, so an agent thread deleted at the provider still presents a row
-   * here. Proving otherwise costs a provider round trip on every accepted
-   * message, and the two ways a target legitimately goes away are already
-   * covered more cheaply: archival revokes these assignments from the
-   * `thread/archived` handler, and a thread this machine has no record of at
-   * all fails the check below. What remains — an out-of-band deletion whose
-   * overlay outlives it — surfaces as a failed `startTurn` with a recoverable
-   * error rather than as a fleet walk charged to every message.
-   */
-  private async defaultAgentTargetIsAgentThread(
-    target: MessagingDefaultAgentAssignmentRecord["target"],
-  ): Promise<boolean> {
-    const admission = await this.options.backend.getThreadAdmissionState({
-      backend: target.backend,
-      threadId: target.threadId,
-    });
-    return Boolean(admission.thread?.agent);
-  }
-
-  private async deliverDefaultAgentBootstrapError(
-    event: MessagingInboundEvent,
-    title: string,
-    body: string,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("default-agent-bootstrap"),
-        createdAt: this.now(),
-        title,
-        body,
-        recoverable: true,
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
-    const command = this.measureHandledToRoutedSyncSubspan(
-      event,
-      "handledTextParsingMs",
-      () => event.text ? parseTextCommand(event.text) : undefined,
-    );
-    if (command) {
-      await this.commandHandlers.handleCommand({
-        ...event,
-        kind: "command",
-        command,
-        args: parseTextCommandArgs(event.text ?? ""),
-        rawText: event.text ?? "",
-      });
-      return;
-    }
-    const mentionCommand = this.measureHandledToRoutedSyncSubspan(
-      event,
-      "handledTextParsingMs",
-      () => event.botMention && event.text
-        ? parseMentionCommand(event.text)
-        : undefined,
-    );
-    if (mentionCommand) {
-      await this.commandHandlers.handleCommand({
-        ...event,
-        kind: "command",
-        command: mentionCommand.command,
-        args: mentionCommand.args,
-        rawText: `/${[mentionCommand.command, ...mentionCommand.args].join(" ")}`,
-      });
-      return;
-    }
-
-    const pendingNewThread = await this.measureHandledToRoutedSubspan(
-      event,
-      "handledPendingNewThreadReadMs",
-      async () => await this.findPendingNewThreadSession(event),
-    );
-    if (pendingNewThread) {
-      await this.appendPendingNewThreadPrompt(pendingNewThread, event);
-      return;
-    }
-
-    let binding = await this.measureHandledToRoutedSubspan(
-      event,
-      "handledBindingLookupMs",
-      async () => await this.options.store.findActiveBindingForChannel(event.channel),
-    );
-    binding = await this.measureHandledToRoutedSubspan(
-      event,
-      "handledPrivateContinuationExpirationMs",
-      async () => await this.revokeExpiredPrivateReplyContinuation(binding),
-    );
-    binding = bindingWithInboundRoutingState(binding, event.routingState);
-    if (!binding) {
-      if (!await this.measureHandledToRoutedSubspan(
-        event,
-        "handledSharedMessagePolicyMs",
-        async () => await this.shouldHandleAmbientSharedMessage(event),
-      )) {
-        return;
-      }
-      if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
-        return;
-      }
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("needs-binding-media"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Choose a thread",
-          body: "Bind this conversation to a PwrAgent thread before sending attachments.",
-          fallbackText: "Reply /resume to choose a thread.",
-          actions: [
-            {
-              id: "command:resume",
-              label: "Resume",
-              style: "primary",
-              fallbackText: "/resume",
-            },
-          ],
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    if (!await this.measureHandledToRoutedSubspan(
-      event,
-      "handledSharedMessagePolicyMs",
-      async () => await this.shouldHandleAmbientSharedMessage(event, binding),
-    )) {
-      return;
-    }
-
-    if (!(await this.measureHandledToRoutedSubspan(
-      event,
-      "handledRequirePermissionMs",
-      async () =>
-        await this.requirePermission(
-          event,
-          "message.reply",
-          "media:reply",
-          { notify: false },
-        ),
-    ))) {
-      return;
-    }
-    if (
-      !(await this.measureHandledToRoutedSubspan(
-        event,
-        "handledRemoteScopeMs",
-        async () =>
-          await this.requireRemoteScopeForBinding(
-            event,
-            binding,
-            "media:reply:remote-instance",
-            { notify: false },
-          ),
-      ))
-    ) {
-      return;
-    }
-
-    await this.admitTurnInput({ binding, event });
-  }
-
-  private async shouldHandleAmbientSharedMessage(
-    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
-    binding?: MessagingBindingRecord,
-  ): Promise<boolean> {
-    if (
-      event.channel.conversation.kind === "dm"
-      || event.channel.conversation.isDirectMessage === true
-    ) {
-      return true;
-    }
-    if (
-      this.capabilityProfile.conversationInput?.reportsBotMention !== true
-    ) {
-      return true;
-    }
-    const responseMode = resolveMessagingResponseMode(
-      binding,
-      await this.measureHandledToRoutedSubspan(
-        event,
-        "handledResponseModeMs",
-        async () => await this.responseModeForConversation(event.channel),
-      ),
-    );
-    return responseMode === "every_message" || event.botMention === true;
-  }
-
-  private async responseModeForConversation(
-    channel: MessagingChannelRef,
-  ): Promise<MessagingResponseMode> {
-    return await this.options.responseModeForConversation?.(channel) ?? "every_message";
-  }
-
-  /**
-   * Retire a Default Agent assignment whose target could not start a turn.
-   *
-   * Scoped to bindings this controller routed through a Default Agent: an
-   * ordinary bound thread failing to start is a transient the operator can
-   * retry, not evidence that the binding is wrong. A revoked assignment leaves
-   * the channel unbound, so the next message falls through to normal handling
-   * and the operator is told the default was cleared.
-   */
-  private async revokeDefaultAgentRouteForFailedStart(
-    binding: MessagingBindingRecord,
-  ): Promise<void> {
-    if (!isDefaultAgentRouteBinding(binding)) {
-      return;
-    }
-    const revoked = await this.options.store
-      .revokeDefaultAgentAssignmentsForTarget({
-        backend: binding.backend,
-        threadId: binding.threadId,
-        revokedAt: this.now(),
-      })
-      .catch((error: unknown) => {
-        this.logger.debug?.("messaging default agent revoke after failed start failed", {
-          error: error instanceof Error ? error.message : String(error),
-          threadId: binding.threadId,
-        });
-        return [];
-      });
-    // An empty array is still truthy, and a start can fail on a channel whose
-    // assignment was already retired -- announce a change only when one moved.
-    if (revoked.length > 0) {
-      this.bindingService.notifyBindingChanged("default-agent-cleared");
-    }
-  }
-
-  /**
-   * The one door into the admission queue, so every route marks the same stage.
-   */
-  private async admitTurnInput(params: {
-    binding: MessagingBindingRecord;
-    event: MessagingTurnInputEvent;
-  }): Promise<boolean> {
-    const requestId = params.binding.privateReplyContinuation?.requestId;
-    // Claim synchronously before append can yield or buffer the response. Cancel
-    // uses the same claim, including for replies typed in the private thread.
-    const replyClaim = requestId ? this.privateReplyClaims.claim(requestId) : undefined;
-    if (requestId && !replyClaim) return false;
-    this.rememberHumanMessagingSource(params.binding, params.event);
-    this.markAdmissionStage(params.event, "routed");
-    const startedAt = this.now();
-    try {
-      await this.turnAdmission.append(params);
-      if (replyClaim) this.privateReplyClaims.complete(replyClaim);
-      return true;
-    } catch (error) {
-      if (replyClaim) this.privateReplyClaims.release(replyClaim);
-      throw error;
-    } finally {
-      const finalAdmissionAppendAwaitMs = this.now() - startedAt;
-      this.recordHandledToRoutedSubspan(
-        params.event,
-        "finalAdmissionAppendAwaitMs",
-        finalAdmissionAppendAwaitMs,
-        false,
-      );
-      this.logger.debug?.("messaging admission append timing", {
-        eventId: params.event.id,
-        platform: params.event.channel.channel,
-        finalAdmissionAppendAwaitMs,
-      });
-    }
-  }
-
-  private async measureHandledToRoutedSubspan<T>(
-    event: MessagingInboundEvent,
-    subspan: MessagingHandledToRoutedSubspan,
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const startedAt = this.now();
-    try {
-      return await operation();
-    } finally {
-      this.recordHandledToRoutedSubspan(
-        event,
-        subspan,
-        this.now() - startedAt,
-      );
-    }
-  }
-
-  private measureHandledToRoutedSyncSubspan<T>(
-    event: MessagingInboundEvent,
-    subspan: MessagingHandledToRoutedSubspan,
-    operation: () => T,
-  ): T {
-    const startedAt = this.now();
-    try {
-      return operation();
-    } finally {
-      this.recordHandledToRoutedSubspan(
-        event,
-        subspan,
-        this.now() - startedAt,
-      );
-    }
-  }
-
-  private recordHandledToRoutedSubspan(
-    event: MessagingInboundEvent,
-    subspan: MessagingHandledToRoutedSubspan,
-    durationMs: number,
-    create = true,
-  ): void {
-    const timing = create
-      ? this.admissionTimingForEvent(event)
-      : this.admissionStageMarks.get(event.id);
-    if (!timing) return;
-    timing.subspans[subspan] =
-      (timing.subspans[subspan] ?? 0) + durationMs;
-  }
-
-  private admissionTimingForEvent(
-    event: MessagingInboundEvent,
-  ): MessagingAdmissionTimingRecord {
-    let timing = this.admissionStageMarks.get(event.id);
-    if (!timing) {
-      timing = { marks: {}, subspans: {} };
-      rememberBoundedMap(
-        this.admissionStageMarks,
-        event.id,
-        timing,
-        ADMISSION_STAGE_MARK_LIMIT,
-      );
-    }
-    return timing;
-  }
-
-  /**
-   * Record when this message reached {@link stage}, if it has not already.
-   *
-   * First mark wins: a stage reached twice (an admission state resolved once
-   * per bundle and again per queued release) keeps the earlier time, so a span
-   * never reads as negative.
-   */
-  private markAdmissionStage(
-    event: MessagingInboundEvent | undefined,
-    stage: MessagingAdmissionStage,
-  ): void {
-    if (!event) return;
-    const timing = this.admissionTimingForEvent(event);
-    timing.marks[stage] ??= this.now();
-  }
-
-  /**
-   * Add one bounded subspan to the existing start-turn admission log.
-   *
-   * A bundle can contain several text or media events, so repeated spans add
-   * together. The record is keyed by the provider event id and never includes
-   * message content, attachment names, or actor identifiers.
-   */
-  private addInputPreparationTiming(
-    event: MessagingInboundEvent | undefined,
-    span: MessagingInputPreparationSpan,
-    startedAt: number,
-  ): void {
-    if (!event) return;
-    const timing = this.admissionTimingForEvent(event);
-    timing.subspans[span] =
-      (timing.subspans[span] ?? 0) + (this.now() - startedAt);
-  }
-
-  /**
-   * Consume this message's marks as span durations for the start-turn log.
-   *
-   * A span is emitted only when both of its ends were reached, so a path that
-   * skips a stage (a queued release, which never prepares input) reports the
-   * stages it did run instead of a misleading zero.
-   *
-   * `routedToBundleReadyMs` covers the input debounce, and for a coalesced
-   * burst it also covers the operator's own typing: the bundle carries its
-   * first event, but flushes {@link DEFAULT_INPUT_DEBOUNCE_MS} after the last.
-   * A large value there is the operator still typing, not PwrAgent stalling.
-   */
-  private takeAdmissionStageTiming(
-    event: MessagingInboundEvent | undefined,
-    startTurnIssuedAt: number,
-  ): Record<string, number> {
-    if (!event) return {};
-    const admissionTiming = this.admissionStageMarks.get(event.id);
-    if (!admissionTiming) return {};
-    this.admissionStageMarks.delete(event.id);
-    const marks = admissionTiming.marks;
-    const spans: Array<[string, number | undefined, number | undefined]> = [
-      ["receivedToHandledMs", event.receivedAt, marks.handled],
-      ["handledToRoutedMs", marks.handled, marks.routed],
-      ["routedToBundleReadyMs", marks.routed, marks.bundleReady],
-      ["bundleReadyToInputPreparedMs", marks.bundleReady, marks.inputPrepared],
-      [
-        "inputPreparedToAdmissionStateMs",
-        marks.inputPrepared,
-        marks.admissionStateResolved,
-      ],
-      [
-        "admissionStateToOccupancyMs",
-        marks.admissionStateResolved,
-        marks.occupancyResolved,
-      ],
-      // A turn that waited behind a busy thread reports its wait here instead.
-      // Without these two the wait belonged to no span at all, so the stages
-      // stopped summing to the end-to-end number with nothing saying why -- the
-      // one reading that would send someone hunting for time that was never
-      // lost.
-      ["admissionStateToQueuedMs", marks.admissionStateResolved, marks.queued],
-      ["queuedToOriginMs", marks.queued, marks.originBuilt],
-      ["occupancyToOriginMs", marks.occupancyResolved, marks.originBuilt],
-      ["originToPolicyMs", marks.originBuilt, marks.policyResolved],
-      ["policyToStartTurnIssueMs", marks.policyResolved, startTurnIssuedAt],
-    ];
-    const timing: Record<string, number> = {};
-    for (const [name, from, to] of spans) {
-      if (from !== undefined && to !== undefined) {
-        timing[name] = to - from;
-      }
-    }
-    Object.assign(timing, admissionTiming.subspans);
-    return timing;
-  }
-
-  private async handleAdmittedTurnBundle(
-    bundle: MessagingTurnAdmissionBundle,
-  ): Promise<void> {
-    this.markAdmissionStage(bundle.events[0], "bundleReady");
-    // Only the first event of a bundle is carried forward to the start-turn
-    // log, so the others' marks can never be consumed. Dropping them here is
-    // what keeps the ceiling from evicting a turn that is still in flight --
-    // eviction is oldest-first, and the oldest entry is the one still waiting.
-    for (const event of bundle.events.slice(1)) {
-      this.admissionStageMarks.delete(event.id);
-    }
-    let currentBinding = bundle.binding;
-    if (bundle.binding.pendingSkillSelection) {
-      const pendingSkillBindingReloadStartedAt = this.now();
-      try {
-        currentBinding =
-          await this.options.store.getBinding(bundle.binding.id)
-          ?? bundle.binding;
-      } finally {
-        this.addInputPreparationTiming(
-          bundle.events[0],
-          "inputPrepPendingSkillBindingReloadMs",
-          pendingSkillBindingReloadStartedAt,
-        );
-      }
-    }
-    const prepared = await this.prepareTurnInput(bundle.events, currentBinding, bundle.events[0]);
-    if (!prepared) {
-      return;
-    }
-    this.markAdmissionStage(bundle.events[0], "inputPrepared");
-    const preparedWithSkill = this.prependPendingSkillSelection(
-      prepared,
-      currentBinding,
-    );
-    if (currentBinding.privateReplyContinuation) {
-      await this.completePrivateReplyContinuation(currentBinding.id);
-    }
-    const consumedSkillBinding = currentBinding.pendingSkillSelection
-      ? bindingWithoutPendingSkillSelection(currentBinding)
-      : currentBinding;
-    let admissionState: MessagingThreadAdmissionState | undefined;
-    try {
-      // Completion can drain an empty local queue while media is preparing.
-      // Read occupancy now so an earlier busy snapshot cannot strand this input.
-      admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: currentBinding.backend,
-        federationTarget: federationTargetForBinding(currentBinding),
-        threadId: currentBinding.threadId,
-      });
-      this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
-    } catch (error) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("turn-start-failed"),
-          createdAt: this.now(),
-          title: "Turn could not start",
-          body: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        }),
-        consumedSkillBinding,
-        bundle.events[0],
-      );
-      return;
-    }
-
-    if (
-      !isDefaultAgentRouteBinding(currentBinding)
-      && !this.options.backend.ownsTurnQueue
-      && await this.isTurnOccupied(
-        currentBinding,
-        bundle.threadKey,
-        admissionState,
-      )
-    ) {
-      this.markAdmissionStage(bundle.events[0], "queued");
-      await this.queuePreparedInput({
-        binding: consumedSkillBinding,
-        event: bundle.events[0],
-        input: preparedWithSkill.input,
-        pdfAttachments: preparedWithSkill.pdfAttachments,
-        privateResponseRequested: preparedWithSkill.privateResponseRequested,
-        preview: preparedWithSkill.preview,
-        threadKey: bundle.threadKey,
-      });
-      if (currentBinding.pendingSkillSelection) {
-        await this.clearPendingSkillSelection(currentBinding);
-      }
-      return;
-    }
-
-    this.markAdmissionStage(bundle.events[0], "occupancyResolved");
-    const startResult = await this.startPreparedInput({
-      binding: consumedSkillBinding,
-      input: preparedWithSkill.input,
-      pdfAttachments: preparedWithSkill.pdfAttachments,
-      privateResponseRequested: preparedWithSkill.privateResponseRequested,
-      preview: preparedWithSkill.preview,
-      threadKey: bundle.threadKey,
-      event: bundle.events[0],
-      admissionState,
-    });
-    if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
-      const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
-      await this.bindingService.renderAutomaticBindingStatus(updatedBinding, bundle.events[0]);
-    }
-  }
-
-  private prependPendingSkillSelection(
-    prepared: {
-      input: AppServerTurnInputItem[];
-      pdfAttachments: PendingPdfAttachment[];
-      privateResponseRequested: boolean;
-      preview: string;
-    },
-    binding: MessagingBindingRecord,
-  ): {
-    input: AppServerTurnInputItem[];
-    pdfAttachments: PendingPdfAttachment[];
-    privateResponseRequested: boolean;
-    preview: string;
-  } {
-    const selection = binding.pendingSkillSelection;
-    if (!selection) return prepared;
-    const prefix = formatSkillInputPrefix(selection);
-    return {
-      input: [
-        {
-          type: "text",
-          text: prefix,
-        },
-        ...prepared.input,
-      ],
-      pdfAttachments: prepared.pdfAttachments,
-      privateResponseRequested: prepared.privateResponseRequested,
-      preview: `${prefix}\n${prepared.preview}`,
-    };
-  }
-
-  private async findPendingNewThreadSession(
-    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
-  ): Promise<MessagingBrowseSessionRecord | undefined> {
-    const session = await this.options.store.findActiveBrowseSessionForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
-    if (
-      session &&
-      isNewThreadLaunchAction(session.launchAction) &&
-      session.mode === "new_thread_options" &&
-      session.selectedProject &&
-      (session.textInputExpiresAt ?? session.expiresAt) > this.now()
-    ) {
-      return session;
-    }
-    return undefined;
-  }
-
-  private async appendPendingNewThreadPrompt(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingTurnInputEvent,
-  ): Promise<void> {
-    const key = this.pendingNewThreadPromptKey(session);
-    const existing = this.pendingNewThreadPrompts.get(key);
-    if (existing) {
-      existing.events.push(event);
-      existing.session = session;
-      if ((this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS) <= 0) {
-        await this.flushPendingNewThreadPrompt(key);
-        return;
-      }
-      if (existing.timer) {
-        clearTimeout(existing.timer);
-      }
-      existing.timer = this.schedulePendingNewThreadPrompt(key);
-      return;
-    }
-
-    this.pendingNewThreadPrompts.set(key, {
-      events: [event],
-      session,
-      timer:
-        (this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS) > 0
-          ? this.schedulePendingNewThreadPrompt(key)
-          : undefined,
-    });
-    if ((this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS) <= 0) {
-      await this.flushPendingNewThreadPrompt(key);
-    }
-  }
-
-  private schedulePendingNewThreadPrompt(
-    key: string,
-  ): ReturnType<typeof setTimeout> {
-    return setTimeout(() => {
-      void this.flushPendingNewThreadPrompt(key);
-    }, this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS);
-  }
-
-  private async flushPendingNewThreadPrompt(key: string): Promise<void> {
-    const pending = this.pendingNewThreadPrompts.get(key);
-    if (!pending) {
-      return;
-    }
-    if (pending.timer) {
-      clearTimeout(pending.timer);
-    }
-    this.pendingNewThreadPrompts.delete(key);
-    try {
-      await this.createNewThreadFromPromptBundle({
-        events: pending.events,
-        session: pending.session,
-      });
-    } catch (error) {
-      this.logger.warn?.("messaging new-thread prompt failed", {
-        channel: pending.session.channel.channel,
-        error: error instanceof Error ? error.message : String(error),
-        sessionId: pending.session.id,
-      });
-      await this.deliverNewThreadPromptFailure(pending, error);
-    }
-  }
-
-  private async deliverNewThreadPromptFailure(
-    pending: PendingNewThreadPromptWindow,
-    error: unknown,
-  ): Promise<void> {
-    const event = pending.events[0];
-    if (!event) {
-      return;
-    }
-    try {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-start-failed"),
-          createdAt: this.now(),
-          title: "Thread could not start",
-          body: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-    } catch (deliveryError) {
-      this.logger.debug?.("messaging new-thread failure notice failed", {
-        channel: pending.session.channel.channel,
-        deliveryError: deliveryError instanceof Error
-          ? deliveryError.message
-          : String(deliveryError),
-        sessionId: pending.session.id,
-      });
-    }
-  }
-
-  private clearPendingNewThreadPrompt(sessionId: string): void {
-    for (const [key, pending] of this.pendingNewThreadPrompts.entries()) {
-      if (pending.session.id !== sessionId) {
-        continue;
-      }
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
-      this.pendingNewThreadPrompts.delete(key);
-    }
-  }
-
-  private pendingNewThreadPromptKey(session: MessagingBrowseSessionRecord): string {
-    return [
-      buildMessagingConversationKey(session.channel),
-      session.allowedActorIds.join(","),
-      session.id,
-    ].join(":");
-  }
-
-  private async prepareTurnInput(
-    events: MessagingTurnInputEvent[],
-    binding: MessagingBindingRecord | undefined,
-    event?: MessagingInboundEvent,
-  ): Promise<
-    | {
-        input: AppServerTurnInputItem[];
-        pendingOriginals: { original: OriginalAttachmentInput; event: MessagingTurnInputEvent; attachmentKey: string }[];
-        pdfAttachments: PendingPdfAttachment[];
-        privateResponseRequested: boolean;
-        preview: string;
-      }
-    | undefined
-  > {
-    const input: AppServerTurnInputItem[] = [];
-    const pendingOriginals: { original: OriginalAttachmentInput; event: MessagingTurnInputEvent; attachmentKey: string }[] = [];
-    const pdfAttachments: PendingPdfAttachment[] = [];
-    const previewParts: string[] = [];
-    const rejections: MessagingAttachmentRejection[] = [];
-    let pdfHandling:
-      | "model_directed"
-      | "render_initial_pages"
-      | "pass_through"
-      | undefined;
-    const privateResponseStartedAt = this.now();
-    const privateReplyContinuation = binding?.privateReplyContinuation;
-    if (
-      privateReplyContinuation
-      && privateReplyContinuation.expiresAt > this.now()
-    ) {
-      input.push({
-        type: "text",
-        text: [
-          PRIVATE_REPLY_COMPLETION_INSTRUCTION,
-          "",
-          "Initiating Agent instructions:",
-          privateReplyContinuation.instructions,
-        ].join("\n"),
-      });
-    }
-    const privateResponseRequested = events.some(
-      (turnEvent) => requestsExplicitPrivateResponse(turnEvent),
-    );
-
-    if (privateResponseRequested) {
-      input.push({
-        type: "text",
-        text: PRIVATE_RESPONSE_FALLBACK_INSTRUCTION,
-      });
-    }
-    this.addInputPreparationTiming(
-      event,
-      "inputPrepPrivateResponseMs",
-      privateResponseStartedAt,
-    );
-
-    for (const turnEvent of events) {
-      if (turnEvent.kind === "text") {
-        const textConstructionStartedAt = this.now();
-        const previewText = turnEvent.text.trim();
-        if (previewText) {
-          input.push({ type: "text", text: turnEvent.text });
-          previewParts.push(previewText);
-        }
-        this.addInputPreparationTiming(
-          event,
-          "inputPrepTextConstructionMs",
-          textConstructionStartedAt,
-        );
-        continue;
-      }
-
-      if (turnEvent.attachments.length > 0 && pdfHandling === undefined) {
-        const pdfHandlingStartedAt = this.now();
-        try {
-          pdfHandling = await this.resolveMessagingPdfHandling(binding, event);
-        } finally {
-          this.addInputPreparationTiming(
-            event,
-            "inputPrepPdfHandlingResolutionMs",
-            pdfHandlingStartedAt,
-          );
-        }
-      }
-      const attachmentProcessingStartedAt = this.now();
-      const processed = await processMessagingAttachments({
-        adapter: this.adapter,
-        attachments: turnEvent.attachments,
-        policy: {
-          ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
-          ...this.options.attachmentPolicy,
-        },
-        pdfHandling,
-        deferSinglePagePdf: binding?.federatedThread?.target.scope === "remote",
-        retainOriginal: this.options.originalAttachmentStore
-          ? async (original, attachment) => {
-              if (!binding) {
-                // No cache identity exists until the new thread is created.
-                // Keep this bounded download in memory, without a provisional
-                // manifest or another provider download.
-                pendingOriginals.push({ original, event: turnEvent, attachmentKey: attachment.id });
-                return { pendingThread: true };
-              }
-              return this.options.originalAttachmentStore!.retain({
-                ...original,
-                scope: {
-                  backend: binding.backend, threadId: binding.threadId, provider: this.options.channel,
-                  ...(binding.federatedThread?.target.scope === "remote"
-                    ? { instanceId: binding.federatedThread.target.instanceId } : {}),
-                },
-                actorKey: originalAttachmentActorKey(turnEvent),
-                eventId: turnEvent.id,
-                attachmentKey: attachment.id,
-                receivedAt: turnEvent.receivedAt,
-              });
-            }
-          : undefined,
-        text: turnEvent.text,
-      });
-      this.addInputPreparationTiming(
-        event,
-        "inputPrepAttachmentProcessingMs",
-        attachmentProcessingStartedAt,
-      );
-
-      input.push(...processed.input);
-      pdfAttachments.push(...processed.pdfAttachments);
-      rejections.push(...processed.rejections);
-      if (turnEvent.text?.trim()) {
-        previewParts.push(turnEvent.text.trim());
-      }
-      for (const attachment of turnEvent.attachments) {
-        previewParts.push(`[${attachment.name}]`);
-      }
-    }
-
-    if (input.length === 0 && pendingOriginals.length === 0) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("unsupported-media"),
-          createdAt: this.now(),
-          title: "Attachment not supported",
-          body:
-            rejections.length > 0
-              ? formatAttachmentRejections(rejections)
-              : "This attachment could not be prepared for the model.",
-          recoverable: true,
-        }),
-        binding,
-        event,
-      );
-      return undefined;
-    }
-
-    if (rejections.length > 0) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("attachment-partial"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Some attachments were skipped",
-          body: formatAttachmentRejections(rejections),
-        }),
-        binding,
-        event,
-      );
-    }
-
-    const previewConstructionStartedAt = this.now();
-    const preview = buildQueuedInputPreview(previewParts);
-    this.addInputPreparationTiming(
-      event,
-      "inputPrepTextConstructionMs",
-      previewConstructionStartedAt,
-    );
-
-    return {
-      input,
-      pendingOriginals,
-      pdfAttachments,
-      privateResponseRequested,
-      preview,
-    };
-  }
-
-  private async revokeExpiredPrivateReplyContinuation(
-    binding: MessagingBindingRecord | undefined,
-  ): Promise<MessagingBindingRecord | undefined> {
-    if (
-      !binding?.privateReplyContinuation
-      || binding.privateReplyContinuation.expiresAt > this.now()
-    ) {
-      return binding;
-    }
-    await this.options.store.revokeBinding({
-      bindingId: binding.id,
-      revokedAt: this.now(),
-    });
-    this.bindingService.notifyBindingChanged("private-reply-expired");
-    return undefined;
-  }
-
-  private async cleanupExpiredPrivateReplyContinuations(): Promise<void> {
-    const now = this.now();
-    const expired = this.filterBindingsForChannel(
-      await this.options.store.findActiveBindings(),
-    ).filter(
-      (binding) =>
-        binding.privateReplyContinuation
-        && binding.privateReplyContinuation.expiresAt <= now,
-    );
-    for (const binding of expired) {
-      await this.options.store.revokeBinding({
-        bindingId: binding.id,
-        revokedAt: now,
-      });
-    }
-    if (expired.length > 0) {
-      this.bindingService.notifyBindingChanged("private-reply-expired");
-    }
-  }
-
-  private async resolveMessagingPdfHandling(
-    binding: MessagingBindingRecord | undefined,
-    event?: MessagingInboundEvent,
-  ): Promise<"model_directed" | "render_initial_pages" | "pass_through"> {
-    if (!(await this.resolvePdfAnalysisEnabled(event))) {
-      return "pass_through";
-    }
-    if (
-      binding?.backend !== "codex" ||
-      !this.options.backend.supportsMessagingPdfTools
-    ) {
-      return "render_initial_pages";
-    }
-    const pdfToolSupportStartedAt = this.now();
-    try {
-      return await this.options.backend.supportsMessagingPdfTools({
-        backend: binding.backend,
-        threadId: binding.threadId,
-        federationTarget: federationTargetForBinding(binding),
-      })
-        ? "model_directed"
-        : "render_initial_pages";
-    } catch (error) {
-      this.logger.warn?.("could not resolve messaging PDF tool support", {
-        bindingId: binding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
-      return "render_initial_pages";
-    } finally {
-      this.addInputPreparationTiming(
-        event,
-        "inputPrepPdfToolSupportProbeMs",
-        pdfToolSupportStartedAt,
-      );
-    }
-  }
-
-  private async resolvePdfAnalysisEnabled(
-    event?: MessagingInboundEvent,
-  ): Promise<boolean> {
-    const pdfAnalysisPolicyStartedAt = this.now();
-    const configured = this.options.pdfAnalysisEnabled;
-    try {
-      if (typeof configured === "function") {
-        return (await configured()) !== false;
-      }
-      return configured !== false;
-    } finally {
-      this.addInputPreparationTiming(
-        event,
-        "inputPrepPdfAnalysisPolicyMs",
-        pdfAnalysisPolicyStartedAt,
-      );
-    }
-  }
-
-  private async startPreparedInput(params: {
-    admissionState?: MessagingThreadAdmissionState;
-    binding: MessagingBindingRecord;
-    event?: MessagingInboundEvent;
-    input: AppServerTurnInputItem[];
-    navigation?: MessagingNavigationContext;
-    pdfAttachments?: PendingPdfAttachment[];
-    privateResponseRequested?: boolean;
-    preview: string;
-    queueOnConcurrentStart?: boolean;
-    threadKey: string;
-  }): Promise<PreparedInputStartResult> {
-    this.turnAdmission.markStarting(params.threadKey);
-    let turnStarted = false;
-    let startingOrigin: ActiveAgentMessagingOrigin | undefined;
-    let preparingActivity: ReturnType<MessagingController["beginTurnPreparationActivity"]> | undefined;
-    const startingThreadKey = agentMessagingThreadKey(
-      params.binding.backend,
-      params.binding.threadId,
-    );
-
-    try {
-      const admissionState = params.admissionState
-        ?? await this.options.backend.getThreadAdmissionState({
-          backend: params.binding.backend,
-          federationTarget: federationTargetForBinding(params.binding),
-          threadId: params.binding.threadId,
-        });
-      this.markAdmissionStage(params.event, "admissionStateResolved");
-      const navigation = params.navigation
-        ?? threadContextForAdmissionState(params.binding, admissionState);
-      startingOrigin = await this.buildAgentMessagingOrigin({
-        binding: params.binding,
-        event: params.event,
-        navigation,
-        privateResponseRequested: params.privateResponseRequested,
-      });
-      if (startingOrigin) {
-        this.startingAgentMessagingOriginsByThreadKey.set(
-          startingThreadKey,
-          startingOrigin,
-        );
-      }
-      this.markAdmissionStage(params.event, "originBuilt");
-      const targetThreadLookupStartedAt = this.now();
-      const targetThread = findThreadForBinding(navigation, params.binding);
-      const targetThreadLookupCompletedAt = this.now();
-      const executionModeResolutionStartedAt = this.now();
-      const executionResolution = resolveExecutionModeForThread(
-        params.binding,
-        targetThread,
-      );
-      const executionModeResolutionCompletedAt = this.now();
-      const turnSettingsResolutionStartedAt = this.now();
-      const turnSettings = turnSettingsForThread(
-        params.binding,
-        targetThread,
-        executionResolution,
-      );
-      const turnSettingsResolutionCompletedAt = this.now();
-      if (
-        turnSettings.executionMode === "full-access" &&
-        targetThread?.executionMode === "full-access"
-      ) {
-        const fullAccessControlsLoadStartedAt = this.now();
-        const controlsResolution = this.resolveFullAccessControls();
-        const fullAccessControlsLoadAwaitCount = isPromiseLike(controlsResolution)
-          ? 1
-          : 0;
-        const controls = isPromiseLike(controlsResolution)
-          ? await controlsResolution
-          : controlsResolution;
-        const fullAccessControlsLoadCompletedAt = this.now();
-        const resumeSettingCheckStartedAt = this.now();
-        const allowed = controls.allowThreadResume;
-        const resumeSettingCheckCompletedAt = this.now();
-        const policyResolvedAt = this.now();
-        const controlsSource = this.options.fullAccessControlsSource
-          ?? (typeof this.options.fullAccessControls === "function"
-            ? "dynamic"
-            : "static");
-        this.markAdmissionStage(params.event, "policyResolved");
-        this.logger.info?.("messaging Full Access resume policy evaluated", {
-          inboundEventId: params.event?.id,
-          channel: params.binding.channel.channel,
-          allowed,
-          controlsSource,
-          policyRevision: this.options.fullAccessPolicyRevision?.(),
-          targetThreadFound: true,
-          targetThreadLookupMs:
-            targetThreadLookupCompletedAt - targetThreadLookupStartedAt,
-          executionModeResolutionMs:
-            executionModeResolutionCompletedAt - executionModeResolutionStartedAt,
-          turnSettingsResolutionMs:
-            turnSettingsResolutionCompletedAt - turnSettingsResolutionStartedAt,
-          fullAccessControlsLoadMs:
-            fullAccessControlsLoadCompletedAt - fullAccessControlsLoadStartedAt,
-          fullAccessControlsLoadAwaitCount,
-          settingsConfigReadMs:
-            controlsSource === "runtime-snapshot"
-              ? 0
-              : fullAccessControlsLoadCompletedAt - fullAccessControlsLoadStartedAt,
-          settingsConfigReadAwaitCount:
-            controlsSource === "runtime-snapshot"
-              ? 0
-              : fullAccessControlsLoadAwaitCount,
-          resumeSettingCheckMs:
-            resumeSettingCheckCompletedAt - resumeSettingCheckStartedAt,
-          authorizedUserPolicyCheckMs: 0,
-          authorizedUserPolicyCheckAwaitCount: 0,
-          allowedPathAuditPersistenceMs: 0,
-          allowedPathAuditPersistenceAwaitCount: 0,
-          fullAccessPolicyTotalMs: policyResolvedAt - targetThreadLookupStartedAt,
-        });
-        // Provider authorization already completed before turn admission.
-        // An allowed Full Access resume performs no audit or persistence.
-        if (!allowed) {
-          await this.deliverFullAccessPolicyError(
-            params.binding,
-            params.event,
-            "Full Access threads cannot be resumed from messaging with the current settings.",
-          );
-          return "failed";
-        }
-      } else {
-        this.markAdmissionStage(params.event, "policyResolved");
-      }
-      // Permission and routing are settled. Backend startup may still wait on
-      // MCP discovery, runtime setup or a cold provider. Request typing now;
-      // neither those waits nor the activity API response may gate the other.
-      preparingActivity = this.beginTurnPreparationActivity(
-        startingOrigin?.deliveryBinding ?? startingOrigin?.binding ?? params.binding,
-      );
-      // Diagnostic for #203-class regressions: a turn that the UI shows
-      // as Default Access but routes to the Full Access codex client is
-      // a silent security bug — the user thinks they're sandboxed but
-      // commands like `npm view` succeed because the full-access client
-      // skipped the network sandbox. We log the resolved mode + where
-      // it came from here at the messaging layer; with Debug log collection
-      // enabled, the registry's `codex thread client routing` log shows which
-      // client actually received the turn. Cross-reference both lines by
-      // threadId to verify the routing matched intent. `executionModeSource` of
-      // anything other than `thread` is suspicious for a thread the UI
-      // claims has been explicitly toggled.
-      const startTurnIssuedAt = this.now();
-      const inboundTiming = params.event
-        ? {
-            inboundEventId: params.event.id,
-            providerSentAt: params.event.providerSentAt,
-            pwragentReceivedAt: params.event.receivedAt,
-            providerSentToPwragentReceivedMs:
-              params.event.providerSentAt === undefined
-                ? undefined
-                : params.event.receivedAt - params.event.providerSentAt,
-            pwragentReceivedToStartTurnIssueMs:
-              startTurnIssuedAt - params.event.receivedAt,
-          }
-        : {};
-      const stageTiming = this.takeAdmissionStageTiming(
-        params.event,
-        startTurnIssuedAt,
-      );
-      this.logger.info?.("messaging starting turn", {
-        backend: params.binding.backend,
-        bindingId: params.binding.id,
-        channel: params.binding.channel.channel,
-        threadId: params.binding.threadId,
-        executionMode: turnSettings.executionMode ?? "unset",
-        executionModeSource: executionResolution.source,
-        model: turnSettings.model,
-        fastMode: turnSettings.fastMode,
-        startTurnIssuedAt,
-        ...inboundTiming,
-        ...stageTiming,
-      });
-      const started = await this.options.backend.startTurn({
-        backend: params.binding.backend,
-        federationTarget: federationTargetForBinding(params.binding),
-        threadId: params.binding.threadId,
-        input: params.input,
-        messageOrigin: messageOriginForInboundEvent(params.event, startingOrigin?.source?.ref),
-        ...turnSettings,
-      });
-      const startTurnAcceptedAt = this.now();
-      const acceptanceTiming = params.event
-        ? {
-            pwragentReceivedToStartTurnAcceptedMs:
-              startTurnAcceptedAt - params.event.receivedAt,
-            startTurnIssueToAcceptedMs: startTurnAcceptedAt - startTurnIssuedAt,
-            startTurnAcceptedAt,
-          }
-        : {
-            startTurnIssueToAcceptedMs: startTurnAcceptedAt - startTurnIssuedAt,
-            startTurnAcceptedAt,
-          };
-      if (started.queueStatus === "queued") {
-        await preparingActivity?.finish(false);
-        preparingActivity = undefined;
-        this.rememberQueuedAgentMessagingOrigin({
-          binding: params.binding,
-          event: params.event,
-          navigation,
-          origin: startingOrigin,
-          queueEntryId: started.queueEntryId ?? started.turnId,
-        });
-        this.logger.info?.("messaging turn queued in shared thread FIFO", {
-          bindingId: params.binding.id,
-          threadId: params.binding.threadId,
-          queueEntryId: started.queueEntryId ?? started.turnId,
-          requestedExecutionMode: turnSettings.executionMode ?? "unset",
-          ...acceptanceTiming,
-        });
-        if (this.options.backend.ownsTurnQueue) {
-          const ownerQueueEntryId = started.queueEntryId ?? started.turnId;
-          const entry: MessagingQueuedTurnEntry = {
-            ...params, id: ownerQueueEntryId, ownerQueueEntryId, status: "queued",
-            createdAt: this.now(), updatedAt: this.now(),
-            pdfSourceRequest: startingOrigin?.source?.ref,
-          };
-          const key = `${params.threadKey}:${ownerQueueEntryId}`;
-          await this.applySharedQueueNoticeEvent(key, { type: "accepted", entry });
-          try {
-            await this.deliverQueuedTurnNotice(entry);
-          } catch (error) {
-            // A provider notice cannot undo the owner's accepted input.
-            this.logger.warn?.("messaging shared queue notice failed", {
-              queueEntryId: ownerQueueEntryId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          } finally {
-            await this.applySharedQueueNoticeEvent(key, { type: "noticeReady" });
-          }
-        }
-        return "queued";
-      }
-      turnStarted = true;
-      this.logger.info?.("messaging turn started", {
-        bindingId: params.binding.id,
-        threadId: params.binding.threadId,
-        turnId: started.turnId,
-        requestedExecutionMode: turnSettings.executionMode ?? "unset",
-        ...acceptanceTiming,
-      });
-      const activeTurn: MessagingActiveTurnSummary = {
-        turnId: started.turnId,
-        status: "working",
-        startedAt: this.now(),
-        updatedAt: this.now(),
-      };
-      this.pdfAttachmentStore.bindTurn(
-        {
-          backend: params.binding.backend,
-          threadId: params.binding.threadId,
-          turnId: started.turnId,
-          sourceInstanceId: params.binding.federatedThread?.target.scope === "remote"
-            ? params.binding.federatedThread.target.instanceId : undefined,
-          sourceRequest: startingOrigin?.source?.ref,
-        },
-        params.pdfAttachments ?? [],
-      );
-      this.rememberAgentMessagingOrigin({
-        binding: params.binding,
-        event: params.event,
-        navigation,
-        origin: startingOrigin,
-        turnId: started.turnId,
-      });
-      const deliveryBinding = startingOrigin?.deliveryBinding
-        ?? startingOrigin?.binding
-        ?? params.binding;
-      this.setActiveTurn(deliveryBinding, activeTurn);
-      // Preserve the accepted turn's normal signal (including a retry after a
-      // failed preparation request). This wait is after backend acceptance.
-      await preparingActivity?.settled;
-      const currentTurn = this.getActiveTurn(deliveryBinding);
-      if (currentTurn?.turnId === started.turnId && currentTurn.status === "working") {
-        await this.signalTurnActivity(deliveryBinding, currentTurn, {
-          force: true,
-        });
-      }
-      await this.bindingService.renderAutomaticBindingStatus(
-        deliveryBinding,
-        undefined,
-        navigation,
-      );
-      return "started";
-    } catch (error) {
-      await preparingActivity?.finish(turnStarted);
-      preparingActivity = undefined;
-      if (turnStarted) {
-        this.logger.debug?.("messaging post-start update failed", {
-          error: error instanceof Error ? error.message : String(error),
-          threadId: params.binding.threadId,
-        });
-        return "started";
-      }
-      if (isTurnInProgressStartError(error)) {
-        if (params.queueOnConcurrentStart !== false) {
-          await this.queuePreparedInput({
-            binding: params.binding,
-            event: params.event,
-            input: params.input,
-            pdfAttachments: params.pdfAttachments,
-            privateResponseRequested: params.privateResponseRequested,
-            preview: params.preview,
-            threadKey: params.threadKey,
-          });
-          return "queued";
-        }
-        return "failed";
-      }
-      // The durable overlay outlives its provider thread, so a targeted
-      // missing-thread response is the one reliable signal that a Default
-      // Agent assignment is dead. Other start failures are recoverable: a
-      // disconnect, rate limit, or invalid runtime option must not destroy the
-      // operator's persisted route.
-      if (isMissingTurnTargetStartError(error, params.binding)) {
-        await this.revokeDefaultAgentRouteForFailedStart(params.binding);
-      }
-      await this.waitForPendingTurnFailureHandlers(params.binding);
-      const errorMessage = parseCodexTurnErrorMessage(
-        error instanceof Error ? error.message : String(error),
-      );
-      if (startingOrigin?.reportedStartFailureText === errorMessage) {
-        return "failed";
-      }
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("turn-start-failed"),
-          createdAt: this.now(),
-          title: "Turn could not start",
-          body: errorMessage,
-          recoverable: true,
-        }),
-        params.binding,
-        params.event,
-      );
-      return "failed";
-    } finally {
-      await preparingActivity?.finish(turnStarted);
-      this.turnAdmission.clearStarting(params.threadKey);
-      if (
-        startingOrigin
-        && this.startingAgentMessagingOriginsByThreadKey.get(startingThreadKey)
-          === startingOrigin
-      ) {
-        this.startingAgentMessagingOriginsByThreadKey.delete(startingThreadKey);
-      }
-    }
-  }
-
-  private async isTurnOccupied(
-    binding: MessagingBindingRecord,
-    threadKey: string,
-    admissionState: MessagingThreadAdmissionState,
-  ): Promise<boolean> {
-    if (this.turnAdmission.isStarting(threadKey)) {
-      return true;
-    }
-
-    const rememberedTurn = await this.reconcileActiveTurnFromThreadStatus(
-      binding,
-      "turn_admission",
-      admissionState.threadStatus,
-    );
-    if (
-      rememberedTurn
-      && ["working", "waiting"].includes(rememberedTurn.status)
-    ) {
-      return true;
-    }
-    return Boolean(
-      admissionState.activeTurn
-      || admissionState.threadStatus === "active",
-    );
-  }
-
-  private async waitForPendingTurnFailureHandlers(binding: MessagingBindingRecord): Promise<void> {
-    await this.backendEventRouter.waitForPendingTurnFailureHandlers(binding);
-  }
-
-  private async adoptStartedTurn(params: {
-    binding: MessagingBindingRecord;
-    event?: MessagingInboundEvent;
-    navigation: MessagingNavigationContext;
-    turnId: string;
-  }): Promise<void> {
-    const currentTurn = this.getActiveTurn(params.binding);
-    if (
-      currentTurn?.turnId === params.turnId &&
-      isTerminalTurnLifecycle(currentTurn)
-    ) {
-      await this.bindingService.renderAutomaticBindingStatus(
-        params.binding,
-        undefined,
-        params.navigation,
-      );
-      return;
-    }
-    const activeTurn: MessagingActiveTurnSummary = {
-      turnId: params.turnId,
-      status: "working",
-      startedAt: this.now(),
-      updatedAt: this.now(),
-    };
-    this.setActiveTurn(params.binding, activeTurn);
-    this.rememberAgentMessagingOrigin({
-      binding: params.binding,
-      event: params.event,
-      navigation: params.navigation,
-      turnId: params.turnId,
-    });
-    await this.signalTurnActivity(params.binding, activeTurn, {
-      force: true,
-    });
-    await this.bindingService.renderAutomaticBindingStatus(
-      params.binding,
-      undefined,
-      params.navigation,
-    );
-  }
-
-  private async queuePreparedInput(params: {
-    binding: MessagingBindingRecord;
-    event?: MessagingInboundEvent;
-    input: AppServerTurnInputItem[];
-    pdfAttachments?: PendingPdfAttachment[];
-    privateResponseRequested?: boolean;
-    preview: string;
-    threadKey: string;
-  }): Promise<void> {
-    const queued = this.turnAdmission.enqueue(params);
-    await this.deliverQueuedTurnNotice(queued);
-  }
-
   private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
     const activeTurn = await this.resolveSteerableActiveTurn(
       entry.binding,
@@ -4281,7 +2180,7 @@ export class MessagingController {
       federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
     });
-    if (await this.isTurnOccupied(binding, threadKey, admissionState)) {
+    if (await this.inboundTurns.isTurnOccupied(binding, threadKey, admissionState)) {
       return;
     }
 
@@ -4294,7 +2193,7 @@ export class MessagingController {
     this.turnAdmission.updateQueuedEntry(entry, { status: "submitting" });
     let startResult: "started" | "queued" | "failed";
     try {
-      startResult = await this.startPreparedInput({
+      startResult = await this.inboundTurns.startPreparedInput({
         binding: entry.binding,
         event: entry.event,
         input: entry.input,
@@ -5346,7 +3245,7 @@ export class MessagingController {
       return false;
     }
 
-    if (await this.isTurnOccupied(binding, threadKey, admissionState)) {
+    if (await this.inboundTurns.isTurnOccupied(binding, threadKey, admissionState)) {
       const activeTurn = await this.resolveSteerableActiveTurn(
         binding,
         "async_question_reply",
@@ -5376,7 +3275,7 @@ export class MessagingController {
       }
       // The queued notice offers Steer, and the queue starts the reply
       // after the turn ends.
-      await this.queuePreparedInput({
+      await this.inboundTurns.queuePreparedInput({
         binding,
         event,
         input,
@@ -5386,7 +3285,7 @@ export class MessagingController {
       return true;
     }
 
-    const started = await this.startPreparedInput({
+    const started = await this.inboundTurns.startPreparedInput({
       admissionState,
       binding,
       event,
@@ -6866,7 +4765,7 @@ export class MessagingController {
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
     this.queuedTurnDrainRequests.clear();
-    this.admissionStageMarks.clear();
+    this.inboundTurns.clearAdmissionTiming();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
     }
@@ -6875,13 +4774,7 @@ export class MessagingController {
       clearTimeout(timer);
     }
     this.monitorTimersBySubscriptionId.clear();
-    for (const pending of this.pendingNewThreadPrompts.values()) {
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
-    }
-    this.pendingNewThreadPrompts.clear();
-    this.pendingFullAccessNewThreadPrompts.clear();
+    this.inboundTurns.clearPendingPrompts();
     this.toolUpdatePolicy.dispose();
     this.taskMonitorMessagingOrigins.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
@@ -7244,8 +5137,8 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
   ): Promise<void> {
     this.browseQueryPool.release(session.id);
-    this.clearPendingNewThreadPrompt(session.id);
-    this.pendingFullAccessNewThreadPrompts.delete(session.id);
+    this.inboundTurns.clearPendingNewThreadPrompt(session.id);
+    this.inboundTurns.pendingFullAccessNewThreadPrompts.delete(session.id);
     await this.options.store.deleteBrowseSession(session.id);
     try {
       const removed = await this.options.store.deletePendingIntentsForChannel({
@@ -7418,7 +5311,7 @@ export class MessagingController {
         ? (canReadRemote ? [{ target, label: inventory.owners.find((owner) => owner.target?.instanceId === target.instanceId)?.label ?? target.instanceId }] : [])
         : owners.filter((owner) => !owner.target);
     }
-    const backendSummaries = session.launchAction === "assign_default_agent" ? await this.loadDefaultAgentBackendSummaries() : undefined;
+    const backendSummaries = session.launchAction === "assign_default_agent" ? await this.inboundTurns.loadDefaultAgentBackendSummaries() : undefined;
     const eligibility = {
       filter: session.query,
       agentOnly: session.mode === "agents" || session.launchAction === "assign_default_agent",
@@ -8570,484 +6463,6 @@ export class MessagingController {
         surface: result.surface,
         updatedAt: this.now(),
       });
-    }
-  }
-
-  private async createNewThreadFromPromptBundle(
-    bundle: PendingNewThreadPromptBundle,
-  ): Promise<void> {
-    const event = bundle.events[0];
-    if (!event || !bundle.session.selectedProject) {
-      return;
-    }
-
-    if (!await this.requireRemoteScope(event, bundle.session.selectedProject?.federationTarget, "messaging-project-create")) return;
-    const prepared = await this.prepareTurnInput(bundle.events, undefined, event);
-    if (!prepared) {
-      return;
-    }
-
-    if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-unavailable"),
-          createdAt: this.now(),
-          title: "New thread unavailable",
-          body: "This backend does not support starting a thread from messaging yet.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    let navigation: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
-      backend: this.options.backend, project: bundle.session.selectedProject,
-    });
-    let selectedBackend: BackendSummary | undefined;
-    if (bundle.session.backend) {
-      const backendChoices = await this.loadNewThreadBackendChoices(event);
-      if (!backendChoices) {
-        return;
-      }
-      selectedBackend = backendChoices.selectable.find(
-        (backend) => backend.kind === bundle.session.backend,
-      );
-      if (!selectedBackend) {
-        await this.deliverSelectedNewThreadBackendUnavailable(event);
-        return;
-      }
-    } else {
-      selectedBackend = await this.resolveNewThreadBackendForSession(
-        {
-          launchpadBackend: navigation.launchpadDefaults.backend,
-          session: bundle.session,
-        },
-        event,
-      );
-    }
-    if (!selectedBackend) {
-      return;
-    }
-    const session = normalizeNewThreadSessionForBackend(
-      {
-        ...bundle.session,
-        backend: selectedBackend.kind,
-      },
-      selectedBackend,
-      this.now(),
-      navigation,
-    );
-    const project = bundle.session.selectedProject;
-    const ensured = await this.ensureNewThreadProjectLaunchpad(
-      session,
-      navigation,
-      selectedBackend.kind,
-    );
-    navigation = ensured.navigation;
-    const directory = ensured.directory ?? directoryForProjectSelection(navigation, project);
-    const preferences = {
-      ...session.preferences,
-      toolUpdateMode: await this.resolveNewThreadToolUpdateMode(session, directory),
-      updatedAt: session.preferences?.updatedAt ?? this.now(),
-    };
-    const options = newThreadOptionsForSession(
-      session,
-      navigation,
-      directory,
-      this.streamingResponsesDefault,
-      selectedBackend,
-    );
-    if (options.executionMode === "full-access") {
-      const decision = await this.resolveFullAccessRiskForSession(
-        session,
-        event,
-        options,
-      );
-      if (decision === "blocked") {
-        return;
-      }
-      if (decision === "warning") {
-        this.pendingFullAccessNewThreadPrompts.set(session.id, {
-          events: bundle.events,
-          session,
-        });
-        await this.presentFullAccessRiskWarning(
-          { kind: "new-thread", session },
-          event,
-          { presentationMode: "message" },
-        );
-        return;
-      }
-    }
-    type StartedLaunchpadThread = Pick<
-      MaterializedDirectoryLaunchpadThread,
-      "backend" | "threadId" | "executionMode"
-    > &
-      Partial<
-        Pick<
-          MaterializedDirectoryLaunchpadThread,
-          "codexEnvironmentRuntime" | "linkedDirectory" | "workMode"
-        >
-      >;
-    let boundThread:
-      | {
-          binding: MessagingBindingRecord;
-          navigation: MessagingThreadContext;
-        }
-      | undefined;
-    let browseSessionRetired = false;
-    const retireBrowseSession = async (): Promise<void> => {
-      if (browseSessionRetired) {
-        return;
-      }
-      browseSessionRetired = true;
-      this.pendingFullAccessNewThreadPrompts.delete(session.id);
-      await this.options.store.deleteBrowseSession(session.id);
-    };
-    const bindStartedThread = async (
-      started: StartedLaunchpadThread,
-    ): Promise<{
-      binding: MessagingBindingRecord;
-      navigation: MessagingThreadContext;
-    }> => {
-      if (boundThread) {
-        return boundThread;
-      }
-      const binding = await this.bindingService.bindChannelToThread(event, {
-        backend: started.backend,
-        threadId: started.threadId,
-        ...(project.federationTarget?.scope === "remote" ? { federatedThread: buildFederatedThreadRef({
-          backend: started.backend, threadId: started.threadId, instanceId: project.federationTarget.instanceId }) } : {}),
-        targetKind: isNewAgentThreadLaunchAction(session.launchAction)
-          ? "agent_thread"
-          : undefined,
-      });
-      await retireBrowseSession();
-      let updatedBinding = preferences
-        ? await this.bindingService.updateBindingPreferences(binding, preferences)
-        : binding;
-      if (bundle.session.surface) {
-        updatedBinding = await this.options.store.upsertBinding({
-          ...updatedBinding,
-          statusSurface: bundle.session.surface,
-          updatedAt: this.now(),
-        });
-      }
-      const optimisticNavigation = buildMessagingStartedThreadContext({
-        backend: started.backend,
-        directory,
-        executionMode: started.executionMode,
-        linkedDirectory: started.linkedDirectory,
-        navigation,
-        now: this.now(),
-        model: options.supportsModel ? options.model : undefined,
-        reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-        serviceTier: options.serviceTier,
-        fastMode: options.supportsFast ? options.fastMode : undefined,
-        acpRuntime: options.acpRuntime,
-        codexEnvironmentRuntime: started.codexEnvironmentRuntime,
-        agent: agentForNewThreadSession(session),
-        preferences,
-        project,
-        threadId: started.threadId,
-        worktreePath: started.linkedDirectory?.worktreePath,
-        workMode: started.workMode ?? options.workMode,
-      });
-      boundThread = {
-        binding: updatedBinding,
-        navigation: optimisticNavigation,
-      };
-      return boundThread;
-    };
-    const launchpad = launchpadForMessagingProject({
-      backend: selectedBackend.kind,
-      directory,
-      navigation,
-      preferences,
-      project,
-      now: this.now(),
-      workMode: options.workMode,
-      branchName: options.branchName,
-      options,
-      acpRuntime: options.acpRuntime,
-    });
-    const startFirstTurnAfterEnvironmentSetup = Boolean(
-      launchpad.codexEnvironmentId,
-    );
-    const environmentSetupReporter = startFirstTurnAfterEnvironmentSetup
-      ? this.createMessagingEnvironmentSetupReporter(event)
-      : undefined;
-    let materialized: Awaited<
-      ReturnType<NonNullable<MessagingBackendBridge["materializeDirectoryLaunchpad"]>>
-    > | undefined;
-    try {
-      materialized = this.options.backend.materializeDirectoryLaunchpad
-        ? await this.options.backend.materializeDirectoryLaunchpad(
-            {
-              directoryKey: messagingLaunchpadMaterializationKey(session),
-              ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
-              agent: agentForNewThreadSession(session),
-              launchpad,
-              ...(startFirstTurnAfterEnvironmentSetup || prepared.pendingOriginals.length > 0
-                ? {}
-                : { input: prepared.input }),
-            },
-            {
-              messageOrigin: messageOriginForInboundEvent(event),
-              ...(environmentSetupReporter
-                ? {
-                    onCodexEnvironmentSetupProgress: (
-                      setupEvent: CodexEnvironmentSetupProgressEvent,
-                    ) => {
-                      environmentSetupReporter.record(setupEvent);
-                    },
-                  }
-                : {}),
-              onThreadMaterialized: async (started) => {
-                await bindStartedThread(started);
-              },
-            },
-          )
-        : undefined;
-    } finally {
-      await environmentSetupReporter?.stop();
-    }
-    const started = materialized ?? (await this.options.backend.startThread!({
-      ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
-      backend: selectedBackend.kind,
-      cwd: directory?.path ?? project.path,
-      directoryKey: directory?.key,
-      executionMode: options.executionMode,
-      fastMode: options.supportsFast ? options.fastMode : undefined,
-      model: options.supportsModel ? options.model : undefined,
-      reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-      serviceTier: options.serviceTier,
-      acpRuntime: options.acpRuntime,
-      agent: agentForNewThreadSession(session),
-      ...(options.workMode === "worktree"
-        ? {
-            workMode: "worktree" as const,
-            branchName: options.branchName,
-          }
-        : {}),
-    }));
-    const {
-      binding: updatedBinding,
-      navigation: optimisticNavigation,
-    } = await bindStartedThread(started);
-    for (const pending of prepared.pendingOriginals) {
-      const original = await this.options.originalAttachmentStore!.retain({
-        ...pending.original,
-        scope: {
-          backend: updatedBinding.backend, threadId: updatedBinding.threadId, provider: this.options.channel,
-          ...(updatedBinding.federatedThread?.target.scope === "remote"
-            ? { instanceId: updatedBinding.federatedThread.target.instanceId } : {}),
-        },
-        actorKey: originalAttachmentActorKey(pending.event),
-        eventId: pending.event.id,
-        attachmentKey: pending.attachmentKey,
-        receivedAt: pending.event.receivedAt,
-      });
-      prepared.input.push({ type: "text", text: formatOriginalAttachmentGuidance(original) });
-    }
-    await retireBrowseSession();
-    if (startFirstTurnAfterEnvironmentSetup && materialized) {
-      await this.deliverMessagingEnvironmentSetupFinal({
-        binding: updatedBinding,
-        event,
-        materialized,
-      });
-      await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
-    }
-    if (materialized?.turnStartFailure) {
-      const activeTurn = this.getActiveTurn(updatedBinding);
-      if (activeTurn?.status === "failed") {
-        await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
-        return;
-      }
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("turn-start-failed"),
-          createdAt: this.now(),
-          title: "Turn could not start",
-          body: materialized.turnStartFailure.message,
-          recoverable: true,
-        }),
-        updatedBinding,
-        event,
-      );
-      await this.bindingService.renderBindingStatus(updatedBinding, event, optimisticNavigation);
-      return;
-    }
-    if (materialized?.turnId) {
-      this.logger.info?.("messaging materialized launchpad turn started", {
-        bindingId: updatedBinding.id,
-        threadId: started.threadId,
-        turnId: materialized.turnId,
-      });
-      await this.adoptStartedTurn({
-        binding: updatedBinding,
-        event,
-        navigation: optimisticNavigation,
-        turnId: materialized.turnId,
-      });
-      return;
-    }
-    if (startFirstTurnAfterEnvironmentSetup) {
-      await this.startPreparedInput({
-        binding: updatedBinding,
-        input: prepared.input,
-        preview: prepared.preview,
-        threadKey: buildThreadIdentityKey(started.backend, started.threadId),
-        event,
-        navigation: optimisticNavigation,
-      });
-      return;
-    }
-    if (materialized) {
-      this.logger.debug?.("messaging materialized launchpad without turn id", {
-        bindingId: updatedBinding.id,
-        threadId: started.threadId,
-      });
-    }
-    await this.startPreparedInput({
-      binding: updatedBinding,
-      input: prepared.input,
-      preview: prepared.preview,
-      threadKey: buildThreadIdentityKey(started.backend, started.threadId),
-      event,
-      navigation: optimisticNavigation,
-    });
-  }
-
-  private createMessagingEnvironmentSetupReporter(
-    event: MessagingInboundEvent,
-  ): {
-    record: (setupEvent: CodexEnvironmentSetupProgressEvent) => void;
-    stop: () => Promise<void>;
-  } {
-    let latestEvent: CodexEnvironmentSetupProgressEvent | undefined;
-    let interval: ReturnType<typeof setInterval> | undefined;
-    let deliveryQueue: Promise<void> = Promise.resolve();
-    let stopped = false;
-
-    const deliverProgress = (setupEvent: CodexEnvironmentSetupProgressEvent) => {
-      deliveryQueue = deliveryQueue.then(async () => {
-        try {
-          await this.deliver(
-            buildConfirmationIntent({
-              id: this.newIntentId("environment-setup-progress"),
-              capabilityProfile: this.capabilityProfile,
-              createdAt: this.now(),
-              title: "Environment setup running",
-              body: buildMessagingEnvironmentSetupProgressBody(setupEvent),
-            }),
-            undefined,
-            event,
-          );
-        } catch (error) {
-          this.logger.debug?.("messaging environment setup progress deliver failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
-    };
-
-    const ensureInterval = () => {
-      if (interval || stopped) {
-        return;
-      }
-      interval = setInterval(() => {
-        if (latestEvent && !isTerminalCodexEnvironmentSetupProgress(latestEvent)) {
-          deliverProgress(latestEvent);
-        }
-      }, MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS);
-    };
-
-    return {
-      record: (setupEvent) => {
-        latestEvent = setupEvent;
-        if (setupEvent.phase === "started") {
-          deliverProgress(setupEvent);
-          ensureInterval();
-          return;
-        }
-        if (isTerminalCodexEnvironmentSetupProgress(setupEvent)) {
-          if (interval) {
-            clearInterval(interval);
-            interval = undefined;
-          }
-          return;
-        }
-        ensureInterval();
-      },
-      stop: async () => {
-        stopped = true;
-        if (interval) {
-          clearInterval(interval);
-          interval = undefined;
-        }
-        await deliveryQueue;
-      },
-    };
-  }
-
-  private async deliverMessagingEnvironmentSetupFinal(params: {
-    binding: MessagingBindingRecord;
-    event: MessagingInboundEvent;
-    materialized: MaterializedDirectoryLaunchpadThread;
-  }): Promise<void> {
-    const runtime = params.materialized.codexEnvironmentRuntime;
-    const failure = params.materialized.codexEnvironmentStartupFailure;
-    if (failure) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("environment-startup-failed"),
-          createdAt: this.now(),
-          title: failure.phase === "action"
-            ? "Environment action failed"
-            : "Environment setup failed",
-          body: buildMessagingEnvironmentSetupFailureBody(runtime, failure.message),
-          recoverable: true,
-        }),
-        params.binding,
-        params.event,
-      );
-      return;
-    }
-
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("environment-startup-succeeded"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: runtime?.setupStatus === "skipped"
-          ? "Environment setup skipped"
-          : "Environment setup completed",
-        body: buildMessagingEnvironmentSetupSuccessBody(runtime),
-      }),
-      params.binding,
-      params.event,
-    );
-  }
-
-  private async loadDefaultAgentBackendSummaries(): Promise<
-    BackendSummary[] | undefined
-  > {
-    if (!this.options.backend.listBackends) {
-      return undefined;
-    }
-    try {
-      return (await this.options.backend.listBackends({
-        includeUnavailable: true,
-      })).backends;
-    } catch (error) {
-      this.logger.debug?.("default Agent backend capability lookup failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
     }
   }
 
@@ -10621,7 +8036,7 @@ export class MessagingController {
         capabilityProfile: this.capabilityProfile,
         binding,
         createdAt: this.now(),
-        defaultMode: await this.responseModeForConversation(binding.channel),
+        defaultMode: await this.inboundTurns.responseModeForConversation(binding.channel),
       }),
       binding,
       event,
@@ -16382,13 +13797,6 @@ export class MessagingController {
 
 export { isMessagingInteractivePendingRequest };
 
-function originalAttachmentActorKey(event: MessagingInboundEvent): string {
-  return MessagingOriginalAttachmentStore.actorKey(
-    [event.channel.channel, event.channel.conversation.id, event.channel.conversation.workspaceId],
-    event.actor.platformUserId,
-  );
-}
-
 /**
  * Format a wall-clock timestamp as `HH:MM AM/PM` for messaging audit
  * messages. Mirrors the format the user sees in the desktop transcript.
@@ -16920,64 +14328,6 @@ function formatNewThreadEnvironmentLabel(
   );
 }
 
-function isTerminalCodexEnvironmentSetupProgress(
-  event: CodexEnvironmentSetupProgressEvent,
-): boolean {
-  return event.phase === "completed" || event.phase === "failed";
-}
-
-function buildMessagingEnvironmentSetupProgressBody(
-  event: CodexEnvironmentSetupProgressEvent,
-): string {
-  const chunk = event.chunk?.trim();
-  return [
-    `Environment: ${event.environmentName}`,
-    event.command ? `Command: ${event.command}` : undefined,
-    event.cwd ? `Directory: ${event.cwd}` : undefined,
-    chunk ? `Latest output: ${truncateText(chunk, 500)}` : undefined,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
-
-function buildMessagingEnvironmentSetupFailureBody(
-  runtime: MaterializedDirectoryLaunchpadThread["codexEnvironmentRuntime"],
-  message: string,
-): string {
-  return [
-    runtime?.environmentName ? `Environment: ${runtime.environmentName}` : undefined,
-    runtime?.setupCommand ? `Command: ${runtime.setupCommand}` : undefined,
-    message,
-    "The thread was created and your first message will still be submitted.",
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
-
-function buildMessagingEnvironmentSetupSuccessBody(
-  runtime: MaterializedDirectoryLaunchpadThread["codexEnvironmentRuntime"],
-): string {
-  const duration = formatDurationMs(runtime?.setupDurationMs);
-  return [
-    runtime?.environmentName ? `Environment: ${runtime.environmentName}` : undefined,
-    runtime?.setupCommand ? `Command: ${runtime.setupCommand}` : undefined,
-    duration ? `Duration: ${duration}` : undefined,
-    "Your first message will be submitted now.",
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
-
-function formatDurationMs(durationMs: number | undefined): string | undefined {
-  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) {
-    return undefined;
-  }
-  if (durationMs < 1_000) {
-    return `${Math.round(durationMs)}ms`;
-  }
-  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
-}
-
 function newThreadBranchChoices(
   session: MessagingBrowseSessionRecord,
   navigation: MessagingNewThreadNavigation,
@@ -17190,13 +14540,6 @@ function automationTurnKey(params: {
   turnId: string;
 }): string {
   return `${params.backend}:${params.threadId}:${params.turnId}`;
-}
-
-function agentMessagingThreadKey(
-  backend: AppServerBackendKind,
-  threadId: ThreadIdentifier,
-): string {
-  return buildThreadIdentityKey(backend, threadId);
 }
 
 function agentMessagingQueueKey(
@@ -17697,41 +15040,6 @@ function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean, manualRet
   return `${quotedPreview}\n\nI got your message, but there is a turn in progress. I've queued it to be sent when the turn completes.${steeringSentence} You can cancel if you don't want this queued.`;
 }
 
-function truncateText(text: string, limit: number): string {
-  if (text.length <= limit) {
-    return text;
-  }
-  return `${text.slice(0, Math.max(0, limit - 3))}...`;
-}
-
-function isTurnInProgressStartError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  // A lock's note is free text, so "repair in progress" must not read as busy
-  // and quietly queue a message the lock will refuse.
-  return !isThreadLockRefusal(message)
-    && /\b(active turn|turn already|already active|in progress)\b/i.test(message);
-}
-
-function isMissingTurnTargetStartError(
-  error: unknown,
-  binding: MessagingBindingRecord,
-): boolean {
-  const message = (error instanceof Error ? error.message : String(error))
-    .toLowerCase();
-  const threadId = binding.threadId.trim().toLowerCase();
-  if (!threadId || !message.includes(threadId)) {
-    return false;
-  }
-  return (
-    message.includes("thread not found")
-    || message.includes("thread does not exist")
-    || message.includes("thread was deleted")
-    || message.includes("thread has been deleted")
-    || message.includes("deleted thread")
-    || message.includes("unknown thread")
-  );
-}
-
 function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
   return (
     result.outcome === "failed" &&
@@ -17850,164 +15158,6 @@ function assistantMessageThreadId(
     ?? (typeof params.threadId === "string" ? params.threadId : "");
 }
 
-function buildMessagingStartedThreadContext(params: {
-  acpRuntime?: BackendAcpSessionRuntimeState;
-  agent?: ReturnType<typeof agentForNewThreadSession>;
-  backend: AppServerBackendKind;
-  codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
-  directory?: MessagingLaunchpadDirectory;
-  executionMode?: ThreadExecutionMode;
-  linkedDirectory?: LinkedDirectorySummary;
-  fastMode?: boolean;
-  model?: string;
-  navigation: MessagingNewThreadNavigation;
-  now: number;
-  preferences?: MessagingBrowseSessionRecord["preferences"];
-  project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
-  reasoningEffort?: string;
-  serviceTier?: string;
-  threadId: ThreadIdentifier;
-  worktreePath?: string;
-  workMode: LaunchpadWorkMode;
-}): MessagingThreadContext {
-  const directoryPath = params.directory?.path ?? params.project.path;
-  const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
-    ? params.linkedDirectory ?? {
-        id: params.directory?.key ?? directoryPath,
-        kind: params.workMode === "worktree" && params.worktreePath ? "worktree" : "local",
-        label: params.directory?.label ?? params.project.label,
-        path: directoryPath,
-        ...(params.worktreePath ? { worktreePath: params.worktreePath } : {}),
-      }
-    : undefined;
-
-  return {
-    kind: "thread",
-    defaults: params.navigation.launchpadDefaults,
-    directory: params.directory,
-    thread: {
-      id: params.threadId,
-      source: params.backend,
-      ...(params.project.federationTarget?.scope === "remote" ? { federation: {
-        instanceLabel: params.project.federationTarget.instanceId,
-        ref: buildFederatedThreadRef({ backend: params.backend, threadId: params.threadId, instanceId: params.project.federationTarget.instanceId }) } } : {}),
-      title: params.threadId,
-      titleSource: "fallback",
-      projectKey: directoryPath,
-      createdAt: params.now,
-      updatedAt: params.now,
-      executionMode: params.executionMode,
-      acpRuntime: params.acpRuntime,
-      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-      agent: params.agent
-        ? {
-            ...params.agent,
-            instructionLineCount: params.agent.instructions
-              ? params.agent.instructions.split(/\r?\n/).length
-              : 0,
-            instructionsTooLong: false,
-            updatedAt: params.now,
-          }
-        : undefined,
-      model: params.model,
-      reasoningEffort: params.reasoningEffort,
-      serviceTier: params.serviceTier,
-      fastMode: params.fastMode,
-      linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
-      inbox: {
-        inInbox: true,
-        reason: "new-thread",
-      },
-    },
-  };
-}
-
-function launchpadForMessagingProject(params: {
-  acpRuntime?: BackendAcpSessionRuntimeState;
-  backend: AppServerBackendKind;
-  branchName: string;
-  directory?: MessagingLaunchpadDirectory;
-  navigation: MessagingNewThreadNavigation;
-  now: number;
-  options: NewThreadOptionsSummary;
-  preferences?: MessagingBrowseSessionRecord["preferences"];
-  project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
-  workMode: LaunchpadWorkMode;
-}): NavigationLaunchpadDraft {
-  const defaults = params.navigation.launchpadDefaults;
-  const directoryPath = params.directory?.path ?? params.project.path;
-  const base: NavigationLaunchpadConfiguration = params.directory?.launchpad ?? {
-    directoryKey:
-      params.directory?.key ??
-      params.project.directoryKey ??
-      params.project.path ??
-      params.project.label,
-    directoryKind: params.directory?.kind ?? "directory",
-    directoryLabel: params.directory?.label ?? params.project.label,
-    directoryPath,
-    backend: params.backend,
-    executionMode: defaults.executionMode,
-    model: defaults.model,
-    reasoningEffort: defaults.reasoningEffort,
-    serviceTier: defaults.serviceTier,
-    fastMode: defaults.fastMode,
-    workMode: params.workMode,
-    branchName: params.branchName,
-    createdAt: params.now,
-    updatedAt: params.now,
-  };
-
-  return {
-    ...base,
-    backend: params.backend,
-    acpRuntime: params.acpRuntime ?? params.options.acpRuntime,
-    codexEnvironmentId:
-      params.preferences?.codexEnvironmentId === null
-        ? undefined
-        : params.options.codexEnvironmentId ?? undefined,
-    codexEnvironmentExecutionTarget:
-      params.preferences?.codexEnvironmentId === null
-        ? undefined
-        : params.options.codexEnvironmentExecutionTarget,
-    codexEnvironmentActionId:
-      params.preferences?.codexEnvironmentId === null
-        ? undefined
-        : params.preferences?.codexEnvironmentActionId === null
-          ? undefined
-          : params.options.codexEnvironmentActionId ?? undefined,
-    executionMode: params.options.executionMode,
-    model: params.options.supportsModel ? params.options.model : undefined,
-    reasoningEffort: params.options.supportsReasoning
-      ? params.options.reasoningEffort
-      : undefined,
-    serviceTier: params.options.serviceTier,
-    fastMode: params.options.supportsFast ? params.options.fastMode : undefined,
-    prompt: "",
-    workMode: params.workMode,
-    branchName: params.branchName,
-    codexEnvironmentOptions: base.codexEnvironmentOptions,
-    updatedAt: params.now,
-  };
-}
-
-function messagingLaunchpadMaterializationKey(
-  session: MessagingBrowseSessionRecord,
-): string {
-  return `messaging:${session.id}`;
-}
-
-function agentForNewThreadSession(
-  session: MessagingBrowseSessionRecord,
-): { name: string; instructions?: string } | undefined {
-  if (!isNewAgentThreadLaunchAction(session.launchAction)) {
-    return undefined;
-  }
-  return {
-    name: DEFAULT_MESSAGING_AGENT_NAME,
-    instructions: DEFAULT_MESSAGING_AGENT_INSTRUCTIONS,
-  };
-}
-
 function formatResumeRepostText(params: {
   createdAt?: number;
   now: number;
@@ -18065,39 +15215,6 @@ function formatAbsoluteDateTime(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
-function parseTextCommand(text: string): string | undefined {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) {
-    return undefined;
-  }
-
-  return trimmed.slice(1).split(/\s+/, 1)[0]?.toLowerCase();
-}
-
-function parseTextCommandArgs(text: string): string[] {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) {
-    return [];
-  }
-
-  return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
-}
-
-function parseMentionCommand(
-  text: string,
-): { command: string; args: string[] } | undefined {
-  const tokens = text.trim().split(/\s+/).filter(Boolean);
-  // Keep mention commands deliberately unambiguous. A bare known verb such
-  // as `@bot new` is a convenient control shortcut, but addressed prose such
-  // as `@bot new phone who dis?` belongs to the bound/default Agent. Commands
-  // with arguments remain available through their explicit slash form.
-  if (tokens.length !== 1) {
-    return undefined;
-  }
-  const command = matchMessagingCommandVerb(tokens[0] ?? "");
-  return command ? { command, args: [] } : undefined;
-}
-
 function skillSearchCwdsForThreadState(
   threadState: MessagingResolvedThreadState,
 ): string[] {
@@ -18111,21 +15228,6 @@ function skillSearchCwdsForThreadState(
   ].filter((cwd, index, candidates): cwd is string =>
     Boolean(cwd) && candidates.indexOf(cwd) === index,
   );
-}
-
-function bindingWithoutPendingSkillSelection(
-  binding: MessagingBindingRecord,
-): MessagingBindingRecord {
-  const { pendingSkillSelection: _pendingSkillSelection, ...rest } = binding;
-  return rest;
-}
-
-function isToolsFallbackText(text: string): boolean {
-  return text.trim().toLowerCase() === "tools";
-}
-
-function isStreamFallbackText(text: string): boolean {
-  return text.trim().toLowerCase() === "stream";
 }
 
 function readStatusStopTurnValue(
@@ -18193,44 +15295,4 @@ function readAcpRuntimeOptionSource(
   return source === "mode" || source === "configOption" || source === "model"
     ? source
     : undefined;
-}
-
-function bindingWithInboundRoutingState(
-  binding: MessagingBindingRecord | undefined,
-  routingState: MessagingAdapterState | undefined,
-): MessagingBindingRecord | undefined {
-  // Metadata persistence is intentionally off-path, but this event's delivery
-  // state is already authoritative for replies and typing activity on the same
-  // route. Use it immediately without waiting for the merge-safe store update.
-  return binding && routingState
-    ? { ...binding, routingState }
-    : binding;
-}
-
-function requestsExplicitPrivateResponse(
-  event: MessagingInboundEvent | MessagingTurnInputEvent,
-): boolean {
-  if (!("text" in event) || typeof event.text !== "string") {
-    return false;
-  }
-  const text = event.text.trim();
-  if (!text) {
-    return false;
-  }
-  const request = EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN.exec(text);
-  if (!request) {
-    return false;
-  }
-  const prefix = text.slice(0, request.index);
-  const clauseStart = Math.max(
-    prefix.lastIndexOf("."),
-    prefix.lastIndexOf("!"),
-    prefix.lastIndexOf("?"),
-    prefix.lastIndexOf(";"),
-    prefix.lastIndexOf(","),
-    prefix.lastIndexOf("\n"),
-  );
-  return !NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN.test(
-    prefix.slice(clauseStart + 1),
-  );
 }
