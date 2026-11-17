@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.4.8 - 2026-11-16
+
+- Research Runs (Experimental) - Coordinate distinct approaches across managed workers, collect shared findings, request revisions, and review candidates through an assignment graph, searchable items, evidence board, and activity history. Available for local Codex threads only; opt in under Settings > Experimental > Research runs with Codex Tool Discovery enabled.
+- Research Controls - Assign a focused finding to a child without loading the whole board. Enforce the selected 1-8 concurrent workers and 1-120 minute deadline, with workers inheriting the coordinator's model and access. These are not token or dollar caps, and accepting a candidate is not formal verification. Disabling the experiment stops owned active runs while preserving their records.
+- Formula Export - Copy inline and display equations as transparent PNG, exact LaTeX, or formatted HTML. Choose Dark, Light, or App theme text and 1x, 2x, or 4x PNG scale; remember those choices across threads and restarts.
+- Portable Tool Discovery - Configure and verify Portable discovery for a model provider in Settings, then use it through the normal model picker. Require a successful discovery-and-invocation check instead of falling back to the full tool catalog. Start a new thread after changing discovery modes; connection checks may incur model charges.
+- Provider Context Budgets - Apply discovered serving limits to provider execution, with an optional context cap and independent budgets for each provider. Local providers default to a 65,536-token context with earlier compaction, without changing the primary Codex runtime's budget.
+- Messaging Attachments - Retain received originals alongside previews so agents can list and export the original PDF or document rather than only its rendered pages. Keep originals in a bounded local cache and export verified copies under existing filesystem permissions.
+- File Previews and Links - Keep an open remote preview, scroll position, and selection through federation disconnects and reconnects. Open transcript media and file links in the system default application instead of forcing an editor.
+- Navigation and Projects - Append a new destination to the newest end of navigation history, preserve viewer pins across sidebar pages, and open project hover cards beside their own lanes. List automation Agents independently of the currently loaded sidebar pages.
+- Composer - Add Paste Without Formatting and start the next paragraph or list item without inherited bold, italic, strike, or inline-code formatting when using Shift+Enter.
+- Quiet Restarts - Make agent-requested restarts quiet by default, flush the tool acknowledgement before shutdown, and serialize competing restart, quit, and update operations. Preserve explicit Quit Now overrides and reject late work after the shutdown checkpoint.
+- Runtime Reliability - Preserve JSON string contents in tool transport frames and parent authentication for Computer Use. Link monitor retry and recovery notices to the visible parent transcript instead of an inaccessible worker ID.
+- Performance and Minor - Reuse unchanged sidebar chips, remote identity indexes, and federation subscriptions; bound Token Miser accounting persistence work. Includes dependency updates and internal lifecycle cleanup.
+
 ## v1.4.7 - 2026-11-15
 
 - Continue After Recovery - Recover ready continuations after the owner confirms a previously busy thread is idle, including when an idle notification was missed. Replace obsolete rolling waits with newer pinned turns instead of letting both fire.

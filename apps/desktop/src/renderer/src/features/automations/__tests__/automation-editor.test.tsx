@@ -2849,7 +2849,7 @@ describe("AutomationEditor with several watched conversations", () => {
     );
 
     const watching = await screen.findByRole("list", { name: "Watching" });
-    fireEvent.click(within(watching).getByRole("button", { name: "Edit f-metrics" }));
+    fireEvent.click(await within(watching).findByRole("button", { name: "Edit f-metrics" }));
 
     // f-metrics is now the one in the fields; f-alerts went back into the list
     // where it stood, and can be reopened the same way.
@@ -2978,7 +2978,7 @@ describe("AutomationEditor with several watched conversations", () => {
 
     const watching = await screen.findByRole("list", { name: "Watching" });
     fireEvent.click(
-      within(watching).getByRole("button", { name: "Edit Telegram · Ops Room / Deploys" }),
+      await within(watching).findByRole("button", { name: "Edit Telegram · Ops Room / Deploys" }),
     );
     // Neither catalog names this group or topic, so only the stored titles can.
     expect(screen.getByLabelText("Topic ID")).toHaveValue("680");
@@ -3050,7 +3050,7 @@ describe("AutomationEditor with several watched conversations", () => {
     );
   });
 
-  it("keeps the list order when a source before the edited one is removed", async () => {
+  it.each(["immediate", "deferred"] as const)("keeps the list order when a source before the edited one is removed (%s settings)", async (settingsDelivery) => {
     const automation = multiSourceAutomation();
     automation.triggers = [
       ...automation.triggers,
@@ -3067,10 +3067,15 @@ describe("AutomationEditor with several watched conversations", () => {
         conditionGroup: senderFilter,
       },
     ];
+    const desktopApi = slackCatalog();
+    const settings = await desktopApi.readMessagingSettings!();
+    const settingsRead = Promise.withResolvers<ReadDesktopMessagingSettingsResponse>();
+    desktopApi.readMessagingSettings = () => settingsRead.promise;
+    if (settingsDelivery === "immediate") settingsRead.resolve(settings);
     const onSubmit = vi.fn(async () => undefined);
     render(
       <AutomationEditor
-        desktopApi={slackCatalog()}
+        desktopApi={desktopApi}
         mode={{ kind: "edit", automation }}
         onCancel={() => undefined}
         onSubmit={onSubmit}
@@ -3078,7 +3083,15 @@ describe("AutomationEditor with several watched conversations", () => {
     );
 
     const watching = await screen.findByRole("list", { name: "Watching" });
-    fireEvent.click(within(watching).getByRole("button", { name: "Edit f-metrics" }));
+    if (settingsDelivery === "deferred") {
+      // Stored sources render before settings authorize their edit actions.
+      expect(within(watching).getByText("f-metrics")).toBeInTheDocument();
+      expect(within(watching).queryByRole("button", { name: "Edit f-metrics" })).toBeNull();
+      settingsRead.resolve(settings);
+    }
+    fireEvent.click(await within(watching).findByRole("button", { name: "Edit f-metrics" }));
+    expect(within(watching).getByText("f-metrics").closest("li"))
+      .toHaveAttribute("aria-current", "true");
     fireEvent.click(
       within(watching).getByRole("button", { name: "Stop watching f-alerts" }),
     );
