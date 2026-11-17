@@ -2143,14 +2143,32 @@ const filledDesktopApis = new WeakMap<DesktopApi, DesktopApi>();
 function withFilledNavigationPages(api: DesktopApi): DesktopApi {
   let filled = filledDesktopApis.get(api);
   if (!filled) {
-    // A view, not a copy: tests and the preload may replace a member of the
-    // underlying object later, and every other member must stay live. Own
-    // keys pass through, so spreading the view still copies each member.
-    filled = new Proxy(api, { get(target, key, receiver) {
-      const value: unknown = Reflect.get(target, key, receiver);
+    const member = (key: string | symbol): unknown => {
+      const value: unknown = Reflect.get(api, key);
       return key === "getNavigationQueryPage" && typeof value === "function"
         ? filledNavigationRead(value as NavigationPageRead) : value;
-    } });
+    };
+    // A view, not a copy: tests and the preload may replace a member of the
+    // underlying object later, and every other member must stay live.
+    //
+    // The view's target is an empty object, not the API. The preload's API is
+    // frozen by Electron's contextBridge, and a proxy may not answer
+    // differently from a frozen target: the read would throw in the app while
+    // passing against an unfrozen test double. Own keys and descriptors are
+    // reported from the API, so spreading the view still copies each member.
+    filled = new Proxy({} as DesktopApi, {
+      get: (_target, key) => member(key),
+      has: (_target, key) => Reflect.has(api, key),
+      set: (_target, key, value) => Reflect.set(api, key, value),
+      deleteProperty: (_target, key) => Reflect.deleteProperty(api, key),
+      // A test spy redefines the member. It must land on the API, where reads look.
+      defineProperty: (_target, key, descriptor) => Reflect.defineProperty(api, key, descriptor),
+      ownKeys: () => Reflect.ownKeys(api),
+      getOwnPropertyDescriptor: (_target, key) => {
+        const own = Reflect.getOwnPropertyDescriptor(api, key);
+        return own && { value: member(key), enumerable: own.enumerable, configurable: true, writable: true };
+      },
+    });
     filledDesktopApis.set(api, filled);
   }
   return filled;
