@@ -337,3 +337,55 @@ export function researchMapBranches(run: Pick<ResearchRunView, "approaches" | "i
   for (const approach of run.approaches) if (!placed.has(approach.id)) branches.push(build(approach));
   return branches;
 }
+
+/** The state an approach's chip shows. An abandoned direction reads "Abandoned", whatever state its worker is in. */
+export function researchApproachStateLabel(approach: Pick<ResearchApproach, "state" | "directionState">): string {
+  return researchLabel(approach.directionState === "abandoned" ? "abandoned" : approach.state);
+}
+
+/** What the Map puts before the title of a branch nested under the item it investigates. */
+export const RESEARCH_FOCUSED_CHILD_PREFIX = "Focused child · ";
+
+/** The label before a contribution on the Map: a finding's kind, or a candidate's review status. */
+export function researchMapLeafLabel(leaf: ResearchMapLeaf): string {
+  return leaf.type === "finding" ? researchLabel(leaf.record.kind) : `Candidate · ${leaf.record.review ? researchLabel(leaf.record.review.decision) : "Awaiting review"}`;
+}
+
+/** The Map's line for the approach this one overlaps. */
+export function researchApproachOverlap(run: Pick<ResearchRunView, "items">, approach: ResearchApproach): string | undefined {
+  return approach.overlapsApproachId ? `Overlaps ${approachTitle(run, approach.overlapsApproachId)}` : undefined;
+}
+
+/** The Map's link to the contributions a branch does not draw. */
+export function researchMapMoreLabel(branch: Pick<ResearchMapBranch, "approach" | "hidden">): string | undefined {
+  return branch.hidden > 0 ? `${branch.hidden} more from ${branch.approach.title}` : undefined;
+}
+
+/**
+ * The lines a branch itself draws, without the branches nested in it: its
+ * title, state chip, task, note and overlap line, each shown contribution
+ * with its label, and the count of the rest. A contribution also matches by
+ * the text its excerpt cuts off. The "Open worker" link is a control and is
+ * not listed, like "Open source thread" on a finding's card.
+ */
+function researchMapBranchLines(run: Pick<ResearchRunView, "items">, branch: ResearchMapBranch, nested: boolean): string[] {
+  const { approach } = branch;
+  return [`${nested ? RESEARCH_FOCUSED_CHILD_PREFIX : ""}${approach.title}`, researchApproachStateLabel(approach), approach.task, approach.note ?? "", researchApproachOverlap(run, approach) ?? "",
+    ...branch.leaves.flatMap((leaf) => [`${researchMapLeafLabel(leaf)} ${excerpt(leaf.record.text)}`, leaf.record.text]), researchMapMoreLabel(branch) ?? ""];
+}
+
+/**
+ * The top-level branches that show `query`, in the order given; all of them
+ * for an empty query. A branch is drawn with the branches nested in it, so
+ * text in any of those keeps it. The lines come from the functions the Map
+ * renders with, and from the window's store alone: nothing is read from the
+ * owner, and a contribution the branch only counts does not match.
+ */
+export function researchMapMatches(run: Pick<ResearchRunView, "items">, branches: ResearchMapBranch[], query: string): ResearchMapBranch[] {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return branches;
+  const shows = (branch: ResearchMapBranch, nested: boolean): boolean => researchMapBranchLines(run, branch, nested).some((line) => line.toLowerCase().includes(wanted))
+    || branch.leaves.some((leaf) => leaf.children.some((child) => shows(child, true)))
+    || branch.assignments.some((child) => shows(child, true));
+  return branches.filter((branch) => shows(branch, false));
+}

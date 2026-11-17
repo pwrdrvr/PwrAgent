@@ -148,6 +148,13 @@ test("a long run's Map, Findings and Activity show its newest work first and pag
     await expect(map.locator(".research-node")).toHaveCount(6);
     await expect(map.locator(".research-node").first()).toContainText(`Delivery attempt ${findings} completed`);
     await expect(panel.getByRole("button", { name: `${findings - 6} more from Retry timing`, exact: true })).toBeVisible();
+    // The Map's filter matches what a branch draws, such as that count, and not a contribution the branch only counts.
+    await panel.getByLabel("Filter this view").fill(`${findings - 6} MORE FROM retry`);
+    await expect(map.locator(".research-node")).toHaveCount(6);
+    await panel.getByLabel("Filter this view").fill("Delivery attempt 1 completed");
+    await expect(map.getByText("No approaches match this filter.")).toBeVisible();
+    await panel.getByLabel("Filter this view").fill("");
+    await expect(map.locator(".research-node")).toHaveCount(6);
     // Findings are read a page at a time, and the filter matches what every finding's card shows.
     await panel.getByRole("tab", { name: "Findings", exact: true }).click();
     const list = panel.getByLabel("Shared findings");

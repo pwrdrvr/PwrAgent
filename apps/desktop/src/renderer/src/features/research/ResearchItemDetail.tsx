@@ -3,7 +3,7 @@ import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchI
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
-import { approachTitle, excerpt, formatClock, researchItemText, researchLabel, type ResearchRunView } from "./research-view-model";
+import { approachTitle, excerpt, formatClock, researchApproachStateLabel, researchItemText, researchLabel, type ResearchRunView } from "./research-view-model";
 
 const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> = {
   open: "Release / reopen", claimed: "Claim", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancel item",
@@ -86,7 +86,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
     {!context && !(detail.key === key && detail.error) && <p role="status" className="research-muted">Loading item…</p>}
     {item && record && <>
       <div className="research-entry__meta">
-        {item.type === "approach" && <span className="research-chip">{researchLabel(item.record.directionState === "abandoned" ? "abandoned" : item.record.state)}</span>}
+        {item.type === "approach" && <span className="research-chip">{researchApproachStateLabel(item.record)}</span>}
         {item.type === "submission" && <span className={`research-chip${item.record.review ? "" : " research-chip--attention"}`}>{item.record.review ? researchLabel(item.record.review.decision) : "Awaiting review"}</span>}
         {item.work.state !== "open" && <span className={`research-chip${["in_progress", "claimed", "assigned"].includes(item.work.state) ? " research-chip--live" : ""}`}>Progress: {researchLabel(item.work.state)}</span>}
       </div>
