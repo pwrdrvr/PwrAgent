@@ -124,7 +124,7 @@ test("a live run shows time left, review work and a confirmed stop", async () =>
   } finally { await app.close(); }
 });
 
-test("a long run's Activity pages from the newest event back to the first", async () => {
+test("a long run's Map, Findings and Activity show its newest work first and page back to the first", async () => {
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
     preLaunchHook: async (homeRoot) => {
@@ -142,6 +142,23 @@ test("a long run's Activity pages from the newest event back to the first", asyn
     await panel.getByRole("combobox", { name: "Run" }).click();
     await app.window.getByRole("option", { name: new RegExp(LONG_RESEARCH_OBJECTIVE.slice(0, 30)) }).click();
     await expect(panel.getByRole("region", { name: "Research run summary" })).toContainText(LONG_RESEARCH_OBJECTIVE);
+    // The Map draws the approach's newest contributions and counts the rest.
+    const findings = LONG_RESEARCH_EVENTS - 4;
+    const map = panel.getByLabel("Research map");
+    await expect(map.locator(".research-node")).toHaveCount(6);
+    await expect(map.locator(".research-node").first()).toContainText(`Delivery attempt ${findings} completed`);
+    await expect(panel.getByRole("button", { name: `${findings - 6} more from Retry timing`, exact: true })).toBeVisible();
+    // Findings are read a page at a time, and the filter searches all of them.
+    await panel.getByRole("tab", { name: "Findings", exact: true }).click();
+    const list = panel.getByLabel("Shared findings");
+    await expect(panel.getByText(`Showing the latest 20 of ${findings} findings.`, { exact: true })).toBeVisible();
+    await expect(list.getByRole("article")).toHaveCount(20);
+    await expect(list.getByRole("article").first()).toContainText(`Delivery attempt ${findings} completed`);
+    await panel.getByRole("button", { name: "Show more", exact: true }).click();
+    await expect(list.getByRole("article")).toHaveCount(40);
+    await panel.getByLabel("Filter this view").fill("Delivery attempt 5 completed");
+    await expect(panel.getByText("All 1 matching finding.", { exact: true })).toBeVisible();
+    await expect(list.getByRole("article")).toHaveCount(1);
     await panel.getByRole("tab", { name: "Activity", exact: true }).click();
     const activity = panel.getByLabel("Research activity");
     await expect(activity.getByRole("listitem")).toHaveCount(100);

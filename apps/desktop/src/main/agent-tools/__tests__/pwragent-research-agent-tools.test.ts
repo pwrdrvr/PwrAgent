@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchService } from "@pwragent/owner-core/research-service";
-import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
-import { projectResearchRun, researchEventPage, sameResearchThread, searchResearchItems, summarizeResearchRun, type ResearchEvent, type ResearchSearchPage, type ResearchItemContext } from "@pwragent/shared";
+import type { ResearchSearchPage, ResearchItemContext } from "@pwragent/shared";
+import { MemoryResearchStorage } from "../../../../../../packages/owner-core/src/__tests__/fixtures/research-memory-storage";
 import type { ResearchAssignmentReceipt } from "@pwragent/owner-core/research-service";
 import { createResearchAgentHandler } from "../../research/research-runtime";
 import { resolveAgentToolCatalogs } from "../agent-tool-catalog-registry";
@@ -35,31 +35,10 @@ describe("ordinary research tools", () => {
   });
 
   it("runs three approaches through the native tool contract without native tool search", async () => {
-    // Tool contracts depend on the storage port. The real SQLite implementation
-    // and write budgets are exercised in main/__tests__/research-store.test.ts.
-    const journals = new Map<string, ResearchEvent[]>();
-    const starts = new Map<string, string>();
-    const get = (id: string) => journals.has(id) ? projectResearchRun(id, structuredClone(journals.get(id)!)) : undefined;
-    const storage: ResearchStorage = {
-      get,
-      header: get,
-      summaries: (thread) => [...journals.keys()].map((id) => get(id)!).filter((run) => sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread))),
-      runSummaries: (thread, limit) => storage.list(thread).slice(0, limit).map(summarizeResearchRun),
-      events: (id, range) => researchEventPage(get(id)!, range),
-      members: (id) => { const run = get(id)!; return [run.coordinator, ...run.approaches.flatMap((a) => a.worker ? [a.worker] : [])]; },
-      isMember: (id, thread) => { const run = get(id); return Boolean(run && (sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread)))); },
-      readItem: (id, itemId) => get(id)?.items.find((item) => item.id === itemId),
-      search: (id, query) => { const run = get(id)!; return searchResearchItems(id, run.items, run.revision, query); },
-      findCommand: (id, key) => journals.get(id)?.find((event) => event.commandId === key),
-      findByStartKey: (key) => starts.has(key) ? get(starts.get(key)!) : undefined,
-      list: (thread) => [...journals.keys()].map((id) => get(id)!).filter((run) => !thread || sameResearchThread(run.coordinator, thread) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread))),
-      create: (id, key, event) => { starts.set(key, id); journals.set(id, [structuredClone(event)]); },
-      append: (id, revision, event) => {
-        const records = journals.get(id)!;
-        if (records.length !== revision) throw new Error("Conflict");
-        records.push(structuredClone(event));
-      },
-    };
+    // Tool contracts depend on the storage port, here the in-memory oracle that answers every read by replay.
+    // The SQLite implementation is held to the same answers in main/__tests__/research-projections.property.test.ts.
+    const storage = new MemoryResearchStorage();
+    let calls = 0;
     let spawned = 0;
     const service = new ResearchService(storage, {
       ownerId: "owner", ownerPid: 1, ownerStartedAt: 500, isOwnerAlive: () => false, schedule: () => () => {}, changed: () => {}, onError: () => {},
@@ -83,7 +62,7 @@ describe("ordinary research tools", () => {
       } });
       expect(result.success).toBe(true);
       expect(spawned).toBe(3);
-      const run = service.snapshot({ backend: "codex", threadId: "coordinator" }).selected!;
+      const run = service.read(service.snapshot({ backend: "codex", threadId: "coordinator" }).runs[0]!.id, { backend: "codex", threadId: "coordinator", kind: "agent" });
       const posted = await catalog.router.handleDynamicToolCall({ backend: "codex", call: { namespace: "pwragent", tool: "research_update", threadId: "worker-1", turnId: "turn-1", callId: "finding",
         arguments: { runId: run.id, command: { action: "finding", approachId: "a1", kind: "counterexample", text: "A reversed event sequence fails", paths: [] } },
       } });
@@ -97,7 +76,7 @@ describe("ordinary research tools", () => {
       const first = await handler("research_read", { runId: run.id }, coordinator);
       expect(first).toMatchObject({ nextSubmissionOffset: 10 });
       const call = async (name: string, args: Parameters<typeof catalog.router.handleDynamicToolCall>[0]["call"]["arguments"], threadId = "coordinator", turnId = "parent") => {
-        const result = await catalog.router.handleDynamicToolCall({ backend: "codex", call: { namespace: "pwragent", tool: name, threadId, turnId, callId: `${name}-${threadId}-${journals.get(run.id)!.length}`, arguments: args } });
+        const result = await catalog.router.handleDynamicToolCall({ backend: "codex", call: { namespace: "pwragent", tool: name, threadId, turnId, callId: `${name}-${threadId}-${++calls}`, arguments: args } });
         expect(result.success).toBe(true);
         const content = result.contentItems?.find((item) => item.type === "inputText");
         if (!content || content.type !== "inputText") throw new Error("Missing tool response");

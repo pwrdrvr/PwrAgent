@@ -150,13 +150,38 @@ Overlapping revision requests for one worker are rejected until its prior
 delivery settles. Cancelling a focused approach settles the selected item as
 well as any source item awaiting that assignment's cancellation.
 
-`research_items` projects approaches, findings and candidates in the same
-transaction as each journal event. Existing journals are backfilled once at
-schema initialization. Search, summaries and single-item reads query these
-records without replaying the run journal; search pages share a SQLite read
-snapshot and use revision-bound cursors. Search returns at most twenty compact
-IDs and excerpts. Single-item reads include only the selected record, its
-source approach and focused assignment. Mutations return compact receipts.
+The journal is the source of truth and is append-only. Everything a read or
+a command needs is projected in the same transaction as each journal event,
+and nothing on a command, turn or read path replays the journal:
+
+- `research_runs` holds each run's `status` and `reason`, written by the same
+  `UPDATE`.
+- `research_items` holds approaches, findings and candidates. `version` is the
+  seq of an item's last change, indexed by `(run_id, version, item_id)`.
+  Approaches also carry `occupies_slot` and their worker thread.
+- `research_deliveries` holds the latest receipt of each revision delivery.
+- `research_workers` holds membership.
+
+`ResearchService` validates a command against these rows: the run header, the
+items the command names, slot counts, and the open deliveries. Idempotency is
+one indexed lookup of the command ID. `projectResearchRun` remains the
+definition of what the projections must hold. Oracle tests compare every
+stored read against it after every generated step, and a differential test
+runs each generated command through the earlier replay-based service too.
+Replay remains available as `ResearchService.read` for recovery and tests; no
+command, observer or view calls it.
+
+An existing item is updated by a statement that names only the indexed columns
+that changed, because SQLite rewrites every index covering a column in a `SET`
+list. A database that predates a projection gains it in one transaction at
+schema initialization, with its backfill, so a projection is either absent or
+complete. Reads never repair or write.
+
+Search, summaries, board pages and single-item reads query these records.
+Search pages share a SQLite read snapshot and use revision-bound cursors.
+Search returns at most twenty compact IDs and excerpts. Single-item reads
+include only the selected record, its source approach and focused assignment.
+Mutations return compact receipts.
 
 The coordinator can assign an open item to a new managed child. Its durable
 intent reserves a worker slot, and membership is recorded before its first
@@ -168,32 +193,45 @@ acknowledged interruption; unknown starts or stops retain their slot. An
 exhausted run can be explicitly continued within its original deadline.
 
 The checked-in budgets measure one commit for a finding or progress update,
-including its item projection, and zero commits for focused reads/search or
-redelivery. A small finding measured 37,080 observed WAL bytes: approximately
-53.4 MB/day at one aggregate finding per minute; a progress change measured
-28,840 bytes (41.5 MB/day at one per minute). No per-token or idle writes are
-introduced. Actual WAL volume depends on payload size and page layout.
-A queued revision measured three commits and 86,520 WAL bytes for review,
-intent and receipt; its two exact queue boundaries add two commits and
-57,680 bytes. At one revision per ten minutes across all workers that is
-approximately 20.8 MB/day, including 13.1 MB/day added by reservation tracking
-and queue reconciliation. Repeated or unrelated queue events write nothing.
+including its projections, and zero commits for reads, search or redelivery.
+A small finding measured 41,200 observed WAL bytes: approximately 59.3 MB/day
+at one aggregate finding per minute. A progress change measured 24,720 bytes
+(35.6 MB/day at one per minute). No per-token or idle writes are introduced.
+Actual WAL volume depends on payload size and page layout. A queued revision
+measured three commits and 82,400 WAL bytes for review, intent and receipt;
+its two exact queue boundaries add two commits and 57,680 bytes. At one
+revision per ten minutes across all workers that is approximately
+20.2 MB/day. Repeated or unrelated queue events write nothing.
 
 The renderer reads research through IPC. This first integration serves local
-Codex threads; federation viewers must use the owning instance. Each
-`research:changed` read returns the thread's run summaries (header fields plus
-review counts, from SQL without replaying a journal), the operator's waiting
-request, and the board of one selected run: its projection without the event
-journal or the item projection. Item records repeat the approach, finding and
-candidate lists, so the board names each item only in `createdSeq`, and the
-renderer reads a record from those lists (`researchBoardEntry`); item work
-state is read per item. Activity reads the journal separately through `research:events`, in
-pages of at most 200 events, newest first, while the Activity view is open.
-Journal entries never change once appended, so a `beforeSeq` page stays valid
-while the run grows. A refresh reads only events above the loaded window. If
-more than one page arrived in between, the window restarts from the newest
-page, and Show older reaches the rest. All of these reads make zero commits. Graph edges
-represent recorded assignments and contributions, and finding relationships
+Codex threads; federation viewers must use the owning instance. The owner
+announces each change as `research:changed { backend, threadId, runId,
+revision }`. A change that names no run (the operator's waiting request)
+carries only the thread.
+
+- `research:snapshot` returns the thread's run summaries in one query, the
+  operator's waiting request and the runs the window may write. With a
+  `runId` it returns that one summary.
+- `research:changes { runId, sinceRevision }` returns the run's header state
+  and only the items whose `version` is above `sinceRevision`, ordered by
+  `(version, item_id)` in pages of at most 500. Its last page carries, for each
+  approach that changed, its contribution count and newest six leaves for the
+  Map. A caller ahead of the run is told to start again from nothing.
+- `research:search` pages Findings, newest first, twenty at a time.
+- `research:events` pages Activity, at most 200 events, newest first, while
+  the Activity view is open. Journal entries never change once appended, so a
+  `beforeSeq` page stays valid while the run grows.
+
+The window keeps one store per run on screen, keyed by item ID
+(`ResearchRunStore` in `packages/shared`). `ResearchSync` applies a change to
+the run on screen as one delta read, patches the run's summary from the
+delta's header state, and reads one summary for a change to another run. It
+reads all pages of a sync before showing any of them, so the panel never
+shows a run part way through. The first open of a run reads it in pages. A
+failed read is retried by the next change event. All of these reads make zero
+commits.
+
+Graph edges represent recorded assignments and contributions, and finding relationships
 identify their source explicitly. Review acceptance is a coordinator or
 operator judgment, never formal verification. Open Math Harness execution
 and Lean verification remain separate adapter milestones.

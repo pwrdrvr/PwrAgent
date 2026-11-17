@@ -795,7 +795,8 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await expect(panel.getByRole("button", { name: "Stop run…", exact: true })).toBeVisible();
         await runAxe(app.window, "research map");
         await panel.getByRole("tab", { name: "Findings", exact: true }).click();
-        await expect(panel.getByLabel("Shared findings")).toBeVisible();
+        // The findings are read a page at a time after the tab opens; audit the cards, not the loading line.
+        await expect(panel.getByLabel("Shared findings").getByRole("article").first()).toBeVisible();
         await runAxe(app.window, "research findings");
         await panel.getByRole("tab", { name: /^Review/ }).click();
         await expect(panel.getByText(/It is not formal verification/)).toBeVisible();

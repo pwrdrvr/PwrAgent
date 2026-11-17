@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { ResearchApproach, ResearchFinding, ResearchRunBoard, ResearchThread } from "@pwragent/shared";
+import type { ResearchApproach, ResearchFinding, ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";
-import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchLabel, researchMapBranches, type ResearchMapBranch } from "./research-view-model";
+import { useResearchFindings } from "./useResearchFindings";
+import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchLabel, researchMapBranches, type ResearchMapBranch, type ResearchRunView } from "./research-view-model";
 
 type Open = (itemId: string) => void;
 
@@ -12,10 +13,11 @@ function approachState(approach: ResearchApproach): string {
 }
 
 export function ResearchMapView({ run, filter, onOpenItem, onShowApproachItems }: {
-  run: ResearchRunBoard; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
+  run: ResearchRunView; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
 }) {
   const query = filter.trim().toLowerCase();
-  const branches = researchMapBranches(run).filter((branch) => !query || branchText(branch).includes(query));
+  const all = useMemo(() => researchMapBranches(run), [run]);
+  const branches = all.filter((branch) => !query || branchText(branch).includes(query));
   return <div className="research-map" aria-label="Research map">
     {branches.map((branch) => <MapBranch key={branch.approach.id} run={run} branch={branch} onOpenItem={onOpenItem} onShowApproachItems={onShowApproachItems} />)}
     {!branches.length && <p className="context-empty">{query ? "No approaches match this filter." : "Approaches appear here once the coordinator starts the run."}</p>}
@@ -28,7 +30,7 @@ function branchText(branch: ResearchMapBranch): string {
 }
 
 function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = false }: {
-  run: ResearchRunBoard; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
+  run: ResearchRunView; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
 }) {
   const { approach } = branch;
   return <div className={`research-map__branch${nested ? " research-map__branch--nested" : ""}`}>
@@ -56,22 +58,46 @@ function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = fals
   </div>;
 }
 
-export function ResearchFindingsView({ run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunBoard; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+/** Newest first, a page at a time. Each card's record comes from the run's store; the search decides which and in what order. */
+export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
-  const query = filter.trim().toLowerCase();
-  const findings = [...run.findings].reverse().filter((f) => !query || `${f.kind} ${f.text} ${approachTitle(run, f.approachId)} ${f.paths.join(" ")}`.toLowerCase().includes(query));
-  return <div className="research-list" aria-label="Shared findings">
-    {findings.map((finding) => <FindingCard key={finding.id} run={run} finding={finding} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />)}
-    {!run.findings.length && <p className="context-empty">Findings appear here as workers share evidence.</p>}
-    {run.findings.length > 0 && !findings.length && <p className="context-empty">No findings match this filter.</p>}
+  const findings = useResearchFindings(api, thread, run.id, run.findings, filter);
+  const { hits, total, loaded } = findings.loaded;
+  const more = findings.loaded.next !== undefined;
+  const list = useRef<HTMLDivElement>(null);
+  // Show more disappears with the last page; keep focus in the list instead of dropping it to the page.
+  const requestedMore = useRef(false);
+  useEffect(() => {
+    if (more || !requestedMore.current) return;
+    requestedMore.current = false;
+    list.current?.focus();
+  }, [more]);
+  return <div ref={list} tabIndex={-1} className="research-list" aria-label="Shared findings">
+    {findings.error && <p role="alert" className="research-error">{findings.error}</p>}
+    {hits.map((hit) => {
+      // A hit read just ahead of the store draws once its item arrives.
+      const item = run.items.get(hit.id);
+      return item?.type === "finding" ? <FindingCard key={hit.id} run={run} finding={item.record} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} /> : null;
+    })}
+    {!findings.available && <p className="context-empty">Findings are unavailable in this window.</p>}
+    {findings.available && !loaded && !findings.error && <p role="status" className="context-empty">Loading findings…</p>}
+    {loaded && !run.findings && <p className="context-empty">Findings appear here as workers share evidence.</p>}
+    {loaded && run.findings > 0 && !hits.length && <p className="context-empty">No findings match this filter.</p>}
+    {hits.length > 0 && <div className="research-activity__footer">
+      <span className="research-muted">{more ? `Showing the latest ${hits.length} of ${total} ${findings.filtered ? "matching findings" : "findings"}.` : `All ${plural(hits.length, findings.filtered ? "matching finding" : "finding")}.`}</span>
+      {more && <button type="button" className="research-button" disabled={findings.loadingOlder} onClick={() => { requestedMore.current = true; findings.showOlder(); }}>
+        {findings.loadingOlder ? "Loading…" : "Show more"}
+      </button>}
+    </div>}
   </div>;
 }
 
 function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunBoard; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+  run: ResearchRunView; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
-  const related = finding.relatesTo ? run.findings.find((other) => other.id === finding.relatesTo) : undefined;
+  const relatedItem = finding.relatesTo ? run.items.get(finding.relatesTo) : undefined;
+  const related = relatedItem?.type === "finding" ? relatedItem.record : undefined;
   return <article className="research-entry" aria-label={`${researchLabel(finding.kind)} from ${approachTitle(run, finding.approachId)}`}>
     <div className="research-entry__meta"><span className="research-chip">{researchLabel(finding.kind)}</span><span>{approachTitle(run, finding.approachId)}</span></div>
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(finding.id)}>{finding.text}</button>
@@ -91,7 +117,7 @@ export function EvidenceList({ paths, available, onOpen }: { paths: string[]; av
 
 /** Newest first. The journal is read in pages; the filter covers what is loaded. */
 export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
-  api: DesktopApi; thread: ResearchThread; run: ResearchRunBoard; filter: string; onOpenItem: Open;
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; onOpenItem: Open;
 }) {
   const activity = useResearchActivity(api, thread, run.id, run.revision);
   const query = filter.trim().toLowerCase();
@@ -115,7 +141,7 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
     <ol ref={list} tabIndex={-1} className="research-activity" aria-label="Research activity" reversed>
       {rows.map((row) => <li key={row.seq}>
         <span className="research-activity__meta"><time dateTime={new Date(row.at).toISOString()}>{formatClock(row.at)}</time> · {row.actor} · {row.kind}</span>
-        {row.itemId && Object.hasOwn(run.createdSeq, row.itemId)
+        {row.itemId && run.items.has(row.itemId)
           ? <button type="button" className="research-activity__text" onClick={() => onOpenItem(row.itemId!)}>{row.text}</button>
           : <p className="research-activity__text">{row.text}</p>}
       </li>)}

@@ -26,6 +26,7 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.tbl_name !== "research_events"
     && row.tbl_name !== "research_workers"
     && row.tbl_name !== "research_items"
+    && row.tbl_name !== "research_deliveries"
     && row.name !== "idx_thread_usage_lines_identity"
   ) : rows;
   return {

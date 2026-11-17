@@ -452,9 +452,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     enabled: researchEnabled,
     ...createResearchOwnerIdentity(),
     onError: (error) => mainLog.warn("research operation failed", { error: String(error) }),
-    changed: (thread) => {
+    changed: (change) => {
       for (const target of rendererSubscribers(RESEARCH_CHANGED_EVENT_CHANNEL)) {
-        try { target.send(RESEARCH_CHANGED_EVENT_CHANNEL, thread); }
+        try { target.send(RESEARCH_CHANGED_EVENT_CHANNEL, change); }
         catch (error) { mainLog.warn("research view notification failed", { error: String(error) }); }
       }
     },

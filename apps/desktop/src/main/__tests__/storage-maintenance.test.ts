@@ -203,6 +203,8 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // Research adds eleven table/index pages and one additional schema page:
     // twelve more VACUUM frames, with the same two commits and deletion budget.
     // The focused item projection and its five indexes add six more pages.
+    // The research delivery projection and its two indexes, the three item indexes for versions,
+    // worker slots and worker threads, and the delivery-failure index add seven more.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));
