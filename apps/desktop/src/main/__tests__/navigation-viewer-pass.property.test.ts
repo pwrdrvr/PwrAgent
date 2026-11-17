@@ -17,6 +17,7 @@ import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-windo
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
+import * as projection from "@pwragent/owner-core/navigation-query-projection";
 
 const current = vi.hoisted(() => ({
   store: undefined as unknown as SqliteOverlayStore,
@@ -178,6 +179,35 @@ it("shares the physical owner scan with viewers while retaining separate invento
     expect(f.provider).toHaveBeenCalledTimes(1);
     expect(f.resolve).toHaveBeenCalledTimes(1);
   } finally { f.close(); }
+});
+
+it.each([8, 16])("budgets projection work and real SQLite commits for %i expanded collections", async (n) => {
+  const create = projection.createNavigationQuerySnapshot;
+  const work = { index: 0, children: 0 };
+  const prepared = vi.spyOn(projection, "createNavigationQuerySnapshot").mockImplementation((index) =>
+    create(index, (stage, rows) => { work[stage] += rows; }));
+  const f = await fixture(n);
+  try {
+    const { writes } = await measureSqliteWrites(async () => {
+      f.queries.setDemand(f.requests); await until(f.idle);
+    });
+    // N roots, N children, N viewer mounts. The owner and viewer share one
+    // physical scan, but intentionally prepare distinct 2N and 3N inventories.
+    expect(prepared).toHaveBeenCalledTimes(2);
+    expect(work).toEqual({ index: 5 * n, children: 8 * n });
+    expect(f.read).toHaveBeenCalledTimes(1 + 2 * n);
+    expect(f.provider).toHaveBeenCalledTimes(1);
+    expect(f.materialize).toHaveBeenCalledTimes(1);
+    expect(writes.commits).toBe(0);
+    f.reset();
+    prepared.mockClear(); work.index = 0; work.children = 0;
+    await f.queries.refresh(); await until(f.idle);
+    expect(prepared).not.toHaveBeenCalled();
+    expect(work).toEqual({ index: 0, children: 3 * n });
+    expect(f.read).toHaveBeenCalledTimes(1 + 2 * n);
+    expect(f.provider).not.toHaveBeenCalled();
+    expect(f.materialize).not.toHaveBeenCalled();
+  } finally { f.close(); prepared.mockRestore(); }
 });
 
 async function expectDisconnectedViewer(n: number, selected: number) {

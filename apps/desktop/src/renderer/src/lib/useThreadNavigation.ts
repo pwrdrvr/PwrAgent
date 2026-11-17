@@ -3682,6 +3682,7 @@ export function useThreadNavigation(
   const manuallySelectedThreadKeysRef = useRecoverableRef("navigation.manualSelections", () => new Set<string>());
   const submittedSeenUpdatedAtByThreadKeyRef = useRecoverableRef("navigation.submittedSeenUpdates", () => new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
+  const refreshCompletionRef = useRef<Promise<void> | undefined>(undefined);
   const archiveRefreshBatchesRef = useRef(0);
   const archiveEventRefreshOwnersRef = useRef(new Map<string, FederationTarget>());
   const mountedRef = useRef(true);
@@ -4095,10 +4096,17 @@ export function useThreadNavigation(
           includeDirectoryIndex: initialRequest.includeDirectoryIndex || queued?.includeDirectoryIndex,
           invalidatedOnly: initialRequest.invalidatedOnly && (!queued || queued.invalidatedOnly === true), owners: queued
           ? mergeNavigationRefreshOwners(queued.owners, initialRequest.owners) : initialRequest.owners };
-        return;
+        return refreshCompletionRef.current;
       }
 
       refreshInFlightRef.current = true;
+      let complete!: () => void;
+      let fail!: (error: unknown) => void;
+      const completion = new Promise<void>((resolve, reject) => { complete = resolve; fail = reject; });
+      // The initiating caller owns the outer async result; concurrent callers
+      // join this same completion, including the coalesced follow-up wave.
+      void completion.catch(() => undefined);
+      refreshCompletionRef.current = completion;
       let nextRequest: typeof initialRequest | undefined = initialRequest;
 
       try {
@@ -4119,14 +4127,24 @@ export function useThreadNavigation(
           );
           nextRequest = queuedRefreshRef.current;
         }
+      } catch (error) {
+        fail(error);
+        throw error;
       } finally {
         refreshInFlightRef.current = false;
+        refreshCompletionRef.current = undefined;
+        complete();
       }
     },
     [performRefresh]
   );
   const refreshNavigation = useCallback(async (caller: NavigationRefreshCaller = "navigation/refresh"): Promise<void> => {
-    await refresh(undefined, undefined, false, { diagnosticTrigger: caller });
+    // A viewer-mount removal publishes its membership event before replying.
+    // Await any still-invalidated work, including an in-flight replacement;
+    // a settled publication needs no second discovery wave. Ordinary refresh
+    // remains a full discovery request.
+    await refresh(undefined, undefined, false, { diagnosticTrigger: caller,
+      invalidatedOnly: caller === "action/remote-pin-remove" });
     await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
   }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
   const refreshThreadMetadata = useCallback(async (thread: NavigationThreadSummary): Promise<void> => {
