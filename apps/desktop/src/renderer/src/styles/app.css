@@ -42307,7 +42307,13 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 0;
 }
 
-.integrated-terminal .xterm .xterm-viewport,
+/* xterm 6.1 paints the viewport black with
+   `.xterm:not(.allow-transparency) .xterm-viewport`, which has the same
+   specificity as `.integrated-terminal .xterm .xterm-viewport`. Its
+   stylesheet loads with the lazy terminal chunk, after this file, so it
+   won that tie and drew a black viewport in light themes. The extra
+   `:not()` keeps this rule ahead regardless of load order. */
+.integrated-terminal .xterm:not(.allow-transparency) .xterm-viewport,
 .integrated-terminal .xterm .xterm-screen {
   background: var(--terminal-bg);
 }
