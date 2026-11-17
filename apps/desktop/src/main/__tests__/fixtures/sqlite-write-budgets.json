@@ -1682,5 +1682,6 @@
   "openai-decisions-register": {"commits": 1, "note": "one decisions_register tool call. Agent-initiated, never per turn or timer: ~1.2 MB/day at 100 registrations/day.", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
   "openai-decisions-update": {"commits": 1, "note": "one decisions_update tool call (supersede + insert, one transaction): ~1.2 MB/day at 100 updates/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "openai-decisions-invoke-batched": {"commits": 3, "note": "120 decisions_invoke calls on one decision: usage summed in memory and written at 50, 100 and the final flush, one ledger line each. ~0.2 MB per 120 invokes, ~1.7 MB/day at 1,000 invokes/day.", "observedWalBytes": 201880, "rowsChanged": 9, "statements": 9},
+  "openai-decisions-batch-card": {"commits": 11, "note": "one 500-item decisions_invoke batch: its thread card written at start, at each tenth, and at the end. Item results stay in memory. 11 commits (~0.23 MB WAL) per batch whatever its size; ~1.2 MB/day at 5 large batches/day, ~12 MB/day at 50.", "observedWalBytes": 234840, "rowsChanged": 11, "statements": 11},
   "openai-decisions-delete": {"commits": 1, "note": "one decisions_delete tool call (every version soft-deleted in one statement): ~0.8 MB/day at 100 deletes/day.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 1}
 }

@@ -437,13 +437,19 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       mayOpenThread: (caller) => caller.backend === "codex" && isVoiceManagerThread(caller.threadId),
     }),
   );
-  // Registered OpenAI Decisions: five fixed tools over a profile registry.
+  // Registered OpenAI Decisions: seven fixed tools over a profile registry.
   // The key stays in the settings secret store until an invoke needs it.
+  // A batch shows as a card on its thread; a background batch wakes the
+  // thread with a queued turn when it ends.
   getDesktopBackendRegistry().setPwrAgentOpenAIDecisionsHandler(
     createOpenAIDecisionsAgentToolsHandler({
       settings: getDesktopSettingsService(),
       recordUsageLines: async (lines) =>
         await getDesktopBackendRegistry().recordOpenAIDecisionsUsageLines(lines),
+      reportBatch: async (report) =>
+        await getDesktopBackendRegistry().publishDecisionBatchCard(report),
+      wakeThread: async (caller, wake) =>
+        await getDesktopBackendRegistry().deliverDecisionBatchWakeup({ ...caller, ...wake }),
     }),
   );
   const researchRegistry = getDesktopBackendRegistry();

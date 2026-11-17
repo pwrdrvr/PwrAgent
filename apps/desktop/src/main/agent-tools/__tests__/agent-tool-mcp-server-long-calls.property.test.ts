@@ -167,6 +167,37 @@ describe("AgentToolMcpServer long tool calls", () => {
     await expect.poll(() => abortedBeforeFinishing).toBe(false);
   });
 
+  // MCP requires each progress value to exceed the last. A tool's own lines
+  // and the heartbeat share one counter, and the tool's line is the message.
+  it("sends a tool's progress lines as the call's progress message", async () => {
+    const release = deferred();
+    const { registration } = await setup(async (_args, context) => {
+      context.reportProgress?.("3 of 10 done");
+      await new Promise((resolve) => setTimeout(resolve, PROGRESS_INTERVAL_MS * 3));
+      context.reportProgress?.("7 of 10 done");
+      await release.promise;
+      return agentToolSuccess({ status: "done" });
+    });
+    const timer = setTimeout(release.resolve, PROGRESS_INTERVAL_MS * 6);
+    try {
+      const response = await callRequest(registration);
+      const messages = await readMessages(response, performance.now());
+      const progress = messages
+        .filter((item) => item.message.method === "notifications/progress")
+        .map((item) => (item.message as unknown as { params: { progress: number; message: string } }).params);
+      expect(progress[0]).toMatchObject({ progress: 1, message: "3 of 10 done" });
+      expect(progress.map((item) => item.message)).toContain("3 of 10 done");
+      // Heartbeats repeat the latest line rather than the generic text.
+      expect(progress.some((item) => item.message === "PwrAgent is still working on this call.")).toBe(false);
+      const values = progress.map((item) => item.progress);
+      expect(values).toEqual([...values].sort((a, b) => a - b));
+      expect(new Set(values).size).toBe(values.length);
+    } finally {
+      clearTimeout(timer);
+      release.resolve();
+    }
+  });
+
   it("keeps requests other than tools/call a single JSON response", async () => {
     const { registration } = await setup(() => agentToolSuccess({}));
     const response = await fetch(registration.server.url, {

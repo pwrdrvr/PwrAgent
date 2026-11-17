@@ -143,7 +143,7 @@ export function resolveAgentToolCatalogs(params: {
     params.threadTodoHandler,
   );
   const threadTodoDynamicTools = threadTodoRouter.buildDynamicToolSpecs();
-  // Five fixed tools for every registered decision. A registered decision is
+  // Seven fixed tools for every registered decision. A registered decision is
   // an argument to decisions_invoke, never a tool of its own: Codex fixes its
   // dynamic tools at thread start, and a per-decision tool would copy its
   // prompt into every transcript that saw the catalog.

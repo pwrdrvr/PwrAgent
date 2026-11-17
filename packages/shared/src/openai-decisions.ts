@@ -25,6 +25,8 @@ export const OPENAI_DECISIONS_TOOL_NAMES = [
   "decisions_invoke",
   "decisions_update",
   "decisions_delete",
+  "decisions_batch_results",
+  "decisions_batch_cancel",
 ] as const;
 
 export type OpenAIDecisionsToolName = (typeof OPENAI_DECISIONS_TOOL_NAMES)[number];
