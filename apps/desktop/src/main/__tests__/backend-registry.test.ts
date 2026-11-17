@@ -43876,15 +43876,12 @@ command = "pnpm dev"
         result: { status: "reported" as const },
       },
     }));
-    const registry = createDesktopBackendRegistry({
-      appManagementHandler,
-      codexClient,
-      overlayStore: createOverlayStoreMock({
-        overlays: {
-          "codex:agent-thread": createAgentOverlay(),
-        },
-      }),
-    });
+    const overlayStore = createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } });
+    await overlayStore.upsertThreadMessageOrigin!({ backend: "codex", threadId: "agent-thread", messageId: "user:turn-1",
+      origin: { kind: "messaging", causalMessagingSource: { ownerId: "profile", requestId: "request" } } });
+    const registry = createDesktopBackendRegistry({ appManagementHandler, codexClient, overlayStore });
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
+      checkDynamicToolPermission: () => ({ allowed: true }), authorizeRetainedTool: async () => ({ allowed: true }) });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -43923,7 +43920,7 @@ command = "pnpm dev"
     });
     expect(appManagementHandler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "status" },
     });
 
@@ -58870,7 +58867,7 @@ script = "printf setup"
     }
   });
 
-  it("handles PwrAgent app management tools from active ordinary threads", async () => {
+  it("denies PwrAgent app management tools from active ordinary threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -58929,20 +58926,8 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(response).toMatchObject({
-      success: true,
-      contentItems: [
-        {
-          type: "inputText",
-          text: expect.stringContaining('"currentVersion": "1.2.3"'),
-        },
-      ],
-    });
-    expect(appManagementHandler).toHaveBeenCalledWith({
-      operation: "manage_pwragent",
-      context: { responseFlushed },
-      args: { action: "status" },
-    });
+    expect(response).toMatchObject({ success: false });
+    expect(appManagementHandler).not.toHaveBeenCalled();
 
     await registry.close();
   });

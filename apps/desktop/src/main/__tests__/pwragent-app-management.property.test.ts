@@ -13,6 +13,7 @@ beforeEach(() => {
   generation = "1";
   quit.mockClear();
   check.mockReset();
+  read.mockClear();
   read.mockReturnValue({ status: "idle" });
   getOwnerHostServices().updates = { read, check, requestQuit: quit, install: vi.fn(), stateToken: () => generation };
 });
@@ -29,11 +30,36 @@ const request = (action: "restart" | "stop", responseFlushed: Promise<void>): Pw
 } as PwrAgentAppRequest);
 
 describe("agent lifecycle admission", () => {
+  it("denies every management action without trusted authorization before reading or changing updater state", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("status", "upgrade_check", "restart", "stop"), async (action) => {
+      const authorize = vi.fn(async () => false);
+      const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize });
+      const response = await handler({ operation: "manage_pwragent", context: { responseFlushed: Promise.resolve() }, args: { action } });
+      expect(response).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(authorize).toHaveBeenCalledOnce();
+    }), { examples: [["status"], ["upgrade_check"], ["restart"], ["stop"]] });
+    expect(read).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+  });
+
+  it("rechecks revoked authorization after response acknowledgement", async () => {
+    let allowed = true;
+    const authorize = vi.fn(async () => allowed);
+    const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize });
+    const flush = deferred();
+    await handler(request("restart", flush.promise));
+    allowed = false;
+    flush.resolve();
+    await vi.waitFor(() => expect(authorize).toHaveBeenCalledTimes(2));
+    expect(quit).not.toHaveBeenCalled();
+  });
+
   it("starts no lifecycle effect before acknowledgement, and admits at most one request", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("restart", "stop"), { minLength: 1, maxLength: 15 }), async (actions) => {
       quit.mockClear();
       const flush = deferred();
-      const handler = createPwrAgentAppManagementHandler({ startedAt: 1 });
+      const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => true });
       for (const action of actions) await handler(request(action, flush.promise));
       expect(quit).not.toHaveBeenCalled();
       flush.resolve();
@@ -47,7 +73,7 @@ describe("agent lifecycle admission", () => {
 
   it("cancels on failed acknowledgement and allows a later request", async () => {
     const flush = deferred();
-    const handler = createPwrAgentAppManagementHandler({ startedAt: 1 });
+    const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => true });
     await handler(request("restart", flush.promise));
     flush.reject(new Error("client disconnected"));
     await Promise.resolve();
@@ -58,7 +84,7 @@ describe("agent lifecycle admission", () => {
   });
 
   it("binds to the serving process and rejects an ABA update change before acknowledgement", async () => {
-    const handler = createPwrAgentAppManagementHandler({ startedAt: 1 });
+    const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => true });
     const status = await handler({ operation: "manage_pwragent", context: {}, args: { action: "status" } });
     if (!status.ok) throw new Error("status unavailable");
     const flush = deferred();
@@ -71,12 +97,12 @@ describe("agent lifecycle admission", () => {
       expect(await handler({ operation: "manage_pwragent", context: {}, args: { action: "status" } })).toMatchObject({ data: { operation: { status: "cancelled" } } });
     });
     expect(quit).not.toHaveBeenCalled();
-    const other = createPwrAgentAppManagementHandler({ startedAt: 1 });
+    const other = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => true });
     expect(await other({ operation: "manage_pwragent", context: { responseFlushed: Promise.resolve() }, args })).toMatchObject({ ok: false });
   });
 
   it("refuses stale inspected state and an unacknowledged transport without side effects", async () => {
-    const handler = createPwrAgentAppManagementHandler({ startedAt: 1 });
+    const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize: async () => true });
     expect(await handler({ operation: "manage_pwragent", context: {}, args: { action: "restart" } })).toMatchObject({ ok: false });
     expect(await handler({ ...request("restart", Promise.resolve()), args: { action: "restart", expectedStateToken: "another-runtime" } } as PwrAgentAppRequest)).toMatchObject({ ok: false });
     expect(quit).not.toHaveBeenCalled();

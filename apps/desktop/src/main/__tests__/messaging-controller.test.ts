@@ -38,6 +38,7 @@ import type {
 } from "@pwragent/shared";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  BUILT_IN_ROLES,
   buildFederatedThreadRef,
 } from "@pwragent/shared";
 import {
@@ -28461,6 +28462,26 @@ describe("RBAC capability enforcement", () => {
     });
     await harness.controller.handleInboundEvent(event);
   }
+
+  it.each(BUILT_IN_ROLES)("requires the lifecycle grant for $id management requests and rechecks revocation", async (role) => {
+    const permissions = [...role.permissions];
+    const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions) });
+    await driveOneTurn(harness, "Check PwrAgent updates");
+    const check = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1",
+      category: "app_management" as const, tool: "manage_pwragent" };
+    expect(harness.controller.checkDynamicToolPermission(check).allowed).toBe(role.id === "admin");
+    permissions.splice(0, permissions.length, "message.reply", "tools.instance_management");
+    expect(harness.controller.checkDynamicToolPermission(check)).toMatchObject({ allowed: false, permission: "tools.instance_lifecycle" });
+    harness.controller.dispose();
+  });
+
+  it("denies lifecycle control in legacy mode without an explicit role grant", async () => {
+    const harness = await createHarness();
+    await driveOneTurn(harness, "Restart PwrAgent");
+    expect(harness.controller.checkDynamicToolPermission({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      category: "app_management", tool: "manage_pwragent" })).toMatchObject({ allowed: false, permission: "tools.instance_lifecycle" });
+    harness.controller.dispose();
+  });
 
   it("gates agent dynamic tools by the originating actor's role", async () => {
     const harness = await createHarness({

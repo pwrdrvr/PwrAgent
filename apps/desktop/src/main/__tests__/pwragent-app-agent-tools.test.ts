@@ -66,7 +66,7 @@ describe("PwrAgent app agent tools", () => {
     });
     expect(handler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "status" },
     });
   });
@@ -139,7 +139,7 @@ describe("PwrAgent app agent tools", () => {
     ).resolves.toMatchObject({ success: true });
     expect(handler).toHaveBeenCalledWith({
       operation: "manage_pwragent",
-      context: {},
+      context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "stop" },
     });
   });

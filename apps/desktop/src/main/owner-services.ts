@@ -418,6 +418,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const federationRuntime = initializeDesktopFederationRuntime();
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({
+      authorize: (context) => registry.canManagePwrAgent(context),
       startedAt: options.startedAt,
       version: () => host.application.getVersion(),
       readCodexAppServerDiagnostics: async () =>

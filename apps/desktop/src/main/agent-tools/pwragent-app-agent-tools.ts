@@ -40,11 +40,12 @@ export function buildPwrAgentAppToolRouter(
 
 export function buildPwrAgentAppToolDefinitions(
   handler: PwrAgentAppManagementHandler | undefined,
-  options: { namespace?: string } = {},
+  options: { namespace?: string; advertise?: boolean } = {},
 ): AgentToolDefinition<PwrAgentAppOperationName>[] {
   return PWRAGENT_APP_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    advertise: options.advertise,
     annotations: { readOnlyHint: false },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
@@ -70,7 +71,8 @@ export function buildPwrAgentAppToolDefinitions(
       }
       const response = await handler({
         operation,
-        context: context.responseFlushed ? { responseFlushed: context.responseFlushed } : {},
+        context: { backend: context.backend, threadId: context.threadId, turnId: context.turnId,
+          ...(context.responseFlushed ? { responseFlushed: context.responseFlushed } : {}) },
         args: { action, ...(typeof args.expectedStateToken === "string" ? { expectedStateToken: args.expectedStateToken } : {}) },
       } as PwrAgentAppRequest);
       return appResponseToAgentToolResult(response);

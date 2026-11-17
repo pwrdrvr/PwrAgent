@@ -69,6 +69,7 @@ export type ResolvedAgentToolCatalog = {
 
 export function resolveAgentToolCatalogs(params: {
   appManagementHandler?: PwrAgentAppManagementHandler;
+  appManagementAllowed?: boolean;
   automationInspectionHandler?: AutomationInspectionHandler;
   federationHandler?: PwrAgentFederationHandler;
   mcpConnectionHandler?: PwrAgentMcpConnectionHandler;
@@ -95,7 +96,7 @@ export function resolveAgentToolCatalogs(params: {
   );
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
   const appRouter = new AgentToolRouter([
-    ...buildPwrAgentAppToolDefinitions(params.appManagementHandler),
+    ...buildPwrAgentAppToolDefinitions(params.appManagementHandler, { advertise: params.appManagementAllowed === true }),
     buildPwrAgentToolGuideDefinition(),
   ]);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();

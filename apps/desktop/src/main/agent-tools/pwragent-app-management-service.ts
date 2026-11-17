@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import type {
   PwrAgentAppManagementData,
+  PwrAgentAppManagementContext,
   PwrAgentLifecycleOperation,
   PwrAgentAppRequest,
   PwrAgentAppResponse,
@@ -29,6 +30,8 @@ export type CodexAppServerDiagnostics = {
 };
 
 export type PwrAgentAppManagementServiceOptions = {
+  /** Re-resolves trusted Agent identity and actor permissions; absent means deny. */
+  authorize?: (context: PwrAgentAppManagementContext) => Promise<boolean>;
   now?: () => number;
   readCodexAppServerDiagnostics?: () => Promise<CodexAppServerDiagnostics | undefined>;
   requestRestart?: (performRestart: () => void) => Promise<boolean>;
@@ -49,6 +52,9 @@ export function createPwrAgentAppManagementHandler(
     .digest("hex");
   const activeOperation = (): boolean => operation !== undefined
     && operation.status !== "cancelled" && operation.status !== "failed";
+  const authorized = async (request: PwrAgentAppRequest): Promise<boolean> => {
+    try { return await options.authorize?.(request.context) === true; } catch { return false; }
+  };
   const data = (
     action: PwrAgentAppManagementData["action"],
     status: AppUpdateStatus,
@@ -64,6 +70,9 @@ export function createPwrAgentAppManagementHandler(
       return { ok: false, error: { code: "unsupported_operation", message: "Unsupported PwrAgent app management operation." } };
     }
     const action = request.args.action;
+    if (!await authorized(request)) {
+      return { ok: false, error: { code: "forbidden", message: "App management requires a designated Agent and a currently authorized lifecycle-management actor." } };
+    }
     try {
       const status = readAppUpdateStatus();
       if (action !== "status" && request.args.expectedStateToken !== undefined
@@ -95,6 +104,11 @@ export function createPwrAgentAppManagementHandler(
           // The acknowledgement names a scheduled request, not a completed
           // confirmation or install. No timer guesses when the caller heard it.
           void request.context.responseFlushed.then(async () => {
+            if (!await authorized(request)) {
+              current.status = "cancelled";
+              current.message = "Authorization changed before acknowledgement. Lifecycle request cancelled.";
+              return;
+            }
             if (tokenFor(readAppUpdateStatus()) !== expectedState) {
               current.status = "cancelled";
               current.message = "Update state changed before acknowledgement. Read status and retry.";

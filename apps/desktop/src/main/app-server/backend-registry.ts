@@ -451,6 +451,7 @@ import {
   isPwrAgentAppDynamicToolCall,
 } from "../agent-tools/pwragent-app-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
+import { authorizeAppManagement } from "../agent-tools/app-management-authorization";
 import {
   handlePwrAgentThreadDynamicToolCall,
   isPwrAgentThreadDynamicToolCall,
@@ -1894,6 +1895,7 @@ export class DesktopBackendRegistry {
       assertThreadOwnership: (...args: Parameters<typeof this.assertThreadOwnership>) => this.assertThreadOwnership(...args),
       attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
       authorizeAgentToolMcpCall: (...args: Parameters<typeof this.authorizeAgentToolMcpCall>) => this.authorizeAgentToolMcpCall(...args),
+      canManagePwrAgent: (...args: Parameters<typeof this.canManagePwrAgent>) => this.canManagePwrAgent(...args),
       get automationInspectionHandler() { return current().automationInspectionHandler; },
       beginStartingTurnOrigin: (...args: Parameters<typeof this.beginStartingTurnOrigin>) => this.beginStartingTurnOrigin(...args),
       bindStartingTurnOrigin: (...args: Parameters<typeof this.bindStartingTurnOrigin>) => this.bindStartingTurnOrigin(...args),
@@ -2541,6 +2543,35 @@ export class DesktopBackendRegistry {
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
+  }
+
+  private readonly appManagementCallSources = new WeakMap<object, string>();
+
+  async canManagePwrAgent(context: import("@pwragent/shared").PwrAgentAppManagementContext, discovery = false): Promise<boolean> {
+    let sourceKey: string | undefined;
+    const allowed = await authorizeAppManagement({
+      isActive: (caller) => Boolean(caller.backend && caller.threadId && caller.turnId
+        && this.isLiveDynamicToolCall(caller.backend, { threadId: caller.threadId, turnId: caller.turnId })),
+      isToolAllowed: () => !localAgentToolRefusal("manage_pwragent"),
+      isAgent: async (caller) => Boolean(caller.backend && caller.threadId
+        && !(caller.backend === "codex" && this.changingCodexAgentThreadIds.has(caller.threadId))
+        && (await this.overlayStore.getThreadOverlayState({ backend: caller.backend, threadId: caller.threadId }))?.agent),
+      readOrigin: async (caller) => {
+        if (!caller.backend || !caller.threadId) return undefined;
+        const origin = await this.readTurnCausalMessagingOrigin({ backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId })
+          ?? this.findStartingTurnOrigin({ backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId })?.origin;
+        sourceKey = JSON.stringify(origin?.causalMessagingSource);
+        const bound = this.appManagementCallSources.get(context);
+        return bound && bound !== sourceKey ? undefined : origin;
+      },
+      authorizeActor: async (caller, origin) => Boolean(caller.backend && caller.threadId && this.messagingAgentToolService?.authorizeRetainedTool
+        && (await this.messagingAgentToolService.authorizeRetainedTool({ backend: caller.backend, threadId: caller.threadId,
+          turnId: caller.turnId, causalMessagingSource: origin.causalMessagingSource }, {
+          backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId, category: "app_management", tool: "manage_pwragent",
+        })).allowed),
+    }, context, discovery);
+    if (allowed && sourceKey && !discovery) this.appManagementCallSources.set(context, sourceKey);
+    return allowed;
   }
 
   // Federation needs the registry before it can supply routed owner bindings.
@@ -15750,13 +15781,15 @@ export class DesktopBackendRegistry {
       : undefined;
   }
 
-  private buildCodexParentDynamicTools(
+  private async buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
     discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
     eagerTools?: ReadonlySet<string>,
-  ): CodexDynamicToolSpec[] {
+    caller?: import("@pwragent/shared").PwrAgentAppManagementContext,
+  ): Promise<CodexDynamicToolSpec[]> {
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
+        appManagementAllowed: caller ? await this.canManagePwrAgent(caller, true) : false,
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
         federationHandler: this.federationHandler,
@@ -15798,6 +15831,7 @@ export class DesktopBackendRegistry {
       discoveryEnabled
         ? await this.resolveEagerPwrAgentTools(params.threadId)
         : undefined,
+      { backend: "codex", threadId: params.threadId },
     );
   }
 
@@ -17704,7 +17738,7 @@ export class DesktopBackendRegistry {
             };
             // A newly created director has the ordinary discovery catalog.
             // Eager director tools are a latency optimization, not authority.
-            const initialTools = this.buildCodexParentDynamicTools(
+            const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
@@ -18779,7 +18813,7 @@ export class DesktopBackendRegistry {
       }
       const tokenMiserEnabled = await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall);
       const router = new AgentToolRouter([buildPwrAgentToolSearchDefinition(
-        this.buildCodexParentDynamicTools(tokenMiserEnabled, false),
+        await this.buildCodexParentDynamicTools(tokenMiserEnabled, false, undefined, { backend, threadId: hostToolCall.threadId, turnId: hostToolCall.turnId }),
         tokenMiserEnabled ? this.tokenMiserStore : undefined,
       )]);
       return await router.handleDynamicToolCall({ backend, call: hostToolCall });
@@ -19249,6 +19283,9 @@ export class DesktopBackendRegistry {
     category: MessagingDynamicToolCategory,
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
   ): Promise<string | null> {
+    if (call.tool === "manage_pwragent" && !await this.canManagePwrAgent({ backend, threadId: call.threadId, turnId: call.turnId })) {
+      return "designated Agent and tools.instance_lifecycle";
+    }
     const service = this.messagingAgentToolService;
     const causalContext = await this.readCausalMessagingContext({ backend, ...call });
     if (!service) return isCausalMessagingContext(causalContext) ? "message.reply" : null;

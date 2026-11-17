@@ -20342,6 +20342,10 @@ export class MessagingController {
     }
     const resolution = this.resolveActorPermissions(origin.event);
     if (resolution === null) {
+      if (params.tool === "manage_pwragent") {
+        // Lifecycle control requires an explicit current grant, including in legacy mode.
+        return { owns: true, allowed: false, permission: "tools.instance_lifecycle" };
+      }
       // Legacy-compatible mode: full capability, exactly as before RBAC.
       return { owns: true, allowed: true };
     }
@@ -20363,6 +20367,7 @@ export class MessagingController {
     if (toolArgsTargetRemoteInstance(params.arguments)) {
       required.push("federation.remote_control");
     }
+    if (params.tool === "manage_pwragent") required.push("tools.instance_lifecycle");
     if (required.length === 0) {
       // Benign tool (e.g. get_current_messaging_surface, or a no-op mutation).
       return { owns: true, allowed: true };

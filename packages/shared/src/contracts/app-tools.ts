@@ -1,3 +1,5 @@
+import type { AppServerBackendKind } from "./normalized-app-server";
+
 /** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const PWRAGENT_APP_TOOL_NAMESPACE = "pwragent_app";
 
@@ -26,6 +28,10 @@ export const PWRAGENT_APP_ERROR_CODES = [
 export type PwrAgentAppErrorCode = (typeof PWRAGENT_APP_ERROR_CODES)[number];
 
 export type PwrAgentAppManagementContext = {
+  /** Caller identity supplied by the local provider transport, never tool arguments. */
+  backend?: AppServerBackendKind;
+  threadId?: string;
+  turnId?: string;
   now?: number;
   /** Trusted local transport acknowledgement, never a tool argument. */
   responseFlushed?: Promise<void>;
