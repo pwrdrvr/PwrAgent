@@ -20,7 +20,11 @@ export async function authorizeAppManagement(
     const origin = await ports.readOrigin(context);
     if (!origin?.causalMessagingSource || origin.causalMessagingAmbiguous) return false;
     if (!await ports.authorizeActor(context, origin)) return false;
-    // Agent designation, containment and the active caller can change during provider authorization.
-    return ports.isToolAllowed() && await ports.isAgent(context) && (discovery || ports.isActive(context));
+    // A steer can change the actor while provider authorization or overlay reads await.
+    if (!ports.isToolAllowed() || !await ports.isAgent(context) || (!discovery && !ports.isActive(context))) return false;
+    const current = await ports.readOrigin(context);
+    return !current?.causalMessagingAmbiguous
+      && JSON.stringify(current?.causalMessagingSource) === JSON.stringify(origin.causalMessagingSource)
+      && ports.isToolAllowed() && (discovery || ports.isActive(context));
   } catch { return false; }
 }

@@ -62,6 +62,26 @@ beforeEach(() => {
 });
 
 describe("quit operation ownership", () => {
+  it("uses an authorized chat request without a desktop decision and rechecks before shutdown", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 4 }), async (revoke, peers) => {
+      let allowed = true;
+      const confirm = vi.fn(async () => "manual-cancel" as const);
+      const performQuit = vi.fn();
+      const resumeCheckpoint = vi.fn();
+      const manager = createQuitManager({
+        getConfirmationEnabled: () => true, getFederationPeerCount: () => peers,
+        getQuitBlockers: () => ({ count: 1, threadIds: ["working"], terminalSessionCount: 0, terminalThreadKeys: [], actionRunCount: 0, items: [] }),
+        confirm, quietForRestart: async () => { if (revoke) allowed = false; },
+        resumeAfterCancelledQuietRestart: resumeCheckpoint,
+        performQuit, log: {},
+      });
+      expect(await manager.requestQuit({ source: "agent-tool", quietRestart: true, authorizeAgent: async () => allowed })).toBe(!revoke);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(performQuit).toHaveBeenCalledTimes(revoke ? 0 : 1);
+      expect(resumeCheckpoint).toHaveBeenCalledTimes(revoke ? 1 : 0);
+    }), { numRuns: 15 });
+  });
+
   it("a pending quit cannot be bypassed by a later idle snapshot or replaced by another callback", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 12 }), async (idle) => {
       let finish!: (value: "manual-confirm") => void;

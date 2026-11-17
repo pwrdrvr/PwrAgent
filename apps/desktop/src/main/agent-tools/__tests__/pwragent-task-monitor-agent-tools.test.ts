@@ -180,7 +180,7 @@ describe("PwrAgent task monitor agent tools", () => {
         }
       }
     };
-    for (const catalog of resolveAgentToolCatalogs({})) {
+    for (const catalog of resolveAgentToolCatalogs({ appManagementAllowed: true })) {
       visit(catalog.dynamicTools);
     }
 

@@ -84,6 +84,7 @@ import {
   messagingReviewStartTarget,
 } from "../messaging/core/messaging-renderer";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
+import { MessagingActivityLog } from "../storage/messaging-activity-log";
 import {
   measureSqliteWrites,
   resetSqliteWriteMetrics,
@@ -28481,6 +28482,32 @@ describe("RBAC capability enforcement", () => {
     expect(harness.controller.checkDynamicToolPermission({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
       category: "app_management", tool: "manage_pwragent" })).toMatchObject({ allowed: false, permission: "tools.instance_lifecycle" });
     harness.controller.dispose();
+  });
+
+  it("budgets canonical lifecycle permission reads and denial auditing", async () => {
+    const { tempDir, dbPath } = createTempStateDb("pwragent-lifecycle-rbac-");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const db = StateDb.open(dbPath);
+    const log = new MessagingActivityLog(db);
+    const permissions = ["message.reply", "tools.instance_management", "tools.instance_lifecycle"];
+    const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions), activityLog: () => log });
+    try {
+      await driveOneTurn(harness, "Upgrade this owner");
+      const check = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1", category: "app_management" as const, tool: "manage_pwragent" };
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let read = 0; read < 20; read++) expect(harness.controller.checkDynamicToolPermission(check).allowed).toBe(true);
+        permissions.splice(permissions.indexOf("tools.instance_lifecycle"), 1);
+        expect(harness.controller.checkDynamicToolPermission(check)).toMatchObject({ allowed: false, permission: "tools.instance_lifecycle" });
+      });
+      expectSqliteWriteBudget({ scenario: "agent-lifecycle-authorization", writes,
+        note: "20 allowed lifecycle permission reads cost zero writes; one denied permission uses the existing activity audit. About 2.1 MB/day at 100 denials/day; no periodic writes." });
+      expect(log.list().filter((entry) => entry.kind === "inbound-rejected")).toHaveLength(1);
+    } finally {
+      harness.controller.dispose();
+      db.close();
+      await rm(tempDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
   });
 
   it("gates agent dynamic tools by the originating actor's role", async () => {

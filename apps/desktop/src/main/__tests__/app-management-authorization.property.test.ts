@@ -38,3 +38,17 @@ it("fails closed on missing identity, ambiguous sources, containment and Agent r
     expect(await authorizeAppManagement(ports, failure === "identity" ? {} : { backend: "codex", threadId: "agent", turnId: "turn" })).toBe(false);
   }));
 });
+
+it("does not transfer an earlier actor's authority when a steer changes the causal source during authorization", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("changed", "missing", "ambiguous"), async (change) => {
+    let current: AppServerThreadMessageOrigin | undefined = source;
+    const ports = { isActive: () => true, isToolAllowed: () => true, isAgent: async () => true,
+      readOrigin: async () => current, authorizeActor: async () => {
+        current = change === "missing" ? undefined : change === "ambiguous"
+          ? { ...source, causalMessagingAmbiguous: true }
+          : { ...source, causalMessagingSource: { ownerId: "profile", requestId: "other-actor" } };
+        return true;
+      } };
+    expect(await authorizeAppManagement(ports, { backend: "codex", threadId: "manager", turnId: "turn" })).toBe(false);
+  }));
+});

@@ -1049,6 +1049,8 @@ export class DesktopBackendRegistry {
   private readonly restartContinuationStore?: RestartContinuationStoreLike;
   /** Restart continuations and saved queued messages with a durable row, by queue entry id. */
   private readonly durableRestartContinuations = new Map<string, StoredRestartContinuation>();
+  private readonly quietRestartCheckpoint = new Map<string, StoredRestartContinuation>();
+  private appRestartVerification?: StoredRestartContinuation;
   /** See `restart-continuation-gate.ts`. */
   private restartGate: RestartGateState = OPEN_RESTART_GATE;
   private beforeQuietRestartGate?: RestartGateState;
@@ -2572,6 +2574,36 @@ export class DesktopBackendRegistry {
     }, context, discovery);
     if (allowed && sourceKey && !discovery) this.appManagementCallSources.set(context, sourceKey);
     return allowed;
+  }
+
+  getAppManagementRuntimeId(): string { return this.runtimeInstanceId; }
+
+  async prepareAgentRestartVerification(
+    context: import("@pwragent/shared").PwrAgentAppManagementContext,
+    verification: { operationId: string; expectedVersion: string; previousRuntimeId: string },
+  ): Promise<() => void> {
+    if (!context.backend || !context.threadId || !context.turnId || !await this.canManagePwrAgent(context)) {
+      throw new Error("The restart caller is no longer authorized.");
+    }
+    const origin = await this.readTurnCausalMessagingOrigin({ backend: context.backend, threadId: context.threadId, turnId: context.turnId });
+    if (!origin?.causalMessagingSource || origin.causalMessagingAmbiguous) throw new Error("The restart caller's identity is unavailable.");
+    const entry: StoredRestartContinuation = {
+      id: `app-upgrade-verification:${verification.operationId}`, kind: "queued", backend: context.backend, threadId: context.threadId,
+      messageOrigin: { kind: "pwragent", systemReason: "app-restart", causalMessagingSource: origin.causalMessagingSource },
+      input: [{ type: "text", text: `The authorized user requested a PwrAgent restart targeting version ${verification.expectedVersion} from runtime ${verification.previousRuntimeId}. After relaunch, call manage_pwragent status again, with current authorization, and compare currentVersion and runtimeId against that exact target and previous runtime. Report the actual result to that user. If permission is missing or revoked, report that verification could not be completed. A scheduled or handed-off request was not confirmation of installation. Do not initiate another download or restart without a new user request.` }],
+      createdAt: Date.now(), queued: { origin: "scheduled" }, upgradeVerification: verification,
+    };
+    this.appRestartVerification = entry;
+    return () => { if (this.appRestartVerification === entry) this.appRestartVerification = undefined; };
+  }
+
+  private cancelUpgradeVerification(entry: StoredRestartContinuation): StoredRestartContinuation {
+    const verification = entry.upgradeVerification;
+    if (!verification || verification.cancelled) return entry;
+    return { ...entry, input: [...entry.input, { type: "text", text:
+      "The restart request was cancelled. Resume preserved work and report cancellation, not a completed upgrade." }],
+      upgradeVerification: { ...verification, cancelled: true },
+    };
   }
 
   // Federation needs the registry before it can supply routed owner bindings.
@@ -9621,13 +9653,31 @@ export class DesktopBackendRegistry {
    * and returns the running turns it will stop. Nothing is stopped yet.
    */
   beginQuietRestart(): QuietRestartTarget[] {
-    if (this.restartGate.phase !== "quieting") this.beforeQuietRestartGate = this.restartGate;
+    if (this.restartGate.phase !== "quieting") {
+      this.beforeQuietRestartGate = this.restartGate;
+      this.quietRestartCheckpoint.clear();
+    }
     this.applyRestartGate({ type: "quiet", at: Date.now() });
     return this.listQuietRestartTargets();
   }
 
-  /** Only used when the initial atomic checkpoint failed, before stopping work. */
-  cancelQuietRestart(): void {
+  /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
+  cancelQuietRestart(resumeCheckpoint = false): void {
+    if (resumeCheckpoint) {
+      const saved = [...this.quietRestartCheckpoint.values()].map((entry) => entry.kind === undefined
+        ? { ...entry, input: [{ type: "text" as const, text: "The PwrAgent restart was cancelled after quieting. Resume the preserved task, checking its current progress before repeating any action." }] }
+        : this.cancelUpgradeVerification(entry));
+      const receipts = saved.filter((entry) => entry.kind === "queued");
+      try { if (receipts.length) this.restartContinuationStore?.saveAll(this.runtimeInstanceId, receipts); }
+      catch (error) { backendRegistryLog.warn("cancelled restart receipt could not be updated", { error: String(error) }); }
+      for (const entry of saved) this.durableRestartContinuations.set(entry.id, entry);
+      this.threadTurnQueue.restoreQueued(receipts.map((entry) => restartQueuedEntry(entry)));
+      this.threadTurnQueue.restoreRestartContinuations(saved.filter((entry) => entry.kind === undefined).map((entry) => ({
+        id: entry.id, backend: entry.backend, threadId: entry.threadId, origin: "scheduled" as const,
+        input: entry.input, messageOrigin: entry.messageOrigin, createdAt: entry.createdAt,
+      })));
+    }
+    this.quietRestartCheckpoint.clear();
     const previous = this.beforeQuietRestartGate ?? OPEN_RESTART_GATE;
     this.beforeQuietRestartGate = undefined;
     this.applyRestartGate({ type: "cancel-quiet", previous: transitionRestartGate(previous, { type: "deadline", at: Date.now() }) });
@@ -9725,9 +9775,11 @@ export class DesktopBackendRegistry {
       createdAt: stoppedAt + index,
     }));
     // Messages waiting in queues live only in memory; carry them across too.
-    const queued = this.restartQueuedSnapshot();
+    const queued = [...this.restartQueuedSnapshot(), ...(this.appRestartVerification ? [this.appRestartVerification] : [])];
     try {
       const saved = store.saveAll(this.runtimeInstanceId, [...continuations, ...queued]);
+      for (const entry of saved) this.quietRestartCheckpoint.set(entry.id, entry);
+      if (this.appRestartVerification) this.quietRestartCheckpoint.set(this.appRestartVerification.id, this.appRestartVerification);
       for (const entry of queued) this.durableRestartContinuations.set(entry.id, entry);
       backendRegistryLog.info("restart continuations saved", {
         count: saved.length,
@@ -9884,7 +9936,10 @@ export class DesktopBackendRegistry {
     // restored continuation keeps the row it has.
     return this.threadTurnQueue.getAllQueuedEntries()
       .filter((entry) => !entry.restartContinuation && !entry.projectHold)
-      .map((entry, position) => storedRestartQueuedEntry(entry, position));
+      .map((entry, position) => {
+        const verification = this.durableRestartContinuations.get(entry.id)?.upgradeVerification;
+        return { ...storedRestartQueuedEntry(entry, position), ...(verification ? { upgradeVerification: verification } : {}) };
+      });
   }
 
   /**

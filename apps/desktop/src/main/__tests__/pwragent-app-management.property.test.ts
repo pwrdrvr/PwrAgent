@@ -31,13 +31,13 @@ const request = (action: "restart" | "stop", responseFlushed: Promise<void>): Pw
 
 describe("agent lifecycle admission", () => {
   it("denies every management action without trusted authorization before reading or changing updater state", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("status", "upgrade_check", "restart", "stop"), async (action) => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("status", "upgrade_check", "download", "cancel", "restart", "stop"), async (action) => {
       const authorize = vi.fn(async () => false);
       const handler = createPwrAgentAppManagementHandler({ startedAt: 1, authorize });
       const response = await handler({ operation: "manage_pwragent", context: { responseFlushed: Promise.resolve() }, args: { action } });
       expect(response).toMatchObject({ ok: false, error: { code: "forbidden" } });
       expect(authorize).toHaveBeenCalledOnce();
-    }), { examples: [["status"], ["upgrade_check"], ["restart"], ["stop"]] });
+    }), { examples: [["status"], ["upgrade_check"], ["download"], ["cancel"], ["restart"], ["stop"]] });
     expect(read).not.toHaveBeenCalled();
     expect(check).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();

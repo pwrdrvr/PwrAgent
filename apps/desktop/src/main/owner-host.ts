@@ -7,7 +7,7 @@ import type { SettingsSecretEncryption } from "@pwragent/owner-core/settings-sec
 import type { MessagingApprovalDecision, MessagingApprovalIntent } from "@pwragent/messaging-interface";
 import type { AgentEvent, InboundPreviewMessage, CodexEnvironmentSetupProgressEvent, OpenThreadToolArgs, PwrAgentStarMapResponse, OperatorFocusSnapshot, StarMapCommandInput, StarMapCommandResponse, StarMapViewSnapshot } from "@pwragent/shared";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
-import type { AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateStatus } from "../shared/app-metadata";
+import type { AppUpdateCancelResult, AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateStatus } from "../shared/app-metadata";
 import type { ClaudeSessionReaderChild } from "./claude/claude-session-reader-contracts";
 import type { OwnerReplayClients } from "./testing/replay-clients";
 import type { CodexClientHost } from "@pwragent/owner-core/codex-app-server/host";
@@ -84,11 +84,13 @@ export interface OwnerHostServices {
   };
   updates: {
     check(source: "manual"): Promise<AppUpdateCheckResult>;
+    download?(options: { expectedVersion: string }): Promise<AppUpdateStatus>;
+    cancelDownload?(expectedVersion: string): AppUpdateCancelResult;
     read(): AppUpdateStatus;
     stateToken?(): string;
     reserveQuit?(): () => void;
     install(options: { expectedVersion?: string; requestQuit: (performQuit: () => void, beforeQuit?: () => boolean) => Promise<boolean> }): Promise<AppUpdateInstallResult>;
-    requestQuit(options: { performQuit: () => void; source: "agent-tool" | "update-install"; quietRestart?: boolean; beforeQuit?: () => boolean }): Promise<boolean>;
+    requestQuit(options: { performQuit: () => void; source: "agent-tool" | "update-install"; quietRestart?: boolean; beforeQuit?: () => boolean; authorizeAgent?: () => Promise<boolean> }): Promise<boolean>;
   };
   workers: { forkClaudeSessionReader(path: string, env: NodeJS.ProcessEnv): Promise<ClaudeSessionReaderChild> };
   storageMaintenance: StorageMaintenanceHost;
