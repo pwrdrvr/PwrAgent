@@ -40,8 +40,9 @@ export const AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS = [
 
 /**
  * Default cap on how many inbound-triggered runs an automation may START per
- * hour. Enforced as a per-automation token bucket (an idle automation may burst
- * up to the rate, then settles to the steady rate). This is a cost backstop
+ * hour. Enforced as a per-automation rolling-hour count of inbound runs in the
+ * run history (the store's countRecentInboundRuns): a hard cap with no burst
+ * allowance, which survives a restart. This is a cost backstop
  * against a misconfigured trigger on a busy channel kicking off a flood of
  * ephemeral agent runs. `undefined` inherits this default; `null` is unlimited.
  */

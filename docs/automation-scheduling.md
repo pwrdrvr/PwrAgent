@@ -2,18 +2,36 @@
 
 PwrAgent automations are local tasks assigned to an existing thread. Scheduled
 automations are intentionally not background daemons: schedules fire only while
-the desktop app is running, and every automation turn enters the same per-thread
-FIFO queue as manual messages and messaging follow-ups. Inbound-message
-automations use the same run queue but are triggered by a matched messaging
-event instead of a clock tick.
+the desktop app is running. A run does not execute on the assigned thread. It
+executes on a separate headless thread, so an automation turn never enters the
+assigned thread's FIFO queue of manual messages and messaging follow-ups.
+Inbound-message automations use the same run path but are triggered by a
+matched messaging event instead of a clock tick.
 
 ## Thread Assignment
 
 Each automation belongs to one backend thread. The thread remains an ordinary
 thread, so a user can open it, read the transcript, and ask what happened.
-Manual interaction is allowed, but it changes the same conversation context and
-uses the same queue as scheduled work. If a manual message is sent while an
-automation run is queued or running, it waits its turn instead of overlapping.
+Manual interaction is allowed and does not share a queue with automation work:
+
+- A manual message waits only for the assigned thread's own active turn and
+  the entries already in that thread's FIFO. It does not wait for an
+  automation run, whether that run is queued or running.
+- An automation run does not wait for the assigned thread's active turn or
+  queued messages. A run and a manual turn can execute at the same time.
+- A run does not add its prompt or output to the assigned thread's
+  conversation. Its result reaches the thread as described in
+  [Execution Model](#execution-model) and [Output Actions](#output-actions).
+
+`DesktopAutomationService` constructs the scheduler with
+`HeadlessAutomationRunner` and no other runner
+(`apps/desktop/src/main/automations/desktop-automation-service.ts`). That
+runner calls `startAutomationHeadlessTurn`
+(`apps/desktop/src/main/app-server/backend-registry.ts`), which starts a new
+thread and then a turn on it without submitting to `ThreadTurnQueue`.
+`ThreadQueueAutomationRunner`
+(`apps/desktop/src/main/automations/automation-runner.ts`) does submit to the
+thread FIFO, but only the scheduler tests construct it.
 
 The thread context rail is the primary management surface. It shows the
 thread's automations, enabled or paused state, next run, pending/coalesced
@@ -28,6 +46,15 @@ capability inspection.
 
 - Scheduled runs execute headlessly from the automation definition, invocation
   metadata, and bounded prior-run context.
+- The headless thread takes its execution mode, model settings and, on Codex,
+  its working directory from the assigned thread unless the automation's
+  execution profile sets them (`startAutomationHeadlessTurn`).
+- Each automation has its own execution lane that runs one run at a time. The
+  scheduler finds a busy lane with `findActiveRunForAutomation`
+  (`packages/sqlite-storage/src/automation-store.ts`), which is keyed by
+  automation, not by thread. A run that arrives while the lane is busy waits
+  there and starts when the active run ends (`startNextPendingRun` in
+  `apps/desktop/src/main/automations/automation-scheduler.ts`).
 - Run artifacts and read-only transcripts remain separate from the Agent
   conversation transcript.
 - Notable results appear as source-labeled cards and do not trigger automatic
@@ -76,12 +103,15 @@ automation scheduled every 5 minutes that takes 8 minutes can collapse the 10
 and 15 minute windows into one catch-up run instead of creating overlapping
 turns.
 
-`drop_missed` records skipped scheduled windows when the assigned thread cannot
-start the run immediately. It does not enqueue stale work.
+`drop_missed` records skipped scheduled windows when the automation's own
+execution lane is busy. It does not enqueue stale work. The assigned thread's
+active turn plays no part in this decision.
 
-`Run now` creates a manual automation run and still enters the same thread FIFO.
-It does not bypass an active turn and does not change the recurring schedule's
-next automatic run.
+`Run now` creates a manual automation run. If the automation already has an
+active run, the manual run waits in that automation's lane; otherwise it starts
+a headless turn at once (`runNow` in `automation-scheduler.ts`). It does not
+enter the assigned thread's FIFO, does not wait for that thread's active turn,
+and does not change the recurring schedule's next automatic run.
 
 ## Run History
 
@@ -94,7 +124,8 @@ the scheduled windows covered by coalesced runs.
 Each run records the process that created it: runtime instance ID, process ID
 and process start time, the identity of the profile runtime marker. At startup
 PwrAgent changes only the pending, queued and running runs whose owner it has
-proved dead, with the check Research runs use. A run with no recorded owner, or
+proved dead, with the check Research runs use (`reconcileStartup` in
+`packages/sqlite-storage/src/automation-store.ts`). A run with no recorded owner, or
 an owner recorded without a start time, cannot prove a live owner and counts as
 dead. A live owner's runs and every terminal run are left as they are.
 
@@ -106,6 +137,10 @@ actions run, and `automation/run/updated` reaches the Agent thread, where the
 failed-automation row appears above the composer, and the thread's bound
 conversations. Nothing is resumed or replayed. All of a launch's runs change in
 one transaction, and a launch that lost nothing writes nothing.
+
+This includes runs that a trigger queued while a quit was pending:
+`quiesceDispatch` holds them so that cancelling the quit can start them, and a
+completed quit leaves them to be reported as interrupted at the next start.
 
 ## Output Actions
 
