@@ -16,7 +16,7 @@ import {
   normalizeThreadReviewItemStatus,
 } from "@pwragent/shared";
 import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
-import { normalizeReviewCategory, parseReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
+import { normalizeReviewCategory, parseReviewOutputText, reviewEntryFailure, reviewEntryFindings } from "../../shared/review-output";
 
 /**
  * A review is a work-queue record, not a transcript copy: it keeps enough of
@@ -75,6 +75,10 @@ export class ThreadReviewService {
     const attachments = new Map<string, Array<{ provider: string; org: string; repo: string; number: number }>>();
     for (const review of this.storage.iterate(request)) {
       if (this.isUntriagedLegacyImport(review)) continue;
+      // Older builds imported Codex's no-response artifact as an empty review.
+      // Keep the stored record intact, but stop offering it as work to settle.
+      if (review.origin === "automatic" && review.items.length === 0
+        && reviewEntryFailure({ review: review.summary ?? "" })) continue;
       // Queue reads follow the current attachment list. Full status reads
       // also serve the transcript, whose resolutions survive PR detachment.
       const pr = review.context?.pullRequest;
@@ -169,6 +173,7 @@ export class ThreadReviewService {
     entry: AppServerThreadReviewEntry,
     source: "live" | "replay" = "replay",
   ): ThreadReview | undefined {
+    if (reviewEntryFailure(entry)) return undefined;
     if (entry.id.endsWith(":started") || entry.turn?.status === "in_progress"
       || (entry.displayText !== undefined && !entry.output)) return undefined;
     // Reading history is not evidence that a review is still waiting on work.
@@ -180,8 +185,7 @@ export class ThreadReviewService {
     const tracked = this.get(reviewId(identity, entry.id));
     if (tracked) return tracked;
     const output = entry.output ?? parseReviewOutputText(entry.review);
-    // An interrupted review leaves an artifact with nothing in it: no verdict,
-    // no findings and no text. There is nothing to address.
+    // An empty exit artifact has no result to address either.
     if (!output && !entry.review.trim()) return undefined;
     return this.record(identity, {
       sourceKey: entry.id,

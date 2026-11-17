@@ -1,4 +1,22 @@
-import type { AppServerReviewOutput, AppServerReviewFinding } from "@pwragent/shared";
+import type { AppServerReviewOutput, AppServerReviewFinding, AppServerThreadReviewEntry } from "@pwragent/shared";
+
+/**
+ * Exiting review mode is not proof that a review completed. Codex emits its
+ * no-response artifact before the interrupted turn's terminal notification.
+ * Replay has the turn status too; both paths must keep it out of tracking.
+ * Claude's structured ReportFindings artifact is already complete when it
+ * is published; subsequent --fix work can fail or stop its enclosing turn.
+ */
+export function reviewEntryFailure(
+  entry: Pick<AppServerThreadReviewEntry, "review" | "turn" | "status" | "reviewer" | "output">,
+): "stopped" | "failed" | "incomplete" | undefined {
+  const publishedClaudeReport = entry.reviewer?.backend === "claude" && entry.output !== undefined;
+  const parentStatus = publishedClaudeReport ? undefined : entry.turn?.status;
+  if (parentStatus === "interrupted" || entry.status === "cancelled") return "stopped";
+  if (parentStatus === "failed" || entry.status === "failed") return "failed";
+  if (entry.review.trim() === "Reviewer failed to output a response.") return "incomplete";
+  return undefined;
+}
 
 /**
  * The structured review contract a PwrAgent Sub Agent child answers in. Main
