@@ -1,6 +1,7 @@
 import type {
   PrChipState,
   PrLifecycleState,
+  PrMergeQueueState,
   PrMergeState,
   PrReviewState,
   PrSummary,
@@ -33,6 +34,7 @@ export type PrStatusTransitionChanges = {
   headSha?: PrStatusFieldChange<string | undefined>;
   lifecycleState?: PrStatusFieldChange<PrLifecycleState | undefined>;
   mergeState?: PrStatusFieldChange<PrMergeState | undefined>;
+  mergeQueueState?: PrStatusFieldChange<PrMergeQueueState | undefined>;
   reviewState?: PrStatusFieldChange<PrReviewState | undefined>;
   title?: PrStatusFieldChange<string | undefined>;
 };
@@ -68,6 +70,7 @@ const TRACKED_FIELDS = [
   "headSha",
   "lifecycleState",
   "mergeState",
+  "mergeQueueState",
   "reviewState",
   "title",
 ] as const;
@@ -90,9 +93,12 @@ function readCheckState(pr: PrSummary): PrChipState | undefined {
 function readField(
   pr: PrSummary,
   field: (typeof TRACKED_FIELDS)[number],
-): PrChipState | PrLifecycleState | PrMergeState | PrReviewState | string | undefined {
+): PrChipState | PrLifecycleState | PrMergeState | PrMergeQueueState | PrReviewState | string | undefined {
   if (field === "checkState") {
     return readCheckState(pr);
+  }
+  if (field === "mergeQueueState") {
+    return pr.mergeQueue?.state;
   }
   return pr[field];
 }

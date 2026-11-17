@@ -135,6 +135,13 @@ describe("GitLab merge request tools", () => {
     await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "d".repeat(40), method: "rebase" }, ctx())).rejects.toMatchObject({ code: "unsupported_operation" });
   });
 
+  it("merges as before when the project's merge train setting cannot be read", async () => {
+    const { client, writeCalls } = harness(() => { throw new GitLabReadError(503); }, () => mr(9, { state: "merged" }));
+    await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "d".repeat(40) }, ctx())).resolves.toMatchObject({ merged: true });
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0]).toMatchObject({ method: "PUT", body: { sha: "d".repeat(40), squash: true } });
+  });
+
   it("returns GitLab's reason for a refused write", async () => {
     const { client } = harness(() => ({}), () => { throw new GitLabReadError(422, undefined, "Another open merge request already exists for this source branch: !4"); });
     await expect(client.execute("add_issue_comment", { number: 4, body: "x", kind: "pr" }, ctx())).rejects.toMatchObject({ code: "rejected", message: expect.stringContaining("already exists") });

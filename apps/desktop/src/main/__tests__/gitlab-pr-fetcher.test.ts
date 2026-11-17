@@ -142,9 +142,11 @@ describe("GitLab MR routing and status", () => {
     expect(graphqlClient.fetchPullRequestsAfterReconnect).toHaveBeenCalledWith([refs[0]]);
     expect(graphqlClient.fetchPullRequests).not.toHaveBeenCalled();
     expect(run).toHaveBeenCalledOnce();
-    expect(tryTakeRequestToken).not.toHaveBeenCalled();
-    expect(await fetcher.fetchPullRequests([refs[1]!])).toEqual([]);
+    // The paid MR read takes no token. The merge trains setting read asks for
+    // one, is refused, and leaves the MR read standing.
     expect(tryTakeRequestToken).toHaveBeenCalledOnce();
+    expect(await fetcher.fetchPullRequests([refs[1]!])).toEqual([]);
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(2);
     expect(run).toHaveBeenCalledOnce();
   });
 
@@ -157,6 +159,8 @@ describe("GitLab MR routing and status", () => {
     expect(run.mock.calls.map((call) => call[1])).toEqual([
       ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests?scope=all&state=all&source_branch=feature%2Fa%2Bb&per_page=100&page=1"],
       ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
+      // Merge trains are a project setting, read once per project and cached.
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/team%2Fsub%2Fgroup%2Fproject"],
     ]);
   });
 
@@ -171,6 +175,8 @@ describe("GitLab MR routing and status", () => {
     expect(run.mock.calls.map((call) => call[1])).toEqual([
       ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", `projects/team%2Fsub%2Fgroup%2Fproject/repository/commits/${tip}/merge_requests?per_page=20`],
       ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
+      // Merge trains are a project setting, read once per project and cached.
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/team%2Fsub%2Fgroup%2Fproject"],
     ]);
 
     const missing = vi.fn(async () => {
@@ -213,7 +219,8 @@ describe("GitLab MR routing and status", () => {
   it("coalesces concurrent reads and does not leak CLI diagnostics", async () => {
     const { fetcher, run } = fixture(() => mr);
     await Promise.all([fetcher.fetchByRef(ref), fetcher.fetchByRef(ref)]);
-    expect(run).toHaveBeenCalledTimes(1);
+    // One MR read and one merge trains setting read, each shared.
+    expect(run).toHaveBeenCalledTimes(2);
     run.mockRejectedValue(new Error("PRIVATE-TOKEN: glpat-secret-do-not-publish"));
     await expect(fetcher.fetchByRef(ref)).rejects.toThrow("GitLab request failed on gitlab.com");
     await expect(fetcher.fetchByRef(ref)).rejects.not.toThrow("glpat");
@@ -286,7 +293,7 @@ describe("review regressions", () => {
         ? { id: "synthetic", parent_ids: ["target-or-previous-train", "new-head"] }
         : { ...mr, head_pipeline: { status, sha: "synthetic", ref: `refs/merge-requests/17/${kind}`, project_id: 123 } });
       expect(await fetcher.fetchByRef(ref)).toMatchObject({ headSha: "new-head", checkState: expected });
-      expect(run).toHaveBeenLastCalledWith("/fixture/glab", ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/123/repository/commits/synthetic"]);
+      expect(run).toHaveBeenCalledWith("/fixture/glab", ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/123/repository/commits/synthetic"]);
     }
   });
 
@@ -339,13 +346,16 @@ describe("review regressions", () => {
       : { ...mr, head_pipeline: { status: "success", sha: "synthetic", ref: "refs/merge-requests/17/merge" } }));
     const fetcher = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
     expect(await fetcher.fetchByRef(ref, true)).toMatchObject({ checkState: "passing" });
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(tryTakeRequestToken).toHaveBeenCalledTimes(1);
+    // The commit verification and the merge trains setting each take a token.
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(2);
   });
 
   it("bounds concurrent subprocesses without an unbounded wait queue", async () => {
     const releases: Array<() => void> = [];
     const run = vi.fn((_command: string, args: string[]) => new Promise<string>((resolve) => {
+      // The merge trains setting answers at once; only MR reads are held.
+      if (!args.at(-1)?.includes("/merge_requests/")) return resolve(JSON.stringify({}));
       const number = Number(args.at(-1)?.split("/").pop());
       releases.push(() => resolve(JSON.stringify({ ...mr, iid: number, web_url: mr.web_url.replace(/17$/, String(number)) })));
     }));
@@ -356,6 +366,7 @@ describe("review regressions", () => {
     releases.forEach((release) => release());
     const results = await pending;
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
-    expect(tryTakeRequestToken).toHaveBeenCalledTimes(3);
+    // Three MR reads, then one shared merge trains setting read.
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(4);
   });
 });
