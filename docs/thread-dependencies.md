@@ -4,7 +4,9 @@
 prerequisites or post-compaction recovery subscriptions for a thread. After
 registering a wait barrier, the thread ends its turn; PwrAgent evaluates
 prerequisites from provider turn boundaries and its existing PR status bus.
-There is no Job Monitor, model-driven polling, or new timer.
+No Job Monitor or model turn runs while it waits. The one timer is the CI run
+poller, which runs only while a `ci_run` condition is waiting (see
+[CI runs without a PR](#ci-runs-without-a-pr)).
 
 ## Post-compaction recovery subscriptions
 
@@ -122,6 +124,10 @@ follow-up as `continuation`. Do not replace it with a Job Monitor running
 `gh pr view` every fifteen minutes. Dependencies reuse PR status updates and
 spend no model turns while waiting, even if merging takes days. They schedule
 the follow-up, but do not merge the PRs or enforce their merge order.
+
+A GitHub Actions run that no PR check covers, such as a tag-push release or a
+manual dispatch, is a `ci_run` condition. Do not start a Job Monitor to poll
+`gh run view` for it.
 
 Reserve `create_monitor_delegation` for long jobs that PR watches and local
 thread dependencies cannot cover. Confirm a wait was registered, finish any
@@ -300,6 +306,7 @@ idle consumer, because it starts no turn.
 | `ci_passed` | Fresh status for the current head reports passing checks with no checks still running, no conflict, and no draft. A merge alone does not prove CI passed. |
 | `pr_merged` | The selected PR merged. Closure without merging reports failure. |
 | `marked_done` | Someone sent `mark_done` for this condition. Nothing else satisfies it. |
+| `ci_run` | The run reached a milestone in `ciRun.on`: `approval_gate`, `job_failed` or `finished` (all three when omitted). A finished run always ends the wait. See below. |
 
 A prerequisite can be registered before its PR exists. Omitted `prUrl`
 selects the first unambiguous primary-workspace PR and retains that identity.
@@ -313,6 +320,73 @@ resumes once to report failure, with instructions to keep dependent work
 blocked. `wait` tolerates CI failures/conflicts while repair proceeds, but a
 closed PR or failed turn is terminal. The UI defaults to waiting through
 repairs; the tool defaults to reporting failure.
+
+## CI runs without a PR
+
+A `ci_run` condition names one GitHub Actions run by URL, with `threadId: ""`:
+
+```json
+{
+  "action": "create",
+  "conditions": [{
+    "threadId": "",
+    "when": "ci_run",
+    "ciRun": {
+      "url": "https://github.com/acme/app/actions/runs/8841207733",
+      "on": ["approval_gate"],
+      "environments": ["production"]
+    }
+  }],
+  "continuation": "Report the gate and its reviewers to the operator."
+}
+```
+
+- **Milestones.** `approval_gate` means the run waits on a deployment
+  approval (GitHub's `pending_deployments`), optionally limited to the named
+  environments. `job_failed` means a job in the latest attempt failed while
+  others may still run. `finished` means the run concluded `success`.
+- **A finished run always settles the wait.** Success satisfies `finished`.
+  Any other conclusion, or a success when `finished` was not requested, fails
+  the condition, because the milestone can no longer happen.
+- **One-shot.** A wake after a gate does not keep watching. Register a new
+  `ci_run` wait for the finish. PwrAgent never approves a deployment.
+- **Registration reads the run once.** A URL it cannot read is refused. A run
+  already at a requested milestone fires at once. A re-run is followed through
+  its latest attempt.
+- **Host.** Only `https://github.com/<owner>/<repo>/actions/runs/<id>` is
+  accepted, the same origin rule as automatic transcript PR reads. GitHub
+  Enterprise hosts and GitLab pipelines are not supported.
+- **Wake context.** The continuation prompt lists the run, each pending gate
+  with its reviewers, job counts for the latest attempt, and each failed job
+  with its failed step and URL.
+
+### Polling
+
+GitHub sends no events for a run without a GitHub App, so the main process
+polls. The poller keeps one timer for all waiting runs: every 30 seconds for
+a run's first ten minutes, then every two minutes. Each check reads the run,
+its latest-attempt jobs, and, while the run is waiting, its pending
+deployments. Requests go through the forge client's admission and token
+bucket. No model is involved.
+
+The poller runs only while background PR polling is enabled and the waiting
+thread's project allows PR watches, the same gate as PR conditions. A failed
+check keeps the last observation and marks it stale. It never fails the wait.
+
+A future PwrAgent GitHub App should replace this polling with `workflow_run`
+and `deployment_review` webhooks.
+
+### Storage
+
+The latest observation lives in coordinator memory only. The stored evidence
+for a waiting run is a fixed `Waiting for run <id>` line, so an unchanged
+check writes nothing. `list` responses and the Waiting For panel are decorated
+from memory with the run's status, job counts and check time. After a
+restart, the first check restores them.
+
+The renderer shows the wait in the Waiting For panel's **CI runs** group and
+in Continue After, with the run's link and a Cancel action. An agent
+registers these waits. The dialog does not offer a form for them.
 
 ## Persistence and admission
 
@@ -398,3 +472,8 @@ supersession). Owner-confirmed idle reads the provider and writes nothing. One h
 unchanged PR observations plus one hundred thread events make zero commits,
 including when the consumer is busy. Evidence timestamps alone never cause
 a write. No dependency means no per-turn persistence.
+
+A `ci_run` wait costs five commits and approximately 49 KB of WAL from
+registration through delivery, and zero commits per unchanged check
+(`thread-dependency-ci-run-lifecycle`, `thread-dependency-ci-run-unchanged-checks`).
+One release wait a day is about 0.05 MB/day.

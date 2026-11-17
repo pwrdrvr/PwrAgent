@@ -13,6 +13,7 @@ input schema for argument details and result semantics.
 | CI or merge of this thread's attached PR | `check_thread_pull_request_status`, follow `prAutomation.guidance`, then `watch_thread_pull_request` if a notification is needed. |
 | Another local thread's turn, passing CI, or PR merge | `manage_thread_dependencies` (the **Continue After** UI) with `action: "create"`. Use `mode: "all"` for several prerequisites. |
 | Work that finishes only when someone says so, before merging or before the operator acts, including a peer's thread or work outside PwrAgent | `manage_thread_dependencies` with a `marked_done` condition. |
+| A GitHub Actions run with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
 | A long job or repeatable check that neither workflow covers | `create_monitor_delegation`. |
 
 ## This thread's PR
@@ -114,6 +115,38 @@ Registration uses PwrAgent's existing PR status updates. It starts no monitor
 thread and spends no model turns while waiting, whether the wait takes minutes
 or days. After registration succeeds, end the turn. This schedules the follow-up;
 it does not merge any prerequisite PR or enforce their merge order.
+
+## A CI run with no PR
+
+A release or deploy workflow started by a tag push or a manual dispatch has
+no PR, so a PR watch cannot see it. Wait on the run itself with a `ci_run`
+condition. PwrAgent checks the run from its own process; no model polls it.
+
+```json
+{
+  "action": "create",
+  "conditions": [{
+    "backend": "codex", "threadId": "", "when": "ci_run",
+    "ciRun": {
+      "url": "https://github.com/example/app/actions/runs/8841207733",
+      "on": ["approval_gate", "job_failed", "finished"],
+      "environments": ["windows-signing"]
+    }
+  }],
+  "continuation": "Report the gate and the job states. Do not approve. Register a ci_run wait for the finish, then verify the release assets."
+}
+```
+
+Omit `on` for all three outcomes, and `environments` for any gate. The
+wake names the gate's environments and reviewers, each job's state, and
+any failed job with its failed step. A finished run always ends the wait;
+a failure, or a milestone that can no longer happen, reports a failure. The
+wait is one-shot, so after a gate wake, register another `ci_run` wait for
+the finish in the same turn. PwrAgent never approves a deployment. Choose
+`deliver: "operator"` when only the operator has anything to do at the gate.
+
+Only runs on github.com are supported. Checks run while PR polling is on
+and the waiting thread's project allows PR watches.
 
 ## Registration lifecycle and delivery review
 

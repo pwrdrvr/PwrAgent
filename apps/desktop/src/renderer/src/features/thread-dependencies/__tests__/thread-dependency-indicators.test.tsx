@@ -49,6 +49,16 @@ describe("summarizeThreadDependencies", () => {
     expect(summarizeThreadDependencies([{ ...held, status: "delivered" }]).size).toBe(0);
   });
 
+  it("names a CI run and the outcomes that wake it", () => {
+    const run: ThreadDependency = {
+      ...waiting, evidence: [],
+      conditions: [{ backend: "codex", threadId: "", when: "ci_run", title: "Release run 8841207733",
+        ciRun: { url: "https://github.com/example/app/actions/runs/8841207733", on: ["approval_gate", "finished"] } }],
+    };
+    expect(summarizeThreadDependencies([run]).get("codex:consumer")?.tooltip)
+      .toBe("Continue after:\n○ Release run 8841207733 reaches an approval gate or finishes");
+  });
+
   it("files a peer's registrations under its owner, apart from a local thread with the same id", () => {
     const indicators = summarizeThreadDependencies([waiting], [{ dependency: { ...waiting, holdMerge: true }, owner: { scope: "remote", instanceId: "laptop" } }]);
     expect(indicators.get(threadDependencyIndicatorKey("codex", "consumer"))).toMatchObject({ mergeHeld: false, label: "1 of 2" });

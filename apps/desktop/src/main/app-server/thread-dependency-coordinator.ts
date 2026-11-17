@@ -2,19 +2,22 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind, AppServerNotification, AppServerThreadMessageOrigin, AppServerThreadTurnMetadata,
   ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, PrSummary,
-  ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadTodo, ThreadTodoProject,
+  ThreadDependency, ThreadDependencyCiRunObservation, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadTodo, ThreadTodoProject,
 } from "@pwragent/shared";
 import {
   isRepairableDependencyFailure, isThreadDependencyLocalThreadCondition,
-  THREAD_DEPENDENCY_CONDITION_PHRASES, THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
+  THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
   THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH, THREAD_DEPENDENCY_MAX_STEPS, THREAD_DEPENDENCY_STEP_MAX_LENGTH,
   THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH, threadDependencyMarkDoneIndex,
+  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS, THREAD_DEPENDENCY_CI_RUN_OUTCOMES, summarizeThreadDependencyCiRun, threadDependencyCiRunId,
+  threadDependencyConditionName, threadDependencyConditionPhrase,
   THREAD_DEPENDENCY_PROMPT_ANY_MET, THREAD_DEPENDENCY_PROMPT_FAILED, THREAD_DEPENDENCY_PROMPT_INTRO,
   THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
   THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
 } from "@pwragent/shared";
 import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
+import { describeCiRunObservation, evaluateCiRunCondition, parseCiRunUrl } from "./thread-dependency-ci-runs";
 
 export type DependencyThreadSnapshot = {
   activeTurnId?: string;
@@ -94,6 +97,14 @@ type Options = {
    * only way to match. Returns the URL under the current name, or undefined.
    */
   resolvePrUrl?: (url: string) => Promise<string | undefined>;
+  /**
+   * One check of a CI run, for `ci_run` prerequisites. Registration checks
+   * the run once; afterwards the owner's poller reports checks through
+   * `handleCiRunObservation`. Without it, `ci_run` registrations are refused.
+   */
+  readCiRun?: (url: string) => Promise<ThreadDependencyCiRunObservation>;
+  /** Registration checked this run, so the poller can wait before the next check. */
+  ciRunChecked?: (url: string) => void;
   now?: () => number;
 };
 
@@ -112,6 +123,8 @@ export class ThreadDependencyCoordinator {
   // Live lifecycle only. Replay reads never enter this map. No per-item writes.
   private readonly compactions = new Map<string, { turnId: string; started: Set<string>; completed: Set<string> }>();
   private readonly closedCompactionTurns = new Map<string, string>();
+  /** The latest check of each waiting CI run. Memory only: checks write nothing. */
+  private readonly ciRuns = new Map<string, ThreadDependencyCiRunObservation>();
 
   constructor(private readonly options: Options) {}
 
@@ -180,6 +193,10 @@ export class ThreadDependencyCoordinator {
       const turnOrder = new Map<string, string[]>();
       for (const original of request.conditions!) {
         const condition = { ...original };
+        if (condition.when === "ci_run") {
+          conditions.push(await this.checkNewCiRun(condition));
+          continue;
+        }
         // Only this machine's threads can be read; Mark Done ends the rest.
         if (!isThreadDependencyLocalThreadCondition(condition)) {
           conditions.push(condition);
@@ -251,8 +268,83 @@ export class ThreadDependencyCoordinator {
     await this.evaluate(saved);
   }
 
+  /**
+   * Registration checks the run once, so a mistyped or unreadable run is
+   * refused, and a run already at its milestone fires on the first evaluation.
+   */
+  private async checkNewCiRun(condition: ThreadDependencyCondition): Promise<ThreadDependencyCondition> {
+    const read = this.options.readCiRun;
+    if (!read) throw new Error("CI run prerequisites are not available on this instance.");
+    const ref = parseCiRunUrl(condition.ciRun!.url)!;
+    let observation: ThreadDependencyCiRunObservation;
+    try {
+      observation = await read(ref.url);
+    } catch (error) {
+      throw new Error(`Could not read CI run ${ref.url}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+    this.ciRuns.set(ref.url, observation);
+    this.options.ciRunChecked?.(ref.url);
+    const title = condition.title ?? `${observation.name ? `${observation.name} ` : ""}run ${ref.runId}`.replace(/^run/, "Run").slice(0, 200);
+    return { ...condition, ciRun: { ...condition.ciRun!, url: ref.url }, title };
+  }
+
+  /**
+   * One check of a CI run from the owner's poller. Evaluation reads it from
+   * memory, so an unchanged check writes nothing.
+   */
+  handleCiRunObservation(url: string, observation: ThreadDependencyCiRunObservation): Promise<void> {
+    return this.serialize(async () => {
+      const previous = this.ciRuns.get(url);
+      // A failed check keeps what the last good one saw, for display.
+      const current = observation.error && previous ? { ...previous, error: observation.error, checkedAt: observation.checkedAt } : observation;
+      this.ciRuns.set(url, current);
+      // Windows show the latest check. Announce a changed summary; the
+      // announcement writes nothing.
+      const shown = !previous || summarizeThreadDependencyCiRun(previous) !== summarizeThreadDependencyCiRun(current);
+      for (const item of this.options.store.active()) {
+        if (!item.conditions.some((condition) => condition.ciRun?.url === url)) continue;
+        await this.evaluate(item);
+        const after = this.options.store.get(item.backend, item.threadId, item.id);
+        if (shown && after && JSON.stringify(after) === JSON.stringify(item)) await this.options.changed(after);
+      }
+    });
+  }
+
+  /**
+   * The runs waiting prerequisites still need checked. A fired run, and a
+   * wait that is ready or dispatching, needs no more checks. Forgets the
+   * observations of runs nothing waits for.
+   */
+  ciRunUrls(eligible: (dependency: ThreadDependency) => boolean = () => true): string[] {
+    const waiting = new Set<string>();
+    const wanted = new Set<string>();
+    for (const item of this.options.store.active()) {
+      if (item.status !== "waiting") continue;
+      for (const condition of item.conditions) {
+        const url = condition.ciRun?.url;
+        if (!url || evidenceFor(item, condition)?.state === "satisfied" || evidenceFor(item, condition)?.state === "failed") continue;
+        waiting.add(url);
+        if (eligible(item)) wanted.add(url);
+      }
+    }
+    for (const url of this.ciRuns.keys()) if (!waiting.has(url)) this.ciRuns.delete(url);
+    return [...wanted];
+  }
+
+  /** Adds each waiting run's latest check to its evidence, in memory only. */
+  withCiRunObservations(dependencies: ThreadDependency[]): ThreadDependency[] {
+    if (!this.ciRuns.size) return dependencies;
+    return dependencies.map((item) => !item.conditions.some((condition) => condition.ciRun) ? item : {
+      ...item,
+      evidence: item.evidence.map((entry) => {
+        const observation = entry.state === "waiting" && entry.condition.ciRun ? this.ciRuns.get(entry.condition.ciRun.url) : undefined;
+        return observation ? { ...entry, ciRun: observation } : entry;
+      }),
+    });
+  }
+
   private response(target: { backend: AppServerBackendKind; threadId: string }): ManageThreadDependenciesResponse {
-    const dependencies = this.options.store.list(target.backend, target.threadId);
+    const dependencies = this.withCiRunObservations(this.options.store.list(target.backend, target.threadId));
     return {
       dependencies,
       ...(dependencies.some((item) => item.conditions[0]?.when === "compaction_completed")
@@ -432,6 +524,10 @@ export class ThreadDependencyCoordinator {
     for (const [conditionIndex, stored] of item.conditions.entries()) {
       let condition = stored;
       const previous = item.evidence.find((entry) => JSON.stringify(entry.condition) === JSON.stringify(condition));
+      if (condition.when === "ci_run") {
+        evidence.push(evaluateCiRunCondition(condition, condition.ciRun ? this.ciRuns.get(condition.ciRun.url) : undefined, previous, this.now()));
+        continue;
+      }
       // A judgement: nothing observed ends it, and Mark Done is final.
       if (condition.when === "marked_done") {
         evidence.push(previous?.state === "satisfied"
@@ -650,6 +746,11 @@ export class ThreadDependencyCoordinator {
 
 class LostDependencyClaim extends Error {}
 
+function evidenceFor(item: ThreadDependency, condition: ThreadDependencyCondition): ThreadDependencyEvidence | undefined {
+  const key = JSON.stringify(condition);
+  return item.evidence.find((entry) => JSON.stringify(entry.condition) === key);
+}
+
 function settledCompaction(item: ThreadDependency, turnId?: string, error?: string): ThreadDependency {
   return { ...item, status: item.repeat ? "waiting" : "delivered", turnId, error,
     ...(item.repeat ? { outcome: undefined, evidence: item.evidence.map((entry) => ({
@@ -689,7 +790,11 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (!condition || typeof condition.backend !== "string" || !condition.backend.trim()
       || typeof condition.threadId !== "string"
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
-    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (condition.when === "ci_run" || condition.ciRun !== undefined) {
+      validateCiRunCondition(condition);
+      continue;
+    }
     if (condition.subject !== undefined) {
       if (typeof condition.subject !== "string" || !condition.subject.trim() || condition.subject.length > THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH) {
         throw new Error(`subject must be nonempty text of at most ${THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH} characters.`);
@@ -714,6 +819,33 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
   }
 }
 
+function validateCiRunCondition(condition: ThreadDependencyCondition): void {
+  const ciRun = condition.ciRun as Record<string, unknown> | undefined;
+  if (condition.when !== "ci_run" || !ciRun || typeof ciRun !== "object" || Array.isArray(ciRun)) {
+    throw new Error("A CI run prerequisite is when: \"ci_run\" with ciRun: { url, on?, environments? }.");
+  }
+  if (condition.threadId !== "" || condition.subject !== undefined || condition.target !== undefined
+    || condition.turnId !== undefined || condition.prUrl !== undefined || condition.headSha !== undefined) {
+    throw new Error("A CI run prerequisite names no thread (threadId \"\") and takes no turn, PR, subject or target fields.");
+  }
+  if (Object.keys(ciRun).some((field) => !["url", "on", "environments"].includes(field))) throw new Error("Unknown ciRun field.");
+  if (condition.title !== undefined && (typeof condition.title !== "string" || condition.title.length > 200)) throw new Error("A prerequisite title must be text of at most 200 characters.");
+  if (typeof ciRun.url !== "string" || ciRun.url.length > 2000 || !parseCiRunUrl(ciRun.url)) {
+    throw new Error("ciRun.url must be a GitHub Actions run on github.com: https://github.com/<owner>/<repo>/actions/runs/<id>.");
+  }
+  if (ciRun.on !== undefined && (!Array.isArray(ciRun.on) || ciRun.on.length < 1
+    || ciRun.on.some((outcome) => !(THREAD_DEPENDENCY_CI_RUN_OUTCOMES as readonly unknown[]).includes(outcome)))) {
+    throw new Error(`ciRun.on lists one or more of ${THREAD_DEPENDENCY_CI_RUN_OUTCOMES.join(", ")}.`);
+  }
+  if (ciRun.environments !== undefined && (!Array.isArray(ciRun.environments) || ciRun.environments.length > THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS
+    || ciRun.environments.some((name) => typeof name !== "string" || !name.trim() || name.length > 100))) {
+    throw new Error(`ciRun.environments lists at most ${THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS} environment names.`);
+  }
+  if (ciRun.environments !== undefined && Array.isArray(ciRun.on) && !ciRun.on.includes("approval_gate")) {
+    throw new Error("ciRun.environments narrows approval_gate; include approval_gate in ciRun.on.");
+  }
+}
+
 /**
  * True when `candidate` re-registers `existing` for a later point in the same
  * work: the same consumer, delivery, policy, plan text and prerequisite set,
@@ -729,7 +861,8 @@ export function supersedesRegistration(existing: ThreadDependency, candidate: Th
   ]);
   if (shape(existing) !== shape(candidate) || existing.conditions.length !== candidate.conditions.length) return false;
   const key = (condition: ThreadDependencyCondition) => JSON.stringify([condition.backend, condition.threadId, condition.when,
-    condition.prUrl ?? "", condition.headSha ?? "", condition.subject ?? "", condition.target?.instanceId ?? ""]);
+    condition.prUrl ?? "", condition.headSha ?? "", condition.subject ?? "", condition.target?.instanceId ?? "",
+    ...condition.ciRun ? [condition.ciRun] : []]);
   const remaining = [...candidate.conditions];
   let later = false;
   for (const condition of existing.conditions) {
@@ -788,10 +921,13 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
     `${THREAD_DEPENDENCY_PROMPT_INTRO}${satisfied
       ? item.mode === "any" ? THREAD_DEPENDENCY_PROMPT_ANY_MET : `its prerequisites were met (all of ${item.conditions.length})`
       : THREAD_DEPENDENCY_PROMPT_FAILED}.`,
-    ...item.evidence.map((entry) => {
-      const label = entry.condition.subject?.trim() || entry.condition.title?.trim();
+    ...item.evidence.flatMap((entry) => {
+      const label = threadDependencyConditionName(entry.condition);
       const name = label ? `"${label}"` : `Thread ${entry.condition.threadId}`;
-      return `- ${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
+      return [
+        `- ${name} ${threadDependencyConditionPhrase(entry.condition)}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}${entry.condition.ciRun ? `; run: ${entry.condition.ciRun.url}` : ""}`,
+        ...entry.ciRun && entry.state !== "waiting" ? describeCiRunObservation(entry.ciRun) : [],
+      ];
     }),
     "",
     ...satisfied
@@ -802,7 +938,12 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       : ["Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
         ...item.continuation ? ["", THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD, item.continuation] : []],
     "Do not poll this dependency or start a Job Monitor for it.",
-    `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => condition.subject !== undefined
+    ...item.conditions.some((condition) => condition.ciRun)
+      ? ["A CI run wait is one-shot. To continue after the run's next milestone, register a new ci_run wait. PwrAgent never approves a deployment; the operator does."]
+      : [],
+    `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => condition.ciRun
+      ? `${condition.ciRun.url} (${condition.when})`
+      : condition.subject !== undefined
       ? `"${condition.subject}" (${condition.when})`
       : `${condition.backend}:${condition.threadId}${condition.target ? ` on ${condition.target.instanceId}` : ""} (${condition.when})`).join(", ")}.`,
   ].join("\n");
@@ -815,6 +956,7 @@ const MET_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
   pr_merged: "merged",
   marked_done: "done",
   compaction_completed: "finished compaction",
+  ci_run: "reached its milestone",
 };
 
 export function buildCompactionRecoveryPrompt(item: ThreadDependency): string {
@@ -836,6 +978,7 @@ function clip(text: string, max: number): string {
 function prerequisiteLabel(entry: ThreadDependencyEvidence, max = 48): string {
   const number = entry.condition.when === "turn_completed" ? undefined : entry.prUrl?.match(/\/pull\/(\d+)/)?.[1];
   if (number) return `#${number}`;
+  if (entry.condition.ciRun) return `Run ${threadDependencyCiRunId(entry.condition.ciRun.url) ?? ""}`.trimEnd();
   const title = entry.condition.subject?.trim() || entry.condition.title?.trim();
   return title ? clip(title, max) : `Thread ${entry.condition.threadId.slice(0, 8)}`;
 }
@@ -852,7 +995,7 @@ export function buildDependencyTodo(item: ThreadDependency): DependencyTodoCard 
   const summary = shown.length > 2
     ? `${shown.length} prerequisites ${success ? "met" : "failed"}`
     : shown.map((entry) => success
-      ? `${prerequisiteLabel(entry)} ${MET_PHRASES[entry.condition.when]}`
+      ? entry.condition.ciRun ? `${prerequisiteLabel(entry)}: ${entry.reason}` : `${prerequisiteLabel(entry)} ${MET_PHRASES[entry.condition.when]}`
       : `${prerequisiteLabel(entry)} failed: ${entry.reason}`).join(success ? " and " : "; ");
   const continuation = item.continuation?.trim();
   // With steps, the title names the first and the card lists them all.
