@@ -5977,16 +5977,16 @@ describe("DesktopBackendRegistry", () => {
   });
 
   describe("research handoff admission", () => {
-    it("research catalogs follow the live experiment and discovery gates", () => {
+    it("research catalogs follow the live experiment and discovery gates", async () => {
       let enabled = false;
       let discovery = true;
       const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), resolveCodexToolDiscovery: () => discovery });
       onTestFinished(() => registry.close());
       registry.setResearchHandler(async () => ({}), undefined, () => enabled);
-      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => DynamicToolSpec[] };
+      const catalog = registry as unknown as { buildCodexParentDynamicTools: (tokenMiser: boolean) => Promise<DynamicToolSpec[]> };
       for (const [feature, discover] of [[false, true], [true, true], [true, false], [false, true]]) {
         enabled = feature; discovery = discover;
-        const tools = catalog.buildCodexParentDynamicTools(false).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
+        const tools = (await catalog.buildCodexParentDynamicTools(false)).flatMap((spec) => spec.type === "namespace" ? spec.tools : [spec]).filter((tool) => tool.name.startsWith("research_"));
         expect(tools).toHaveLength(feature && discover ? 5 : 0);
         expect(tools.every((tool) => tool.deferLoading === true)).toBe(true);
       }
@@ -20378,7 +20378,6 @@ script = "echo setup"
 
     expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
       "list_automations",
-      "manage_pwragent",
       "search_threads",
       "read_thread",
       "get_current_messaging_surface",
@@ -20389,6 +20388,8 @@ script = "echo setup"
       "create_monitor_delegation",
       "cancel_monitor_delegation",
     ]);
+    expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name))
+      .not.toContain("manage_pwragent");
 
     await registry.close();
   });
@@ -20874,7 +20875,6 @@ script = "echo setup"
       "get_automation_run_artifact",
       "create_monitor_delegation",
       "cancel_monitor_delegation",
-      "manage_pwragent",
       "search_threads",
       "read_thread",
       "get_thread_status",
@@ -20886,6 +20886,7 @@ script = "echo setup"
       "send_message_to_thread",
       "start_review",
     ]);
+    expect(pwragentDynamicTools(dynamicTools).map((tool) => tool.name)).not.toContain("manage_pwragent");
     const getThreadStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "get_thread_status");
     expect(getThreadStatusTool?.description).toContain(
@@ -25977,12 +25978,13 @@ command = "pnpm grok"
     expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
       "list_automations",
       "search_threads",
-      "manage_pwragent",
       "get_current_messaging_surface",
       "send_messaging_file",
       "attach_thread_here",
       "handoff_task",
     ]);
+    expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name))
+      .not.toContain("manage_pwragent");
 
     await registry.close();
   });

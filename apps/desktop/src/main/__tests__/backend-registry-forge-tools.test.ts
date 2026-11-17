@@ -833,11 +833,11 @@ describe("backend forge tool dispatch", () => {
     });
   });
 
-  it("hides tools the policy turned off from new turns", () => {
+  it("hides tools the policy turned off from new turns", async () => {
     policy.access.read = "off";
     policy.access.approve_merge = "off";
-    const internalsWithCatalog = registry as unknown as { buildCodexParentDynamicTools(tokenMiser: boolean, discovery?: boolean): Array<{ name: string; tools?: Array<{ name: string }> }> };
-    const names = internalsWithCatalog.buildCodexParentDynamicTools(false, false).flatMap((tool) => tool.tools?.map((nested) => nested.name) ?? [tool.name]);
+    const internalsWithCatalog = registry as unknown as { buildCodexParentDynamicTools(tokenMiser: boolean, discovery?: boolean): Promise<Array<{ name: string; tools?: Array<{ name: string }> }>> };
+    const names = (await internalsWithCatalog.buildCodexParentDynamicTools(false, false)).flatMap((tool) => tool.tools?.map((nested) => nested.name) ?? [tool.name]);
     expect(names).toContain("create_pull_request");
     expect(names).toContain("submit_pull_request_review");
     expect(names).not.toContain("get_forge_status");
