@@ -2,6 +2,7 @@ import { type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecyc
 import { readProviderResponseBlockNotification, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
 import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationRunOutputDecision, AppServerThreadMessageOrigin, FederationTarget, MessagingBindingTargetKind, MessagingToolUpdateMode, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingStoreLike } from "./messaging-storage";
+import type { MessagingPrivateResponses } from "./messaging-private-response-state";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliveryResult, MessagingInboundEvent, MessagingImagePart, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { type MessagingArtifact } from "./messaging-artifact-renderer.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
@@ -55,7 +56,7 @@ export interface MessagingBackendEventHost {
   readonly assistantStreamDeliveryQueues: Map<string, Promise<MessagingDeliveryResult>>;
   readonly assistantStreamCancellationSignals: Map<string, MessagingCancellationSignal>;
   readonly deliverAssistantStreamUpdate: (delta: AssistantStreamDelta, binding: MessagingBindingRecord, options?: { bufferOnly?: boolean; }) => Promise<void>;
-  readonly heldPrivateResponseFallbackTextByTurnKey: Map<string, string>;
+  readonly privateResponses: Pick<MessagingPrivateResponses, "hold" | "heldText" | "completeReply">;
   readonly deliverPrivateResponseFallback: (params: { binding: MessagingBindingRecord; event: AgentEvent; text: string; turnId: string; }) => Promise<void>;
   readonly takeBufferedAssistantTextForTerminalEvent: (event: AgentEvent, binding: MessagingBindingRecord) => string | undefined;
   readonly markAssistantMessageDelivered: (event: AgentEvent, binding: MessagingBindingRecord, text: string, identity?: AssistantMessageDeliveryIdentity) => boolean;
@@ -75,7 +76,6 @@ export interface MessagingBackendEventHost {
   readonly scheduleNextQueuedTurn: (binding: MessagingBindingRecord) => void;
   readonly activeAgentMessagingOriginsByTurnKey: Map<string, ActiveAgentMessagingOrigin>;
   readonly completePrivateReplyContinuation: (bindingId: string) => Promise<void>;
-  readonly privateReplyCompletionTurnKeys: Set<string>;
   readonly forgetAutomationTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string) => void;
   readonly forgetAgentMessagingOrigin: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string) => void;
 }

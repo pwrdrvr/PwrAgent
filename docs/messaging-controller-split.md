@@ -35,7 +35,7 @@ patches, plain-object stand-ins and reads inside catchable regions.
 | Shared thread mutations | The existing Thread-State Update Bus remains the refresh source. Execution-mode apply still precedes queue-clear. |
 | Messaging status | The controller still owns `activeTurnsByThreadKey`. Its callers include bus routing, accepted starts, pending-request reconciliation, queue steering and status rendering. A later PWR-149 PR replaces this with the explicit reducer. |
 | Admission and draining | `MessagingTurnAdmission` still owns debounce/start admission and its duplicate queued-entry collection. The controller still owns drain requests, timers and pending drains. Retirement into `ThreadTurnQueue` remains required. |
-| Private responses | The controller still owns request claims, completion routing, terminal suppression, fallback eligibility, fallback attempts and held fallback text. Request claims are keyed by continuation request ID; the other records are keyed by turn. The explicit state PR must preserve that distinction. |
+| Private responses | `MessagingPrivateResponses` owns one discriminated state per turn and `transitionPrivateResponse` owns its changes. `MessagingPrivateReplyClaims` owns continuation request receipts, which are keyed by request ID rather than turn ID. The controller retains delivery effects and forwards state changes to these owners. |
 | Bindings | The controller's existing `runDetachPipeline` remains the single detach pipeline. Its extraction belongs to the binding-service PR. |
 | Commands, callbacks, inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
 
@@ -47,7 +47,8 @@ still reaches the current wrapped store at the original point in each method.
 No collaborator is read during router construction. The same await, early
 return, iteration, failure and cleanup boundaries remain in the moved methods.
 
-`--verify-router-move` additionally compares all three moved method bodies to
+At the first PR's head (`5a51525bcdc53ed873d68fa45ee9ecbb4adf3f5c`),
+`--ref <head> --verify-router-move` compares all three moved method bodies to
 the pinned baseline after reversing only the explicit port substitutions.
 Behavior tests remain necessary: textual equivalence alone does not prove
 that wiring supplies the right owner.
@@ -89,19 +90,76 @@ protected fixtures remain byte-identical to the baseline. The controller is
 23,399 lines after this first extraction; the new router, helper and context
 files are each below 1,000 lines.
 
+## Private-response state and production counterexamples
+
+The next focused PR starts at main
+`b54346c56247fef9e6ee8c925aad5ea37a37595c` after #3805 merged. The eviction
+hypothesis is now confirmed through public controller calls and real SQLite
+bindings, without seeding internal maps. A fallback visibly delivers, then
+continuation persistence fails. The old wrapper restores fallback eligibility.
+After 1,000 other private turns, terminal and attempt history have evicted the
+old turn while its eligibility survives. Replaying its final item privately
+delivers the body a second time. The property shrank to `[1000]` (seed
+`284912773`, path `0:0`); the named regression retains that exact cardinality.
+
+A separate scheduler counterexample shows a repeated final item publishing
+the private body to the source while the first private delivery is unresolved
+(baseline seed `733395119`). Both counterexamples fail assertions on pinned
+pre-fix production. They are separate from the sequential observable oracle,
+which passes both baseline and fixed production. All provider data is contrived.
+
+The turn state uses `available`, `claimed`, `completed`, `fallbackHeld`,
+`fallbackAttempted` and `terminal`. `available` represents an admitted origin
+that has not requested private output. An explicit failed attempt completes
+without suppressing source output. A fallback claim withholds source content
+through its await and remains attempted after failure. Visible delivery is
+terminal evidence, even if later source cancellation or continuation setup
+fails. An explicit tool retry remains permitted; fallback cannot be claimed
+twice. Completion routing is cleared at the original terminal-cleanup boundary.
+
+Live origins and pending receipts cannot be evicted. Authoritative turn cleanup
+retires a record; settled history is bounded at 1,000 entries in admission
+order. A missing record cannot claim fallback. Held text is independently
+bounded at 256 payloads in first-hold order, preserving the existing map policy;
+evicting a payload retains its turn's claim evidence. Detach retains a live
+origin until its terminal event, as before. Shutdown disposes both owners, and
+generation receipts reject late effects without recreating records. Request
+claims have their own `claimed | completed` reducer: failed admission or
+cancellation releases its receipt; only completed requests can be evicted.
+
+Run `node scripts/inventory-messaging-private-responses.mjs` for the checker
+inventory and a pinned-baseline AST comparison. All 411 existing controller
+and router methods retain identical ordered await expressions. The audit
+records 1,095 private effect/read/branch records, two test seams and six ports;
+the five turn collections are gone, and the request set is now its typed owner.
+No private test cast or spy reached a retired collection. The test-only
+`messagingModules` seam exposes the actual new owners.
+
+Run `node scripts/mutate-messaging-private-responses.mjs --baseline` for the
+baseline sequential oracle and both assertion-failing production
+counterexamples. Without flags it checks 15 deliberate transition, bound,
+receipt, ordering, caller and host-port mutations. `--only <pattern>` selects
+one mutation. The script rejects bootstrap/import errors and timeouts as proof,
+restores sources in `finally` and verifies both protected fixture hashes. Logs
+stay under `.local/pwr-149-private/`. Run mutations separately from other checks
+because they temporarily change production source.
+
+Focused tests cover actual owner models, supported/unsupported resolvers,
+successful/failed deliveries, repeated items/terminals, overlapping provider
+responses and terminal cleanup, explicit retries, claim release, real history
+and text bounds, detach and shutdown. Scheduler settlement uses `setImmediate`;
+there are no property polling loops, retries or increased timeouts.
+
+Private-state verification passes the required static checks, 100 protected
+test files (4,852 passing tests, two skipped), and the full suite (2,062 passing
+files, 28,882 passing tests, 107 skipped). Both protected fixtures are byte
+identical to the pinned baseline. No test timeout required an isolation run.
+
 ## Remaining state-machine work
 
-The private-response eviction hypothesis is **not established by this move**.
-Successful tool delivery normally removes fallback eligibility before adding
-terminal suppression. The separate state PR must reproduce a reachable
-duplicate-delivery sequence on unmodified production before calling it a bug,
-and keep any counterexample separate from its intended-behavior oracle. Its
-generators must cross actual eviction bounds, including in-flight claims and
-post-delivery cleanup failures.
-
-Both explicit machines, canonical queue retirement, the five remaining named
+The turn/drain machine, canonical queue retirement, the five remaining named
 extractions, controller size reduction and the parent's registry/test size
-criteria remain tracked work. This first PR does not claim PWR-149 or PWR-142
+criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is
 changed. There is no new persistence, timer or filesystem access in production:
 additional writes per event are zero, or **0 MB/day**. The turn-event recording
