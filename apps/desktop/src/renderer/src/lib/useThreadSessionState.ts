@@ -4776,7 +4776,7 @@ function userMessageEntryFromItem(params: {
     content?: unknown;
     text?: unknown;
   };
-}): AppServerThreadMessageEntry | undefined {
+}, retainedEntries: AppServerThreadEntry[]): AppServerThreadMessageEntry | undefined {
   const item = params.item;
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     return undefined;
@@ -4797,16 +4797,26 @@ function userMessageEntryFromItem(params: {
     fallbackStatus: "in_progress",
   });
   const origin = threadMessageOriginFromUnknown(record.origin);
+  const id = typeof record.id === "string" ? record.id : `user-${Date.now()}`;
+  const retainedMessage = retainedEntries.find((entry) =>
+    entry.type === "message" && entry.role === "user" && entry.id === id,
+  );
 
   return {
     type: "message",
-    id: typeof record.id === "string" ? record.id : `user-${Date.now()}`,
+    id,
     role: "user",
     text: content.text,
     ...(content.parts ? { parts: content.parts } : {}),
     ...(origin ? { origin } : {}),
     ...(turn ? { turn } : {}),
-    createdAt: Date.now(),
+    createdAt:
+      normalizeNotificationTimestamp(record.createdAt) ??
+      normalizeNotificationTimestamp(record.created_at) ??
+      normalizeNotificationTimestamp(record.timestamp) ??
+      normalizeNotificationTimestamp(record.time) ??
+      retainedMessage?.createdAt ??
+      Date.now(),
   };
 }
 
@@ -6863,7 +6873,8 @@ export function useThreadSessionState(params: {
           || event.notification.method === "item/completed"
         ) {
           const userMessageEntry = userMessageEntryFromItem(
-            event.notification.params
+            event.notification.params,
+            current.response?.replay.entries ?? [],
           );
           if (userMessageEntry) {
             const launchpadMessageCandidate =

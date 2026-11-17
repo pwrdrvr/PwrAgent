@@ -3285,8 +3285,7 @@ function extractReviewEntryFromItem(
   const { event, item: reviewItem, parent } = reviewEvent;
   const createdAt =
     timestamps.itemCreatedAt ??
-    (event === "exitedreviewmode" ? turn?.completedAt : undefined) ??
-    timestamps.turnCreatedAt;
+    (event === "exitedreviewmode" ? turn?.completedAt : timestamps.turnCreatedAt);
   const reviewOutput = normalizeReviewOutput(reviewItem);
   const review =
     pickRawString(reviewItem, ["review", "text"]) ??
@@ -5423,7 +5422,6 @@ function extractThreadEntries(
     const pendingActivityItems: Record<string, unknown>[] = [];
     const pendingActivityById = new Map<string, Record<string, unknown>>();
     let pendingActivityCreatedAt: number | undefined;
-    let hasUserMessage = false;
 
     const flushActivityItems = (): void => {
       const activity = summarizeActivityItems(
@@ -5439,13 +5437,12 @@ function extractThreadEntries(
       }
     };
 
-    for (const item of rawItems) {
+    for (const [itemIndex, item] of rawItems.entries()) {
       const itemCreatedAt = timestampFromRecord(item);
       const itemType = pickString(item, ["type"]);
       const role = normalizeConversationRole(itemType);
       if (role) {
-        const isOpeningPrompt = role === "user" && !hasUserMessage;
-        if (role === "user") hasUserMessage = true;
+        const isOpeningPrompt = role === "user" && itemIndex === 0;
         // Only a message that renders ends the activity group. Models that
         // answer each tool call with an empty assistant message would
         // otherwise split their exploration into one activity per call.
@@ -5556,7 +5553,7 @@ function extractThreadEntries(
 
     flushActivityItems();
     attachCustomToolOutputImagesToTurn({
-      createdAt: turnMetadata?.completedAt ?? createdAt,
+      createdAt: turnMetadata?.completedAt,
       entries,
       imageParts: assistantImageParts,
       startIndex: turnStartIndex,
