@@ -9,7 +9,7 @@ export function expectedSlices(samples = 1) {
       for (let sample = 1; sample <= count; sample++) slices.push({ kind, platform, lane, sample });
     }
   };
-  add("unit", "linux", 2);
+  add("unit", "linux", 4);
   add("unit", "macos", 4);
   add("unit", "windows-main", 2);
   add("unit", "windows-renderer", 2);
