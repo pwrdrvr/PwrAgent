@@ -18,5 +18,5 @@ export function headlessOutputManifest(metafile, entries) {
       inputs: Object.entries(output.inputs).filter(([, input]) => input.bytesInOutput > 0).map(([input]) => sourceName(input)),
     };
   }
-  return { version: 1, entries: Object.fromEntries(Object.keys(entries).map(name => [name, `${name}.mjs`])), chunks };
+  return { version: 1, entries: Object.fromEntries(Object.keys(entries).map(name => [name, `${name}.js`])), chunks };
 }
