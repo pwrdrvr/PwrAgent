@@ -191,12 +191,16 @@ describe("WaitingForPanel", () => {
     it("says loop protection suspended follow-ups and rearms them for the local operator", async () => {
       const rearm = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, rearmed: true }));
       const wakes = [followUp({ wakesAt: at(15, 45), followUpSuspended: true })];
-      render(<WaitingForPanel thread={thread} controller={controller(ready(wakes, []), undefined, undefined, rearm)} now={NOW} />);
+      render(<WaitingForPanel thread={thread} controller={controller(ready(wakes, []), undefined, undefined, rearm)} now={NOW}
+        onSendScheduledNow={async () => {}} />);
 
       const notice = screen.getByRole("note");
       expect(within(notice).getByText("Agent follow-ups suspended")).toBeInTheDocument();
       expect(within(notice).getByText(/woke this thread 12 times in 24 hours/)).toBeInTheDocument();
       expect(screen.getByText(/Suspended by loop protection\./)).toBeInTheDocument();
+      // Send Now would be refused, so it is not offered. Cancel still is.
+      expect(screen.queryByRole("button", { name: "Send Now" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel: Follow-up due now" })).toBeInTheDocument();
       await act(async () => {
         fireEvent.click(within(notice).getByRole("button", { name: "Rearm follow-ups" }));
       });

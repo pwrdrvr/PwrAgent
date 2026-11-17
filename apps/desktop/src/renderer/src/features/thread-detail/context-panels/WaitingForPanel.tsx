@@ -259,7 +259,8 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
                         Send Now
                       </button>
                     ) : null}
-                    {wake.kind === "scheduled_action" && wake.status === "scheduled" && !peer && props.onSendScheduledNow ? (
+                    {/* A suspended follow-up cannot be sent until the guard is rearmed. */}
+                    {wake.kind === "scheduled_action" && wake.status === "scheduled" && !wake.followUpSuspended && !peer && props.onSendScheduledNow ? (
                       <button
                         type="button"
                         className="pr-watch-list__action"
