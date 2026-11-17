@@ -5,6 +5,8 @@ import type { MessagingPrivateResponses } from "../../messaging/core/messaging-p
 import type { MessagingPrivateReplyClaims } from "../../messaging/core/messaging-private-reply-claims";
 import type { MessagingCallbackHandlers } from "../../messaging/core/messaging-callback-handlers";
 import type { MessagingCallbackHost } from "../../messaging/core/messaging-callback-context";
+import type { MessagingBindingService } from "../../messaging/core/messaging-binding-service";
+import type { MessagingBindingHost } from "../../messaging/core/messaging-binding-context";
 
 // Test-only access to the actual owner and the facade's late-bound host ports.
 // No moved state or moved operation is accessed through the controller.
@@ -15,6 +17,8 @@ export function messagingModules(controller: MessagingController): {
   readonly privateReplyClaims: MessagingPrivateReplyClaims;
   readonly callbacks: MessagingCallbackHandlers;
   readonly callbackHost: () => MessagingCallbackHost;
+  readonly bindings: MessagingBindingService;
+  readonly bindingHost: () => MessagingBindingHost;
 } {
   const ports = controller as unknown as {
     readonly backendEventRouter: MessagingBackendEventRouter;
@@ -23,6 +27,8 @@ export function messagingModules(controller: MessagingController): {
     readonly privateReplyClaims: MessagingPrivateReplyClaims;
     readonly callbackHandlers: MessagingCallbackHandlers;
     callbackHost(): MessagingCallbackHost;
+    readonly bindingService: MessagingBindingService;
+    bindingHost(): MessagingBindingHost;
   };
   return {
     backendEvents: ports.backendEventRouter,
@@ -31,5 +37,7 @@ export function messagingModules(controller: MessagingController): {
     privateReplyClaims: ports.privateReplyClaims,
     callbacks: ports.callbackHandlers,
     callbackHost: () => ports.callbackHost(),
+    bindings: ports.bindingService,
+    bindingHost: () => ports.bindingHost(),
   };
 }
