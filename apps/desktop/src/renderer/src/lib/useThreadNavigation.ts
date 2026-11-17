@@ -952,6 +952,9 @@ function threadSummariesEqual(
     left.ordinaryChildCount === right.ordinaryChildCount &&
     left.viewerChildCount === right.viewerChildCount &&
     left.ownerOrdinaryChildCount === right.ownerOrdinaryChildCount &&
+    left.ownerSiblingPosition?.parentKey === right.ownerSiblingPosition?.parentKey &&
+    left.ownerSiblingPosition?.position === right.ownerSiblingPosition?.position &&
+    (left.ownerSiblingPosition === undefined) === (right.ownerSiblingPosition === undefined) &&
     left.nativeSubAgentGroupPresent === right.nativeSubAgentGroupPresent &&
     left.nativeSubAgentCount === right.nativeSubAgentCount &&
     left.id === right.id &&
@@ -3990,7 +3993,7 @@ export function useThreadNavigation(
             ...(resource.state.request.query.kind === "exact"
               ? resource.state.request.query.identities.map((ref) => navigationThreadSelectionKey(ref)) : []),
           ]));
-        for (const [id, page] of orderedPages) for (const { row } of page.entries) {
+        for (const [id, page] of orderedPages) for (const { row, placement, siblingOrder } of page.entries) {
           const key = threadSummaryIdentityKey(row);
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
           const previous = threadRows.get(key);
@@ -3998,7 +4001,7 @@ export function useThreadNavigation(
           // fresh read runs. That range supplies membership, not newer row
           // metadata: it must not roll a live PR chip back to an old status.
           if (previous && boundedNavigation.resources.get(id)?.restoredFromCache) continue;
-          let presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
+          let presentedRow: NavigationPresentedThread = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
             ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank,
                 ownerOrdinaryChildCount: row.ordinaryChildCount, viewerChildCount: previous?.viewerChildCount,
                 ordinaryChildCount: row.ordinaryChildCount + (previous?.viewerChildCount ?? 0) }
@@ -4006,6 +4009,20 @@ export function useThreadNavigation(
                 viewerChildCount: row.viewerChildCount,
                 ordinaryChildCount: (previous.ownerOrdinaryChildCount ?? 0) + (row.viewerChildCount ?? 0) } : row
             : row;
+          // Exact batches turn over when selection or loaded membership
+          // changes. Their last accepted sibling positions are row metadata:
+          // retain them with the admitted row, not with the transport lease.
+          // A new owner observation replaces (or withdraws) that metadata.
+          // Directory ancestry can stop before a native parent that belongs
+          // to another owner project; the row still carries that relationship.
+          const siblingParent = placement.kind === "child" ? placement.parent : row.parentThreadId
+            ? { backend: row.parentThreadBackend ?? row.source, threadId: row.parentThreadId,
+                ownerInstanceId: row.parentThreadInstanceId ?? row.ref.ownerInstanceId } : undefined;
+          const ownerSiblingPosition = ownerPage && boundedNavigation.resources.get(id)?.state.request.query.kind === "exact"
+            ? siblingParent && siblingOrder !== undefined
+              ? { parentKey: navigationThreadSelectionKey(siblingParent), position: siblingOrder } : null
+            : previous?.ownerSiblingPosition;
+          if (ownerSiblingPosition !== undefined) presentedRow = { ...presentedRow, ownerSiblingPosition };
           const observedName = threadNameObservationsRef.current.get(key);
           if (observedName) {
             if (row.title === observedName.threadName && row.titleSource === observedName.titleSource) {

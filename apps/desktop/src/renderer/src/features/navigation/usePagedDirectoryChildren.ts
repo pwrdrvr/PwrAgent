@@ -1,5 +1,7 @@
 import type { NavigationQueryEntry, NavigationThreadSummary } from "@pwragent/shared";
 import { useLayoutEffect, useRef } from "react";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
+import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import {
   buildPagedDirectoryChildKeys,
   type DirectoryChildren,
@@ -23,7 +25,7 @@ function visitPlacement(entry: Pick<NavigationQueryEntry, "placement" | "sibling
 }
 
 /** Only fields consumed by child membership, counts and owner sibling order. */
-function visitInputs(params: PagedDirectoryChildInputs, visit: Visit): boolean {
+function visitInputs(params: PagedDirectoryChildInputs & { threadsByKey: ReadonlyMap<string, NavigationPresentedThread> }, visit: Visit): boolean {
   if (!visit(params.resources.size) || !visit(params.presentationOrder ? "supplied" : "page")) return false;
   for (const resource of params.resources.values()) {
     const { request, page } = resource.state;
@@ -36,6 +38,16 @@ function visitInputs(params: PagedDirectoryChildInputs, visit: Visit): boolean {
       if (!visit(request.inventory)
         || !visit(request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined)) return false;
     }
+    const visitOwnerPosition = (key: string): boolean => {
+      if (!(query.kind === "children" && query.directoryKey !== undefined)
+        && !(query.kind === "exact" && request.inventory === "owner")) return true;
+      const row = params.threadsByKey.get(key);
+      const owner = row?.federation?.ref.target;
+      return visit(row?.ownerSiblingPosition === undefined ? "unknown" : "observed")
+        && visit(row?.ownerSiblingPosition?.parentKey) && visit(row?.ownerSiblingPosition?.position)
+        && visit(owner?.scope) && visit(owner?.scope === "remote" ? owner.instanceId : undefined)
+        && visit(row?.source) && visit(row?.parentThreadId) && visit(row?.parentThreadBackend) && visit(row?.parentThreadInstanceId);
+    };
     if (query.kind === "children" && query.directoryKey !== undefined) {
       const entries = page?.entries ?? [];
       if (!visit(entries.length)) return false;
@@ -47,13 +59,14 @@ function visitInputs(params: PagedDirectoryChildInputs, visit: Visit): boolean {
       const entries = params.presentationOrder.get(resource.id) ?? [];
       if (!visit(entries.length)) return false;
       for (const entry of entries) {
-        if (!visit(entry.key) || !visitPlacement(entry, visit)) return false;
+        if (!visit(entry.key) || !visitPlacement(entry, visit) || !visitOwnerPosition(entry.key)) return false;
       }
     } else {
       const entries = page?.entries ?? [];
       if (!visit(entries.length)) return false;
       for (const entry of entries) {
-        if (!visitRef(entry.row.ref, visit) || !visitPlacement(entry, visit)) return false;
+        if (!visitRef(entry.row.ref, visit) || !visitPlacement(entry, visit)
+          || !visitOwnerPosition(navigationThreadSelectionKey(entry.row.ref))) return false;
       }
     }
   }

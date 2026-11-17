@@ -34,11 +34,12 @@ export type PagedDirectoryChildInputs = {
 function projectPagedDirectoryChildren<Row>(
   params: PagedDirectoryChildInputs,
   resolve: (key: string) => Row | undefined,
+  threadsByKey: ReadonlyMap<string, NavigationThreadSummary>,
 ): Map<string, DirectoryChildren<Row>> {
   const presentation = params.presentationOrder ?? readNavigationPresentationOrder(params.resources);
   const directories = new Map<string, DirectoryChildren<Row>>();
   const seenByScopeAndParent = new Map<string, Set<string>>();
-  const ownerChildOrder = readOwnerChildOrder(params.resources, presentation);
+  const ownerChildOrder = readOwnerChildOrder(params.resources, presentation, threadsByKey);
   for (const resource of params.resources.values()) {
     const query = resource.state.request.query;
     if (query.kind !== "children" || query.directoryKey === undefined) continue;
@@ -70,10 +71,10 @@ function projectPagedDirectoryChildren<Row>(
 export function buildPagedDirectoryChildren(params: PagedDirectoryChildInputs & {
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): PagedDirectoryChildren {
-  return projectPagedDirectoryChildren(params, (key) => params.threadsByKey.get(key));
+  return projectPagedDirectoryChildren(params, (key) => params.threadsByKey.get(key), params.threadsByKey);
 }
 
-/** Membership and owner order do not depend on the latest row metadata. */
+/** Membership and order use placements and accepted owner positions, independent of live row content. */
 export function buildPagedDirectoryChildKeys(params: PagedDirectoryChildInputs & {
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): { directories: Map<string, DirectoryChildren<string>>; admissionKeys: string[] } {
@@ -81,7 +82,7 @@ export function buildPagedDirectoryChildKeys(params: PagedDirectoryChildInputs &
   const directories = projectPagedDirectoryChildren(params, (key) => {
     admissionKeys.push(key);
     return params.threadsByKey.has(key) ? key : undefined;
-  });
+  }, params.threadsByKey);
   return { directories, admissionKeys };
 }
 
