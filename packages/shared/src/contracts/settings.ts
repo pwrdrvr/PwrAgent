@@ -457,6 +457,18 @@ export const DESKTOP_TEXT_SIZES = [
 export type DesktopTextSize = (typeof DESKTOP_TEXT_SIZES)[number];
 export const DESKTOP_TEXT_SIZE_DEFAULT: DesktopTextSize = "md";
 
+/**
+ * How the composer's context-window moon tracks usage. "wax" fills from a
+ * new moon at 0% to a full moon at 100%. "lunar-cycle" runs one whole
+ * lunar month across the window: full at 50%, then waning toward a new
+ * moon as the window runs out.
+ */
+export const DESKTOP_CONTEXT_MOON_STYLES = ["wax", "lunar-cycle"] as const;
+export type DesktopContextMoonStyle =
+  (typeof DESKTOP_CONTEXT_MOON_STYLES)[number];
+export const DESKTOP_CONTEXT_MOON_STYLE_DEFAULT: DesktopContextMoonStyle =
+  "wax";
+
 export type DesktopToolOutputAlertPolicy = {
   outputCapHitsEnabled: boolean;
   repeatedLargeOutputsEnabled: boolean;
@@ -853,6 +865,9 @@ export type DesktopAppearanceSnapshot = {
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
+  /** `general.appearance.context_moon`. The settings service always fills
+   *  it; a snapshot without it reads as `DESKTOP_CONTEXT_MOON_STYLE_DEFAULT`. */
+  contextMoon?: DesktopSettingsValue<DesktopContextMoonStyle>;
 };
 
 export type DesktopGeneralSettingsSnapshot = {
@@ -1798,6 +1813,7 @@ export type DesktopSettingsConfigPatch = {
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
+      contextMoon?: DesktopContextMoonStyle;
     };
     codexProfileModel?: DesktopCodexProfileModel;
     /** `null` clears the persisted acknowledgement. */
@@ -2790,6 +2806,12 @@ export function isDesktopAppearanceDensity(
 
 export function isDesktopTextSize(value: string): value is DesktopTextSize {
   return DESKTOP_TEXT_SIZES.includes(value as DesktopTextSize);
+}
+
+export function isDesktopContextMoonStyle(
+  value: string,
+): value is DesktopContextMoonStyle {
+  return DESKTOP_CONTEXT_MOON_STYLES.includes(value as DesktopContextMoonStyle);
 }
 
 export function isDesktopIntegratedTerminalWindowsShell(

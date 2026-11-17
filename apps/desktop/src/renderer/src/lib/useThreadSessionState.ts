@@ -118,30 +118,6 @@ const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "item/fileChange/requestApproval",
 ]);
 
-/**
- * Names the context-window moon's phase. The moon only waxes: its lit share
- * is the share of the window in use, so a new moon is empty and a full moon
- * is full. Phases index `CONTEXT_MOON_PHASES` in the composer.
- */
-export function getContextWindowMoonPhase(usedPercent: number): number {
-  if (usedPercent < 10) {
-    return 0;
-  }
-  if (usedPercent < 40) {
-    return 1;
-  }
-  if (usedPercent < 60) {
-    return 2;
-  }
-  if (usedPercent < 90) {
-    return 3;
-  }
-  if (usedPercent < 97.5) {
-    return 4;
-  }
-  return 5;
-}
-
 export type ThreadViewportState = {
   distanceFromBottom: number;
   isGluedToBottom?: boolean;
@@ -158,7 +134,6 @@ export type ThreadContextWindowState = {
   inputTokens?: number;
   modelContextWindow: number;
   outputTokens?: number;
-  phase: number;
   reasoningOutputTokens?: number;
   remainingPercent?: number;
   remainingTokens?: number;
@@ -3319,7 +3294,6 @@ function contextWindowFill(
 ): Pick<
   ThreadContextWindowState,
   | "modelContextWindow"
-  | "phase"
   | "remainingPercent"
   | "remainingTokens"
   | "totalTokens"
@@ -3329,7 +3303,6 @@ function contextWindowFill(
   const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
   return {
     modelContextWindow,
-    phase: getContextWindowMoonPhase(rawUsedPercent),
     remainingPercent: Math.max(
       0,
       Math.min(100, (remainingTokens / modelContextWindow) * 100)

@@ -48551,9 +48551,9 @@ button.composer__subthread-source-parent:hover {
   opacity: 0.72;
 }
 
-/* The moon only waxes: the shadow covers the unused share of the disc, so
-   the lit area is the share of the context window in use. Its path comes
-   from context-window-moon.ts and spans the disc inside its rim. */
+/* The shadow covers the unlit share of the disc. Its path comes from
+   context-window-moon.ts, which follows Settings → Appearance → Context
+   moon, and spans the disc inside its rim. */
 .context-window-moon__shadow {
   position: absolute;
   inset: 0;
@@ -48562,19 +48562,19 @@ button.composer__subthread-source-parent:hover {
   fill: var(--bg-input);
 }
 
-.context-window-moon__sprite--phase-0 .context-window-moon__disc {
+.context-window-moon__sprite--new .context-window-moon__disc {
   background:
     radial-gradient(circle at 60% 36%, color-mix(in srgb, var(--accent) 8%, transparent) 0 2px, transparent 3px),
     color-mix(in srgb, var(--accent) 8%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.context-window-moon__sprite--phase-4 .context-window-moon__disc,
-.context-window-moon__sprite--phase-5 .context-window-moon__disc {
+.context-window-moon__sprite--full .context-window-moon__disc,
+.context-window-moon__sprite--critical .context-window-moon__disc {
   border-color: var(--accent-strong);
 }
 
-.context-window-moon__sprite--phase-5 .context-window-moon__disc {
+.context-window-moon__sprite--critical .context-window-moon__disc {
   box-shadow:
     0 0 12px color-mix(in srgb, var(--accent) 48%, transparent),
     inset 0 0 4px rgba(255, 243, 220, 0.34);

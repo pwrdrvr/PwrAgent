@@ -1036,6 +1036,11 @@ function SettingsSectionBody(props: {
             general: { appearance: { terminalMinimumContrast } },
           });
         }}
+        onContextMoonChange={async (contextMoon) => {
+          await props.settings.writeConfig({
+            general: { appearance: { contextMoon } },
+          });
+        }}
         onClearMessagingAcknowledgment={async () => {
           await props.settings.writeConfig({
             general: { messagingAcknowledgment: null },

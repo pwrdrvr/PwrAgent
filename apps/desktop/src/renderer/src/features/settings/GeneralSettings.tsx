@@ -1,7 +1,9 @@
 import { useState } from "react";
-import type {
-  DesktopColorTheme,
-  DesktopSettingsSnapshot,
+import {
+  DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
+  type DesktopColorTheme,
+  type DesktopContextMoonStyle,
+  type DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -24,6 +26,15 @@ import {
 } from "./SettingsLayout";
 import { DensityPicker } from "./DensityPicker";
 import { sourceBadge } from "./settings-fields";
+
+const CONTEXT_MOON_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: DesktopContextMoonStyle;
+}> = [
+  { label: "Wax to full", meta: "Full at 100%", value: "wax" },
+  { label: "Lunar cycle", meta: "Full at 50%, then wanes", value: "lunar-cycle" },
+];
 
 const THEME_OPTIONS: Array<{
   label: string;
@@ -257,6 +268,7 @@ export function GeneralSettings(props: {
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
   onThemedDockIconChange: (value: boolean) => Promise<void>;
   onTerminalMinimumContrastChange: (value: boolean) => Promise<void>;
+  onContextMoonChange: (value: DesktopContextMoonStyle) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const pastedImageMaxPatches =
@@ -286,6 +298,10 @@ export function GeneralSettings(props: {
   const terminalMinimumContrast =
     props.snapshot.general.appearance.terminalMinimumContrast;
   const calmMotion = props.snapshot.general.appearance.calmMotion;
+  const contextMoon = props.snapshot.general.appearance.contextMoon ?? {
+    value: DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
+    source: "default" as const,
+  };
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
@@ -460,6 +476,17 @@ export function GeneralSettings(props: {
               value={appearance.transcriptTextSize}
               onChange={(value) => {
                 props.appearanceController?.setTranscriptTextSize(value);
+              }}
+            />
+            <SegmentedField
+              label="Context moon"
+              sub="How the moon beside the composer tracks the context window. Wax to full lights the share of the window in use. Lunar cycle runs a whole month across the window, so the moon wanes as the window runs out."
+              source={sourceBadge(contextMoon)}
+              disabled={props.saving}
+              options={CONTEXT_MOON_OPTIONS}
+              value={contextMoon.value}
+              onChange={(value) => {
+                return props.onContextMoonChange(value);
               }}
             />
           </div>

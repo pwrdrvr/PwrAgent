@@ -32,7 +32,8 @@ import {
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
-import { contextWindowMoonShadow } from "./context-window-moon";
+import { contextWindowMoonFace } from "./context-window-moon";
+import { useContextMoonStyle } from "../../lib/context-moon-preferences";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -923,15 +924,6 @@ type AutocompleteKind =
   | "skills"
   | "slash";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
-
-const CONTEXT_MOON_PHASES = [
-  "new moon",
-  "waxing crescent",
-  "first quarter",
-  "waxing gibbous",
-  "full moon",
-  "critical",
-] as const;
 
 type ReviewConfigState = {
   pullRequestUrl?: string;
@@ -16097,6 +16089,7 @@ function ContextWindowMoon({
   });
   // The card's copy depends on availability, not the callback identity.
   const opensUsage = Boolean(onOpenUsage);
+  const moonStyle = useContextMoonStyle();
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -16111,28 +16104,25 @@ function ContextWindowMoon({
     if (!visible) {
       return;
     }
-    const phase = Math.min(
-      CONTEXT_MOON_PHASES.length - 1,
-      Math.max(0, contextWindow.phase),
-    );
+    const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
         contextWindow={contextWindow}
+        critical={moonFace.critical}
         opensUsage={opensUsage}
-        phaseLabel={CONTEXT_MOON_PHASES[phase]}
+        phaseLabel={moonFace.phaseLabel}
       />,
     );
-  }, [contextWindow, hide, opensUsage, tooltipId, update, visible]);
+  }, [contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
   }
 
-  const phase = Math.min(CONTEXT_MOON_PHASES.length - 1, Math.max(0, contextWindow.phase));
-  const phaseLabel = CONTEXT_MOON_PHASES[phase];
+  const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
+  const phaseLabel = moonFace.phaseLabel;
   const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
-  const shadow = contextWindowMoonShadow(contextWindow.usedPercent);
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
@@ -16140,6 +16130,7 @@ function ContextWindowMoon({
   const card = (
     <ContextWindowUsageCard
       contextWindow={contextWindow}
+      critical={moonFace.critical}
       opensUsage={opensUsage}
       phaseLabel={phaseLabel}
     />
@@ -16148,7 +16139,7 @@ function ContextWindowMoon({
     <>
       <span
         aria-hidden="true"
-        className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
+        className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
       >
         <span className="context-window-moon__disc">
           <svg
@@ -16157,7 +16148,7 @@ function ContextWindowMoon({
             preserveAspectRatio="none"
             viewBox="-1 -1 2 2"
           >
-            <path d={shadow.path} />
+            <path d={moonFace.path} />
           </svg>
         </span>
       </span>
@@ -16202,15 +16193,16 @@ function ContextWindowMoon({
 
 function ContextWindowUsageCard({
   contextWindow,
+  critical,
   opensUsage,
   phaseLabel,
 }: {
   contextWindow: ThreadContextWindowState;
+  critical: boolean;
   opensUsage?: boolean;
   phaseLabel: string;
 }) {
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
-  const critical = contextWindow.phase >= CONTEXT_MOON_PHASES.length - 1;
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"
     || typeof contextWindow.cachedInputTokens === "number"

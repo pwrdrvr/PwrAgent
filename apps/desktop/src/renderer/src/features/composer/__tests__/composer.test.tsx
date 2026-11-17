@@ -65,6 +65,7 @@ import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
 import { useThreadSkills } from "../../../lib/useThreadSkills";
+import { ContextMoonPreferencesProvider } from "../../../lib/context-moon-preferences";
 
 function Composer(props: ComponentProps<typeof ProductionComposer>) {
   const desktopApi = useMemo<DesktopApi>(() => ({
@@ -6120,7 +6121,6 @@ describe("Composer", () => {
           backends={[backendSummary("codex")]}
           contextWindow={{
             modelContextWindow: 128_000,
-            phase: 1,
             remainingPercent: 75,
             remainingTokens: 96_000,
             totalTokens: 32_000,
@@ -6167,7 +6167,6 @@ describe("Composer", () => {
         backends={[backendSummary("codex")]}
         contextWindow={{
           modelContextWindow: 128_000,
-          phase: 1,
           remainingPercent: 75,
           remainingTokens: 96_000,
           totalTokens: 32_000,
@@ -6197,6 +6196,60 @@ describe("Composer", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("follows the Context moon setting: waxing by default, waning in a lunar cycle", () => {
+    const composerAt = (usedPercent: number) => (
+      <Composer
+        backends={[backendSummary("codex")]}
+        contextWindow={{
+          modelContextWindow: 100_000,
+          remainingPercent: 100 - usedPercent,
+          remainingTokens: (100 - usedPercent) * 1_000,
+          totalTokens: usedPercent * 1_000,
+          usedPercent,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Context usage",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    const moonAt = (name: string) => screen.getByRole("img", { name });
+    const litFromLeft = (moon: HTMLElement) => {
+      // The lunar cycle's waning shadow starts on the right limb (sweep 1).
+      const path = moon.querySelector(".context-window-moon__shadow path");
+      return path?.getAttribute("d")?.startsWith("M0 -1A1 1 0 0 1 ") ?? false;
+    };
+
+    const { rerender } = render(composerAt(75));
+    const waxing = moonAt("Context window 75% full, 75k/100k tokens, waxing gibbous");
+    expect(waxing.querySelector(".context-window-moon__sprite--waxing")).not.toBeNull();
+    expect(litFromLeft(waxing)).toBe(false);
+
+    rerender(
+      <ContextMoonPreferencesProvider style="lunar-cycle">
+        {composerAt(75)}
+      </ContextMoonPreferencesProvider>,
+    );
+    const waning = moonAt("Context window 75% full, 75k/100k tokens, third quarter");
+    expect(waning.querySelector(".context-window-moon__sprite--waning")).not.toBeNull();
+    expect(litFromLeft(waning)).toBe(true);
+
+    rerender(
+      <ContextMoonPreferencesProvider style="lunar-cycle">
+        {composerAt(50)}
+      </ContextMoonPreferencesProvider>,
+    );
+    const full = moonAt("Context window 50% full, 50k/100k tokens, full moon");
+    expect(full.querySelector(".context-window-moon__sprite--full")).not.toBeNull();
+  });
+
   it("shows an orange moon for reported context window usage", () => {
     render(
       <Composer
@@ -6211,7 +6264,6 @@ describe("Composer", () => {
           inputTokens: 63_000,
           modelContextWindow: 128_000,
           outputTokens: 1_000,
-          phase: 2,
           remainingPercent: 50,
           remainingTokens: 64_000,
           totalTokens: 64_000,
@@ -6293,7 +6345,6 @@ describe("Composer", () => {
     const { rerender } = render(
       composerFor({
         modelContextWindow: 128_000,
-        phase: 2,
         remainingPercent: 50,
         remainingTokens: 64_000,
         totalTokens: 64_000,
@@ -6309,7 +6360,6 @@ describe("Composer", () => {
     rerender(
       composerFor({
         modelContextWindow: 128_000,
-        phase: 3,
         remainingPercent: 25,
         remainingTokens: 32_000,
         totalTokens: 96_000,
