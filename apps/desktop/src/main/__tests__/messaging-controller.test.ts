@@ -28489,7 +28489,7 @@ describe("RBAC capability enforcement", () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const db = StateDb.open(dbPath);
     const log = new MessagingActivityLog(db);
-    const permissions = ["message.reply", "tools.instance_management", "tools.instance_lifecycle"];
+    const permissions: MessagingPermissionId[] = ["message.reply", "tools.instance_management", "tools.instance_lifecycle"];
     const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions), activityLog: () => log });
     try {
       await driveOneTurn(harness, "Upgrade this owner");
