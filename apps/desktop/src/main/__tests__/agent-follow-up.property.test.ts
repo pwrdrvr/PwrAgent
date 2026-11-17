@@ -334,6 +334,38 @@ describe("agent follow-up loop guard", () => {
       expect(world.admittedCount(tripped)).toBe(1);
     });
   });
+
+  it("suspends a thread whose guard row cannot be read, and other due work still fires", async () => {
+    const db = openInMemoryStateDb();
+    try {
+      const world = new AgentFollowUpWorld(db);
+      await world.start();
+      const first = await world.create(1);
+      if (!("id" in first)) throw new Error(first.refused);
+      await world.tick(2 * MINUTE);
+      expect(world.admittedCount(first.id)).toBe(1);
+      db.raw.prepare("UPDATE thread_agent_follow_up_guards SET payload = '{'").run();
+
+      const blocked = await world.create(1);
+      if (!("id" in blocked)) throw new Error(blocked.refused);
+      const operator = await world.service.create({
+        ...FOLLOW_UP_THREAD, kind: "turn", origin: "desktop", scheduledFor: world.clock + MINUTE,
+        displayText: "Operator message", turn: { input: [{ type: "text", text: "Operator message" }] },
+      });
+      await world.tick(2 * MINUTE);
+      // An allowance that cannot be counted is not spent, and it stalls nothing else.
+      expect(world.admittedCount(blocked.id)).toBe(0);
+      expect(world.admittedCount(operator.action.id)).toBe(1);
+      expect(world.store.listPendingWakes({ ...FOLLOW_UP_THREAD, endedLimit: 0 }).actions)
+        .toEqual([expect.objectContaining({ id: blocked.id, followUpSuspended: true })]);
+
+      await world.service.rearmAgentFollowUps(FOLLOW_UP_THREAD);
+      await world.settle();
+      expect(world.admittedCount(blocked.id)).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("schedule_follow_up scope", () => {

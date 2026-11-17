@@ -18,7 +18,7 @@ const PROMPT_PREVIEW_MAX_CHARS = 600;
 const SUSPENDED_NOTICE =
   "Loop protection suspended agent follow-ups on this thread. Nothing fires until the operator rearms them in Waiting for. Tell the operator; do not schedule more to work around it.";
 
-type FollowUpThread = { backend: AppServerBackendKind; threadId: string };
+export type FollowUpThread = { backend: AppServerBackendKind; threadId: string };
 
 /** The part of the scheduled-action service the tool drives. */
 export type AgentFollowUpToolService = {

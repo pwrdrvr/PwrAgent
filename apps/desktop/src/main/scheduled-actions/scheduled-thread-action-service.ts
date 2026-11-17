@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentEvent,
   AgentFollowUpProtection,
-  AppServerBackendKind,
   AppServerThreadMessageOrigin,
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
@@ -25,7 +24,7 @@ import { getMainLogger } from "../log.js";
 import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { AgentFollowUpRefusal } from "./agent-follow-up-refusal.js";
-import { buildAgentFollowUpToolHandler } from "./agent-follow-up-tool.js";
+import { buildAgentFollowUpToolHandler, type FollowUpThread } from "./agent-follow-up-tool.js";
 
 const scheduledActionLog = getMainLogger("pwragent:scheduled-actions");
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -37,8 +36,6 @@ const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 // exact same-process ownership available so a sibling service cannot recover
 // work from a scheduler that is still active after resume.
 const activeSchedulerOwnerIds = new Set<string>();
-
-type FollowUpThread = { backend: AppServerBackendKind; threadId: string };
 
 export type ScheduledThreadActionServiceOptions = {
   registry: DesktopBackendRegistry;
@@ -220,7 +217,9 @@ export class ScheduledThreadActionService {
       throw new AgentFollowUpRefusal("not_found", "No follow-up with that id waits on this thread. Use action list.");
     }
     if (current.origin !== "agent") {
-      throw new AgentFollowUpRefusal("forbidden", "The operator scheduled that action. Only the operator can cancel it.");
+      throw new AgentFollowUpRefusal("forbidden", current.origin === "messaging"
+        ? "A messaging contact scheduled that action. The contact or the operator cancels it."
+        : "The operator scheduled that action. Only the operator can cancel it.");
     }
     if (current.status !== "scheduled" && current.status !== "held" && current.status !== "queued") {
       throw new AgentFollowUpRefusal("not_found", `That follow-up is already ${current.status}. Cancel cannot undo a turn that started.`);

@@ -62,6 +62,8 @@ type AgentFollowUpGuard = {
   /** Never moves back, so a clock rollback cannot age reservations out early. */
   lastFiredAt?: number;
   suspendedAt?: number;
+  /** The stored payload could not be read, so the allowance cannot be counted. */
+  unreadable?: true;
 };
 
 /** An agent follow-up on a thread whose loop guard has tripped. */
@@ -178,12 +180,19 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       "SELECT suspended_at, payload FROM thread_agent_follow_up_guards WHERE backend = ? AND thread_id = ?",
     ).get(thread.backend, thread.threadId) as { suspended_at: number | null; payload: string } | undefined;
     if (!row) return { fired: [] };
-    const payload = JSON.parse(row.payload) as Partial<AgentFollowUpGuard>;
+    // The column is the authority: the due queries read it without the payload.
+    const suspended = row.suspended_at !== null ? { suspendedAt: row.suspended_at } : {};
+    let payload: Partial<AgentFollowUpGuard>;
+    try {
+      payload = JSON.parse(row.payload) as Partial<AgentFollowUpGuard>;
+      if (!payload || typeof payload !== "object") throw new Error("Not a guard payload");
+    } catch {
+      return { fired: [], unreadable: true, ...suspended };
+    }
     return {
       fired: Array.isArray(payload.fired) ? payload.fired : [],
       ...(typeof payload.lastFiredAt === "number" ? { lastFiredAt: payload.lastFiredAt } : {}),
-      // The column is the authority: the due queries read it without the payload.
-      ...(row.suspended_at !== null ? { suspendedAt: row.suspended_at } : {}),
+      ...suspended,
     };
   }
 
@@ -216,6 +225,13 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   ): AgentFollowUpGuard | "unchanged" | undefined {
     const guard = this.readAgentFollowUpGuard(thread);
     if (guard.suspendedAt !== undefined) return undefined;
+    if (guard.unreadable) {
+      // Suspended rather than thrown: a throw here would stop every thread's
+      // scheduled actions, and a fresh allowance would defeat the guard.
+      this.writeAgentFollowUpGuard(thread, { fired: [], suspendedAt: now });
+      this.suspendedAgentFollowUpThreads.push({ backend: thread.backend, threadId: thread.threadId });
+      return undefined;
+    }
     const effectiveNow = Math.max(now, guard.lastFiredAt ?? now);
     const fired = guard.fired.filter((entry) =>
       entry.at > effectiveNow - AGENT_FOLLOW_UP_FIRED_WINDOW_MS);
