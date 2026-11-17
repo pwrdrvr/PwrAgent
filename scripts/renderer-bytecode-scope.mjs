@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 
-export const rendererBytecodeBudget = 25 * 1024;
+export { bytecodeBudget as rendererBytecodeBudget } from "./bytecode-compiler.mjs";
 export const rendererBytecodeRoots = [
   ["DesktopAppShell", "App.tsx"],
   ["Sidebar", "features/navigation/Sidebar.tsx"],
