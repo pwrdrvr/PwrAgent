@@ -38,7 +38,8 @@ patches, plain-object stand-ins and reads inside catchable regions.
 | Private responses | `MessagingPrivateResponses` owns one discriminated state per turn and `transitionPrivateResponse` owns its changes. `MessagingPrivateReplyClaims` owns continuation request receipts, which are keyed by request ID rather than turn ID. The controller retains delivery effects and forwards state changes to these owners. |
 | Bindings | The controller's existing `runDetachPipeline` remains the single detach pipeline. Its extraction belongs to the binding-service PR. |
 | Commands | `MessagingCommandHandlers` owns dispatch, schedule management, help, review entry and command routing for monitors, default Agents and Claude continuation. It delegates existing workflows through `MessagingCommandHost`. |
-| Callbacks, inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
+| Callbacks | `MessagingCallbackHandlers` owns callback dispatch and its entry methods. `MessagingCallbackHost` delegates retained workflows and reads existing queue/private-response owners lazily. |
+| Inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
 
 The event router receives only the collaborators it uses: a narrow store port,
 clock, logger and lazy typed host. It never imports its facade. The facade
@@ -233,9 +234,77 @@ investigation is proposed to its existing owner in to-do card
 `aebdc93f-1217-4f4d-b04f-d3e103c1ba9a`. No timeout, worker or concurrency
 configuration is changed, and this PR does not claim the full suite passed.
 
+## Callback owner and observable protocol
+
+The callback extraction starts at main
+`55b5bff62dbcf3250a253f1a2026ba61a110b1d3`, after #3823 merged. Nineteen
+methods move into `MessagingCallbackHandlers`; 58 shared declarations move to
+`messaging-callback-helpers.ts`. The context has 15 store operations, eight
+backend operations, two optional adapter operations, capability profile, clock,
+logger and 116 exact workflow/data ports. Backend operations reached through a
+local alias or the launchpad helper are included. The adapter getter continues
+to read the facade's current adapter, including its shutdown stub.
+
+Run `node scripts/inventory-messaging-callbacks.mjs --verify`. The checker audit
+records 1,552 effects/branches and 43 resolved references. Two broad test-seam
+candidates are an unrelated contained-tool stand-in and the explicit command
+host fixture; neither calls a moved operation through the facade. Verification
+checks moved bodies and declarations, retained methods, fields and helper
+bodies, original constructor order, all host ports and lazy context getters.
+No module imports the facade. The test-only `messagingModules` seam exposes the
+actual callback owner and its host ports.
+
+`messaging-callback-observable.property.test.ts` drives real controller input
+with SQLite bindings, pending proposals and provider-visible deliveries. It
+covers stale approval surfaces, permission denial, replay, backend acceptance
+before proposal retirement, independent callbacks during an in-flight submit,
+help navigation through delivered controls, provider action budgets, shared
+provider stores and replacement overlays. It passes unchanged against pinned
+original main and extracted production. The actual-owner callback model covers
+access changes and status ordering; focused tests cover construction laziness,
+host/store replacement after awaits, exception identity and the stale-notice
+error boundary. Pure properties cover identity, risk payloads, reply-option
+bounds, help payloads and provider preference isolation.
+
+Run `node scripts/mutate-messaging-callbacks.mjs --baseline` for the original
+production oracle, or omit the flag for extracted production and 15 deliberate
+mutations. All 15 fail assertions. The first oracle missed a dropped submit
+await; the acceptance-boundary assertion was strengthened, then both baselines
+and all mutations were rerun. `--check` checks mutation anchors; `--only` selects
+a case. Sources are restored after every mutation and protected fixture hashes
+are checked. Logs stay in `.local/pwr-149-callbacks/`; run mutations separately
+from other source checks.
+
+A separate same-timestamp counterexample fails on both original and extracted
+production: two live approval cards share `createdAt`, and clicking the most
+recently delivered card submits nothing. It shrinks to `[2]` (original seed
+`34413503`, extracted seed `80586874`). That semantic fix is proposed in
+standalone to-do `13a3246b-29b9-4c5a-b004-ce1573f432d7`; it is outside this
+move-only extraction. The intended oracle gives strictly newer persisted
+proposals different clock values. The counterexample and its restoring probe
+remain separate from that oracle.
+
+The final base is main `a2a1ef72ea66038504a64bceb2bc75ea652948f4`;
+its three additional commits do not overlap this extraction. The controller
+falls from 22,568 to 19,371 lines. The callback owner, helpers and context are
+2,349, 1,006 and 146 lines respectively. Fifteen focused tests and all required
+static checks pass. Protected/focused verification passes 118 files and 4,978
+tests, with two skipped. Both protected fixtures match the current main base
+byte for byte. Main added a merge-queue SQLite budget row after the pinned
+callback baseline; this extraction preserves that upstream addition.
+
+The full suite passes 2,093 files and 29,139 tests, with eight files and 107
+tests skipped. It exits nonzero with one unhandled renderer teardown error:
+Tiptap's deferred editor destruction reads `window` after the environment is
+gone in `composer-named-providers.test.tsx`. That file passes all six tests in
+isolation. Its sources and dependencies are unchanged by this extraction.
+Follow-up card `af6e2338-5b96-43d6-bec0-f05c97400888` proposes investigation to
+the existing Composer owner. The earlier timeout paths do not fail in this
+run. No timeout, worker, concurrency or teardown policy is changed here.
+
 ## Remaining state-machine work
 
-The turn/drain machine, canonical queue retirement, the four remaining named
+The turn/drain machine, canonical queue retirement, the three remaining named
 extractions, controller size reduction and the parent's registry/test size
 criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is
