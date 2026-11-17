@@ -22,7 +22,7 @@
 // Against PwrAgent's own pre-fix code (see the PR that added this file):
 // before #1768 (no cache, no back-off) I5b and I5c fail without any restart;
 // before #2414 (budget held in memory) a restart breaks I5a and I5b.
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,8 +36,39 @@ const RELEASES_URL = "https://api.github.com/repos/pwrdrvr/PwrAgent/releases";
 
 // Captured before fake timers install, so settling never moves the clock.
 const realSetImmediate = globalThis.setImmediate;
+const cacheOperations = new Set<Promise<unknown>>();
+type Gate = { entered: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> };
+let responseGate: Gate | undefined;
+
+function observe<T>(operations: Set<Promise<unknown>>, promise: Promise<T>): Promise<T> {
+  operations.add(promise);
+  void promise.then(() => operations.delete(promise), () => operations.delete(promise));
+  return promise;
+}
+
+// Observe the real cache through its complete operation promise, including
+// response-body consumption and the durable commit. It has no process-local
+// budget state to reset: restarts must recover that state from disk.
+vi.mock("../github-release-cache", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github-release-cache")>();
+  return {
+    ...actual,
+    fetchGitHubReleaseMetadata: (...args: Parameters<typeof actual.fetchGitHubReleaseMetadata>) =>
+      observe(cacheOperations, actual.fetchGitHubReleaseMetadata(...args)),
+  };
+});
 
 type Request = { at: number; manual: boolean; resetAt?: number };
+type DiskBudget = {
+  createdAt: number;
+  automaticAttempts: number[];
+  rateLimitUntil?: number;
+  entries: Record<string, { lastAttempt?: number; lastSuccess?: number; pendingUntil?: number; body?: string }>;
+};
+
+function readDiskBudget(directory: string): DiskBudget {
+  return JSON.parse(readFileSync(path.join(directory, "cache", "github-releases", "state.json"), "utf8"));
+}
 
 const fake = {
   requests: [] as Request[],
@@ -55,6 +86,12 @@ const fetchStub = async (input: RequestInfo | URL): Promise<Response> => {
   if (!url.startsWith(RELEASES_URL)) throw new Error(`unexpected request to ${url}`);
   const at = Date.now();
   const manual = fake.manualDepth > 0;
+  const gate = responseGate;
+  responseGate = undefined;
+  if (gate) {
+    gate.entered.resolve();
+    await gate.release.promise;
+  }
   if (fake.rateLimitNextMinutes !== undefined) {
     const resetAt = Math.ceil((at + fake.rateLimitNextMinutes * MINUTE) / 1_000) * 1_000;
     fake.rateLimitNextMinutes = undefined;
@@ -119,29 +156,83 @@ vi.mock("../shell/update-install-state", () => ({
 }));
 
 type Updater = typeof import("../shell/auto-updater");
-type World = { updater: Updater; firstLaunchAt: number };
+type World = { updater: Updater; firstLaunchAt: number; directory: string; owner: BudgetTestOwner };
 type Model = Record<string, never>;
+const loader = { load: () => import("../shell/auto-updater") };
 
-async function settle(): Promise<void> {
-  for (let turn = 0; turn < 3; turn++) {
-    await new Promise<void>((resolve) => realSetImmediate(resolve));
+class BudgetTestOwner {
+  stopped = false;
+  private readonly tasks = new Set<Promise<unknown>>();
+
+  checkpoint(): void {
+    if (this.stopped) throw new fc.PreconditionFailure(true);
+  }
+
+  run(work: (owner: BudgetTestOwner) => Promise<void>): Promise<void> {
+    const task = Promise.resolve().then(() => {
+      this.checkpoint();
+      return work(this);
+    });
+    return observe(this.tasks, task);
+  }
+
+  async close(): Promise<void> {
+    this.stopped = true;
+    await Promise.allSettled([...this.tasks]);
+    await settle();
   }
 }
 
+async function settle(): Promise<void> {
+  do {
+    await Promise.allSettled([...cacheOperations]);
+    // Once the cache's real I/O settles, updater continuations and the
+    // already-current native updater fake use only microtasks. Drain those
+    // before examining whether they started another cache operation.
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
+  } while (cacheOperations.size > 0);
+}
+
 async function launch(world: World): Promise<void> {
+  world.owner.checkpoint();
   // The old process exits. clearAllTimers rewinds the fake clock to where
   // it was installed, so put the time back: a restart does not move the clock.
   const now = Date.now();
   vi.clearAllTimers();
   vi.setSystemTime(now);
   vi.resetModules();
-  world.updater = await import("../shell/auto-updater");
+  world.updater = await loader.load();
+  world.owner.checkpoint();
   world.updater.initAutoUpdater();
+  // Join the check initAutoUpdater just started, in the same synchronous
+  // turn. Joining does not spend another request or mark startup as manual.
+  await world.updater.checkForAppUpdatesNow("startup");
   await settle();
 }
 
 function checkBudget(world: World): void {
+  world.owner.checkpoint();
   const log = fake.requests;
+  const durable = readDiskBudget(world.directory);
+  expect(durable.createdAt, "a restart must keep the original first-launch delay").toBe(world.firstLaunchAt);
+  const lastRequest = log.at(-1);
+  expect(durable.automaticAttempts, "the disk reservation log must agree with actual automatic traffic").toEqual(
+    log.filter((request) => !request.manual && request.at > (lastRequest?.at ?? world.firstLaunchAt) - 60 * MINUTE)
+      .map((request) => request.at),
+  );
+  expect(durable.rateLimitUntil, "back-off must survive the next launch").toBe(
+    log.filter((request) => request.resetAt !== undefined).map((request) => request.resetAt!).sort((a, b) => a - b).at(-1),
+  );
+  const entries = Object.values(durable.entries);
+  expect(entries).toHaveLength(lastRequest ? 1 : 0);
+  if (lastRequest) {
+    const entry = entries[0];
+    const success = log.filter((request) => request.resetAt === undefined).at(-1);
+    expect(entry.pendingUntil, "commands may observe the budget only after the cache commit").toBeUndefined();
+    expect(entry.lastAttempt).toBe(lastRequest.at);
+    expect(entry.lastSuccess).toBe(success?.at);
+    expect(entry.body === undefined ? undefined : JSON.parse(entry.body)[0].tag_name).toBe(success ? "v1.0.0" : undefined);
+  }
   log.forEach((request, index) => {
     const earlier = log.slice(0, index);
     const limited = earlier.find((prior) => prior.resetAt !== undefined && request.at < prior.resetAt);
@@ -165,6 +256,7 @@ class Advance implements fc.AsyncCommand<Model, World> {
   constructor(readonly minutes: number) {}
   check = () => true;
   async run(_model: Model, world: World): Promise<void> {
+    world.owner.checkpoint();
     await vi.advanceTimersByTimeAsync(this.minutes * MINUTE);
     await settle();
     checkBudget(world);
@@ -184,6 +276,7 @@ class Restart implements fc.AsyncCommand<Model, World> {
 class OpenSettings implements fc.AsyncCommand<Model, World> {
   check = () => true;
   async run(_model: Model, world: World): Promise<void> {
+    world.owner.checkpoint();
     await world.updater.readAppUpdateReleaseVersions().catch(() => undefined);
     await settle();
     checkBudget(world);
@@ -194,6 +287,7 @@ class OpenSettings implements fc.AsyncCommand<Model, World> {
 class ManualCheck implements fc.AsyncCommand<Model, World> {
   check = () => true;
   async run(_model: Model, world: World): Promise<void> {
+    world.owner.checkpoint();
     fake.manualDepth++;
     try {
       await world.updater.checkForAppUpdatesNow("manual").catch(() => undefined);
@@ -210,6 +304,7 @@ class RateLimitNext implements fc.AsyncCommand<Model, World> {
   constructor(readonly minutes: number) {}
   check = () => true;
   async run(_model: Model, world: World): Promise<void> {
+    world.owner.checkpoint();
     fake.rateLimitNextMinutes = this.minutes;
     checkBudget(world);
   }
@@ -230,8 +325,10 @@ describe("auto-updater release-list request budget", () => {
   const originalFetch = globalThis.fetch;
   const originalPlatform = process.platform;
   let root: string | undefined;
+  let owner: BudgetTestOwner;
 
   beforeEach(() => {
+    owner = new BudgetTestOwner();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
     vi.stubEnv("NODE_ENV", "production");
@@ -240,7 +337,11 @@ describe("auto-updater release-list request budget", () => {
     Object.defineProperty(globalThis, "fetch", { configurable: true, value: fetchStub });
   });
 
-  afterEach(() => {
+  async function cleanup(): Promise<void> {
+    // Vitest's outer timeout does not cancel fc.assert or a pending import.
+    // Keep the fake clock, fetch and PWRAGENT_HOME installed until every
+    // owned launch/model and real cache commit has settled.
+    await owner.close();
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -248,14 +349,18 @@ describe("auto-updater release-list request budget", () => {
     Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
     if (root) rmSync(root, { recursive: true, force: true });
     root = undefined;
-  });
+  }
+  afterEach(cleanup);
 
-  async function runSession(commands: Iterable<fc.AsyncCommand<Model, World>>): Promise<void> {
+  async function runSession(scope: BudgetTestOwner, commands: Iterable<fc.AsyncCommand<Model, World>>): Promise<void> {
+    scope.checkpoint();
+    await settle();
+    scope.checkpoint();
     if (root) rmSync(root, { recursive: true, force: true });
     root = mkdtempSync(path.join(tmpdir(), "updater-budget-"));
     vi.stubEnv("PWRAGENT_HOME", root);
     fake.reset();
-    const world = { firstLaunchAt: Date.now() } as World;
+    const world = { firstLaunchAt: Date.now(), directory: root, owner: scope } as World;
     await launch(world);
     checkBudget(world);
     await fc.asyncModelRun(() => ({ model: {}, real: world }), commands);
@@ -271,13 +376,106 @@ describe("auto-updater release-list request budget", () => {
     // Before #2414 the budget lived in memory, so a restart spent another.
     ["#2414 restart", [new Advance(11), new Restart()]],
   ])("keeps the shrunk %s sequence", async (_name, commands) => {
-    await runSession(commands);
+    await owner.run((scope) => runSession(scope, commands));
+  });
+
+  it("waits for the timer's real cache commit before the next model command", async ({ signal }) => {
+    const gate: Gate = { entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+    const releaseOnTimeout = () => gate.release.resolve();
+    signal.addEventListener("abort", releaseOnTimeout, { once: true });
+    await owner.run((scope) => runSession(scope, []));
+    responseGate = gate;
+    const advancing = owner.run(async () => { await vi.advanceTimersByTimeAsync(FIRST_CHECK_DELAY_MS); });
+    await gate.entered.promise;
+    await advancing;
+    let advanced = false;
+    const waiting = Promise.withResolvers<void>();
+    const ready = owner.run(async () => { waiting.resolve(); await settle(); advanced = true; });
+    await waiting.promise;
+    const directory = root!;
+    const at = Date.now();
+    try {
+      const reserved = readDiskBudget(directory);
+      expect(at).toBe(reserved.createdAt + FIRST_CHECK_DELAY_MS);
+      expect(reserved.automaticAttempts).toEqual([at]);
+      expect(Object.values(reserved.entries)).toEqual([expect.objectContaining({
+        lastAttempt: at,
+        pendingUntil: at + 30_000,
+      })]);
+      // Replay the former helper's three turns with the HTTP gate still
+      // closed. These turns may flush callbacks, but cannot commit the body.
+      for (let turn = 0; turn < 3; turn++) {
+        await new Promise<void>((resolve) => realSetImmediate(resolve));
+      }
+      expect(advanced, "a timer firing is not evidence that its request and disk commit finished").toBe(false);
+      expect(Object.values(readDiskBudget(directory).entries)[0].lastSuccess).toBeUndefined();
+    } finally {
+      signal.removeEventListener("abort", releaseOnTimeout);
+      gate.release.resolve();
+      await ready;
+      await settle();
+    }
+    const committed = Object.values(readDiskBudget(directory).entries)[0];
+    expect(committed.pendingUntil).toBeUndefined();
+    expect(committed.lastSuccess).toBe(at);
+    expect(JSON.parse(committed.body!)[0].tag_name).toBe("v1.0.0");
+  });
+
+  it("joins a pending restart and the whole property before removing its durable budget", async ({ signal }) => {
+    const gate: Gate = { entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+    const releaseOnTimeout = () => gate.release.resolve();
+    signal.addEventListener("abort", releaseOnTimeout, { once: true });
+    const load = loader.load;
+    let launches = 0;
+    let sessions = 0;
+    const spy = vi.spyOn(loader, "load").mockImplementation(async () => {
+      const updater = await load();
+      if (++launches === 2) {
+        gate.entered.resolve();
+        await gate.release.promise;
+      }
+      return updater;
+    });
+    const running = owner.run((scope) => fc.assert(fc.asyncProperty(fc.constant(null), async () => {
+      scope.checkpoint();
+      sessions++;
+      await runSession(scope, [new Advance(11), new Restart()]);
+    }), { numRuns: 2, markInterruptAsFailure: true }));
+    const outcome = running.then(() => "passed", () => "interrupted");
+    await gate.entered.promise;
+    const directory = root!;
+    let closed = false;
+    let closing: Promise<void> | undefined;
+    try {
+      const persisted = readDiskBudget(directory);
+      expect(Object.values(persisted.entries)[0].lastSuccess).toBe(persisted.createdAt + FIRST_CHECK_DELAY_MS);
+      closing = cleanup().then(() => { closed = true; });
+      await new Promise<void>((resolve) => realSetImmediate(resolve));
+      expect(closed, "teardown must join the pending launch before restoring globals or deleting its root").toBe(false);
+      expect(process.platform).toBe("win32");
+      expect(process.env.PWRAGENT_HOME).toBe(directory);
+      expect(readDiskBudget(directory)).toEqual(persisted);
+    } finally {
+      signal.removeEventListener("abort", releaseOnTimeout);
+      // Also keep the oracle safe when run against the old teardown.
+      owner.stopped = true;
+      gate.release.resolve();
+      await (closing ?? owner.close());
+      await outcome;
+      spy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+    expect(await outcome).toBe("interrupted");
+    expect(sessions, "no further generated session or shrinking may reset the fixture after stop").toBe(1);
+    expect(launches).toBe(2);
+    expect(cacheOperations.size).toBe(0);
+    expect(existsSync(directory)).toBe(false);
   });
 
   it("never spends a release-list request the budget does not allow", async () => {
-    await fc.assert(fc.asyncProperty(
+    await owner.run((scope) => fc.assert(fc.asyncProperty(
       fc.commands(commandArbs, { maxCommands: 20 }),
-      runSession,
-    ), { numRuns: 100 });
+      (commands) => runSession(scope, commands),
+    ), { numRuns: 100, markInterruptAsFailure: true }));
   });
 });
