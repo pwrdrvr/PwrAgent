@@ -50,7 +50,10 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
       const stackedOffset = await app.window.evaluate((fraction) => {
         const root = document.scrollingElement;
         if (!root) throw new Error("The document has no scrolling element.");
-        root.scrollTop = (root.scrollHeight - root.clientHeight) * fraction;
+        // A small fraction of a short range can round down to zero physical
+        // pixels (the CI counterexample was 5% at 180%). Exercise a real
+        // scroll even then; a layout with no overflow still fails below.
+        root.scrollTop = Math.max(1, (root.scrollHeight - root.clientHeight) * fraction);
         return root.scrollTop;
       }, scrolled);
       // The stacked layout has to be scrollable, or this checks nothing.
@@ -73,6 +76,8 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
     }), { numRuns: 8, examples: [
       [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
       [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
+      [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 180 }, scrolled: 0.05, wide: { width: 960, height: 640 } }],
+      [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 180 }, scrolled: 0.05, wide: { width: 960, height: 640 } }],
     ] });
   } finally {
     await app.window.evaluate((value) => {
