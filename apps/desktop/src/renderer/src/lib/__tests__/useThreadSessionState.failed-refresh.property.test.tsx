@@ -5,21 +5,26 @@ import type { AgentEvent, AppServerReadThreadResponse, NavigationThreadSummary }
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSessionState } from "../useThreadSessionState";
 
-type Trigger = "completion" | "metadata" | "history-limit";
+type Trigger = "completion" | "failed-turn-metadata" | "metadata" | "history-limit";
+const triggers: Trigger[] = ["completion", "failed-turn-metadata", "metadata", "history-limit"];
 const LOGGED_OUT = "Codex is logged out. Please sign in again to resume operations.";
 const thread: NavigationThreadSummary = {
   id: "quiet-thread", title: "Quiet transcript", titleSource: "explicit", summary: "Fixture",
   source: "codex", linkedDirectories: [], inbox: { inInbox: false }, updatedAt: 1,
 };
 
-function response(): AppServerReadThreadResponse {
+function response(recovered = false): AppServerReadThreadResponse {
   const message = {
     type: "message" as const, id: "retained-message", role: "assistant" as const, text: "Keep this visible.",
-    turn: { id: "turn-1", status: "completed" as const, startedAt: 1, completedAt: 2 },
+    turn: { id: "turn-0", status: "completed" as const, startedAt: 1, completedAt: 2 },
   };
+  const messages = recovered ? [message, {
+    ...message, id: "recovered-message", text: "Recovered terminal output.",
+    turn: { ...message.turn, id: "turn-1" },
+  }] : [message];
   return {
     backend: "codex", threadId: thread.id, fetchedAt: 3, threadStatus: "idle",
-    replay: { entries: [message], messages: [message], pagination: { hasPreviousPage: false } },
+    replay: { entries: messages, messages, pagination: { supportsPagination: true, hasPreviousPage: false } },
   };
 }
 
@@ -40,16 +45,25 @@ async function mountFailedRefresh(trigger: Trigger, error = LOGGED_OUT) {
   const hook = renderHook(() => useThreadSessionState({ desktopApi, thread: currentThread, initialHistoryLimit }));
   await act(async () => reads[0]!.resolve(response()));
   expect(readThread).toHaveBeenCalledTimes(1);
-  const notify = (method: "turn/started" | "turn/completed") => emit({
+  const notify = (method: "turn/started" | "turn/completed" | "turn/failed") => emit({
     backend: "codex",
-    notification: { method, params: { threadId: thread.id, turnId: "turn-1", turn: {
-      id: "turn-1", status: method === "turn/started" ? "in_progress" : "failed", startedAt: 1,
-      ...(method === "turn/completed" ? { completedAt: 2 } : {}),
-    } } },
+    notification: method === "turn/started"
+      ? { method, params: { threadId: thread.id, turn: { id: "turn-1", status: "in_progress", startedAt: 1 } } }
+      : method === "turn/completed"
+        ? { method, params: { threadId: thread.id, turnId: "turn-1", turn: {
+            id: "turn-1", status: "completed", startedAt: 1, completedAt: 2, output: [],
+          } } }
+        : { method, params: { threadId: thread.id, turnId: "turn-1", turn: {
+            id: "turn-1", status: "failed", error: { message: LOGGED_OUT },
+          } } },
   });
-  if (trigger === "completion") {
+  if (trigger === "completion" || trigger === "failed-turn-metadata") {
     act(() => notify("turn/started"));
-    act(() => notify("turn/completed"));
+    act(() => notify(trigger === "completion" ? "turn/completed" : "turn/failed"));
+    if (trigger === "failed-turn-metadata") {
+      currentThread = { ...thread, updatedAt: 2 };
+      hook.rerender();
+    }
   } else {
     if (trigger === "metadata") currentThread = { ...thread, updatedAt: 2 };
     else initialHistoryLimit = 3;
@@ -67,7 +81,7 @@ async function mountFailedRefresh(trigger: Trigger, error = LOGGED_OUT) {
 
 // Rule: once a refresh fails, the same selected thread/version must remain
 // quiescent with its cached transcript and error until a retry or new version.
-for (const trigger of ["completion", "metadata", "history-limit"] as const) {
+for (const trigger of triggers) {
   it(`keeps a failed ${trigger} refresh quiet without hiding cached messages`, async () => {
     const real = await mountFailedRefresh(trigger);
     try {
@@ -87,7 +101,7 @@ for (const trigger of ["completion", "metadata", "history-limit"] as const) {
 
 it("preserves the failed-refresh invariant across generated summary rerenders", async () => {
   await fc.assert(fc.asyncProperty(
-    fc.constantFrom<Trigger>("completion", "metadata", "history-limit"),
+    fc.constantFrom(...triggers),
     fc.constantFrom(LOGGED_OUT, "Federation peer is not connected", "Backend unavailable"),
     fc.integer({ min: 1, max: 8 }),
     async (trigger, error, rerenders) => {
@@ -119,7 +133,7 @@ for (const retry of ["reload", "reselect", "new-version"] as const) {
       else if (retry === "reselect") real.reselect();
       else real.advanceVersion();
       expect(real.readThread).toHaveBeenCalledTimes(3);
-      await act(async () => { real.reads[2]!.resolve(response()); await reloaded; });
+      await act(async () => { real.reads[2]!.resolve(response(true)); await reloaded; });
       expect(real.result.current.loading).toBe(false);
       expect(real.result.current.error).toBeUndefined();
       expect(real.readThread).toHaveBeenCalledTimes(3);
