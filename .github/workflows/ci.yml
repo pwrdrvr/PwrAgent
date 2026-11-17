@@ -240,6 +240,19 @@ jobs:
         timeout-minutes: 10
         run: pnpm check:renderer-bytecode
 
+      - name: Main function bytecode budget
+        timeout-minutes: 10
+        run: pnpm check:main-bytecode --report main-bytecode.json
+
+      - name: Upload main bytecode measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: main-bytecode
+          path: main-bytecode.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Oxlint
         timeout-minutes: 10
         run: pnpm lint:oxlint

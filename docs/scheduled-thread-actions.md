@@ -39,7 +39,38 @@ not stop the main-process timer.
   remains owned by the same renewable lease while the in-memory registry holds
   it.
 - `started`: handed to a backend turn or review.
+- `held`: durable, and waiting for the operator instead of the clock. The
+  timer never dispatches it, because `claimNextDue` selects `scheduled` rows
+  only. It is not editable, because `update` accepts `scheduled` only.
 - `cancelled` / `failed`: terminal.
+
+`ScheduledThreadActionStatus` in
+`packages/shared/src/contracts/scheduled-thread-actions.ts` lists these
+states. The transitions are in
+`packages/sqlite-storage/src/scheduled-thread-action-store.ts`.
+
+An action becomes `held` in three ways:
+
+- **At creation.** `create` stores an action with `manualReleaseRequired` as
+  `held`, not `scheduled`. The stale-steer fallback creates such an action
+  when the turn a steering message targeted ended before delivery
+  (`apps/desktop/src/main/scheduled-actions/steer-turn-admission.ts`).
+- **After dispatch.** `markHeld` moves a `dispatching` or `queued` action to
+  `held` and sets `manualReleaseRequired`. The service calls it when the
+  registry holds the queue entry, for example because the thread is locked,
+  and when a release attempt does not start the turn
+  (`apps/desktop/src/main/scheduled-actions/scheduled-thread-action-service.ts`).
+- **At recovery.** `recoverExpiredClaims` returns a recoverable expired action
+  that has `manualReleaseRequired` to `held` and clears its queue entry,
+  whether it was `dispatching` or `queued`. Such an action is neither failed
+  nor re-admitted.
+
+Two operations take an action out of `held`:
+
+- **Send now.** `claim` accepts `held` as well as `scheduled`, so `sendNow`
+  moves the action to `dispatching` and dispatches it. A release that cannot
+  start the turn returns it to `held` with the reason.
+- **Cancel.** `cancel` and `markCancelled` accept `held`.
 
 Each admitted action has a stable queue identity. Multiple scheduled reviews
 behind one active turn keep distinct pending IDs; the registry chains them
@@ -52,7 +83,9 @@ work after a system suspend or event-loop stall. Queued registry work with a
 recoverable expired lease is re-admitted from its durable action because the
 registry FIFO itself is in memory. A recoverable expired action in the narrower
 `dispatching` window is marked failed instead: whether the backend accepted it
-is ambiguous, so automatic replay could duplicate operator work. Due actions
+is ambiguous, so automatic replay could duplicate operator work. Neither rule
+applies to an action with `manualReleaseRequired`, which returns to `held` as
+described above. Due actions
 are claimed individually immediately before backend admission; later due work
 stays scheduled if an earlier admission blocks.
 
@@ -63,8 +96,8 @@ Desktop IPC and the messaging backend bridge expose the same operations:
 - list active actions, optionally scoped to a backend and thread;
 - create a message or review;
 - update an action that is still `scheduled`;
-- cancel a scheduled or registry-queued action;
-- atomically claim and send a scheduled action now.
+- cancel a scheduled, held or registry-queued action;
+- atomically claim and send a scheduled or held action now.
 
 Messaging exposes these operations as `/schedule` and `/scheduled` commands.
 Provider adapters register those commands where the provider has a native

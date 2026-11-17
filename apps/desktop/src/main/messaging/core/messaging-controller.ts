@@ -1,3 +1,6 @@
+import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
+import type { MessagingCallbackHost } from "./messaging-callback-context";
+import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, buildQueuedInputPreview, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, federationRefsMatch, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type PreparedInputStartResult, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage, type PendingNewThreadPromptWindow, type PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
 import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
@@ -36,14 +39,13 @@ import { isThreadLockRefusal } from "@pwragent/shared";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
-import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
+import { readMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  applyNavigationLaunchpadProviderSettingsPatch,
   buildReviewBranchOptions,
   buildFederatedThreadRef,
   buildThreadIdentityKey,
@@ -60,8 +62,6 @@ import {
   parseCodexTurnErrorMessage,
   readProviderResponseBlockNotification,
   describeProviderResponseBlock,
-  parseThreadIdentityKey,
-  permissionForActionId,
   permissionForDynamicTool,
   permissionsForThreadMutation,
   toolArgsTargetRemoteInstance,
@@ -83,16 +83,12 @@ import type {
   AutomationRunSourceMetadata,
   AutomationRunOutputDecision,
   CodexEnvironmentSetupProgressEvent,
-  CodexEnvironmentOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
-  BackendModelOption,
   BackendSummary,
   AppServerPendingRequestNotification,
   AppServerThreadMessageOrigin,
   AppServerToolRequestUserInputNotification,
-  DesktopAuthorizedContact,
-  DesktopMessagingFullAccessWarningGlobalPolicy,
   FederatedThreadRef,
   FederationTarget,
   HandoffThreadWorkspaceRequest,
@@ -128,7 +124,6 @@ import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type {
   MessagingBindingRecord,
-  MessagingCallbackHandleRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
   MessagingApprovalDecision,
@@ -138,7 +133,6 @@ import type {
   MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingDefaultAgentAssignmentRecord,
-  MessagingDefaultAgentScope,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
   MessagingInboundChannelMetadataUpdate,
@@ -148,7 +142,6 @@ import type {
   MessagingImagePart,
   MessagingAdapterState,
   MessagingJsonValue,
-  MessagingManagedConversationActionResult,
   MessagingManagedConversationOperationSupport,
   MessagingManagedTopicRecord,
   MessagingMonitorState,
@@ -237,19 +230,15 @@ import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
-import { actionsForIntent } from "./deterministic-interaction-mapper.js";
+
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildBoundedResumeIntent,
-  directoryForProjectSelection as legacyDirectoryForProjectSelection,
   isNewAgentThreadLaunchAction,
   isNewThreadLaunchAction,
   parseResumeCommandArgs,
   resumeBrowserPageSize,
-  resumeReturnTargetForSession,
   selectProjectFromValue,
-  selectThreadFromValue,
-  shouldStartNewAgentThreadFromSession,
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
@@ -296,7 +285,6 @@ import {
   isSkillsSearchIntent,
   isSkillsWorkflowIntent,
   skillSelectionFromValue,
-  skillsBrowserPageFromValue,
 } from "./messaging-skills-browser.js";
 import {
   resolveMessagingThreadState,
@@ -464,8 +452,6 @@ const NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN = new RegExp(
 );
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
-
-type PreparedInputStartResult = "failed" | "queued" | "started";
 const messagingControllerLog = getMainLogger("pwragent:messaging");
 
 type MonitorStateOptions = Pick<
@@ -590,36 +576,11 @@ function turnSettingsForThread(
   };
 }
 
-function findThreadForBinding(
-  navigation: MessagingNavigationContext | undefined,
-  binding: MessagingBindingRecord,
-): NavigationThreadSummary | undefined {
-  const threads = navigation && isMessagingThreadContext(navigation) ? (navigation.thread ? [navigation.thread] : []) : navigation?.threads;
-  return threads?.find(
-    (thread) =>
-      thread.source === binding.backend &&
-      thread.id === binding.threadId &&
-      federationRefsMatch(thread.federation?.ref, binding.federatedThread),
-  );
-}
-
 function threadContextForAdmissionState(
   _binding: MessagingBindingRecord,
   state: MessagingThreadAdmissionState,
 ): MessagingThreadContext {
   return { kind: "thread", thread: state.thread };
-}
-
-function federationRefsMatch(
-  left: FederatedThreadRef | undefined,
-  right: FederatedThreadRef | undefined,
-): boolean {
-  const leftTarget = left?.target ?? { scope: "local" as const };
-  const rightTarget = right?.target ?? { scope: "local" as const };
-  return leftTarget.scope === rightTarget.scope &&
-    (leftTarget.scope === "local" ||
-      (rightTarget.scope === "remote" &&
-        leftTarget.instanceId === rightTarget.instanceId));
 }
 
 function federationTargetForThread(
@@ -687,21 +648,6 @@ type MessagingToolUpdateDefaultModeResolver =
     targetKind: MessagingBindingTargetKind,
   ) => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
-type MessagingFullAccessControls = {
-  allowEscalation: boolean;
-  allowThreadResume: boolean;
-  warningPolicy: DesktopMessagingFullAccessWarningGlobalPolicy;
-  authorizedUsers?: Partial<Record<MessagingChannelKind, DesktopAuthorizedContact[]>>;
-  dismissWarning?: (params: {
-    actorId: string;
-    channel: MessagingChannelKind;
-  }) => Promise<void>;
-  canDismissWarning?: (params: {
-    actorId: string;
-    channel: MessagingChannelKind;
-  }) => boolean | Promise<boolean>;
-};
-
 type MessagingFullAccessControlsResolverFn = () =>
   | MessagingFullAccessControls
   | undefined
@@ -728,73 +674,9 @@ function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
   return typeof (value as PromiseLike<T>)?.then === "function";
 }
 
-type FullAccessEscalationContext =
-  | {
-      backend: AppServerBackendKind;
-      binding?: MessagingBindingRecord;
-      kind: "thread";
-      threadId: ThreadIdentifier;
-    }
-  | {
-      kind: "new-thread";
-      pendingPrompt?: boolean;
-      session: MessagingBrowseSessionRecord;
-    }
-  | {
-      backend: AppServerBackendKind;
-      federatedThread?: FederatedThreadRef;
-      kind: "resume-thread";
-      session: MessagingBrowseSessionRecord;
-      threadId: ThreadIdentifier;
-    };
-
-type FullAccessRiskWarningContext =
-  | {
-      bindingId: string;
-      kind: "thread";
-      threadId: ThreadIdentifier;
-    }
-  | {
-      kind: "new-thread";
-      pendingPrompt?: boolean;
-      sessionId: string;
-    }
-  | {
-      backend: AppServerBackendKind;
-      federationInstanceId?: string;
-      kind: "resume-thread";
-      sessionId: string;
-      threadId: ThreadIdentifier;
-    };
-
-type AcpRuntimeRiskWarningContext =
-  | {
-      kind: "new-thread";
-      label: string;
-      optionId: string;
-      sessionId: string;
-      source: BackendAcpRuntimeOptionSource;
-      value: string;
-    }
-  | {
-      bindingId: string;
-      kind: "thread";
-      label: string;
-      optionId: string;
-      source: BackendAcpRuntimeOptionSource;
-      threadId: ThreadIdentifier;
-      value: string;
-    };
-
 type FullAccessRiskPresentation = {
   binding?: MessagingBindingRecord;
   surface?: MessagingSurfaceRef;
-};
-
-type FullAccessWarningResolution = {
-  canDismiss: boolean;
-  policy: DesktopMessagingFullAccessWarningGlobalPolicy;
-  shouldWarn: boolean;
 };
 
 type FullAccessRiskPresentationMode = "surface" | "message";
@@ -815,49 +697,6 @@ export type MessagingControllerDeliveryBudgetEvent = {
   scope?: MessagingDeliveryScope;
   slowMode: boolean;
   threadId?: ThreadIdentifier;
-};
-
-type QueuedTurnAction = {
-  entryId: string;
-  kind: "cancel" | "steer" | "retry";
-};
-
-type PrivateReplyAction =
-  | { kind: "cancel"; requestId: string }
-  | { kind: "reply"; optionIndex: number; requestId: string };
-
-/**
- * Per-binding tracking of a posted "permissions queued" audit message so
- * we can edit it in place when the queue resolves (cancelled / applied).
- * One controller-side map keyed by `buildThreadIdentityKey` is enough —
- * only one queued mode change can exist per thread at a time, and the
- * registry's queueCleared notification is per-thread.
- */
-type PendingQueueAuditMessage = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
-  /** ULID-shaped queueId from the registry, used for the cancel button action id. */
-  queueId: string;
-  fromExecutionMode: ThreadExecutionMode;
-  toExecutionMode: ThreadExecutionMode;
-  queuedAt: number;
-  /** Surface refs for every binding we successfully posted to. */
-  surfaces: Map<string, MessagingSurfaceRef>;
-};
-
-const PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX = "permissions:queue:cancel:";
-const FULL_ACCESS_RISK_ACTION_PREFIX = "full-access-risk:";
-const ACP_RUNTIME_RISK_ACTION_PREFIX = "acp-runtime-risk:";
-
-type PendingNewThreadPromptWindow = {
-  events: MessagingTurnInputEvent[];
-  session: MessagingBrowseSessionRecord;
-  timer?: ReturnType<typeof setTimeout>;
-};
-
-type PendingNewThreadPromptBundle = {
-  events: MessagingTurnInputEvent[];
-  session: MessagingBrowseSessionRecord;
 };
 
 type DeliveryLaneState = {
@@ -1046,7 +885,10 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly queuedTurnDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly queuedTurnDrainTimers = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    settle: () => void;
+  }>();
   private readonly queuedTurnDrains = new Map<string, Promise<void>>();
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
@@ -1096,6 +938,9 @@ export class MessagingController {
   private readonly commandHandlers: MessagingCommandHandlers;
   private commandHostPorts?: MessagingCommandHost;
 
+  private readonly callbackHandlers: MessagingCallbackHandlers;
+  private callbackHostPorts?: MessagingCallbackHost;
+
   constructor(private readonly options: MessagingControllerOptions) {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
@@ -1114,6 +959,16 @@ export class MessagingController {
       get now() { return readNow(); },
       get capabilityProfile() { return readCapabilityProfile(); },
       host: () => this.commandHost(),
+    });
+    const readAdapter = () => this.adapter;
+    this.callbackHandlers = new MessagingCallbackHandlers({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get now() { return readNow(); },
+      get logger() { return readLogger(); },
+      host: () => this.callbackHost(),
     });
     this.authorizedActorIds = new Set(options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
@@ -1266,7 +1121,7 @@ export class MessagingController {
     }
 
     if (event.kind === "callback") {
-      await this.handleCallback(event);
+      await this.callbackHandlers.handleCallback(event);
       return;
     }
 
@@ -1473,7 +1328,7 @@ export class MessagingController {
     return this.commandHostPorts ??= {
       requirePermission: (...args) => this.requirePermission(...args),
       requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
-      handleStatusCallback: (...args) => this.handleStatusCallback(...args),
+      handleStatusCallback: (...args) => this.callbackHandlers.handleStatusCallback(...args),
       presentStatus: (...args) => this.presentStatus(...args),
       detachBinding: (...args) => this.detachBinding(...args),
       presentResumeBrowser: (...args) => this.presentResumeBrowser(...args),
@@ -1498,6 +1353,128 @@ export class MessagingController {
       renderTopicCleanupProposal: (...args) => this.renderTopicCleanupProposal(...args),
       runTopicMonitorFanout: (...args) => this.runTopicMonitorFanout(...args),
       renderTopicControlStatus: (...args) => this.renderTopicControlStatus(...args),
+    };
+  }
+
+  private callbackHost(): MessagingCallbackHost {
+    const readController = () => this;
+    return this.callbackHostPorts ??= {
+      get commandHandlers() { return readController().commandHandlers; },
+      presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
+      clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
+      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      requirePermission: (...args) => this.requirePermission(...args),
+      canResumeFullAccessThreads: (...args) => this.canResumeFullAccessThreads(...args),
+      deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
+      bindChannelToThread: (...args) => this.bindChannelToThread(...args),
+      renderBindingStatus: (...args) => this.renderBindingStatus(...args),
+      repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
+      submitApprovalAction: (...args) => this.submitApprovalAction(...args),
+      retireApprovalIntent: (...args) => this.retireApprovalIntent(...args),
+      resumeBindingForPendingIntent: (...args) => this.resumeBindingForPendingIntent(...args),
+      handleQuestionnaireAction: (...args) => this.handleQuestionnaireAction(...args),
+      handleReviewAction: (...args) => this.handleReviewAction(...args),
+      get turnAdmission() { return readController().turnAdmission; },
+      get sharedQueueNotices() { return readController().sharedQueueNotices; },
+      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      startPreparedInput: (...args) => this.startPreparedInput(...args),
+      retireQueuedTurnNotice: (...args) => this.retireQueuedTurnNotice(...args),
+      trackQueuedTurnAction: (...args) => this.trackQueuedTurnAction(...args),
+      steerQueuedTurn: (...args) => this.steerQueuedTurn(...args),
+      resolveSteerableActiveTurn: (...args) => this.resolveSteerableActiveTurn(...args),
+      deliverQueuedTurnNotice: (...args) => this.deliverQueuedTurnNotice(...args),
+      applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
+      renderResumeBrowser: (...args) => this.renderResumeBrowser(...args),
+      resolveNewThreadBackendForSession: (...args) => this.resolveNewThreadBackendForSession(...args),
+      retireBrowseSession: (...args) => this.retireBrowseSession(...args),
+      deliverInvalidBrowseSelection: (...args) => this.deliverInvalidBrowseSelection(...args),
+      startNewThreadFromProject: (...args) => this.startNewThreadFromProject(...args),
+      updateNewThreadStickySettings: (...args) => this.updateNewThreadStickySettings(...args),
+      presentNewThreadPromptGate: (...args) => this.presentNewThreadPromptGate(...args),
+      presentNewThreadBranchPicker: (...args) => this.presentNewThreadBranchPicker(...args),
+      getBackendSummary: (...args) => this.getBackendSummary(...args),
+      get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
+      presentNewThreadAcpRuntimeModePicker: (...args) => this.presentNewThreadAcpRuntimeModePicker(...args),
+      presentNewThreadPermissionsPicker: (...args) => this.presentNewThreadPermissionsPicker(...args),
+      setNewThreadPermissions: (...args) => this.setNewThreadPermissions(...args),
+      presentNewThreadEnvironmentPicker: (...args) => this.presentNewThreadEnvironmentPicker(...args),
+      setNewThreadEnvironment: (...args) => this.setNewThreadEnvironment(...args),
+      setNewThreadAcpRuntimeMode: (...args) => this.setNewThreadAcpRuntimeMode(...args),
+      ensureNewThreadProjectLaunchpad: (...args) => this.ensureNewThreadProjectLaunchpad(...args),
+      resolveNewThreadToolUpdateMode: (...args) => this.resolveNewThreadToolUpdateMode(...args),
+      presentNewThreadWorkingUpdatesPicker: (...args) => this.presentNewThreadWorkingUpdatesPicker(...args),
+      presentNewThreadBackendPicker: (...args) => this.presentNewThreadBackendPicker(...args),
+      presentNewThreadModelPicker: (...args) => this.presentNewThreadModelPicker(...args),
+      presentNewThreadReasoningPicker: (...args) => this.presentNewThreadReasoningPicker(...args),
+      deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
+      loadDefaultAgentBackendSummaries: (...args) => this.loadDefaultAgentBackendSummaries(...args),
+      notifyBindingChanged: (...args) => this.notifyBindingChanged(...args),
+      presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
+      ensureFullAccessEscalationAllowed: (...args) => this.ensureFullAccessEscalationAllowed(...args),
+      updateBindingPreferences: (...args) => this.updateBindingPreferences(...args),
+      stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
+      enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
+      deliverInvalidTopicApproval: (...args) => this.deliverInvalidTopicApproval(...args),
+      getActiveTurn: (...args) => this.getActiveTurn(...args),
+      signalTurnActivity: (...args) => this.signalTurnActivity(...args),
+      detachBinding: (...args) => this.detachBinding(...args),
+      rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
+      dismissActiveSkillsWorkflow: (...args) => this.dismissActiveSkillsWorkflow(...args),
+      clearActiveBindingSubmodeIntent: (...args) => this.clearActiveBindingSubmodeIntent(...args),
+      presentSkillsBrowser: (...args) => this.presentSkillsBrowser(...args),
+      presentSkillsSearchPrompt: (...args) => this.presentSkillsSearchPrompt(...args),
+      selectPendingSkill: (...args) => this.selectPendingSkill(...args),
+      removePendingSkill: (...args) => this.removePendingSkill(...args),
+      presentHandoffOverview: (...args) => this.presentHandoffOverview(...args),
+      presentHandoffProjectPicker: (...args) => this.presentHandoffProjectPicker(...args),
+      presentHandoffConfirmation: (...args) => this.presentHandoffConfirmation(...args),
+      clearActiveHandoffIntent: (...args) => this.clearActiveHandoffIntent(...args),
+      presentHandoffBranchPicker: (...args) => this.presentHandoffBranchPicker(...args),
+      executeHandoff: (...args) => this.executeHandoff(...args),
+      presentModelPicker: (...args) => this.presentModelPicker(...args),
+      presentReasoningPicker: (...args) => this.presentReasoningPicker(...args),
+      presentStatusAcpRuntimeModePicker: (...args) => this.presentStatusAcpRuntimeModePicker(...args),
+      setBindingModel: (...args) => this.setBindingModel(...args),
+      setBindingReasoning: (...args) => this.setBindingReasoning(...args),
+      setBindingAcpRuntimeMode: (...args) => this.setBindingAcpRuntimeMode(...args),
+      setBindingPermissionsMode: (...args) => this.setBindingPermissionsMode(...args),
+      setToolUpdateMode: (...args) => this.setToolUpdateMode(...args),
+      setBindingResponseMode: (...args) => this.setBindingResponseMode(...args),
+      toggleFastMode: (...args) => this.toggleFastMode(...args),
+      readBoundNavigationThread: (...args) => this.readBoundNavigationThread(...args),
+      presentPermissionsPicker: (...args) => this.presentPermissionsPicker(...args),
+      presentToolUpdateModePicker: (...args) => this.presentToolUpdateModePicker(...args),
+      presentResponseModePicker: (...args) => this.presentResponseModePicker(...args),
+      cycleStreamingResponseMode: (...args) => this.cycleStreamingResponseMode(...args),
+      stopActiveTurn: (...args) => this.stopActiveTurn(...args),
+      compactThread: (...args) => this.compactThread(...args),
+      toggleThreadLock: (...args) => this.toggleThreadLock(...args),
+      syncConversationName: (...args) => this.syncConversationName(...args),
+      deliverInvalidStatusSelection: (...args) => this.deliverInvalidStatusSelection(...args),
+      deliverStaleFullAccessWarning: (...args) => this.deliverStaleFullAccessWarning(...args),
+      get pendingFullAccessNewThreadPrompts() { return readController().pendingFullAccessNewThreadPrompts; },
+      withNewThreadPromptCaptureExpiry: (...args) => this.withNewThreadPromptCaptureExpiry(...args),
+      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
+      resolveFullAccessWarning: (...args) => this.resolveFullAccessWarning(...args),
+      deliverMissingFullAccessPrompt: (...args) => this.deliverMissingFullAccessPrompt(...args),
+      createNewThreadFromPromptBundle: (...args) => this.createNewThreadFromPromptBundle(...args),
+      deliverNewThreadPromptFailure: (...args) => this.deliverNewThreadPromptFailure(...args),
+      applyNewThreadAcpRuntimeMode: (...args) => this.applyNewThreadAcpRuntimeMode(...args),
+      applyBindingAcpRuntimeMode: (...args) => this.applyBindingAcpRuntimeMode(...args),
+      recordFullAccessPolicyViolation: (...args) => this.recordFullAccessPolicyViolation(...args),
+      queueAuditKey: (...args) => this.queueAuditKey(...args),
+      get pendingQueueAuditMessages() { return readController().pendingQueueAuditMessages; },
+      agentMessagingOriginForPendingIntent: (...args) => this.agentMessagingOriginForPendingIntent(...args),
+      readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
+      reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
+      startNextQueuedTurn: (...args) => this.startNextQueuedTurn(...args),
+      get privateReplyClaims() { return readController().privateReplyClaims; },
+      deliverPrivateReplyButtonState: (...args) => this.deliverPrivateReplyButtonState(...args),
+      completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
+      admitTurnInput: (...args) => this.admitTurnInput(...args),
     };
   }
 
@@ -2475,7 +2452,7 @@ export class MessagingController {
           text: event.text,
         });
         if (mapped.kind === "matched") {
-          await this.handleCallback({
+          await this.callbackHandlers.handleCallback({
             ...event,
             kind: "callback",
             interaction: {
@@ -2507,7 +2484,7 @@ export class MessagingController {
           text: event.text,
         });
         if (mapped.kind === "matched") {
-          await this.handleCallback({
+          await this.callbackHandlers.handleCallback({
             ...event,
             kind: "callback",
             interaction: {
@@ -4330,80 +4307,6 @@ export class MessagingController {
     });
   }
 
-  private async handleQueuedTurnCallback(
-    event: MessagingInboundCallbackEvent,
-    action: QueuedTurnAction,
-  ): Promise<void> {
-    const entry = this.turnAdmission.findQueuedEntry(action.entryId)
-      ?? [...this.sharedQueueNotices.values()].flatMap((state) =>
-        state.phase === "announcing" || state.phase === "queued" ? [state.entry] : [],
-      ).find((candidate) => candidate.id === action.entryId);
-    if (!entry || entry.status !== "queued") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("expired-queued-turn"),
-          createdAt: this.now(),
-          title: "Queued message unavailable",
-          body: "That queued message is no longer waiting.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    if (action.kind === "retry") {
-      if (!entry.manualRetryRequired
-        || !(await this.requirePermission(event, "message.reply", "queued-turn:retry"))
-        || !(await this.requireRemoteScopeForBinding(event, entry.binding, "queued-turn:retry:remote-instance"))
-        || this.turnAdmission.findQueuedEntry(entry.id)?.status !== "queued"
-        || this.turnAdmission.isStarting(entry.threadKey)) return;
-      const result = await this.startPreparedInput({
-        binding: entry.binding, event: entry.event, input: entry.input,
-        pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
-        preview: entry.preview, threadKey: entry.threadKey, queueOnConcurrentStart: false,
-      });
-      if (result === "failed") return;
-      this.turnAdmission.removeQueuedEntry(entry);
-      await this.retireQueuedTurnNotice(entry, result === "queued"
-        ? "Queued message handed to the thread queue."
-        : "Queued message sent as the next turn.", event);
-      return;
-    }
-
-    if (entry.ownerQueueEntryId) {
-      if (action.kind === "cancel") {
-        await this.handleSharedQueuedTurnCallback(entry, event, action.kind);
-      } else {
-        entry.status = "steering";
-        this.trackQueuedTurnAction(entry, this.handleSharedQueuedTurnCallback(entry, event, action.kind).finally(() => {
-          if (entry.status === "steering") entry.status = "queued";
-        }));
-      }
-      return;
-    }
-
-    if (action.kind === "cancel") {
-      const cancelled = this.turnAdmission.updateQueuedEntry(entry, {
-        status: "cancelled",
-      });
-      await this.retireQueuedTurnNotice(
-        cancelled,
-        "Queued message cancelled.",
-        event,
-      );
-      return;
-    }
-
-    // Claim before the first await. Duplicate clicks and turn completion
-    // cannot dispatch the same queued input while its provider call waits.
-    const claimed = this.turnAdmission.updateQueuedEntry(entry, { status: "steering" });
-    // Ingress must return even if steering waits for an escalation answer:
-    // sequential provider polling needs ingress to deliver that answer.
-    this.trackQueuedTurnAction(entry, this.steerQueuedTurn(claimed, event));
-  }
-
   private trackQueuedTurnAction(entry: MessagingQueuedTurnEntry, action: Promise<void>): void {
     const task = action.catch((error: unknown) => {
       this.logger.warn?.("messaging queued action failed", {
@@ -4500,68 +4403,6 @@ export class MessagingController {
     );
   }
 
-  private async handleSharedQueuedTurnCallback(
-    entry: MessagingQueuedTurnEntry,
-    event: MessagingInboundCallbackEvent,
-    kind: "cancel" | "steer",
-  ): Promise<void> {
-    const backend = this.options.backend;
-    const target = federationTargetForBinding(entry.binding);
-    try {
-      if (!backend.cancelQueuedTurn || !backend.readQueuedTurn) throw new Error("The thread owner cannot edit this queue.");
-      // Desktop viewers can edit queued content. Read the owner before
-      // removing it; its hash makes cancellation refuse a concurrent edit.
-      const content = await backend.readQueuedTurn({ backend: entry.binding.backend,
-        threadId: entry.binding.threadId, federationTarget: target, queueEntryId: entry.id, forEdit: true });
-      const active = kind === "steer" ? await this.resolveSteerableActiveTurn(entry.binding, "queued_turn_steer") : undefined;
-      if (kind === "steer" && (entry.pdfAttachments?.length || !backend.steerTurn || !active || !["working", "waiting"].includes(active.status))) {
-        throw new Error("There is no active turn available to steer. The message is still queued.");
-      }
-      const cancelled = await backend.cancelQueuedTurn({ federationTarget: target,
-        queueEntryId: entry.id, expectedContentHash: content.contentHash });
-      if (!cancelled.cancelled) throw new Error("The queued message changed or has already been admitted. Refresh the thread queue.");
-      if (kind === "steer" && active && backend.steerTurn) {
-        try {
-          await backend.steerTurn({ backend: entry.binding.backend, federationTarget: target,
-            threadId: entry.binding.threadId, expectedTurnId: active.turnId, requestId: entry.id,
-            input: content.input, messageOrigin: content.messageOrigin });
-        } catch (error) {
-          // Cancellation succeeded, so restore the owner's current content
-          // through normal admission if the turn ended before steering.
-          const restored = await this.startPreparedInput({
-            binding: entry.binding, event: entry.event, input: content.input,
-            pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
-            preview: entry.preview, threadKey: entry.threadKey, queueOnConcurrentStart: false,
-          });
-          if (restored === "failed") {
-            // The owner no longer has this input. Retain a separate recovery
-            // entry until an operator's Retry is accepted; idle events must
-            // not repeatedly submit it while the owner is unavailable.
-            const recovery = this.turnAdmission.enqueue({
-              binding: entry.binding, event: entry.event, input: content.input,
-              pdfAttachments: entry.pdfAttachments,
-              privateResponseRequested: entry.privateResponseRequested,
-              preview: buildQueuedInputPreview(content.input.flatMap((item) => item.type === "text" ? [item.text] : [])) || entry.preview,
-              threadKey: entry.threadKey, manualRetryRequired: true,
-            });
-            await this.deliverQueuedTurnNotice(recovery);
-          }
-          throw error;
-        }
-      }
-      await this.applySharedQueueNoticeEvent(`${entry.threadKey}:${entry.id}`, {
-        type: "ownerOutcome", outcome: { status: "cancelled" },
-      });
-      await this.retireQueuedTurnNotice(entry, kind === "steer"
-        ? "Queued message was sent as a steering message." : "Queued message cancelled.", event);
-    } catch (error) {
-      await this.deliver(buildErrorIntent({ id: this.newIntentId("queued-turn-action-failed"),
-        createdAt: this.now(), title: "Queued message could not be updated",
-        body: error instanceof Error ? error.message : String(error), recoverable: true,
-      }), entry.binding, event);
-    }
-  }
-
   private scheduleNextQueuedTurn(binding: MessagingBindingRecord): void {
     const key = this.threadKeyForBinding(binding);
     const entry = this.turnAdmission.peekNextQueued(key);
@@ -4571,19 +4412,23 @@ export class MessagingController {
     // A start emits ordered lifecycle events. It cannot acknowledge while
     // the event that released it is still awaiting this listener. Leave the
     // delivery stack before draining, and coalesce terminal + idle releases.
+    const { promise: drain, resolve: settle } = Promise.withResolvers<void>();
+    this.queuedTurnDrains.set(key, drain);
+    void drain.finally(() => this.queuedTurnDrains.delete(key));
     const timer = setTimeout(() => {
       this.queuedTurnDrainTimers.delete(key);
-      if (this.disposed) return;
-      const drain = this.startNextQueuedTurn(binding).catch((error) => {
+      if (this.disposed) {
+        settle();
+        return;
+      }
+      void this.startNextQueuedTurn(binding).catch((error) => {
         this.logger.warn?.("messaging queued turn dispatch failed", {
           threadId: binding.threadId,
           error: error instanceof Error ? error.message : String(error),
         });
-      });
-      this.queuedTurnDrains.set(key, drain);
-      void drain.finally(() => this.queuedTurnDrains.delete(key));
+      }).finally(settle);
     }, 0);
-    this.queuedTurnDrainTimers.set(key, timer);
+    this.queuedTurnDrainTimers.set(key, { timer, settle });
   }
 
   private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
@@ -4637,280 +4482,6 @@ export class MessagingController {
     if (this.queuedTurnDrainRequests.delete(threadKey) && !this.disposed) {
       await this.startNextQueuedTurn(binding);
     }
-  }
-
-  private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
-    if (event.actionId === "claude:continue-session") {
-      await this.commandHandlers.continueClaudeThreadInNewSession(event);
-      return;
-    }
-    const privateReplyAction = readPrivateReplyAction(event);
-    if (privateReplyAction) {
-      await this.handlePrivateReplyCallback(event, privateReplyAction);
-      return;
-    }
-    if (event.actionId === "agent-default:set") {
-      await this.presentDefaultAgentAssignmentBrowser(event, "conversation");
-      return;
-    }
-    if (event.actionId === "agent-default:clear") {
-      await this.clearDefaultAgentAssignment(event, "conversation");
-      return;
-    }
-    const command = readCommandAction(event);
-    if (command) {
-      await this.commandHandlers.handleCommand(
-        {
-          ...event,
-          kind: "command",
-          args: [],
-          command,
-          rawText: `/${command}`,
-        },
-        {
-          targetSurface: event.sourceSurface,
-        },
-      );
-      return;
-    }
-
-    const helpAction = readHelpNavAction(event);
-    if (helpAction) {
-      await this.handleHelpNavCallback(event, helpAction);
-      return;
-    }
-
-    const browseAction = readBrowseAction(event);
-    if (browseAction) {
-      await this.handleBrowseCallback(event, browseAction);
-      return;
-    }
-
-    const permissionsQueueCancelAction = readPermissionsQueueCancelAction(event);
-    if (permissionsQueueCancelAction) {
-      await this.handlePermissionsQueueCancelCallback(
-        event,
-        permissionsQueueCancelAction.queueId,
-      );
-      return;
-    }
-
-    const monitorAction = readMonitorAction(event);
-    if (monitorAction) {
-      await this.handleMonitorCallback(event, monitorAction);
-      return;
-    }
-
-    const fullAccessRiskAction = readFullAccessRiskAction(event);
-    if (fullAccessRiskAction) {
-      await this.handleFullAccessRiskCallback(event, fullAccessRiskAction);
-      return;
-    }
-
-    const acpRuntimeRiskAction = readAcpRuntimeRiskAction(event);
-    if (acpRuntimeRiskAction) {
-      await this.handleAcpRuntimeRiskCallback(event, acpRuntimeRiskAction);
-      return;
-    }
-
-    const statusAction = readStatusAction(event);
-    if (statusAction) {
-      await this.handleStatusCallback(event, statusAction);
-      return;
-    }
-
-    const queuedTurnAction = readQueuedTurnAction(event);
-    if (queuedTurnAction) {
-      await this.handleQueuedTurnCallback(event, queuedTurnAction);
-      return;
-    }
-
-    const bindingTarget = readBindingTarget(event);
-    if (bindingTarget) {
-      const federationTarget = bindingTarget.federatedThread?.target;
-      // RBAC scope: binding to a thread that lives on a federated peer is
-      // remote control, whatever the thread's execution mode. Gate before the
-      // bind so an actor without the scope can never create a remote binding
-      // (the picker also hides remote threads from them).
-      if (
-        !(await this.requireRemoteScope(
-          event,
-          federationTarget,
-          "resume:remote-instance",
-        ))
-      ) {
-        return;
-      }
-      const targetThread = await this.readExactNavigationThread({
-        ref: { backend: bindingTarget.backend, threadId: bindingTarget.threadId,
-          ...(federationTarget?.scope === "remote" ? { ownerInstanceId: federationTarget.instanceId } : {}) },
-        federationTarget,
-      });
-      if (!targetThread || targetThread.archivedAt) {
-        await this.deliver(buildErrorIntent({ id: this.newIntentId("bind-unavailable"), createdAt: this.now(),
-          title: "Thread unavailable", body: "The owning instance could not resolve an active thread. Refresh the thread picker.", recoverable: true }), undefined, event);
-        return;
-      }
-      if (targetThread?.executionMode === "full-access") {
-        // RBAC: binding a conversation to a Full Access thread needs the danger
-        // permission, in addition to the global resume-full-access setting.
-        if (
-          !(await this.requirePermission(
-            event,
-            "thread.execution.full_access",
-            "resume:full-access",
-          ))
-        ) {
-          return;
-        }
-        if (!(await this.canResumeFullAccessThreads())) {
-          await this.deliverFullAccessPolicyError(
-            undefined,
-            event,
-            "Full Access threads cannot be resumed from messaging with the current settings.",
-          );
-          return;
-        }
-      }
-      const binding = await this.bindChannelToThread(event, bindingTarget);
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("bound"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Thread bound",
-          body: boundThreadConfirmationBody(binding, this.capabilityProfile),
-          fallbackText: boundThreadFallbackText(binding, this.capabilityProfile),
-        }),
-        binding,
-      );
-      await this.renderBindingStatus(binding);
-      await this.repostLastAssistantMessageForResume(binding);
-      return;
-    }
-
-    const pendingIntent = await this.pendingIntentForCallback(
-      event,
-      await this.options.store.findActivePendingIntentForChannel({
-        actorId: event.actor.platformUserId,
-        channel: event.channel,
-        now: this.now(),
-      }),
-    );
-    if (pendingIntent) {
-      const action = actionsForIntent(pendingIntent.intent).find(
-        (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
-      );
-      if (action && pendingIntent.intent.kind === "approval") {
-        // RBAC (fail closed): a pending-request approval is the agent asking to
-        // act OUTSIDE its sandbox (run a command, touch the network/filesystem).
-        // We can't reliably prove any such request is benign, so every one
-        // requires the escalation permission — never the weaker default. This
-        // avoids under-classifying an exec/network approval whose payload lacks
-        // the subject fields (path/grantRoot/diff/files) we can recognize.
-        if (
-          !(await this.requirePermission(
-            event,
-            "approval.respond.escalation",
-            "approval:respond",
-          ))
-        ) {
-          return;
-        }
-        if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
-          return;
-        }
-        const decision = await this.submitApprovalAction(
-          pendingIntent.intent,
-          action.id,
-        );
-        await this.retireApprovalIntent(
-          pendingIntent,
-          event,
-          approvalResponseLabel(decision),
-        );
-        await this.options.store.deletePendingIntent(pendingIntent.id);
-        await this.resumeBindingForPendingIntent(
-          pendingIntent,
-          "pending_request.submitted",
-        );
-        return;
-      }
-      if (action && pendingIntent.intent.kind === "questionnaire") {
-        if (
-          !(await this.requirePermission(
-            event,
-            "elicitation.answer",
-            "questionnaire:answer",
-          ))
-        ) {
-          return;
-        }
-        await this.handleQuestionnaireAction(pendingIntent, event, action);
-        return;
-      }
-      if (action && pendingIntent.intent.kind === "review") {
-        await this.handleReviewAction(pendingIntent, event, action);
-        return;
-      }
-    }
-
-    if ((event.actionId ?? event.interaction.id).startsWith("approval:")) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("expired-approval"),
-          createdAt: this.now(),
-          title: "Approval expired",
-          body: "That approval request is no longer available. Retry the command or request that needed approval.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    if ((event.actionId ?? event.interaction.id).startsWith("questionnaire:")) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("expired-questionnaire"),
-          createdAt: this.now(),
-          title: "Input request expired",
-          body: "That input request is no longer available. Retry the command or request that needed input.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    if ((event.actionId ?? event.interaction.id).startsWith("review:")) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("expired-review"),
-          createdAt: this.now(),
-          title: "Review picker expired",
-          body: "That review picker is no longer available. Send /review to open a new one.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("expired-callback"),
-        createdAt: this.now(),
-        title: "Action expired",
-        body: "That action is no longer available. Use /resume to refresh.",
-        recoverable: true,
-      }),
-      undefined,
-      event,
-    );
   }
 
   private async handleQuestionnaireTextAnswer(
@@ -6043,54 +5614,6 @@ export class MessagingController {
       await this.options.store.deletePendingIntent(pendingIntent.id);
       await this.deliverQuestionnaireIntent(pendingIntent, answered);
     }
-  }
-
-  /**
-   * A channel's newest pending intent answers its callbacks, but an agent can
-   * ask a second async question while an earlier card is still open. A click
-   * on the earlier card must act on that card, not on the newest question.
-   */
-  private async pendingIntentForCallback(
-    event: MessagingInboundCallbackEvent,
-    newest: MessagingPendingIntentRecord | undefined,
-  ): Promise<MessagingPendingIntentRecord | undefined> {
-    const clicked = event.sourceSurface;
-    const actionId = event.actionId ?? event.interaction.id;
-    if (actionId.startsWith("approval:")) {
-      if (newest?.intent.kind !== "approval") return undefined;
-      // Action ids (such as approval:mcp:accept) are shared by every card.
-      // A provider's durable handle or the clicked surface must identify
-      // this exact proposal; an old button must never approve a newer one.
-      const handle = await this.resolveCallbackHandleForEvent(event);
-      if (handle?.pendingIntentId) {
-        return handle.pendingIntentId === newest.id ? newest : undefined;
-      }
-      return clicked && newest.surface && isSameMessagingSurface(clicked, newest.surface)
-        ? newest : undefined;
-    }
-    if (
-      !clicked
-      || (newest && isSameMessagingSurface(clicked, newest.surface))
-      // Only a questionnaire button can belong to an older async card.
-      || !(actionId.startsWith("questionnaire:") || actionId.startsWith("async-question:"))
-    ) {
-      return newest;
-    }
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      return newest;
-    }
-    const questionnaires =
-      await this.options.store.findActivePendingAsyncQuestionnaires({
-        backend: binding.backend,
-        threadId: binding.threadId,
-        now: this.now(),
-      });
-    return questionnaires.find((candidate) =>
-      candidate.bindingId === binding.id
-      && candidate.allowedActorIds.includes(event.actor.platformUserId)
-      && isSameMessagingSurface(clicked, candidate.surface)
-    ) ?? newest;
   }
 
   private async submitQuestionnaireIntent(
@@ -7546,7 +7069,10 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
-    for (const timer of this.queuedTurnDrainTimers.values()) clearTimeout(timer);
+    for (const { timer, settle } of this.queuedTurnDrainTimers.values()) {
+      clearTimeout(timer);
+      settle();
+    }
     this.queuedTurnDrainTimers.clear();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
@@ -7592,7 +7118,7 @@ export class MessagingController {
   /**
    * Resolves once the tool-update batches that a flush timer already started
    * have finished delivering, including their store writes, and then once
-   * every queued-turn drain already begun has finished. dispose() is
+   * every scheduled or running queued-turn drain has finished. dispose() is
    * synchronous and only stops new batches.
    */
   async whenToolUpdatesSettled(): Promise<void> {
@@ -7601,9 +7127,9 @@ export class MessagingController {
   }
 
   /**
-   * Resolves once every queued-turn drain that has already begun has finished,
-   * including the start it submits and the queued notice it retires. A drain
-   * scheduled but not yet begun is not awaited.
+   * Resolves once every queued-turn drain scheduled or running at the time of
+   * the call has finished, including the start it submits and the queued notice
+   * it retires. dispose() cancels and settles drains that have not yet begun.
    */
   async whenQueuedTurnDrainsSettled(): Promise<void> {
     await Promise.allSettled([...this.queuedTurnDrains.values()]);
@@ -7611,53 +7137,6 @@ export class MessagingController {
 
   async whenQueuedTurnActionsSettled(): Promise<void> {
     await Promise.all(this.queuedTurnActions);
-  }
-
-  /**
-   * Handle navigation callbacks on the paginated help surface
-   * (Prev / Next / Cancel). The page index travels in
-   * `event.value.pageIndex` so help has no persistent session
-   * record — re-rendering is a function of catalog + page index.
-   *
-   * `targetSurface` is taken from the originating callback's
-   * interaction state so the help post is updated in place rather
-   * than stacking new posts on every Next click.
-   */
-  private async handleHelpNavCallback(
-    event: MessagingInboundCallbackEvent,
-    actionId: string,
-  ): Promise<void> {
-    const targetSurface: MessagingSurfaceRef | undefined = {
-      channel: event.interaction.channel,
-      id: event.interaction.id,
-      ...(event.interaction.state ? { state: event.interaction.state } : {}),
-    };
-    if (actionId === "help:cancel") {
-      // Replace the help body with a brief dismissal and strip the
-      // action row. Mirrors the resume browser's "Resume cancelled"
-      // pattern for consistent dismissed-surface UX across both
-      // paginated flows.
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("help-dismissed"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Help dismissed",
-          body: "Send `/help` or `@<bot> help` to see commands again.",
-          actions: [],
-          delivery: { mode: "update", replaceMarkup: true },
-          targetSurface,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    const requestedPage = readHelpPageIndex(event);
-    await this.commandHandlers.presentHelp(event, {
-      pageIndex: requestedPage,
-      targetSurface,
-    });
   }
 
   private async presentResumeBrowser(
@@ -7972,873 +7451,6 @@ export class MessagingController {
     );
   }
 
-  private async handleBrowseCallback(
-    event: MessagingInboundCallbackEvent,
-    actionId: string,
-  ): Promise<void> {
-    const session = await this.findBrowseSessionForCallback(event);
-    if (!session) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("expired-browse"),
-          createdAt: this.now(),
-          title: "Action expired",
-          body: "That browser action is no longer available. Use /resume to refresh.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
-      ...(actionId.startsWith("browse:new:") ? { project: session.selectedProject } : {}) });
-    const nextSession = {
-      ...session,
-      updatedAt: this.now(),
-    };
-
-    if (actionId === "browse:page:next") {
-      await this.renderResumeBrowser(
-        { ...nextSession, pageIndex: nextSession.pageIndex + 1 },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:page:prev") {
-      await this.renderResumeBrowser(
-        { ...nextSession, pageIndex: Math.max(0, nextSession.pageIndex - 1) },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:projects") {
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          launchAction: "resume_thread",
-          mode: "projects",
-          pageIndex: 0,
-          returnTo: shouldStartNewAgentThreadFromSession(session)
-            ? session.returnTo ?? resumeReturnTargetForSession(session)
-            : undefined,
-          selectedProject: undefined,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:recents") {
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          launchAction: "resume_thread",
-          mode: "recents",
-          pageIndex: 0,
-          returnTo: shouldStartNewAgentThreadFromSession(session)
-            ? session.returnTo ?? resumeReturnTargetForSession(session)
-            : undefined,
-          selectedProject: undefined,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:agents") {
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          launchAction: "resume_thread",
-          mode: "agents",
-          pageIndex: 0,
-          selectedProject: undefined,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:new") {
-      const selectedBackend = await this.resolveNewThreadBackendForSession(
-        {
-          launchpadBackend: navigation.launchpadDefaults.backend,
-          session: nextSession,
-        },
-        event,
-      );
-      if (!selectedBackend) {
-        return;
-      }
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          backend: selectedBackend.kind,
-          launchAction: shouldStartNewAgentThreadFromSession(session)
-            ? "start_new_agent_thread"
-            : "start_new_thread",
-          mode: "new_project",
-          pageIndex: 0,
-          returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
-          selectedProject: undefined,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:new-agent") {
-      const selectedBackend = await this.resolveNewThreadBackendForSession(
-        {
-          launchpadBackend: navigation.launchpadDefaults.backend,
-          session: nextSession,
-        },
-        event,
-      );
-      if (!selectedBackend) {
-        return;
-      }
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          backend: selectedBackend.kind,
-          launchAction: "start_new_agent_thread",
-          mode: "new_project",
-          pageIndex: 0,
-          selectedProject: undefined,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:new-thread") {
-      const selectedBackend = await this.resolveNewThreadBackendForSession(
-        {
-          launchpadBackend: navigation.launchpadDefaults.backend,
-          session: nextSession,
-        },
-        event,
-      );
-      if (!selectedBackend) {
-        return;
-      }
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          backend: selectedBackend.kind,
-          launchAction: "start_new_thread",
-          mode: "new_project",
-          pageIndex: 0,
-          selectedProject: undefined,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:mode:resume") {
-      const target = session.returnTo;
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          launchAction: "resume_thread",
-          mode: target?.mode ?? "recents",
-          pageIndex: target?.pageIndex ?? 0,
-          preferences: target?.preferences,
-          query: target?.query,
-          returnTo: undefined,
-          selectedProject: target?.selectedProject,
-          directorySelector: target?.directorySelector,
-          workMode: undefined,
-          branchName: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:cancel") {
-      await this.retireBrowseSession(session);
-      if (session.cancelDestination === "help" && session.surface) {
-        await this.commandHandlers.presentHelp(event, {
-          targetSurface: session.surface,
-        });
-        return;
-      }
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("browse-cancelled"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          delivery: session.surface
-            ? {
-                mode: "update",
-                replaceMarkup: true,
-              }
-            : undefined,
-          title: "Resume cancelled",
-          body: "No thread binding changed.",
-          targetSurface: session.surface,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:select-project") {
-      const project = selectProjectFromValue(event.value);
-      if (!project) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      if (isNewThreadLaunchAction(session.launchAction)) {
-        await this.startNewThreadFromProject(event, session, navigation, project);
-        return;
-      }
-      await this.renderResumeBrowser(
-        {
-          ...nextSession,
-          mode: "project_threads",
-          pageIndex: 0,
-          selectedProject: project,
-          directorySelector: undefined,
-        },
-        navigation,
-        event,
-      );
-      return;
-    }
-    if (actionId === "browse:new:workspace:toggle") {
-      const directory = nextSession.selectedProject
-        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-        : undefined;
-      const currentWorkMode = resolveNewThreadWorkMode({
-        requestedWorkMode:
-          nextSession.workMode ??
-          directory?.launchpad?.workMode ??
-          navigation.launchpadDefaults.workMode ??
-          "local",
-        directory,
-      });
-      const nextWorkMode =
-        currentWorkMode === "worktree" || !canCreateNewThreadWorktree(directory)
-          ? "local"
-          : "worktree";
-      const branchName = nextWorkMode === "worktree"
-        ? resolveNewThreadBaseBranch(nextSession, navigation, directory)
-        : undefined;
-      await this.updateNewThreadStickySettings(nextSession, {
-        branchName,
-        workMode: nextWorkMode,
-      });
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          workMode: nextWorkMode,
-          branchName,
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:workspace:local") {
-      await this.updateNewThreadStickySettings(nextSession, {
-        branchName: undefined,
-        workMode: "local",
-      });
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          workMode: "local",
-          branchName: undefined,
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:workspace:worktree") {
-      const directory = nextSession.selectedProject
-        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-        : undefined;
-      if (!canCreateNewThreadWorktree(directory)) {
-        await this.presentNewThreadPromptGate(
-          {
-            ...nextSession,
-            workMode: "local",
-            branchName: undefined,
-          },
-          event,
-          navigation,
-        );
-        return;
-      }
-      const branchName = resolveNewThreadBaseBranch(nextSession, navigation);
-      await this.updateNewThreadStickySettings(nextSession, {
-        branchName,
-        workMode: "worktree",
-      });
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          workMode: "worktree",
-          branchName,
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:base-branch") {
-      const directory = nextSession.selectedProject
-        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-        : undefined;
-      if (!canCreateNewThreadWorktree(directory)) {
-        await this.presentNewThreadPromptGate(
-          {
-            ...nextSession,
-            workMode: "local",
-            branchName: undefined,
-          },
-          event,
-          navigation,
-        );
-        return;
-      }
-      await this.presentNewThreadBranchPicker(nextSession, navigation, event);
-      return;
-    }
-    if (
-      actionId === "browse:new:branches:next" ||
-      actionId === "browse:new:branches:previous"
-    ) {
-      await this.presentNewThreadBranchPicker(
-        nextSession,
-        navigation,
-        event,
-        branchPageIndexFromValue(event.value),
-      );
-      return;
-    }
-    if (actionId === "browse:new:set-base-branch") {
-      const branchName = readStringValue(event.value, "branchName");
-      if (!branchName) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      const directory = nextSession.selectedProject
-        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-        : undefined;
-      if (!canCreateNewThreadWorktree(directory)) {
-        await this.presentNewThreadPromptGate(
-          {
-            ...nextSession,
-            workMode: "local",
-            branchName: undefined,
-          },
-          event,
-          navigation,
-        );
-        return;
-      }
-      await this.updateNewThreadStickySettings(nextSession, {
-        branchName,
-        workMode: "worktree",
-      });
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          workMode: "worktree",
-          branchName,
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:permissions") {
-      if (nextSession.backend && isAcpBackendId(nextSession.backend)) {
-        const summary = await this.getBackendSummary(nextSession.backend);
-        const directory = nextSession.selectedProject
-          ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-          : undefined;
-        const runtimeChoices = summary
-          && !acpBackendUsesExecutionModePermissions(summary)
-          ? buildMessagingAcpRuntimeModeSummary({
-              backend: summary,
-              runtime: newThreadOptionsForSession(
-                nextSession,
-                navigation,
-                directory,
-                this.streamingResponsesDefault,
-                summary,
-              ).acpRuntime,
-            }).choices
-          : [];
-        if (runtimeChoices.length > 0) {
-          await this.presentNewThreadAcpRuntimeModePicker(
-            nextSession,
-            event,
-            nextSession.backend,
-            navigation,
-          );
-        } else {
-          await this.presentNewThreadPermissionsPicker(nextSession, event, navigation);
-        }
-        return;
-      }
-      await this.presentNewThreadPermissionsPicker(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:set-permissions") {
-      await this.setNewThreadPermissions(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:environment") {
-      await this.presentNewThreadEnvironmentPicker(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:environment:back") {
-      await this.presentNewThreadPromptGate(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:set-environment") {
-      await this.setNewThreadEnvironment(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:runtime-mode") {
-      await this.presentNewThreadAcpRuntimeModePicker(
-        nextSession,
-        event,
-        nextSession.backend ?? navigation.launchpadDefaults.backend,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:set-runtime-mode") {
-      await this.setNewThreadAcpRuntimeMode(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:fast") {
-      const backend = await this.resolveNewThreadBackendForSession({
-        launchpadBackend: navigation.launchpadDefaults.backend,
-        session: nextSession,
-      }, event);
-      if (!backend) return;
-      const directory = nextSession.selectedProject
-        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-        : undefined;
-      const options = newThreadOptionsForSession(
-        nextSession,
-        navigation,
-        directory,
-        this.streamingResponsesDefault,
-        backend,
-      );
-      const models = backend.launchpadOptions?.models ?? [];
-      const model = models.find((option) => option.id === options.model);
-      const speedPatch = codexSpeedSettings(nextCodexSpeed(
-        codexSpeedOptions(model, backend.codexFastAllowed !== false, backend.launchpadOptions?.supportsFastMode),
-        options,
-      ));
-      await this.updateNewThreadStickySettings(nextSession, speedPatch);
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          preferences: {
-            ...nextSession.preferences,
-            ...speedPatch,
-            updatedAt: this.now(),
-          },
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:streaming") {
-      const streamingResponses = nextMessagingStreamingResponseMode(
-        nextSession.preferences?.streamingResponses ?? "inherit",
-        this.streamingResponsesDefault,
-      );
-      // Sticky-reveal so the control stays in the gate once enabled here, and
-      // carries onto the created binding.
-      const streamingControlRevealed =
-        nextSession.preferences?.streamingControlRevealed ||
-        streamingResponses === "enabled";
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          preferences: {
-            ...nextSession.preferences,
-            streamingResponses,
-            ...(streamingControlRevealed
-              ? { streamingControlRevealed: true }
-              : {}),
-            updatedAt: this.now(),
-          },
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:working-updates") {
-      const ensured = await this.ensureNewThreadProjectLaunchpad(
-        nextSession,
-        navigation,
-        nextSession.backend,
-      );
-      const currentMode =
-        await this.resolveNewThreadToolUpdateMode(nextSession, ensured.directory);
-      await this.presentNewThreadWorkingUpdatesPicker(
-        nextSession,
-        event,
-        currentMode,
-      );
-      return;
-    }
-    if (actionId === "browse:new:set-working-updates") {
-      const toolUpdateMode = readMessagingToolUpdateModeValue(event.value);
-      if (!toolUpdateMode) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      const updatedSession = {
-        ...nextSession,
-        preferences: {
-          ...nextSession.preferences,
-          toolUpdateMode,
-          updatedAt: this.now(),
-        },
-      };
-      // This is sticky only for the selected project. The backend's broad
-      // sticky flag would also freeze unrelated launchpad defaults.
-      await this.updateNewThreadStickySettings(
-        updatedSession,
-        { messagingToolUpdateMode: toolUpdateMode },
-        false,
-      );
-      await this.presentNewThreadPromptGate(
-        updatedSession,
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:backend") {
-      await this.presentNewThreadBackendPicker(nextSession, event, navigation);
-      return;
-    }
-    if (actionId === "browse:new:set-backend") {
-      const backend = readStringValue(event.value, "backend");
-      const selectedBackend = await this.resolveNewThreadBackendForSession(
-        {
-          launchpadBackend: navigation.launchpadDefaults.backend,
-          preferredBackend: backend,
-          session: nextSession,
-          requirePreferred: true,
-        },
-        event,
-      );
-      if (!selectedBackend) {
-        return;
-      }
-      const backendChanged =
-        selectedBackend.kind !==
-        (nextSession.backend ?? navigation.launchpadDefaults.backend);
-      const updatedAt = this.now();
-      const normalizedSession = normalizeNewThreadSessionForBackend(
-        backendChanged
-          ? clearNewThreadProviderPreferences(
-              {
-                ...nextSession,
-                backend: selectedBackend.kind,
-              },
-              updatedAt,
-            )
-          : {
-              ...nextSession,
-              backend: selectedBackend.kind,
-            },
-        selectedBackend,
-        updatedAt,
-        navigation,
-      );
-      await this.updateNewThreadStickySettings(normalizedSession, {
-        backend: selectedBackend.kind,
-      });
-      await this.presentNewThreadPromptGate(
-        normalizedSession,
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:model" || actionId.startsWith("browse:new:model:")) {
-      await this.presentNewThreadModelPicker(
-        nextSession,
-        event,
-        nextSession.backend ?? navigation.launchpadDefaults.backend,
-      );
-      return;
-    }
-    if (actionId === "browse:new:set-model") {
-      const model = readStringValue(event.value, "model");
-      if (!model) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      const backend = nextSession.backend ?? navigation.launchpadDefaults.backend;
-      const summary = await this.getBackendSummary(backend);
-      const models = summary?.launchpadOptions?.models ?? [];
-      const modelOption = models.find((candidate) => candidate.id === model);
-      if (summary && !modelOption) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      const directory = nextSession.selectedProject
-        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
-        : undefined;
-      const launchpadSettings = applyNavigationLaunchpadProviderSettingsPatch(
-        directory?.launchpad ?? navigation.launchpadDefaults,
-        { backend, model },
-      );
-      const reasoningEffort = summary
-        ? normalizeReasoningEffortForModel(summary, modelOption, [
-            launchpadSettings.reasoningEffort,
-            nextSession.preferences?.reasoningEffort,
-          ])
-        : nextSession.preferences?.reasoningEffort;
-      const preferences = {
-        ...nextSession.preferences,
-        model,
-        updatedAt: this.now(),
-      };
-      if (summary && reasoningEffort === undefined) {
-        delete preferences.reasoningEffort;
-      } else if (reasoningEffort !== undefined) {
-        preferences.reasoningEffort = reasoningEffort;
-      }
-      await this.updateNewThreadStickySettings(nextSession, { model });
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          preferences,
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:new:reasoning") {
-      await this.presentNewThreadReasoningPicker(
-        nextSession,
-        event,
-        nextSession.backend ?? navigation.launchpadDefaults.backend,
-      );
-      return;
-    }
-    if (actionId === "browse:new:set-reasoning") {
-      const reasoningEffort = readStringValue(event.value, "reasoningEffort");
-      if (!reasoningEffort) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      await this.updateNewThreadStickySettings(nextSession, {
-        reasoningEffort,
-      });
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          preferences: {
-            ...nextSession.preferences,
-            reasoningEffort,
-            updatedAt: this.now(),
-          },
-        },
-        event,
-        navigation,
-      );
-      return;
-    }
-    if (actionId === "browse:select-thread") {
-      const target = selectThreadFromValue(event.value);
-      if (!target) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      if (session.launchAction === "assign_default_agent" && target.federatedThread?.target.scope === "remote") {
-        await this.deliverDefaultAgentCommandError(event,
-          "Select an Agent owned by this instance for this default route.");
-        return;
-      }
-      if (!await this.requireRemoteScope(event, target.federatedThread?.target, "resume:select:remote-instance")) return;
-      const targetThread = await this.readExactNavigationThread({ ref: { backend: target.backend, threadId: target.threadId,
-        ...(target.federatedThread?.target.scope === "remote" ? { ownerInstanceId: target.federatedThread.target.instanceId } : {}) },
-        federationTarget: target.federatedThread?.target });
-      if (session.mode === "agents" && !targetThread?.agent) {
-        await this.deliverInvalidBrowseSelection(event);
-        return;
-      }
-      if (session.launchAction === "assign_default_agent") {
-        const backendSummaries = await this.loadDefaultAgentBackendSummaries();
-        if (
-          !session.defaultAgentScope
-          || !targetThread?.agent
-          || defaultAgentBackendSupport(target.backend, backendSummaries)
-            !== "supported"
-        ) {
-          await this.deliverDefaultAgentCommandError(
-            event,
-            "That thread is not an eligible default Agent. Choose a Codex Agent or an ACP Agent with PwrAgent HTTP MCP tools.",
-          );
-          return;
-        }
-        const assignment: MessagingDefaultAgentAssignmentRecord = {
-          id: this.newIntentId("default-agent-assignment"),
-          scope: session.defaultAgentScope,
-          target: {
-            kind: "agent",
-            backend: target.backend,
-            threadId: target.threadId,
-          },
-          createdAt: this.now(),
-          updatedAt: this.now(),
-        };
-        await this.options.store.upsertDefaultAgentAssignment(assignment);
-        this.notifyBindingChanged("default-agent-assigned");
-        await this.options.store.deleteBrowseSession(session.id);
-        await this.presentDefaultAgentStatus(event, {
-          notice:
-            `${targetThread.title || target.threadId} is now the `
-            + `${formatDefaultAgentScope(assignment.scope)} default.`,
-        });
-        return;
-      }
-      if (
-        targetThread?.executionMode === "full-access" &&
-        !(await this.canResumeFullAccessThreads())
-      ) {
-        await this.deliverFullAccessPolicyError(
-          undefined,
-          event,
-          "Full Access threads cannot be resumed from messaging with the current settings.",
-        );
-        return;
-      }
-      // Scope: the picker hides remote threads from actors without the scope,
-      // but a browse session outlives its render (it is persisted with a TTL),
-      // so the selection is gated too rather than trusting the filter.
-      if (
-        !(await this.requireRemoteScope(
-          event,
-          target.federatedThread?.target,
-          "resume:select:remote-instance",
-        ))
-      ) {
-        return;
-      }
-      const requestedExecutionMode = session.preferences?.executionMode;
-      const shouldEscalateTarget =
-        requestedExecutionMode === "full-access" &&
-        targetThread?.executionMode !== "full-access";
-      if (shouldEscalateTarget) {
-        const allowed = await this.ensureFullAccessEscalationAllowed(
-          {
-            backend: target.backend,
-            federatedThread: target.federatedThread,
-            kind: "resume-thread",
-            session,
-            threadId: target.threadId,
-          },
-          event,
-        );
-        if (!allowed) {
-          return;
-        }
-      }
-      const binding = await this.bindChannelToThread(event, {
-        ...target,
-        targetKind: session.mode === "agents" ? "agent_thread" : "thread",
-      });
-      const updatedBinding = session.preferences
-        ? await this.updateBindingPreferences(binding, session.preferences)
-        : binding;
-      if (shouldEscalateTarget) {
-        await this.options.backend.setThreadExecutionMode?.({
-          backend: target.backend,
-          federationTarget: target.federatedThread?.target,
-          threadId: target.threadId,
-          executionMode: "full-access",
-        });
-      }
-      await this.options.store.deleteBrowseSession(session.id);
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("bound"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          delivery: session.surface
-            ? {
-                mode: "update",
-                replaceMarkup: true,
-              }
-            : undefined,
-          title: "Thread bound",
-          body: boundThreadConfirmationBody(
-            updatedBinding,
-            this.capabilityProfile,
-          ),
-          fallbackText: boundThreadFallbackText(
-            updatedBinding,
-            this.capabilityProfile,
-          ),
-          targetSurface: session.surface,
-        }),
-        undefined,
-        event,
-      );
-      await this.renderBindingStatus(updatedBinding, event);
-      await this.repostLastAssistantMessageForResume(updatedBinding);
-      return;
-    }
-
-    await this.deliverInvalidBrowseSelection(event);
-  }
-
-  private async findBrowseSessionForCallback(
-    event: MessagingInboundCallbackEvent,
-  ): Promise<MessagingBrowseSessionRecord | undefined> {
-    const callbackHandle = await this.resolveCallbackHandleForEvent(event);
-    if (callbackHandle?.browseSessionId) {
-      return await this.options.store.getBrowseSession(callbackHandle.browseSessionId, {
-        now: this.now(),
-      });
-    }
-    if (callbackHandle) {
-      return undefined;
-    }
-
-    return await this.options.store.findActiveBrowseSessionForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
-  }
-
   private async retireBrowseSession(
     session: MessagingBrowseSessionRecord,
   ): Promise<void> {
@@ -8995,17 +7607,6 @@ export class MessagingController {
     const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
       project: session.selectedProject, ensureBackend: preferredBackend ?? session.backend });
     return { directory: navigation.directory, navigation };
-  }
-
-  private async resolveCallbackHandleForEvent(
-    event: MessagingInboundCallbackEvent,
-  ): Promise<MessagingCallbackHandleRecord | undefined> {
-    return await this.options.store.resolveCallbackHandle({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      handle: event.interaction.id,
-      now: this.now(),
-    });
   }
 
   private async renderResumeBrowser(
@@ -10689,22 +9290,6 @@ export class MessagingController {
     await this.recreateBindingStatus(binding, event);
   }
 
-  private async handleMonitorCallback(
-    event: MessagingInboundCallbackEvent,
-    actionId: string,
-  ): Promise<void> {
-    if (actionId === "monitor:topics" || actionId.startsWith("monitor:topics:")) {
-      await this.handleMonitorTopicCallback(event, actionId);
-      return;
-    }
-    if (actionId === "monitor:stop") {
-      await this.stopMonitoringForChannel(event);
-      return;
-    }
-
-    await this.enableAndRenderChannelMonitor(event, normalizeMonitorCallbackAction(actionId));
-  }
-
   private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
     return channel.channel === "telegram" &&
       (channel.conversation.kind === "topic" || channel.conversation.kind === "channel");
@@ -10811,130 +9396,6 @@ export class MessagingController {
       rawText: `/monitor ${args.join(" ")}`,
       routingState: topic.routingState ?? event.routingState,
     };
-  }
-
-  private async handleMonitorTopicCallback(
-    event: MessagingInboundCallbackEvent,
-    actionId: string,
-  ): Promise<void> {
-    if (actionId === "monitor:topics:cleanup") {
-      await this.commandHandlers.handleMonitorTopicCommand(
-        {
-          ...event,
-          kind: "command",
-          command: "monitor",
-          args: ["topics", "cleanup"],
-          rawText: "/monitor topics cleanup",
-        },
-        { kind: "topics-cleanup" },
-      );
-      return;
-    }
-    if (actionId === "monitor:topics:fanout") {
-      await this.commandHandlers.handleMonitorTopicCommand(
-        {
-          ...event,
-          kind: "command",
-          command: "monitor",
-          args: ["topics", "fanout"],
-          rawText: "/monitor topics fanout",
-        },
-        { kind: "topics-fanout" },
-      );
-      return;
-    }
-    const approvePrefix = "monitor:topics:approve:";
-    if (!actionId.startsWith(approvePrefix)) {
-      await this.commandHandlers.handleMonitorTopicCommand(
-        {
-          ...event,
-          kind: "command",
-          command: "monitor",
-          args: ["topics"],
-          rawText: "/monitor topics",
-        },
-        { kind: "topics-adopt" },
-      );
-      return;
-    }
-
-    const approvalKey = actionId.slice(approvePrefix.length);
-    const separatorIndex = approvalKey.lastIndexOf(":");
-    const proposalId = separatorIndex > 0 ? approvalKey.slice(0, separatorIndex) : "";
-    const itemId = separatorIndex > 0 ? approvalKey.slice(separatorIndex + 1) : "";
-    if (!proposalId || !itemId) {
-      await this.deliverInvalidTopicApproval(event);
-      return;
-    }
-    const proposal = await this.options.store.getTopicCleanupProposal(proposalId);
-    const item = proposal?.items.find((candidate) => candidate.id === itemId);
-    if (!proposal || proposal.status !== "pending" || !item) {
-      await this.deliverInvalidTopicApproval(event);
-      return;
-    }
-
-    const topic = await this.options.store.getManagedTopic(item.topicRecordId);
-    if (!topic) {
-      await this.deliverInvalidTopicApproval(event);
-      return;
-    }
-
-    let result: MessagingManagedConversationActionResult | undefined;
-    if (item.action === "close") {
-      result = await this.adapter.closeManagedConversation?.({
-        actor: event.actor,
-        channel: topicChannelRef(topic),
-        routingState: topic.routingState,
-      });
-    } else if (item.action === "delete") {
-      result = await this.adapter.deleteManagedConversation?.({
-        actor: event.actor,
-        channel: topicChannelRef(topic),
-        routingState: topic.routingState,
-      });
-    }
-    const now = this.now();
-    if (!result || result.outcome !== "updated") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-approval-failed"),
-          createdAt: now,
-          title: "Topic action failed",
-          body: result?.errorMessage ?? "The Telegram adapter could not apply that topic action.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    await this.options.store.upsertManagedTopic({
-      ...topic,
-      closedAt: item.action === "close" ? now : topic.closedAt,
-      deletedAt: item.action === "delete" ? now : topic.deletedAt,
-      lifecycle: item.action === "delete" ? "deleted" : "closed",
-      recommendation: item.action,
-      updatedAt: now,
-    });
-    await this.options.store.upsertTopicCleanupProposal({
-      ...proposal,
-      appliedAt: now,
-      status: "applied",
-      updatedAt: now,
-    });
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-action-applied"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: now,
-        title: "Topic action applied",
-        body: `${item.action === "delete" ? "Deleted" : "Closed"} ${topic.title ?? topic.topicId}.`,
-        actions: [],
-      }),
-      undefined,
-      event,
-    );
   }
 
   private async deliverInvalidTopicApproval(
@@ -11586,267 +10047,6 @@ export class MessagingController {
       monitorSurface: undefined,
       updatedAt: now,
     });
-  }
-
-  private async handleStatusCallback(
-    event: MessagingInboundCallbackEvent,
-    actionId: string,
-  ): Promise<void> {
-    // RBAC top-guard: every status/handoff action maps to a permission through
-    // the shared lookup table, so one check covers every mutation method below
-    // without touching each individually. Unmapped actions (skills sub-nav)
-    // fall through ungated. The full-access double-gate is enforced deeper, at
-    // ensureFullAccessEscalationAllowed / ensureAcpRuntimeModeAllowed.
-    const requiredPermission = permissionForActionId(actionId);
-    if (
-      requiredPermission &&
-      !(await this.requirePermission(event, requiredPermission, actionId))
-    ) {
-      if (
-        actionId === "status:stop"
-        && readStringValue(event.value, "source") === "agent_session_stopped"
-      ) {
-        const binding = await this.options.store.findActiveBindingForChannel(
-          event.channel,
-        );
-        const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
-        if (binding && activeTurn) {
-          await this.signalTurnActivity(binding, activeTurn, {
-            force: true,
-            reason: "agent_session_stop_denied",
-          });
-        }
-      }
-      return;
-    }
-    // Detach is exempt: it removes the LOCAL binding record and never touches
-    // the peer. Gating it would strand an actor whose scope was revoked while
-    // bound to a remote thread — unable to act, and unable to let go either.
-    if (actionId === "status:detach") {
-      await this.detachBinding(event);
-      return;
-    }
-
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    // Scope gate: a binding created while the actor still had remote scope (or
-    // by an operator) must not stay drivable after the scope is revoked.
-    if (
-      !(await this.requireRemoteScopeForBinding(
-        event,
-        binding,
-        `${actionId}:remote-instance`,
-      ))
-    ) {
-      return;
-    }
-    if (!binding) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("status-expired"),
-          createdAt: this.now(),
-          title: "Action expired",
-          body: "That status action is no longer available. Use /status to refresh.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    this.rememberHumanMessagingSource(binding, event);
-
-    if (actionId === "status:refresh" || actionId === "handoff:back-to-status") {
-      if (
-        actionId === "status:refresh" &&
-        await this.dismissActiveSkillsWorkflow(binding, event)
-      ) {
-        return;
-      }
-      // "Back" buttons from handoff sub-flows resolve to a status card
-      // refresh, same as an explicit Refresh tap.
-      await this.clearActiveBindingSubmodeIntent(event, binding);
-      await this.renderBindingStatus(binding, event);
-      return;
-    }
-    if (actionId === "status:skills") {
-      await this.presentSkillsBrowser(binding, event);
-      return;
-    }
-    if (actionId === "skills:next" || actionId === "skills:previous") {
-      const page = skillsBrowserPageFromValue(event.value);
-      await this.presentSkillsBrowser(binding, event, page);
-      return;
-    }
-    if (actionId === "skills:search") {
-      await this.presentSkillsSearchPrompt(binding, event);
-      return;
-    }
-    if (actionId === "skills:cancel" || actionId === "skills:search:cancel") {
-      await this.dismissActiveSkillsWorkflow(binding, event, {
-        allowCallbackFallback: true,
-      });
-      return;
-    }
-    if (actionId === "skills:select") {
-      await this.selectPendingSkill(binding, event);
-      return;
-    }
-    if (actionId === "skills:remove") {
-      await this.removePendingSkill(binding, event);
-      return;
-    }
-    if (actionId === "status:handoff") {
-      await this.presentHandoffOverview(binding, event);
-      return;
-    }
-    if (actionId === "handoff:projects") {
-      await this.presentHandoffProjectPicker(binding, event);
-      return;
-    }
-    if (actionId === "handoff:select-project") {
-      await this.presentHandoffConfirmation(binding, event);
-      return;
-    }
-    if (actionId === "handoff:cancel") {
-      await this.clearActiveHandoffIntent(event);
-      await this.renderBindingStatus(binding, event);
-      return;
-    }
-    if (actionId === "handoff:move-branch" || actionId === "handoff:local-to-worktree") {
-      await this.presentHandoffBranchPicker(binding, event);
-      return;
-    }
-    if (actionId === "handoff:create-detached") {
-      await this.presentHandoffConfirmation(binding, event);
-      return;
-    }
-    if (
-      actionId === "handoff:branches:next" ||
-      actionId === "handoff:branches:previous"
-    ) {
-      await this.presentHandoffBranchPicker(
-        binding,
-        event,
-        branchPageIndexFromValue(event.value),
-      );
-      return;
-    }
-    if (actionId === "handoff:worktree-to-local" || actionId === "handoff:worktree-to-worktree") {
-      await this.presentHandoffConfirmation(binding, event);
-      return;
-    }
-    if (actionId === "handoff:select-leave-branch") {
-      await this.presentHandoffConfirmation(binding, event);
-      return;
-    }
-    if (actionId === "handoff:confirm") {
-      await this.executeHandoff(binding, event);
-      return;
-    }
-    if (actionId === "status:model" || actionId.startsWith("status:model:")) {
-      await this.presentModelPicker(binding, event);
-      return;
-    }
-    if (actionId === "status:reasoning") {
-      await this.presentReasoningPicker(binding, event);
-      return;
-    }
-    if (actionId === "status:runtime-mode") {
-      await this.presentStatusAcpRuntimeModePicker(binding, event);
-      return;
-    }
-    if (actionId === "status:set-model") {
-      await this.setBindingModel(binding, event);
-      return;
-    }
-    if (actionId === "status:set-reasoning") {
-      await this.setBindingReasoning(binding, event);
-      return;
-    }
-    if (actionId === "status:set-runtime-mode") {
-      await this.setBindingAcpRuntimeMode(binding, event);
-      return;
-    }
-    if (actionId === "status:set-permissions") {
-      await this.setBindingPermissionsMode(binding, event);
-      return;
-    }
-    if (actionId === "status:set-tool-updates") {
-      await this.setToolUpdateMode(binding, event);
-      return;
-    }
-    if (actionId === "status:set-response-mode") {
-      await this.setBindingResponseMode(binding, event);
-      return;
-    }
-    if (actionId === "status:fast") {
-      await this.toggleFastMode(binding, event);
-      return;
-    }
-    if (actionId === "status:permissions") {
-      if (isAcpBackendId(binding.backend)) {
-        const summary = await this.getBackendSummary(
-          binding.backend,
-          federationTargetForBinding(binding),
-        );
-        const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
-        const thread = findThreadForBinding(navigation, binding);
-        const runtimeMode = buildMessagingAcpRuntimeModeSummary({
-          backend: summary,
-          runtime: thread?.acpRuntime ?? binding.preferences?.acpRuntime,
-        });
-        if (
-          !acpBackendUsesExecutionModePermissions(summary)
-          && runtimeMode.choices.length > 0
-        ) {
-          await this.presentStatusAcpRuntimeModePicker(binding, event);
-        } else {
-          await this.presentPermissionsPicker(binding, event);
-        }
-      } else {
-        await this.presentPermissionsPicker(binding, event);
-      }
-      return;
-    }
-    if (actionId === "status:tool-updates") {
-      await this.presentToolUpdateModePicker(binding, event);
-      return;
-    }
-    if (actionId === "status:response-mode") {
-      await this.presentResponseModePicker(binding, event);
-      return;
-    }
-    if (actionId === "status:streaming") {
-      await this.cycleStreamingResponseMode(binding, event);
-      return;
-    }
-    if (actionId === "status:stop") {
-      await this.stopActiveTurn(binding, event);
-      return;
-    }
-    if (actionId === "status:compact") {
-      await this.compactThread(binding, event);
-      return;
-    }
-    if (actionId === "status:lock") {
-      await this.toggleThreadLock(binding, event);
-      return;
-    }
-    if (actionId === "status:sync-name") {
-      await this.syncConversationName(binding, event);
-      return;
-    }
-
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("status-action-pending"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Status action unavailable",
-        body: "Use /status to refresh. This control will be wired to backend actions in the next implementation slice.",
-      }),
-      binding,
-    );
   }
 
   private async presentSkillsBrowser(
@@ -13388,349 +11588,6 @@ export class MessagingController {
     }
   }
 
-  private async handleFullAccessRiskCallback(
-    event: MessagingInboundCallbackEvent,
-    action: "accept" | "dismiss" | "cancel",
-  ): Promise<void> {
-    const context = readFullAccessRiskContext(event.value);
-    if (!context) {
-      await this.deliverInvalidStatusSelection(event);
-      return;
-    }
-    if (action === "cancel") {
-      if (context.kind === "new-thread" || context.kind === "resume-thread") {
-        const session = await this.options.store.getBrowseSession(context.sessionId, {
-          now: this.now(),
-        });
-        if (!session) {
-          await this.deliverStaleFullAccessWarning(event);
-          return;
-        }
-        if (context.kind === "new-thread") {
-          this.pendingFullAccessNewThreadPrompts.delete(session.id);
-        }
-        const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
-        if (context.kind === "new-thread") {
-          await this.presentNewThreadPromptGate(
-            this.withNewThreadPromptCaptureExpiry(session),
-            event,
-            navigation,
-          );
-        } else {
-          await this.renderResumeBrowser(session, navigation, event);
-        }
-        return;
-      }
-      const binding = await this.options.store.getBinding(context.bindingId);
-      if (!binding) {
-        await this.deliverInvalidStatusSelection(event);
-        return;
-      }
-      if (binding.statusSurface || binding.pinnedStatusSurface) {
-        await this.clearActiveBindingSubmodeIntent(event, binding);
-        await this.renderBindingStatus(binding, event);
-        return;
-      }
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("full-access-risk-cancelled"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Full Access cancelled",
-          body: "No Full Access change was made.",
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    const escalationContext =
-      await this.resolveFullAccessRiskCallbackContext(context, event);
-    if (!escalationContext) {
-      return;
-    }
-    if (!(await this.ensureFullAccessRiskCallbackAllowed(escalationContext, event))) {
-      return;
-    }
-
-    if (action === "dismiss") {
-      const controls = await this.resolveFullAccessControls();
-      const warning = await this.resolveFullAccessWarning(controls, event);
-      if (warning.canDismiss) {
-        await controls.dismissWarning?.({
-          actorId: event.actor.platformUserId,
-          channel: event.channel.channel,
-        });
-      }
-    }
-
-    if (escalationContext.kind === "new-thread") {
-      const { session } = escalationContext;
-      const acceptedSession = {
-        ...session,
-        fullAccessRiskAcceptedAt: this.now(),
-        preferences: {
-          ...session.preferences,
-          executionMode: "full-access" as const,
-          permissionsMode: "full-access" as const,
-          updatedAt: this.now(),
-        },
-      };
-      const pendingPrompt = this.pendingFullAccessNewThreadPrompts.get(session.id);
-      if (escalationContext.pendingPrompt && !pendingPrompt) {
-        await this.deliverMissingFullAccessPrompt(event);
-        return;
-      }
-      if (pendingPrompt) {
-        try {
-          await this.createNewThreadFromPromptBundle({
-            events: pendingPrompt.events,
-            session: acceptedSession,
-          });
-        } catch (error) {
-          this.logger.warn?.("messaging new-thread prompt failed", {
-            channel: pendingPrompt.session.channel.channel,
-            error: error instanceof Error ? error.message : String(error),
-            sessionId: pendingPrompt.session.id,
-          });
-          await this.deliverNewThreadPromptFailure(
-            {
-              events: pendingPrompt.events,
-              session: acceptedSession,
-            },
-            error,
-          );
-        }
-        return;
-      }
-      await this.presentNewThreadPromptGate(acceptedSession, event);
-      return;
-    }
-
-    if (escalationContext.kind === "resume-thread") {
-      const { session } = escalationContext;
-      const target = {
-        backend: escalationContext.backend,
-        federatedThread: escalationContext.federatedThread,
-        threadId: escalationContext.threadId,
-      };
-      const binding = await this.bindChannelToThread(event, target);
-      const preferences = {
-        ...session.preferences,
-        executionMode: "full-access" as const,
-        permissionsMode: "full-access" as const,
-        updatedAt: this.now(),
-      };
-      const updatedBinding = await this.updateBindingPreferences(binding, preferences);
-      await this.options.backend.setThreadExecutionMode?.({
-        backend: escalationContext.backend,
-        federationTarget: escalationContext.federatedThread?.target,
-        threadId: escalationContext.threadId,
-        executionMode: "full-access",
-      });
-      await this.options.store.deleteBrowseSession(session.id);
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("bound"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          delivery: session.surface
-            ? {
-                mode: "update",
-                replaceMarkup: true,
-              }
-            : undefined,
-          title: "Thread bound",
-          body: "Messages in this conversation will route to the selected thread.",
-          fallbackText: "Send a message to continue the thread.",
-          targetSurface: session.surface,
-        }),
-        undefined,
-        event,
-      );
-      await this.renderBindingStatus(updatedBinding, event);
-      await this.repostLastAssistantMessageForResume(updatedBinding);
-      return;
-    }
-
-    const { binding } = escalationContext;
-    if (!binding) {
-      await this.deliverInvalidStatusSelection(event);
-      return;
-    }
-    await this.updateBindingPreferences(binding, {
-      executionMode: "full-access",
-      permissionsMode: "full-access",
-    });
-    await this.clearActiveBindingSubmodeIntent(event, binding);
-    await this.options.backend.setThreadExecutionMode?.({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: escalationContext.threadId,
-      executionMode: "full-access",
-    });
-  }
-
-  private async handleAcpRuntimeRiskCallback(
-    event: MessagingInboundCallbackEvent,
-    action: "accept" | "dismiss" | "cancel",
-  ): Promise<void> {
-    const context = readAcpRuntimeRiskContext(event.value);
-    if (!context) {
-      await this.deliverInvalidStatusSelection(event);
-      return;
-    }
-
-    if (action === "cancel") {
-      if (context.kind === "new-thread") {
-        const session = await this.options.store.getBrowseSession(context.sessionId, {
-          now: this.now(),
-        });
-        if (!session) {
-          await this.deliverStaleFullAccessWarning(event);
-          return;
-        }
-        const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
-        await this.presentNewThreadPromptGate(session, event, navigation);
-        return;
-      }
-      const binding = await this.options.store.getBinding(context.bindingId);
-      if (!binding) {
-        await this.deliverInvalidStatusSelection(event);
-        return;
-      }
-      await this.renderBindingStatus(binding, event);
-      return;
-    }
-
-    if (!(await this.ensureAcpRuntimeRiskCallbackAllowed(context, event))) {
-      return;
-    }
-    if (action === "dismiss") {
-      const controls = await this.resolveFullAccessControls();
-      const warning = await this.resolveFullAccessWarning(controls, event);
-      if (warning.canDismiss) {
-        await controls.dismissWarning?.({
-          actorId: event.actor.platformUserId,
-          channel: event.channel.channel,
-        });
-      }
-    }
-
-    if (context.kind === "new-thread") {
-      const session = await this.options.store.getBrowseSession(context.sessionId, {
-        now: this.now(),
-      });
-      if (!session) {
-        await this.deliverStaleFullAccessWarning(event);
-        return;
-      }
-      const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
-      await this.applyNewThreadAcpRuntimeMode(session, event, navigation, context);
-      return;
-    }
-
-    const binding = await this.options.store.getBinding(context.bindingId);
-    if (!binding) {
-      await this.deliverInvalidStatusSelection(event);
-      return;
-    }
-    await this.applyBindingAcpRuntimeMode(binding, event, context);
-  }
-
-  private async ensureAcpRuntimeRiskCallbackAllowed(
-    context: AcpRuntimeRiskWarningContext,
-    event: MessagingInboundEvent,
-  ): Promise<boolean> {
-    const controls = await this.resolveFullAccessControls();
-    if (controls.allowEscalation) {
-      return true;
-    }
-    await this.deliverFullAccessPolicyError(
-      context.kind === "thread"
-        ? await this.options.store.getBinding(context.bindingId)
-        : undefined,
-      event,
-        `Permissions mode ${context.label} is disabled from messaging by Full Access settings.`,
-    );
-    return false;
-  }
-
-  private async resolveFullAccessRiskCallbackContext(
-    context: FullAccessRiskWarningContext,
-    event: MessagingInboundEvent,
-  ): Promise<FullAccessEscalationContext | undefined> {
-    if (context.kind === "new-thread") {
-      const session = await this.options.store.getBrowseSession(context.sessionId, {
-        now: this.now(),
-      });
-      if (!session) {
-        await this.deliverStaleFullAccessWarning(event);
-        return undefined;
-      }
-      return {
-        kind: "new-thread",
-        pendingPrompt: context.pendingPrompt,
-        session,
-      };
-    }
-
-    if (context.kind === "resume-thread") {
-      const session = await this.options.store.getBrowseSession(context.sessionId, {
-        now: this.now(),
-      });
-      if (!session) {
-        await this.deliverStaleFullAccessWarning(event);
-        return undefined;
-      }
-      return {
-        backend: context.backend,
-        ...(context.federationInstanceId
-          ? {
-              federatedThread: buildFederatedThreadRef({
-                backend: context.backend,
-                instanceId: context.federationInstanceId,
-                threadId: context.threadId,
-              }),
-            }
-          : {}),
-        kind: "resume-thread",
-        session,
-        threadId: context.threadId,
-      };
-    }
-
-    const binding = await this.options.store.getBinding(context.bindingId);
-    if (!binding) {
-      await this.deliverInvalidStatusSelection(event);
-      return undefined;
-    }
-    return {
-      backend: binding.backend,
-      binding,
-      kind: "thread",
-      threadId: context.threadId,
-    };
-  }
-
-  private async ensureFullAccessRiskCallbackAllowed(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-  ): Promise<boolean> {
-    const controls = await this.resolveFullAccessControls();
-    if (!controls.allowEscalation) {
-      await this.recordFullAccessPolicyViolation(context, event);
-      await this.deliverFullAccessPolicyError(
-        context.kind === "thread" ? context.binding : undefined,
-        event,
-        "Escalating to Full Access from messaging is disabled in Settings.",
-      );
-      return false;
-    }
-    return true;
-  }
-
   private async canResumeFullAccessThreads(): Promise<boolean> {
     return (await this.resolveFullAccessControls()).allowThreadResume;
   }
@@ -13852,86 +11709,6 @@ export class MessagingController {
       });
     } catch (error) {
       this.logger.debug?.("messaging full-access policy log failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  /**
-   * Handle a tap on the Cancel button of a queued-permissions audit
-   * message. The actionId is `permissions:queue:cancel:${queueId}`; we
-   * validate that the queueId still matches the active tracking entry
-   * before calling the bridge.
-   *
-   * Stale-click feedback (mirroring `handleQueuedTurnCallback`'s
-   * "queued message no longer waiting" pattern): if the queue this
-   * button references has already been applied or cancelled, OR a
-   * different queue has replaced it, we post an explicit "no longer
-   * waiting" reply instead of silently routing through the registry's
-   * idempotent no-op. This is the same UX contract queued reply
-   * messages have used since `2026-05-03-001-fix-messaging-turn-admission-plan.md`.
-   *
-   * The visual button SHOULD have been removed by the
-   * `handleExecutionModeQueueCleared` edit when the queue resolved,
-   * but Telegram/Discord chat history can still show stale buttons
-   * (the user scrolled up; the edit failed; the tab was offline at
-   * the time of the edit; etc.) — we treat the click as the
-   * authoritative "user wants to interact with this queue" signal
-   * and respond with the truth at click time.
-   */
-  private async handlePermissionsQueueCancelCallback(
-    event: MessagingInboundCallbackEvent,
-    queueId: string,
-  ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      return;
-    }
-
-    const queueKey = this.queueAuditKey(binding.backend, binding.threadId);
-    const tracking = this.pendingQueueAuditMessages.get(queueKey);
-    const isStale = !tracking || tracking.queueId !== queueId;
-    if (isStale) {
-      try {
-        await this.deliver(
-          buildErrorIntent({
-            id: this.newIntentId("expired-permissions-queue"),
-            createdAt: this.now(),
-            title: "Permissions change unavailable",
-            body: "That queued permissions change is no longer waiting.",
-            recoverable: true,
-          }),
-          binding,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.(
-          "messaging permissions-queue stale-cancel notice failed",
-          {
-            bindingId: binding.id,
-            threadId: binding.threadId,
-            queueId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-      }
-      return;
-    }
-
-    if (!this.options.backend.cancelThreadExecutionModeQueue) {
-      return;
-    }
-    try {
-      await this.options.backend.cancelThreadExecutionModeQueue({
-        backend: binding.backend,
-        federationTarget: federationTargetForBinding(binding),
-        threadId: binding.threadId,
-      });
-    } catch (error) {
-      this.logger.debug?.("messaging permissions-queue cancel failed", {
-        bindingId: binding.id,
-        threadId: binding.threadId,
-        queueId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -15326,35 +13103,6 @@ export class MessagingController {
     }
   }
 
-  private async retireApprovalCallbackIfBackendIdle(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent,
-  ): Promise<boolean> {
-    const persistedBinding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    const origin = this.agentMessagingOriginForPendingIntent(pendingIntent);
-    const binding = persistedBinding ?? origin?.deliveryBinding ?? origin?.binding;
-    const turnId = pendingIntent.intent.requestContext?.turnId;
-    if (!binding || binding.revokedAt || !turnId) {
-      return false;
-    }
-
-    const threadStatus = await this.readBackendThreadStatus(binding);
-    if (threadStatus !== "idle") {
-      return false;
-    }
-
-    await this.reconcileActiveTurnFromBackendStatus(
-      binding,
-      "pending_request.submitted",
-    );
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    await this.retireApprovalIntent(pendingIntent, event, "Resolved");
-    await this.startNextQueuedTurn(binding);
-    return true;
-  }
-
   private async reconcileIdleTurnAndStartNext(
     binding: MessagingBindingRecord,
     reason: string,
@@ -15728,98 +13476,6 @@ export class MessagingController {
       revokedAt: this.now(),
     });
     this.notifyBindingChanged("private-reply-completed");
-  }
-
-  private async handlePrivateReplyCallback(
-    event: MessagingInboundCallbackEvent,
-    action: PrivateReplyAction,
-  ): Promise<void> {
-    if (this.privateReplyClaims.has(action.requestId)) {
-      if (action.kind === "cancel") {
-        await this.deliverPrivateReplyButtonState(
-          event,
-          "This request already has a response or has been closed. Cancellation is no longer available.",
-        );
-      }
-      return;
-    }
-    const binding = (await this.options.store.findActiveBindings()).find((candidate) =>
-      candidate.privateReplyContinuation?.requestId === action.requestId
-    );
-    const continuation = binding?.privateReplyContinuation;
-    if (
-      !binding
-      || !continuation
-      || continuation.expiresAt <= this.now()
-      || !binding.authorizedActorIds.includes(event.actor.platformUserId)
-      || binding.channel.channel !== event.channel.channel
-      || binding.channel.conversation.id !== event.channel.conversation.id
-      || (
-        continuation.requestSurface
-        && event.sourceSurface
-        && continuation.requestSurface.id !== event.sourceSurface.id
-      )
-    ) {
-      await this.deliverPrivateReplyButtonState(event, "This private request is no longer available.");
-      return;
-    }
-
-    if (action.kind === "cancel") {
-      // Binding lookup yielded: a typed reply or another button may have won.
-      const replyClaim = this.privateReplyClaims.claim(action.requestId);
-      if (!replyClaim) {
-        await this.deliverPrivateReplyButtonState(
-          event,
-          "This request already has a response or has been closed. Cancellation is no longer available.",
-        );
-        return;
-      }
-      try {
-        await this.completePrivateReplyContinuation(binding.id);
-        this.privateReplyClaims.complete(replyClaim);
-      } catch (error) {
-        this.privateReplyClaims.release(replyClaim);
-        throw error;
-      }
-      await this.deliverPrivateReplyButtonState(
-        event,
-        "Private request cancelled. The Agent will not resume from this request.",
-      );
-      return;
-    }
-
-    const option = continuation.replyOptions?.[action.optionIndex];
-    if (!option) {
-      await this.deliverPrivateReplyButtonState(event, "This private reply option is no longer available.");
-      return;
-    }
-    if (
-      !(await this.requirePermission(event, "message.reply", "private-reply:button", { notify: false }))
-      || !(await this.requireRemoteScopeForBinding(
-        event,
-        binding,
-        "private-reply:button:remote-instance",
-        { notify: false },
-      ))
-    ) {
-      return;
-    }
-
-    const responseEvent: MessagingInboundTextEvent = {
-      ...event,
-      id: `${event.id}:private-reply:${action.optionIndex}`,
-      kind: "text",
-      channel: binding.channel,
-      routingState: binding.routingState,
-      receivedAt: this.now(),
-      text: option.text,
-    };
-    // Admission rechecks and acquires the claim after asynchronous validation.
-    if (!(await this.admitTurnInput({ binding, event: responseEvent }))) return;
-    await this.deliverPrivateReplyButtonState(
-      event,
-      "Response received. The Agent will continue in the original conversation.",
-    );
   }
 
   private async deliverPrivateReplyButtonState(
@@ -19768,12 +17424,6 @@ function originalAttachmentActorKey(event: MessagingInboundEvent): string {
   );
 }
 
-function readCommandAction(event: MessagingInboundCallbackEvent): string | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
-  return match?.[1]?.toLowerCase();
-}
-
 /**
  * Format a wall-clock timestamp as `HH:MM AM/PM` for messaging audit
  * messages. Mirrors the format the user sees in the desktop transcript.
@@ -19786,74 +17436,6 @@ function formatTimeOfDay(epochMs: number): string {
   const displayHours = hours % 12 === 0 ? 12 : hours % 12;
   const paddedMinutes = minutes < 10 ? `0${minutes}` : String(minutes);
   return `${displayHours}:${paddedMinutes} ${period}`;
-}
-
-function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  return actionId.startsWith("browse:") ? actionId : undefined;
-}
-
-function readHelpNavAction(event: MessagingInboundCallbackEvent): string | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  if (
-    actionId === "help:page:next"
-    || actionId === "help:page:prev"
-    || actionId === "help:cancel"
-  ) {
-    return actionId;
-  }
-  return undefined;
-}
-
-/**
- * Read the target page index from a help-nav callback's value
- * payload. Returns 0 (first page) when the value is missing or
- * malformed — clamping in `paginateHelpCatalog` will pin to the
- * first/last page anyway, so an absent value never crashes the
- * re-render.
- */
-function readHelpPageIndex(event: MessagingInboundCallbackEvent): number {
-  const value = event.value;
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const candidate = (value as Record<string, unknown>).pageIndex;
-    if (typeof candidate === "number" && Number.isInteger(candidate) && candidate >= 0) {
-      return candidate;
-    }
-  }
-  return 0;
-}
-
-function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  return actionId.startsWith("status:")
-    || actionId.startsWith("handoff:")
-    || actionId.startsWith("skills:")
-    ? actionId
-    : undefined;
-}
-
-function readMonitorAction(event: MessagingInboundCallbackEvent): string | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  return actionId.startsWith("monitor:") ? actionId : undefined;
-}
-
-function normalizeMonitorCallbackAction(actionId: string): MonitorCommandAction {
-  if (actionId === "monitor:interval") {
-    return { kind: "cycle-interval" };
-  }
-  if (actionId === "monitor:pins") {
-    return { kind: "cycle-pinned" };
-  }
-  if (actionId === "monitor:recent") {
-    return { kind: "cycle-recent" };
-  }
-  if (actionId === "monitor:status") {
-    return { kind: "toggle-status-line" };
-  }
-  if (actionId === "monitor:snippet") {
-    return { kind: "toggle-snippet" };
-  }
-  return { kind: "refresh" };
 }
 
 function resolveMonitorStateOptions(
@@ -20005,13 +17587,6 @@ function managedTopicRecordFromConversation(params: {
   };
 }
 
-function topicChannelRef(topic: MessagingManagedTopicRecord): MessagingChannelRef {
-  return {
-    channel: topic.channel,
-    conversation: topic.conversation,
-  };
-}
-
 function topicTitleForThread(thread: NavigationThreadSummary): string {
   const trimmed = thread.title.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 120) : `${thread.source} thread`;
@@ -20059,153 +17634,6 @@ function formatTopicCleanupProposalBody(
   ].join("\n");
 }
 
-/**
- * Match the cancel button on a "Permissions queued" audit message. The
- * action id is `permissions:queue:cancel:${queueId}`; the queueId is
- * encoded so multiple queue posts in the same conversation can't
- * collide. Returns the parsed queueId on match, undefined otherwise.
- *
- * The queueId is what the controller-side tracking map keys against,
- * so the cancel handler can detect stale clicks (the apply has
- * already happened, or a different queue has replaced this one) and
- * respond with explicit feedback rather than silently no-op'ing
- * through the registry's `cancelThreadExecutionModeQueue` call.
- */
-function readPermissionsQueueCancelAction(
-  event: MessagingInboundCallbackEvent,
-): { queueId: string } | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  if (!actionId.startsWith(PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX)) {
-    return undefined;
-  }
-  const queueId = actionId.slice(PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX.length);
-  if (!queueId) {
-    return undefined;
-  }
-  return { queueId };
-}
-
-function readFullAccessRiskAction(
-  event: MessagingInboundCallbackEvent,
-): "accept" | "dismiss" | "cancel" | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  if (!actionId.startsWith(FULL_ACCESS_RISK_ACTION_PREFIX)) {
-    return undefined;
-  }
-  const action = actionId.slice(FULL_ACCESS_RISK_ACTION_PREFIX.length);
-  return action === "accept" || action === "dismiss" || action === "cancel"
-    ? action
-    : undefined;
-}
-
-function readAcpRuntimeRiskAction(
-  event: MessagingInboundCallbackEvent,
-): "accept" | "dismiss" | "cancel" | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  if (!actionId.startsWith(ACP_RUNTIME_RISK_ACTION_PREFIX)) {
-    return undefined;
-  }
-  const action = actionId.slice(ACP_RUNTIME_RISK_ACTION_PREFIX.length);
-  return action === "accept" || action === "dismiss" || action === "cancel"
-    ? action
-    : undefined;
-}
-
-function readAcpRuntimeRiskContext(
-  value: MessagingJsonValue | undefined,
-): AcpRuntimeRiskWarningContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const source =
-    value.source === "mode" ||
-    value.source === "configOption" ||
-    value.source === "model"
-      ? value.source
-      : undefined;
-  if (
-    value.kind === "new-thread" &&
-    typeof value.sessionId === "string" &&
-    typeof value.optionId === "string" &&
-    typeof value.value === "string" &&
-    typeof value.label === "string" &&
-    source
-  ) {
-    return {
-      kind: "new-thread",
-      label: value.label,
-      optionId: value.optionId,
-      sessionId: value.sessionId,
-      source,
-      value: value.value,
-    };
-  }
-  if (
-    value.kind === "thread" &&
-    typeof value.bindingId === "string" &&
-    typeof value.threadId === "string" &&
-    typeof value.optionId === "string" &&
-    typeof value.value === "string" &&
-    typeof value.label === "string" &&
-    source
-  ) {
-    return {
-      bindingId: value.bindingId,
-      kind: "thread",
-      label: value.label,
-      optionId: value.optionId,
-      source,
-      threadId: value.threadId,
-      value: value.value,
-    };
-  }
-  return undefined;
-}
-
-function readFullAccessRiskContext(
-  value: MessagingJsonValue | undefined,
-): FullAccessRiskWarningContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  if (value.kind === "new-thread" && typeof value.sessionId === "string") {
-    return {
-      kind: "new-thread",
-      ...(value.pendingPrompt === true ? { pendingPrompt: true } : {}),
-      sessionId: value.sessionId,
-    };
-  }
-  if (
-    value.kind === "resume-thread" &&
-    typeof value.backend === "string" &&
-    isAppServerBackendKind(value.backend) &&
-    typeof value.sessionId === "string" &&
-    typeof value.threadId === "string"
-  ) {
-    return {
-      backend: value.backend,
-      ...(typeof value.federationInstanceId === "string"
-        ? { federationInstanceId: value.federationInstanceId }
-        : {}),
-      kind: "resume-thread",
-      sessionId: value.sessionId,
-      threadId: value.threadId,
-    };
-  }
-  if (
-    value.kind === "thread" &&
-    typeof value.bindingId === "string" &&
-    typeof value.threadId === "string"
-  ) {
-    return {
-      bindingId: value.bindingId,
-      kind: "thread",
-      threadId: value.threadId,
-    };
-  }
-  return undefined;
-}
-
 function fullAccessRiskPresentationForContext(
   context: FullAccessEscalationContext,
   presentationMode: FullAccessRiskPresentationMode,
@@ -20220,55 +17648,6 @@ function fullAccessRiskPresentationForContext(
     };
   }
   return { surface: context.session.surface };
-}
-
-function readQueuedTurnAction(
-  event: MessagingInboundCallbackEvent,
-): QueuedTurnAction | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  const steerPrefix = "queued-turn:steer:";
-  if (actionId.startsWith(steerPrefix)) {
-    return {
-      kind: "steer",
-      entryId: actionId.slice(steerPrefix.length),
-    };
-  }
-
-  const retryPrefix = "queued-turn:retry:";
-  if (actionId.startsWith(retryPrefix)) {
-    return { kind: "retry", entryId: actionId.slice(retryPrefix.length) };
-  }
-
-  const cancelPrefix = "queued-turn:cancel:";
-  if (actionId.startsWith(cancelPrefix)) {
-    return {
-      kind: "cancel",
-      entryId: actionId.slice(cancelPrefix.length),
-    };
-  }
-
-  return undefined;
-}
-
-function readPrivateReplyAction(
-  event: MessagingInboundCallbackEvent,
-): PrivateReplyAction | undefined {
-  const actionId = event.actionId ?? event.interaction.id;
-  const parts = actionId.split(":");
-  if (parts[0] !== "private-reply" || !parts[1] || parts.length < 3) {
-    return undefined;
-  }
-  if (parts[2] === "cancel" && parts.length === 3) {
-    return { kind: "cancel", requestId: parts[1] };
-  }
-  if (parts[2] === "reply" && parts.length === 4 && /^[0-2]$/.test(parts[3] ?? "")) {
-    return {
-      kind: "reply",
-      optionIndex: Number(parts[3]),
-      requestId: parts[1],
-    };
-  }
-  return undefined;
 }
 
 function handoffContextForBinding(
@@ -20334,26 +17713,6 @@ function handoffContextForBinding(
     workingDirectoryPath: sourcePath,
     workspaceKind: "local",
   };
-}
-
-function branchPageIndexFromValue(value: MessagingJsonValue | undefined): number {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return 0;
-  }
-  const pageIndex = value.pageIndex;
-  return typeof pageIndex === "number" && Number.isFinite(pageIndex)
-    ? Math.max(0, Math.trunc(pageIndex))
-    : 0;
-}
-
-function directoryForProjectSelection(
-  navigation: MessagingNewThreadNavigation,
-  selectedProject: Parameters<typeof legacyDirectoryForProjectSelection>[1],
-): MessagingLaunchpadDirectory | undefined {
-  if (!isMessagingLaunchpadContext(navigation)) return legacyDirectoryForProjectSelection(navigation, selectedProject);
-  const directory = navigation.directory;
-  return directory && (selectedProject.directoryKey ? directory.key === selectedProject.directoryKey : directory.path === selectedProject.path)
-    ? directory : undefined;
 }
 
 function findNavigationDirectory(
@@ -20603,356 +17962,6 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     .join("\n");
 }
 
-function normalizeNewThreadSessionForBackend(
-  session: MessagingBrowseSessionRecord,
-  backend: BackendSummary,
-  updatedAt: number,
-  navigation: MessagingNewThreadNavigation,
-): MessagingBrowseSessionRecord {
-  if (!session.preferences) {
-    return session;
-  }
-
-  const preferences = { ...session.preferences };
-  if (isAcpBackendId(backend.kind)) {
-    delete preferences.permissionsMode;
-  } else {
-    delete preferences.acpRuntime;
-  }
-  const models = backend.launchpadOptions?.models ?? [];
-  if (preferences.model !== undefined) {
-    const modelIsValid = models.some((model) => model.id === preferences.model);
-    if (models.length === 0) {
-      delete preferences.model;
-    } else if (!modelIsValid) {
-      preferences.model = defaultBackendModel(models)?.id;
-    }
-  }
-
-  const directory = session.selectedProject
-    ? directoryForProjectSelection(navigation, session.selectedProject)
-    : undefined;
-  const selectedModel = newThreadModelForSession(
-    { ...session, preferences },
-    navigation,
-    directory,
-    backend,
-  );
-  const reasoningEfforts = reasoningEffortsForModel(backend, selectedModel);
-  if (preferences.reasoningEffort !== undefined) {
-    if (reasoningEfforts.length === 0) {
-      delete preferences.reasoningEffort;
-    } else if (!reasoningEfforts.includes(preferences.reasoningEffort)) {
-      const defaultReasoningEffort = defaultReasoningEffortForModel(
-        backend,
-        selectedModel,
-      );
-      if (defaultReasoningEffort) {
-        preferences.reasoningEffort = defaultReasoningEffort;
-      } else {
-        delete preferences.reasoningEffort;
-      }
-    }
-  }
-
-  const supportsFast =
-    Boolean(backend.launchpadOptions?.supportsFastMode) ||
-    Boolean(selectedModel?.supportsFast);
-  if (!supportsFast) {
-    delete preferences.fastMode;
-  }
-
-  const serviceTiers = backend.kind === "codex"
-    ? selectedModel?.serviceTiers ?? []
-    : backend.launchpadOptions?.serviceTiers ?? [];
-  if (preferences.serviceTier !== undefined) {
-    if (serviceTiers.length === 0) {
-      delete preferences.serviceTier;
-    } else if (!serviceTiers.includes(preferences.serviceTier)) {
-      if (backend.kind === "codex") {
-        delete preferences.serviceTier;
-      } else {
-        preferences.serviceTier = serviceTiers[0];
-      }
-    }
-  }
-
-  const hasPreferences = Object.keys(preferences).some((key) => key !== "updatedAt");
-  return {
-    ...session,
-    preferences: hasPreferences
-      ? {
-          ...preferences,
-          updatedAt,
-        }
-      : undefined,
-  };
-}
-
-function clearNewThreadProviderPreferences(
-  session: MessagingBrowseSessionRecord,
-  updatedAt: number,
-): MessagingBrowseSessionRecord {
-  if (!session.preferences) {
-    return session;
-  }
-
-  const preferences = { ...session.preferences };
-  delete preferences.acpRuntime;
-  delete preferences.codexEnvironmentActionId;
-  delete preferences.codexEnvironmentExecutionTarget;
-  delete preferences.codexEnvironmentId;
-  delete preferences.codexEnvironmentSetupEnabled;
-  delete preferences.executionMode;
-  delete preferences.fastMode;
-  delete preferences.model;
-  delete preferences.permissionsMode;
-  delete preferences.reasoningEffort;
-  delete preferences.serviceTier;
-
-  const hasPreferences = Object.keys(preferences).some((key) => key !== "updatedAt");
-  return {
-    ...session,
-    preferences: hasPreferences
-      ? {
-          ...preferences,
-          updatedAt,
-        }
-      : undefined,
-  };
-}
-
-function defaultBackendModel(
-  models: NonNullable<BackendSummary["launchpadOptions"]>["models"] = [],
-) {
-  return models.find((model) => model.current) ?? models[0];
-}
-
-function reasoningEffortsForModel(
-  backend: BackendSummary | undefined,
-  model: BackendModelOption | undefined,
-): string[] {
-  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
-}
-
-function defaultReasoningEffortForModel(
-  backend: BackendSummary | undefined,
-  model: BackendModelOption | undefined,
-): string | undefined {
-  const efforts = reasoningEffortsForModel(backend, model);
-  if (
-    model?.defaultReasoningEffort &&
-    efforts.includes(model.defaultReasoningEffort)
-  ) {
-    return model.defaultReasoningEffort;
-  }
-  return efforts[0];
-}
-
-function resolveReasoningEffortForModel(
-  backend: BackendSummary | undefined,
-  model: BackendModelOption | undefined,
-  candidates: Array<string | undefined>,
-): string | undefined {
-  if (!backend && !model) {
-    return candidates.find((candidate): candidate is string => Boolean(candidate));
-  }
-  const efforts = reasoningEffortsForModel(backend, model);
-  const selected = candidates.find((candidate) =>
-    candidate ? efforts.includes(candidate) : false,
-  );
-  return selected ?? defaultReasoningEffortForModel(backend, model);
-}
-
-function normalizeReasoningEffortForModel(
-  backend: BackendSummary,
-  model: BackendModelOption | undefined,
-  candidates: Array<string | undefined>,
-): string | undefined {
-  if (!candidates.some((candidate) => Boolean(candidate))) {
-    return undefined;
-  }
-  return resolveReasoningEffortForModel(backend, model, candidates);
-}
-
-type NewThreadOptionsSummary = {
-  acpRuntime?: BackendAcpSessionRuntimeState;
-  backend: AppServerBackendKind;
-  backendLabel: string;
-  branchName: string;
-  codexEnvironmentActionId?: string | null;
-  codexEnvironmentExecutionTarget?: "local" | "remote";
-  codexEnvironmentId?: string | null;
-  codexEnvironmentOptions: CodexEnvironmentOption[];
-  executionMode: ThreadExecutionMode;
-  executionModeSource: "session" | "directory-launchpad" | "launchpad-defaults";
-  fastMode: boolean;
-  model: string;
-  reasoningEffort?: string;
-  serviceTier?: string;
-  supportsFast: boolean;
-  supportsUltrafast: boolean;
-  supportsModel: boolean;
-  supportsReasoning: boolean;
-  streamingResponses: boolean;
-  workMode: LaunchpadWorkMode;
-};
-
-function newThreadModelForSession(
-  session: MessagingBrowseSessionRecord,
-  navigation: MessagingNewThreadNavigation,
-  directory: MessagingLaunchpadDirectory | undefined,
-  backend: BackendSummary,
-): BackendModelOption | undefined {
-  const launchpadDefaults = applyNavigationLaunchpadProviderSettingsPatch(
-    navigation.launchpadDefaults,
-    { backend: backend.kind },
-  );
-  const directoryLaunchpad = directory?.launchpad
-    ? applyNavigationLaunchpadProviderSettingsPatch(directory.launchpad, { backend: backend.kind })
-    : undefined;
-  const models = backend.launchpadOptions?.models ?? [];
-  return models.find((model) => model.id === session.preferences?.model)
-    ?? models.find((model) => model.id === directoryLaunchpad?.model)
-    ?? models.find((model) => model.id === launchpadDefaults.model)
-    ?? defaultBackendModel(models);
-}
-
-function newThreadOptionsForSession(
-  session: MessagingBrowseSessionRecord,
-  navigation: MessagingNewThreadNavigation,
-  directory: MessagingLaunchpadDirectory | undefined,
-  streamingResponsesDefault: boolean,
-  backend: BackendSummary,
-): NewThreadOptionsSummary {
-  const launchpadDefaults = applyNavigationLaunchpadProviderSettingsPatch(
-    navigation.launchpadDefaults,
-    { backend: backend.kind },
-  );
-  const directoryLaunchpad = directory?.launchpad
-    ? applyNavigationLaunchpadProviderSettingsPatch(directory.launchpad, {
-        backend: backend.kind,
-      })
-    : undefined;
-  const workMode = resolveNewThreadWorkMode({
-    requestedWorkMode:
-      session.workMode ??
-      directoryLaunchpad?.workMode ??
-      launchpadDefaults.workMode ??
-      "local",
-    directory,
-  });
-  const streamingMode = session.preferences?.streamingResponses ?? "inherit";
-  const models = backend.launchpadOptions?.models ?? [];
-  const modelOption = newThreadModelForSession(session, navigation, directory, backend);
-  const reasoningEfforts = reasoningEffortsForModel(backend, modelOption);
-  const reasoningEffort = resolveReasoningEffortForModel(backend, modelOption, [
-    session.preferences?.reasoningEffort,
-    directoryLaunchpad?.reasoningEffort,
-    launchpadDefaults.reasoningEffort,
-  ]);
-  const serviceTiers = backend.kind === "codex"
-    ? modelOption?.serviceTiers ?? []
-    : backend.launchpadOptions?.serviceTiers ?? [];
-  // Selecting Standard or Fast clears the tier instead of inheriting Ultrafast.
-  const serviceTierCandidates = backend.kind === "codex" && session.preferences?.fastMode !== undefined
-    ? [session.preferences.serviceTier]
-    : [session.preferences?.serviceTier, directoryLaunchpad?.serviceTier, launchpadDefaults.serviceTier];
-  const serviceTier = serviceTierCandidates.find((candidate) => candidate ? serviceTiers.includes(candidate) : false);
-  const supportsFast =
-    Boolean(backend.launchpadOptions?.supportsFastMode) ||
-    Boolean(modelOption?.supportsFast);
-  const supportsReasoning =
-    reasoningEfforts.length > 0 || Boolean(modelOption?.supportsReasoning);
-  const acpRuntime = isAcpBackendId(backend.kind)
-    ? session.preferences?.acpRuntime ??
-      directoryLaunchpad?.acpRuntime ??
-      launchpadDefaults.acpRuntime
-    : undefined;
-  const executionMode =
-    session.preferences?.executionMode ??
-    directoryLaunchpad?.executionMode ??
-    launchpadDefaults.executionMode;
-  const executionModeSource = session.preferences?.executionMode
-    ? "session"
-    : directoryLaunchpad?.executionMode
-      ? "directory-launchpad"
-      : "launchpad-defaults";
-  const codexEnvironmentOptions = directoryLaunchpad?.codexEnvironmentOptions ?? [];
-  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(
-    session,
-    directoryLaunchpad,
-  );
-  const selectedEnvironment = codexEnvironmentOptions.find(
-    (environment) => environment.id === codexEnvironmentId,
-  );
-  return {
-    backend: backend.kind,
-    backendLabel: backend.label,
-    acpRuntime,
-    branchName: resolveNewThreadBaseBranch(session, navigation, directory),
-    codexEnvironmentActionId: selectedEnvironment
-      ? session.preferences?.codexEnvironmentActionId ??
-        directoryLaunchpad?.codexEnvironmentActionId
-      : undefined,
-    codexEnvironmentExecutionTarget: selectedEnvironment
-      ? session.preferences?.codexEnvironmentExecutionTarget ??
-        directoryLaunchpad?.codexEnvironmentExecutionTarget ??
-        "local"
-      : undefined,
-    codexEnvironmentId: selectedEnvironment?.id ?? (codexEnvironmentId === null ? null : undefined),
-    codexEnvironmentOptions,
-    executionMode,
-    executionModeSource,
-    fastMode:
-      supportsFast
-        ? session.preferences?.fastMode ??
-          directoryLaunchpad?.fastMode ??
-          launchpadDefaults.fastMode ??
-          false
-        : false,
-    model: session.preferences?.model ?? modelOption?.id ?? "default",
-    reasoningEffort,
-    serviceTier,
-    supportsFast,
-    supportsUltrafast: backend.kind === "codex"
-      && codexSpeedOptions(modelOption, backend.codexFastAllowed !== false).includes("ultrafast"),
-    supportsModel: models.length > 0,
-    supportsReasoning,
-    streamingResponses: messagingStreamingResponsesEnabled(
-      streamingMode,
-      streamingResponsesDefault,
-    ),
-    workMode,
-  };
-}
-
-function canCreateNewThreadWorktree(
-  directory: MessagingLaunchpadDirectory | undefined,
-): boolean {
-  if (!directory?.path || directory.kind !== "directory") {
-    return false;
-  }
-  if (directory.gitStatus?.worktreeCreationAvailable !== undefined) {
-    return directory.gitStatus.worktreeCreationAvailable;
-  }
-  return Boolean(
-    directory.gitStatus?.currentBranch
-    || (directory.gitStatus?.baseBranches?.length ?? 0) > 0
-    || (directory.gitStatus?.branches?.length ?? 0) > 0,
-  );
-}
-
-function resolveNewThreadWorkMode(params: {
-  requestedWorkMode: LaunchpadWorkMode;
-  directory: MessagingLaunchpadDirectory | undefined;
-}): LaunchpadWorkMode {
-  return params.requestedWorkMode === "worktree" &&
-    canCreateNewThreadWorktree(params.directory)
-    ? "worktree"
-    : "local";
-}
-
 function newThreadPromptGateBody(
   session: MessagingBrowseSessionRecord,
   options: NewThreadOptionsSummary,
@@ -21005,19 +18014,6 @@ function newThreadPromptGateBody(
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
-}
-
-function resolveNewThreadCodexEnvironmentId(
-  session: MessagingBrowseSessionRecord,
-  launchpad: Pick<NavigationLaunchpadConfiguration, "codexEnvironmentId"> | undefined,
-): string | null | undefined {
-  if (session.preferences?.codexEnvironmentId === null) {
-    return null;
-  }
-  return (
-    session.preferences?.codexEnvironmentId ??
-    launchpad?.codexEnvironmentId
-  );
 }
 
 function formatNewThreadEnvironmentLabel(
@@ -21094,26 +18090,6 @@ function formatDurationMs(durationMs: number | undefined): string | undefined {
   return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
-function resolveNewThreadBaseBranch(
-  session: MessagingBrowseSessionRecord,
-  navigation: MessagingNewThreadNavigation,
-  directory?: MessagingLaunchpadDirectory,
-): string {
-  const selectedDirectory =
-    directory ??
-    (session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined);
-  return (
-    sanitizeBranchLabel(session.branchName) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.defaultBranch) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.baseBranches?.[0]) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.branches?.[0]) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.currentBranch) ??
-    "main"
-  );
-}
-
 function newThreadBranchChoices(
   session: MessagingBrowseSessionRecord,
   navigation: MessagingNewThreadNavigation,
@@ -21132,11 +18108,6 @@ function newThreadBranchChoices(
   return branches.filter((branch, index) => branches.indexOf(branch) === index);
 }
 
-function sanitizeBranchLabel(branch: string | undefined): string | undefined {
-  const normalized = branch?.replace(/^refs\/heads\//, "").trim();
-  return normalized || undefined;
-}
-
 function normalizeConversationTitle(title: string | undefined): string | undefined {
   const normalized = title?.replace(/\s+/g, " ").trim();
   return normalized || undefined;
@@ -21153,40 +18124,6 @@ function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversa
     case "dm":
       return "conversation";
   }
-}
-
-function boundThreadConfirmationBody(
-  binding: MessagingBindingRecord,
-  capabilityProfile: MessagingCapabilityProfile,
-): string {
-  const noun = binding.targetKind === "agent_thread" ? "Agent thread" : "thread";
-  return [
-    `Messages in this conversation will route to the selected ${noun}.`,
-    sharedConversationMentionInstruction(binding, capabilityProfile),
-  ].filter((line): line is string => Boolean(line)).join("\n\n");
-}
-
-function boundThreadFallbackText(
-  binding: MessagingBindingRecord,
-  capabilityProfile: MessagingCapabilityProfile,
-): string {
-  return sharedConversationMentionInstruction(binding, capabilityProfile)
-    ?? (binding.targetKind === "agent_thread"
-      ? "Send a message to continue with the Agent thread."
-      : "Send a message to continue the thread.");
-}
-
-function sharedConversationMentionInstruction(
-  binding: MessagingBindingRecord,
-  capabilityProfile: MessagingCapabilityProfile,
-): string | undefined {
-  if (
-    binding.channel.conversation.kind === "dm" ||
-    !capabilityProfile.conversationInput?.sharedConversationRequiresMention
-  ) {
-    return undefined;
-  }
-  return capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
@@ -21448,21 +18385,6 @@ function summarizeMessagingActor(
     username: actor.username,
     isBot: actor.isBot,
   };
-}
-
-function formatDefaultAgentScope(scope: MessagingDefaultAgentScope): string {
-  switch (scope.kind) {
-    case "conversation":
-      return "conversation";
-    case "parent":
-      return "parent conversation";
-    case "workspace":
-      return "workspace";
-    case "provider":
-      return `${scope.channel} provider`;
-    case "profile":
-      return "profile";
-  }
 }
 
 function summarizeMessagingBinding(
@@ -21809,27 +18731,6 @@ function isUserInitiatedDeliveryEvent(
   );
 }
 
-function approvalResponseLabel(
-  decision: MessagingApprovalDecision | undefined,
-): string {
-  switch (decision) {
-    case "accept":
-      return "Approved";
-    case "accept_for_session":
-      return "Approved for Session";
-    case "accept_with_execpolicy_amendment":
-      return "Approved and Remembered";
-    case "apply_network_policy_amendment":
-      return "Network Rule Applied";
-    case "decline":
-      return "Declined";
-    case "cancel":
-      return "Canceled";
-    case undefined:
-      return "Resolved";
-  }
-}
-
 function approvalBodyWithResponse(body: string, responseLabel: string): string {
   const blocks = body
     .split(/\n{2,}/)
@@ -21918,15 +18819,6 @@ function compactLogPreview(text: string, limit = 96): string {
   return preview.replace(/["\\]/g, "\\$&");
 }
 
-function buildQueuedInputPreview(parts: string[]): string {
-  const preview = parts
-    .map((part) => part.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  return preview || "[attachment]";
-}
-
 function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean, manualRetryRequired = false): string {
   const quotedPreview = truncateText(preview, 500)
     .split("\n")
@@ -22006,17 +18898,6 @@ function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): bool
 
 function messagingSurfaceKey(surface: MessagingSurfaceRef): string {
   return `${surface.channel}\0${surface.id}`;
-}
-
-function isSameMessagingSurface(
-  left: MessagingSurfaceRef,
-  right: MessagingSurfaceRef | undefined,
-): boolean {
-  return Boolean(
-    right
-    && left.channel === right.channel
-    && left.id === right.id,
-  );
 }
 
 function shouldRecordOutboundActivity(
@@ -22381,59 +19262,6 @@ function isStreamFallbackText(text: string): boolean {
   return text.trim().toLowerCase() === "stream";
 }
 
-function readBindingTarget(
-  event: MessagingInboundCallbackEvent,
-): {
-  backend: AppServerBackendKind;
-  federatedThread?: FederatedThreadRef;
-  threadId: ThreadIdentifier;
-} | undefined {
-  const fromValue = readBindingTargetFromValue(event.value);
-  if (fromValue) {
-    return fromValue;
-  }
-
-  const actionId = event.actionId ?? event.interaction.id;
-  if (!actionId.startsWith("bind:")) {
-    return undefined;
-  }
-  const identity = parseThreadIdentityKey(actionId.slice("bind:".length));
-  return identity?.threadId ? identity : undefined;
-}
-
-function readBindingTargetFromValue(
-  value: MessagingJsonValue | undefined,
-): {
-  backend: AppServerBackendKind;
-  federatedThread?: FederatedThreadRef;
-  threadId: ThreadIdentifier;
-} | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const backend = value.backend;
-  const federationInstanceId = value.federationInstanceId;
-  const threadId = value.threadId;
-  if (typeof backend === "string" && isAppServerBackendKind(backend) && typeof threadId === "string") {
-    return {
-      backend,
-      ...(typeof federationInstanceId === "string"
-        ? {
-            federatedThread: buildFederatedThreadRef({
-              backend,
-              instanceId: federationInstanceId,
-              threadId,
-            }),
-          }
-        : {}),
-      threadId,
-    };
-  }
-
-  return undefined;
-}
-
 function readStatusStopTurnValue(
   value: MessagingJsonValue | undefined,
   binding: MessagingBindingRecord,
@@ -22489,21 +19317,6 @@ function readThreadExecutionModeValue(
   const executionMode = readStringValue(value, "executionMode");
   return executionMode === "default" || executionMode === "auto" || executionMode === "full-access"
     ? executionMode
-    : undefined;
-}
-
-function readMessagingToolUpdateModeValue(
-  value: MessagingJsonValue | undefined,
-): MessagingToolUpdateMode | undefined {
-  const toolUpdateMode = readStringValue(value, "toolUpdateMode");
-  return (
-    toolUpdateMode === "show_none" ||
-      toolUpdateMode === "show_less" ||
-      toolUpdateMode === "show_some" ||
-      toolUpdateMode === "show_more" ||
-      toolUpdateMode === "show_all"
-  )
-    ? toolUpdateMode
     : undefined;
 }
 

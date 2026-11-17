@@ -86,7 +86,9 @@ On an admitted human request, `SqliteMessagingRequestStore` records a bounded
 routing snapshot and advances one actor/Agent/provider/workspace/connection
 destination pointer in one transaction. It stores no message text or attachment
 bytes. Bot messages, observed-only traffic, completion events and polling never
-advance this projection. A duplicate event makes no writes. Profile-file
+advance this projection. A duplicate event makes no writes to this projection
+(`remember` in `packages/sqlite-storage/src/messaging-request-store.ts` returns
+the stored request); that says nothing about turn admission. Profile-file
 identity is part of the owner namespace, so copying a database into another
 profile does not transfer attachment authority.
 
@@ -280,16 +282,18 @@ sequenceDiagram
     Bridge->>Backend: protocol call
 ```
 
-The adapter's job ends at "I converted a platform-specific event into a `MessagingInboundEvent`". Workflow decisions — debouncing, queueing, steering, binding resolution — all live in `MessagingController`. Adapters must not call `turn/start` themselves.
+The adapter's job ends at "I converted a platform-specific event into a `MessagingInboundEvent`". Workflow decisions — debouncing, steering, binding resolution — all live in `MessagingController`. Queueing behind a busy thread depends on the backend. The desktop bridge sets `ownsTurnQueue` (`apps/desktop/src/main/messaging/desktop-backend-bridge.ts`), so the controller submits the turn and the thread owner's FIFO queues it, the same FIFO desktop viewers read. The controller queues the input itself (`queuePreparedInput`) only for a backend without that flag. Adapters must not call `turn/start` themselves.
 
 Before ordinary text/media routing, the controller offers the normalized event
 to desktop automations. Enabled inbound-message automations match on provider,
 conversation, sender/bot identity, text filter, and thread-reply policy. A match
-starts an automation run on the automation's assigned Agent thread and records
-bounded source metadata for the prompt and read-only inspection tools. This path
-is intentionally separate from bound-thread user input: a Datadog Slack post can
-start or queue work in one Agent thread without requiring that Slack channel to
-be bound to the thread as a normal conversation.
+starts an automation run for the automation's assigned Agent thread and records
+bounded source metadata for the prompt and read-only inspection tools. The run
+executes on a separate headless thread, not in the Agent thread's turn queue;
+see [automation-scheduling.md](automation-scheduling.md). This path is
+intentionally separate from bound-thread user input: a Datadog Slack post can
+start or queue an automation run without requiring that Slack channel to be
+bound to the thread as a normal conversation.
 
 ### Outbound (agent produces output)
 
@@ -922,6 +926,9 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-command-handlers.ts` | Command dispatch, schedule management, help, review entry, Claude continuation and monitor/default-agent command routing through lazy typed workflow ports |
 | `apps/desktop/src/main/messaging/core/messaging-command-context.ts` | Narrow command store/backend collaborators and exact workflow port signatures; reads remain late bound |
 | `apps/desktop/src/main/messaging/core/messaging-command-helpers.ts` | Pure command parsing and shared message-origin attribution used by command and inbound workflows |
+| `apps/desktop/src/main/messaging/core/messaging-callback-handlers.ts` | Callback dispatch, approval identity, browse/help navigation, queue/status controls, risk confirmations, monitor actions and private replies |
+| `apps/desktop/src/main/messaging/core/messaging-callback-context.ts` | Lazy callback collaborators and exact workflow/data ports; queue and private-response state remain in their existing owners |
+| `apps/desktop/src/main/messaging/core/messaging-callback-helpers.ts` | Pure callback payload readers, surface/owner identity checks and provider-aware new-thread option normalization |
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
 | `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
 | `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |

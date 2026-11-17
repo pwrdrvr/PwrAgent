@@ -2,7 +2,7 @@
 // runbook's tag scheme; the independent oracle never calls compareSemver.
 // PwrAgent returns at `available`, so its model settles downloads through
 // updater events and exercises its cancellation token as well as failures.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AppUpdateStatus } from "../../shared/app-metadata";
 
@@ -217,12 +217,50 @@ type GitHubRelease = Parameters<typeof import("../shell/auto-updater").selectCha
 const { selectChannelReleases, compareSemver } = await import("../shell/auto-updater");
 
 const originalPlatform = process.platform;
-afterEach(() => {
+// Vitest's outer timeout does not cancel fc.assert, an import, or a model
+// command. Own the whole assertion, including fast-check's subsequent runs
+// and shrinking, until afterEach has stopped admission and joined it.
+class UpdaterTestOwner {
+  private stopped = false;
+  private readonly tasks = new Set<Promise<unknown>>();
+
+  checkpoint(): void {
+    if (this.stopped) throw new fc.PreconditionFailure(true);
+  }
+
+  async run(work: (owner: UpdaterTestOwner) => Promise<void>): Promise<void> {
+    const task = Promise.resolve().then(() => {
+      this.checkpoint();
+      return work(this);
+    });
+    this.tasks.add(task);
+    try {
+      await task;
+    } finally {
+      this.tasks.delete(task);
+    }
+  }
+
+  async close(): Promise<void> {
+    this.stopped = true;
+    // The test already owns failures. Joining must also work on its failure
+    // path, before any timers, mocks, environment or platform are restored.
+    await Promise.allSettled([...this.tasks]);
+  }
+}
+
+let owner: UpdaterTestOwner;
+beforeEach(() => { owner = new UpdaterTestOwner(); });
+
+async function cleanupUpdaterTest(): Promise<void> {
+  await owner.close();
+  fake.reset();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-});
+}
+afterEach(cleanupUpdaterTest);
 
 type Kind = "final" | "prerelease" | "beta" | "alpha";
 type Tag = { core: [number, number, number]; kind: Kind; n: number };
@@ -489,7 +527,7 @@ function newestEligible(feed: ReadonlySet<string>, train: Train): string {
 }
 
 type Model = { feed: Set<string>; train: Train; downloading: boolean; handedOff: boolean };
-type World = { updater: Updater };
+type World = { updater: Updater; owner: UpdaterTestOwner };
 type Action = "publish" | "selectTrain" | "check" | "succeed" | "fail" | "cancel" | "restart";
 
 /** The real macrotask drains microtasks without relying on a guessed number
@@ -500,6 +538,26 @@ async function settle(): Promise<void> {
   for (let turn = 0; turn < 3; turn++) {
     await new Promise<void>((resolve) => fake.macrotask(resolve));
   }
+}
+
+async function settleOwned(sessionOwner: UpdaterTestOwner): Promise<void> {
+  await settle();
+  sessionOwner.checkpoint();
+}
+
+async function drainSession(updater: Updater): Promise<void> {
+  // A canceled download or failed native stage can release a queued track
+  // check. Drain that work before clearing listeners, timers or the cache.
+  for (;;) {
+    await settle();
+    if (!fake.state.pending && fake.nativeHandlers.size === 0) break;
+    if (fake.state.pending) {
+      expect(updater.cancelAppUpdateDownload()).toEqual({ canceled: true });
+    }
+    fake.native.emit("error");
+  }
+  vi.clearAllTimers();
+  fake.reset();
 }
 
 function checkInvariants(world: World): void {
@@ -518,7 +576,7 @@ function checkInvariants(world: World): void {
 }
 
 async function afterCommand(model: Model, world: World): Promise<void> {
-  await settle();
+  await settleOwned(world.owner);
   // electron-updater owns download lifetime. The fake cache is the disk
   // oracle, independent of main's held-update bookkeeping (as in PwrGit).
   model.downloading = fake.state.pending !== undefined;
@@ -544,6 +602,7 @@ class SessionCommand implements fc.AsyncCommand<Model, World> {
     }
   }
   async run(model: Model, world: World): Promise<void> {
+    world.owner.checkpoint();
     const { state } = fake;
     switch (this.action) {
       case "publish":
@@ -609,28 +668,26 @@ const commandArbs = [
 ];
 
 async function runSession(
+  sessionOwner: UpdaterTestOwner,
   start: { published: string[]; train: Train },
   commands: Iterable<fc.AsyncCommand<Model, World>>,
 ): Promise<void> {
+  sessionOwner.checkpoint();
   vi.clearAllTimers();
   fake.reset();
   const feed = new Set([BASELINE, ...start.published]);
   fake.state.feed = new Set(feed);
   fake.state.train = start.train;
   vi.resetModules();
-  const world = { updater: await import("../shell/auto-updater") };
+  const world = { updater: await import("../shell/auto-updater"), owner: sessionOwner };
+  sessionOwner.checkpoint();
   world.updater.initAutoUpdater();
   const model: Model = { feed, train: start.train, downloading: false, handedOff: false };
   try {
     await afterCommand(model, world);
     await fc.asyncModelRun(() => ({ model, real: world }), commands);
   } finally {
-    // Drain selection waiters before the next run resets the module.
-    // A cancel may unblock another queued track's download.
-    while (fake.state.pending) {
-      world.updater.cancelAppUpdateDownload();
-      await settle();
-    }
+    await drainSession(world.updater);
   }
 }
 
@@ -645,30 +702,35 @@ describe("auto-updater held-update model (Windows pending cache)", () => {
     useWindowsUpdater();
     // Shrunk from the model: Stable finishes after selecting Beta, whose
     // queued check deletes the Stable installer before selecting Stable again.
-    await runSession({ published: ["v1.1.0", "v1.2.0-beta.1"], train: "stable" }, [
+    await owner.run((scope) => runSession(scope, { published: ["v1.1.0", "v1.2.0-beta.1"], train: "stable" }, [
       new SessionCommand("selectTrain", "beta"),
       new SessionCommand("succeed"),
       new SessionCommand("selectTrain", "stable"),
-    ]);
+    ]));
   });
 
   it("Restart offers and install-on-quit always name an installer still on disk", async () => {
     useWindowsUpdater();
-    await fc.assert(fc.asyncProperty(
+    await owner.run((scope) => fc.assert(fc.asyncProperty(
       fc.record({ published: fc.subarray([...TAG_POOL]), train: fc.constantFrom<Train>("stable", "beta") }),
       fc.commands(commandArbs, { size: "medium", maxCommands: 30 }),
-      runSession,
-    // PwrGit's 400 medium sessions catch races much more reliably than the
-    // default short commands. With in-memory cache/settings and one module
-    // reload per run this stays under the 5 s local test timeout.
-    ), { numRuns: 400 });
+      (start, commands) => runSession(scope, start, commands),
+    // Keep PwrGit's 400 medium sessions. If Vitest times out under load,
+    // teardown interrupts and joins this assertion before another test runs.
+    ), { numRuns: 400, markInterruptAsFailure: true }));
   });
 });
 
 /** An unselected installer must stay disarmed, but its replacement still
  * needs a native staging request before its Restart offer can be shown. The
  * fake's post-dispatch gate above is the oracle from MacUpdater's source. */
-async function runMacStagingSession(patch: number, beta: number, startTrain: Train): Promise<void> {
+async function runMacStagingSession(
+  sessionOwner: UpdaterTestOwner,
+  patch: number,
+  beta: number,
+  startTrain: Train,
+): Promise<void> {
+  sessionOwner.checkpoint();
   vi.clearAllTimers();
   fake.reset();
   const stableVersion = `1.0.${patch}`;
@@ -677,34 +739,39 @@ async function runMacStagingSession(patch: number, beta: number, startTrain: Tra
   fake.state.train = startTrain;
   vi.resetModules();
   const updater = await import("../shell/auto-updater");
+  sessionOwner.checkpoint();
   updater.initAutoUpdater();
-  await settle();
-  fake.succeed();
-  await settle();
-  expect(fake.native.checkForUpdates).toHaveBeenCalledTimes(1);
-  // The first build has staged. The replacement's completion is delivered
-  // separately, only after main or MacUpdater actually requests staging.
-  fake.native.emit("update-downloaded");
-  fake.native.checkForUpdates.mockReset();
-  fake.native.checkForUpdates.mockImplementation(() => {
-    expect(fake.nativeHandlers.has("update-downloaded"), "observe staging before starting it").toBe(true);
-    expect(fake.nativeHandlers.has("error")).toBe(true);
-  });
+  try {
+    await settleOwned(sessionOwner);
+    fake.succeed();
+    await settleOwned(sessionOwner);
+    expect(fake.native.checkForUpdates).toHaveBeenCalledTimes(1);
+    // The first build has staged. The replacement's completion is delivered
+    // separately, only after main or MacUpdater actually requests staging.
+    fake.native.emit("update-downloaded");
+    fake.native.checkForUpdates.mockReset();
+    fake.native.checkForUpdates.mockImplementation(() => {
+      expect(fake.nativeHandlers.has("update-downloaded"), "observe staging before starting it").toBe(true);
+      expect(fake.nativeHandlers.has("error")).toBe(true);
+    });
 
-  fake.state.train = startTrain === "stable" ? "beta" : "stable";
-  const target = fake.state.train === "beta" ? betaVersion : stableVersion;
-  fake.state.changed();
-  await settle();
-  expect(fake.autoUpdater.autoInstallOnAppQuit, "the unselected installer stays disarmed").toBe(false);
-  fake.succeed();
-  await settle();
-  expect(fake.native.checkForUpdates, "the replacement must be staged explicitly").toHaveBeenCalledTimes(1);
-  expect(fake.autoUpdater.autoInstallOnAppQuit).toBe(false);
-  expect(updater.readAppUpdateStatus()).not.toEqual({ status: "downloaded", version: target });
-  fake.native.emit("update-downloaded");
-  expect(updater.readAppUpdateStatus()).toEqual({ status: "downloaded", version: target });
-  expect(fake.autoUpdater.autoInstallOnAppQuit).toBe(true);
-  expect(fake.nativeHandlers.size).toBe(0);
+    fake.state.train = startTrain === "stable" ? "beta" : "stable";
+    const target = fake.state.train === "beta" ? betaVersion : stableVersion;
+    fake.state.changed();
+    await settleOwned(sessionOwner);
+    expect(fake.autoUpdater.autoInstallOnAppQuit, "the unselected installer stays disarmed").toBe(false);
+    fake.succeed();
+    await settleOwned(sessionOwner);
+    expect(fake.native.checkForUpdates, "the replacement must be staged explicitly").toHaveBeenCalledTimes(1);
+    expect(fake.autoUpdater.autoInstallOnAppQuit).toBe(false);
+    expect(updater.readAppUpdateStatus()).not.toEqual({ status: "downloaded", version: target });
+    fake.native.emit("update-downloaded");
+    expect(updater.readAppUpdateStatus()).toEqual({ status: "downloaded", version: target });
+    expect(fake.autoUpdater.autoInstallOnAppQuit).toBe(true);
+    expect(fake.nativeHandlers.size).toBe(0);
+  } finally {
+    await drainSession(updater);
+  }
 }
 
 describe("macOS cross-track staging", () => {
@@ -716,16 +783,90 @@ describe("macOS cross-track staging", () => {
 
   it("stages Beta explicitly while the held Stable installer is disarmed", async () => {
     useMacUpdater();
-    await runMacStagingSession(1, 1, "stable");
+    await owner.run((scope) => runMacStagingSession(scope, 1, 1, "stable"));
+  });
+
+  it("joins a stopped model before handing its fixture to the next platform", async () => {
+    useWindowsUpdater();
+    const paused = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let sessions = 0;
+    const pause: fc.AsyncCommand<Model, World> = {
+      check: () => true,
+      run: async () => { paused.resolve(); await release.promise; },
+      toString: () => "pause at the timeout boundary",
+    };
+    const running = owner.run((scope) => fc.assert(fc.asyncProperty(fc.constant(null), async () => {
+      scope.checkpoint();
+      sessions++;
+      await runSession(scope, { published: ["v1.0.1", "v2.0.0-beta.1"], train: "stable" }, [
+        // Canceling Stable during teardown must also drain the queued Beta
+        // check and its download, before the fixture can change platforms.
+        new SessionCommand("selectTrain", "beta"),
+        pause,
+        new SessionCommand("selectTrain", "stable"),
+      ]);
+    }), { numRuns: 2, markInterruptAsFailure: true }));
+    // Attach a rejection handler before requesting stop, as Vitest does for
+    // the outer test promise. An interrupt must never count as a passing run.
+    const outcome = running.then(() => "passed", () => "interrupted");
+    await paused.promise;
+    expect(fake.state.pending?.version).toBe("1.0.1");
+    const changedAfterStop = vi.fn(fake.state.changed);
+    fake.state.changed = changedAfterStop;
+    let closed = false;
+    const closing = cleanupUpdaterTest().then(() => { closed = true; });
+    try {
+      await settle();
+      expect(closed, "teardown must join the command before restoring globals").toBe(false);
+      expect(process.platform).toBe("win32");
+    } finally {
+      release.resolve();
+      await closing;
+      await outcome;
+    }
+    expect(await outcome).toBe("interrupted");
+    expect(sessions, "stop also prevents further generated cases and shrinking").toBe(1);
+    expect(changedAfterStop, "no model command may change tracks after stop").not.toHaveBeenCalled();
+    expect(fake.state.pending).toBeUndefined();
+    expect(fake.nativeHandlers.size).toBe(0);
+    owner = new UpdaterTestOwner();
+    useMacUpdater();
+    // The reported shrunk counterexample, after the interrupted Windows run.
+    await owner.run((scope) => runMacStagingSession(scope, 1, 1, "stable"));
+  });
+
+  it("drains native staging after a failed case before reusing the mock", async () => {
+    useMacUpdater();
+    const succeed = fake.succeed;
+    const failure = new Error("interrupt the case while replacement staging is pending");
+    const spy = vi.spyOn(fake, "succeed")
+      .mockImplementationOnce(succeed)
+      .mockImplementationOnce(() => {
+        succeed();
+        expect(fake.nativeHandlers.size).toBe(2);
+        throw failure;
+      });
+    try {
+      await expect(owner.run((scope) => runMacStagingSession(scope, 1, 1, "stable")))
+        .rejects.toBe(failure);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fake.state.pending).toBeUndefined();
+    expect(fake.nativeHandlers.size).toBe(0);
+    expect(fake.native.checkForUpdates.getMockImplementation()).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+    await owner.run((scope) => runMacStagingSession(scope, 1, 1, "stable"));
   });
 
   it("every cross-track replacement requests staging before offering Restart", async () => {
     useMacUpdater();
-    await fc.assert(fc.asyncProperty(
+    await owner.run((scope) => fc.assert(fc.asyncProperty(
       fc.integer({ min: 1, max: 100 }),
       fc.integer({ min: 1, max: 100 }),
       fc.constantFrom<Train>("stable", "beta"),
-      runMacStagingSession,
-    ), { numRuns: 25 });
+      (patch, beta, train) => runMacStagingSession(scope, patch, beta, train),
+    ), { numRuns: 25, markInterruptAsFailure: true }));
   });
 });
