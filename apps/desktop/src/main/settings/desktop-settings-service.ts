@@ -30,6 +30,7 @@ import type {
   DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
+  DesktopContextMoonStyle,
   DesktopSpendAlertPolicy,
   DesktopToolOutputAlertPolicy,
   DesktopApplicationsSnapshot,
@@ -95,6 +96,7 @@ import {
   DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
@@ -1188,6 +1190,9 @@ export class DesktopSettingsService {
           ),
           transcriptTextSize: this.resolveTextSize(
             config.general?.appearance?.transcriptTextSize,
+          ),
+          contextMoon: this.resolveContextMoonStyle(
+            config.general?.appearance?.contextMoon,
           ),
         },
         codexProfileModel: this.resolveCodexProfileModel(
@@ -4334,6 +4339,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopTextSize> {
     return {
       value: configValue ?? DESKTOP_TEXT_SIZE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveContextMoonStyle(
+    configValue: DesktopContextMoonStyle | undefined,
+  ): DesktopSettingsValue<DesktopContextMoonStyle> {
+    return {
+      value: configValue ?? DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

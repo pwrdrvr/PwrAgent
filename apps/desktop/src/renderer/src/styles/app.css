@@ -121,6 +121,10 @@
   --status-warning-text: var(--status-warning);
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
+  /* What the critical context moon's red is dimmed toward: the dark side of
+     the scheme, so the eclipsed moon reads darker than a full one in every
+     color theme, whatever its --status-error. */
+  --context-moon-umbra: var(--bg-input);
   /* Usage Activity chart series: the five costliest threads, then the rest. */
   --usage-series-1: var(--accent);
   --usage-series-2: #7aa7e0;
@@ -513,6 +517,7 @@
   --status-warning: #a86b00;
   --status-suspended: #6b6660;
   --status-error: #a8472a;
+  --context-moon-umbra: var(--text-primary);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
   --usage-series-3: #11806f;
@@ -48866,87 +48871,42 @@ button.composer__subthread-source-parent:hover {
   opacity: 0.72;
 }
 
-.context-window-moon__disc::after {
+/* The shadow covers the unlit share of the disc. Its path comes from
+   context-window-moon.ts, which follows Settings → Appearance → Context
+   moon, and spans the disc inside its rim. */
+.context-window-moon__shadow {
   position: absolute;
-  inset: -1px auto -1px var(--context-window-moon-shadow-left, -1px);
-  width: var(--context-window-moon-shadow-width, 100%);
-  border-radius: var(--context-window-moon-shadow-radius, 50%);
-  background: var(--bg-input);
-  box-shadow:
-    var(--context-window-moon-terminator-glow, 1px 0 3px rgba(255, 169, 79, 0.18)),
-    inset var(--context-window-moon-shadow-inset, -1px 0 2px) var(--accent-bg-medium);
-  content: "";
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--bg-input);
 }
 
-.context-window-moon__sprite--phase-0 .context-window-moon__disc {
+.context-window-moon__sprite--new .context-window-moon__disc {
   background:
     radial-gradient(circle at 60% 36%, color-mix(in srgb, var(--accent) 8%, transparent) 0 2px, transparent 3px),
     color-mix(in srgb, var(--accent) 8%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.context-window-moon__sprite--phase-0 .context-window-moon__disc::after {
-  --context-window-moon-shadow-width: 100%;
-}
-
-.context-window-moon__sprite--phase-1 {
-  --context-window-moon-shadow-width: 76%;
-}
-
-.context-window-moon__sprite--phase-2 {
-  --context-window-moon-shadow-radius: 0;
-  --context-window-moon-shadow-width: 50%;
-}
-
-.context-window-moon__sprite--phase-3 {
-  --context-window-moon-shadow-width: 24%;
-}
-
-.context-window-moon__sprite--phase-4 {
-  --context-window-moon-shadow-width: 0%;
-}
-
-.context-window-moon__sprite--phase-5 {
-  --context-window-moon-shadow-left: auto;
-  --context-window-moon-shadow-inset: 1px 0 2px;
-  --context-window-moon-shadow-width: 24%;
-  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
-}
-
-.context-window-moon__sprite--phase-5 .context-window-moon__disc::after,
-.context-window-moon__sprite--phase-6 .context-window-moon__disc::after,
-.context-window-moon__sprite--phase-7 .context-window-moon__disc::after {
-  right: -1px;
-}
-
-.context-window-moon__sprite--phase-6 {
-  --context-window-moon-shadow-left: auto;
-  --context-window-moon-shadow-inset: 1px 0 2px;
-  --context-window-moon-shadow-radius: 0;
-  --context-window-moon-shadow-width: 50%;
-  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
-}
-
-.context-window-moon__sprite--phase-7 {
-  --context-window-moon-shadow-left: auto;
-  --context-window-moon-shadow-inset: 1px 0 2px;
-  --context-window-moon-shadow-width: 76%;
-  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
-}
-
-.context-window-moon__sprite--phase-4 .context-window-moon__disc,
-.context-window-moon__sprite--phase-8 .context-window-moon__disc {
+.context-window-moon__sprite--full .context-window-moon__disc {
   border-color: var(--accent-strong);
 }
 
-.context-window-moon__sprite--phase-8 {
-  --context-window-moon-shadow-width: 0%;
-}
-
-.context-window-moon__sprite--phase-8 .context-window-moon__disc {
+/* Critical is a blood moon: the eclipsed full moon, red and dimmer than the
+   full moon at 50%, so the two never read alike. */
+.context-window-moon__sprite--critical .context-window-moon__disc {
+  border-color: var(--status-error);
+  background:
+    radial-gradient(
+      circle at 40% 36%,
+      color-mix(in srgb, var(--status-error) 88%, var(--context-moon-umbra)) 0%,
+      color-mix(in srgb, var(--status-error) 66%, var(--context-moon-umbra)) 62%,
+      color-mix(in srgb, var(--status-error) 46%, var(--context-moon-umbra)) 100%
+    );
   box-shadow:
-    0 0 12px color-mix(in srgb, var(--accent) 48%, transparent),
-    inset 0 0 4px rgba(255, 243, 220, 0.34);
+    0 0 10px color-mix(in srgb, var(--status-error) 55%, transparent),
+    inset 0 0 3px color-mix(in srgb, var(--status-error) 45%, transparent);
 }
 
 .context-window-moon__label {

@@ -1748,6 +1748,48 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("waxes the context moon by default and writes the lunar cycle when chosen", async () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        calmMotion: false,
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setCalmMotion: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const group = screen.getByRole("radiogroup", { name: "Context moon" });
+    expect(within(group).getByRole("radio", { name: /^Wax to full/ }))
+      .toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(group).getByRole("radio", { name: /^Lunar cycle/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { appearance: { contextMoon: "lunar-cycle" } },
+      });
+    });
+  });
+
   it("leaves calm motion off by default and switches it through the appearance controller", async () => {
     const controller: AppearanceController = {
       appearance: {
