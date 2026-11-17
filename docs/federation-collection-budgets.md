@@ -185,6 +185,29 @@ while retaining its accepted display ranges. Replacement lifetimes use distinct
 consumer tokens so late release cannot cancel the successor. The main renderer uses these distinct query resources. Process-wide IPC decode
 allocation accounting is outside the isolated heap measurement below.
 
+### What a viewer adds to another owner's page
+
+An owner fills a page up to 252 KiB. Its viewer knows facts the owner does not:
+the owner's label, status and icon, the capabilities it granted, and the
+viewer's own directory disclosure. These are the same for every row, so the
+viewer's main process sends them once per page in `remoteOwner` and leaves the
+owner's rows unchanged. The 252 KiB check on a viewer measures the owner's
+content only (`navigationQueryPageBudgetBytes`), so a page the owner could
+select is one the viewer can hold, without a second request. The block has its
+own 32 KiB cap. It is counted in retained backing.
+
+A window fills its rows in from the block as it reads a page
+(`expandNavigationRemoteOwner`, in `getDesktopApi`). Callers inside the main
+process get filled rows from `getNavigationQueryPage`. The filled rows share
+the block's values.
+
+Before this, the viewer copied those facts onto every row and then measured the
+result against the owner's budget. A peer's capability list is about 1 KB, so a
+100-row page grew by about 144 KB after its owner had selected it, and the
+viewer refused it on every refresh. `readRemoteNavigationPageWithinBudget` still
+asks for fewer rows when an owner sends more than the budget or the block is
+over its cap.
+
 ### Owner directory read action
 
 `markNavigationDirectorySeen` resolves directory membership and per-thread seen

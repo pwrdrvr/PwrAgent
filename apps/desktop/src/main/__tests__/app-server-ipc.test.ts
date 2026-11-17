@@ -19,6 +19,7 @@ import type {
   MarkThreadSeenRequest,
   NavigationThreadSummary,
   NavigationQueryPage,
+  NavigationRemoteOwner,
   FederationRemoteTarget,
   FederationCapability,
   FederationPeerSummary,
@@ -40,7 +41,7 @@ import type {
   WatchThreadPullRequestToolArgs,
   ThreadSearchResponse,
 } from "@pwragent/shared";
-import { buildPullRequestStatusKey, DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared";
+import { buildPullRequestStatusKey, DEFAULT_PROJECT_FORGE_AUTOMATION, expandNavigationRemoteOwner } from "@pwragent/shared";
 import {
   getProjectForgeAutomationIndex,
   resetProjectForgeAutomationIndexForTests,
@@ -195,6 +196,12 @@ const federationMock = vi.hoisted(() => {
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteNavigationQueryPage: vi.fn(),
+      // The owner's page as it arrived. Tests supply it through
+      // `remoteNavigationQueryPage`, which the service no longer calls.
+      remoteNavigationOwnerQueryPage: vi.fn((...args: unknown[]) =>
+        (federationMock.runtime.remoteNavigationQueryPage as (...sent: unknown[]) => unknown)(...args)),
+      remoteNavigationOwner: vi.fn((target: FederationRemoteTarget): NavigationRemoteOwner =>
+        ({ instanceId: target.instanceId, instanceLabel: target.instanceId })),
       remoteMarkNavigationDirectorySeen: vi.fn(),
       navigationActionOwnerLabel: vi.fn(),
       stampRemoteNavigationQueryPage: vi.fn((_target: FederationRemoteTarget, page: NavigationQueryPage) => page),
@@ -5153,7 +5160,9 @@ describe("app server ipc", () => {
       fc.string({ minLength: 1, maxLength: 30 }), async (index, senderId, consumerId) => {
         const method = methods[index]!;
         const response = { protocol: 2, revision: consumerId };
-        const read = vi.spyOn(appServerService, method).mockResolvedValue(response as never);
+        // A window's page read takes the compact form and fills rows in itself.
+        const read = vi.spyOn(appServerService, method === "getNavigationQueryPage" ? "getNavigationQueryWirePage" : method)
+          .mockResolvedValue(response as never);
         try {
           const request = { protocol: 2, inventory: "viewer", query: { kind: "lens", lens: "inbox" } };
           const result = await dispatch!({ sender: { id: senderId, once: vi.fn() } },
@@ -5302,8 +5311,9 @@ describe("app server ipc", () => {
     const row = { id: "child", source: "codex", title: "Child", titleSource: "explicit", linkedDirectories: [],
       inbox: { inInbox: false }, ref: { backend: "codex", threadId: "child", ownerInstanceId: "peer" },
       federation: { ref, instanceLabel: "Peer" }, parentThreadId: "local-parent", parentThreadInstanceId: "pwr_local" };
-    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, entries: [{ row }], complete: true,
-      coverage: { state: "complete" } });
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2,
+      entries: [{ row, placement: { kind: "root" } }], complete: true, coverage: { state: "complete" } });
+    federationMock.runtime.remoteNavigationOwner.mockReturnValueOnce({ instanceId: "peer", instanceLabel: "Peer" });
     updateRemoteThreadPinSnapshots.mockResolvedValueOnce(true);
     registerAppServerIpcHandlers();
     await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90203, once: vi.fn() } }, {
@@ -5458,10 +5468,11 @@ describe("app server ipc", () => {
       ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [],
       directories: [directory], selectionDirectory: directory, complete: true });
     registerAppServerIpcHandlers();
-    const page = await navigationReadHandler("backend.getNavigationQueryPage")?.({ sender: { id: 90001, once: vi.fn() } }, {
+    // The owner's directories arrive unchanged; this viewer's disclosure is in the block.
+    const page = expandNavigationRemoteOwner(await navigationReadHandler("backend.getNavigationQueryPage")?.({ sender: { id: 90001, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
       completeBaselineRevision: "owner-only-revision",
-    }) as {
+    }) as NavigationQueryPage) as unknown as {
       directories: Array<{ directoryThreadsCollapsed: boolean; forgeAutomation?: unknown }>;
       selectionDirectory: { directoryThreadsCollapsed: boolean; forgeAutomation?: unknown };
     };
@@ -5478,9 +5489,9 @@ describe("app server ipc", () => {
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: false } });
     federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, queryKey: "directories", generation: "g",
       ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [], complete: true, unchanged: true });
-    const refreshed = await navigationReadHandler("backend.getNavigationQueryPage")?.({ sender: { id: 90001, once: vi.fn() } }, {
+    const refreshed = expandNavigationRemoteOwner(await navigationReadHandler("backend.getNavigationQueryPage")?.({ sender: { id: 90001, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
-    }) as typeof page;
+    }) as NavigationQueryPage) as unknown as typeof page;
     expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenLastCalledWith(federationTarget,
       expect.objectContaining({ completeBaselineRevision: "r" }), expect.anything());
     expect(refreshed.directories[0]?.directoryThreadsCollapsed).toBe(false);
@@ -5497,7 +5508,7 @@ describe("app server ipc", () => {
       instanceLabel: "Old label", capabilities: ["thread_navigation"], peerStatus: "connected", celestialIcon: "moon",
     };
     const stamp = (page: NavigationQueryPage) => stampRemoteNavigationQueryPage({ page, target, ...metadata });
-    federationMock.runtime.stampRemoteNavigationQueryPage.mockImplementation((_target, page) => stamp(page));
+    federationMock.runtime.remoteNavigationOwner.mockImplementation(() => ({ instanceId: target.instanceId, ...metadata }));
     const ownerPage: NavigationQueryPage = {
       protocol: 2, queryKey: "metadata", generation: "g", ownerEpoch: "owner", countsRevision: "stable",
       counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
@@ -5510,14 +5521,16 @@ describe("app server ipc", () => {
     };
     const unchanged = { ...ownerPage, entries: [], unchanged: true };
     federationMock.runtime.remoteNavigationQueryPage.mockClear()
-      .mockResolvedValueOnce(stamp(ownerPage))
+      .mockResolvedValueOnce(ownerPage)
       .mockResolvedValueOnce(unchanged)
       .mockResolvedValueOnce(unchanged);
     registerAppServerIpcHandlers();
     const read = async () => navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90205, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget: target, query: { kind: "lens", lens: "inbox" },
-    }) as Promise<NavigationQueryPage>;
+    }).then((page) => expandNavigationRemoteOwner(page as NavigationQueryPage));
     const first = await read();
+    // The window gets the owner's rows and one block, and fills the rows in.
+    expect({ ...first, remoteOwner: undefined }).toEqual({ ...stamp(ownerPage), remoteOwner: undefined });
     expect(first.entries[0]?.row.federation).toMatchObject(metadata);
     metadata = { instanceLabel: "Renamed peer", capabilities: ["thread_navigation", "turn_control"],
       peerStatus: "connected", celestialIcon: "black-hole" };
