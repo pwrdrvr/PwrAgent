@@ -95,28 +95,36 @@ it("counts a page this instance owns as its whole serialized size", () => {
   }));
 });
 
-it("charges a viewer what the page cost its owner, before and after rows are filled in", () => {
+it("charges a viewer exactly what the page cost its owner, before and after rows are filled in", () => {
   fc.assert(fc.property(viewed, ({ page, owner }) => {
+    // Main retains and sends this form.
     const sent = { ...page, remoteOwner: owner };
-    // Main retains and sends this form. It never costs more than the owner
-    // measured, and less only by the disclosure values the viewer replaces.
-    const charged = navigationQueryPageBudgetBytes(sent);
-    const replaced = [...(page.directories ?? []), ...(page.selectionDirectory ? [page.selectionDirectory] : [])]
-      .filter(({ key }) => Object.hasOwn(owner.directoryThreadsCollapsed ?? {}, key))
-      .reduce((sum, { directoryThreadsCollapsed }) => sum + (directoryThreadsCollapsed === undefined
-        ? 0 : `,"directoryThreadsCollapsed":${directoryThreadsCollapsed}`.length), 0);
-    expect(charged).toBe(bytes(page) - replaced);
-    // A window holds this form. Filling rows in changes nothing it is charged.
+    expect(navigationQueryPageBudgetBytes(sent)).toBe(bytes(page));
+    // A window holds this form. Filling rows in records the charge; it does not change it.
     const filled = expandNavigationRemoteOwner(sent);
-    expect(navigationQueryPageBudgetBytes(filled)).toBe(charged);
-    expect(navigationRemoteOwnerBytes(filled)).toBe(bytes(owner));
+    expect(navigationQueryPageBudgetBytes(filled)).toBe(bytes(page));
+    expect(filled.remoteOwner).toEqual({ ...owner, ownerContentBytes: bytes(page) });
+    expect(navigationRemoteOwnerBytes(sent)).toBe(bytes(owner));
+  }));
+});
+
+it("counts everything an owner sends, including fields a viewer would fill in", () => {
+  // An owner may not hide bytes in the fields a viewer overwrites.
+  fc.assert(fc.property(viewed, fc.integer({ min: 1, max: 4_000 }), ({ page, owner }, extra) => {
+    const padded = { ...page, entries: page.entries.map((entry) => ({ ...entry, row: { ...entry.row,
+      federation: { ...entry.row.federation, instanceLabel: "x".repeat(extra),
+        ref: { backend: "codex", threadId: entry.row.id, target: { scope: "remote", instanceId: OWNER } } } } })),
+    } as unknown as NavigationQueryPage;
+    const sent = { ...padded, remoteOwner: owner };
+    expect(navigationQueryPageBudgetBytes(sent)).toBe(bytes(padded));
+    expect(navigationQueryPageBudgetBytes(expandNavigationRemoteOwner(sent))).toBe(bytes(padded));
   }));
 });
 
 it("fills every row the owner did not assign elsewhere, and leaves the others alone", () => {
   fc.assert(fc.property(viewed, ({ page, owner }) => {
     const filled = expandNavigationRemoteOwner({ ...page, remoteOwner: owner });
-    expect(expandNavigationRemoteOwner(filled)).toEqual(filled);
+    expect(expandNavigationRemoteOwner(filled)).toBe(filled);
     filled.entries.forEach((entry, index) => {
       const sent = page.entries[index]!;
       if (sent.row.ref.ownerInstanceId) {

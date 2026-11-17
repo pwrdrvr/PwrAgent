@@ -7477,7 +7477,9 @@ async function mountRemoteParentForLocalChild(
     const query = { ...requestedQuery, deadlineAt };
     const consumerId = `created-child-parent:${randomUUID()}`;
     try {
-      return await pool.read({ consumerId, request: query, load: async ({ signal, deadlineAt }) => {
+      // The pool is shared with windows, whose reads retain another owner's
+      // page with its rows not yet filled in.
+      return expandNavigationRemoteOwner(await pool.read({ consumerId, request: query, load: async ({ signal, deadlineAt }) => {
         signal.throwIfAborted();
         if (query.federationTarget && isRemoteFederationTarget(query.federationTarget)) {
           return await runtime.remoteNavigationQueryPage(query.federationTarget, query, { signal, deadlineAt });
@@ -7490,7 +7492,7 @@ async function mountRemoteParentForLocalChild(
             return index;
           },
         });
-      } });
+      } }));
     } finally {
       pool.release(consumerId);
     }

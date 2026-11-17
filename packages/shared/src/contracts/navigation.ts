@@ -2502,6 +2502,11 @@ export type NavigationRemoteOwner = {
   celestialIcon?: CelestialIconId;
   /** This viewer's disclosure for the page's directories, by directory key. */
   directoryThreadsCollapsed?: Record<string, boolean>;
+  /**
+   * UTF-8 bytes of the owner's content as it arrived, recorded when rows are
+   * filled in. Its presence marks a page whose rows are already filled in.
+   */
+  ownerContentBytes?: number;
 };
 
 export type NavigationMetadataDependencies = {

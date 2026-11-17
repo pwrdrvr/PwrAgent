@@ -199,7 +199,13 @@ own 32 KiB cap. It is counted in retained backing.
 A window fills its rows in from the block as it reads a page
 (`expandNavigationRemoteOwner`, in `getDesktopApi`). Callers inside the main
 process get filled rows from `getNavigationQueryPage`. The filled rows share
-the block's values.
+the block's values. Filling in records the owner's measured bytes on the block
+(`ownerContentBytes`), because they cannot be recovered afterwards; a page that
+carries the record is already filled in.
+
+The query pool is shared by windows and by main-process readers such as
+messaging. It can hand either reader a page the other loaded, so every reader
+fills rows in after the pool returns, not inside its own loader.
 
 Before this, the viewer copied those facts onto every row and then measured the
 result against the owner's budget. A peer's capability list is about 1 KB, so a
