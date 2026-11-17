@@ -34,6 +34,11 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
   const sizeWindow = (size: WindowZoomSize) => sizeWindowAtZoom(app.electronApp, app.window, size);
   try {
     await expect(app.window.locator(".app-shell")).toBeVisible();
+    // The shell also renders before the selected transcript and lazy editor.
+    // Its loading layout may fit the viewport at the lower generated zooms,
+    // so it cannot supply the overflowing layout this property scrolls.
+    await expect(app.window.getByText("The replay harness is live.", { exact: true })).toBeVisible();
+    await expect(app.window.getByRole("textbox", { name: "Reply" })).toBeVisible();
     await fc.assert(fc.asyncProperty(fc.record({
       platform: fc.constantFrom(...PLATFORMS),
       // 960 CSS px at 118% and above is narrower than the 820px breakpoint.
@@ -71,6 +76,7 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
       });
       expect(offsets, `${platform}: ${narrow.width}x${narrow.height} at ${narrow.zoom}%, then ${wide.width}x${wide.height} at 100%`).toEqual([]);
     }), { numRuns: 8, examples: [
+      [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 180 }, scrolled: 0.05, wide: { width: 960, height: 640 } }],
       [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
       [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
     ] });
