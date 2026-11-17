@@ -3,10 +3,12 @@ import type { NavigationPresentationOrder } from "./navigation-presentation-orde
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
+import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
+import { usePagedDirectoryChildren } from "./usePagedDirectoryChildren";
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
+  memo,
   useCallback,
   useEffect,
   Fragment,
@@ -92,7 +94,8 @@ import {
   useNavigationDirectoryDisclosure,
   type NavigationDirectoryDisclosure,
 } from "../../lib/useNavigationDirectoryDisclosure";
-import { canFoldSubthreads, createSubthreadTrays, ordinaryChildCountOf } from "./subthread-trays";
+import { canFoldSubthreads, ordinaryChildCountOf } from "./subthread-trays";
+import { useDirectoryTrays } from "./useDirectoryTrays";
 import {
   interleaveStartingSubthreads,
   isSubthreadLaunchpadDraft,
@@ -437,7 +440,7 @@ function DirectoryCount(props: {
   );
 }
 
-export function DirectoriesList(props: DirectoriesListProps) {
+export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesListProps) {
   const localDisclosure = useNavigationDirectoryDisclosure();
   const {
     expandedByKey, setExpandedByKey,
@@ -476,9 +479,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
     },
   });
   const { threadsByKey, pinnedThreadKeys } = pinOrdering;
-  const pagedChildren = useMemo(() => buildPagedDirectoryChildren({
+  const pagedChildren = usePagedDirectoryChildren({
     resources: props.pagedNavigation?.resources ?? new Map(), presentationOrder: props.presentationOrder, threadsByKey,
-  }), [props.pagedNavigation?.resources, props.presentationOrder, threadsByKey]);
+  });
+  const readDirectoryTrays = useDirectoryTrays();
   const pointerDownSubthread = useSubthreadReorderDrag({
     threadByKey: threadsByKey,
     onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
@@ -1195,17 +1199,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // folding behind a missing control would strand the rows it hides.
     const subthreadCountOf = (thread: NavigationThreadSummary): number =>
       ordinaryChildCounts.get(threadSummaryIdentityKey(thread)) ?? ordinaryChildCountOf(thread);
-    const trays = createSubthreadTrays(childThreadsByParentKey, roots, ownerChildOrder, {
-      draftParentKeys: subthreadDraftParentKeys,
-      isCollapsed: (thread) =>
-        isSubthreadSectionCollapsed(thread)
-        && subthreadCountOf(thread) > 0
-        && canFoldSubthreads(thread, canSetSubthreadsCollapsed),
+    const trays = readDirectoryTrays(directory.key, {
+      children: childThreadsByParentKey, owners: roots, ownerChildOrder, threadsByKey,
+      options: {
+        draftParentKeys: subthreadDraftParentKeys,
+        isCollapsed: (thread) =>
+          isSubthreadSectionCollapsed(thread)
+          && subthreadCountOf(thread) > 0
+          && canFoldSubthreads(thread, canSetSubthreadsCollapsed),
+      },
     });
     const selectedRoot = roots.find((thread) => threadSummaryIdentityKey(thread) === props.selectedItemKey);
-    const selectedTrayRoot = selectedRoot ? undefined : roots.find((thread) =>
-      trays.subtree(threadSummaryIdentityKey(thread)).some((child) =>
-        threadSummaryIdentityKey(child) === props.selectedItemKey));
+    const selectedTrayRoot = selectedRoot || !props.selectedItemKey ? undefined : roots.find((thread) =>
+      trays.hasInSubtree(threadSummaryIdentityKey(thread), props.selectedItemKey!));
     const revealThreadRowKey = !preserveClickedPosition && directory.key === revealDirectoryKey
       && props.selectedItemKey && (selectedRoot || selectedTrayRoot)
       ? threadRowInstanceKey({
@@ -1219,10 +1225,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // Already depth-first ordered by the tray. Re-sorting here by this row's
       // `subthreadOrder` would rank its grandchildren as unlisted and scatter
       // them away from the sub-threads that own them.
-      const children = trays.subtree(parentKey);
+      const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
+      // A folded tray with no draft cannot render descendants. Keep only its
+      // topology until a selection, disclosure or draft actually needs rows.
+      const children = subthreadsCollapsed && startingSubthreads.length === 0 ? [] : trays.subtree(parentKey);
       const directChildKeys = trays.directChildKeys(parentKey);
       const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
-      const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
       const trayEntries = interleaveStartingSubthreads({
         trayKey: parentKey,
         subtree: children,
@@ -2006,4 +2014,4 @@ export function DirectoriesList(props: DirectoriesListProps) {
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );
-}
+});

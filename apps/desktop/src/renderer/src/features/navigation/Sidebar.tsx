@@ -28,7 +28,7 @@ import type {
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import type { PendingSidebarRow } from "./StartingThreadRow";
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ThreadMaintenanceLauncherContext } from "../maintenance/thread-maintenance-launcher";
 import type {
   ComponentType,
@@ -726,6 +726,39 @@ function uniqueContextMenuValues(
 }
 
 export function Sidebar(props: SidebarProps) {
+  // These are post-commit events. Render-time readers retain their original
+  // identities and remain ordinary memo dependencies. Optional capability
+  // changes still reach the content, while events use the latest closure.
+  const events = {
+    onSelectPendingLaunchpad: useStableRowCallback(props.onSelectPendingLaunchpad),
+    onDetachSubthreadDraft: useStableRowCallback(props.onDetachSubthreadDraft),
+    onCreateThread: useEventCallback(props.onCreateThread),
+    onCreateThreadWithoutDirectory: useStableRowCallback(props.onCreateThreadWithoutDirectory),
+    onCreateThreadOnFederationTarget: useStableRowCallback(props.onCreateThreadOnFederationTarget),
+    onContinueAfter: useStableRowCallback(props.onContinueAfter),
+    onAddProjectDirectory: useStableRowCallback(props.onAddProjectDirectory),
+    onCreateSubthread: useStableRowCallback(props.onCreateSubthread),
+    onForkThread: useStableRowCallback(props.onForkThread),
+    onOpenAutomations: useStableRowCallback(props.onOpenAutomations),
+    onOpenThreadSearch: useStableRowCallback(props.onOpenThreadSearch),
+    onOpenLaunchpad: useEventCallback(props.onOpenLaunchpad),
+    onOpenSettings: useStableRowCallback(props.onOpenSettings),
+    onOpenUsageActivity: useStableRowCallback(props.onOpenUsageActivity),
+    onSelectThread: useEventCallback(props.onSelectThread),
+    onThreadJumpOpenChange: useStableRowCallback(props.onThreadJumpOpenChange),
+    onJumpToProject: useStableRowCallback(props.onJumpToProject),
+    onJumpToThread: useStableRowCallback(props.onJumpToThread),
+    onJumpToRemoteThread: useStableRowCallback(props.onJumpToRemoteThread),
+    onRemoveRemoteThreadPin: useStableRowCallback(props.onRemoveRemoteThreadPin),
+    onRemoveDirectory: useStableRowCallback(props.onRemoveDirectory),
+    onOpenForgePermissions: useStableRowCallback(props.onOpenForgePermissions),
+  };
+  return <MemoSidebarContent {...props} {...events} />;
+}
+
+const MemoSidebarContent = memo(SidebarContent);
+
+function SidebarContent(props: SidebarProps) {
   useNativeDragInteractionGuard();
   const pinnedThreadsOnTop = props.pinnedThreadsOnTop ?? true;
   const pinnedGroupShown = lensHasPinnedGroup(props.browseMode, pinnedThreadsOnTop);
