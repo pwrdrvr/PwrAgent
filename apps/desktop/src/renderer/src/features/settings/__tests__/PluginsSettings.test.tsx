@@ -1216,6 +1216,47 @@ describe("PluginsSettings", () => {
       await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "builtin:sandboxer" }));
     });
 
+    it("keeps a Local CLI setup's state in its suggestion and leaves Connect to the full setup", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", sandboxerCliState: "not_signed_in", configured: false,
+        state: "disconnected", enabled: false, toolApproval: "prompt",
+      });
+      const api = managedApi([sandboxer]);
+      api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const suggestion = (await screen.findByText("Sandboxer")).closest("article")!;
+      expect(within(suggestion).getByText("Local CLI \u00b7 Not signed in")).toBeInTheDocument();
+      // Connect would switch to the hosted service; the choice lives in Set up.
+      expect(within(suggestion).queryByRole("button", { name: "Connect Sandboxer" })).toBeNull();
+      expect(within(suggestion).getByRole("button", { name: "Set up Sandboxer" })).toBeInTheDocument();
+      expect(api.setSandboxerTransport).not.toHaveBeenCalled();
+    });
+
+    it("closes Sandboxer's store page onto its row once it is connected", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "oauth",
+        serverUrl: "https://sandboxer.com/mcp", configured: false, state: "disconnected", enabled: false,
+      });
+      const connected = { ...sandboxer, configured: true, state: "ready" as const, enabled: true };
+      const api = managedApi([sandboxer]);
+      api.listMcpConnections = vi.fn()
+        .mockResolvedValueOnce({ connections: [sandboxer] })
+        .mockResolvedValue({ connections: [connected] });
+      api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      api.authorizeMcpConnection = vi.fn(async () => ({ connection: connected }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      fireEvent.click(within((await screen.findByText("Sandboxer")).closest("article")!)
+        .getByRole("button", { name: "Set up Sandboxer" }));
+      const page = screen.getByRole("dialog", { name: "Sandboxer" });
+      fireEvent.click(within(page).getByRole("button", { name: "Connect Sandboxer" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      const row = document.querySelector("[data-connection-id='builtin:sandboxer']")!;
+      await waitFor(() => expect(row).toHaveClass("settings-mcp-row--revealed"));
+      expect(screen.queryByRole("heading", { name: "Suggested" })).not.toBeInTheDocument();
+    });
+
     it("copies sbx onboard for an operator who still needs an account or a plan", async () => {
       for (const [sandboxerCliState, step, headline] of [
         ["not_signed_in", "Sign in", "Not signed in"],

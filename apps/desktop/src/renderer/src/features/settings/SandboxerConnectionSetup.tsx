@@ -346,6 +346,8 @@ export function SandboxerCompactRow(props: {
   disabled?: boolean;
   /** Why the last sign-in failed, under the row. */
   error?: string;
+  /** Replaces the one-line description, e.g. with where setup stands. */
+  meta?: string;
   onConnect?: () => void;
   desktopApi?: DesktopApi;
   onNotice: (notice: Notice) => void;
@@ -355,7 +357,7 @@ export function SandboxerCompactRow(props: {
     <CompactMcpConnectionRow
       {...(props.connectionId ? { connectionId: props.connectionId } : {})}
       {...(props.error ? { error: props.error } : {})}
-      meta={<>Cloud Linux machines for your agent &middot; paid service</>}
+      meta={props.meta ?? <>Cloud Linux machines for your agent &middot; paid service</>}
       name="Sandboxer"
     >
       <SandboxerLink

@@ -360,7 +360,6 @@ export function PluginsSettings(props: {
   );
   /** The last Test of `localDraft`, cleared by any edit to it. */
   const [localTest, setLocalTest] = useState<TestMcpStdioConnectionResponse>();
-  /** The GitHub row's setup form is open, for a first or another connection. */
   /** The plugin store dialog and its page, or undefined while it is closed. */
   const [storeView, setStoreView] = useState<PluginStoreView>();
   const storeTitleId = useId();
@@ -1290,19 +1289,31 @@ export function PluginsSettings(props: {
 
   // Declared after the store's dialog hook, whose cleanup returns focus to
   // the Plugin store button when the store closes; this then moves it on to
-  // the row the store added or pointed at. A row that is not listed yet
-  // waits for the next load.
+  // the row the store added or pointed at. Every caller reloads the list
+  // before asking, so a row that is not listed now is given up rather than
+  // left waiting: a later reload must not pull focus to it out of the blue.
   useEffect(() => {
     if (storeView !== undefined || !revealConnectionId) return;
     const row = Array.from(
       connectionListRef.current?.querySelectorAll<HTMLElement>("[data-connection-id]") ?? [],
     ).find((element) => element.dataset.connectionId === revealConnectionId);
-    if (!row) return;
     setRevealConnectionId(undefined);
+    if (!row) return;
     setHighlightConnectionId(revealConnectionId);
     row.scrollIntoView?.({ block: "nearest" });
     row.querySelector<HTMLElement>("button")?.focus();
   }, [connections, revealConnectionId, storeView]);
+
+  // Sandboxer's store page closes onto its row once it works, as adding
+  // GitHub or a custom server does.
+  const sandboxerConfiguredId = connections.find(
+    (connection) => connection.kind === "sandboxer" && connection.configured,
+  )?.id;
+  useEffect(() => {
+    if (storeView !== "sandboxer" || !sandboxerConfiguredId) return;
+    setStoreView(undefined);
+    setRevealConnectionId(sandboxerConfiguredId);
+  }, [sandboxerConfiguredId, storeView]);
 
   useEffect(() => {
     if (!highlightConnectionId) return;
@@ -2084,8 +2095,9 @@ export function PluginsSettings(props: {
             </div>
           ) : (
             <p className="settings-empty">
-              No connections set up yet. Set up a suggestion below, or open the plugin store to add
-              your own server.
+              {suggestedConnections.length || suggestGithub
+                ? "No connections set up yet. Set up a suggestion below, or open the plugin store to add your own server."
+                : "No connections set up yet. Open the plugin store to add one."}
             </p>
           )}
           {!connectionsLoading && (suggestedConnections.length || suggestGithub) ? (
@@ -2124,6 +2136,7 @@ export function PluginsSettings(props: {
                       connection={connection}
                       desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
+                      setupHeadline={resolveMcpConnectionSetup({ connection, gatewayEnabled }).headline}
                       onCancelAuthorization={() => void cancelAuthorization(connection)}
                       onConnect={props.desktopApi?.setSandboxerTransport
                         ? () => void connectSandboxerHosted(connection)
@@ -2502,8 +2515,8 @@ export function PluginsSettings(props: {
                           disabled={Boolean(connectionPending)}
                           type="button"
                           onClick={() => {
-                            // Opens the GitHub row's own setup, above, with the
-                            // name typed here; this form goes back to empty.
+                            // Turns the store to GitHub's page with the name
+                            // typed here; this form goes back to empty.
                             openGithubSetup(connectionName.trim());
                             setConnectionName("");
                             setConnectionUrl("");
@@ -3797,6 +3810,8 @@ function SuggestedSandboxerRow(props: {
   authorizationError?: string;
   authorizing: boolean;
   connection: McpConnectionStatus;
+  /** Where setup stands, in the row's own words (`resolveMcpConnectionSetup`). */
+  setupHeadline: string;
   desktopApi?: DesktopApi;
   disabled: boolean;
   onCancelAuthorization: () => void;
@@ -3819,13 +3834,20 @@ function SuggestedSandboxerRow(props: {
       </CompactMcpConnectionRow>
     );
   }
+  // Part way through the Local CLI path, the line says where it stands and
+  // leaves Connect (which would switch to the hosted service) to the full
+  // setup, where the choice between the two is on screen.
+  const localCliInProgress = props.connection.authMode === "local_cli"
+    && props.connection.sandboxerCliState !== "cli_missing";
   return (
     <SandboxerCompactRow
       connectionId={props.connection.id}
       desktopApi={props.desktopApi}
       disabled={props.disabled}
       {...(props.authorizationError ? { error: `Sign-in failed: ${props.authorizationError}` } : {})}
-      {...(props.onConnect ? { onConnect: props.onConnect } : {})}
+      {...(localCliInProgress
+        ? { meta: `Local CLI \u00b7 ${props.setupHeadline}` }
+        : props.onConnect ? { onConnect: props.onConnect } : {})}
       onNotice={props.onNotice}
       onSetUp={props.onSetUp}
     />
@@ -3879,7 +3901,11 @@ function PwrSuiteStoreTile(props: {
   onShow: () => void;
 }) {
   const app = props.connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap";
-  const { status, refresh } = useLocalConnectionStatus(app, props.desktopApi);
+  // Set up, the tile only points at its row, which already probes the app.
+  const { status, refresh } = useLocalConnectionStatus(
+    props.connection.configured ? undefined : app,
+    props.desktopApi,
+  );
   const onChanged = props.onChanged;
   const refreshStatus = useCallback(() => {
     void refresh();
