@@ -32,6 +32,9 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
   });
   const hostPlatform = await app.window.evaluate(() => document.documentElement.dataset.platform);
   const sizeWindow = (size: WindowZoomSize) => sizeWindowAtZoom(app.electronApp, app.window, size);
+  // Cases whose stacked page fit the viewport, named in the failure when
+  // too many of them leave the property without enough scrolled cases.
+  const fitted: string[] = [];
   try {
     await expect(app.window.locator(".app-shell")).toBeVisible();
     await fc.assert(fc.asyncProperty(fc.record({
@@ -54,10 +57,12 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
         return root.scrollTop;
       }, scrolled);
       // A stacked page that fits its viewport has no offset to keep, so the
-      // case checks nothing. The smoke fixture's stacked page is about 355 CSS
-      // px tall on the Windows runner, so it fits at 180% of a 640px window
-      // there and overflows at 300%. fast-check counts only cases that pass
-      // this, and `maxSkipsPerRun` fails the property when too few scroll.
+      // case checks nothing. The smoke fixture's stacked page is short: on
+      // the Windows runner of main run 44122380675 it fit a 533x355 CSS
+      // viewport (180% of 960x640) and overflowed at 300%. fast-check counts
+      // only cases that pass this, and `maxSkipsPerRun` fails the property
+      // when too few of them scroll.
+      if (stackedOffset === 0) fitted.push(`${platform} ${narrow.width}x${narrow.height} at ${narrow.zoom}%`);
       fc.pre(stackedOffset > 0);
       await sizeWindow({ ...wide, zoom: 100 });
       const offsets = await app.window.evaluate(() => {
@@ -74,10 +79,14 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
         return scrolled;
       });
       expect(offsets, `${platform}: ${narrow.width}x${narrow.height} at ${narrow.zoom}%, then ${wide.width}x${wide.height} at 100%`).toEqual([]);
-    }), { numRuns: 8, maxSkipsPerRun: 1, examples: [
+    }), { numRuns: 8, maxSkipsPerRun: 4, examples: [
       [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
       [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
     ] });
+  } catch (error) {
+    if (fitted.length === 0) throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n`
+      + `Stacked pages that fit their viewport (${fitted.length}): ${fitted.join("; ")}`, { cause: error });
   } finally {
     await app.window.evaluate((value) => {
       if (value) document.documentElement.dataset.platform = value;
