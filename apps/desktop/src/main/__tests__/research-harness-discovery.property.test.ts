@@ -38,7 +38,7 @@ it("retains source snapshots with provenance atomically, without model calls or 
   const { store, connection, probe } = setup();
   const input = request();
   const result = await measureSqliteWrites(() => service.start(input, fixture.tempDir));
-  const run = result.result;
+  const run = store.get(result.result.id)!;
   expect(run.harness?.discovery?.tree?.nodes.at(-1)?.sourceVerified).toBe(true);
   expect(run.submissions).toEqual([]);
   expect(run.status).toBe("interrupted");
@@ -81,7 +81,7 @@ it("does not revive an observation cancelled while the tree response is outstand
   });
   const start = service.start(request(), fixture.tempDir);
   await waiting.promise;
-  const run = store.list(actor)[0]!;
+  const run = store.activeRuns(actor)[0]!;
   await service.stop(run.id, actor, "stopped", "Detach observation");
   tree.resolve(records.tree);
   expect((await start).status).toBe("stopped");
@@ -91,6 +91,6 @@ it("does not revive an observation cancelled while the tree response is outstand
 it("refuses discovery execution before creating an intent or opening a process", () => {
   const { store, connection } = setup();
   expect(() => service.start({ ...request(), mode: "execute" }, fixture.tempDir)).toThrow("read-only");
-  expect(store.list(actor)).toHaveLength(0);
+  expect(store.activeRuns(actor)).toHaveLength(0);
   expect(connection.request).not.toHaveBeenCalled();
 });

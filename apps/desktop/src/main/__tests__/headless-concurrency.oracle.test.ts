@@ -35,7 +35,7 @@ beforeAll(async () => {
   runtimeRoot = root;
   const outputDirectory = path.join(root, "runtime");
   const fixture = path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts");
-  await buildHeadless({ outputDirectory, plugins: [{ name: "conformance-provider", setup(builder) {
+  await buildHeadless({ outputDirectory, sourcemap: false, logLevel: "warning", plugins: [{ name: "conformance-provider", setup(builder) {
     builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "owned-codex" }));
     builder.onLoad({ filter: /.*/, namespace: "owned-codex" }, () => ({
       contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(fixture)};`, loader: "ts", resolveDir: import.meta.dirname,

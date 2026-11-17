@@ -33,6 +33,47 @@ function sourceId(value: object): number {
   return id;
 }
 
+/** Time kept back from a caller's deadline to read and return the page. */
+export const STARTUP_COVERAGE_WAIT_MARGIN_MS = 1_000;
+
+/**
+ * Group-member reads plan an archive, and their callers accept only complete
+ * coverage. While the startup provider check runs, every index reports
+ * `checking`, so a read made in the first seconds after launch was refused as
+ * incomplete. Such a read waits for the check to end, within the caller's
+ * deadline less a margin. After that it answers as before, with `checking`
+ * when the check is still running. Sidebar queries never wait: they draw
+ * `checking` and refresh on `navigation/providerThreads/refreshed`.
+ */
+export async function awaitStartupProviderCoverage(params: {
+  query: { kind: string };
+  deadlineAt?: number;
+  registry?: Pick<DesktopBackendRegistry, "getStartupProviderRefreshStatus" | "onEvent">;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.query.kind !== "group-members" || params.deadlineAt === undefined) return;
+  const registry = params.registry ?? getDesktopBackendRegistry();
+  const checking = () => registry.getStartupProviderRefreshStatus?.()?.state === "checking";
+  const waitMs = params.deadlineAt - STARTUP_COVERAGE_WAIT_MARGIN_MS - Date.now();
+  if (!checking() || waitMs <= 0) return;
+  params.signal?.throwIfAborted();
+  await new Promise<void>((resolve) => {
+    let unsubscribe: (() => void) | undefined;
+    const finish = () => {
+      clearTimeout(timer);
+      unsubscribe?.();
+      params.signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, waitMs);
+    // The registry leaves `checking` before it emits the refreshed event.
+    unsubscribe = registry.onEvent?.(() => { if (!checking()) finish(); });
+    params.signal?.addEventListener("abort", finish, { once: true });
+    if (!checking()) finish();
+  });
+  params.signal?.throwIfAborted();
+}
+
 /**
  * Build the complete compact membership index used by bounded navigation
  * reads. This intentionally does not hydrate queue entries, launchpad

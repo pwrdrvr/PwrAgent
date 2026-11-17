@@ -13,6 +13,11 @@ export type AgentToolCallContext = {
   signal?: AbortSignal;
   /** Local transport response flush; never supplied by tool arguments. */
   responseFlushed?: Promise<void>;
+  /**
+   * One line of progress for a long call. MCP sends it as the call's
+   * progress message; transports without one ignore it.
+   */
+  reportProgress?: (message: string) => void;
 };
 
 export type AgentToolCallContentItems = NonNullable<

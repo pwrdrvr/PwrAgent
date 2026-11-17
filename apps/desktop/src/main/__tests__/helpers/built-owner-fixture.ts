@@ -90,7 +90,7 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
       builder.onLoad({ filter: /.*/, namespace: "no-installed-agents" }, () => ({ contents: "export const discoverLocalAcpAgentRecords = async () => [];", loader: "js" }));
     }
   } }];
-  await buildHeadless({ outputDirectory: path.join(directory, "dist"), plugins });
+  await buildHeadless({ outputDirectory: path.join(directory, "dist"), plugins, sourcemap: false, logLevel: "warning" });
   const guard = path.join(directory, "guard.cjs");
   await build({ entryPoints: [path.join(main, "__tests__/setup/agent-cli-spawn-guard.ts")], outfile: guard, bundle: true, platform: "node", format: "cjs", logLevel: "silent",
     plugins: [{ name: "process-exit-hooks", setup(builder) {

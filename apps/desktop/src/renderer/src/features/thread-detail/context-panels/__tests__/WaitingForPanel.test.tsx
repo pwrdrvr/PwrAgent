@@ -207,6 +207,25 @@ describe("WaitingForPanel", () => {
     expect(openContinueAfter).toHaveBeenCalledTimes(1);
   });
 
+  it("groups a CI run wait apart from thread waits and shows its latest check", () => {
+    const condition = { backend: "codex" as const, threadId: "", when: "ci_run" as const, title: "Release run 8841207733",
+      ciRun: { url: "https://github.com/example/app/actions/runs/8841207733", on: ["approval_gate" as const, "job_failed" as const] } };
+    const run: ThreadPendingWake = {
+      kind: "dependency", key: "dependency:run", durable: true, stop: "cancel", createdAt: at(15, 56), createdBy: "agent",
+      dependency: {
+        id: "run", mode: "all", onFailure: "notify", status: "waiting", conditions: [condition],
+        evidence: [{ condition, state: "waiting", reason: "Waiting for run 8841207733", observedAt: at(15, 56),
+          ciRun: { runId: 8841207733, status: "waiting", checkedAt: at(15, 58), gates: [{ environment: "macos-notarize", reviewers: [] }] } }],
+      },
+    };
+    render(<WaitingForPanel thread={thread} controller={controller(ready([WAKES[3]!, run]))} now={NOW} />);
+    const runs = screen.getByRole("group", { name: "CI runs" });
+    const title = within(runs).getByRole("button", { name: "Continue after Release run 8841207733 reaches an approval gate or has a failed job" });
+    expect(screen.getByRole("group", { name: "Other threads" })).not.toContainElement(title);
+    fireEvent.click(title);
+    expect(within(runs).getByText(/Waiting for approval: macos-notarize · checked 3:58 PM/)).toBeInTheDocument();
+  });
+
   it("links a running task to the tab that owns it", () => {
     const showTab = vi.fn();
     render(<WaitingForPanel thread={thread} controller={controller(ready())} now={NOW} onShowTab={showTab} />);

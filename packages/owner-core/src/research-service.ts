@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchRunBoard,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork, type ResearchPendingRequest,
-  type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage,
+  type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage, type ResearchChange, type ResearchChanges,
+  type ResearchChangesCursor, type ResearchBoardRange, type ResearchBoardPage,
 } from "@pwragent/shared/research";
 
-/** How many of a thread's runs the panel lists. Only the selected one is projected. */
+/** How many of a thread's runs the panel lists. Each run's items are read by delta. */
 export const RESEARCH_SNAPSHOT_RUN_LIMIT = 50;
 
 /** An operator request expires if the coordinator has not started it within five minutes. */
@@ -20,14 +21,15 @@ export type ResearchAssignmentReceipt = { runId: string; itemId: string; version
 /** The adapter has confirmed that no model turn was admitted. */
 export class ResearchAdmissionRefused extends Error {}
 export type ResearchPorts = {
-  stopHarness?: (id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string) => Promise<ResearchRun>;
+  stopHarness?: (id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string) => Promise<ResearchRunHeader>;
   enabled?: () => boolean;
   spawn: (context: ResearchExecutionContext, task: string, title: string, workspaceMode: StartResearchRequest["workspaceMode"],
     onCreated: (worker: ResearchThread) => void) => Promise<ResearchThread & { turnId?: string }>;
   stop: (worker: NonNullable<ResearchApproach["worker"]>) => Promise<void>;
   notify: (context: ResearchActor, target: ResearchThread, text: string) => Promise<{ queueEntryId?: string; turnId?: string }>;
   cancelQueued: (queueEntryId: string) => Promise<{ turnId?: string }>;
-  changed: (thread: ResearchThread) => void;
+  /** A run reached a revision, or (with no run) the thread's pending request changed. */
+  changed: (change: ResearchChange) => void;
   ownerId: string;
   ownerPid: number;
   ownerStartedAt: number;
@@ -38,8 +40,10 @@ export type ResearchPorts = {
 };
 
 /**
- * Owns only structured research, never provider transcripts. Store mutations
- * are synchronous, compare-and-append commits before effects. Spawn intent is
+ * Owns only structured research, never provider transcripts. Commands and
+ * observers validate against the stored projections, the run header and the
+ * items they touch, so their cost does not grow with the journal. Store
+ * mutations are synchronous, compare-and-append commits before effects. Spawn intent is
  * durable before handing off; a thread is bound before its first model turn.
  * A lost response is never retried automatically. Foreign live owners are
  * read-only. Dead owners become interrupted, without starting any work.
@@ -47,13 +51,14 @@ export type ResearchPorts = {
  * cancellation is unresolved. Provider cancellation does not undo billing.
  */
 export class ResearchService {
-  private readonly starts = new Map<string, { signature: string; promise: Promise<ResearchRun> }>();
+  private readonly starts = new Map<string, { signature: string; promise: Promise<ResearchRunHeader> }>();
   private readonly assignments = new Map<string, { signature: string; promise: Promise<ResearchAssignmentReceipt> }>();
   private readonly deadlines = new Map<string, () => void>();
-  private readonly pendingStarts = new Set<string>();
-  private readonly pendingDeliveries = new Set<string>();
-  private readonly pendingQueueEvents = new Map<string, Map<string, { status: string; turnId?: string }>>();
-  private readonly stops = new Map<string, Promise<ResearchRun>>();
+  /** Run ID to the approaches whose start is unresolved. */
+  private readonly pendingStarts = new Map<string, Set<string>>();
+  /** Run ID to the revision deliveries whose send is unresolved, each with the queue events seen meanwhile. */
+  private readonly pendingDeliveries = new Map<string, Map<string, Map<string, { status: string; turnId?: string }>>>();
+  private readonly stops = new Map<string, Promise<ResearchRunHeader>>();
   private readonly workerStops = new Map<string, Promise<void>>();
   private readonly intents = new Map<string, { id: string; request: PrepareResearchRequest; preparedAt: number; expiresAt: number }>();
   private closed = false;
@@ -64,8 +69,7 @@ export class ResearchService {
   }
 
   initialize(): void {
-    for (const run of this.storage.list()) {
-      if (!["running", "stopping"].includes(run.status)) continue;
+    for (const run of this.storage.activeRuns()) {
       if (run.ownerId === this.ports.ownerId) this.scheduleDeadline(run);
       else if (!this.ports.isOwnerAlive(run)) {
         this.append(run, `recovery:${this.ports.ownerId}`, this.operator(run), {
@@ -78,18 +82,22 @@ export class ResearchService {
   }
 
   /**
-   * Run summaries for the thread, plus the board of one run: the requested
-   * one when the thread can see it, else the newest. The journal is read
-   * separately in pages (`readEvents`), so a change re-sends no history.
+   * The thread's run summaries, read in one statement. With `runId`, only
+   * that run's summary: what a targeted change needs.
    */
   snapshot(request: ResearchSnapshotRequest): ResearchSnapshot {
     const thread = { backend: request.backend, threadId: request.threadId };
-    const runs = this.storage.runSummaries(thread, RESEARCH_SNAPSHOT_RUN_LIMIT);
+    const runs = this.storage.runSummaries(thread, RESEARCH_SNAPSHOT_RUN_LIMIT, request.runId);
     const pending = this.pendingRequest(thread);
-    const selectedId = (runs.find((r) => r.id === request.runId) ?? runs[0])?.id;
-    const selected = selectedId ? this.storage.get(selectedId) : undefined;
-    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id),
-      ...(pending ? { pending } : {}), ...(selected ? { selected: researchRunBoard(selected) } : {}) };
+    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id), ...(pending ? { pending } : {}) };
+  }
+
+  /** The run's state and the items changed after `sinceRevision`. Members only; no writes. */
+  changes(id: string, sinceRevision: number | undefined, after: ResearchChangesCursor | undefined, actor: ResearchActor): ResearchChanges {
+    const header = this.accessibleHeader(id, actor);
+    const page = this.storage.changes(id, sinceRevision, after);
+    if (!page) throw new Error("Research run not found");
+    return { ...page, writable: !this.closed && header.ownerId === this.ports.ownerId };
   }
 
   /** One page of a run's journal, newest first. Members only; no writes. */
@@ -114,10 +122,54 @@ export class ResearchService {
     return this.storage.summaries(thread).map((run) => ({ id: run.id, objective: run.objective.slice(0, 200), status: run.status, deadlineAt: run.deadlineAt, workerLimit: run.workerLimit, activeWorkers: run.activeWorkers }));
   }
 
+  /** Replays the whole journal. For recovery and tests: no command, observer or view reads this way. */
   read(id: string, actor: ResearchActor): ResearchRun {
-    const run = this.requireRun(id);
-    this.requireMember(run, actor);
-    return run;
+    const run = this.storage.get(id);
+    if (!run) throw new Error("Research run not found");
+    if (sameResearchThread(actor, run.coordinator) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, actor))) return run;
+    throw new Error("The calling thread is not a member of this research run");
+  }
+
+  /** One page of approaches, findings and submissions, each in creation order, for the agent tools. */
+  readBoard(id: string, range: ResearchBoardRange, actor: ResearchActor): ResearchBoardPage & { run: ResearchRunHeader } {
+    const run = this.memberHeader(id, actor);
+    const page = this.storage.board(id, range);
+    if (!page) throw new Error("Research run not found");
+    return { run, ...page };
+  }
+
+  /** The workspace-relative path of one piece of evidence, and the thread whose workspace holds it. */
+  readEvidence(id: string, itemId: string, pathIndex: number, actor: ResearchActor): { relativePath: string; source: ResearchThread; harnessWorkspace?: string } {
+    const run = this.memberHeader(id, actor);
+    const item = this.storage.readItem(id, itemId);
+    const relativePath = item && item.type !== "approach" ? item.record.paths[pathIndex] : undefined;
+    // The author of evidence is whoever appended it, not a field its text can claim.
+    const created = item ? this.storage.events(id, { afterSeq: item.createdSeq - 1, beforeSeq: item.createdSeq + 1, limit: 1 }).events[0] : undefined;
+    if (!relativePath || !created) throw new Error("Evidence source is unavailable");
+    return { relativePath, source: { backend: created.actor.backend, threadId: created.actor.threadId },
+      ...(created.provenance && run.harness ? { harnessWorkspace: run.harness.workspace } : {}) };
+  }
+
+  /** What a command changed, for a compact receipt: the item it created or named, and its revision delivery. */
+  receipt(id: string, commandId: string, command: ResearchCommand): { item?: ResearchItem; delivery?: ResearchDelivery } {
+    const event = this.storage.findCommand(id, commandId);
+    const itemId = event?.data.type === "finding" ? event.data.finding.id : event?.data.type === "submission" ? event.data.submission.id
+      : command.action === "review" ? command.submissionId : "approachId" in command ? command.approachId : undefined;
+    const item = itemId ? this.storage.readItem(id, itemId) : undefined;
+    const delivery = command.action === "review" && command.decision === "revision_requested" ? this.revisionDelivery(id, commandId) : undefined;
+    return { ...(item ? { item } : {}), ...(delivery ? { delivery } : {}) };
+  }
+
+  /** The latest receipt of the delivery a revision request made, by that request's command ID. */
+  revisionDelivery(id: string, commandId: string): ResearchDelivery | undefined {
+    return this.storage.delivery(id, `feedback:${commandId}`);
+  }
+
+  /** The header for a thread the run's coordinator or an approach's current worker. */
+  private memberHeader(id: string, actor: ResearchActor): ResearchRunHeader {
+    const header = this.requireHeader(id);
+    if (sameResearchThread(actor, header.coordinator) || this.storage.isApproachWorker(id, actor)) return header;
+    throw new Error("The calling thread is not a member of this research run");
   }
 
   private accessibleHeader(id: string, actor: ResearchActor): ResearchRunHeader {
@@ -157,7 +209,7 @@ export class ResearchService {
 
   private async performAssignment(request: ResearchAssignRequest, context: ResearchExecutionContext, key: string, signature: string): Promise<ResearchAssignmentReceipt> {
     this.requireOpen();
-    const run = this.read(request.runId, context);
+    const run = this.memberHeader(request.runId, context);
     if (run.harness) throw new Error("Harness member admission belongs to the configured bridge");
     if (!sameResearchThread(run.coordinator, context)) throw new Error("Only the coordinating thread can assign research items");
     if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
@@ -170,19 +222,20 @@ export class ResearchService {
     if (run.revision + (run.status === "exhausted" ? 1 : 0) >= RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; finish this run before starting another");
     boundedText(request.task, "assignment task", 2000);
     const item = this.requireItemVersion(run.id, request.itemId, request.expectedVersion);
-    this.requireReleasedAssignment(run, item);
+    this.requireReleasedAssignment(run.id, item);
     if (!["open", "blocked"].includes(item.work.state) || item.work.assignee) throw new Error("Release or reopen the item before assigning it");
     if (run.activeWorkers >= run.workerLimit) throw new Error("Research worker limit reached; wait for or cancel an existing worker");
     if (run.status === "exhausted") {
       this.append(run, `reopen:${key}`, context, { type: "status", status: "running", reason: "The coordinator explicitly assigned retained evidence within the original deadline." });
-      this.scheduleDeadline(this.requireRun(run.id));
+      this.scheduleDeadline(this.requireHeader(run.id));
     }
     const title = `Investigate: ${item.type === "approach" ? item.record.title : item.record.text}`.slice(0, 160);
     const approach: ResearchApproach = { id: `work-${randomUUID()}`, title, task: request.task, state: "pending", itemId: item.id };
-    this.append(this.requireRun(run.id), key, context, { type: "assignment", itemId: item.id, approach, task: request.task }, signature);
+    this.append(this.requireHeader(run.id), key, context, { type: "assignment", itemId: item.id, approach, task: request.task }, signature);
     await this.admitApproach(run.id, approach, context);
-    if (this.requireRun(run.id).status === "stopping") this.finishStopping(this.requireRun(run.id));
-    else this.finishExploration(this.requireRun(run.id));
+    const settled = this.requireHeader(run.id);
+    if (settled.status === "stopping") this.finishStopping(settled);
+    else this.finishExploration(settled);
     return this.assignmentReceipt(run.id, approach.id, item.id);
   }
 
@@ -215,18 +268,17 @@ export class ResearchService {
     if (!coordinator && (assigned ? !sameResearchThread(assigned, actor) : !originalWorker || !sameResearchThread(originalWorker, actor))) throw new Error("Only the item's assignee or coordinator may change its work state");
     if (["open", "cancelled"].includes(command.state) && !coordinator) throw new Error("Only the coordinator may release or cancel an item");
     if (!RESEARCH_WORK_TRANSITIONS[item.work.state].includes(command.state)) throw new Error("Invalid item work-state transition");
-    if (command.state === "open") this.requireReleasedAssignment(this.requireRun(id), item);
+    if (command.state === "open") this.requireReleasedAssignment(id, item);
     const cancellation = command.state === "cancelled" ? item.work.assignmentId ?? (item.type === "approach" ? item.id : undefined) : undefined;
     const work: ResearchItemWork = command.state === "open" ? { state: "open", note: command.reason }
       : { ...item.work, state: cancellation ? "cancel_requested" : command.state, note: command.reason,
         ...(cancellation ? { assignmentId: cancellation, assignee: assigned ?? originalWorker } : {}),
         ...(command.state === "claimed" ? { assignee: assigned ?? { backend: actor.backend, threadId: actor.threadId } } : {}) };
     if (header.revision >= RESEARCH_MAX_EVENTS && command.state !== "cancelled") throw new Error("Research event limit reached; finish this run before starting another");
-    this.storage.append(id, header.revision, { seq: header.revision + 1, commandId: requestId, signature, at: this.now(), actor, data: { type: "item_work", itemId: item.id, work } });
-    this.publish(id);
+    if (this.storage.append(id, header.revision, { seq: header.revision + 1, commandId: requestId, signature, at: this.now(), actor, data: { type: "item_work", itemId: item.id, work } })) this.publish(id, header.revision + 1);
     if (cancellation) {
-      for (const delivery of this.requireRun(id).deliveries) {
-        if (delivery.approachId === cancellation && !["cancelled", "ended"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
+      for (const delivery of this.storage.deliveries(id, { open: true })) {
+        if (delivery.approachId === cancellation) await this.cancelDelivery(id, delivery, actor);
       }
       await this.stopWorker(id, cancellation, actor);
       this.settleItemCancellation(id, cancellation);
@@ -241,25 +293,24 @@ export class ResearchService {
     return item;
   }
 
-  private requireReleasedAssignment(run: ResearchRun, item: ResearchItem): void {
-    const assignment = item.work.assignmentId ? run.approaches.find((a) => a.id === item.work.assignmentId) : undefined;
+  private requireReleasedAssignment(id: string, item: ResearchItem): void {
+    const assignment = item.work.assignmentId ? this.approach(id, item.work.assignmentId) : undefined;
     if (assignment && researchApproachOccupiesSlot(assignment)) throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
   }
 
   private settleItemCancellation(id: string, assignmentId: string): void {
-    const run = this.requireRun(id);
-    const assignment = run.approaches.find((a) => a.id === assignmentId);
+    const assignment = this.approach(id, assignmentId);
     if (!assignment || researchApproachOccupiesSlot(assignment)) return;
     for (const itemId of new Set([assignment.id, assignment.itemId].filter((value): value is string => Boolean(value)))) {
       const item = this.storage.readItem(id, itemId);
       if (item?.work.assignmentId !== assignmentId || item.work.state !== "cancel_requested") continue;
-      this.append(this.requireRun(id), `item-cancelled:${assignmentId}:${item.id}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
+      const run = this.requireHeader(id);
+      this.append(run, `item-cancelled:${assignmentId}:${item.id}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
     }
   }
 
   isWorker(thread: ResearchThread): boolean {
-    return this.storage.list(thread).some((run) => ["running", "stopping"].includes(run.status)
-      && run.approaches.some((a) => a.worker && sameResearchThread(a.worker, thread)));
+    return this.storage.isActiveWorker(thread);
   }
 
   /** Bind the operator's form limits before asking the coordinator to propose directions. No writes or spend. */
@@ -274,15 +325,15 @@ export class ResearchService {
     return { intentId: id };
   }
 
-  start(request: StartResearchRequest, context: ResearchExecutionContext): Promise<ResearchRun> {
+  start(request: StartResearchRequest, context: ResearchExecutionContext): Promise<ResearchRunHeader> {
     const key = JSON.stringify([context.backend, context.threadId, context.turnId, context.callId]);
     const pending = this.starts.get(key);
     const signature = JSON.stringify(request);
     if (pending) return pending.signature === signature ? pending.promise : Promise.reject(new Error("Research start key was reused with different arguments"));
-    const existing = this.storage.findByStartKey(key);
+    const existing = this.storage.runIdForStartKey(key);
     if (existing) {
-      if (existing.events[0]?.signature !== signature) return Promise.reject(new Error("Research start key was reused with different arguments"));
-      return Promise.resolve(existing);
+      if (this.storage.events(existing, { beforeSeq: 2, limit: 1 }).events[0]?.signature !== signature) return Promise.reject(new Error("Research start key was reused with different arguments"));
+      return Promise.resolve(this.requireHeader(existing));
     }
     const promise = this.performStart(request, context, key);
     this.starts.set(key, { signature, promise });
@@ -290,7 +341,7 @@ export class ResearchService {
     return promise;
   }
 
-  private async performStart(request: StartResearchRequest, context: ResearchExecutionContext, key: string): Promise<ResearchRun> {
+  private async performStart(request: StartResearchRequest, context: ResearchExecutionContext, key: string): Promise<ResearchRunHeader> {
     this.requireOpen();
     validateStartResearch(request);
     if (this.isWorker(context)) throw new Error("Research workers cannot start additional runs. Ask the coordinating thread to change the assignment.");
@@ -306,70 +357,71 @@ export class ResearchService {
       data: { type: "created", objective: request.objective, coordinator: { backend: context.backend, threadId: context.threadId }, approaches, ownerId: this.ports.ownerId,
         ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, deadlineAt: this.now() + request.minutes * 60_000, workspaceMode: request.workspaceMode } });
     if (intent) this.intents.delete(intentKey);
-    this.ports.changed(context);
-    this.scheduleDeadline(this.requireRun(id));
+    this.ports.changed({ backend: context.backend, threadId: context.threadId, runId: id, revision: 1 });
+    this.scheduleDeadline(this.requireHeader(id));
     for (const approach of approaches) {
-      if (!this.canDispatch(this.requireRun(id))) break;
+      if (!this.canDispatch(this.requireHeader(id))) break;
       await this.admitApproach(id, approach, context);
     }
-    const current = this.requireRun(id);
+    const current = this.requireHeader(id);
     if (current.status === "stopping") this.finishStopping(current);
     else if (current.status === "running" && this.now() >= current.deadlineAt) await this.stop(id, context, "deadline", "Research deadline reached");
     else this.finishExploration(current);
-    return this.requireRun(id);
+    return this.requireHeader(id);
   }
 
   private async admitApproach(id: string, approach: ResearchApproach, context: ResearchExecutionContext): Promise<void> {
-    const run = this.requireRun(id);
+    const run = this.requireHeader(id);
     if (!this.canAdmitApproach(run, approach)) {
       this.append(run, `unadmitted:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "stopped" });
       this.settleItemCancellation(id, approach.id);
       return;
     }
-    this.pendingStarts.add(`${id}:${approach.id}`);
-    this.append(this.requireRun(id), `starting:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting" });
+    const starting = this.pendingStarts.get(id) ?? new Set<string>();
+    this.pendingStarts.set(id, starting.add(approach.id));
+    this.append(this.requireHeader(id), `starting:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting" });
     try {
       const worker = await this.ports.spawn({ ...context, callId: `${context.callId}:${approach.id}` },
         approach.itemId ? researchItemWorkerPrompt(id, approach) : researchWorkerPrompt(id, run.objective, approach), approach.title, run.workspaceMode,
         (created) => {
-          const current = this.requireRun(id);
-          this.append(current, `bound:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting", worker: created });
-          if (!this.canAdmitApproach(this.requireRun(id), approach)) throw new ResearchAdmissionRefused("Research assignment stopped before worker admission");
+          this.append(this.requireHeader(id), `bound:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting", worker: created });
+          if (!this.canAdmitApproach(this.requireHeader(id), approach)) throw new ResearchAdmissionRefused("Research assignment stopped before worker admission");
         });
-      const current = this.requireRun(id);
-      const prior = current.approaches.find((a) => a.id === approach.id)!;
+      const current = this.requireHeader(id);
+      const prior = this.requireApproach(id, approach.id);
       // A trusted provider event can precede the handoff reply. It already
       // owns this transition; do not rewrite it or regress its outcome.
       if (!prior.worker?.turnId || (prior.state === "starting" && prior.worker.turnId === worker.turnId)) {
         this.append(current, `started:${approach.id}`, context, { type: "worker", approachId: approach.id, worker,
           state: ["ended", "stopped", "failed"].includes(prior.state) ? prior.state : worker.turnId ? "running" : "unknown" });
       }
-      const admitted = this.requireApproach(this.requireRun(id), approach.id);
-      if (!this.canAdmitApproach(this.requireRun(id), approach) && !["ended", "stopped", "failed"].includes(admitted.state)) await this.stopWorker(id, approach.id, context);
+      const admitted = this.requireApproach(id, approach.id);
+      if (!this.canAdmitApproach(this.requireHeader(id), approach) && !["ended", "stopped", "failed"].includes(admitted.state)) await this.stopWorker(id, approach.id, context);
     } catch (error) {
-      const current = this.requireRun(id);
-      const observed = this.requireApproach(current, approach.id);
+      const current = this.requireHeader(id);
+      const observed = this.requireApproach(id, approach.id);
       const state = observed.worker?.turnId && ["running", "ended", "stopped", "failed"].includes(observed.state)
         ? observed.state : error instanceof ResearchAdmissionRefused ? "failed" : "unknown";
       this.append(current, `start-failed:${approach.id}`, context, { type: "worker", approachId: approach.id, state, note: message(error) });
-      if (!this.canAdmitApproach(this.requireRun(id), approach) && state === "running") await this.stopWorker(id, approach.id, context);
+      if (!this.canAdmitApproach(this.requireHeader(id), approach) && state === "running") await this.stopWorker(id, approach.id, context);
     } finally {
-      this.pendingStarts.delete(`${id}:${approach.id}`);
+      starting.delete(approach.id);
+      if (!starting.size && this.pendingStarts.get(id) === starting) this.pendingStarts.delete(id);
       this.settleItemCancellation(id, approach.id);
     }
   }
 
-  async update(id: string, requestId: string, command: ResearchCommand, actor: ResearchActor): Promise<ResearchRun> {
+  async update(id: string, requestId: string, command: ResearchCommand, actor: ResearchActor): Promise<ResearchRunHeader> {
     this.requireOpen();
-    if (command?.action === "work") { await this.work(id, requestId, command, actor); return this.requireRun(id); }
+    if (command?.action === "work") { await this.work(id, requestId, command, actor); return this.requireHeader(id); }
     if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
-    let run = this.read(id, actor);
+    const run = this.memberHeader(id, actor);
     if (run.harness && !["review", "stop", "finish"].includes(command.action)) throw new Error("Harness records are immutable source observations");
     if (run.harness && command.action === "review" && command.decision === "revision_requested") throw new Error("Bridge revision delivery is unavailable; record rejection or acceptance locally");
     if (run.ownerId !== this.ports.ownerId) throw new Error("This run belongs to another process. Open its worker threads to inspect interrupted work.");
     const signature = JSON.stringify(command);
-    const duplicate = run.events.find((e) => e.commandId === requestId);
+    const duplicate = this.storage.findCommand(id, requestId);
     if (duplicate) {
       if (duplicate.signature !== signature || !sameResearchThread(duplicate.actor, actor) || duplicate.actor.kind !== actor.kind) throw new Error("Research command key was reused");
       return run;
@@ -378,13 +430,15 @@ export class ResearchService {
     if ((command.action === "review" || command.action === "stop" || command.action === "finish") && !coordinator) throw new Error("Only the coordinator or operator may review or stop a run");
     if (command.action === "stop" || command.action === "finish") {
       boundedText(command.reason, "reason", 2000);
-      if (command.action === "finish" && !run.submissions.some((s) => s.review?.decision === "accepted")) throw new Error("Accept a submission before completing the run");
+      if (command.action === "finish" && !this.storage.hasSubmission(id, "accepted")) throw new Error("Accept a submission before completing the run");
       return await this.stop(id, actor, command.action === "finish" ? "completed" : "stopped", command.reason, requestId, signature);
     }
     if (command.action !== "review" && !this.canDispatch(run)) throw new Error("Research run is no longer accepting work");
     let data: ResearchEventData;
+    /** The approach a revision request returns to. */
+    let revisionApproachId: string | undefined;
     if (command.action === "finding" || command.action === "submit") {
-      const approach = this.requireApproach(run, command.approachId);
+      const approach = this.requireApproach(id, command.approachId);
       if (!coordinator && (!approach.worker || !sameResearchThread(actor, approach.worker))) throw new Error("A worker may post only under its assigned approach");
       if (approach.directionState === "abandoned") throw new Error("Revise the abandoned direction before posting more work");
       boundedText(command.text, "text", 4000);
@@ -392,86 +446,83 @@ export class ResearchService {
       if (command.action === "finding") {
         if (!RESEARCH_FINDING_KINDS.includes(command.kind)) throw new Error("Unknown finding kind");
         if (Boolean(command.relatesTo) !== Boolean(command.relation)) throw new Error("A relationship needs both relation and relatesTo");
-        if (command.relatesTo && (!run.findings.some((f) => f.id === command.relatesTo) || !["supports", "contradicts", "supersedes"].includes(command.relation ?? ""))) throw new Error("Unknown finding relationship");
+        if (command.relatesTo && (this.storage.readItem(id, command.relatesTo)?.type !== "finding" || !["supports", "contradicts", "supersedes"].includes(command.relation ?? ""))) throw new Error("Unknown finding relationship");
         data = { type: "finding", finding: { id: randomUUID(), author: { backend: actor.backend, threadId: actor.threadId }, approachId: command.approachId, kind: command.kind,
           text: command.text, paths: [...command.paths], ...(command.relatesTo ? { relatesTo: command.relatesTo, relation: command.relation } : {}) } };
       } else data = { type: "submission", submission: { id: randomUUID(), author: { backend: actor.backend, threadId: actor.threadId }, approachId: command.approachId, text: command.text, paths: command.paths } };
     } else if (command.action === "review") {
-      if (!run.submissions.some((s) => s.id === command.submissionId)) throw new Error("Unknown submission");
+      const submission = this.storage.readItem(id, command.submissionId);
+      if (submission?.type !== "submission") throw new Error("Unknown submission");
       if (!["accepted", "revision_requested", "rejected"].includes(command.decision)) throw new Error("Unknown review decision");
       if (command.decision === "revision_requested" && !this.canDispatch(run)) throw new Error("The run is no longer accepting revisions");
       if (command.decision === "revision_requested") {
-        const submission = run.submissions.find((s) => s.id === command.submissionId)!;
-        const approach = this.requireApproach(run, submission.approachId);
+        const approach = this.requireApproach(id, submission.record.approachId);
         if (!approach.worker) throw new Error("Revision worker is unavailable");
         if (approach.revisionDeliveryIds?.length) throw new Error("A revision is already pending for this worker");
         if (!researchApproachOccupiesSlot(approach) && run.activeWorkers >= run.workerLimit) throw new Error("Research worker limit reached; wait for or cancel an existing worker");
         if (!this.canAdmitApproach(run, approach)) throw new Error("The research assignment is no longer accepting revisions");
+        revisionApproachId = approach.id;
       }
       boundedText(command.reason, "reason", 2000);
       data = { type: "review", submissionId: command.submissionId, decision: command.decision, reason: command.reason };
     } else if (command.action === "direction") {
-      const approach = this.requireApproach(run, command.approachId);
+      const approach = this.requireApproach(id, command.approachId);
       if (!coordinator && (!approach.worker || !sameResearchThread(actor, approach.worker))) throw new Error("A worker may revise only its own direction");
       boundedText(command.title, "title", 160);
       boundedText(command.task, "task", 4000);
       boundedText(command.reason, "reason", 2000);
       if (command.overlapsApproachId) {
-        this.requireApproach(run, command.overlapsApproachId);
+        this.requireApproach(id, command.overlapsApproachId);
         if (command.overlapsApproachId === approach.id) throw new Error("A direction cannot overlap itself");
       }
       data = { type: "direction", approachId: command.approachId, title: command.title, task: command.task, reason: command.reason, overlapsApproachId: command.overlapsApproachId };
     } else {
-      const approach = this.requireApproach(run, command.approachId);
+      const approach = this.requireApproach(id, command.approachId);
       if (!coordinator && (!approach.worker || !sameResearchThread(actor, approach.worker))) throw new Error("A worker may abandon only its own approach");
       boundedText(command.reason, "reason", 2000);
       data = { type: "abandoned", approachId: command.approachId, reason: command.reason };
     }
     this.append(run, requestId, actor, data, signature);
-    run = this.requireRun(id);
-    if ((actor.kind === "agent" && actor.turnId && actor.callId && command.action === "submit") || (command.action === "review" && command.decision === "revision_requested")) {
-      const target = command.action === "submit" ? run.coordinator
-        : this.requireApproach(run, run.submissions.find((s) => s.id === command.submissionId)!.approachId).worker;
+    if ((actor.kind === "agent" && actor.turnId && actor.callId && command.action === "submit") || revisionApproachId) {
+      const approachId = revisionApproachId;
+      const target = approachId ? this.requireApproach(id, approachId).worker : run.coordinator;
       if (target && !sameResearchThread(actor, target)) {
-        const revision = command.action === "review";
         const deliveryId = `feedback:${requestId}`;
-        const approachId = command.action === "review" ? run.submissions.find((s) => s.id === command.submissionId)!.approachId : undefined;
-        if (revision) {
-          this.pendingDeliveries.add(`${id}:${deliveryId}`);
-          this.pendingQueueEvents.set(`${id}:${deliveryId}`, new Map());
-          this.append(this.requireRun(id), `pending:${deliveryId}`, actor, { type: "delivery", delivery: { id: deliveryId, target, approachId, state: "pending" } });
+        if (approachId) {
+          const sending = this.pendingDeliveries.get(id) ?? new Map<string, Map<string, { status: string; turnId?: string }>>();
+          this.pendingDeliveries.set(id, sending.set(deliveryId, new Map()));
+          this.append(this.requireHeader(id), `pending:${deliveryId}`, actor, { type: "delivery", delivery: { id: deliveryId, target, approachId, state: "pending" } });
         }
         try {
           const receipt = await this.ports.notify(actor, target,
             `Research run ${id}: ${command.action === "submit" ? "A candidate is ready for review" : "Revision requested"}. Read research_read with runId=${id}. ${command.action === "review" ? command.reason : "Review the submission and its evidence; acceptance is not formal verification."}`);
-          if (revision) {
-            const current = this.requireRun(id);
-            const terminal = receipt.turnId && this.turnEnded(current, approachId!, receipt.turnId);
+          if (approachId) {
+            const terminal = receipt.turnId && this.turnEnded(id, approachId, receipt.turnId);
             const delivery: ResearchDelivery = { id: deliveryId, target, approachId, ...receipt,
-              state: terminal ? current.status === "stopping" ? "cancelled" : "ended" : receipt.queueEntryId ? "queued" : receipt.turnId ? "started" : "unknown" };
-            this.append(this.requireRun(id), `receipt:${deliveryId}`, actor, { type: "delivery", delivery });
-            const queuedEvent = receipt.queueEntryId ? this.pendingQueueEvents.get(`${id}:${deliveryId}`)?.get(receipt.queueEntryId) : undefined;
+              state: terminal ? this.requireHeader(id).status === "stopping" ? "cancelled" : "ended" : receipt.queueEntryId ? "queued" : receipt.turnId ? "started" : "unknown" };
+            this.append(this.requireHeader(id), `receipt:${deliveryId}`, actor, { type: "delivery", delivery });
+            const queuedEvent = receipt.queueEntryId ? this.pendingDeliveries.get(id)?.get(deliveryId)?.get(receipt.queueEntryId) : undefined;
             if (receipt.queueEntryId && queuedEvent) await this.observeQueue(target, receipt.queueEntryId, queuedEvent.status, queuedEvent.turnId);
-            const afterReceipt = this.requireRun(id);
-            const known = afterReceipt.deliveries.find((d) => d.id === deliveryId)!;
-            if (!["cancelled", "ended"].includes(known.state) && !this.canAdmitApproach(afterReceipt, this.requireApproach(afterReceipt, approachId!))) await this.cancelDelivery(id, known, actor);
+            const known = this.storage.delivery(id, deliveryId)!;
+            if (!["cancelled", "ended"].includes(known.state) && !this.canAdmitApproach(this.requireHeader(id), this.requireApproach(id, approachId))) await this.cancelDelivery(id, known, actor);
           }
         } catch (error) {
-          this.append(this.requireRun(id), `delivery:${requestId}`, actor, { type: "delivery_failed", reason: message(error) });
-          if (revision) this.append(this.requireRun(id), `unknown:${deliveryId}`, actor, { type: "delivery", delivery: { id: deliveryId, target, approachId, state: "unknown" } });
+          this.append(this.requireHeader(id), `delivery:${requestId}`, actor, { type: "delivery_failed", reason: message(error) });
+          if (approachId) this.append(this.requireHeader(id), `unknown:${deliveryId}`, actor, { type: "delivery", delivery: { id: deliveryId, target, approachId, state: "unknown" } });
         } finally {
-          this.pendingDeliveries.delete(`${id}:${deliveryId}`);
-          this.pendingQueueEvents.delete(`${id}:${deliveryId}`);
+          const sending = this.pendingDeliveries.get(id);
+          sending?.delete(deliveryId);
+          if (sending && !sending.size) this.pendingDeliveries.delete(id);
           if (approachId) this.settleItemCancellation(id, approachId);
-          this.finishStopping(this.requireRun(id));
+          this.finishStopping(this.requireHeader(id));
         }
       }
     }
-    return this.requireRun(id);
+    return this.requireHeader(id);
   }
 
-  async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRun> {
-    const run = this.read(id, actor);
+  async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRunHeader> {
+    const run = this.memberHeader(id, actor);
     if (run.harness) {
       if (!this.ports.stopHarness) throw new Error("Harness cancellation is unavailable");
       return await this.ports.stopHarness(id, actor, outcome, reason);
@@ -489,53 +540,58 @@ export class ResearchService {
     try { return await promise; } finally { this.stops.delete(id); }
   }
 
-  private async performStop(id: string, actor: ResearchActor): Promise<ResearchRun> {
-    const run = this.requireRun(id);
-    for (const item of run.items) {
-      if (item.work.assignmentId && !["open", "completed", "cancelled", "cancel_requested"].includes(item.work.state)) this.append(this.requireRun(id), `cancel-item:${item.id}:${run.revision}`, actor, { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancel_requested", note: "Research run stopped" } });
+  private async performStop(id: string, actor: ResearchActor): Promise<ResearchRunHeader> {
+    const run = this.requireHeader(id);
+    const underway = this.storage.underwayItems(id);
+    const deliveries = this.storage.deliveries(id, { open: true });
+    for (const item of underway) {
+      if (item.work.assignmentId) this.append(this.requireHeader(id), `cancel-item:${item.id}:${run.revision}`, actor, { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancel_requested", note: "Research run stopped" } });
     }
-    for (const delivery of run.deliveries) {
+    for (const delivery of deliveries) {
       if (["queued", "started"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
     }
-    for (const approach of this.requireRun(id).approaches) {
+    // An approach that holds no slot has ended, stopped or failed with no revision pending.
+    for (const approach of this.storage.approaches(id, { occupying: true })) {
       if (approach.worker && !["ended", "stopped", "failed"].includes(approach.state)) await this.stopWorker(id, approach.id, actor);
-      else if (approach.state === "pending") this.append(this.requireRun(id), `unstarted:${approach.id}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
+      else if (approach.state === "pending") this.append(this.requireHeader(id), `unstarted:${approach.id}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
     }
-    this.finishStopping(this.requireRun(id));
-    return this.requireRun(id);
+    this.finishStopping(this.requireHeader(id));
+    return this.requireHeader(id);
   }
 
   private async cancelDelivery(id: string, delivery: ResearchDelivery, actor: ResearchActor): Promise<void> {
-    if (["cancelled", "ended"].includes(this.requireRun(id).deliveries.find((d) => d.id === delivery.id)?.state ?? "")) return;
+    const settled = () => ["cancelled", "ended"].includes(this.storage.delivery(id, delivery.id)?.state ?? "");
+    if (settled()) return;
     let known = delivery;
     try {
       if (!delivery.queueEntryId && !delivery.turnId) throw new Error("Revision delivery has no confirmed receipt");
       const receipt = delivery.queueEntryId ? await this.ports.cancelQueued(delivery.queueEntryId) : { turnId: delivery.turnId };
       if (receipt.turnId) {
         known = { ...delivery, turnId: receipt.turnId };
-        if (delivery.turnId !== receipt.turnId) this.append(this.requireRun(id), `admitted:${delivery.id}`, actor, { type: "delivery", delivery: { ...known, state: "started" } });
-        const run = this.requireRun(id);
-        const approach = run.approaches.find((a) => a.worker && sameResearchThread(a.worker, delivery.target));
+        if (delivery.turnId !== receipt.turnId) this.append(this.requireHeader(id), `admitted:${delivery.id}`, actor, { type: "delivery", delivery: { ...known, state: "started" } });
+        const approach = this.storage.approaches(id, { worker: delivery.target })[0];
         if (!approach) throw new Error("Revision worker is unavailable");
-        const ended = this.turnEnded(run, approach.id, receipt.turnId);
+        const ended = this.turnEnded(id, approach.id, receipt.turnId);
         if (!ended && (approach.worker?.turnId !== receipt.turnId || !["ended", "stopped", "failed"].includes(approach.state))) {
           await this.ports.stop({ ...delivery.target, turnId: receipt.turnId });
-          const current = this.requireRun(id);
-          if (this.requireApproach(current, approach.id).worker?.turnId === receipt.turnId) this.append(current, `revision-stopped:${delivery.id}:${receipt.turnId}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
+          const current = this.requireHeader(id);
+          if (this.requireApproach(id, approach.id).worker?.turnId === receipt.turnId) this.append(current, `revision-stopped:${delivery.id}:${receipt.turnId}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
         }
       }
-      if (["cancelled", "ended"].includes(this.requireRun(id).deliveries.find((d) => d.id === delivery.id)?.state ?? "")) return;
-      this.append(this.requireRun(id), `cancelled:${delivery.id}`, actor, { type: "delivery", delivery: { ...known, state: "cancelled" } });
+      if (settled()) return;
+      this.append(this.requireHeader(id), `cancelled:${delivery.id}`, actor, { type: "delivery", delivery: { ...known, state: "cancelled" } });
       if (known.approachId) this.settleItemCancellation(id, known.approachId);
     } catch (error) {
-      if (["cancelled", "ended"].includes(this.requireRun(id).deliveries.find((d) => d.id === delivery.id)?.state ?? "")) return;
-      this.append(this.requireRun(id), `cancel-unknown:${delivery.id}:${this.requireRun(id).revision}`, actor, { type: "delivery", delivery: { ...known, state: "unknown" } });
-      this.append(this.requireRun(id), `cancel-error:${delivery.id}:${this.requireRun(id).revision}`, actor, { type: "delivery_failed", reason: message(error) });
+      if (settled()) return;
+      const unknown = this.requireHeader(id);
+      this.append(unknown, `cancel-unknown:${delivery.id}:${unknown.revision}`, actor, { type: "delivery", delivery: { ...known, state: "unknown" } });
+      const failed = this.requireHeader(id);
+      this.append(failed, `cancel-error:${delivery.id}:${failed.revision}`, actor, { type: "delivery_failed", reason: message(error) });
     }
   }
 
   private async stopWorker(id: string, approachId: string, actor: ResearchActor): Promise<void> {
-    const approach = this.requireApproach(this.requireRun(id), approachId);
+    const approach = this.requireApproach(id, approachId);
     if (!approach.worker?.turnId) return;
     const worker = approach.worker;
     const key = JSON.stringify([id, approachId, worker.turnId]);
@@ -550,16 +606,16 @@ export class ResearchService {
 
   private async performWorkerStop(id: string, approachId: string, actor: ResearchActor, worker: NonNullable<ResearchApproach["worker"]>): Promise<void> {
     try {
-      const before = this.requireApproach(this.requireRun(id), approachId);
+      const before = this.requireApproach(id, approachId);
       if (before.worker?.turnId !== worker.turnId || ["ended", "stopped", "failed"].includes(before.state)) return;
       await this.ports.stop(worker);
-      const current = this.requireRun(id);
-      if (this.requireApproach(current, approachId).worker?.turnId !== worker.turnId) return;
+      const current = this.requireHeader(id);
+      if (this.requireApproach(id, approachId).worker?.turnId !== worker.turnId) return;
       this.append(current, `stopped:${approachId}:${worker.turnId}`, actor, { type: "worker", approachId, state: "stopped" });
       this.settleItemCancellation(id, approachId);
     } catch (error) {
-      const current = this.requireRun(id);
-      const latest = this.requireApproach(current, approachId);
+      const current = this.requireHeader(id);
+      const latest = this.requireApproach(id, approachId);
       if (latest.worker?.turnId !== worker.turnId || ["ended", "stopped", "failed"].includes(latest.state)) return;
       this.append(current, `stop-error:${approachId}:${current.revision}`, actor, { type: "worker", approachId, state: "unknown", note: message(error) });
     }
@@ -568,15 +624,15 @@ export class ResearchService {
   /** Only the exact recorded worker turn can retire an assignment. No token events write. */
   async observeQueue(thread: ResearchThread, queueEntryId: string, status: string, turnId?: string): Promise<void> {
     if (this.closed || turnId?.startsWith("pending:") || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
-    for (const run of this.storage.list(thread)) {
-      if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
-      const delivery = run.deliveries.find((d) => d.queueEntryId === queueEntryId && sameResearchThread(d.target, thread));
+    for (const run of this.storage.activeRuns(thread)) {
+      if (run.ownerId !== this.ports.ownerId) continue;
+      const delivery = this.storage.deliveries(run.id, { queueEntryId }).find((d) => sameResearchThread(d.target, thread));
       if (!delivery) {
         // The queue may admit and finish before notify returns its queue ID.
         // Buffer only while a research send is unresolved, then match its exact receipt.
-        for (const pending of run.deliveries.filter((d) => sameResearchThread(d.target, thread))) {
-          const events = this.pendingQueueEvents.get(`${run.id}:${pending.id}`);
-          if (!events) continue;
+        for (const [pendingId, events] of this.pendingDeliveries.get(run.id) ?? []) {
+          const pending = this.storage.delivery(run.id, pendingId);
+          if (!pending || !sameResearchThread(pending.target, thread)) continue;
           if (["terminal", "cancelled"].includes(events.get(queueEntryId)?.status ?? "")) continue;
           if (events.size >= 128 && !events.has(queueEntryId)) events.delete(events.keys().next().value!);
           events.set(queueEntryId, { status, turnId });
@@ -591,18 +647,18 @@ export class ResearchService {
         state = "cancelled";
       } else if (status === "terminal" || status === "started") {
         if (!turnId) continue;
-        const ended = status === "terminal" || (delivery.approachId && this.turnEnded(run, delivery.approachId, turnId));
+        const ended = status === "terminal" || (delivery.approachId && this.turnEnded(run.id, delivery.approachId, turnId));
         state = ended ? run.status === "stopping" ? "cancelled" : "ended" : "started";
       } else state = "unknown";
       if (delivery.state === state && (!turnId || delivery.turnId === turnId)) continue;
       const known = { ...delivery, state, ...(turnId ? { turnId } : {}) };
       this.append(run, `queue:${delivery.id}:${run.revision}`, this.operator(run), { type: "delivery", delivery: known });
       if (known.approachId) {
-        const current = this.requireRun(run.id);
-        if (!["cancelled", "ended", "unknown"].includes(state) && !this.canAdmitApproach(current, this.requireApproach(current, known.approachId))) await this.cancelDelivery(run.id, known, this.operator(current));
+        const current = this.requireHeader(run.id);
+        if (!["cancelled", "ended", "unknown"].includes(state) && !this.canAdmitApproach(current, this.requireApproach(run.id, known.approachId))) await this.cancelDelivery(run.id, known, this.operator(current));
         this.settleItemCancellation(run.id, known.approachId);
       }
-      this.finishStopping(this.requireRun(run.id));
+      this.finishStopping(this.requireHeader(run.id));
     }
   }
 
@@ -610,15 +666,15 @@ export class ResearchService {
     // Registry placeholders describe local submission, not provider admission.
     if (this.closed || turnId.startsWith("pending:")) return Promise.resolve();
     const cancellations: Promise<void>[] = [];
-    for (const run of this.storage.list(thread)) {
-      if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
-      const approach = run.approaches.find((a) => a.worker && sameResearchThread(a.worker, thread));
+    for (const run of this.storage.activeRuns(thread)) {
+      if (run.ownerId !== this.ports.ownerId) continue;
+      const approach = this.storage.approaches(run.id, { worker: thread })[0];
       if (!approach || approach.worker?.turnId === turnId) continue;
       this.append(run, `observed-start:${approach.id}:${turnId}`, this.operator(run), {
         type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId },
       });
-      if (!this.canAdmitApproach(this.requireRun(run.id), approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
-        if (!this.closed) this.finishStopping(this.requireRun(run.id));
+      if (!this.canAdmitApproach(this.requireHeader(run.id), approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
+        if (!this.closed) this.finishStopping(this.requireHeader(run.id));
       }));
     }
     return Promise.all(cancellations).then(() => undefined);
@@ -626,16 +682,18 @@ export class ResearchService {
 
   observeEnd(thread: ResearchThread, turnId: string, outcome: { failed?: boolean; note?: string } = {}): void {
     if (this.closed || turnId.startsWith("pending:")) return;
-    for (const run of this.storage.list(thread)) {
-      if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
-      for (const delivery of run.deliveries) {
-        if (!["cancelled", "ended"].includes(delivery.state) && delivery.turnId === turnId && sameResearchThread(delivery.target, thread)) {
-          this.append(this.requireRun(run.id), `terminal-delivery:${delivery.id}:${turnId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: run.status === "stopping" ? "cancelled" : "ended" } });
+    for (const run of this.storage.activeRuns(thread)) {
+      if (run.ownerId !== this.ports.ownerId) continue;
+      // The header just read stays current until this observation appends.
+      let current = run;
+      for (const delivery of this.storage.deliveries(run.id, { open: true })) {
+        if (delivery.turnId === turnId && sameResearchThread(delivery.target, thread)) {
+          this.append(this.requireHeader(run.id), `terminal-delivery:${delivery.id}:${turnId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: run.status === "stopping" ? "cancelled" : "ended" } });
           if (delivery.approachId) this.settleItemCancellation(run.id, delivery.approachId);
+          current = this.requireHeader(run.id);
         }
       }
-      const current = this.requireRun(run.id);
-      const approach = current.approaches.find((a) => a.worker && sameResearchThread(a.worker, thread) && a.worker.turnId === turnId);
+      const approach = this.storage.approaches(run.id, { worker: thread }).find((a) => a.worker?.turnId === turnId);
       if (!approach || ["ended", "stopped", "failed"].includes(approach.state)) {
         if (current.status === "stopping") this.finishStopping(current);
         continue;
@@ -643,64 +701,67 @@ export class ResearchService {
       this.append(current, `ended:${approach.id}:${turnId}`, this.operator(run), { type: "worker", approachId: approach.id,
         state: outcome.failed ? "failed" : "ended", ...(outcome.note ? { note: outcome.note.slice(0, 2000) } : {}) });
       this.settleItemCancellation(run.id, approach.id);
-      if (run.status === "stopping") this.finishStopping(this.requireRun(run.id));
-      else this.finishExploration(this.requireRun(run.id));
+      if (run.status === "stopping") this.finishStopping(this.requireHeader(run.id));
+      else this.finishExploration(this.requireHeader(run.id));
     }
   }
 
   close(): void {
     this.closed = true;
     this.intents.clear();
-    this.pendingQueueEvents.clear();
+    for (const sending of this.pendingDeliveries.values()) for (const events of sending.values()) events.clear();
     for (const cancel of this.deadlines.values()) cancel();
     this.deadlines.clear();
-    for (const run of this.storage.list()) {
-      if (run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status)) this.append(run, `shutdown:${this.ports.ownerId}`, this.operator(run), {
+    for (const run of this.storage.activeRuns()) {
+      if (run.ownerId === this.ports.ownerId) this.append(run, `shutdown:${this.ports.ownerId}`, this.operator(run), {
         type: "status", status: "interrupted", reason: "PwrAgent closed. Research evidence is retained; execution was not automatically resumed.",
       });
     }
   }
 
   async stopOwnedRuns(reason: string): Promise<void> {
-    await Promise.all(this.storage.list().filter((run) => run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status))
+    await Promise.all(this.storage.activeRuns().filter((run) => run.ownerId === this.ports.ownerId)
       .map(async (run) => await this.stop(run.id, this.operator(run), "stopped", reason)));
   }
 
-  private finishStopping(run: ResearchRun): void {
-    if (run.status !== "stopping"
-      || run.deliveries.some((d) => this.pendingDeliveries.has(`${run.id}:${d.id}`) || !["cancelled", "ended"].includes(d.state))
-      || run.approaches.some((a) => this.pendingStarts.has(`${run.id}:${a.id}`) || researchApproachOccupiesSlot(a))) return;
+  /** `run` must be the header as it stands now. */
+  private finishStopping(run: ResearchRunHeader): void {
+    if (run.status !== "stopping" || run.activeWorkers > 0 || this.pendingStarts.get(run.id)?.size) return;
+    // A send still in flight holds the run even after its receipt is recorded as ended.
+    for (const deliveryId of this.pendingDeliveries.get(run.id)?.keys() ?? []) if (this.storage.delivery(run.id, deliveryId)) return;
+    if (this.storage.deliveries(run.id, { open: true }).length) return;
     const status = run.reason?.startsWith("deadline:") ? "deadline" : run.reason?.startsWith("completed:") ? "completed" : "stopped";
     this.append(run, `settled:${run.revision}`, this.operator(run), { type: "status", status, reason: run.reason ?? status });
   }
 
-  private finishExploration(run: ResearchRun): void {
-    if (run.status !== "running" || run.submissions.length || run.approaches.some((a) => this.pendingStarts.has(`${run.id}:${a.id}`) || researchApproachOccupiesSlot(a))) return;
+  /** `run` must be the header as it stands now. */
+  private finishExploration(run: ResearchRunHeader): void {
+    if (run.status !== "running" || run.activeWorkers > 0 || this.pendingStarts.get(run.id)?.size || this.storage.hasSubmission(run.id)) return;
     this.append(run, `exhausted:${run.revision}`, this.operator(run), { type: "status", status: "exhausted", reason: "All workers ended without submitting a candidate. Findings are retained; this does not establish that the problem is unsolvable." });
     this.deadlines.get(run.id)?.();
     this.deadlines.delete(run.id);
   }
 
-  private scheduleDeadline(run: ResearchRun): void {
+  private scheduleDeadline(run: ResearchRunHeader): void {
     const callback = () => { void this.stop(run.id, this.operator(run), "deadline", "Research deadline reached").catch(this.ports.onError); };
     const schedule = this.ports.schedule ?? ((fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return () => clearTimeout(timer); });
     this.deadlines.set(run.id, schedule(callback, Math.max(0, run.deadlineAt - this.now())));
   }
 
-  private append(run: ResearchRun, commandId: string, actor: ResearchActor, data: ResearchEventData, signature = JSON.stringify(data)): void {
+  /** Appends at `run.revision`, which must be the journal's current revision, and tells the run's members. */
+  private append(run: ResearchRunHeader, commandId: string, actor: ResearchActor, data: ResearchEventData, signature = JSON.stringify(data)): void {
     // Contribution limits cannot block receipts or cancellation settlement.
     if (run.revision >= RESEARCH_MAX_EVENTS && !["status", "worker", "delivery", "delivery_failed"].includes(data.type)
       && !(data.type === "item_work" && ["cancel_requested", "cancelled"].includes(data.work.state))) throw new Error("Research event limit reached; finish this run before starting another");
-    this.storage.append(run.id, run.revision, { seq: run.revision + 1, commandId, signature, at: this.now(), actor, data });
-    this.publish(run.id);
+    if (this.storage.append(run.id, run.revision, { seq: run.revision + 1, commandId, signature, at: this.now(), actor, data })) this.publish(run.id, run.revision + 1);
   }
-  private publish(id: string): void { for (const thread of this.storage.members(id)) this.ports.changed(thread); }
+  private publish(id: string, revision: number): void { for (const thread of this.storage.members(id)) this.ports.changed({ backend: thread.backend, threadId: thread.threadId, runId: id, revision }); }
   private requireOpen(): void {
     if (this.closed) throw new Error("Research service is closed");
     if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
   }
-  private canDispatch(run: ResearchRun): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && this.now() < run.deadlineAt; }
-  private canAdmitApproach(run: ResearchRun, approach: ResearchApproach): boolean {
+  private canDispatch(run: ResearchRunHeader): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && this.now() < run.deadlineAt; }
+  private canAdmitApproach(run: ResearchRunHeader, approach: Pick<ResearchApproach, "id" | "itemId">): boolean {
     if (!this.canDispatch(run)) return false;
     if (run.activeWorkers > run.workerLimit) return false;
     const selected = this.storage.readItem(run.id, approach.id);
@@ -709,16 +770,14 @@ export class ResearchService {
     if (!approach.itemId) return Boolean(item && !["completed", "cancel_requested", "cancelled"].includes(item.work.state));
     return item?.work.assignmentId === approach.id && !["open", "completed", "cancel_requested", "cancelled"].includes(item.work.state);
   }
-  private turnEnded(run: ResearchRun, approachId: string, turnId: string): boolean {
-    return run.events.some((event) => event.commandId === `ended:${approachId}:${turnId}` || event.commandId === `stopped:${approachId}:${turnId}`);
+  /** The owner records a worker turn's end under one of two exact command keys. */
+  private turnEnded(id: string, approachId: string, turnId: string): boolean {
+    return Boolean(this.storage.findCommand(id, `ended:${approachId}:${turnId}`) ?? this.storage.findCommand(id, `stopped:${approachId}:${turnId}`));
   }
-  private requireRun(id: string): ResearchRun { const run = this.storage.get(id); if (!run) throw new Error("Research run not found"); return run; }
-  private requireApproach(run: ResearchRun, id: string): ResearchApproach { const approach = run.approaches.find((a) => a.id === id); if (!approach) throw new Error("Research approach not found"); return approach; }
-  private operator(run: ResearchRun): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
-  private requireMember(run: ResearchRun, actor: ResearchActor): void {
-    if (sameResearchThread(actor, run.coordinator) || run.approaches.some((a) => a.worker && sameResearchThread(a.worker, actor))) return;
-    throw new Error("The calling thread is not a member of this research run");
-  }
+  private requireHeader(id: string): ResearchRunHeader { const run = this.storage.header(id); if (!run) throw new Error("Research run not found"); return run; }
+  private approach(id: string, approachId: string): ResearchApproach | undefined { const item = this.storage.readItem(id, approachId); return item?.type === "approach" ? item.record : undefined; }
+  private requireApproach(id: string, approachId: string): ResearchApproach { const approach = this.approach(id, approachId); if (!approach) throw new Error("Research approach not found"); return approach; }
+  private operator(run: Pick<ResearchRunHeader, "coordinator">): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
 }
 
 export function validateStartResearch(request: StartResearchRequest): void {

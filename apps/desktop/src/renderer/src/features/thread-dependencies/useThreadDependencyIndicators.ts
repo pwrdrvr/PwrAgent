@@ -1,10 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { AppServerBackendKind, FederationTarget, NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
-import { buildThreadIdentityKey, THREAD_DEPENDENCY_CONDITION_PHRASES, threadDependencyDeliveryTarget } from "@pwragent/shared";
+import { buildThreadIdentityKey, threadDependencyConditionPhrase, threadDependencyDeliveryTarget } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   ACTIVE_DEPENDENCY_STATUSES,
+  conditionName,
   evidenceFor,
   groupDeliveryReviews,
   isFailureReport,
@@ -246,8 +247,8 @@ function describeRegistration(dependency: ThreadDependency, identify: boolean): 
   const lines = dependency.conditions.slice(0, MAX_TOOLTIP_CONDITIONS).map((condition, index) => {
     const state = evidenceFor(dependency, index)?.state;
     const mark = state === "satisfied" ? "✓" : state === "failed" ? "✗" : "○";
-    const name = condition.subject?.trim() || condition.title || condition.threadId;
-    return `${mark} ${name.length > 80 ? `${name.slice(0, 79)}…` : name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
+    const name = conditionName(condition);
+    return `${mark} ${name.length > 80 ? `${name.slice(0, 79)}…` : name} ${threadDependencyConditionPhrase(condition)}`;
   });
   if (dependency.conditions.length > MAX_TOOLTIP_CONDITIONS) lines.push(`+${dependency.conditions.length - MAX_TOOLTIP_CONDITIONS} more prerequisites. Open Continue After for details.`);
   if (holdsMerge(dependency)) lines.push("Merging waits.");

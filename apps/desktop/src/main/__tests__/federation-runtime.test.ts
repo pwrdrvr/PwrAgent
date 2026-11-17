@@ -842,6 +842,39 @@ describe("DesktopFederationRuntime", () => {
     } finally { first.abort(); second.abort(); source.mockRestore(); registry.mockRestore(); }
   });
 
+  it("holds a peer's group-members read until this owner's startup provider check ends", async () => {
+    // A peer planning an archive accepts only complete coverage; during the
+    // check every index reports `checking`.
+    let state = "checking";
+    const listeners: Array<() => void> = [];
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({
+        getStartupProviderRefreshStatus: () => ({ state }),
+        onEvent: (listener: () => void) => {
+          listeners.push(listener);
+          return () => { listeners.splice(listeners.indexOf(listener), 1); };
+        },
+      } as never);
+    const statesAtLoad: string[] = [];
+    const source = vi.spyOn(navigationQuerySource, "loadLocalNavigationQueryIndex").mockImplementation(async () => {
+      statesAtLoad.push(state);
+      return { threads: [], directories: [], coverage: { state: state === "checking" ? "checking" : "complete" } } as never;
+    });
+    try {
+      const backend = new DesktopFederationRuntime().localBackend();
+      const read = backend.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
+        query: { kind: "group-members", roots: [{ backend: "codex", threadId: "startup-root" }] } },
+      { requesterInstanceId: "archive-peer", deadlineAt: Date.now() + 5_000 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(statesAtLoad).toEqual([]);
+      state = "ready";
+      for (const listener of [...listeners]) listener();
+      const page = await read;
+      expect(statesAtLoad).toEqual(["ready"]);
+      expect(page.coverage.state).toBe("complete");
+    } finally { source.mockRestore(); registry.mockRestore(); }
+  });
+
   it("serves owner project pages without full navigation reconciliation or SQLite writes", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     // A write budget records WAL growth, which only a real file has.

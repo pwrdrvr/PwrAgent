@@ -1567,7 +1567,7 @@ describe("federation transport", () => {
 });
 
 describe("federation transport liveness", () => {
-  it("terminates an authenticated peer whose link stops answering keepalive probes", async () => {
+  it.each([false, true])("terminates an authenticated peer whose link stops answering keepalive probes (expire before close: %s)", async (expireBeforeClose) => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
       store,
@@ -1577,6 +1577,7 @@ describe("federation transport liveness", () => {
       expiresAt: Date.now() + 60_000,
     });
     const registry = new FederationSessionRegistry();
+    const disconnected = Promise.withResolvers<FederationGatewayConnection>();
     server = new FederationGatewayWebSocketServer({
       gatewayInstanceId: "gateway_one",
       gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
@@ -1589,6 +1590,7 @@ describe("federation transport liveness", () => {
       // Keep the auth deadline out of the way: this test is about the
       // post-auth keepalive, not the pre-auth deadline.
       authTimeoutMs: 60_000,
+      onDisconnect: disconnected.resolve,
     });
     const { url } = await server.start();
     const socket = new WebSocket(url);
@@ -1631,16 +1633,26 @@ describe("federation transport liveness", () => {
     // Simulate a silently dead link: stop reading, so the gateway's pings
     // are never processed and no pong ever goes back. No FIN, no RST —
     // exactly the failure mode keepalive exists for.
-    (socket as unknown as { _socket: net.Socket })._socket.pause();
-
-    await expect
-      .poll(() => registry.listActiveSessions().length, { timeout: 5_000 })
-      .toBe(0);
-    expect(registry.getSession(session.sessionId)).toMatchObject({
-      status: "closed",
-      closeReason: "transport_closed",
-    });
-    socket.terminate();
+    try {
+      (socket as unknown as { _socket: net.Socket })._socket.pause();
+      // A delayed worker can expire the registry entry before the socket's
+      // close callback. The first terminal reason remains authoritative.
+      if (expireBeforeClose) {
+        expect(registry.expireStaleSessions({
+          now: session.lastHeartbeatAt + 200,
+          heartbeatTimeoutMs: 200,
+        })).toEqual([session]);
+      }
+      // Registry expiry alone cannot prove that the real socket closed.
+      expect((await disconnected.promise).sessionId).toBe(session.sessionId);
+      expect(registry.listActiveSessions()).toHaveLength(0);
+      const closed = registry.getSession(session.sessionId);
+      expect(closed).toMatchObject({ status: "closed" });
+      expect(["transport_closed", "timeout"]).toContain(closed?.closeReason);
+      if (expireBeforeClose) expect(closed?.closeReason).toBe("timeout");
+    } finally {
+      socket.terminate();
+    }
   });
 
   it("terminates a socket that upgrades but never completes auth", async () => {

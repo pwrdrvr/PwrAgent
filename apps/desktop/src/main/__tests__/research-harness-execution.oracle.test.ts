@@ -50,8 +50,8 @@ it("executes a real process through an explicit endpoint probe, eager functions 
     const run = await service.start({ backend: "codex", threadId: "fixture-coordinator", requestId: "execute-once", mode: "execute", project: "fixture-project", session: "fixture-session",
       swarm: "fixture-swarm", objective: "Exercise an invented external run", workers: 2, minutes: 1, budgetAcknowledged: true }, root);
     expect(run.status).toBe("exhausted");
-    expect(run.findings[0]?.text).toBe("A real process imported this contrived model finding.");
-    expect(run.submissions[0]?.review).toBeUndefined();
+    expect(new ResearchStore(db).get(run.id)!.findings[0]?.text).toBe("A real process imported this contrived model finding.");
+    expect(new ResearchStore(db).get(run.id)!.submissions[0]?.review).toBeUndefined();
     expect(requests).toHaveLength(3);
     expect(JSON.stringify(requests)).not.toMatch(/tool_search|defer_loading/);
     expect(requests[2]?.tools).toEqual(researchModelRequest(config.model, [{ role: "user", content: "test" }]).tools);

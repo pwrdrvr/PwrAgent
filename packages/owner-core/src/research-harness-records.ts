@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ResearchEventData, ResearchRun, ResearchProvenance, ResearchHarnessState } from "@pwragent/shared";
+import type { ResearchEvent, ResearchEventData, ResearchRun, ResearchProvenance, ResearchHarnessState } from "@pwragent/shared";
 import { RESEARCH_HARNESS_REVISION } from "@pwragent/shared";
 
 type Normalized = { data: ResearchEventData; provenance: ResearchProvenance };
@@ -10,7 +10,7 @@ export function harnessRecordDigest(value: unknown): string {
 }
 
 /** Reads the public swarm record contract at the pinned revision. No source verdict is a local review. */
-export function normalizeHarnessRecords(run: ResearchRun, records: unknown[]): { events: Normalized[]; state: ResearchHarnessState; ended: boolean } {
+export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "workerLimit" | "approaches"> & { events?: ResearchEvent[] }, records: unknown[], readRecord?: (seq: number) => ResearchEvent | undefined): { events: Normalized[]; state: ResearchHarnessState; ended: boolean } {
   if (!run.harness) throw new Error("Not a Harness run");
   if (!Array.isArray(records) || records.length > 50 || JSON.stringify(records).length > 256_000) throw new Error("Harness page exceeds its bound");
   const state = structuredClone(run.harness);
@@ -23,7 +23,7 @@ export function normalizeHarnessRecords(run: ResearchRun, records: unknown[]): {
     if (r.swarm !== state.swarm) throw new Error("Harness record belongs to another swarm");
     const digest = harnessRecordDigest(r);
     if (seq <= state.cursor) {
-      const previous = [...run.events, ...events].find((e) => e.provenance?.seq === seq);
+      const previous = events.find((e) => e.provenance?.seq === seq) ?? (readRecord ? readRecord(seq) : run.events?.find((e) => e.provenance?.seq === seq));
       if (previous?.provenance?.digest !== digest) throw new Error("Conflicting Harness redelivery");
       continue;
     }

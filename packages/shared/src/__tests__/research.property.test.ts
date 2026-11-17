@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { projectResearchRun, researchBoardEntry, researchBoardIndex, researchRunBoard, type ResearchEvent, type ResearchEventData } from "../research";
+import {
+  applyResearchChanges, emptyResearchRunStore, projectResearchRun, RESEARCH_BOARD_PAGE, researchApproachLeaves, researchApproachOccupiesSlot, researchBoardPage, researchChangePage,
+  researchRunState, researchRunStoreCursor, researchRunStoreSynced, summarizeResearchRun, type ResearchEvent, type ResearchRun, type ResearchRunStore,
+} from "../research";
+import { nextResearchEvent, researchCreatedEvent, researchJournalStepArb, type ResearchJournalStep } from "./research-journal-arbitraries";
 
 const actor = { kind: "agent", backend: "codex", threadId: "parent" } as const;
 describe("research journal projection", () => {
@@ -26,59 +30,107 @@ describe("research journal projection", () => {
     expect(() => projectResearchRun("run", [{ ...event, seq: 1 }, { ...event, seq: 1, signature: "different" }])).toThrow("Conflicting");
   });
 
-  // Every event kind that creates or changes an item, aimed at items the journal already holds, as the owner would append them.
-  const stepArb = fc.record({
-    kind: fc.constantFrom("finding", "submission", "review", "worker", "abandoned", "direction", "assignment", "item_work", "delivery", "status"),
-    pick: fc.nat(), other: fc.nat(), flag: fc.boolean(),
+  it("the item projection agrees with the board lists projectResearchRun keeps, for every event kind", () => {
+    fc.assert(fc.property(fc.array(researchJournalStepArb, { size: "max", minLength: 5, maxLength: 60 }), (steps) => {
+      const events = [researchCreatedEvent(3)];
+      for (const step of steps) {
+        events.push(nextResearchEvent(projectResearchRun("run", events), step));
+        const run = projectResearchRun("run", events);
+        const records = (type: string) => run.items.filter((item) => item.type === type).map((item) => item.record);
+        expect(records("approach")).toEqual(run.approaches);
+        expect(records("finding")).toEqual(run.findings);
+        expect(records("submission")).toEqual(run.submissions);
+        expect(run.items.map((item) => item.createdSeq)).toEqual(run.items.map((item) => item.createdSeq).sort((a, b) => a - b));
+      }
+    }));
+  });
+});
+
+describe("research change stream", () => {
+  /** Sync `store` to the journal's end, appending `between` pages as a live run would. */
+  function sync(store: ResearchRunStore, events: ResearchEvent[], limit: number, between: ResearchJournalStep[]): ResearchRunStore {
+    const pending = [...between];
+    do {
+      const page = researchChangePage(projectResearchRun("run", events), researchRunStoreCursor(store).sinceRevision, researchRunStoreCursor(store).after, limit);
+      store = applyResearchChanges(store, { ...page, writable: true });
+      const step = store.cursor ? pending.shift() : undefined;
+      if (step) events.push(nextResearchEvent(projectResearchRun("run", events), step));
+    } while (store.cursor);
+    return store;
+  }
+  function expectStoreHoldsRun(store: ResearchRunStore, run: ResearchRun) {
+    expect(researchRunStoreSynced(store)).toBe(true);
+    expect(store.revision).toBe(run.revision);
+    expect(store.items).toEqual(new Map(run.items.map((item) => [item.id, item])));
+    expect(store.approaches).toEqual(run.approaches);
+    expect(store.submissions).toEqual(run.submissions);
+    expect(store.state).toEqual(researchRunState(run));
+    expect(store.leaves).toEqual(new Map(researchApproachLeaves(run).map((entry) => [entry.approachId, entry])));
+  }
+  const opArb = fc.oneof(
+    { weight: 3, arbitrary: fc.record({ append: fc.array(researchJournalStepArb, { minLength: 1, maxLength: 8 }) }) },
+    { weight: 1, arbitrary: fc.record({ sync: fc.integer({ min: 1, max: 7 }), between: fc.array(researchJournalStepArb, { maxLength: 3 }) }) },
+  );
+
+  it("a store fed pages of changes holds the run projectResearchRun holds, whatever the page size, the gap between syncs, and the appends between pages", () => {
+    fc.assert(fc.property(fc.array(opArb, { size: "max", minLength: 4, maxLength: 30 }), (ops) => {
+      const events = [researchCreatedEvent(3)];
+      let store = emptyResearchRunStore("run");
+      for (const op of ops) {
+        if ("append" in op) { for (const step of op.append) events.push(nextResearchEvent(projectResearchRun("run", events), step)); continue; }
+        const held = store;
+        store = sync(store, events, op.sync, op.between);
+        const run = projectResearchRun("run", events);
+        expectStoreHoldsRun(store, run);
+        // The delta agrees with a full sync into an empty store.
+        expectStoreHoldsRun(sync(emptyResearchRunStore("run"), events, op.sync, []), run);
+        // An apply returns a new store, and replaces a list only when one of its records changed.
+        if (held.revision === store.revision) expect(store.approaches).toBe(held.approaches);
+      }
+    }));
   });
 
-  it("serves every item's record and creation order from the board, as projectResearchRun's items hold them", () => {
-    fc.assert(fc.property(fc.array(stepArb, { size: "max", minLength: 5, maxLength: 60 }), (steps) => {
-      const events: ResearchEvent[] = [{ seq: 1, at: 1000, actor, commandId: "created", signature: "created", data: {
-        type: "created", objective: "Research", coordinator: actor, ownerId: "owner", ownerPid: 1, deadlineAt: 100_000, workspaceMode: "none",
-        approaches: [{ id: "a1", title: "One", task: "t", state: "pending" }, { id: "a2", title: "Two", task: "t", state: "pending" }],
-      } }];
-      for (const step of steps) {
-        const run = projectResearchRun("run", events);
-        const seq = events.length + 1;
-        const approach = run.approaches[step.pick % run.approaches.length]!;
-        const item = run.items[step.other % run.items.length]!;
-        const submission = run.submissions.length ? run.submissions[step.pick % run.submissions.length] : undefined;
-        let data: ResearchEventData;
-        switch (step.kind) {
-          case "submission": data = { type: "submission", submission: { id: `s${seq}`, approachId: approach.id, text: `Candidate ${seq}`, paths: [] } }; break;
-          case "review": data = submission ? { type: "review", submissionId: submission.id, decision: step.flag ? "accepted" : "revision_requested", reason: `r${seq}` }
-            : { type: "status", status: "running", reason: "no candidate yet" }; break;
-          case "worker": data = { type: "worker", approachId: approach.id, state: step.flag ? "running" : "ended",
-            ...(step.flag ? { worker: { backend: "codex", threadId: `w${step.other % 3}`, turnId: `t${seq}` } } : { note: `ended ${seq}` }) }; break;
-          case "abandoned": data = { type: "abandoned", approachId: approach.id, reason: `abandon ${seq}` }; break;
-          case "direction": data = { type: "direction", approachId: approach.id, title: `Retitled ${seq}`, task: `task ${seq}`, reason: `why ${seq}`,
-            ...(step.flag ? { overlapsApproachId: run.approaches[step.other % run.approaches.length]!.id } : {}) }; break;
-          case "assignment": data = { type: "assignment", itemId: item.id, task: `focus ${seq}`,
-            approach: { id: `work-${seq}`, itemId: item.id, title: `Focus ${seq}`, task: `focus ${seq}`, state: "pending" } }; break;
-          case "item_work": data = { type: "item_work", itemId: item.id, work: { state: step.flag ? "claimed" : "blocked", note: `work ${seq}` } }; break;
-          case "delivery": data = { type: "delivery", delivery: { id: `d${step.other % 3}`, target: actor, approachId: approach.id,
-            state: (["pending", "queued", "started", "ended", "cancelled"] as const)[step.other % 5]! } }; break;
-          case "status": data = { type: "status", status: "running", reason: `status ${seq}` }; break;
-          default: data = { type: "finding", finding: { id: `f${seq}`, approachId: approach.id, kind: "note", text: `Finding ${seq}`, paths: [],
-            ...(step.flag ? { relatesTo: item.id, relation: "supports" as const } : {}) } };
-        }
-        events.push({ seq, at: 1000 + seq, actor, commandId: `c${seq}`, signature: `c${seq}`, data });
-      }
+  it("a delta carries only the items changed since the store's revision", () => {
+    fc.assert(fc.property(fc.array(researchJournalStepArb, { minLength: 2, maxLength: 40 }), fc.nat(), (steps, cut) => {
+      const events = [researchCreatedEvent(3)];
+      for (const step of steps) events.push(nextResearchEvent(projectResearchRun("run", events), step));
       const run = projectResearchRun("run", events);
-      const board = researchRunBoard(run);
-      const { events: _events, items: _items, ...rest } = run;
-      expect(board).toEqual({ ...rest, createdSeq: board.createdSeq });
-      expect(Object.keys(board.createdSeq).sort()).toEqual(run.items.map((i) => i.id).sort());
-      const index = researchBoardIndex(board);
-      expect(index.size).toBe(run.items.length);
-      for (const item of run.items) {
-        const expected = { id: item.id, type: item.type, record: item.record, createdSeq: item.createdSeq };
-        expect(researchBoardEntry(board, item.id)).toEqual(expected);
-        expect(index.get(item.id)).toEqual(expected);
-      }
-      expect(researchBoardEntry(board, "missing")).toBeUndefined();
-      expect(researchBoardEntry(board, "constructor")).toBeUndefined();
+      const since = 1 + cut % run.revision;
+      const page = researchChangePage(run, since);
+      expect(page.items.map((item) => item.id).sort()).toEqual(run.items.filter((item) => item.version > since).map((item) => item.id).sort());
+      expect(page.items.every((item) => item.version > since)).toBe(true);
+      expect((page.approaches ?? []).map((entry) => entry.approachId).sort()).toEqual([...new Set(page.items.map((item) => item.approachId))].sort());
+      expect(researchChangePage(run, run.revision)).toEqual({ runId: "run", revision: run.revision, state: researchRunState(run), items: [], approaches: [] });
+    }));
+  });
+
+  it("a store ahead of the journal is replaced, not merged", () => {
+    const events = [researchCreatedEvent(2)];
+    events.push(nextResearchEvent(projectResearchRun("run", events), { kind: "finding", pick: 0, other: 0, variant: 0, flag: false }));
+    const run = projectResearchRun("run", events);
+    const stale = applyResearchChanges(emptyResearchRunStore("run"), { runId: "run", revision: 9, writable: true, state: { ...researchRunState(run), revision: 9 },
+      items: [{ id: "gone", type: "finding", approachId: "a1", version: 9, createdSeq: 9, updatedAt: 1, work: { state: "open" }, record: { id: "gone", approachId: "a1", kind: "note", text: "From another journal", paths: [] } }],
+      approaches: [{ approachId: "gone-approach", findings: 1, candidates: 0, leafIds: ["gone"] }] });
+    expect(stale.revision).toBe(9);
+    const page = researchChangePage(run, stale.revision);
+    expect(page.reset).toBe(true);
+    expectStoreHoldsRun(applyResearchChanges(stale, { ...page, writable: false }), run);
+    expect(applyResearchChanges(stale, { ...page, runId: "other", writable: false })).toBe(stale);
+  });
+
+  it("board pages and summaries are slices of the replayed run", () => {
+    fc.assert(fc.property(fc.array(researchJournalStepArb, { minLength: 1, maxLength: 60 }), fc.nat(30), fc.nat(30), fc.nat(30), (steps, approachOffset, findingOffset, submissionOffset) => {
+      const events = [researchCreatedEvent(3)];
+      for (const step of steps) events.push(nextResearchEvent(projectResearchRun("run", events), step));
+      const run = projectResearchRun("run", events);
+      const board = researchBoardPage(run, { approachOffset, findingOffset, submissionOffset });
+      expect(board.approaches).toEqual(run.approaches.slice(approachOffset, approachOffset + RESEARCH_BOARD_PAGE));
+      expect(board.findings).toEqual(run.findings.slice(findingOffset, findingOffset + RESEARCH_BOARD_PAGE));
+      expect(board.submissions).toEqual(run.submissions.slice(submissionOffset, submissionOffset + RESEARCH_BOARD_PAGE));
+      expect([board.totalApproaches, board.totalFindings, board.totalSubmissions]).toEqual([run.approaches.length, run.findings.length, run.submissions.length]);
+      const summary = summarizeResearchRun(run);
+      expect(summary).toMatchObject({ status: run.status, activeWorkers: run.approaches.filter(researchApproachOccupiesSlot).length });
+      expect(summary.reason).toBe(run.reason);
     }));
   });
 });

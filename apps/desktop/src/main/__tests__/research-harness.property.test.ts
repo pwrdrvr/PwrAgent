@@ -43,31 +43,65 @@ function setup(options: { records?: unknown[]; enabled?: () => boolean; hello?: 
 }
 
 describe("Harness lifecycle and real SQLite oracle", () => {
-  it("keeps Harness run summaries compact and selected-board provenance intact without snapshot writes", async () => {
+  it("keeps Harness summaries compact and source provenance in deltas without replay or read writes", async () => {
     const { service, store } = setup({ records: harnessRecords() });
-    const run = await service.start(request("import"), fixture.tempDir);
+    const replay = vi.spyOn(store, "get").mockImplementation(() => { throw new Error("Live research must not replay the journal"); });
+    const receipt = await service.start(request("import"), fixture.tempDir);
     const native = new ResearchService(store, { ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, isOwnerAlive: () => true,
-      spawn: async () => { throw new Error("Snapshot reads must not dispatch"); }, stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
+      spawn: async () => { throw new Error("Reads must not dispatch"); }, stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
       changed: () => {}, schedule: () => () => {}, onError: () => {} });
     try {
-      const measured = await measureSqliteWrites(() => native.snapshot(actor));
-      expect(measured.result.runs).toEqual([summarizeResearchRun(run)]);
-      expect(measured.result.runs.every((summary) => !Object.hasOwn(summary, "harness"))).toBe(true);
-      expect(measured.result.selected).not.toHaveProperty("events");
-      const finding = run.events.find((event) => event.data.type === "finding")!;
-      expect(Reflect.get(measured.result.selected!, "itemProvenance")).toMatchObject({ "h:4": finding.provenance });
+      const measured = await measureSqliteWrites(() => ({ summary: native.snapshot(actor), changes: native.changes(receipt.id, 0, undefined, actor) }));
+      expect(measured.result.summary.runs.every((summary) => !Object.hasOwn(summary, "harness"))).toBe(true);
+      expect(measured.result.changes.state.harness).toEqual(receipt.harness);
+      expect(measured.result.changes.items.find((item) => item.id === "h:4")?.provenance).toMatchObject({ seq: 4, member: "m1" });
+      expect(measured.result.changes).not.toHaveProperty("events");
+      expect(native.readEvidence(receipt.id, "h:4", 0, actor).harnessWorkspace).toBe(fixture.tempDir);
+      expect(replay).not.toHaveBeenCalled();
       expect(measured.writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
-    } finally { native.close(); }
+      replay.mockRestore();
+      expect(measured.result.summary.runs).toEqual([summarizeResearchRun(store.get(receipt.id)!)]);
+    } finally { replay.mockRestore(); native.close(); }
   });
   it.each(["import", "execute"] as const)("refuses disabled %s admission before any intent or process effect", async (mode) => {
     const { service, store, ports } = setup({ enabled: () => false });
     const result = await measureSqliteWrites(async () => {
       await expect(service.start(request(mode), fixture.tempDir)).rejects.toThrow("Research runs are disabled");
     });
-    expect(store.list(actor)).toHaveLength(0);
+    expect(store.activeRuns(actor)).toHaveLength(0);
     expect(ports.open).not.toHaveBeenCalled();
     expect(ports.probe).not.toHaveBeenCalled();
     expectSqliteWriteBudget({ scenario: "research-harness-disabled-admission", note: "Disabled import or execution is refused before intent, process admission or model work.", writes: result.writes });
+  });
+
+  it("reads source receipts and current state through indexes as the journal grows", async () => {
+    const { service, store } = setup();
+    const run = await service.start(request("import"), fixture.tempDir);
+    const source = store.harnessRecord(run.id, 4)!;
+    const events = Array.from({ length: 996 }, (_, index) => {
+      const seq = index + 5;
+      return { ...source, seq: run.revision + index + 1, commandId: `source:${seq}:0`, signature: `fixture:${seq}`,
+        provenance: { ...source.provenance!, seq, digest: "b".repeat(64) },
+        data: { type: "harness_observation" as const, event: "fixture", text: `Retained source ${seq}` } };
+    });
+    store.appendBatch(run.id, run.revision, [...events, { ...source, seq: run.revision + events.length + 1,
+      commandId: "cursor:1000", signature: "cursor:1000", data: { type: "harness", state: { ...run.harness!, cursor: 1000 } } }]);
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 1000 }), async (seq) => {
+      const reads = vi.spyOn(db.raw, "prepare");
+      let sql: string[];
+      try {
+        const measured = await measureSqliteWrites(() => ({ header: store.header(run.id), receipt: store.harnessRecord(run.id, seq) }));
+        expect(measured.result.header?.harness?.cursor).toBe(1000);
+        expect(measured.result.receipt?.provenance?.seq).toBe(seq);
+        expect(measured.writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
+        sql = reads.mock.calls.map(([query]) => query);
+      } finally { reads.mockRestore(); }
+      for (const query of sql) {
+        const receipt = query.includes("$.provenance.seq");
+        const plan = db.raw.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...(receipt ? [run.id, seq] : [run.id])) as { detail: string }[];
+        expect(plan.map((row) => row.detail).join("\n")).toContain(receipt ? "idx_research_events_harness_record" : "idx_research_events_harness");
+      }
+    }), { numRuns: 25 });
   });
 
   it.each(["hello", "probe"] as const)("fences execution when the live experiment is disabled during %s", async (boundary) => {
@@ -91,10 +125,10 @@ describe("Harness lifecycle and real SQLite oracle", () => {
   });
 
   it("retains owner-selected model provenance instead of accepting a model identity from source records", async () => {
-    const { service, connection } = setup();
+    const { service, store, connection } = setup();
     connection.model = { model: "owner-selected", endpointOrigin: "https://fixture.example" };
     const admitted = await measureSqliteWrites(() => service.start(request(), fixture.tempDir));
-    const run = admitted.result;
+    const run = store.get(admitted.result.id)!;
     expectSqliteWriteBudget({ scenario: "research-harness-model-admission", note: "Intent, owner-selected model provenance before the paid probe, dispatch and one initial source page. No per-token writes.", writes: admitted.writes });
     expect(run.harness).toMatchObject({ model: "owner-selected", endpointOrigin: "https://fixture.example" });
     expect(run.events.some((e) => e.data.type === "harness_observation" && e.data.text.includes("fixture-model"))).toBe(true);
@@ -125,7 +159,7 @@ describe("Harness lifecycle and real SQLite oracle", () => {
   it("imports real-shaped records without dispatch or inherited source reviews, retaining unknown variants and provenance", async () => {
     const { service, store, connection, ports } = setup({ records: harnessRecords() });
     const measured = await measureSqliteWrites(() => service.start(request("import"), fixture.tempDir));
-    const run = measured.result;
+    const run = store.get(measured.result.id)!;
     expect(run.status).toBe("exhausted");
     expect(run.findings).toHaveLength(2);
     expect(run.submissions[0]?.review).toBeUndefined();
@@ -141,32 +175,36 @@ describe("Harness lifecycle and real SQLite oracle", () => {
   it("models admission, duplicate requests, lost cancellation, shutdown and recovery without replay", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("duplicate", "poll", "stop", "close"), { minLength: 1, maxLength: 12, size: "max" }), fc.boolean(), async (commands, confirmsStop) => {
       const { service, store, connection } = setup({ cancel: async (p) => confirmsStop ? { stopped: true, runId: p.runId, swarm: p.swarm } : { stopped: false } });
-      const input = request();
-      const run = await service.start(input, fixture.tempDir);
-      const model = { execute: 1, cancels: 0, active: true, closed: false, status: "running" };
-      for (const command of commands) {
-        if (command === "duplicate") await service.start(input, fixture.tempDir);
-        if (command === "poll") await service.poll(run.id);
-        if (command === "stop" && !model.closed) {
-          await service.stop(run.id, actor, "stopped", "Operator stop");
-          if (model.active) { model.cancels++; model.active = false; model.status = confirmsStop ? "stopped" : "stopping"; }
+      const replay = vi.spyOn(store, "get").mockImplementation(() => { throw new Error("Live commands must not replay the journal"); });
+      try {
+        const input = request();
+        const run = await service.start(input, fixture.tempDir);
+        const model = { execute: 1, cancels: 0, active: true, closed: false, status: "running" };
+        for (const command of commands) {
+          if (command === "duplicate") await service.start(input, fixture.tempDir);
+          if (command === "poll") await service.poll(run.id);
+          if (command === "stop" && !model.closed) {
+            await service.stop(run.id, actor, "stopped", "Operator stop");
+            if (model.active) { model.cancels++; model.active = false; model.status = confirmsStop ? "stopped" : "stopping"; }
+          }
+          if (command === "close") {
+            await service.close(); model.closed = true;
+            if (model.active) { model.active = false; model.status = "interrupted"; }
+          }
+          const methods = vi.mocked(connection.request).mock.calls.map(([method]) => method);
+          expect(methods.filter((m) => m === "execute")).toHaveLength(model.execute);
+          expect(methods.filter((m) => m === "cancel")).toHaveLength(model.cancels);
+          expect(store.header(run.id)?.status).toBe(model.status);
         }
-        if (command === "close") {
-          await service.close(); model.closed = true;
-          if (model.active) { model.active = false; model.status = "interrupted"; }
-        }
-        const methods = vi.mocked(connection.request).mock.calls.map(([method]) => method);
-        expect(methods.filter((m) => m === "execute")).toHaveLength(model.execute);
-        expect(methods.filter((m) => m === "cancel")).toHaveLength(model.cancels);
-        expect(store.get(run.id)?.status).toBe(model.status);
-      }
-      // A new owner recovers the real journal, never the external model request.
-      const native = new ResearchService(store, { ownerId: `recovery-${randomUUID()}`, ownerPid: 2, ownerStartedAt: 100, isOwnerAlive: () => false,
-        spawn: vi.fn(async () => { throw new Error("Recovery must not dispatch"); }), stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}), changed: () => {}, schedule: () => () => {}, onError: () => {} });
-      native.initialize(); native.close();
-      expect(vi.mocked(connection.request).mock.calls.filter(([m]) => m === "execute")).toHaveLength(1);
-      await service.close();
-    }), { numRuns: 25 });
+        // A new owner recovers the real journal, never the external model request.
+        const native = new ResearchService(store, { ownerId: `recovery-${randomUUID()}`, ownerPid: 2, ownerStartedAt: 100, isOwnerAlive: () => false,
+          spawn: vi.fn(async () => { throw new Error("Recovery must not dispatch"); }), stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}), changed: () => {}, schedule: () => () => {}, onError: () => {} });
+        native.initialize(); native.close();
+        expect(vi.mocked(connection.request).mock.calls.filter(([m]) => m === "execute")).toHaveLength(1);
+        await service.close();
+        expect(replay).not.toHaveBeenCalled();
+      } finally { replay.mockRestore(); }
+    }), { numRuns: 25, examples: [[["duplicate"], false]] });
   });
 
   it("never retries a possibly admitted execution, including after process restart", async () => {
@@ -188,7 +226,7 @@ describe("Harness lifecycle and real SQLite oracle", () => {
     const { service, store, connection, ports } = setup({ probe: async () => await gate.promise });
     const starting = service.start(request(), fixture.tempDir);
     await vi.waitFor(() => expect(ports.open).toHaveBeenCalled());
-    const id = store.list()[0]!.id;
+    const id = store.activeRuns()[0]!.id;
     const stopped = await service.stop(id, actor, "stopped", "Stop while probing");
     expect(stopped.status).toBe("stopped");
     gate.resolve(); await starting;
@@ -248,7 +286,7 @@ describe("Harness lifecycle and real SQLite oracle", () => {
       expect(() => normalizeHarnessRecords(before, records)).toThrow();
       expect(store.get(run.id)).toEqual(before);
     }), { numRuns: 25 });
-    expect(normalizeHarnessRecords(run, harnessRecords().slice(0, 4)).events).toEqual([]);
+    expect(normalizeHarnessRecords(store.get(run.id)!, harnessRecords().slice(0, 4)).events).toEqual([]);
   });
 
   it("does not commit a page whose continuation cursor lies about the observed prefix", async () => {

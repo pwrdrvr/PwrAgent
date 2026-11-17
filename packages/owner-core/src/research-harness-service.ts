@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, sameResearchThread, type ResearchActor, type ResearchEvent,
-  type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRun } from "@pwragent/shared";
+  type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
 import { normalizeHarnessRecords, object, text } from "./research-harness-records";
@@ -21,19 +21,20 @@ export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | 
 export class ResearchHarnessService {
   private readonly connections = new Map<string, ResearchHarnessConnection>();
   private readonly timers = new Map<string, () => void>();
-  private readonly pending = new Map<string, Promise<ResearchRun>>();
+  private readonly pending = new Map<string, Promise<ResearchRunHeader>>();
   private readonly stopping = new Set<string>();
   private readonly probes = new Map<string, AbortController>();
   private closed = false;
   private readonly cleanup = new Set<Promise<void>>();
   constructor(private readonly storage: ResearchStorage, private readonly ports: ResearchHarnessPorts) {}
 
-  start(request: ResearchHarnessRequest, workspace: string): Promise<ResearchRun> {
+  start(request: ResearchHarnessRequest, workspace: string): Promise<ResearchRunHeader> {
     const key = JSON.stringify(["harness", request.backend, request.threadId, text(request.requestId, 200)]);
-    const existing = this.storage.findByStartKey(key);
+    const existingId = this.storage.runIdForStartKey(key);
+    const existing = existingId ? this.run(existingId) : undefined;
     const signature = JSON.stringify({ request, workspace });
     if (existing) {
-      if (existing.events[0]?.signature !== signature) return Promise.reject(new Error("Harness request ID was reused"));
+      if (this.storage.findCommand(existing.id, "start")?.signature !== signature) return Promise.reject(new Error("Harness request ID was reused"));
       return this.pending.get(existing.id) ?? Promise.resolve(existing);
     }
     if (this.closed) return Promise.reject(new Error("Harness adapter is closed"));
@@ -65,7 +66,7 @@ export class ResearchHarnessService {
     return promise;
   }
 
-  private async connect(id: string, request: ResearchHarnessRequest): Promise<ResearchRun> {
+  private async connect(id: string, request: ResearchHarnessRequest): Promise<ResearchRunHeader> {
     try {
       const connection = this.ports.open(this.run(id).harness!.workspace, id, request.mode);
       this.connections.set(id, connection);
@@ -137,7 +138,7 @@ export class ResearchHarnessService {
       // Re-read after await: cancellation and review may have appended meanwhile.
       const run = this.run(id);
       if (!this.connections.has(id) || !["running", "stopping"].includes(run.status)) return;
-      const normalized = normalizeHarnessRecords(run, response.records);
+      const normalized = normalizeHarnessRecords({ ...run, approaches: this.approaches(id) }, response.records, (seq) => this.storage.harnessRecord(id, seq));
       if (response.next !== undefined && (response.next !== normalized.state.cursor || normalized.state.cursor <= run.harness!.cursor)) throw new Error("Invalid Harness continuation cursor");
       if (normalized.events.length) {
         if (run.revision + normalized.events.length + 2 > RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; import retained source separately");
@@ -168,11 +169,11 @@ export class ResearchHarnessService {
     } catch (error) { this.unknown(id, error); }
   }
 
-  async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string): Promise<ResearchRun> {
+  async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string): Promise<ResearchRunHeader> {
     const run = this.run(id);
     if (this.closed || run.ownerId !== this.ports.ownerId || !sameResearchThread(run.coordinator, actor)) throw new Error("Harness owner or coordinator unavailable");
     if (outcome === "completed") {
-      if (!run.submissions.some((submission) => submission.review?.decision === "accepted")) throw new Error("Accept a submission before completing the run");
+      if (!this.storage.hasSubmission(id, "accepted")) throw new Error("Accept a submission before completing the run");
       if (["ended", "imported"].includes(run.harness!.state) && ["exhausted", "interrupted"].includes(run.status)) {
         this.append(id, [{ type: "status", status: "completed", reason: text(reason, 2000) }]);
         return this.run(id);
@@ -186,7 +187,7 @@ export class ResearchHarnessService {
     const connection = this.connections.get(id);
     try {
       if (run.harness!.state === "pending" || run.harness!.mode === "import") {
-        this.append(id, [...this.run(id).approaches.map((a): ResearchEventData => ({ type: "worker", approachId: a.id, state: "stopped" })),
+        this.append(id, [...this.approaches(id).map((a): ResearchEventData => ({ type: "worker", approachId: a.id, state: "stopped" })),
           { type: "harness", state: { ...this.run(id).harness!, state: "stopped", note: "Stopped before execution dispatch, or detached an observation import. Source work was not cancelled." } },
           { type: "status", status: outcome, reason: "Stopped before execution dispatch, or detached an observation import." }]);
       } else {
@@ -194,7 +195,7 @@ export class ResearchHarnessService {
         const receipt = object(await connection.request("cancel", { runId: id, project: run.harness!.project, session: run.harness!.session, swarm: run.harness!.swarm }));
         if (receipt.stopped !== true || receipt.runId !== id || receipt.swarm !== run.harness!.swarm) throw new Error("Harness cancellation acknowledgement is unresolved");
         if (!["running", "stopping"].includes(this.run(id).status)) return this.run(id);
-        this.append(id, [ ...this.run(id).approaches.map((a): ResearchEventData => ({ type: "worker", approachId: a.id, state: "stopped" })),
+        this.append(id, [ ...this.approaches(id).map((a): ResearchEventData => ({ type: "worker", approachId: a.id, state: "stopped" })),
           { type: "harness", state: { ...this.run(id).harness!, state: "stopped", note: "Bridge confirmed this run's work stopped. In-flight provider usage may still bill." } },
           { type: "status", status: outcome, reason }]);
       }
@@ -252,8 +253,13 @@ export class ResearchHarnessService {
       at: this.now(), actor: this.actor(run), data: entry })));
     this.changed(id);
   }
-  private changed(id: string): void { this.ports.changed(this.run(id).coordinator); }
-  private actor(run: ResearchRun): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
-  private run(id: string): ResearchRun { const run = this.storage.get(id); if (!run?.harness) throw new Error("Harness run not found"); return run; }
+  private changed(id: string): void { const run = this.run(id); this.ports.changed({ ...run.coordinator, runId: id, revision: run.revision }); }
+  private actor(run: ResearchRunHeader): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
+  private run(id: string): ResearchRunHeader { const run = this.storage.header(id); if (!run?.harness) throw new Error("Harness run not found"); return run; }
+  private approaches(id: string) {
+    const run = this.run(id);
+    return Array.from({ length: run.workerLimit }, (_, index) => this.storage.readItem(id, `a${index + 1}`))
+      .flatMap((item) => item?.type === "approach" ? [item.record] : []);
+  }
   private now(): number { return this.ports.now?.() ?? Date.now(); }
 }

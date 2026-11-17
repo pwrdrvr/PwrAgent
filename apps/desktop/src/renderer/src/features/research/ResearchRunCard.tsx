@@ -1,14 +1,13 @@
 import { useState } from "react";
-import type { ResearchRunBoard } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
-import { isResearchRunLive, plural, researchFinishBlocker, researchLabel, researchPhaseInput, researchRunCounts, researchRunPhase, researchTimeLeft } from "./research-view-model";
+import { isResearchRunLive, plural, researchFinishBlocker, researchLabel, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
 export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop, onFinish }: {
-  run: ResearchRunBoard; now: number; coordinator: boolean; writable: boolean; busy: boolean;
+  run: ResearchRunView; now: number; coordinator: boolean; writable: boolean; busy: boolean;
   onStop: () => void; onFinish: () => void;
 }) {
   const [confirmingStop, setConfirmingStop] = useState(false);
-  const phase = researchRunPhase(researchPhaseInput(run));
+  const phase = researchRunPhase(run);
   const counts = researchRunCounts(run);
   const live = isResearchRunLive(run);
   const controls = coordinator && writable && (live || (run.status !== "completed" && run.harness && ["ended", "imported"].includes(run.harness.state)));

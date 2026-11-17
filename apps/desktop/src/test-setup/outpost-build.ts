@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 
 /** Own the generated bundle before any desktop-main test worker imports it. */
 export default async function setup(): Promise<void> {
-  await promisify(execFile)(process.execPath, [path.join(process.cwd(), "packages/pwragent/scripts/build.mjs")], {
+  await promisify(execFile)(process.execPath, [path.join(process.cwd(), "packages/pwragent/scripts/build.mjs"), "--no-sourcemap"], {
     cwd: process.cwd(),
   });
 }

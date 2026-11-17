@@ -1,6 +1,8 @@
+import { messagingModules } from "./fixtures/messaging-controller-modules";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
@@ -188,6 +190,7 @@ async function settleHarness(
   harness.controller.dispose();
   await harness.controller.whenToolUpdatesSettled();
   await harness.controller.whenQueuedTurnActionsSettled();
+  await harness.controller.whenQueuedTurnDrainsSettled();
   if (harness.store instanceof MessagingStore) {
     const storeIndex = tempStores.indexOf(harness.store);
     if (storeIndex >= 0) tempStores.splice(storeIndex, 1);
@@ -195,29 +198,55 @@ async function settleHarness(
   }
 }
 
+/** What one property example created through `createHarness`. */
+type PropertyExampleScope = {
+  harnesses: { controller: MessagingController; store: unknown }[];
+  databases: StateDb[];
+};
+
+const propertyExampleScope = new AsyncLocalStorage<PropertyExampleScope>();
+
 /**
- * Runs one property example against its own harness over an in-memory
- * StateDb, then settles that harness and closes the database. A test that
- * has timed out keeps running, so this starts nothing once `signal` aborts.
+ * Wraps a fast-check predicate so each example owns the harnesses it creates.
+ * A test that has timed out keeps running, so no example starts once `signal`
+ * aborts. Inside an example, `createHarness` uses an in-memory StateDb store
+ * unless the test passes its own; the JSON store's serialized file I/O is
+ * what pushed properties past the timeout under load. When the example ends,
+ * even by failing, its harnesses settle and their databases close.
  */
-async function withExampleHarness<T>(
+function propertyExample<Args extends unknown[]>(
   signal: AbortSignal,
-  options: Omit<NonNullable<Parameters<typeof createHarness>[0]>, "store">,
-  run: (harness: Awaited<ReturnType<typeof createHarness>>) => Promise<T>,
-): Promise<T> {
-  signal.throwIfAborted();
-  const db = openInMemoryStateDb();
-  let created: Awaited<ReturnType<typeof createHarness>> | undefined;
-  try {
-    created = await createHarness({ ...options, store: new SqliteMessagingStore(db) });
-    return await run(created);
-  } finally {
+  body: (...args: Args) => Promise<void>,
+): (...args: Args) => Promise<void> {
+  return async (...args) => {
+    signal.throwIfAborted();
+    const scope: PropertyExampleScope = { harnesses: [], databases: [] };
+    let bodyFailure: { error: unknown } | undefined;
     try {
-      await settleHarness(created);
-    } finally {
-      db.close();
+      await propertyExampleScope.run(scope, async () => await body(...args));
+    } catch (error) {
+      bodyFailure = { error };
     }
-  }
+    // Settle every harness and close every database even when one step fails,
+    // and report the example's own failure ahead of any teardown failure.
+    const teardownErrors: unknown[] = [];
+    for (const harness of scope.harnesses.reverse()) {
+      try {
+        await settleHarness(harness);
+      } catch (error) {
+        teardownErrors.push(error);
+      }
+    }
+    for (const db of scope.databases) {
+      try {
+        db.close();
+      } catch (error) {
+        teardownErrors.push(error);
+      }
+    }
+    if (bodyFailure) throw bodyFailure.error;
+    if (teardownErrors.length > 0) throw teardownErrors[0];
+  };
 }
 
 afterEach(async () => {
@@ -1185,20 +1214,18 @@ describe("MessagingController", () => {
     // Model: new reviews fix by default; only a toggle changes that choice.
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("toggle", "scope", "mode", "reviewer"), { maxLength: 6 }),
-      // This property checks picker state, not file persistence. Repeating
-      // the JSON store's reads and atomic rewrites for 25 examples can
-      // exhaust the test timeout while other survey files are doing I/O.
-      async (steps) => await withExampleHarness(signal, { listBackends: async () => ({
-        fetchedAt: 1000, backends: [
-          buildBackendSummary({ capabilities: {
-            ...buildBackendSummary().capabilities, reviewRunner: true,
-            reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
-          } }),
-          buildBackendSummary({ kind: "acp:grok", capabilities: {
-            ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
-          } }),
-        ],
-      }) }, async (harness) => {
+      propertyExample(signal, async (steps) => {
+        const harness = await createHarness({ listBackends: async () => ({
+          fetchedAt: 1000, backends: [
+            buildBackendSummary({ capabilities: {
+              ...buildBackendSummary().capabilities, reviewRunner: true,
+              reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
+            } }),
+            buildBackendSummary({ kind: "acp:grok", capabilities: {
+              ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
+            } }),
+          ],
+        }) });
         await bindThread(harness);
         await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
         let autoFix = true;
@@ -12392,11 +12419,7 @@ describe("MessagingController", () => {
       },
     });
 
-    await (
-      harness.controller as unknown as {
-        refreshBindingFromInbound(event: MessagingInboundEvent): Promise<void>;
-      }
-    ).refreshBindingFromInbound(event);
+    await messagingModules(harness.controller).bindings.refreshBindingFromInbound(event);
 
     expect(upsertBinding).not.toHaveBeenCalled();
   });
@@ -17136,8 +17159,8 @@ describe("MessagingController", () => {
     })).toMatchObject({ ok: false, error: { code: "forbidden" } });
   });
 
-  it.each([{ kinds: ["pdf"] }, { kinds: ["image"] }, { kinds: ["zip"] }, { kinds: ["pdf", "image", "zip"] }])("initial $kinds originals are bound before first-turn admission and survive restart", async ({ kinds }) => {
-    await fc.assert(fc.asyncProperty(fc.uint8Array({ minLength: 1, maxLength: 128 }), async (payload) => {
+  it.for([{ kinds: ["pdf"] }, { kinds: ["image"] }, { kinds: ["zip"] }, { kinds: ["pdf", "image", "zip"] }])("initial $kinds originals are bound before first-turn admission and survive restart", async ({ kinds }, { signal }) => {
+    await fc.assert(fc.asyncProperty(fc.uint8Array({ minLength: 1, maxLength: 128 }), propertyExample(signal, async (payload) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-initial-originals-"));
       tempDirs.push(root);
       const cache = path.join(root, "cache");
@@ -17212,7 +17235,7 @@ describe("MessagingController", () => {
           context: { ...context, threadId: "thread-1" }, args: { attachmentId: original.attachmentId } }))
           .toMatchObject({ ok: false, error: { code: "not_found" } });
       }
-    }), { numRuns: 3, examples: [[Uint8Array.of(0)]] });
+    })), { numRuns: 3, examples: [[Uint8Array.of(0)]] });
   });
 
   it("budgets initial original-file admission through the startThread fallback", async () => {
@@ -17760,10 +17783,10 @@ describe("MessagingController", () => {
     }
   });
 
-  it("admits busy-thread messaging input to the owner's FIFO in arrival order", async () => {
+  it("admits busy-thread messaging input to the owner's FIFO in arrival order", async ({ signal }) => {
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("follow up", "same message", "check status"), {
       minLength: 1, maxLength: 4,
-    }), async (messages) => {
+    }), propertyExample(signal, async (messages) => {
       const started: string[] = [];
       const owner = new ThreadTurnQueue({ startTurn: async (entry) => {
         started.push(entry.input.map((part) => part.type === "text" ? part.text : "").join(""));
@@ -17778,23 +17801,21 @@ describe("MessagingController", () => {
             queueStatus: result.status, queueEntryId: result.entry.id };
         },
       });
-      try {
-        await bindThread(harness);
-        await harness.controller.handleInboundEvent(buildTextEvent("first"));
-        for (const text of messages) await harness.controller.handleInboundEvent(buildTextEvent(text));
-        // The owner is the oracle for every viewer's queue. No accepted
-        // follow-up may live only in a messaging controller's local FIFO.
-        expect(owner.getQueuedEntries({ backend: "codex", threadId: "thread-1" })
-          .map((entry) => entry.input)).toEqual(messages.map((text) => [{ type: "text", text }]));
-        expect(started).toEqual(["first"]);
-        for (let index = 0; index <= messages.length; index += 1) {
-          await owner.releaseThread({ backend: "codex", threadId: "thread-1",
-            turnId: `turn-${index + 1}`, status: "turn/completed" });
-        }
-        expect(started).toEqual(["first", ...messages]);
-        expect(harness.startTurn).toHaveBeenCalledTimes(messages.length + 1);
-      } finally { harness.controller.dispose(); }
-    }), { numRuns: 8 });
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("first"));
+      for (const text of messages) await harness.controller.handleInboundEvent(buildTextEvent(text));
+      // The owner is the oracle for every viewer's queue. No accepted
+      // follow-up may live only in a messaging controller's local FIFO.
+      expect(owner.getQueuedEntries({ backend: "codex", threadId: "thread-1" })
+        .map((entry) => entry.input)).toEqual(messages.map((text) => [{ type: "text", text }]));
+      expect(started).toEqual(["first"]);
+      for (let index = 0; index <= messages.length; index += 1) {
+        await owner.releaseThread({ backend: "codex", threadId: "thread-1",
+          turnId: `turn-${index + 1}`, status: "turn/completed" });
+      }
+      expect(started).toEqual(["first", ...messages]);
+      expect(harness.startTurn).toHaveBeenCalledTimes(messages.length + 1);
+    })), { numRuns: 8 });
   });
 
   it.each(["cancel", "steer", "edited"] as const)("uses owner content and cancellation disposition for shared queue action %s", async (action) => {
@@ -17821,8 +17842,8 @@ describe("MessagingController", () => {
     if (action === "edited") expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("changed or has already been admitted") });
   });
 
-  it("preserves owner input until a retry is admitted after failed steering and fallback", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 2 }), async (queueRetry, failedRetries) => {
+  it("preserves owner input until a retry is admitted after failed steering and fallback", async ({ signal }) => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 2 }), propertyExample(signal, async (queueRetry, failedRetries) => {
       let calls = 0;
       const harness = await createHarness({
         backendOverrides: {
@@ -17845,38 +17866,36 @@ describe("MessagingController", () => {
             : { backend: "codex", threadId: "thread-1", turnId: "turn-2" };
         },
       });
-      try {
-        await bindThread(harness);
-        await harness.controller.handleInboundEvent(buildTextEvent("first"));
-        await harness.controller.handleInboundEvent(buildTextEvent("original input"));
-        harness.steerTurn.mockRejectedValue(new Error("Steer rejected"));
-        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:steer:owner-entry" }));
-        await harness.controller.whenQueuedTurnActionsSettled();
-        const retryNotice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
-        const retry = retryNotice && "actions" in retryNotice
-          ? retryNotice.actions?.find((action) => action.id.startsWith("queued-turn:retry:")) : undefined;
-        expect(retry).toBeDefined();
-        expect(retryNotice).toMatchObject({ body: expect.stringContaining("owner-edited input") });
-        const beforeIdle = calls;
-        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
-          method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
-        } });
-        expect(calls).toBe(beforeIdle);
-        for (let index = 0; index < failedRetries; index += 1) {
-          await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id }));
-        }
-        await Promise.all([
-          harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id })),
-          harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id })),
-        ]);
-        expect(harness.startTurn.mock.calls.slice(2).map(([request]) => request.input))
-          .toEqual(Array.from({ length: failedRetries + 2 }, () => [{ type: "text", text: "owner-edited input" }]));
-        const acceptedCalls = calls;
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildTextEvent("first"));
+      await harness.controller.handleInboundEvent(buildTextEvent("original input"));
+      harness.steerTurn.mockRejectedValue(new Error("Steer rejected"));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "queued-turn:steer:owner-entry" }));
+      await harness.controller.whenQueuedTurnActionsSettled();
+      const retryNotice = harness.delivered.filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued").at(-1);
+      const retry = retryNotice && "actions" in retryNotice
+        ? retryNotice.actions?.find((action) => action.id.startsWith("queued-turn:retry:")) : undefined;
+      expect(retry).toBeDefined();
+      expect(retryNotice).toMatchObject({ body: expect.stringContaining("owner-edited input") });
+      const beforeIdle = calls;
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+      } });
+      expect(calls).toBe(beforeIdle);
+      for (let index = 0; index < failedRetries; index += 1) {
         await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id }));
-        expect(calls).toBe(acceptedCalls);
-        expect(harness.delivered.at(-1)).toMatchObject({ body: "That queued message is no longer waiting." });
-      } finally { harness.controller.dispose(); }
-    }), { numRuns: 8, examples: [[false, 0], [true, 1]] });
+      }
+      await Promise.all([
+        harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id })),
+        harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id })),
+      ]);
+      expect(harness.startTurn.mock.calls.slice(2).map(([request]) => request.input))
+        .toEqual(Array.from({ length: failedRetries + 2 }, () => [{ type: "text", text: "owner-edited input" }]));
+      const acceptedCalls = calls;
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: retry!.id }));
+      expect(calls).toBe(acceptedCalls);
+      expect(harness.delivered.at(-1)).toMatchObject({ body: "That queued message is no longer waiting." });
+    })), { numRuns: 8, examples: [[false, 0], [true, 1]] });
   });
 
   it.each([false, true])("keeps owner acceptance authoritative when queue notice fails=%s", async (failNotice) => {
@@ -17926,11 +17945,11 @@ describe("MessagingController", () => {
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("delivers terminal and idle events independently of the next queued start acknowledgement", async () => {
+  it("delivers terminal and idle events independently of the next queued start acknowledgement", async ({ signal }) => {
     // Oracle: the owner must finish delivering the ended turn before a new
     // turn's ordered start can acknowledge. Awaiting that start from inside
     // the event listener creates a cycle, even for a text-only final message.
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (idleFirst) => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), propertyExample(signal, async (idleFirst) => {
       const harness = await createHarness();
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("first"));
@@ -17966,18 +17985,17 @@ describe("MessagingController", () => {
         acknowledge();
         await delivery;
         await harness.controller.whenQueuedTurnDrainsSettled();
-        harness.controller.dispose();
       }
-    }), { numRuns: 4 });
+    })), { numRuns: 4 });
   });
 
-  it("settles armed queued-turn drains only after dispatch finishes or disposal cancels them", async () => {
+  it("settles armed queued-turn drains only after dispatch finishes or disposal cancels them", async ({ signal }) => {
     // Oracle: a released entry must start before the settle hook resolves,
     // and the hook must include acknowledgement and notice retirement.
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("completed", "idle", "both"),
       fc.constantFrom("accepted", "rejected", "disposed"),
-      async (release, outcome) => {
+      propertyExample(signal, async (release, outcome) => {
         const harness = await createHarness();
         const entered = createDeferred<void>();
         const acknowledgement = createDeferred<void>();
@@ -18030,7 +18048,7 @@ describe("MessagingController", () => {
           harness.controller.dispose();
           await harness.controller.whenQueuedTurnDrainsSettled();
         }
-      },
+      }),
     ), { numRuns: 9, examples: [["completed", "accepted"], ["idle", "rejected"], ["completed", "disposed"], ["both", "disposed"]] });
   });
 
@@ -18762,8 +18780,8 @@ describe("MessagingController", () => {
     }), { numRuns: 6 });
   });
 
-  it("releases the remaining queue when completion overtakes a steer acknowledgement", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (reject) => {
+  it("releases the remaining queue when completion overtakes a steer acknowledgement", async ({ signal }) => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), propertyExample(signal, async (reject) => {
       const harness = await createHarness();
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
@@ -18807,7 +18825,7 @@ describe("MessagingController", () => {
         acknowledgement.resolve();
         await harness.controller.whenQueuedTurnActionsSettled();
       }
-    }), { numRuns: 6 });
+    })), { numRuns: 6 });
   });
 
   it("keeps queued follow-ups available when backend steering is rejected", async () => {
@@ -21116,7 +21134,7 @@ describe("MessagingController", () => {
     }), { minLength: 1, maxLength: 4 });
 
     await fc.assert(fc.asyncProperty(turn, fc.array(fc.nat({ max: 100 }), { maxLength: 6 }),
-      async (items, terminalRetries) => {
+      propertyExample(signal, async (items, terminalRetries) => {
         const texts = items.map((item, index) => `Reply ${index}: ${item.text.trim()}.`);
         const events: AgentEvent[] = [{
           backend: "codex",
@@ -21137,29 +21155,27 @@ describe("MessagingController", () => {
           } },
         }];
 
-        // This property checks delivery deduplication, not file persistence.
-        // The JSON store serializes a read, or a read and an atomic rewrite,
-        // for each store operation: about 1,500 file operations across 25
-        // examples, which exceeded the timeout under full-suite I/O load.
+        // Each run builds its own harness. Before propertyExample gave it an
+        // in-memory store, 25 examples made about 1,500 serialized JSON-store
+        // file operations, which exceeded the timeout under full-suite load.
         async function deliver(withRetries: boolean): Promise<string[]> {
-          return await withExampleHarness(signal, {}, async (harness) => {
-            await bindThread(harness);
-            harness.delivered.length = 0;
-            for (const [index, event] of events.entries()) {
-              await harness.controller.handleBackendEvent(event);
-              const retries = index === 0 ? []
-                : index === events.length - 1 ? terminalRetries : items[index - 1]!.retries;
-              if (withRetries) {
-                for (const retry of retries) {
-                  await harness.controller.handleBackendEvent(events[retry % (index + 1)]!);
-                }
+          const harness = await createHarness();
+          await bindThread(harness);
+          harness.delivered.length = 0;
+          for (const [index, event] of events.entries()) {
+            await harness.controller.handleBackendEvent(event);
+            const retries = index === 0 ? []
+              : index === events.length - 1 ? terminalRetries : items[index - 1]!.retries;
+            if (withRetries) {
+              for (const retry of retries) {
+                await harness.controller.handleBackendEvent(events[retry % (index + 1)]!);
               }
             }
-            return harness.delivered
-              .filter((intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
-                intent.kind === "message" && intent.role === "assistant")
-              .flatMap((intent) => intent.parts.flatMap((part) => "text" in part ? [part.text] : []));
-          });
+          }
+          return harness.delivered
+            .filter((intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
+              intent.kind === "message" && intent.role === "assistant")
+            .flatMap((intent) => intent.parts.flatMap((part) => "text" in part ? [part.text] : []));
         }
 
         const unique = await deliver(false);
@@ -21167,7 +21183,7 @@ describe("MessagingController", () => {
         // The differential oracle alone could agree on the same duplicate output.
         // Each generated final item must also reach the recipient exactly once.
         expect(unique).toEqual(texts);
-      },
+      }),
     ), { numRuns: 25 });
   });
 
@@ -21212,12 +21228,34 @@ describe("MessagingController", () => {
     const timedOut = new AbortController();
     timedOut.abort(new Error("Test timed out"));
     const registered = harnessControllers.length;
-    const run = vi.fn(async () => undefined);
+    const body = vi.fn(async () => {
+      await createHarness();
+    });
 
-    await expect(withExampleHarness(timedOut.signal, {}, run)).rejects.toThrow("Test timed out");
+    await expect(propertyExample(timedOut.signal, body)()).rejects.toThrow("Test timed out");
 
-    expect(run).not.toHaveBeenCalled();
+    expect(body).not.toHaveBeenCalled();
     expect(harnessControllers).toHaveLength(registered);
+  });
+
+  it("settles every harness a property example created, even when the example fails", async () => {
+    // Model: an example owns exactly the harnesses it created. They settle
+    // when it ends, and any other test's harness stays registered.
+    const outside = await createHarness();
+    const created: Awaited<ReturnType<typeof createHarness>>[] = [];
+
+    await expect(propertyExample(new AbortController().signal, async () => {
+      created.push(await createHarness(), await createHarness());
+      throw new Error("example failed");
+    })()).rejects.toThrow("example failed");
+
+    expect(created).toHaveLength(2);
+    for (const harness of created) {
+      expect(harness.store).toBeInstanceOf(SqliteMessagingStore);
+      expect(harnessControllers).not.toContain(harness.controller);
+    }
+    expect(outside.store).toBeInstanceOf(MessagingStore);
+    expect(harnessControllers).toContain(outside.controller);
   });
 
   it("posts one final response when turn completion repeats it with commentary", async () => {
@@ -23059,10 +23097,10 @@ describe("MessagingController", () => {
     }
   }, 30_000);
 
-  it("binds MCP confirmation buttons to the proposal the person saw", async () => {
+  it("binds MCP confirmation buttons to the proposal the person saw", async ({ signal }) => {
     // Model: only the latest card's own actor/channel/surface can answer it.
     // Replacing a pending proposal must never retarget an old Allow button.
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 4 }), async (count) => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 4 }), propertyExample(signal, async (count) => {
       let now = 1000;
       const harness = await createHarness({ now: () => now });
       await bindThread(harness);
@@ -23113,7 +23151,7 @@ describe("MessagingController", () => {
       });
       await harness.controller.handleInboundEvent(callback(count - 1));
       expect(harness.submitServerRequest).toHaveBeenCalledTimes(1);
-    }), { numRuns: 8 });
+    })), { numRuns: 8 });
   });
 
   it("presents and declines MCP link requests even when Working Updates is None", async () => {
@@ -28973,14 +29011,7 @@ describe("RBAC capability enforcement", () => {
       });
       const event = buildCommandEvent("/status");
       await expect(
-        (
-          harness.controller as unknown as {
-            bindChannelToThread: (
-              event: unknown,
-              target: unknown,
-            ) => Promise<unknown>;
-          }
-        ).bindChannelToThread(event, {
+        messagingModules(harness.controller).bindings.bindChannelToThread(event, {
           backend: "codex",
           threadId: "thread-1",
           federatedThread: {
@@ -29630,7 +29661,14 @@ async function createHarness<
   updateDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   store: Store;
 }> {
-  const store = (options?.store ?? await createStore()) as Store;
+  const example = propertyExampleScope.getStore();
+  let exampleStore: SqliteMessagingStore | undefined;
+  if (example && !options?.store) {
+    const db = openInMemoryStateDb();
+    example.databases.push(db);
+    exampleStore = new SqliteMessagingStore(db);
+  }
+  const store = (options?.store ?? exampleStore ?? await createStore()) as Store;
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
     retainedSourceConnectionId: options?.authorizeRetainedSource ? () => "fixture" : undefined,
@@ -30200,6 +30238,7 @@ async function createHarness<
   });
   controllerRef.current = controller;
   harnessControllers.push(controller);
+  example?.harnesses.push({ controller, store });
 
   return {
     controller,

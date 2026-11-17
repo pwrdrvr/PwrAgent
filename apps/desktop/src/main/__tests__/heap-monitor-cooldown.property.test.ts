@@ -132,29 +132,40 @@ const monitors: Record<string, (world: World) => Monitor> = {
 };
 
 describe.each(Object.keys(monitors))("%s heap monitor snapshot cooldown", (kind) => {
+  let activeProperty: Promise<void> | undefined;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(START_MS);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Join the aborted property's monitor cleanup before another test owns
+    // the shared fake clock. A Vitest timeout does not stop its callback.
+    await activeProperty?.catch(() => {});
+    activeProperty = undefined;
     vi.useRealTimers();
   });
 
-  it("spaces snapshot attempts by the cooldown and caps written snapshots", async () => {
-    await fc.assert(
+  it("spaces snapshot attempts by the cooldown and caps written snapshots", async ({ signal }) => {
+    await (activeProperty = fc.assert(
       fc.asyncProperty(fc.array(stepArbitrary, { minLength: 1, maxLength: 60, size: "max" }), async (steps) => {
+        signal.throwIfAborted();
         vi.setSystemTime(START_MS);
         const world: World = { heapUsed: 1_000, failNext: false, clockOffsetMs: 0, attempts: [] };
         const monitor = monitors[kind]!(world);
-        await monitor.start();
-        for (const step of steps) {
-          world.heapUsed += step.growth;
-          world.failNext = step.fails;
-          world.clockOffsetMs -= step.clockBackMs;
-          await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+        try {
+          await monitor.start();
+          for (const step of steps) {
+            signal.throwIfAborted();
+            world.heapUsed += step.growth;
+            world.failNext = step.fails;
+            world.clockOffsetMs -= step.clockBackMs;
+            await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+          }
+        } finally {
+          await monitor.stop("property");
         }
-        await monitor.stop("property");
 
         world.attempts.forEach((attempt, index) => {
           const previous = world.attempts[index - 1];
@@ -168,7 +179,7 @@ describe.each(Object.keys(monitors))("%s heap monitor snapshot cooldown", (kind)
           .toBeLessThanOrEqual(MAX_SNAPSHOTS);
       }),
       { numRuns: 150 },
-    );
+    ));
   });
 
   it("stops at the snapshot cap under a steady leak", async () => {

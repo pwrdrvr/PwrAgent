@@ -60,6 +60,29 @@ const dialog = () => screen.getByRole("dialog", { name: "Continue After" });
 const instructions = () => screen.getByRole("textbox", { name: "Instructions" });
 
 describe("Continue After dialog", () => {
+  it("shows an agent's CI run wait with its outcomes, gates and latest check, and cancels it", async () => {
+    const condition = { backend: "codex" as const, threadId: "", when: "ci_run" as const, title: "Release run 8841207733",
+      ciRun: { url: "https://github.com/example/app/actions/runs/8841207733", environments: ["windows-signing"] } };
+    const run: ThreadDependency = {
+      ...dependency, id: "run-wait", conditions: [condition], onFailure: "notify",
+      evidence: [{ condition, state: "waiting", reason: "Waiting for run 8841207733", observedAt: 1,
+        ciRun: { runId: 8841207733, status: "in_progress", checkedAt: 1,
+          jobs: { total: 5, passed: 2, failed: 0, running: 1, queued: 2, waiting: 0, skipped: 0 } } }],
+    };
+    const manage = vi.fn(async () => ({ dependencies: [run] }));
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderDialog(searchingApi(manage));
+    const link = await screen.findByRole("button", { name: "Release run 8841207733" });
+    expect(screen.getByText("reaches an approval gate, has a failed job, or finishes")).toBeInTheDocument();
+    expect(screen.getByText("Approval gates: windows-signing only")).toBeInTheDocument();
+    expect(screen.getByText("Running · 2 passed, 1 running, 2 queued")).toBeInTheDocument();
+    fireEvent.click(link);
+    expect(open).toHaveBeenCalledWith("https://github.com/example/app/actions/runs/8841207733", "_blank", "noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "cancel", backend: "codex", threadId: "waiting", dependencyId: "run-wait" }));
+    open.mockRestore();
+  });
+
   it("shows a durable recovery suspension and lets the local operator rearm it", async () => {
     const hook = { ...dependency, repeat: true, conditions: [{ backend: "codex" as const, threadId: "waiting", when: "compaction_completed" as const }] };
     const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => ({

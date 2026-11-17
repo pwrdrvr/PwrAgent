@@ -46,6 +46,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 type Drop = { event: number; after: boolean };
+class ModeledConnectionDrop extends Error {}
+
 type TransferStep = {
   event: number;
   phase: string;
@@ -58,6 +60,8 @@ async function transferBlob(drops: Drop[], modelDurability: boolean, options: {
   afterBegin?: () => Promise<void>;
   signal?: AbortSignal;
   onStep?: (step: TransferStep) => void;
+  beforeSync?: (filePath: string) => Promise<void>;
+  onCancel?: () => void;
   dropAfter?: (step: TransferStep) => boolean;
 } = {}): Promise<number> {
   const root = await mkdtemp(path.join(os.tmpdir(), "blob-model-"));
@@ -66,7 +70,10 @@ async function transferBlob(drops: Drop[], modelDurability: boolean, options: {
   const received = path.join(root, "received");
   const model = modelDurability ? new BlobDurabilityModel(received) : undefined;
   const scope: DurabilityScope = { nativeSyncs: 0,
-    sync: model ? (filePath, file) => model.sync(filePath, file) : undefined,
+    sync: model ? async (filePath, file) => {
+      if (options.beforeSync) await options.beforeSync(filePath);
+      await model.sync(filePath, file);
+    } : undefined,
     rename: model ? (source, destination) => model.rename(source, destination) : undefined,
   };
   durability.scopes.set(root, scope);
@@ -81,12 +88,22 @@ async function transferBlob(drops: Drop[], modelDurability: boolean, options: {
   const beginsPerGeneration = new Set<number>();
   const sentOffsets: number[] = [];
   const cancellations: Promise<unknown>[] = [];
+  const sends: Promise<void>[] = [];
+  const joinSends = async (): Promise<void> => {
+    // The sender can stop waiting on an aborted send while its receiver is
+    // still disposing a dropped generation. Keep that work in this fixture.
+    const results = await Promise.allSettled(sends);
+    const failures = results.flatMap(result => result.status === "rejected"
+      && !(result.reason instanceof ModeledConnectionDrop)
+      && result.reason !== options.signal?.reason ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "Modeled blob sends failed.");
+  };
   const drop = async (): Promise<never> => {
     connected = false;
     generation++;
     await receiver.dispose();
     receiver = makeReceiver();
-    throw new Error("model: connection dropped");
+    throw new ModeledConnectionDrop("model: connection dropped");
   };
   const step = async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
     event++;
@@ -108,7 +125,12 @@ async function transferBlob(drops: Drop[], modelDurability: boolean, options: {
   const transport: ResumableBlobTransport = {
     localInstanceId: "source", targetInstanceId: "receiver",
     waitForReconnect: async () => { options.signal?.throwIfAborted(); connected = true; },
-    cancel: (identity) => { cancellations.push(receiver.handle("source", FILE_PUSH_METHODS.cancel, identity)); },
+    cancel: (identity) => {
+      options.onCancel?.();
+      // A drop can still be retiring the old receiver. Its completion owns
+      // the next generation that may accept this cancellation.
+      cancellations.push(joinSends().then(() => receiver.handle("source", FILE_PUSH_METHODS.cancel, identity)));
+    },
     connection: () => {
       const current = generation;
       return {
@@ -133,19 +155,23 @@ async function transferBlob(drops: Drop[], modelDurability: boolean, options: {
             return result as T;
           });
         } },
-        send: async (envelope) => await step(FILE_PUSH_METHODS.chunk, async () => {
-          const offset = envelope.chunkIndex * BLOB_CHUNK_BYTES;
-          expect(offset).toBeGreaterThanOrEqual(durablePrefix);
-          sentOffsets.push(offset);
-          await receiver.receiveBlob(envelope);
-          const checkpoint = await receiver.handle("source", FILE_PUSH_METHODS.checkpoint, { transferId: envelope.transferId }) as { committedOffset: number };
-          const receivedOffset = offset + envelope.data.byteLength;
-          const committedOffset = receivedOffset === data.length
-            ? receivedOffset : Math.floor(receivedOffset / BLOB_COMMIT_BYTES) * BLOB_COMMIT_BYTES;
-          expect(checkpoint).toEqual({ receivedOffset, committedOffset });
-          if (model) expect(checkpoint.committedOffset).toBe(model.committedOffset);
-          durablePrefix = committedOffset;
-        }),
+        send: (envelope) => {
+          const sending = step(FILE_PUSH_METHODS.chunk, async () => {
+            const offset = envelope.chunkIndex * BLOB_CHUNK_BYTES;
+            expect(offset).toBeGreaterThanOrEqual(durablePrefix);
+            sentOffsets.push(offset);
+            await receiver.receiveBlob(envelope);
+            const checkpoint = await receiver.handle("source", FILE_PUSH_METHODS.checkpoint, { transferId: envelope.transferId }) as { committedOffset: number };
+            const receivedOffset = offset + envelope.data.byteLength;
+            const committedOffset = receivedOffset === data.length
+              ? receivedOffset : Math.floor(receivedOffset / BLOB_COMMIT_BYTES) * BLOB_COMMIT_BYTES;
+            expect(checkpoint).toEqual({ receivedOffset, committedOffset });
+            if (model) expect(checkpoint.committedOffset).toBe(model.committedOffset);
+            durablePrefix = committedOffset;
+          });
+          sends.push(sending);
+          return sending;
+        },
       };
     },
   };
@@ -167,7 +193,7 @@ async function transferBlob(drops: Drop[], modelDurability: boolean, options: {
       expect(new Set(sentOffsets).size).toBe(sentOffsets.length);
     }
   } finally {
-    try { await Promise.all(cancellations); } finally {
+    try { await Promise.all([joinSends(), ...cancellations]); } finally {
       try { await receiver.dispose(); } finally {
         durability.scopes.delete(root);
         await rm(root, { recursive: true, force: true });
@@ -418,4 +444,59 @@ it("peer-supplied begin fields cannot forge a completed file receipt", async () 
       await rm(root, { recursive: true, force: true });
     }
   }), { numRuns: 10 });
+});
+
+it("joins an aborted send's dropped receiver before cancelling and retiring the fixture", async () => {
+  const lastFence = process.platform === "win32" ? 0 : 2;
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: lastFence }), async (fence) => {
+    for (const fails of [false, true]) {
+      const controller = new AbortController();
+      const reason = new Error("operator cancelled the modeled send");
+      const fenceFailure = new Error("unexpected receiver durability fence failure");
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const cancelled = Promise.withResolvers<void>();
+      let dropping = false;
+      let syncIndex = 0;
+      const work = transferBlob([{ event: 2, after: false }], true, {
+        signal: controller.signal,
+        onStep: (step) => {
+          if (step.event === 2 && step.point === "before") dropping = true;
+        },
+        beforeSync: async () => {
+          if (dropping && syncIndex++ === fence) {
+            entered.resolve();
+            await release.promise;
+            if (fails) throw fenceFailure;
+          }
+        },
+        onCancel: cancelled.resolve,
+      });
+      const outcome = work.then(
+        value => ({ status: "fulfilled" as const, value }),
+        error => ({ status: "rejected" as const, error }),
+      );
+      try {
+        await Promise.race([entered.promise, outcome.then(() => { throw new Error("Transfer ended before its disposal fence."); })]);
+        controller.abort(reason);
+        await Promise.race([cancelled.promise, outcome.then(() => { throw new Error("Transfer ended without requesting cancellation."); })]);
+        release.resolve();
+        const result = await outcome;
+        expect(result.status).toBe("rejected");
+        if (result.status === "rejected") {
+          if (fails) {
+            // Joining an aborted send must still report unexpected receiver
+            // failures, including errors nested by its real disposal owner.
+            expect(JSON.stringify(result.error, ["message", "errors", "cause"]))
+              .toContain(fenceFailure.message);
+          } else {
+            expect(result.error).toBe(reason);
+          }
+        }
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+    }
+  }), { numRuns: 8, examples: Array.from({ length: lastFence + 1 }, (_, fence): [number] => [fence]) });
 });

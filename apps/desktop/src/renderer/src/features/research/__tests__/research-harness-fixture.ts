@@ -1,4 +1,4 @@
-import { projectResearchRun, RESEARCH_HARNESS_REVISION, type ResearchEvent, type ResearchHarnessState } from "@pwragent/shared";
+import { applyResearchChanges, emptyResearchRunStore, researchChangePage, summarizeResearchRun, projectResearchRun, RESEARCH_HARNESS_REVISION, type ResearchRun, type ResearchEvent, type ResearchHarnessState } from "@pwragent/shared";
 
 export function harnessRun(state: ResearchHarnessState["state"] = "running", accepted = false) {
   const actor = { backend: "codex", threadId: "parent", kind: "agent" } as const;
@@ -22,4 +22,10 @@ export function harnessRun(state: ResearchHarnessState["state"] = "running", acc
   if (state === "imported" || state === "ended") add({ type: "status", status: "interrupted", reason: "Source prefix retained" });
   if (state === "unknown") add({ type: "status", status: "stopping", reason: "Remote stop unconfirmed" });
   return projectResearchRun("fixture-run", events);
+}
+
+export function harnessRunView(run: ResearchRun) {
+  const store = applyResearchChanges(emptyResearchRunStore(run.id), { ...researchChangePage(run), writable: true });
+  return { ...summarizeResearchRun(run), ...store.state!, items: store.items, approaches: store.approaches,
+    submissions: store.submissions, leaves: store.leaves };
 }

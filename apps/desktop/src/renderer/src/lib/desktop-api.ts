@@ -1,6 +1,6 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchRunBoard, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
+import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
@@ -1055,17 +1055,19 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   searchResearch?: (request: ResearchSearchRequest) => Promise<ResearchSearchPage>;
   readResearchItem?: (request: ResearchItemReadRequest) => Promise<ResearchItemContext>;
   updateResearchItem?: (request: ResearchWorkRequest) => Promise<ResearchItemContext>;
-  /** Run summaries for the thread and the board of `runId` (or the newest run). No journal. */
+  /** The thread's run summaries, or only `runId`'s. No items and no journal. */
   researchSnapshot?: (request: ResearchSnapshotRequest) => Promise<ResearchSnapshot>;
+  /** The run's state and the items changed since a revision. A missing method leaves the panel unavailable. */
+  researchChanges?: (request: ResearchChangesRequest) => Promise<ResearchChanges>;
   /** One page of a run's journal, newest first. */
   readResearchEvents?: (request: ResearchEventsRequest) => Promise<ResearchEventPage>;
   researchHarnessStatus?: () => Promise<ResearchHarnessStatus>;
-  startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchRunBoard>;
+  startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchUpdateReceipt>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
   withdrawResearch?: (thread: ResearchThread) => Promise<void>;
-  updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchRunBoard>;
+  updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchUpdateReceipt>;
   openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
-  onResearchChanged?: (callback: (thread: ResearchThread) => void) => () => void;
+  onResearchChanged?: (callback: (change: ResearchChange) => void) => () => void;
   getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
   getCodexRestartStatus?: () => Promise<CodexAppServerRestartStatus>;

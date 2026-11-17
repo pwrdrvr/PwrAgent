@@ -2,18 +2,20 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { researchEventPage, researchRunBoard, summarizeResearchRun, type NavigationThreadSummary, type ResearchRun } from "@pwragent/shared";
+import { researchChangePage, researchEventPage, searchResearchItems, summarizeResearchRun, type NavigationThreadSummary, type ResearchRun } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ResearchPanel } from "../ResearchPanel";
 import { harnessRun } from "./research-harness-fixture";
 
 function show(run: ResearchRun) {
   const api = {
-    researchSnapshot: vi.fn(async () => ({ runs: [summarizeResearchRun(run)], selected: researchRunBoard(run), writableRunIds: [run.id] })),
+    researchSnapshot: vi.fn(async () => ({ runs: [summarizeResearchRun(run)], writableRunIds: [run.id] })),
+    researchChanges: vi.fn(async () => ({ ...researchChangePage(run), writable: true })),
+    searchResearch: vi.fn(async (request) => searchResearchItems(run.id, run.items, run.revision, request.query)),
     readResearchEvents: vi.fn<NonNullable<DesktopApi["readResearchEvents"]>>(async (request) => researchEventPage(run, request.range)),
     onResearchChanged: vi.fn(() => () => {}),
     readResearchItem: vi.fn<NonNullable<DesktopApi["readResearchItem"]>>(async (request) => ({ run, item: run.items.find((item) => item.id === request.itemId)! })),
-    updateResearch: vi.fn<NonNullable<DesktopApi["updateResearch"]>>(async () => researchRunBoard(run)),
+    updateResearch: vi.fn<NonNullable<DesktopApi["updateResearch"]>>(async () => ({ runId: run.id, revision: run.revision, status: run.status })),
     updateResearchItem: vi.fn(), submitThreadReply: vi.fn(),
   } satisfies Partial<DesktopApi>;
   render(<ResearchPanel desktopApi={api as DesktopApi} thread={{ id: "parent", source: "codex" } as NavigationThreadSummary} />);
@@ -26,7 +28,7 @@ it("preserves source provenance, unknown cancellation and source verdicts across
   expect(await screen.findByLabelText("Harness provenance")).toHaveTextContent(run.harness!.note);
   expect(screen.getByLabelText("Harness provenance")).toHaveTextContent("token and dollar usage unknown");
   fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
-  expect(screen.getByText(/Source m1 · record 1 · SHA-256 aaaaaaaaaaaa/)).toBeInTheDocument();
+  expect(await screen.findByText(/Source m1 · record 1 · SHA-256 aaaaaaaaaaaa/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("tab", { name: /Review/ }));
   const candidate = screen.getByRole("article", { name: "Candidate from Source direction" });
   expect(within(candidate).getByText("Awaiting review")).toBeInTheDocument();

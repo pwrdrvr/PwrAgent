@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MessagingBindingRecord, MessagingCallbackHandleRecord, MessagingDefaultAgentAssignmentRecord, MessagingManagedTopicRecord, MessagingPendingIntentRecord } from "@pwragent/messaging-interface";
 import { SqliteMessagingStore as SharedStore, type SqliteMessagingPolicy, type SqliteMessagingSnapshot, type SqliteMessagingStorageRecords } from "@pwragent/sqlite-storage/messaging-store-sqlite";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
@@ -18,10 +18,99 @@ const binding = (id: string, at = 10): MessagingBindingRecord => ({
 });
 const construct = (db: StateDb, host: number) => host === 0 ? new SharedStore(db, messagingSqlitePolicy)
   : host === 1 ? new DesktopStore(db) : new CompatibilityStore(db);
-afterEach(() => { disposeAppState(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+// Vitest's outer timeout does not cancel a generated assertion. Keep its
+// current WAL writer and all subsequent cases owned until teardown stops
+// admission and joins the assertion; only then restore process-wide state.
+class MessagingModelLifetime {
+  private stopped = false;
+  private work: Promise<void> | undefined;
 
-it("binds the actual app-state construction and accessor to shared persistence for their original lifetime", async () => {
+  checkpoint(): void {
+    if (this.stopped) throw new fc.PreconditionFailure(true);
+  }
+
+  async run(work: (lifetime: MessagingModelLifetime) => Promise<void>): Promise<void> {
+    const task = Promise.resolve().then(() => {
+      this.checkpoint();
+      return work(this);
+    });
+    this.work = task;
+    try {
+      await task;
+    } finally {
+      this.work = undefined;
+    }
+  }
+
+  async close(): Promise<void> {
+    this.stopped = true;
+    // Keep assertion failures observable to the test and its teardown.
+    await this.work;
+  }
+}
+
+let testLifetime: MessagingModelLifetime;
+beforeEach(() => { testLifetime = new MessagingModelLifetime(); });
+async function retireMessagingModels(): Promise<void> {
+  try {
+    await testLifetime.close();
+  } finally {
+    disposeAppState();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
+}
+afterEach(retireMessagingModels);
+
+it("joins a generated WAL writer before restoring the model environment", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  let entered!: () => void;
+  let release!: () => void;
+  const writing = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const commits: number[] = [];
+  const visible: string[] = [];
+  let cases = 0;
+  let result: { interrupted: boolean; failed: boolean } | undefined;
+  const work = testLifetime.run(async (lifetime) => {
+    result = await fc.check(fc.asyncProperty(fc.constant(null), async () => {
+      lifetime.checkpoint();
+      cases += 1;
+      const fixture = createTempStateDb("shared-messaging-lifetime-");
+      const dbs = [StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath)];
+      const writer = construct(dbs[0]!, 0);
+      const reader = construct(dbs[1]!, 1);
+      try {
+        expect(dbs[0]!.raw.pragma("journal_mode", { simple: true })).toBe("wal");
+        entered();
+        await held;
+        const id = `owned-${cases}`;
+        const measured = await measureSqliteWrites(() => writer.upsertBinding(binding(id)));
+        commits.push(measured.writes.commits);
+        expect(measured.writes.commits).toBe(2);
+        const row = await reader.getBinding(id);
+        expect(row?.id).toBe(id);
+        visible.push(row!.id);
+      } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
+    }), { numRuns: 2, markInterruptAsFailure: true });
+  });
+  try {
+    await Promise.race([writing, work.then(() => { throw new Error("The WAL writer did not reach its gate"); })]);
+    const retiring = retireMessagingModels();
+    release();
+    await work;
+    await retiring;
+    expect({ cases, commits, visible, interrupted: result?.interrupted, failed: result?.failed })
+      .toEqual({ cases: 1, commits: [2], visible: ["owned-1"], interrupted: true, failed: true });
+  } finally {
+    release();
+    await work;
+  }
+});
+
+it("binds the actual app-state construction and accessor to shared persistence for their original lifetime", () => testLifetime.run(async (lifetime) => {
   await fc.assert(fc.asyncProperty(fc.boolean(), fc.string(), async (changeRoot, id) => {
+    lifetime.checkpoint();
     const fixture = createTempStateDb("shared-messaging-app-state-");
     try {
       vi.stubEnv("PWRAGENT_HOME", fixture.tempDir);
@@ -40,15 +129,16 @@ it("binds the actual app-state construction and accessor to shared persistence f
       expect(await new SharedStore(getAppStateDb(), messagingSqlitePolicy).getBinding(id)).toEqual(await store.getBinding(id));
       upsert.mockRestore();
     } finally { disposeAppState(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 20 });
-});
+  }), { numRuns: 20, markInterruptAsFailure: true });
+}));
 
-it("models binding identity, merge admission, monotone observations, detached reads and exact writes across WAL hosts", async () => {
+it("models binding identity, merge admission, monotone observations, detached reads and exact writes across WAL hosts", () => testLifetime.run(async (lifetime) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ host: fc.integer({ min: 0, max: 2 }), id: fc.nat({ max: 3 }),
     at: fc.integer({ min: 1, max: 20 }), backend: fc.constantFrom("codex" as const, "claude" as const),
     revoked: fc.boolean(), merge: fc.boolean(), title: fc.string({ maxLength: 10 }), reopen: fc.boolean(),
   }), { minLength: 1, maxLength: 25 }), async commands => {
+    lifetime.checkpoint();
     const fixture = createTempStateDb("shared-messaging-bindings-");
     const dbs = [StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath)];
     const stores = dbs.map(construct);
@@ -56,6 +146,7 @@ it("models binding identity, merge admission, monotone observations, detached re
     const observed = new Map<string, { first: number; last: number; title?: string }>();
     try {
       for (const op of commands) {
+        lifetime.checkpoint();
         const id = String(op.id); const previous = model.get(id);
         const next = { ...binding(id, op.at), backend: op.backend, revokedAt: op.revoked ? op.at : undefined,
           channel: { ...binding(id).channel, conversation: { ...binding(id).channel.conversation, title: op.title } },
@@ -98,18 +189,20 @@ it("models binding identity, merge admission, monotone observations, detached re
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true });
+}));
 
-it("models one active default Agent per scope, target qualification and rollback without extra commits", async () => {
+it("models one active default Agent per scope, target qualification and rollback without extra commits", () => testLifetime.run(async (lifetime) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ host: fc.nat({ max: 1 }), id: fc.nat({ max: 4 }), scope: fc.nat({ max: 2 }),
     backend: fc.constantFrom("codex" as const, "acp:gemini" as const), revoke: fc.boolean(),
   }), { minLength: 1, maxLength: 25 }), async commands => {
+    lifetime.checkpoint();
     const fixture = createTempStateDb("shared-messaging-defaults-"); const dbs = [StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath)];
     const stores = dbs.map(construct); const model = new Map<string, MessagingDefaultAgentAssignmentRecord>();
     try {
       for (const [index, op] of commands.entries()) {
+        lifetime.checkpoint();
         const at = index + 10; const id = String(op.id);
         const scope: MessagingDefaultAgentAssignmentRecord["scope"] = op.scope === 0 ? { kind: "profile" }
           : op.scope === 1 ? { kind: "provider", channel: "slack" } : { kind: "workspace", channel: "slack", workspaceId: "invented-workspace" };
@@ -135,8 +228,8 @@ it("models one active default Agent per scope, target qualification and rollback
         target: { kind: "agent", backend: "codex", threadId: "other" }, createdAt: 100, updatedAt: 100 })).rejects.toThrow("invented refusal"));
       expect(measured.writes.commits).toBe(0); expect(await stores[1]!.readSnapshot()).toEqual(before);
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true });
+}));
 
 const pending = (id: string, at: number, expiresAt: number, actor: string): MessagingPendingIntentRecord => ({
   id, channel: binding("surface").channel, allowedActorIds: [actor, actor], createdAt: at, expiresAt,
@@ -148,15 +241,17 @@ const callback = (id: string, at: number, expiresAt: number, actor: string): Mes
   allowedActorIds: [actor, actor], createdAt: at, updatedAt: at, expiresAt, browseSessionId: "session", bindingId: "binding",
   value: { token: "private", safe: id },
 });
-it("models callback and questionnaire authorization, strict expiry, latest selection and bounded cleanup across WAL readers", async () => {
+it("models callback and questionnaire authorization, strict expiry, latest selection and bounded cleanup across WAL readers", () => testLifetime.run(async (lifetime) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ id: fc.nat({ max: 5 }), at: fc.integer({ min: 1, max: 20 }), expiry: fc.integer({ min: 1, max: 20 }),
     actor: fc.constantFrom("human-a", "human-b"), host: fc.nat({ max: 1 }), cleanup: fc.boolean(),
   }), { minLength: 1, maxLength: 25 }), async commands => {
+    lifetime.checkpoint();
     const fixture = createTempStateDb("shared-messaging-expiry-"); const dbs = [StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath)];
     const stores = dbs.map(construct); const intents = new Map<string, MessagingPendingIntentRecord>(); const handles = new Map<string, MessagingCallbackHandleRecord>();
     try {
       for (const op of commands) {
+        lifetime.checkpoint();
         const id = String(op.id); const p = pending(id, op.at, op.expiry, op.actor); const h = callback(id, op.at, op.expiry, op.actor);
         const measured = await measureSqliteWrites(async () => { await stores[op.host]!.upsertPendingIntent(p); await stores[op.host]!.upsertCallbackHandle(h); });
         expect(measured.writes.commits).toBe(2);
@@ -191,20 +286,22 @@ it("models callback and questionnaire authorization, strict expiry, latest selec
         }); expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true });
+}));
 
-it("keeps owned topic metadata authoritative over observations and makes repeated observations write-free", async () => {
+it("keeps owned topic metadata authoritative over observations and makes repeated observations write-free", () => testLifetime.run(async (lifetime) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ at: fc.integer({ min: 1, max: 20 }), observed: fc.integer({ min: 1, max: 30 }),
     host: fc.nat({ max: 1 }), closed: fc.boolean(), title: fc.string({ maxLength: 10 }),
   }), { minLength: 1, maxLength: 25 }), async commands => {
+    lifetime.checkpoint();
     const fixture = createTempStateDb("shared-messaging-topics-"); const dbs = [StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath)]; const stores = dbs.map(construct);
     let expected: MessagingManagedTopicRecord = { id: "topic", channel: "telegram", supergroupId: "group", topicId: "topic", title: "owned-title",
       conversation: { kind: "topic", id: "topic", parentId: "group" }, authorizedActorIds: ["owner"], source: "owned", lifecycle: "open", createdAt: 1, updatedAt: 1 };
     try {
       await stores[0]!.upsertManagedTopic(expected);
       for (const op of commands) {
+        lifetime.checkpoint();
         const observation = { ...expected, title: op.title, authorizedActorIds: ["observer"], source: "observed" as const,
           lifecycle: op.closed ? "closed" as const : "open" as const, updatedAt: op.at, lastObservedAt: op.observed };
         const nextObserved = Math.max(expected.lastObservedAt ?? 0, op.observed);
@@ -217,12 +314,13 @@ it("keeps owned topic metadata authoritative over observations and makes repeate
         for (const store of stores) expect(await store.getManagedTopic("topic")).toEqual(expected);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true });
+}));
 
-it("preserves serialization failures, legacy migration, malformed read behavior and atomic cleanup refusal", async () => {
+it("preserves serialization failures, legacy migration, malformed read behavior and atomic cleanup refusal", () => testLifetime.run(async (lifetime) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.string(), async hostileId => {
+    lifetime.checkpoint();
     const db = openInMemoryStateDb(); const store = construct(db, 0);
     try {
       const legacy = { id: hostileId, scopeKind: "profile", backend: "codex", threadId: "legacy-agent", createdAt: 1, updatedAt: 2 };
@@ -245,8 +343,8 @@ it("preserves serialization failures, legacy migration, malformed read behavior 
         await expect(store.readSnapshot()).rejects.toThrow();
       }); expect(malformed.writes.commits).toBe(0);
     } finally { db.close(); }
-  }), { numRuns: 25 });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true });
+}));
 
 // An independent host uses arbitrary channel names, opaque payloads and its own
 // snapshot shape. Its type map contains no messaging-interface record.
@@ -285,8 +383,9 @@ const alternatePolicy: SqliteMessagingPolicy<AlternateRecords & SqliteMessagingS
   bindingMetadataResult: (row, changed) => ({ binding: row, changed }), managedTopicResult: (topic, changed) => ({ topic, changed }),
   snapshot: records => ({ host: "alternate", bindings: records.bindings }),
 };
-it("persists an alternate host's channel, opaque JSON and snapshot without desktop domain contracts", async () => {
+it("persists an alternate host's channel, opaque JSON and snapshot without desktop domain contracts", () => testLifetime.run(async (lifetime) => {
   await fc.assert(fc.asyncProperty(fc.jsonValue(), fc.string(), async (payload, id) => {
+    lifetime.checkpoint();
     const db = openInMemoryStateDb();
     try {
       const store = new SharedStore<AlternateRecords>(db, alternatePolicy);
@@ -299,12 +398,13 @@ it("persists an alternate host's channel, opaque JSON and snapshot without deskt
       expect(await store.findActiveBindingForChannel(row.channel)).toEqual(persisted);
       expect(await store.readSnapshot()).toEqual({ host: "alternate", bindings: { [id]: persisted } });
     } finally { db.close(); }
-  }), { numRuns: 25, examples: [[{}, "__proto__"], [{ "": [-0] }, ""]] });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true, examples: [[{}, "__proto__"], [{ "": [-0] }, ""]] });
+}));
 
-it("retains arbitrary record ids as own keys in every snapshot dictionary without writes", async () => {
+it("retains arbitrary record ids as own keys in every snapshot dictionary without writes", () => testLifetime.run(async (lifetime) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.oneof(fc.constantFrom("__proto__", "constructor", "toString"), fc.string()), async id => {
+    lifetime.checkpoint();
     const db = openInMemoryStateDb();
     let captured: SqliteMessagingSnapshot<AlternateRecords> | undefined;
     const store = new SharedStore<AlternateRecords>(db, { ...alternatePolicy, snapshot: records => {
@@ -343,11 +443,12 @@ it("retains arbitrary record ids as own keys in every snapshot dictionary withou
         expect(Object.entries(captured![dictionary]), dictionary).toEqual([[id, expected[dictionary]]]);
       }
     } finally { db.close(); }
-  }), { numRuns: 25, examples: [["__proto__"]] });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true, examples: [["__proto__"]] });
+}));
 
-it("models browse-session expiry and channel-versus-binding cleanup while preserving qualified federated bindings", async () => {
+it("models browse-session expiry and channel-versus-binding cleanup while preserving qualified federated bindings", () => testLifetime.run(async (lifetime) => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 6 }), fc.integer({ min: 1, max: 6 }), fc.string(), async (count, now, opaque) => {
+    lifetime.checkpoint();
     const fixture = createTempStateDb("shared-messaging-browse-"); const dbs = [StateDb.open(fixture.dbPath), StateDb.open(fixture.dbPath)]; const stores = dbs.map(construct);
     try {
       for (let i = 0; i < count; i++) {
@@ -377,5 +478,5 @@ it("models browse-session expiry and channel-versus-binding cleanup while preser
       expect(await stores[1]!.getCallbackHandle("0", { now: 0 })).toBeUndefined();
       expect((await stores[1]!.findActiveBindings()).length).toBe(count - 1);
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
-});
+  }), { numRuns: 25, markInterruptAsFailure: true });
+}));

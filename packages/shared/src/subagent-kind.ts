@@ -72,14 +72,16 @@ export function isHarnessSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitor
 }
 
 /**
- * Whether a running card can be stopped: a thread turn to interrupt, or a
- * Claude task, which Claude stops by its id. A Claude sub-agent has no thread.
+ * Whether a running card can be stopped: a thread turn to interrupt, a
+ * Claude task, which Claude stops by its id, or a decision batch, which the
+ * owner cancels by its batch id. Neither of the last two has a thread.
  */
 export function hasStoppableSubAgentRun(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId" | "monitorThreadId" | "monitorTurnId">,
 ): boolean {
   return (Boolean(subAgent.monitorThreadId) && Boolean(subAgent.monitorTurnId))
-    || isClaudeNativeSubAgent(subAgent);
+    || isClaudeNativeSubAgent(subAgent)
+    || isDecisionBatchSubAgent(subAgent);
 }
 
 /** Execution thread IDs also exist for ephemeral workers; they do not imply a reloadable transcript. */
@@ -100,6 +102,26 @@ export function isSystemQueuedMessageTitleHelperSubAgent(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): boolean {
   return subAgent.monitorId.startsWith("system:queued-message-titles:");
+}
+
+/** A decisions_invoke batch's card; the id after the prefix is its batch id. */
+export const DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX = "system:decision-batch:";
+
+export function decisionBatchSubAgentId(batchId: string): string {
+  return `${DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX}${batchId}`;
+}
+
+/** The batch id a decision batch card names, or undefined for any other card. */
+export function decisionBatchIdFromSubAgentId(monitorId: string): string | undefined {
+  if (!monitorId.startsWith(DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX)) return undefined;
+  const batchId = monitorId.slice(DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX.length);
+  return batchId.length > 0 ? batchId : undefined;
+}
+
+export function isDecisionBatchSubAgent(
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
+): boolean {
+  return subAgent.monitorId.startsWith(DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX);
 }
 
 export function isTokenMiserSubAgent(
@@ -134,6 +156,9 @@ export function subAgentOriginLabel(
   if (isTokenMiserSubAgent(subAgent)) {
     return "PwrAgent Token Miser gate";
   }
+  if (isDecisionBatchSubAgent(subAgent)) {
+    return "PwrAgent decision batch";
+  }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
@@ -160,6 +185,9 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
   if (isTokenMiserSubAgent(subAgent)) {
     return "Gate";
   }
+  if (isDecisionBatchSubAgent(subAgent)) {
+    return "Decisions";
+  }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
@@ -180,6 +208,9 @@ export function subAgentPricingUsageTitle(
   }
   if (isTokenMiserSubAgent(subAgent)) {
     return "Token Miser gate";
+  }
+  if (isDecisionBatchSubAgent(subAgent)) {
+    return "Decision batch";
   }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex sub-agent usage";

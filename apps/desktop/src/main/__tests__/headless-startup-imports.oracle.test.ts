@@ -7,12 +7,18 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { LOADED_ON_FIRST_USE } from "./helpers/headless-first-use-packages";
 
-// Loading the bundle in a child gives it a fresh require cache, so the
+// Loading the bundle in a child gives it fresh CJS and ESM caches, so the
 // result is what an Outpost process loads, whatever this worker already has.
 const PROBE = `
+  const files = new Set();
+  const hook = require("node:module").registerHooks({ load(url, context, nextLoad) {
+    if (url.startsWith("file:")) files.add(require("node:url").fileURLToPath(url));
+    return nextLoad(url, context);
+  } });
   require(process.argv[1]);
+  hook.deregister();
   const packages = new Set();
-  for (const file of Object.keys(require.cache)) {
+  for (const file of files) {
     const parts = file.split(require("node:path").sep);
     const at = parts.lastIndexOf("node_modules");
     if (at < 0) continue;
@@ -27,12 +33,18 @@ let bundle: string;
 
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "pa-startup-imports-"));
-  await buildHeadless({ outputDirectory: path.join(root, "dist") });
+  await buildHeadless({ outputDirectory: path.join(root, "dist"), sourcemap: false, logLevel: "warning" });
   bundle = path.join(root, "dist/index.js");
 });
 
 afterAll(() => {
   if (root) fs.rmSync(root, { recursive: true, force: true });
+});
+
+it("the startup probe build emits executable bundles without debugging source maps", () => {
+  const files = fs.readdirSync(path.dirname(bundle));
+  expect(files).toContain("index.js");
+  expect(files.filter(file => file.endsWith(".map"))).toEqual([]);
 });
 
 it("loading the built headless owner defers the packages it needs only on first use", async () => {

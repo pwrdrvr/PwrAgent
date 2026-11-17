@@ -35,6 +35,7 @@ import {
 } from "../app-server/thread-pending-wakes";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import { parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller } from "../app-server/thread-dependency-ci-runs";
 import {
   getProjectForgeAutomationIndex,
   summarizeProjectHeldWakeup,
@@ -358,7 +359,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -1634,6 +1635,8 @@ class DesktopAppServerService {
     requestedAt: number;
   }>();
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
+  /** Checks CI runs that Continue After waits on; armed only while one waits. */
+  private threadDependencyCiRunPoller: ThreadDependencyCiRunPoller | undefined;
   private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
   private unsubscribeRestartGate?: () => void;
@@ -2317,6 +2320,8 @@ class DesktopAppServerService {
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
+        await awaitStartupProviderCoverage({ query: request.query,
+          deadlineAt: rpcOptions?.deadlineAt ?? request.deadlineAt, signal: rpcOptions?.signal });
         const summaries = request.inventory === "viewer"
           ? getDesktopFederationRuntime().remoteThreadSummaries() : undefined;
         const index = await loadLocalNavigationQueryIndex({
@@ -5218,8 +5223,11 @@ class DesktopAppServerService {
       autoFix: async (thread) => await this.listThreadPrAutoFixStates(thread),
       // A plain store read: the coordinator's list waits behind evaluations,
       // and selected detail reads this list.
-      dependencies: async (thread, endedLimit) => createThreadDependencyStorage()
-        .listPendingWakes(thread.backend, thread.threadId, endedLimit),
+      dependencies: async (thread, endedLimit) => {
+        const dependencies = createThreadDependencyStorage().listPendingWakes(thread.backend, thread.threadId, endedLimit);
+        // A waiting CI run shows its latest check, held in memory.
+        return this.threadDependencyCoordinator?.withCiRunObservations(dependencies) ?? dependencies;
+      },
       scheduledActions: (thread, endedLimit) => getAppScheduledThreadActionStore().listPendingWakes({ ...thread, endedLimit }),
       monitors: (thread) => registry.listPendingTaskMonitorWakes(thread),
       recentSubAgents: async (thread, limit) => limit === 0 ? []
@@ -7187,6 +7195,8 @@ class DesktopAppServerService {
       }
 
       this.backgroundPrPollingEnabled = backgroundPollingEnabled;
+      // CI run waits are checked under the same switch as PR polling.
+      this.threadDependencyCiRunPoller?.sync();
       this.prAutoDispatchAllowed = prAutoDispatchAllowed;
       this.prAutoDispatchBudgetConfig = budgetConfig;
       if (budgetStatus?.paused) {
@@ -9428,6 +9438,8 @@ class DesktopAppServerService {
         });
       });
     }
+    // CI run waits are checked only while their project allows PR watches.
+    if (projectAllowsPrWatches(previous) !== projectAllowsPrWatches(next)) this.threadDependencyCiRunPoller?.sync();
     if (!projectAllowsPrWatches(previous) && projectAllowsPrWatches(next) && getAppStateMode()) {
       await this.getThreadDependencyCoordinator().handlePrEvent();
       // A merge or close seen while watches were held left its watch
@@ -9917,6 +9929,8 @@ class DesktopAppServerService {
     this.focusedDiffService = null;
     this.prFetcher = undefined;
     this.forgeCiClient = undefined;
+    this.threadDependencyCiRunPoller?.dispose();
+    this.threadDependencyCiRunPoller = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
     this.prPollingSettingsSyncGeneration += 1;
@@ -10079,6 +10093,8 @@ class DesktopAppServerService {
           publish: (todo) => getThreadTodoService().publish(todo),
         },
         readThread: (condition) => this.readDependencyThread(condition),
+        readCiRun: async (url) => await this.readDependencyCiRun(url),
+        ciRunChecked: (url) => this.getThreadDependencyCiRunPoller().checked(url),
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
         submit: async (request) => await this.submitDependencyWakeup(request),
@@ -10107,6 +10123,9 @@ class DesktopAppServerService {
             || (this.backgroundPrPollingEnabled
               && projectAllowsPrWatches(this.threadForgeAutomation(dependency)))),
         changed: async (dependency) => {
+          // A wait that starts, fires or ends changes which runs need checks.
+          // After close() the poller is gone; a late change must not rebuild it.
+          if (dependency.conditions.some((condition) => condition.ciRun)) this.threadDependencyCiRunPoller?.sync();
           // Prerequisite threads list their dependents, so they refresh too.
           const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
           for (const target of [dependency, ...dependency.conditions.filter(isThreadDependencyLocalThreadCondition)]) {
@@ -10122,6 +10141,29 @@ class DesktopAppServerService {
       });
     }
     return this.threadDependencyCoordinator;
+  }
+
+  /**
+   * GitHub sends PwrAgent no event for a workflow run until a PwrAgent GitHub
+   * App can receive webhooks, so the owner checks each run a wait needs. Runs
+   * are read only while PR polling is on and the waiting thread's project
+   * allows PR watches, the same gate that holds PR prerequisites.
+   */
+  private getThreadDependencyCiRunPoller(): ThreadDependencyCiRunPoller {
+    this.threadDependencyCiRunPoller ??= new ThreadDependencyCiRunPoller({
+      urls: () => this.getThreadDependencyCoordinator().ciRunUrls((dependency) => this.backgroundPrPollingEnabled
+        && projectAllowsPrWatches(this.threadForgeAutomation(dependency))),
+      read: async (url) => await this.readDependencyCiRun(url),
+      observe: async (url, observation) => await this.getThreadDependencyCoordinator().handleCiRunObservation(url, observation),
+    });
+    return this.threadDependencyCiRunPoller;
+  }
+
+  private async readDependencyCiRun(url: string) {
+    const ref = parseCiRunUrl(url);
+    if (!ref) throw new Error("Not a GitHub Actions run on github.com.");
+    const client = this.getForgeCiClient();
+    return await readCiRun(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
   }
 
   /**
@@ -10292,6 +10334,10 @@ class DesktopAppServerService {
       if (request.conditions?.some(isPrDependencyCondition) && !this.backgroundPrPollingEnabled) {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
       }
+      // CI runs are checked under the same switch, so a wait would never fire.
+      if (request.conditions?.some((condition) => condition?.when === "ci_run") && !this.backgroundPrPollingEnabled) {
+        throw new Error("Enable background PR polling before waiting for a CI run.");
+      }
     }
     const { pullRequest, ...managed } = request;
     if (pullRequest !== undefined && (managed.action !== "list" || typeof pullRequest !== "string" || !pullRequest.trim())) {
@@ -10343,6 +10389,7 @@ class DesktopAppServerService {
   async reconcileThreadDependencies(): Promise<void> {
     if (!getAppStateMode()) return;
     await this.getThreadDependencyCoordinator().reconcile();
+    this.getThreadDependencyCiRunPoller().sync();
   }
 
   /**

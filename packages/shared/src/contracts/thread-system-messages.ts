@@ -1,4 +1,6 @@
-import { THREAD_DEPENDENCY_CONDITION_PHRASES } from "./thread-dependencies";
+import {
+  THREAD_DEPENDENCY_CI_RUN_OUTCOMES, THREAD_DEPENDENCY_CONDITION_PHRASES, threadDependencyCiRunPhrase,
+} from "./thread-dependencies";
 import { parseThreadUrl, type ThreadLinkRef } from "./thread-link";
 
 /*
@@ -73,6 +75,19 @@ function dependencySummary(
     : `${evidence.length} prerequisites met`;
 }
 
+/**
+ * Every phrase a prompt's evidence line can carry: each condition's, plus a
+ * CI run's for each choice of outcomes. Longest first, so a CI run's full
+ * phrase wins over one of its parts.
+ */
+const DEPENDENCY_PROMPT_PHRASES: readonly string[] = [
+  ...new Set([
+    ...Object.values(THREAD_DEPENDENCY_CONDITION_PHRASES),
+    ...Array.from({ length: (1 << THREAD_DEPENDENCY_CI_RUN_OUTCOMES.length) - 1 }, (_, mask) =>
+      threadDependencyCiRunPhrase({ on: THREAD_DEPENDENCY_CI_RUN_OUTCOMES.filter((_, bit) => ((mask + 1) >> bit) & 1) })),
+  ]),
+].sort((left, right) => right.length - left.length);
+
 /** `"Name" passes CI: CI failed; PR: …` → condition and reason. */
 function splitEvidence(line: string): { condition: string; reason: string } | undefined {
   // The name is a quoted title or `Thread <id>`. Find where it ends before
@@ -81,7 +96,7 @@ function splitEvidence(line: string): { condition: string; reason: string } | un
     ? line.indexOf("\" ", 1) + 1
     : line.startsWith("Thread ") ? line.indexOf(" ", "Thread ".length) : -1;
   if (nameEnd <= 0) return undefined;
-  for (const phrase of Object.values(THREAD_DEPENDENCY_CONDITION_PHRASES)) {
+  for (const phrase of DEPENDENCY_PROMPT_PHRASES) {
     const marker = ` ${phrase}: `;
     const index = line.indexOf(marker, nameEnd);
     if (index === nameEnd) {

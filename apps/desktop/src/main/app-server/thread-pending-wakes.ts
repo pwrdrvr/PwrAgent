@@ -1,5 +1,6 @@
 import {
-  THREAD_DEPENDENCY_CONDITION_PHRASES,
+  threadDependencyConditionName,
+  threadDependencyConditionPhrase,
   THREAD_PENDING_WAKE_TEXT_MAX_CHARS,
   THREAD_PENDING_WAKES_ENDED_MAX_LIMIT,
   buildThreadPendingWakeKey,
@@ -439,7 +440,7 @@ function endedDependency(dependency: ThreadDependency): ThreadPendingWakeEnded[]
   const condition = dependency.conditions[0];
   const detail = dependency.conditions.length > 1
     ? `${dependency.conditions.length} threads`
-    : condition ? (condition.title ? `${condition.title} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}` : THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when])
+    : condition ? (threadDependencyConditionName(condition) ? `${threadDependencyConditionName(condition)} ${threadDependencyConditionPhrase(condition)}` : threadDependencyConditionPhrase(condition))
     : undefined;
   return [{
     key: buildThreadPendingWakeKey("dependency", dependency.id),

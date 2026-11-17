@@ -143,6 +143,13 @@ are contrived fixtures, not evidence of a deployed Open Math OS service or a pai
 hosted-model run. Electron fixtures show source provenance, unconfirmed cancellation
 and a source-accepted candidate still awaiting local review.
 
+The adapter follows the native incremental research contracts. Run summaries omit
+source state; the selected run receives it with its change pages, and source item
+provenance travels on the changed item. Admission, cancellation, model callbacks
+and source redelivery checks read headers, bounded items and indexed source
+receipts rather than replaying the journal. A real SQLite oracle forbids replay
+on those paths and checks the source indexes across a 1,000-record journal.
+
 Mutation checks removed each lifecycle fence independently. The late-record oracle
 then observed `exhausted` instead of `stopped`; the late-probe oracle observed an
 `execute` after cancellation. Both failed with exit 1 and pass with the guards
@@ -153,25 +160,27 @@ The checked-in SQLite budgets measure the feature after database setup:
 
 | Boundary | Commits | Observed WAL bytes |
 | --- | ---: | ---: |
-| Eleven-record completed import | 4 | 156,592 |
-| Six-record source page and cursor | 1 | 57,680 |
+| Eleven-record completed import | 4 | 185,432 |
+| Six-record source page and cursor | 1 | 70,040 |
 | Fifty repeated pages | 0 | 0 |
-| Confirmed cancellation | 2 | 74,160 |
-| Execution admission with model provenance and an initial source page | 4 | 156,592 |
+| Confirmed cancellation | 2 | 78,280 |
+| Execution admission with model provenance and an initial source page | 4 | 185,432 |
 | Changed Harness configuration revision | 1 | 4,120 |
 | One thousand adapter configuration reads | 0 | 0 |
-| Discovery status/problems/three-node tree import | 3 | 111,272 |
+| Discovery status/problems/three-node tree import | 3 | 131,872 |
 | Repeated discovery request identity | 0 | 0 |
 
 At one six-record page per minute across the owner, the measured rate is
-`(1/60 commits/s) × 57,680 bytes/commit × 86,400 s = 83.06 MB/day`.
+`(1/60 commits/s) × 70,040 bytes/commit × 86,400 s = 100.86 MB/day`,
+or 8.40 MB over one run's maximum two hours. The source-state and source-receipt
+indexes add WAL pages while preserving the commit, statement and row budgets.
 Idle polling and token streaming add zero writes. Four imports/hour at the measured
-size add approximately 15.03 MB/day. WAL bytes vary with payload/page layout and
+size add approximately 17.80 MB/day. WAL bytes vary with payload/page layout and
 are recorded, not asserted; commit/statement/row budgets fail in either direction.
 Configuration reads add zero MB/day. One configuration edit/hour at the measured
 commit size adds approximately 0.10 MB/day through the existing config snapshot.
 Four explicit discovery imports/hour at the measured three-node fixture size add
-approximately 10.68 MB/day; there is no background discovery polling or per-node
+approximately 12.66 MB/day; there is no background discovery polling or per-node
 commit. Larger bounded snapshots cost more WAL bytes in the same three commits.
 
 ## Milestone acceptance

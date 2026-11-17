@@ -2,7 +2,7 @@ import type { ResearchDiscoverySnapshot, ResearchEventData, ResearchProvenance, 
 import { harnessRecordDigest, object, text } from "./research-harness-records";
 
 /** A bounded service snapshot. Source verification stays an observation, never a local verdict. */
-export function normalizeHarnessDiscovery(run: ResearchRun, input: { status: unknown; problems: unknown; tree?: unknown }, observedAt: number): {
+export function normalizeHarnessDiscovery(run: Pick<ResearchRun, "harness">, input: { status: unknown; problems: unknown; tree?: unknown }, observedAt: number): {
   snapshot: ResearchDiscoverySnapshot;
   events: Array<{ data: ResearchEventData; provenance: ResearchProvenance }>;
 } {

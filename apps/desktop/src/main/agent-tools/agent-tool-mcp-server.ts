@@ -87,6 +87,9 @@ const MCP_PATH = "/mcp";
  * a renderer or long work open until it finishes.
  */
 export const AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS = 30_000;
+/** A tool's own progress lines go out at most this often; the heartbeat repeats the latest. */
+export const AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS = 2_000;
+const AGENT_TOOL_MCP_DEFAULT_PROGRESS_MESSAGE = "PwrAgent is still working on this call.";
 const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 
 export type AgentToolMcpClientContext = {
@@ -434,19 +437,38 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       CallToolRequestSchema,
       async (request, extra) => {
         const progressToken = request.params._meta?.progressToken;
+        // One counter for heartbeats and reported lines: MCP requires the
+        // progress value to increase with every notification.
         let progress = 0;
-        const heartbeat = progressToken === undefined ? undefined : setInterval(() => {
+        let message = AGENT_TOOL_MCP_DEFAULT_PROGRESS_MESSAGE;
+        let lastSentAt = Number.NEGATIVE_INFINITY;
+        let settled = false;
+        const sendProgress = () => {
+          if (settled) return;
           progress += 1;
+          lastSentAt = Date.now();
           void extra.sendNotification({
             method: "notifications/progress",
-            params: { progressToken, progress, message: "PwrAgent is still working on this call." },
+            params: { progressToken: progressToken!, progress, message },
           }).catch(() => undefined);
-        }, this.options.progressIntervalMs ?? AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS);
+        };
+        const heartbeat = progressToken === undefined
+          ? undefined
+          : setInterval(sendProgress, this.options.progressIntervalMs ?? AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS);
         heartbeat?.unref?.();
         // A client that stopped reading no longer needs progress.
-        const stopHeartbeat = () => clearInterval(heartbeat);
+        const stopHeartbeat = () => {
+          settled = true;
+          clearInterval(heartbeat);
+        };
         clientGone.signal.addEventListener("abort", stopHeartbeat, { once: true });
-        const call = this.callTool(request, extra, params.responseFlushed);
+        const reportProgress = progressToken === undefined
+          ? undefined
+          : (line: string) => {
+              message = line;
+              if (Date.now() - lastSentAt >= AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS) sendProgress();
+            };
+        const call = this.callTool(request, extra, params.responseFlushed, reportProgress);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
@@ -491,6 +513,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     request: CallToolRequest,
     extra: CallToolExtra,
     responseFlushed?: Promise<void>,
+    reportProgress?: (message: string) => void,
   ): Promise<AgentMcpToolCallResponse> {
     const token = extra.authInfo?.token;
     const clientContext = token
@@ -556,6 +579,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       args: request.params.arguments,
       signal: extra.signal,
       responseFlushed,
+      ...(reportProgress ? { reportProgress } : {}),
     });
     try {
       // Resolve after dispatch using the original turn identity. A reminder

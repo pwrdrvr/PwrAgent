@@ -671,9 +671,9 @@ vi.mock("../state/app-state", () => ({
 vi.mock("../storage/desktop-runtime-storage", async () => ({
   ...await vi.importActual<typeof import("../storage/desktop-runtime-storage")>("../storage/desktop-runtime-storage"),
   createResearchStorage: () => ({
-    list: () => [],
+    activeRuns: () => [],
     get: vi.fn(),
-    findByStartKey: vi.fn(),
+    runIdForStartKey: vi.fn(),
     create: vi.fn(() => { throw new Error("Startup must not create research work"); }),
     append: vi.fn(() => { throw new Error("Startup has no active research runs"); }),
   }),

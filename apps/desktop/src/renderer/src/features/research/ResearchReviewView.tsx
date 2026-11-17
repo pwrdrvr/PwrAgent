@@ -1,13 +1,13 @@
 import { useId, useState } from "react";
-import type { ResearchRunBoard, ResearchSubmission } from "@pwragent/shared";
+import type { ResearchSubmission } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
-import { approachTitle, researchLabel, researchRevisionBlocker, researchSourceLabel } from "./research-view-model";
+import { approachTitle, researchLabel, researchRevisionBlocker, researchSourceLabel, type ResearchRunView } from "./research-view-model";
 
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
 export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailable, onReview, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunBoard; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
+  run: ResearchRunView; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
@@ -25,7 +25,7 @@ export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailab
 }
 
 function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailable, onReview, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunBoard; submission: ResearchSubmission; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
+  run: ResearchRunView; submission: ResearchSubmission; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {

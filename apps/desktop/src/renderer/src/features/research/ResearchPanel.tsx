@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useState, type KeyboardEvent } from "react";
 import { sameResearchThread, type NavigationThreadSummary, type ResearchCommand, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -11,8 +11,8 @@ import { ResearchReviewView } from "./ResearchReviewView";
 import { ResearchRunCard } from "./ResearchRunCard";
 import { ResearchPendingCard, ResearchStartForm, type ResearchStartValues } from "./ResearchStartForm";
 import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
-import { excerpt, isResearchRunLive, researchRunPhase, unreviewedCandidates } from "./research-view-model";
-import { useResearchSnapshot } from "./useResearchSnapshot";
+import { excerpt, isResearchRunLive, researchRunPhase, researchRunView } from "./research-view-model";
+import { useResearchSync } from "./useResearchSync";
 import "./research.css";
 
 const VIEWS = [
@@ -38,7 +38,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
   const identity = thread && !remote && thread.source === "codex" ? { backend: thread.source, threadId: thread.id } : undefined;
   const [selectedRunId, setSelectedRunId] = useState<string>();
-  const state = useResearchSnapshot(api, identity, selectedRunId);
+  const state = useResearchSync(api, identity, selectedRunId);
   const tabsId = useId();
   const [view, setView] = useState<View>("map");
   const [filter, setFilter] = useState("");
@@ -50,21 +50,23 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const [openItemId, setOpenItemId] = useState<string>();
   const [returnFocusId, setReturnFocusId] = useState<string>();
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
-  const snapshot = state.snapshot;
-  // The board arrives with its summaries. While a newly chosen run's board is in flight, show none:
-  // the previous board's controls would act on a run the selector no longer names.
-  const wantedRunId = selectedRunId && snapshot?.runs.some((r) => r.id === selectedRunId) ? selectedRunId : undefined;
-  const switchingRun = Boolean(wantedRunId && snapshot?.selected?.id !== wantedRunId);
-  const run = switchingRun ? undefined : snapshot?.selected;
-  const views = run?.harness?.discovery ? DISCOVERY_VIEWS : VIEWS;
-  const currentView = views.some((entry) => entry.id === view) ? view : views[0].id;
+  const runs = state.runs;
+  // The run on screen is the chosen one while the thread still lists it, else the newest. Its store arrives
+  // after its summary. Until that first sync finishes, show no run: another run's controls would act on a
+  // run the selector no longer names.
+  const summary = runs?.find((r) => r.id === selectedRunId) ?? runs?.[0];
+  const store = state.store;
+  const run = useMemo(() => summary && store ? researchRunView(summary, store) : undefined, [summary, store]);
+  const loadingRun = Boolean(summary && !run);
   // Read the clock directly: once the request expires, the tick that hid it also stops the timer.
-  const pendingLive = Boolean(snapshot?.pending && snapshot.pending.expiresAt > Date.now());
+  const pendingLive = Boolean(state.pending && state.pending.expiresAt > Date.now());
   const now = useNow(Boolean(run && isResearchRunLive(run)) || pendingLive);
-  const pending = snapshot?.pending && now < snapshot.pending.expiresAt ? snapshot.pending : undefined;
+  const pending = state.pending && now < state.pending.expiresAt ? state.pending : undefined;
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
-  const writable = Boolean(run && snapshot?.writableRunIds.includes(run.id));
+  const writable = Boolean(run && state.writableRunIds.includes(run.id));
   const live = Boolean(run && isResearchRunLive(run));
+  const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : VIEWS;
+  const currentView: View = views.some((entry) => entry.id === view) ? view : views[0]!.id;
 
   function selectRun(id: string) {
     setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError("");
@@ -112,7 +114,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     try {
       const result = await api.updateResearch({ ...identity, runId: run.id, requestId: crypto.randomUUID(), command });
       if (command.action === "review" && command.decision === "revision_requested") {
-        const delivery = result.deliveries.at(-1);
+        const delivery = result.delivery;
         setNotice(delivery?.state === "queued" ? "Revision feedback is queued for the worker." : delivery?.state === "started" ? "The worker received the revision feedback." : "The revision is recorded, but delivery to the worker was not confirmed. Check Activity before you send it again.");
       } else if (command.action === "review") setNotice(`Decision recorded: ${command.decision === "accepted" ? "accepted" : "rejected"}.`);
       return true;
@@ -139,29 +141,29 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
 
   if (remote) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Open this thread on its owning instance to inspect its research runs.</p></section>;
   if (!identity) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research runs are available in local Codex threads.</p></section>;
-  if (!api?.researchSnapshot) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
+  if (!api?.researchSnapshot || !api.researchChanges) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
 
-  const firstRun = Boolean(snapshot && snapshot.runs.length === 0 && !pending);
-  const showForm = !harnessForm && Boolean(snapshot) && (creating || firstRun);
-  const reviewCount = run ? unreviewedCandidates(run).length : 0;
+  const firstRun = Boolean(runs && runs.length === 0 && !pending);
+  const showForm = Boolean(runs) && (creating || firstRun);
+  const reviewCount = run?.unreviewed ?? 0;
   return <section className="context-panel__section research-panel" aria-label="Research">
     <div className="research-heading">
       <h3>Research</h3>
-      {!firstRun && snapshot && <button type="button" className="research-button" onClick={() => { setCreating(!creating); setHarnessForm(false); }} aria-expanded={creating}>New run</button>}
-      {snapshot && <button type="button" className="research-button" onClick={() => { setHarnessForm(!harnessForm); setCreating(false); }} aria-expanded={harnessForm}>Harness</button>}
+      {api.startResearchHarness && <button type="button" className="research-button" onClick={() => setHarnessForm(!harnessForm)} aria-expanded={harnessForm}>Harness…</button>}
+      {!firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
     </div>
     {harnessForm && <ResearchHarnessForm api={api} thread={identity} onStarted={() => setHarnessForm(false)} />}
     {showForm && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
       onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
     {notice && <p role="status" className="research-notice">{notice}</p>}
-    {!snapshot && !state.error && <p role="status" className="context-empty">Loading research…</p>}
+    {!runs && !state.error && <p role="status" className="context-empty">Loading research…</p>}
     {pending && <ResearchPendingCard pending={pending} busy={busy} onWithdraw={api.withdrawResearch ? () => { void withdraw(); } : undefined} />}
-    {snapshot && snapshot.runs.length > 1 && (run || wantedRunId) && <label className="research-run-select">Run
-      <Select value={wantedRunId ?? run!.id} onChange={selectRun} className="research-select"
-        options={snapshot.runs.map((r: ResearchRunSummary) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
+    {runs && runs.length > 1 && summary && <label className="research-run-select">Run
+      <Select value={summary.id} onChange={selectRun} className="research-select"
+        options={runs.map((r: ResearchRunSummary) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
     </label>}
-    {switchingRun && <p role="status" className="context-empty">Loading run…</p>}
+    {loadingRun && !state.error && <p role="status" className="context-empty">Loading run…</p>}
     {run && <>
       <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
@@ -178,7 +180,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         {currentView === "discovery" && run.harness?.discovery && <ResearchDiscoveryPanel key={run.id} snapshot={run.harness.discovery} />}
         {currentView === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={openItem}
           onShowApproachItems={(approachId) => { setItemsQuery({ ...EMPTY_RESEARCH_ITEMS_QUERY, approachId }); setOpenItemId(undefined); setView("items"); }} />}
-        {currentView === "findings" && <ResearchFindingsView run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
+        {currentView === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
         {currentView === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={Boolean(api.openResearchEvidence)}
           onReview={(submissionId, decision, reason) => update({ action: "review", submissionId, decision, reason })}
           onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}

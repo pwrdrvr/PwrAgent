@@ -1,7 +1,7 @@
-import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchRunBoard, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
-import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL } from "../shared/ipc";
+import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL } from "../shared/ipc";
+import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
@@ -1913,9 +1913,11 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_WORK_CHANNEL, request),
   researchSnapshot: async (request: ResearchSnapshotRequest): Promise<ResearchSnapshot> =>
     await ipcRenderer.invoke(RESEARCH_SNAPSHOT_CHANNEL, request),
+  researchChanges: async (request: ResearchChangesRequest): Promise<ResearchChanges> =>
+    await ipcRenderer.invoke(RESEARCH_CHANGES_CHANNEL, request),
   researchHarnessStatus: async (): Promise<ResearchHarnessStatus> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_STATUS_CHANNEL),
-  startResearchHarness: async (request: ResearchHarnessRequest): Promise<ResearchRunBoard> =>
+  startResearchHarness: async (request: ResearchHarnessRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_START_CHANNEL, request),
   readResearchEvents: async (request: ResearchEventsRequest): Promise<ResearchEventPage> =>
     await ipcRenderer.invoke(RESEARCH_EVENTS_CHANNEL, request),
@@ -1923,12 +1925,12 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_PREPARE_CHANNEL, request),
   withdrawResearch: async (request: ResearchThread): Promise<void> =>
     await ipcRenderer.invoke(RESEARCH_WITHDRAW_CHANNEL, request),
-  updateResearch: async (request: ResearchUpdateRequest): Promise<ResearchRunBoard> =>
+  updateResearch: async (request: ResearchUpdateRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_UPDATE_CHANNEL, request),
   openResearchEvidence: async (request: ResearchEvidenceRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(RESEARCH_OPEN_EVIDENCE_CHANNEL, request),
-  onResearchChanged: (callback: (thread: ResearchThread) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, thread: ResearchThread) => callback(thread);
+  onResearchChanged: (callback: (change: ResearchChange) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, change: ResearchChange) => callback(change);
     ipcRenderer.on(RESEARCH_CHANGED_EVENT_CHANNEL, listener);
     return () => ipcRenderer.off(RESEARCH_CHANGED_EVENT_CHANNEL, listener);
   },

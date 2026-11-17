@@ -39,6 +39,15 @@ describe("owner-revalidated archive group planning", () => {
     expect(members.map((member) => member.id)).toEqual(["child", "root"]);
   });
 
+  it("says providers are still listing when the owner's startup check outlasts discovery", async () => {
+    const root = thread("root");
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => ({
+      ...navigationQueryFixture(request, { threads: [root] }), coverage: { state: "checking" as const },
+    }));
+    await expect(readNavigationArchiveGroup({ api: { getNavigationQueryPage }, thread: root }))
+      .rejects.toThrow("still listing threads from its providers. No threads were archived.");
+  });
+
   it("fails discovery before returning an archive plan when a required owner is unavailable", async () => {
     const root = thread("root");
     const releaseNavigationQuery = vi.fn(async () => undefined);

@@ -36,7 +36,7 @@ patches, plain-object stand-ins and reads inside catchable regions.
 | Messaging status | The controller still owns `activeTurnsByThreadKey`. Its callers include bus routing, accepted starts, pending-request reconciliation, queue steering and status rendering. A later PWR-149 PR replaces this with the explicit reducer. |
 | Admission and draining | `MessagingTurnAdmission` still owns debounce/start admission and its duplicate queued-entry collection. The controller still owns drain requests, timers and pending drains. Retirement into `ThreadTurnQueue` remains required. |
 | Private responses | `MessagingPrivateResponses` owns one discriminated state per turn and `transitionPrivateResponse` owns its changes. `MessagingPrivateReplyClaims` owns continuation request receipts, which are keyed by request ID rather than turn ID. The controller retains delivery effects and forwards state changes to these owners. |
-| Bindings | The controller's existing `runDetachPipeline` remains the single detach pipeline. Its extraction belongs to the binding-service PR. |
+| Bindings | `MessagingBindingService` owns creation, metadata, preferences, status surfaces, the render lock, name sync, audits and the single `runDetachPipeline`. The facade keeps the public boolean revoke entry point. |
 | Commands | `MessagingCommandHandlers` owns dispatch, schedule management, help, review entry and command routing for monitors, default Agents and Claude continuation. It delegates existing workflows through `MessagingCommandHost`. |
 | Callbacks | `MessagingCallbackHandlers` owns callback dispatch and its entry methods. `MessagingCallbackHost` delegates retained workflows and reads existing queue/private-response owners lazily. |
 | Inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
@@ -302,9 +302,88 @@ Follow-up card `af6e2338-5b96-43d6-bec0-f05c97400888` proposes investigation to
 the existing Composer owner. The earlier timeout paths do not fail in this
 run. No timeout, worker, concurrency or teardown policy is changed here.
 
+## Binding owner and observable protocol
+
+The binding extraction starts at main
+`9e8826a71db9f97c1cb1edf6a033d22872cb753a`, after #3832 merged.
+`MessagingBindingService` receives 24 methods and the existing status-render
+lock. Eight shared declarations move to `messaging-binding-helpers.ts`.
+Its context has 12 store operations, three backend operations, one optional
+adapter operation and 20 workflow/data ports. All collaborators and the two
+optional configuration values resolve lazily through the original configuration
+object. The clock port calls the facade's clock lazily with its original
+receiver. The optional audit getter remains
+outside its method-call catch, and the adapter method keeps its original
+receiver. The facade's public revoke method preserves its boolean return.
+
+Run `node scripts/inventory-messaging-bindings.mjs --verify`. The checker audit
+records 440 effects/branches and 142 resolved references. Two actual private
+facade tests now call the binding owner through `messagingModules`. The six
+remaining broad seam matches are unrelated stand-ins or explicit workflow host
+fixtures. Verification checks moved bodies, helper declarations, retained
+callers and fields, lock ownership, public delegation, constructor order, every
+host port, lazy clock call and context/configuration getter. No new module imports
+the facade.
+
+The eight observable tests use real controller entry points and SQLite. Their
+independent session model covers bind, replacement, metadata, status, command
+detach and UI revoke. Additional protocols cover pinned retirement, provider
+isolation, failed best-effort work, optional name-sync capability, replacement
+store overlays, a late normal render after revoke, and replacement-adapter
+routing when shutdown interrupts a name-sync read. They also check native clock
+and configuration callback receivers and optional getter reads. These assertions
+failed on the initial extraction; the corrected ports preserve the original
+object and call receivers. The observable oracle passes
+pinned original main and extracted production.
+
+The owner suite checks construction laziness, late host/store replacement,
+optional getter boundaries and receiver binding, remote admission, awaited
+detach failures and the shared status lock under scheduler-controlled renders.
+Pure helper properties check whitespace and breadcrumb order, targeted owner
+projection, handoff identity and observed branch precedence.
+
+Run `node scripts/mutate-messaging-bindings.mjs --baseline` for the original
+oracle, or omit the flag for extracted production and 19 deliberate mutations.
+All 19 fail assertions. `--check` verifies anchors; `--only` selects a case.
+Three initial probes also caused missing-clock errors or a timeout and did not
+count. The snapshots were narrowed to one collaborator and the delivery probe
+was directed to a test that can observe the missing effect without waiting on
+it. The complete oracle and mutation run was repeated. Sources restore in
+`finally`; protected fixture hashes are checked. Logs stay under
+`.local/pwr-149-binding/`; do not run mutations alongside other source checks.
+
+A separate counterexample holds **retirement**, before the normal render. A
+public `/status` command pauses while retiring its old surface, UI detach
+commits a revoke, and late retirement restores the binding from its stale
+record. Both original and extracted production fail assertions. Run
+`node scripts/mutate-messaging-bindings.mjs --retirement-counterexample` to
+replay both paths independently of the intended oracle. The first clean paired
+replay used seeds `-2016786528` and `1504060681`, path `0`. Standalone card
+`0e360f1d-4301-406b-8196-6d2729db231e` tracks the semantic fix; this extraction
+preserves the current production behavior.
+
+The final base is main `358fd7736dad52f32e98f693fd97a67cae236ac8`, whose
+additional commit fixes an unrelated approval-property fixture and teardown.
+Both private-test migrations are preserved on that current test owner.
+
+The controller falls from 19,381 to 18,245 lines. The binding owner, helpers
+and context are 985, 129 and 49 lines respectively. Eighteen focused tests,
+all required static checks and the main-function bytecode check pass. The
+largest measured function is 23,846 bytes against the 25,600-byte budget.
+Protected/focused verification passes 122 files and 5,000 tests, with two
+skipped. Both protected fixtures remain byte-identical to current main.
+
+The final full suite passes 2,097 files and 29,166 tests, with eight files and
+107 tests skipped; one federation resumable-blob model times out at five
+seconds. Its nine-test file passes in isolation, and the exact printed seed
+`1494783974` passes an isolated replay. The blob production and test sources
+are unchanged. Card `41ed7f56-1d31-4342-a395-5380d981f147` proposes the new
+evidence to its existing native-suite owner. The final full run is not reported
+as passing. No timeout or concurrency setting is changed.
+
 ## Remaining state-machine work
 
-The turn/drain machine, canonical queue retirement, the three remaining named
+The turn/drain machine, canonical queue retirement, the two remaining named
 extractions, controller size reduction and the parent's registry/test size
 criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is
