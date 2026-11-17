@@ -37,7 +37,8 @@ GitHub's logo guidance forbids modifying the mark. In particular:
   `currentColor` or a CSS filter.
 - **No redrawing, warping, cropping, or effects.**
 - **Not for endorsement.** The mark identifies the `gh` tool PwrAgent
-  runs. It must not appear anywhere that implies GitHub sponsors,
+  runs, and GitHub's own MCP server on its tile in Settings → Plugins →
+  Plugin store, which refers to GitHub's product by GitHub's mark. It must not appear anywhere that implies GitHub sponsors,
   endorses, or is affiliated with PwrAgent.
 
 ## Updating these files

@@ -7,7 +7,8 @@ sister PwrSuite repository:
 - Source: `apps/desktop/build/icon.png` — the full-bleed master PwrGit's own
   build documents as its Windows/Linux source. Downsampled to 256px, which is
   the only transformation applied.
-- Usage: the New Thread PwrGit connection prompt, and the OAuth callback page
+- Usage: the New Thread PwrGit connection prompt, the OAuth callback page, and
+  PwrGit's tile in Settings → Plugins → Plugin store
   the browser lands on after PwrGit's authorization screen
 
 To refresh it, point the sync script at a PwrGit checkout:

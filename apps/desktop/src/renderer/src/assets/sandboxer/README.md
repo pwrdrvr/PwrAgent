@@ -12,7 +12,8 @@ thread launchpad's Sandboxer tile draws it.
 
 Sandboxer publishes no brand kit or brand guidelines. This file is the only
 mark it ships, so it is used as published, to name Sandboxer's own service on
-a control that sets up Sandboxer. Replace it with a brand-kit file, and record
+a control that sets up Sandboxer: the New Thread Sandboxer prompt and
+Sandboxer's tile in Settings → Plugins → Plugin store. Replace it with a brand-kit file, and record
 the kit's usage rules here, if Sandboxer publishes one.
 
 ## Usage rules

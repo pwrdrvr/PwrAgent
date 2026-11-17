@@ -48,6 +48,40 @@ describe("McpAccessPanel", () => {
     });
   });
 
+  it("lists PwrSnap and PwrGit, then GitHub, then the rest, as Settings does", async () => {
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [
+              READY,
+              connection({ id: "github-bot", displayName: "GitHub (bot)", kind: "github", authMode: "none" }),
+              connection({ id: "pwrgit", displayName: "PwrGit", kind: "pwrgit", authMode: "none" }),
+              connection({ id: "files", displayName: "Project files", kind: "stdio", authMode: "none" }),
+              connection({ id: "github", displayName: "GitHub", kind: "github", authMode: "none" }),
+            ],
+          }),
+        }}
+        selection={{ connectionIds: [], providerServersEnabled: true }}
+        onDismiss={vi.fn()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("switch", { name: "Use Datadog in this thread" });
+    const order = screen.getAllByRole("switch", { name: /^Use .+ in this thread$/ })
+      .map((control) => control.getAttribute("aria-label"))
+      .filter((label) => label !== "Use the agent's own MCP servers in this thread");
+    expect(order).toEqual([
+      "Use PwrGit in this thread",
+      "Use GitHub (bot) in this thread",
+      "Use GitHub in this thread",
+      "Use Datadog in this thread",
+      "Use Project files in this thread",
+    ]);
+  });
+
   it("offers the remedy for a connection that needs authorization", async () => {
     const onOpenSettings = vi.fn();
     render(

@@ -7,7 +7,8 @@ sister PwrSuite repository:
 - Source: `apps/desktop/build/icon.png` — the full-bleed master PwrSnap's own
   build documents as its Windows master. Downsampled to 256px, which is the
   only transformation applied.
-- Usage: the New Thread PwrSnap connection prompt
+- Usage: the New Thread PwrSnap connection prompt, and PwrSnap's tile in
+  Settings → Plugins → Plugin store
 
 To refresh it, point the sync script at a PwrSnap checkout:
 

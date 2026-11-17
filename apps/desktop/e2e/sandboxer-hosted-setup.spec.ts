@@ -10,9 +10,15 @@ test("fresh Sandboxer setup offers hosted sign-in without a local CLI", async ({
     await app.window.getByRole("button", { name: "Open settings", exact: true }).click();
     await app.window.getByRole("navigation", { name: "Settings sections" })
       .getByRole("button", { name: "Plugins", exact: true }).click();
-    const row = app.window.locator("article.settings-mcp-row").filter({
+    // Not signed in, Sandboxer is a one-line suggestion; its full setup opens
+    // as a page of the plugin store.
+    const suggestion = app.window.locator("article.settings-mcp-row").filter({
       has: app.window.locator(".settings-mcp-row__name", { hasText: /^Sandboxer$/ }),
     });
+    await expect(suggestion.getByRole("button", { name: "Connect Sandboxer", exact: true })).toBeVisible();
+    await suggestion.getByRole("button", { name: "Set up Sandboxer", exact: true }).click();
+    const store = app.window.getByRole("dialog", { name: "Sandboxer" });
+    const row = store.locator("article.settings-mcp-row");
     await expect(row.getByRole("button", { name: "Connect Sandboxer", exact: true })).toBeVisible();
     await expect(row).toContainText("separate from your PwrAgent and coding agent accounts");
     await expect(row.getByRole("button", { name: "Get Sandboxer CLI", exact: true })).toHaveCount(0);
