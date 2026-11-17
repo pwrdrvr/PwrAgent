@@ -184,7 +184,10 @@ Codex threads; federation viewers must use the owning instance. Each
 `research:changed` read returns the thread's run summaries (header fields plus
 candidate counts, from SQL without replaying a journal), the operator's waiting
 request, and the board of one selected run: its projection without the event
-journal. Activity reads the journal separately through `research:events`, in
+journal or the item projection. Item records repeat the approach, finding and
+candidate lists, so the board names each item only in `createdSeq`, and the
+renderer reads a record from those lists (`researchBoardEntry`); item work
+state is read per item. Activity reads the journal separately through `research:events`, in
 pages of at most 200 events, newest first, while the Activity view is open.
 Journal entries never change once appended, so a `beforeSeq` page stays valid
 while the run grows. A refresh reads only events above the loaded window. If

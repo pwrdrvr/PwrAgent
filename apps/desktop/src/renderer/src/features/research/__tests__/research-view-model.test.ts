@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { projectResearchRun, researchApproachOccupiesSlot, researchEventPage, summarizeResearchRun, type ResearchApproach, type ResearchEvent, type ResearchEventData, type ResearchEventRange, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchSubmission } from "@pwragent/shared";
+import { projectResearchRun, researchApproachOccupiesSlot, researchEventPage, researchRunBoard, summarizeResearchRun, type ResearchApproach, type ResearchEvent, type ResearchEventData, type ResearchEventRange, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchSubmission } from "@pwragent/shared";
 import { appendResearchActivityOlder, emptyResearchActivity, mergeResearchActivityHead, researchActivityHeadRange, researchActivityRows, researchMapBranches, researchPhaseInput, researchRunPhase, researchTimeLeft, type ResearchActivityWindow, type ResearchMapBranch } from "../research-view-model";
 
 const STATES: ResearchApproach["state"][] = ["pending", "starting", "running", "ended", "failed", "stopped", "unknown"];
@@ -62,7 +62,7 @@ const mapArb = fc.record({
   leafLimit: fc.integer({ min: 1, max: 4 }),
 });
 
-function mapRun(input: { approaches: number; contributions: Array<{ owner: number; finding: boolean }>; links: Array<number | undefined> }): ResearchRun {
+function mapRun(input: { approaches: number; contributions: Array<{ owner: number; finding: boolean }>; links: Array<number | undefined> }): ResearchRunBoard {
   const approaches: ResearchApproach[] = Array.from({ length: input.approaches }, (_, index) => ({ id: `a${index}`, title: `A${index}`, task: "t", state: "running" }));
   const findings: ResearchFinding[] = [];
   const submissions: ResearchSubmission[] = [];
@@ -79,7 +79,7 @@ function mapRun(input: { approaches: number; contributions: Array<{ owner: numbe
   const items = [...approaches.map((record, index) => ({ id: record.id, approachId: record.id, type: "approach", record, createdSeq: index + 1 })),
     ...findings.map((record, index) => ({ id: record.id, approachId: record.approachId, type: "finding", record, createdSeq: 100 + index })),
     ...submissions.map((record, index) => ({ id: record.id, approachId: record.approachId, type: "submission", record, createdSeq: 200 + index }))] as unknown as ResearchItem[];
-  return { approaches, findings, submissions, items, events: [] } as unknown as ResearchRun;
+  return researchRunBoard({ approaches, findings, submissions, items, events: [] } as unknown as ResearchRun);
 }
 
 function walk(branches: ResearchMapBranch[], seen: { approaches: string[]; leaves: string[]; hidden: number }) {
@@ -121,7 +121,7 @@ describe("research activity", () => {
         { seq: 2, at: 2, commandId: "operator:c2", signature: "s", actor: { ...actor, kind: "operator" }, data: { type: "abandoned", approachId: "a1", reason: "Ruled out" } },
         { seq: 3, at: 3, commandId: "settled:2", signature: "s", actor: { ...actor, kind: "operator" }, data: { type: "status", status: "deadline", reason: "Research deadline reached" } },
       ] } as unknown as ResearchRun;
-    const rows = researchActivityRows(run, run.events.toReversed());
+    const rows = researchActivityRows(researchRunBoard(run), run.events.toReversed());
     expect(rows.map((row) => row.seq)).toEqual([3, 2, 1]);
     expect(rows[0]).toMatchObject({ actor: "PwrAgent", kind: "Deadline reached" });
     expect(rows[1]).toMatchObject({ actor: "You", text: "Bisect fixture setup: Ruled out" });

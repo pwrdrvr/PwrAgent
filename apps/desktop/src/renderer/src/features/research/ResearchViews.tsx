@@ -97,7 +97,7 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
   const query = filter.trim().toLowerCase();
   const loaded = activity.loaded.events;
   const rows = researchActivityRows(run, loaded).filter((row) => !query || `${row.kind} ${row.actor} ${row.text}`.toLowerCase().includes(query));
-  const known = new Set(run.items.map((item) => item.id));
+
   const older = activity.loaded.nextBeforeSeq !== undefined;
   const list = useRef<HTMLOListElement>(null);
   // Show older disappears with the last page; keep focus in the list instead of dropping it to the page.
@@ -112,7 +112,7 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
     <ol ref={list} tabIndex={-1} className="research-activity" aria-label="Research activity" reversed>
       {rows.map((row) => <li key={row.seq}>
         <span className="research-activity__meta"><time dateTime={new Date(row.at).toISOString()}>{formatClock(row.at)}</time> · {row.actor} · {row.kind}</span>
-        {row.itemId && known.has(row.itemId)
+        {row.itemId && Object.hasOwn(run.createdSeq, row.itemId)
           ? <button type="button" className="research-activity__text" onClick={() => onOpenItem(row.itemId!)}>{row.text}</button>
           : <p className="research-activity__text">{row.text}</p>}
       </li>)}

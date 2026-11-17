@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchItemContext, type ResearchRunBoard, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
+import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, researchBoardEntry, type ResearchItemContext, type ResearchRunBoard, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
@@ -74,8 +74,8 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
   const record = item?.record;
   const workActive = writable && (run.status === "running" || (coordinator && run.status === "exhausted"));
   const assignable = writable && coordinator && ["running", "exhausted"].includes(run.status) && Date.now() < run.deadlineAt && api.submitThreadReply;
-  const related = record && "relatesTo" in record && record.relatesTo ? run.items.find((entry) => entry.id === record.relatesTo) : undefined;
-  const source = record && "itemId" in record && record.itemId ? run.items.find((entry) => entry.id === record.itemId) : undefined;
+  const related = record && "relatesTo" in record && record.relatesTo ? researchBoardEntry(run, record.relatesTo) : undefined;
+  const source = record && "itemId" in record && record.itemId ? researchBoardEntry(run, record.itemId) : undefined;
   const transitions = item ? RESEARCH_WORK_TRANSITIONS[item.work.state].filter((value) => coordinator || !["open", "cancelled"].includes(value)) as ResearchWorkCommand["state"][] : [];
   return <article className="research-detail" aria-labelledby={`${id}-heading`}>
     <button type="button" className="research-link research-detail__back" onClick={onBack}>← Back to results</button>

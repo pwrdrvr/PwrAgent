@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchRunSummary, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchBoardEntry, sameResearchThread, type ResearchApproach, type ResearchBoardEntry, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchRunSummary, type ResearchSubmission } from "@pwragent/shared";
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
 export type ResearchPhase = { label: string; tone: ResearchTone };
@@ -185,11 +185,11 @@ export function appendResearchActivityOlder(window: ResearchActivityWindow, page
 }
 
 function itemExcerpt(run: ResearchRunBoard, itemId: string): string {
-  const item = run.items.find((entry) => entry.id === itemId);
-  return item ? excerpt(researchItemText(item), 80) : itemId;
+  const entry = researchBoardEntry(run, itemId);
+  return entry ? excerpt(researchItemText(entry), 80) : itemId;
 }
 
-export function researchItemText(item: ResearchItem): string {
+export function researchItemText(item: ResearchItem | ResearchBoardEntry): string {
   return item.type === "approach" ? item.record.title : item.record.text;
 }
 
@@ -207,10 +207,11 @@ export type ResearchMapBranch = { approach: ResearchApproach; leaves: ResearchMa
  * `leafLimit` contributions of a branch render; `hidden` counts the rest.
  */
 export function researchMapBranches(run: ResearchRunBoard, leafLimit = 6): ResearchMapBranch[] {
-  const items = new Map(run.items.map((item) => [item.id, item]));
+  const known = (id: string) => Object.hasOwn(run.createdSeq, id);
+  const createdSeq = (id: string) => run.createdSeq[id] ?? 0;
   const childrenOf = new Map<string, ResearchApproach[]>();
   for (const approach of run.approaches) {
-    if (!approach.itemId || approach.itemId === approach.id || !items.has(approach.itemId)) continue;
+    if (!approach.itemId || approach.itemId === approach.id || !known(approach.itemId)) continue;
     childrenOf.set(approach.itemId, [...(childrenOf.get(approach.itemId) ?? []), approach]);
   }
   const placed = new Set<string>();
@@ -221,7 +222,7 @@ export function researchMapBranches(run: ResearchRunBoard, leafLimit = 6): Resea
       ...run.findings.filter((f) => f.approachId === approach.id).map((record) => ({ type: "finding" as const, record })),
       ...run.submissions.filter((s) => s.approachId === approach.id).map((record) => ({ type: "submission" as const, record })),
     ];
-    contributions.sort((a, b) => (items.get(b.record.id)?.createdSeq ?? 0) - (items.get(a.record.id)?.createdSeq ?? 0));
+    contributions.sort((a, b) => createdSeq(b.record.id) - createdSeq(a.record.id));
     const assignments = nest(approach.id);
     // Children of hidden contributions still render; they attach to the branch instead.
     const leaves = contributions.map((entry) => ({ ...entry, children: nest(entry.record.id) }) as ResearchMapLeaf);
@@ -229,7 +230,7 @@ export function researchMapBranches(run: ResearchRunBoard, leafLimit = 6): Resea
     for (const leaf of leaves.slice(leafLimit)) assignments.push(...leaf.children);
     return { approach, leaves: shown, hidden: leaves.length - shown.length, assignments };
   };
-  const roots = run.approaches.filter((a) => !a.itemId || a.itemId === a.id || !items.has(a.itemId));
+  const roots = run.approaches.filter((a) => !a.itemId || a.itemId === a.id || !known(a.itemId));
   const branches = roots.map(build);
   // A loop of children whose sources are each other has no root; keep each reachable.
   for (const approach of run.approaches) if (!placed.has(approach.id)) branches.push(build(approach));

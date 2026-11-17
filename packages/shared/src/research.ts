@@ -135,8 +135,18 @@ export type ResearchRun = {
 export type ResearchPendingRequest = Omit<PrepareResearchRequest, "backend" | "threadId"> & { preparedAt: number; expiresAt: number };
 /** A run header with the review counts the run list needs to name its phase. */
 export type ResearchRunSummary = ResearchRunHeader & { candidates: number; unreviewed: number; accepted: number };
-/** One run's board: its full projection without the event journal, which Activity reads in pages. */
-export type ResearchRunBoard = Omit<ResearchRun, "events">;
+/**
+ * One run's board: its projection without the event journal, which Activity
+ * reads in pages, or the item projection, whose records repeat approaches,
+ * findings and submissions. `createdSeq` names every item and keeps the order
+ * of its creation across those three lists. Work state is read per item.
+ */
+export type ResearchRunBoard = Omit<ResearchRun, "events" | "items"> & { createdSeq: Record<string, number> };
+/** An item as the board holds it: its record from approaches, findings or submissions. */
+export type ResearchBoardEntry =
+  | { id: string; type: "approach"; record: ResearchApproach; createdSeq: number }
+  | { id: string; type: "finding"; record: ResearchFinding; createdSeq: number }
+  | { id: string; type: "submission"; record: ResearchSubmission; createdSeq: number };
 /** The thread's run summaries, plus the board of the selected run (or the newest when none is named). */
 export type ResearchSnapshot = { runs: ResearchRunSummary[]; writableRunIds: string[]; pending?: ResearchPendingRequest; selected?: ResearchRunBoard };
 export type ResearchSnapshotRequest = ResearchThread & { runId?: string };
@@ -339,8 +349,20 @@ export function researchEventPage(run: Pick<ResearchRun, "id" | "revision" | "ev
 }
 
 export function researchRunBoard(run: ResearchRun): ResearchRunBoard {
-  const { events: _events, ...board } = run;
-  return board;
+  const { events: _events, items, ...board } = run;
+  return { ...board, createdSeq: Object.fromEntries(items.map((item) => [item.id, item.createdSeq])) };
+}
+
+/** The board's record for an item id, or undefined when the run has no such item. */
+export function researchBoardEntry(board: Pick<ResearchRunBoard, "approaches" | "findings" | "submissions" | "createdSeq">, id: string): ResearchBoardEntry | undefined {
+  if (!Object.hasOwn(board.createdSeq, id)) return undefined;
+  const createdSeq = board.createdSeq[id]!;
+  const finding = board.findings.find((f) => f.id === id);
+  if (finding) return { id, type: "finding", record: finding, createdSeq };
+  const submission = board.submissions.find((s) => s.id === id);
+  if (submission) return { id, type: "submission", record: submission, createdSeq };
+  const approach = board.approaches.find((a) => a.id === id);
+  return approach ? { id, type: "approach", record: approach, createdSeq } : undefined;
 }
 
 /** The in-memory oracle for a stored run summary. */
