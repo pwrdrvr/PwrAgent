@@ -26373,11 +26373,7 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
     const warning = harness.delivered.at(-1);
-    (
-      harness.controller as unknown as {
-        pendingFullAccessNewThreadPrompts: Map<string, unknown>;
-      }
-    ).pendingFullAccessNewThreadPrompts.clear();
+    messagingModules(harness.controller).inbound.pendingFullAccessNewThreadPrompts.clear();
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
