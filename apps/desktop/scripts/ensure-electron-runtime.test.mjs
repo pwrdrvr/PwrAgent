@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdt
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { setTimeout } from "node:timers/promises";
@@ -143,16 +144,16 @@ it("property: cache entries partition every target dimension and archive identit
   ), { numRuns: 6 });
 }, 60_000);
 
-it("recovers an OS-confirmed dead installer while concurrent successors preserve the new owner", async () => {
-  const setup = fixture("44.10.1", randomBytes(8192));
-  const install = prepareInstall(setup, "interrupted");
-  const ready = join(setup.root, "owner-ready");
+// Start a real installer, wait until it holds the lock, then kill it. Process
+// identity, rather than elapsed time, is what allows a successor to recover.
+async function killedLockOwner(root, electronDir) {
+  const ready = join(mkdtempSync(join(root, "owner-")), "ready");
   const script = `
     import { ensureRuntime } from ${JSON.stringify(pathToFileURL(join(here, "electron-runtime-cache.mjs")).href)};
     import { writeFileSync } from "node:fs";
     await ensureRuntime({
-      electronDir: ${JSON.stringify(install.electron)}, version: "44.10.1", platform: "darwin", arch: "arm64",
-      cacheRoot: ${JSON.stringify(join(setup.root, "home/cache/electron-runtime/v1"))},
+      electronDir: ${JSON.stringify(electronDir)}, version: "44.10.1", platform: "darwin", arch: "arm64",
+      cacheRoot: ${JSON.stringify(join(root, "home/cache/electron-runtime/v1"))},
       download: async () => {
         writeFileSync(${JSON.stringify(ready)}, "ready");
         await new Promise(() => { setInterval(() => {}, 1000); });
@@ -168,17 +169,88 @@ it("recovers an OS-confirmed dead installer while concurrent successors preserve
     const deadline = Date.now() + 15_000;
     while (!existsSync(ready) && Date.now() < deadline && child.exitCode === null) await setTimeout(20);
     expect(existsSync(ready)).toBe(true); // Witness that the owner actually holds the lock.
-    child.kill("SIGKILL");
-    await exited; // Process identity, rather than elapsed time, allows recovery.
-    const results = await Promise.allSettled([install.run(), install.run(), install.run()]);
-    for (const result of results) expect(result.status, result.reason?.stderr).toBe("fulfilled");
-    expect(readFileSync(install.binary)).toEqual(setup.bytes);
-    expect(existsSync(join(install.electron, ".pwragent-runtime-lock"))).toBe(false);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    child.kill("SIGKILL");
     await exited;
   }
+}
+
+it("recovers an OS-confirmed dead installer while concurrent successors preserve the new owner", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const install = prepareInstall(setup, "interrupted");
+  await killedLockOwner(setup.root, install.electron);
+  const results = await Promise.allSettled([install.run(), install.run(), install.run()]);
+  for (const result of results) expect(result.status, result.reason?.stderr).toBe("fulfilled");
+  expect(readFileSync(install.binary)).toEqual(setup.bytes);
+  expect(existsSync(join(install.electron, ".pwragent-runtime-lock"))).toBe(false);
 }, 60_000);
+
+// The rule: after an owner dies, every waiting installer gets the lock, one
+// at a time, and none fails because another installer was recovering the same
+// dead lock. The operating system is the oracle. Windows answers EPERM for a
+// file or directory that another process is deleting at that instant; on
+// windows-latest the pre-fix lock failed 20 of 150 runs of the test above.
+// Each racer holds the lock only to journal its turn, so the lock changes
+// hands as fast as it can and removals collide on every handover.
+it("property: racing installers each recover a dead owner's lock and hold it alone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pwragent-electron-cache-"));
+  roots.push(root);
+  const racer = `
+    import { ensureRuntime } from ${JSON.stringify(pathToFileURL(join(here, "electron-runtime-cache.mjs")).href)};
+    import { appendFileSync } from "node:fs";
+    import { createInterface } from "node:readline";
+    for await (const line of createInterface({ input: process.stdin })) {
+      const { electronDir, journal, id, at } = JSON.parse(line);
+      while (Date.now() < at) { /* Start every racer at its generated instant. */ }
+      let outcome;
+      try {
+        await ensureRuntime({
+          electronDir, version: "44.10.1", platform: "darwin", arch: "arm64",
+          cacheRoot: ${JSON.stringify(join(root, "unused-cache"))}, log: () => {},
+          download: async () => {
+            appendFileSync(journal, "enter " + id + "\\n");
+            await new Promise((resolveTurn) => { setImmediate(resolveTurn); });
+            appendFileSync(journal, "exit " + id + "\\n");
+            throw Object.assign(new Error("turn taken"), { code: "TURN_TAKEN" });
+          },
+        });
+        outcome = "installed without taking a turn";
+      } catch (error) {
+        outcome = error.code === "TURN_TAKEN" ? "turn taken" : String(error.stack);
+      }
+      process.stdout.write(JSON.stringify(outcome) + "\\n");
+    }
+  `;
+  const racers = Array.from({ length: 6 }, () => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", racer], { stdio: ["pipe", "pipe", "inherit"] });
+    return { child, replies: createInterface({ input: child.stdout })[Symbol.asyncIterator]() };
+  });
+  try {
+    await fc.assert(fc.asyncProperty(
+      // One start offset, in milliseconds, for each racing installer.
+      fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 3, maxLength: racers.length }),
+      async (offsets) => {
+        const electronDir = mkdtempSync(join(root, "package-"));
+        const journal = join(electronDir, "journal");
+        await killedLockOwner(root, electronDir);
+        const at = Date.now() + 20;
+        const racing = racers.slice(0, offsets.length);
+        racing.forEach(({ child }, id) => child.stdin.write(`${JSON.stringify({ electronDir, journal, id, at: at + offsets[id] })}\n`));
+        const outcomes = [];
+        for (const { replies } of racing) outcomes.push(JSON.parse((await replies.next()).value));
+        expect(outcomes).toEqual(offsets.map(() => "turn taken"));
+        // A turn that another racer entered before it ended is two owners.
+        const turns = readFileSync(journal, "utf8").trim().split("\n");
+        const order = turns.filter((turn) => turn.startsWith("enter ")).map((turn) => turn.slice("enter ".length));
+        expect(turns).toEqual(order.flatMap((id) => [`enter ${id}`, `exit ${id}`]));
+        expect([...order].sort()).toEqual(offsets.map((_, id) => String(id)));
+        expect(existsSync(join(electronDir, ".pwragent-runtime-lock"))).toBe(false);
+      },
+    ), { numRuns: 30, endOnFailure: true }); // A race does not shrink: a replay is a new race.
+  } finally {
+    for (const { child } of racers) child.kill("SIGKILL");
+  }
+}, 120_000);
 
 it("property: any changed cached payload is rejected and rebuilt from the verified archive", async () => {
   const setup = fixture("44.10.1", randomBytes(8192));
