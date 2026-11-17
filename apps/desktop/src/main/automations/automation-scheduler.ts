@@ -99,8 +99,10 @@ export class AutomationScheduler {
 
   /**
    * Hold new launches while the operator decides whether to quit. Existing
-   * turns continue, and triggers still become durable queued runs so staying
-   * open can resume them without losing inbound work.
+   * turns continue, and triggers still become queued runs so staying open can
+   * resume them without losing inbound work. The queued rows do not survive a
+   * completed quit: the store's reconcileStartup cancels them at the next
+   * start.
    */
   quiesceDispatch(): () => Promise<void> {
     this.dispatchPauseCount += 1;
