@@ -2,7 +2,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { projectResearchRun, researchEventPage, researchRunBoard, searchResearchItems, summarizeResearchRun, type NavigationThreadSummary, type ResearchEvent, type ResearchRun, type ResearchSnapshot, type ResearchSnapshotRequest, type ResearchItemContext } from "@pwragent/shared";
+import {
+  projectResearchRun, researchChangePage, researchEventPage, searchResearchItems, summarizeResearchRun,
+  type NavigationThreadSummary, type ResearchChange, type ResearchChanges, type ResearchChangesRequest, type ResearchEvent, type ResearchRun, type ResearchSnapshot, type ResearchSnapshotRequest,
+  type ResearchItemContext, type ResearchUpdateReceipt,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption } from "../../../test/select";
 import { ResearchPanel } from "../ResearchPanel";
@@ -12,9 +16,13 @@ const actor = { backend: "codex", threadId: "parent", kind: "agent" } as const;
 /** What the owner holds: complete runs. The fake API answers only as the owner's IPC does, through the shared oracles. */
 type OwnerState = { runs: ResearchRun[]; writableRunIds: string[]; pending?: ResearchSnapshot["pending"] };
 function ownerSnapshot(data: OwnerState, request?: Pick<ResearchSnapshotRequest, "runId">): ResearchSnapshot {
-  const selected = data.runs.find((run) => run.id === request?.runId) ?? data.runs[0];
-  return { runs: data.runs.map(summarizeResearchRun), writableRunIds: data.writableRunIds, ...(data.pending ? { pending: data.pending } : {}),
-    ...(selected ? { selected: researchRunBoard(selected) } : {}) };
+  const runs = request?.runId === undefined ? data.runs : data.runs.filter((run) => run.id === request.runId);
+  return { runs: runs.map(summarizeResearchRun), writableRunIds: data.writableRunIds.filter((id) => runs.some((run) => run.id === id)), ...(data.pending ? { pending: data.pending } : {}) };
+}
+function ownerChanges(data: OwnerState, request: Pick<ResearchChangesRequest, "runId" | "sinceRevision" | "after">): ResearchChanges {
+  const run = data.runs.find((entry) => entry.id === request.runId);
+  if (!run) throw new Error("Research run not found");
+  return { ...researchChangePage(run, request.sinceRevision, request.after), writable: data.writableRunIds.includes(run.id) };
 }
 function snapshot(findings = 1): OwnerState {
   const records: ResearchEvent[] = [];
@@ -26,22 +34,26 @@ function snapshot(findings = 1): OwnerState {
   return { runs: [projectResearchRun("run", records)], writableRunIds: ["run"] };
 }
 function apiFor(data: OwnerState = snapshot()) {
-  let changed: (() => void) | undefined;
+  let notify: ((change: ResearchChange) => void) | undefined;
   const unsubscribe = vi.fn();
+  const run = (id: string) => data.runs.find((entry) => entry.id === id)!;
   const api = {
     researchSnapshot: vi.fn<NonNullable<DesktopApi["researchSnapshot"]>>(async (request) => ownerSnapshot(data, request)),
+    researchChanges: vi.fn<NonNullable<DesktopApi["researchChanges"]>>(async (request) => ownerChanges(data, request)),
     readResearchEvents: vi.fn<NonNullable<DesktopApi["readResearchEvents"]>>(async (request) => researchEventPage(data.runs.find((run) => run.id === request.runId)!, request.range)),
     prepareResearch: vi.fn(async () => ({ intentId: "prepared-intent" })),
     withdrawResearch: vi.fn(async () => {}),
-    onResearchChanged: vi.fn((callback) => { changed = () => callback({ backend: "codex", threadId: "parent" }); return unsubscribe; }),
-    updateResearch: vi.fn(async () => researchRunBoard(data.runs[0]!)),
+    onResearchChanged: vi.fn((callback: (change: ResearchChange) => void) => { notify = callback; return unsubscribe; }),
+    updateResearch: vi.fn<NonNullable<DesktopApi["updateResearch"]>>(async (request): Promise<ResearchUpdateReceipt> => ({ runId: request.runId, revision: run(request.runId).revision, status: run(request.runId).status })),
     submitThreadReply: vi.fn<NonNullable<DesktopApi["submitThreadReply"]>>(async () => ({ backend: "codex", threadId: "parent", queueStatus: "queued", queueEntryId: "queue" })),
     openResearchEvidence: vi.fn(async () => ({ opened: true })),
-    searchResearch: vi.fn<NonNullable<DesktopApi["searchResearch"]>>(async (request) => searchResearchItems(request.runId, data.runs[0]!.items, data.runs[0]!.revision, request.query)),
+    searchResearch: vi.fn<NonNullable<DesktopApi["searchResearch"]>>(async (request) => searchResearchItems(request.runId, run(request.runId).items, run(request.runId).revision, request.query)),
     readResearchItem: vi.fn<NonNullable<DesktopApi["readResearchItem"]>>(async (request) => ({ run: data.runs[0]!, item: data.runs[0]!.items.find((item) => item.id === request.itemId)! })),
     updateResearchItem: vi.fn<NonNullable<DesktopApi["updateResearchItem"]>>(async (request) => ({ run: data.runs[0]!, item: { ...data.runs[0]!.items.find((item) => item.id === request.command.itemId)!, version: 99, work: { state: request.command.state } } })),
   } satisfies Partial<DesktopApi>;
-  return { api: api as DesktopApi, mocks: api, changed: () => changed?.(), unsubscribe };
+  /** The owner's change event: for a run at its current revision, or (with no run) for the thread's pending request. */
+  const changed = (runId: string | null | undefined = data.runs[0]?.id) => notify?.({ backend: "codex", threadId: "parent", ...(runId ? { runId, revision: run(runId).revision } : {}) });
+  return { api: api as DesktopApi, mocks: api, changed, unsubscribe };
 }
 
 describe("Research panel", () => {
@@ -115,20 +127,70 @@ describe("Research panel", () => {
     expect(screen.queryByText("f0")).not.toBeInTheDocument();
   });
 
-  it("shows a map, a findings list and evidence references, and follows owner changes", async () => {
-    const { api, mocks, unsubscribe, changed } = apiFor();
+  it("shows a map, a findings list and evidence references, and follows owner changes by reading only what changed", async () => {
+    const data = snapshot();
+    const { api, mocks, unsubscribe, changed } = apiFor(data);
     const view = render(<ResearchPanel desktopApi={api} thread={thread} />);
     expect(await screen.findByLabelText("Research map")).toBeInTheDocument();
     expect(screen.getByText("Counterexample 0")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open worker thread: Events" })).toBeInTheDocument();
+    expect(mocks.researchChanges).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "parent", runId: "run", sinceRevision: 0 });
+    data.runs[0] = projectResearchRun("run", [...data.runs[0]!.events, { seq: 4, commandId: "late", signature: "t", at: 2000, actor,
+      data: { type: "finding", finding: { id: "late", approachId: "a1", kind: "note", text: "Arrived after the first read", paths: [] } } } as ResearchEvent]);
+    act(() => changed());
+    expect(await screen.findByText("Arrived after the first read")).toBeInTheDocument();
+    // The change names its run and revision: one read of the items changed since revision 3, and no second read of the run list.
+    expect(mocks.researchChanges).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "run", sinceRevision: 3 });
+    const delta = await mocks.researchChanges.mock.results.at(-1)!.value as ResearchChanges;
+    expect(delta.items.map((item) => item.id)).toEqual(["late"]);
+    expect(mocks.researchChanges).toHaveBeenCalledTimes(2);
+    expect(mocks.researchSnapshot).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("2", { selector: "dd" })).toBeInTheDocument();
+    // A change the store already holds reads nothing.
+    act(() => changed());
+    await act(async () => {});
+    expect(mocks.researchChanges).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
     expect(screen.getByLabelText("Shared findings")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "evidence.txt" }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "evidence.txt" }))[0]!);
     await waitFor(() => expect(mocks.openResearchEvidence).toHaveBeenCalledWith({ backend: "codex", threadId: "parent", runId: "run", itemId: "f0", pathIndex: 0 }));
-    act(changed);
-    await waitFor(() => expect(mocks.researchSnapshot).toHaveBeenCalledTimes(2));
     view.unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes one summary for a change to a run that is not on screen, and the run list only for a change that names no run", async () => {
+    const first = snapshot();
+    const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));
+    const data: OwnerState = { runs: [first.runs[0]!, second], writableRunIds: ["run", "other-run"] };
+    const { api, mocks, changed } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    data.runs[1] = projectResearchRun("other-run", [...second.events, { seq: second.revision + 1, commandId: "end", signature: "t", at: 2000, actor, data: { type: "status", status: "stopped", reason: "Stopped" } } as ResearchEvent]);
+    act(() => changed("other-run"));
+    await waitFor(() => expect(mocks.researchSnapshot).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "other-run" }));
+    expect(mocks.researchSnapshot).toHaveBeenCalledTimes(2);
+    // The run on screen was not read again.
+    expect(mocks.researchChanges).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("combobox", { name: "Run" }));
+    await waitFor(() => expect(screen.getByRole("option", { name: /Second objective/ })).toHaveAccessibleDescription("Stopped"));
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Run" }), { key: "Escape" });
+    act(() => changed(null));
+    await waitFor(() => expect(mocks.researchSnapshot).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent" }));
+    expect(mocks.researchSnapshot).toHaveBeenCalledTimes(3);
+    expect(mocks.researchChanges).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports where revision feedback went from the update's own receipt", async () => {
+    const data = snapshot();
+    data.runs[0]!.deadlineAt = Date.now() + 600_000;
+    const { api, mocks } = apiFor(data);
+    mocks.updateResearch.mockImplementation(async (request) => ({ runId: request.runId, revision: 4, status: "running", delivery: { id: "feedback", target: { backend: "codex", threadId: "worker" }, approachId: "a1", state: "queued" } }));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Review, 1 to review" }));
+    fireEvent.change(screen.getByLabelText("Reason for your decision"), { target: { value: "Reproduce it first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Request revision" }));
+    expect(await screen.findByText("Revision feedback is queued for the worker.")).toBeInTheDocument();
   });
 
   it("reviews each candidate with its own reason and keeps acceptance separate from verification", async () => {
@@ -287,13 +349,94 @@ describe("Research panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "995 more from Events" }));
     await waitFor(() => expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ approachId: "a1" }) })));
     expect(screen.getByRole("button", { name: "Remove approach filter: Events" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
-    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "Counterexample 999" } });
-    expect(screen.getByText("Counterexample 999")).toBeInTheDocument();
-    expect(screen.queryByText("Counterexample 1")).not.toBeInTheDocument();
+    // The first read arrives in pages, each continuing from the last item of the one before.
+    expect(mocks.researchChanges).toHaveBeenCalledTimes(3);
+    expect(mocks.researchChanges).toHaveBeenLastCalledWith(expect.objectContaining({ sinceRevision: 0, after: expect.objectContaining({ version: expect.any(Number) }) }));
   });
 
-  it("sends summaries and one board, never a journal, and reads the chosen run's board", async () => {
+  it("pages the findings newest first through the item search, and filters every finding by what its card shows", async () => {
+    const { api, mocks } = apiFor(snapshot(1000));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
+    const list = screen.getByLabelText("Shared findings");
+    expect(await screen.findByText("Showing the latest 20 of 1000 findings.")).toBeInTheDocument();
+    expect(list.querySelectorAll("article")).toHaveLength(20);
+    expect(within(list).getAllByRole("article")[0]).toHaveTextContent("Counterexample 999");
+    expect(mocks.searchResearch).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "run", query: { type: "finding", limit: 20 } });
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Showing the latest 40 of 1000 findings.")).toBeInTheDocument();
+    expect(mocks.searchResearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: expect.objectContaining({ cursor: expect.objectContaining({ id: "f980" }) }) }));
+    expect(within(list).getAllByRole("article")[39]).toHaveTextContent("Counterexample 960");
+    const reads = mocks.searchResearch.mock.calls.length;
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "Counterexample 99" } });
+    // The filter reaches findings that were never loaded: 99 and 990 to 999.
+    expect(await screen.findByText("All 11 matching findings.")).toBeInTheDocument();
+    expect(within(list).getAllByRole("article").at(-1)).toHaveTextContent("Counterexample 99");
+    expect(screen.queryByText("Counterexample 1", { exact: true })).not.toBeInTheDocument();
+    // Every card shows its approach, its kind and its evidence, so each of those finds the cards that show it.
+    for (const shown of ["events", "Counterexample", "evidence.txt"]) {
+      fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: shown } });
+      expect(await screen.findByText("Showing the latest 20 of 1000 matching findings.")).toBeInTheDocument();
+      expect(within(list).getAllByRole("article")[0]).toHaveTextContent("Counterexample 999");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Showing the latest 40 of 1000 matching findings.")).toBeInTheDocument();
+    expect(within(list).getAllByRole("article")[39]).toHaveTextContent("Counterexample 960");
+    // Another filter starts again from one page.
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "events" } });
+    expect(await screen.findByText("Showing the latest 20 of 1000 matching findings.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "nothing matches this" } });
+    expect(await screen.findByText("No findings match this filter.")).toBeInTheDocument();
+    // A filter of any length is matched in the window and reads nothing from the owner.
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "x".repeat(400) } });
+    expect(await screen.findByText("No findings match this filter.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(mocks.searchResearch.mock.calls).toHaveLength(reads);
+    // Without the filter, the pages read earlier are still there.
+    fireEvent.change(screen.getByLabelText("Filter this view"), { target: { value: "" } });
+    expect(await screen.findByText("Showing the latest 40 of 1000 findings.")).toBeInTheDocument();
+  });
+
+  it("moves focus to the findings list only when Show more draws the last page", async () => {
+    const { api } = apiFor(snapshot(45));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
+    const list = screen.getByLabelText("Shared findings");
+    const filter = screen.getByLabelText("Filter this view");
+    expect(await screen.findByText("Showing the latest 20 of 45 findings.")).toBeInTheDocument();
+    // More remain after this click, so the button stays and focus stays on it.
+    const more = screen.getByRole("button", { name: "Show more" });
+    more.focus();
+    fireEvent.click(more);
+    expect(await screen.findByText("Showing the latest 40 of 45 findings.")).toBeInTheDocument();
+    expect(list).not.toHaveFocus();
+    // A filter that then fits one page hides the button. The operator is typing: focus stays in the filter.
+    filter.focus();
+    fireEvent.change(filter, { target: { value: "Counterexample 4" } });
+    expect(await screen.findByText("All 6 matching findings.")).toBeInTheDocument();
+    expect(filter).toHaveFocus();
+    // Show more that draws the last matches takes its button away, so focus goes to the list.
+    fireEvent.change(filter, { target: { value: "Counterexample" } });
+    expect(await screen.findByText("Showing the latest 20 of 45 matching findings.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Showing the latest 40 of 45 matching findings.")).toBeInTheDocument();
+    expect(list).not.toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("All 45 matching findings.")).toBeInTheDocument();
+    expect(list).toHaveFocus();
+    // The same holds for the pages read from the owner.
+    filter.focus();
+    fireEvent.change(filter, { target: { value: "" } });
+    expect(await screen.findByText("Showing the latest 40 of 45 findings.")).toBeInTheDocument();
+    expect(filter).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("All 45 findings.")).toBeInTheDocument();
+    await waitFor(() => expect(list).toHaveFocus());
+  });
+
+  it("reads summaries with no items or journal, and the chosen run through its own change stream", async () => {
     const first = snapshot(3);
     const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));
     const { api, mocks } = apiFor({ runs: [first.runs[0]!, second], writableRunIds: ["run"] });
@@ -301,11 +444,14 @@ describe("Research panel", () => {
     await screen.findByLabelText("Research map");
     const response = await mocks.researchSnapshot.mock.results[0]!.value;
     expect(JSON.stringify(response)).not.toContain("\"events\"");
+    expect(JSON.stringify(response)).not.toContain("Counterexample");
     expect(response.runs.map((run: { id: string }) => run.id)).toEqual(["run", "other-run"]);
     chooseSelectOption(screen.getByRole("combobox", { name: "Run" }), /Second objective/);
-    await waitFor(() => expect(mocks.researchSnapshot).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "other-run" }));
+    await waitFor(() => expect(mocks.researchChanges).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "other-run", sinceRevision: 0 }));
     expect(await screen.findByText("Second objective", { selector: ".research-objective" })).toBeInTheDocument();
     expect(screen.getByText("This run’s owner is not running in this window’s process.", { exact: false })).toBeInTheDocument();
+    // Choosing a run reads that run, not the list again.
+    expect(mocks.researchSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("pages Activity newest first, reads only new events on a change, and reaches the first event with Show older", async () => {
@@ -323,7 +469,7 @@ describe("Research panel", () => {
     const records = [...data.runs[0]!.events, { seq: 253, commandId: "late", signature: "t", at: 2000, actor,
       data: { type: "finding", finding: { id: "late", approachId: "a1", kind: "note", text: "Arrived between pages", paths: [] } } } as ResearchEvent];
     data.runs[0] = projectResearchRun("run", records);
-    act(changed);
+    act(() => changed());
     await waitFor(() => expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("Arrived between pages"));
     expect(mocks.readResearchEvents).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "run", range: { afterSeq: 252, limit: 100 } }));
     fireEvent.click(screen.getByRole("button", { name: "Show older" }));
@@ -366,8 +512,9 @@ describe("Research panel", () => {
     const second = snapshot();
     second.runs[0]!.objective = "New thread's run";
     const researchSnapshot = vi.fn(async ({ threadId }: { threadId: string }) => threadId === "parent" ? await first.promise : ownerSnapshot(second));
-    const { rerender } = render(<ResearchPanel desktopApi={{ researchSnapshot } as DesktopApi} thread={thread} />);
-    rerender(<ResearchPanel desktopApi={{ researchSnapshot } as DesktopApi} thread={{ ...thread, id: "other" }} />);
+    const researchChanges = vi.fn(async (request: ResearchChangesRequest) => ownerChanges(second, request));
+    const { rerender } = render(<ResearchPanel desktopApi={{ researchSnapshot, researchChanges } as DesktopApi} thread={thread} />);
+    rerender(<ResearchPanel desktopApi={{ researchSnapshot, researchChanges } as DesktopApi} thread={{ ...thread, id: "other" }} />);
     await screen.findAllByText("New thread's run");
     await act(async () => first.resolve(ownerSnapshot(snapshot())));
     expect(screen.queryByText("Investigate queue ordering")).not.toBeInTheDocument();

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
-import type { ResearchApproach, ResearchFinding, ResearchRunBoard, ResearchThread } from "@pwragent/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ResearchApproach, ResearchFinding, ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";
-import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchLabel, researchMapBranches, type ResearchMapBranch } from "./research-view-model";
+import { RESEARCH_FINDINGS_PAGE, useResearchFindings } from "./useResearchFindings";
+import { approachTitle, excerpt, formatClock, plural, researchActivityRows, researchFindingMatches, researchFindingRelation, researchLabel, researchMapBranches, type ResearchMapBranch, type ResearchRunView } from "./research-view-model";
 
 type Open = (itemId: string) => void;
 
@@ -12,10 +13,11 @@ function approachState(approach: ResearchApproach): string {
 }
 
 export function ResearchMapView({ run, filter, onOpenItem, onShowApproachItems }: {
-  run: ResearchRunBoard; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
+  run: ResearchRunView; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
 }) {
   const query = filter.trim().toLowerCase();
-  const branches = researchMapBranches(run).filter((branch) => !query || branchText(branch).includes(query));
+  const all = useMemo(() => researchMapBranches(run), [run]);
+  const branches = all.filter((branch) => !query || branchText(branch).includes(query));
   return <div className="research-map" aria-label="Research map">
     {branches.map((branch) => <MapBranch key={branch.approach.id} run={run} branch={branch} onOpenItem={onOpenItem} onShowApproachItems={onShowApproachItems} />)}
     {!branches.length && <p className="context-empty">{query ? "No approaches match this filter." : "Approaches appear here once the coordinator starts the run."}</p>}
@@ -28,7 +30,7 @@ function branchText(branch: ResearchMapBranch): string {
 }
 
 function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = false }: {
-  run: ResearchRunBoard; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
+  run: ResearchRunView; branch: ResearchMapBranch; onOpenItem: Open; onShowApproachItems: (approachId: string) => void; nested?: boolean;
 }) {
   const { approach } = branch;
   return <div className={`research-map__branch${nested ? " research-map__branch--nested" : ""}`}>
@@ -56,28 +58,68 @@ function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = fals
   </div>;
 }
 
-export function ResearchFindingsView({ run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunBoard; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+/**
+ * Newest first, a page at a time. Unfiltered, the owner's search pages the
+ * list and each card's record comes from the run's store. A filter matches
+ * what the cards show, across every finding of the run, in the window.
+ */
+export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
   const query = filter.trim().toLowerCase();
-  const findings = [...run.findings].reverse().filter((f) => !query || `${f.kind} ${f.text} ${approachTitle(run, f.approachId)} ${f.paths.join(" ")}`.toLowerCase().includes(query));
-  return <div className="research-list" aria-label="Shared findings">
-    {findings.map((finding) => <FindingCard key={finding.id} run={run} finding={finding} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />)}
-    {!run.findings.length && <p className="context-empty">Findings appear here as workers share evidence.</p>}
-    {run.findings.length > 0 && !findings.length && <p className="context-empty">No findings match this filter.</p>}
+  const paged = useResearchFindings(api, thread, run.id, run.findings);
+  const matches = useMemo(() => query ? researchFindingMatches(run, query) : undefined, [run, query]);
+  // How many matches are drawn. A new filter starts again from one page.
+  const [drawn, setDrawn] = useState({ query, count: RESEARCH_FINDINGS_PAGE });
+  const count = drawn.query === query ? drawn.count : RESEARCH_FINDINGS_PAGE;
+  const shown = matches
+    ? matches.slice(0, count)
+    // A hit read just ahead of the store draws once its item arrives.
+    : paged.loaded.hits.flatMap((hit) => { const item = run.items.get(hit.id); return item?.type === "finding" ? [item.record] : []; });
+  const total = matches ? matches.length : paged.loaded.total;
+  const more = matches ? count < matches.length : paged.loaded.next !== undefined;
+  const loaded = Boolean(matches) || paged.loaded.loaded;
+  const loadingOlder = !matches && paged.loadingOlder;
+  const error = matches ? "" : paged.error;
+  const list = useRef<HTMLDivElement>(null);
+  // Show more disappears with the last page; keep focus in the list instead of dropping it to the page.
+  // The click is forgotten once its page is drawn: a filter that hides the button later must not take focus from the filter box.
+  const requestedMore = useRef(false);
+  useEffect(() => {
+    if (!requestedMore.current || loadingOlder) return;
+    requestedMore.current = false;
+    if (!more) list.current?.focus();
+  }, [more, shown.length, loadingOlder]);
+  const showMore = () => {
+    requestedMore.current = true;
+    if (matches) setDrawn({ query, count: count + RESEARCH_FINDINGS_PAGE });
+    else paged.showOlder();
+  };
+  const noun = matches ? "matching finding" : "finding";
+  return <div ref={list} tabIndex={-1} className="research-list" aria-label="Shared findings">
+    {error && <p role="alert" className="research-error">{error}</p>}
+    {shown.map((finding) => <FindingCard key={finding.id} run={run} finding={finding} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />)}
+    {!matches && !paged.available && <p className="context-empty">Findings are unavailable in this window.</p>}
+    {!matches && paged.available && !loaded && !error && <p role="status" className="context-empty">Loading findings…</p>}
+    {loaded && !run.findings && <p className="context-empty">Findings appear here as workers share evidence.</p>}
+    {matches && run.findings > 0 && !shown.length && <p className="context-empty">No findings match this filter.</p>}
+    {shown.length > 0 && <div className="research-activity__footer">
+      <span className="research-muted">{more ? `Showing the latest ${shown.length} of ${total} ${noun}s.` : `All ${plural(shown.length, noun)}.`}</span>
+      {more && <button type="button" className="research-button" disabled={loadingOlder} onClick={showMore}>
+        {loadingOlder ? "Loading…" : "Show more"}
+      </button>}
+    </div>}
   </div>;
 }
 
 function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunBoard; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+  run: ResearchRunView; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
-  const related = finding.relatesTo ? run.findings.find((other) => other.id === finding.relatesTo) : undefined;
+  const relation = researchFindingRelation(run, finding);
   return <article className="research-entry" aria-label={`${researchLabel(finding.kind)} from ${approachTitle(run, finding.approachId)}`}>
     <div className="research-entry__meta"><span className="research-chip">{researchLabel(finding.kind)}</span><span>{approachTitle(run, finding.approachId)}</span></div>
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(finding.id)}>{finding.text}</button>
-    {finding.relatesTo && <button type="button" className="research-link" onClick={() => onOpenItem(finding.relatesTo!)}>
-      {researchLabel(finding.relation ?? "related")}: {related ? excerpt(related.text, 80) : "an earlier finding"}
-    </button>}
+    {relation && <button type="button" className="research-link" onClick={() => onOpenItem(finding.relatesTo!)}>{relation}</button>}
     {finding.paths.length > 0 && <EvidenceList paths={finding.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(finding.id, index)} />}
     {finding.author && <ResearchThreadButton thread={finding.author} title="Open source thread" label={`Open source thread: ${approachTitle(run, finding.approachId)}`} />}
   </article>;
@@ -91,7 +133,7 @@ export function EvidenceList({ paths, available, onOpen }: { paths: string[]; av
 
 /** Newest first. The journal is read in pages; the filter covers what is loaded. */
 export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
-  api: DesktopApi; thread: ResearchThread; run: ResearchRunBoard; filter: string; onOpenItem: Open;
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; onOpenItem: Open;
 }) {
   const activity = useResearchActivity(api, thread, run.id, run.revision);
   const query = filter.trim().toLowerCase();
@@ -115,7 +157,7 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
     <ol ref={list} tabIndex={-1} className="research-activity" aria-label="Research activity" reversed>
       {rows.map((row) => <li key={row.seq}>
         <span className="research-activity__meta"><time dateTime={new Date(row.at).toISOString()}>{formatClock(row.at)}</time> · {row.actor} · {row.kind}</span>
-        {row.itemId && Object.hasOwn(run.createdSeq, row.itemId)
+        {row.itemId && run.items.has(row.itemId)
           ? <button type="button" className="research-activity__text" onClick={() => onOpenItem(row.itemId!)}>{row.text}</button>
           : <p className="research-activity__text">{row.text}</p>}
       </li>)}

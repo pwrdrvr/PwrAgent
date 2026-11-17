@@ -1,4 +1,18 @@
-import { researchApproachOccupiesSlot, researchBoardIndex, sameResearchThread, type ResearchApproach, type ResearchBoardEntry, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchRunSummary, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+
+/**
+ * One run as the panel draws it: its header, its current state and counts,
+ * and the window's store of its items. Lists that can grow without bound,
+ * the findings and each approach's contributions, are not held here in
+ * order: the Findings view pages them, and the Map reads `leaves`.
+ */
+export type ResearchRunView = ResearchRunHeader & ResearchRunState & Pick<ResearchRunStore, "items" | "approaches" | "submissions" | "leaves">;
+
+/** The view of a run whose store has finished a sync, or undefined while its first sync is in flight. */
+export function researchRunView(header: ResearchRunHeader, store: ResearchRunStore): ResearchRunView | undefined {
+  if (store.runId !== header.id || !store.state || !researchRunStoreSynced(store)) return undefined;
+  return { ...header, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves };
+}
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
 export type ResearchPhase = { label: string; tone: ResearchTone };
@@ -19,13 +33,8 @@ export function unreviewedCandidates(run: Pick<ResearchRun, "submissions">): Res
   return run.submissions.filter((submission) => !submission.review);
 }
 
-/** What names a run's phase. A summary carries it directly; a board through `researchPhaseInput`. */
+/** What names a run's phase. A summary and a run view both carry it. */
 export type ResearchPhaseInput = Pick<ResearchRunSummary, "status" | "activeWorkers" | "unreviewed" | "accepted">;
-
-export function researchPhaseInput(run: Pick<ResearchRunBoard, "status" | "approaches" | "submissions">): ResearchPhaseInput {
-  return { status: run.status, activeWorkers: run.approaches.filter(researchApproachOccupiesSlot).length,
-    unreviewed: unreviewedCandidates(run).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length };
-}
 
 /**
  * The operator-facing phase. A running run with no worker holding a slot is
@@ -66,35 +75,34 @@ export function formatClock(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export function researchRunCounts(run: ResearchRunBoard) {
-  return {
-    slotsInUse: run.activeWorkers,
-    workerLimit: run.workerLimit,
-    findings: run.findings.length,
-    candidates: run.submissions.length,
-    unreviewed: unreviewedCandidates(run).length,
-    accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
-  };
+export function researchRunCounts(run: Pick<ResearchRunView, "activeWorkers" | "workerLimit" | "findings" | "candidates" | "unreviewed" | "accepted">) {
+  return { slotsInUse: run.activeWorkers, workerLimit: run.workerLimit, findings: run.findings, candidates: run.candidates, unreviewed: run.unreviewed, accepted: run.accepted };
 }
 
 /** Why Finish is unavailable, or undefined when it is. */
-export function researchFinishBlocker(run: ResearchRunBoard): string | undefined {
-  if (!run.submissions.some((s) => s.review?.decision === "accepted")) return "Accept a candidate to finish the run.";
+export function researchFinishBlocker(run: Pick<ResearchRunView, "accepted">): string | undefined {
+  if (!run.accepted) return "Accept a candidate to finish the run.";
   return undefined;
 }
 
+/** The approach with this ID, or undefined when the run has none. */
+export function researchApproach(run: Pick<ResearchRunView, "items">, id: string): ResearchApproach | undefined {
+  const item = run.items.get(id);
+  return item?.type === "approach" ? item.record : undefined;
+}
+
 /** Why a revision cannot be requested for this candidate, or undefined when it can. */
-export function researchRevisionBlocker(run: ResearchRunBoard, submission: ResearchSubmission, live: boolean): string | undefined {
+export function researchRevisionBlocker(run: Pick<ResearchRunView, "status" | "items" | "activeWorkers" | "workerLimit">, submission: ResearchSubmission, live: boolean): string | undefined {
   if (!live || run.status !== "running") return "Revisions need a running run.";
-  const approach = run.approaches.find((a) => a.id === submission.approachId);
+  const approach = researchApproach(run, submission.approachId);
   if (!approach?.worker) return "This candidate's worker is unavailable.";
   if (approach.revisionDeliveryIds?.length) return "A revision is already pending for this worker.";
   if (!researchApproachOccupiesSlot(approach) && run.activeWorkers >= run.workerLimit) return "Every worker slot is in use.";
   return undefined;
 }
 
-export function approachTitle(run: Pick<ResearchRun, "approaches">, id: string): string {
-  return run.approaches.find((a) => a.id === id)?.title ?? id;
+export function approachTitle(run: Pick<ResearchRunView, "items">, id: string): string {
+  return researchApproach(run, id)?.title ?? id;
 }
 
 /**
@@ -116,11 +124,10 @@ export function excerpt(text: string, max = 100): string {
 export type ResearchActivityRow = { seq: number; at: number; kind: string; actor: string; text: string; itemId?: string };
 
 /** One row per loaded event, newest first as given. Approach IDs are replaced with their titles. */
-export function researchActivityRows(run: ResearchRunBoard, events: readonly ResearchEvent[]): ResearchActivityRow[] {
+export function researchActivityRows(run: Pick<ResearchRunView, "items" | "approaches" | "coordinator">, events: readonly ResearchEvent[]): ResearchActivityRow[] {
   const title = (id: string) => approachTitle(run, id);
-  let index: Map<string, ResearchBoardEntry> | undefined;
   const itemExcerpt = (itemId: string) => {
-    const entry = (index ??= researchBoardIndex(run)).get(itemId);
+    const entry = run.items.get(itemId);
     return entry ? excerpt(researchItemText(entry), 80) : itemId;
   };
   const rows: ResearchActivityRow[] = [];
@@ -189,8 +196,99 @@ export function appendResearchActivityOlder(window: ResearchActivityWindow, page
   return { ...rest, events: [...window.events, ...page.events], ...(page.nextBeforeSeq !== undefined ? { nextBeforeSeq: page.nextBeforeSeq } : {}) };
 }
 
-export function researchItemText(item: ResearchItem | ResearchBoardEntry): string {
+export function researchItemText(item: ResearchItem): string {
   return item.type === "approach" ? item.record.title : item.record.text;
+}
+
+/** What a finding's own record puts on its card, lower-cased. An item is replaced when it changes, so this is built once per version. */
+const findingCardText = new WeakMap<ResearchItem, string>();
+
+/** The line a finding's card shows for the finding it relates to. */
+export function researchFindingRelation(run: Pick<ResearchRunView, "items">, finding: ResearchFinding): string | undefined {
+  if (!finding.relatesTo) return undefined;
+  const related = run.items.get(finding.relatesTo);
+  return `${researchLabel(finding.relation ?? "related")}: ${related?.type === "finding" ? excerpt(related.record.text, 80) : "an earlier finding"}`;
+}
+
+/**
+ * The findings whose card shows `query`, newest first. A card shows the
+ * finding's kind, its text, its evidence paths, the title of its approach and
+ * a line for the finding it relates to, so each of those matches. The
+ * window's store holds every item, so this reads no page from the owner; the
+ * caller draws as many as it shows.
+ */
+export function researchFindingMatches(run: Pick<ResearchRunView, "items">, query: string): ResearchFinding[] {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return [];
+  const titled = new Map<string, boolean>();
+  const titleMatches = (approachId: string) => {
+    let matches = titled.get(approachId);
+    if (matches === undefined) {
+      matches = approachTitle(run, approachId).toLowerCase().includes(wanted);
+      titled.set(approachId, matches);
+    }
+    return matches;
+  };
+  const found: Array<{ id: string; createdSeq: number; record: ResearchFinding }> = [];
+  for (const item of run.items.values()) {
+    if (item.type !== "finding") continue;
+    let text = findingCardText.get(item);
+    if (text === undefined) {
+      text = [item.record.kind, researchLabel(item.record.kind), item.record.text, ...item.record.paths].join("\n").toLowerCase();
+      findingCardText.set(item, text);
+    }
+    if (text.includes(wanted) || titleMatches(item.record.approachId) || researchFindingRelation(run, item.record)?.toLowerCase().includes(wanted)) found.push({ id: item.id, createdSeq: item.createdSeq, record: item.record });
+  }
+  return found.sort((a, b) => b.createdSeq - a.createdSeq || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map((entry) => entry.record);
+}
+
+/**
+ * The loaded part of the unfiltered findings list: one contiguous stretch,
+ * newest first, from the newest finding. `next` continues it while older
+ * findings remain. `revision` is the board revision of the last page merged,
+ * which a continuing search must name.
+ */
+export type ResearchFindingsWindow = { key: string; hits: ResearchSearchHit[]; total: number; revision: number; loaded: boolean; next?: NonNullable<ResearchSearchQuery["cursor"]> };
+
+export function emptyResearchFindings(key: string): ResearchFindingsWindow {
+  return { key, hits: [], total: 0, revision: 0, loaded: false };
+}
+
+/**
+ * Merge a read of the first page. The page is the top of the list as it
+ * stands now, so it replaces the window down to the page's last hit and the
+ * window keeps what it holds below that. If the window does not reach the
+ * page's last hit, more arrived than one page holds: the window restarts
+ * from the page, and Show more reaches the rest.
+ *
+ * Below the first page the window is as it was read. Findings are only ever
+ * added and keep their order, so that is exact.
+ */
+export function mergeResearchFindingsHead(window: ResearchFindingsWindow, page: ResearchSearchPage): ResearchFindingsWindow {
+  const fromPage = (): ResearchFindingsWindow => ({ key: window.key, hits: page.items, total: page.total, revision: page.revision, loaded: true, ...(page.nextCursor ? { next: page.nextCursor } : {}) });
+  const last = page.items.at(-1);
+  // A page with nothing after it is the whole list.
+  if (!window.loaded || !last || !page.nextCursor) return fromPage();
+  const index = window.hits.findIndex((hit) => hit.id === last.id);
+  if (index < 0) return fromPage();
+  const below = window.hits.slice(index + 1);
+  // A window that ended at the page's last hit continues from the page's cursor.
+  const { next: _next, ...rest } = window;
+  const next = below.length ? window.next : page.nextCursor;
+  return { ...rest, hits: [...page.items, ...below], total: page.total, revision: page.revision, ...(next ? { next } : {}) };
+}
+
+/** The cursor that continues the window below its oldest hit, at the board revision the window last saw. */
+export function researchFindingsOlderCursor(window: ResearchFindingsWindow): ResearchSearchQuery["cursor"] {
+  return window.next ? { ...window.next, revision: window.revision } : undefined;
+}
+
+/** Append an older page. A page that repeats a loaded hit, such as one read before a restart, is ignored. */
+export function appendResearchFindingsOlder(window: ResearchFindingsWindow, page: ResearchSearchPage): ResearchFindingsWindow {
+  const loaded = new Set(window.hits.map((hit) => hit.id));
+  if (!window.next || page.items.some((hit) => loaded.has(hit.id))) return window;
+  const { next: _previous, ...rest } = window;
+  return { ...rest, hits: [...window.hits, ...page.items], total: page.total, revision: page.revision, ...(page.nextCursor ? { next: page.nextCursor } : {}) };
 }
 
 /** A finding or candidate on the map, with the focused children that investigate it. */
@@ -200,38 +298,41 @@ export type ResearchMapLeaf =
 export type ResearchMapBranch = { approach: ResearchApproach; leaves: ResearchMapLeaf[]; hidden: number; assignments: ResearchMapBranch[] };
 
 /**
- * Approaches with their contributions, newest first. A focused child nests
- * under the item it investigates, with its own contributions. Every approach
- * appears exactly once: a child whose source is missing, or whose chain of
- * sources loops, stays reachable as a top-level branch. Only the newest
- * `leafLimit` contributions of a branch render; `hidden` counts the rest.
+ * Approaches with their newest contributions, newest first. Each approach's
+ * counts and newest few contribution IDs come from `run.leaves`, which the
+ * owner reads per approach, so the Map never walks every finding. A focused
+ * child nests under the item it investigates, with its own contributions; one
+ * whose source is not among the shown leaves attaches to the source's branch.
+ * Every approach appears exactly once: a child whose source is missing, or
+ * whose chain of sources loops, stays reachable as a top-level branch.
+ * `hidden` counts the contributions a branch does not show.
  */
-export function researchMapBranches(run: ResearchRunBoard, leafLimit = 6): ResearchMapBranch[] {
-  const known = (id: string) => Object.hasOwn(run.createdSeq, id);
-  const createdSeq = (id: string) => run.createdSeq[id] ?? 0;
-  const childrenOf = new Map<string, ResearchApproach[]>();
+export function researchMapBranches(run: Pick<ResearchRunView, "approaches" | "items" | "leaves">): ResearchMapBranch[] {
+  /** Children by the ID they nest under: a shown leaf, or the approach that owns their source. */
+  const childrenOf = new Map<string, Array<{ approach: ResearchApproach; sourceSeq: number }>>();
+  const rooted = new Set<string>();
   for (const approach of run.approaches) {
-    if (!approach.itemId || approach.itemId === approach.id || !known(approach.itemId)) continue;
-    childrenOf.set(approach.itemId, [...(childrenOf.get(approach.itemId) ?? []), approach]);
+    const source = approach.itemId && approach.itemId !== approach.id ? run.items.get(approach.itemId) : undefined;
+    if (!source) { rooted.add(approach.id); continue; }
+    const shown = source.type === "approach" || run.leaves.get(source.approachId)?.leafIds.includes(source.id);
+    // A hidden contribution's children follow the branch's own, newest source first.
+    const under = shown ? source.id : source.approachId;
+    childrenOf.set(under, [...(childrenOf.get(under) ?? []), { approach, sourceSeq: shown ? Number.MAX_SAFE_INTEGER : source.createdSeq }]);
   }
   const placed = new Set<string>();
   const build = (approach: ResearchApproach): ResearchMapBranch => {
     placed.add(approach.id);
-    const nest = (id: string) => (childrenOf.get(id) ?? []).filter((child) => !placed.has(child.id)).map(build);
-    const contributions: Array<{ type: "finding"; record: ResearchFinding } | { type: "submission"; record: ResearchSubmission }> = [
-      ...run.findings.filter((f) => f.approachId === approach.id).map((record) => ({ type: "finding" as const, record })),
-      ...run.submissions.filter((s) => s.approachId === approach.id).map((record) => ({ type: "submission" as const, record })),
-    ];
-    contributions.sort((a, b) => createdSeq(b.record.id) - createdSeq(a.record.id));
+    const nest = (id: string) => (childrenOf.get(id) ?? []).filter((child) => !placed.has(child.approach.id))
+      .sort((a, b) => b.sourceSeq - a.sourceSeq).map((child) => build(child.approach));
+    const entry = run.leaves.get(approach.id);
     const assignments = nest(approach.id);
-    // Children of hidden contributions still render; they attach to the branch instead.
-    const leaves = contributions.map((entry) => ({ ...entry, children: nest(entry.record.id) }) as ResearchMapLeaf);
-    const shown = leaves.slice(0, leafLimit);
-    for (const leaf of leaves.slice(leafLimit)) assignments.push(...leaf.children);
-    return { approach, leaves: shown, hidden: leaves.length - shown.length, assignments };
+    const leaves = (entry?.leafIds ?? []).flatMap((id): ResearchMapLeaf[] => {
+      const item = run.items.get(id);
+      return item && item.type !== "approach" ? [{ type: item.type, record: item.record, children: nest(id) } as ResearchMapLeaf] : [];
+    });
+    return { approach, leaves, hidden: Math.max(0, (entry ? entry.findings + entry.candidates : 0) - leaves.length), assignments };
   };
-  const roots = run.approaches.filter((a) => !a.itemId || a.itemId === a.id || !known(a.itemId));
-  const branches = roots.map(build);
+  const branches = run.approaches.filter((approach) => rooted.has(approach.id)).map(build);
   // A loop of children whose sources are each other has no root; keep each reachable.
   for (const approach of run.approaches) if (!placed.has(approach.id)) branches.push(build(approach));
   return branches;

@@ -41,6 +41,11 @@ function createService(overrides: Partial<ResearchPorts> = {}, storage = new Res
   return service;
 }
 
+/** Start a run and replay it, for the worker bindings and items a test then acts on. */
+async function startRun(service: ResearchService, start: Parameters<ResearchService["start"]>[0] = mutableRequest(), context: Parameters<ResearchService["start"]>[1] = actor) {
+  return service.read((await service.start(start, context)).id, actor);
+}
+
 describe("research journal storage", () => {
   it("budgets disabling the experiment as one existing stop lifecycle with no new idle writes", async () => {
     let enabled = true;
@@ -207,7 +212,7 @@ describe("research journal storage", () => {
 
   it.each(["source", "approach"] as const)("budgets one focused child admission and exact %s item cancellation", async (target) => {
     const service = createService();
-    const run = await service.start(mutableRequest(), actor);
+    const run = await startRun(service);
     await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Investigate this item", paths: [] }, actor);
     const source = service.read(run.id, actor).findings[0]!;
     service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
@@ -223,7 +228,7 @@ describe("research journal storage", () => {
 
   it("budgets settling both cancelled references to one focused assignment", async () => {
     const service = createService({ stop: async () => { throw new Error("Lost cancellation response"); } });
-    const run = await service.start(mutableRequest(), actor);
+    const run = await startRun(service);
     await service.update(run.id, "source", { action: "finding", approachId: "a1", kind: "note", text: "Source evidence", paths: [] }, actor);
     service.observeEnd(run.approaches[0]!.worker!, run.approaches[0]!.worker!.turnId!);
     const source = service.readItem(run.id, service.read(run.id, actor).findings[0]!.id, actor).item;
@@ -239,19 +244,19 @@ describe("research journal storage", () => {
   });
   it("retains the board and exact review provenance after reopening a real database", async () => {
     const service = createService();
-    const run = await service.start(mutableRequest(), actor);
+    const run = await startRun(service);
     const worker: ResearchActor = { ...run.approaches[0]!.worker!, kind: "agent", callId: "post" };
-    const posted = await service.update(run.id, "finding", { action: "finding", approachId: "a1", kind: "experiment", text: "Ordering reproduced the failure", paths: ["evidence/result.txt"] }, worker);
+    await service.update(run.id, "finding", { action: "finding", approachId: "a1", kind: "experiment", text: "Ordering reproduced the failure", paths: ["evidence/result.txt"] }, worker);
     await service.update(run.id, "candidate", { action: "submit", approachId: "a1", text: "Preserve event order", paths: [] }, actor);
     const submission = service.read(run.id, actor).submissions[0]!;
     await service.update(run.id, "review", { action: "review", submissionId: submission.id, decision: "accepted", reason: "Reproduction supports it" }, actor);
     const before = service.read(run.id, actor);
-    expect(new ResearchStore(db).list(worker).map((r) => r.id)).toContain(run.id);
+    expect(new ResearchStore(db).runSummaries(worker, 50).map((r) => r.id)).toContain(run.id);
     db.close();
     db = StateDb.open(fixture.dbPath);
     const after = new ResearchStore(db).get(run.id)!;
     expect(after).toEqual(before);
-    expect(after.findings[0]?.id).toBe(posted.findings[0]?.id);
+    expect(after.findings[0]).toMatchObject({ text: "Ordering reproduced the failure", author: { backend: worker.backend, threadId: worker.threadId } });
     expect(after.submissions[0]?.review?.actor).toEqual(actor);
   });
 
@@ -278,13 +283,17 @@ describe("research journal storage", () => {
     const service = createService();
     const start = await measureSqliteWrites(async () => await service.start(mutableRequest(), actor));
     expectSqliteWriteBudget({ scenario: "research-start-three-workers", note: "One run and three managed worker admissions; no provider transcripts or token events.", writes: start.writes });
-    const run = service.snapshot(actor).selected!;
+    const run = service.read(start.result.id, actor);
     const command = { action: "finding", approachId: "a1", kind: "note", text: "Evidence", paths: [] } as const;
     const post = await measureSqliteWrites(async () => await service.update(run.id, "post", { ...command, paths: [] }, actor));
     expectSqliteWriteBudget({ scenario: "research-finding", note: "One explicit structured finding. No polling writes. Project using observed bytes per commit at one finding/minute, not one streamed token/event.", writes: post.writes });
     const idle = await measureSqliteWrites(async () => {
       for (let i = 0; i < 100; i++) {
         service.snapshot(actor);
+        service.snapshot({ ...actor, runId: run.id });
+        service.changes(run.id, undefined, undefined, actor);
+        service.changes(run.id, run.revision, undefined, actor);
+        service.readBoard(run.id, { approachOffset: 0, findingOffset: 0, submissionOffset: 0 }, actor);
         service.read(run.id, actor);
         await service.update(run.id, "post", { ...command, paths: [] }, actor);
         service.observeEnd(run.approaches[0]!.worker!, "unrelated-turn");
@@ -298,7 +307,7 @@ describe("research journal storage", () => {
   it("budgets revision delivery and cancels only its recorded queued message", async () => {
     const cancelQueued = vi.fn(async () => ({}));
     const service = createService({ notify: async () => ({ queueEntryId: "research-feedback" }), cancelQueued });
-    const run = await service.start(mutableRequest(), actor);
+    const run = await startRun(service);
     await service.update(run.id, "submission", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, actor);
     const submissionId = service.read(run.id, actor).submissions[0]!.id;
     const revision = await measureSqliteWrites(async () => await service.update(run.id, "review", { action: "review", submissionId, decision: "revision_requested", reason: "Reproduce the counterexample" }, { ...actor, kind: "operator" }));
@@ -326,7 +335,7 @@ describe("research journal storage", () => {
 
   it("budgets exact queued revision admission and terminal release", async () => {
     const service = createService({ notify: async () => ({ queueEntryId: "exact-feedback" }) });
-    const run = await service.start({ ...mutableRequest(), approaches: [request.approaches[0]] }, actor);
+    const run = await startRun(service, { ...mutableRequest(), approaches: [request.approaches[0]] });
     await service.update(run.id, "submission", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, actor);
     await service.update(run.id, "review", { action: "review", submissionId: service.read(run.id, actor).submissions[0]!.id, decision: "revision_requested", reason: "Check it" }, actor);
     const worker = run.approaches[0]!.worker!;
@@ -351,7 +360,7 @@ describe("research journal storage", () => {
     const prepared = await measureSqliteWrites(async () => service.prepare({ backend: actor.backend, threadId: actor.threadId,
       objective: request.objective, workers: 3, minutes: request.minutes, workspaceMode: request.workspaceMode }));
     expectSqliteWriteBudget({ scenario: "research-prepare", note: "Bind the operator's exact limits in memory before the coordinator receives the request. No execution or SQLite writes.", writes: prepared.writes });
-    const run = await service.start({ ...mutableRequest(), ...prepared.result }, actor);
+    const run = await startRun(service, { ...mutableRequest(), ...prepared.result });
     const firstWorker = run.approaches[0]!.worker!;
     const terminal = await measureSqliteWrites(async () => service.observeEnd(firstWorker, firstWorker.turnId!));
     expectSqliteWriteBudget({ scenario: "research-worker-terminal", note: "One exact provider terminal event for an assigned worker; duplicate and unrelated terminal events do not write.", writes: terminal.writes });
@@ -372,12 +381,12 @@ describe("research journal storage", () => {
       cancelQueued: async () => ({ turnId: "revision-turn" }),
       stop: async (worker) => { if (worker.turnId === "revision-turn") throw new Error("Lost cancellation receipt"); },
     });
-    const run = await service.start(mutableRequest(), actor);
+    const run = await startRun(service);
     await service.update(run.id, "submission", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, actor);
     await service.update(run.id, "review", { action: "review", submissionId: service.read(run.id, actor).submissions[0]!.id, decision: "revision_requested", reason: "Check evidence" }, { ...actor, kind: "operator" });
     const stopping = await measureSqliteWrites(async () => await service.update(run.id, "stop", { action: "stop", reason: "Stop" }, actor));
     expect(stopping.result.status).toBe("stopping");
-    expect(stopping.result.deliveries[0]).toMatchObject({ state: "unknown", turnId: "revision-turn" });
+    expect(service.read(run.id, actor).deliveries[0]).toMatchObject({ state: "unknown", turnId: "revision-turn" });
     expectSqliteWriteBudget({ scenario: "research-revision-cancel-unknown", note: "Stop admission, retain the exact newly admitted revision turn before cancellation, record its unknown receipt, and cancel three initial worker turns.", writes: stopping.writes });
     const settled = await measureSqliteWrites(async () => service.observeEnd(run.approaches[0]!.worker!, "revision-turn"));
     expect(service.read(run.id, actor).status).toBe("stopped");
