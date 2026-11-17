@@ -19262,8 +19262,20 @@ a.button {
 
 .plugin-store__tile-top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+}
+
+/* A product's own mark, as published: sized, never recolored or redrawn. */
+.plugin-store__tile-icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+/* App icons are full-bleed squares; round them as the PwrSuite tiles do. */
+.plugin-store__tile-icon--app {
+  border-radius: 6px;
 }
 
 .plugin-store__tile-name {

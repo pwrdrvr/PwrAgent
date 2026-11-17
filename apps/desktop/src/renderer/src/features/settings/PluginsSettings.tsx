@@ -80,6 +80,10 @@ import {
   sandboxerNeedsSetup,
 } from "./SandboxerConnectionSetup";
 import { CompactMcpConnectionRow } from "./CompactMcpConnectionRow";
+import { GitHubIcon } from "../../icons";
+import pwrGitIcon from "../../assets/pwrgit/pwrgit-app-icon.png";
+import pwrSnapIcon from "../../assets/pwrsnap/pwrsnap-app-icon.png";
+import sandboxerMark from "../../assets/sandboxer/sandboxer-mark.svg";
 import { McpProjectToolApprovals } from "./McpProjectToolApprovals";
 import {
   GithubCompactRow,
@@ -2613,6 +2617,7 @@ export function PluginsSettings(props: {
                           <PluginStoreTile
                             by={STORE_TILE_TEXT.github.by}
                             description={STORE_TILE_TEXT.github.description}
+                            icon={<GitHubIcon aria-hidden="true" className="plugin-store__tile-icon" size={28} />}
                             name="GitHub"
                             status={githubConnections.length ? (
                               <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>
@@ -2635,6 +2640,16 @@ export function PluginsSettings(props: {
                           <PluginStoreTile
                             by={STORE_TILE_TEXT.sandboxer.by}
                             description={STORE_TILE_TEXT.sandboxer.description}
+                            icon={(
+                              <img
+                                alt=""
+                                aria-hidden="true"
+                                className="plugin-store__tile-icon"
+                                height={28}
+                                src={sandboxerMark}
+                                width={28}
+                              />
+                            )}
                             name="Sandboxer"
                             status={storeTiles.sandboxer.configured ? (
                               <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>Connected</span>
@@ -3824,6 +3839,11 @@ function PluginStoreTile(props: {
   /** The custom-server entry, drawn dashed because it is not one server. */
   custom?: boolean;
   description: string;
+  /**
+   * The product's own mark, where PwrAgent ships one, drawn as published:
+   * an `<img>` of the file under `assets/<vendor>/`, never redrawn.
+   */
+  icon?: ReactNode;
   name: string;
   status?: ReactNode;
 }) {
@@ -3833,6 +3853,7 @@ function PluginStoreTile(props: {
       className={`plugin-store__tile${props.custom ? " plugin-store__tile--custom" : ""}`}
     >
       <div className="plugin-store__tile-top">
+        {props.icon}
         <span className="plugin-store__tile-name">{props.name}</span>
         <span className="plugin-store__tile-by">{props.by}</span>
       </div>
@@ -3869,6 +3890,16 @@ function PwrSuiteStoreTile(props: {
     <PluginStoreTile
       by="PwrDrvr app"
       description={PWRSUITE_PLUGIN_SUMMARY[app].split(" \u00b7 ")[0]!}
+      icon={(
+        <img
+          alt=""
+          aria-hidden="true"
+          className="plugin-store__tile-icon plugin-store__tile-icon--app"
+          height={28}
+          src={app === "PwrGit" ? pwrGitIcon : pwrSnapIcon}
+          width={28}
+        />
+      )}
       name={app}
       status={props.connection.configured ? (
         <span className={`settings-pathrow__chip${chipToneClass("ok")}`}>Installed</span>

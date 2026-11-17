@@ -1973,6 +1973,11 @@ describe("PluginsSettings GitHub connection", () => {
     const store = screen.getByRole("dialog", { name: "Plugin store" });
     expect(within(store).getAllByRole("region").map((tile) => tile.getAttribute("aria-label")))
       .toEqual(["PwrSnap", "PwrGit", "GitHub", "Sandboxer", "Custom server"]);
+    // Each known plugin wears its own published mark; Custom server is not
+    // one product, so it has none.
+    expect(within(store).getAllByRole("region").map((tile) =>
+      tile.querySelector("img.plugin-store__tile-icon") !== null))
+      .toEqual([true, true, true, true, false]);
     expect(within(within(store).getByRole("region", { name: "PwrGit" })).getByText("Installed"))
       .toBeInTheDocument();
     expect(within(store).getByRole("button", { name: "Add GitHub" })).toBeInTheDocument();
