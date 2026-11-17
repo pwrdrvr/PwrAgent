@@ -1,5 +1,6 @@
 import type { AppServerReviewTarget } from "./contracts/normalized-app-server";
 import type { NavigationThreadSummary, PrSummary } from "./contracts/navigation";
+import { isGitObjectId } from "./git-object-id";
 import { findPrimaryReviewWorkspaceCwd } from "./review-branches";
 
 /**
@@ -143,7 +144,7 @@ export function nativeReviewTarget(
   if (target.type !== "pullRequest") return target;
   const snapshot = target.snapshot;
   if (!snapshot || ![snapshot.baseCommit, snapshot.headCommit, snapshot.mergeBaseCommit]
-    .every((sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha))) {
+    .every(isGitObjectId)) {
     throw new Error("Pull request review requires an owner-resolved commit snapshot.");
   }
   return {
