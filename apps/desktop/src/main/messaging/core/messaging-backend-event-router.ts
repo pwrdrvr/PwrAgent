@@ -37,7 +37,6 @@ import {
   assistantDeltaForBackendEvent,
   isUnphasedAssistantMessageEvent,
   agentMessagingTurnKey,
-  MAX_TRACKED_TURN_PROSE,
   isFinalAssistantImageResolutionEvent,
   errorTextForBackendEvent,
   isThreadNameUpdatedEvent,
@@ -708,11 +707,9 @@ export class MessagingBackendEventRouter {
           // Only the first fallback is sent, and an unphased message can be a
           // progress note: Claude reports every message this way. Hold the
           // latest one until the turn ends.
-          rememberBoundedMap(
-            this.context.host().heldPrivateResponseFallbackTextByTurnKey,
+          this.context.host().privateResponses.hold(
             agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
             assistantText,
-            MAX_TRACKED_TURN_PROSE,
           );
         } else if (fallbackTurnId) {
           await this.context.host().deliverPrivateResponseFallback({
@@ -735,7 +732,7 @@ export class MessagingBackendEventRouter {
         );
         const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
         const fallbackText = fallbackTurnId
-          ? this.context.host().heldPrivateResponseFallbackTextByTurnKey.get(
+          ? this.context.host().privateResponses.heldText(
               agentMessagingTurnKey(event.backend, binding.threadId, fallbackTurnId),
             ) ?? bufferedText
           : undefined;
@@ -978,7 +975,7 @@ export class MessagingBackendEventRouter {
           origin.privateReplyContinuationBindingId,
         );
       }
-      this.context.host().privateReplyCompletionTurnKeys.delete(turnKey);
+      this.context.host().privateResponses.completeReply(turnKey);
       this.context.host().forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.context.host().forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
       this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));

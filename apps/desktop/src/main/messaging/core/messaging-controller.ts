@@ -1,5 +1,7 @@
 import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
+import { MessagingPrivateResponses } from "./messaging-private-response-state";
+import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
 import {
   threadIdForBackendEvent,
   asPlainRecord,
@@ -1023,12 +1025,8 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
-  private readonly privateReplyCompletionTurnKeys = new Set<string>();
-  private readonly privateReplyClaims = new Set<string>();
-  private readonly terminalPrivateResponseTurnKeys = new Set<string>();
-  private readonly privateResponseFallbackTurnKeys = new Set<string>();
-  private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
-  private readonly heldPrivateResponseFallbackTextByTurnKey = new Map<string, string>();
+  private readonly privateResponses = new MessagingPrivateResponses();
+  private readonly privateReplyClaims = new MessagingPrivateReplyClaims();
   private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
     string,
     ActiveAgentMessagingOrigin
@@ -1539,7 +1537,7 @@ export class MessagingController {
       get assistantStreamDeliveryQueues() { return readController().assistantStreamDeliveryQueues; },
       get assistantStreamCancellationSignals() { return readController().assistantStreamCancellationSignals; },
       deliverAssistantStreamUpdate: (...args) => this.deliverAssistantStreamUpdate(...args),
-      get heldPrivateResponseFallbackTextByTurnKey() { return readController().heldPrivateResponseFallbackTextByTurnKey; },
+      get privateResponses() { return readController().privateResponses; },
       deliverPrivateResponseFallback: (...args) => this.deliverPrivateResponseFallback(...args),
       takeBufferedAssistantTextForTerminalEvent: (...args) => this.takeBufferedAssistantTextForTerminalEvent(...args),
       markAssistantMessageDelivered: (...args) => this.markAssistantMessageDelivered(...args),
@@ -1559,7 +1557,6 @@ export class MessagingController {
       scheduleNextQueuedTurn: (...args) => this.scheduleNextQueuedTurn(...args),
       get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
       completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
-      get privateReplyCompletionTurnKeys() { return readController().privateReplyCompletionTurnKeys; },
       forgetAutomationTurn: (...args) => this.forgetAutomationTurn(...args),
       forgetAgentMessagingOrigin: (...args) => this.forgetAgentMessagingOrigin(...args),
     };
@@ -3520,18 +3517,17 @@ export class MessagingController {
     const requestId = params.binding.privateReplyContinuation?.requestId;
     // Claim synchronously before append can yield or buffer the response. Cancel
     // uses the same claim, including for replies typed in the private thread.
-    if (requestId) {
-      if (this.privateReplyClaims.has(requestId)) return false;
-      rememberBoundedKey(this.privateReplyClaims, requestId);
-    }
+    const replyClaim = requestId ? this.privateReplyClaims.claim(requestId) : undefined;
+    if (requestId && !replyClaim) return false;
     this.rememberHumanMessagingSource(params.binding, params.event);
     this.markAdmissionStage(params.event, "routed");
     const startedAt = this.now();
     try {
       await this.turnAdmission.append(params);
+      if (replyClaim) this.privateReplyClaims.complete(replyClaim);
       return true;
     } catch (error) {
-      if (requestId) this.privateReplyClaims.delete(requestId);
+      if (replyClaim) this.privateReplyClaims.release(replyClaim);
       throw error;
     } finally {
       const finalAdmissionAppendAwaitMs = this.now() - startedAt;
@@ -8058,12 +8054,8 @@ export class MessagingController {
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.startingAgentMessagingOriginsByThreadKey.clear();
     this.backendEventRouter.dispose();
-    this.privateReplyCompletionTurnKeys.clear();
-    this.privateReplyClaims.clear();
-    this.terminalPrivateResponseTurnKeys.clear();
-    this.privateResponseFallbackTurnKeys.clear();
-    this.attemptedPrivateResponseFallbackTurnKeys.clear();
-    this.heldPrivateResponseFallbackTextByTurnKey.clear();
+    this.privateResponses.dispose();
+    this.privateReplyClaims.dispose();
     this.assistantStreamCancellationFailures.clear();
     for (const cancellation of this.assistantStreamCancellationSignals.values()) {
       cancellation.cancel();
@@ -16220,15 +16212,10 @@ export class MessagingController {
       turnKey,
       origin,
     );
-    if (origin.privateReplyContinuationBindingId) {
-      rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
-    }
-    if (
-      origin.privateResponseRequested
-      || requestsExplicitPrivateResponse(origin.event)
-    ) {
-      rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
-    }
+    this.privateResponses.register(turnKey, {
+      replyCompletion: Boolean(origin.privateReplyContinuationBindingId),
+      fallback: Boolean(origin.privateResponseRequested || requestsExplicitPrivateResponse(origin.event)),
+    });
   }
 
   private async buildAgentMessagingOrigin(params: {
@@ -16307,6 +16294,7 @@ export class MessagingController {
   ): void {
     const turnKey = agentMessagingTurnKey(backend, threadId, turnId);
     this.activeAgentMessagingOriginsByTurnKey.delete(turnKey);
+    this.privateResponses.retire(turnKey);
     this.pdfAttachmentStore.releaseTurn({ backend, threadId, turnId });
   }
 
@@ -16317,7 +16305,7 @@ export class MessagingController {
   ): boolean {
     return Boolean(
       turnId
-      && this.terminalPrivateResponseTurnKeys.has(
+      && this.privateResponses.isTerminal(
         agentMessagingTurnKey(backend, threadId, turnId),
       ),
     );
@@ -16330,7 +16318,7 @@ export class MessagingController {
   ): boolean {
     return Boolean(
       turnId
-      && this.privateResponseFallbackTurnKeys.has(
+      && this.privateResponses.isFallback(
         agentMessagingTurnKey(backend, threadId, turnId),
       ),
     );
@@ -16345,9 +16333,9 @@ export class MessagingController {
       return false;
     }
     if (
-      this.privateReplyCompletionTurnKeys.has(
+      this.privateResponses.state(
         agentMessagingTurnKey(backend, threadId, turnId),
-      )
+      )?.replyCompletion
     ) {
       return true;
     }
@@ -16408,18 +16396,19 @@ export class MessagingController {
 
     if (action.kind === "cancel") {
       // Binding lookup yielded: a typed reply or another button may have won.
-      if (this.privateReplyClaims.has(action.requestId)) {
+      const replyClaim = this.privateReplyClaims.claim(action.requestId);
+      if (!replyClaim) {
         await this.deliverPrivateReplyButtonState(
           event,
           "This request already has a response or has been closed. Cancellation is no longer available.",
         );
         return;
       }
-      rememberBoundedKey(this.privateReplyClaims, action.requestId);
       try {
         await this.completePrivateReplyContinuation(binding.id);
+        this.privateReplyClaims.complete(replyClaim);
       } catch (error) {
-        this.privateReplyClaims.delete(action.requestId);
+        this.privateReplyClaims.release(replyClaim);
         throw error;
       }
       await this.deliverPrivateReplyButtonState(
@@ -16550,15 +16539,10 @@ export class MessagingController {
         turnKey,
         origin,
       );
-      if (origin.privateReplyContinuationBindingId) {
-        rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
-      }
-      if (
-        origin.privateResponseRequested
-        || requestsExplicitPrivateResponse(origin.event)
-      ) {
-        rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
-      }
+      this.privateResponses.register(turnKey, {
+        replyCompletion: Boolean(origin.privateReplyContinuationBindingId),
+        fallback: Boolean(origin.privateResponseRequested || requestsExplicitPrivateResponse(origin.event)),
+      });
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: params.update.turnId,
         status: "working",
@@ -18141,25 +18125,27 @@ export class MessagingController {
       params.binding.threadId,
       params.turnId,
     );
-    this.heldPrivateResponseFallbackTextByTurnKey.delete(turnKey);
-    if (this.attemptedPrivateResponseFallbackTurnKeys.has(turnKey)) {
+    if (!this.privateResponses.claimFallback(turnKey)) {
       return;
     }
-    rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
 
-    const response = await this.sendPrivateResponseFromAgentMessagingOrigin({
-      operation: "send_private_response",
-      context: {
-        backend: params.event.backend,
-        threadId: params.binding.threadId,
-        turnId: params.turnId,
-      },
-      args: { text: params.text },
-    });
+    let response: PwrAgentMessagingResponse;
+    try {
+      response = await this.sendPrivateResponseFromAgentMessagingOrigin({
+        operation: "send_private_response",
+        context: {
+          backend: params.event.backend,
+          threadId: params.binding.threadId,
+          turnId: params.turnId,
+        },
+        args: { text: params.text },
+      });
+    } finally {
+      this.privateResponses.finishFallback(turnKey);
+    }
     if (response.ok) {
       return;
     }
-    rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
 
     await this.deliver(
       buildErrorIntent({
@@ -18756,263 +18742,265 @@ export class MessagingController {
       request.context.threadId,
       request.context.turnId,
     );
-    this.privateResponseFallbackTurnKeys.delete(turnKey);
-    this.heldPrivateResponseFallbackTextByTurnKey.delete(turnKey);
-    rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
-    const origin = await this.resolveAgentMessagingOrigin(request.context);
-    if (!origin.ok) {
-      return origin;
-    }
-    if (!this.adapter.resolvePrivateConversation) {
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_operation",
-          message:
-            "This messaging provider cannot start a private response to the requesting user.",
-        },
-      };
-    }
-
-    let privateConversation: MessagingPrivateConversationResolveResult;
+    const privateReceipt = this.privateResponses.beginTool(turnKey);
     try {
-      privateConversation = await this.adapter.resolvePrivateConversation({
-        actor: origin.origin.event.actor,
-        ...(awaitReply ? { replyContinuationRequired: true } : {}),
-        source: origin.origin.event.channel,
-        routingState: origin.origin.event.routingState,
-      });
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: "internal_error",
-          message:
-            error instanceof Error
-              ? `Could not resolve a private conversation: ${error.message}`
-              : "Could not resolve a private conversation.",
-        },
-      };
-    }
-    if (
-      privateConversation.outcome !== "resolved"
-      || !privateConversation.conversation
-      || privateConversation.channel !== origin.origin.event.channel.channel
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: privateConversation.outcome === "unsupported"
-            ? "unsupported_operation"
-            : "internal_error",
-          message:
-            privateConversation.errorMessage
-            ?? "The messaging provider could not resolve a private conversation.",
-        },
-      };
-    }
-
-    const privateEvent: MessagingInboundEvent = {
-      ...origin.origin.event,
-      id: `${origin.origin.event.id}:private-response:${this.now()}`,
-      channel: {
-        channel: privateConversation.channel,
-        conversation: privateConversation.conversation,
-      },
-      receivedAt: this.now(),
-      routingState: privateConversation.routingState,
-    };
-    const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
-    if (awaitReply && !sourceBinding) {
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_operation",
-          message: "A private reply needs an originating conversation for its completion.",
-        },
-      };
-    }
-    const sourceThread = sourceBinding
-      ? await this.resolveBoundThreadSummary(sourceBinding)
-      : undefined;
-    const attributionLabel = sourceBinding
-      ? responseAttributionLabel(sourceBinding, sourceThread)
-      : "PwrAgent Agent";
-    const requestId = awaitReply ? randomUUID() : undefined;
-    // Interactive cards use one provider text block. Keep long private content
-    // on the ordinary message path so provider block limits cannot clip it.
-    const buttonActions = awaitReply && requestId && actionCapacity >= 2 && text.length <= 2_000
-      ? [
-          ...replyOptions.map((option, index) => ({
-            id: `private-reply:${requestId}:reply:${index}`,
-            label: option.label,
-            style: "primary" as const,
-          })),
-          {
-            id: `private-reply:${requestId}:cancel`,
-            label: "Cancel",
-            style: "secondary" as const,
+      const origin = await this.resolveAgentMessagingOrigin(request.context);
+      if (!origin.ok) {
+        return origin;
+      }
+      if (!this.adapter.resolvePrivateConversation) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message:
+              "This messaging provider cannot start a private response to the requesting user.",
           },
-        ]
-      : [];
-    const result = await this.deliver(
-      buttonActions.length > 0
-        ? {
-            ...buildConfirmationIntent({
-              id: this.newIntentId("private-response"),
-              capabilityProfile: this.capabilityProfile,
-              createdAt: this.now(),
-              title: attributionLabel,
-              body: `${text}\n\nChoose a button or reply in this message's thread. Completion returns to the original conversation.`,
-              actions: buttonActions,
-            }),
-            allowedActorIds: [origin.origin.event.actor.platformUserId],
-            bindingId: sourceBinding?.id,
-          }
-        : {
-            id: this.newIntentId("private-response"),
-            kind: "message",
-            bindingId: sourceBinding?.id,
-            createdAt: this.now(),
-            role: "assistant",
-            attribution: {
-              label: attributionLabel,
-              hint: awaitReply
-                ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
-                : "Private Request · Reply in Thread to Respond to this Agent",
-            },
-            parts: [{ type: "text", text, markdown: "markdown" }],
-          },
-      undefined,
-      privateEvent,
-    );
-    if (!isVisibleAssistantStreamDelivery(result)) {
-      return {
-        ok: false,
-        error: {
-          code: result.outcome === "unsupported"
-            ? "unsupported_operation"
-            : "internal_error",
-          message:
-            result.errorMessage
-            ?? "The private response was not delivered, so the source response was not suppressed.",
-        },
-      };
-    }
+        };
+      }
 
-    rememberBoundedKey(this.terminalPrivateResponseTurnKeys, turnKey);
-    let sourceStreamsCancelled = true;
-    let sourceWorkingUpdatesCancelled = true;
-    if (sourceBinding) {
-      this.toolUpdatePolicy.flush({
-        bindingId: sourceBinding.id,
-        clear: true,
-        turnId: request.context.turnId,
-      });
-      this.clearTurnProse(sourceBinding.id, request.context.turnId);
-      [sourceStreamsCancelled, sourceWorkingUpdatesCancelled] = await Promise.all([
-        this.cancelAssistantStreamsForTurn(
-          sourceBinding,
-          request.context.turnId,
-        ),
-        this.cancelWorkingUpdatesForTurn(
-          sourceBinding,
-          request.context.turnId,
-        ),
-      ]);
-    }
-    if (!sourceStreamsCancelled || !sourceWorkingUpdatesCancelled) {
-      return {
-        ok: false,
-        error: {
-          code: "internal_error",
-          message:
-            "The private response was delivered, but existing source output could not be fully retracted. Further source output remains suppressed.",
-        },
-      };
-    }
-    if (sourceBinding) {
-      await this.clearTerminalPrivateResponseActivity(
-        sourceBinding,
-        request.context.turnId,
-      );
-    }
-    if (awaitReply && (!sourceBinding || !result.continuation)) {
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_operation",
-          message:
-            "The private response was delivered, but this provider did not return a reply thread for the requested continuation. Further source output remains suppressed.",
-        },
-      };
-    }
-    if (sourceBinding && result.continuation) {
+      let privateConversation: MessagingPrivateConversationResolveResult;
       try {
-        let continuationBinding = await this.bindChannelToThread(
-          {
-            ...privateEvent,
-            id: `${privateEvent.id}:continuation`,
-            channel: result.continuation.channel,
-            routingState: result.continuation.routingState,
-          },
-          {
-            backend: request.context.backend,
-            recordTransition: false,
-            statusPresentation: "on_demand",
-            threadId: request.context.threadId,
-            targetKind: sourceBinding.targetKind ?? "agent_thread",
-          },
-        );
-        if (awaitReply) {
-          continuationBinding = await this.options.store.upsertBinding({
-            ...continuationBinding,
-            privateReplyContinuation: {
-              createdAt: this.now(),
-              expiresAt: this.now() + PRIVATE_REPLY_CONTINUATION_TTL_MS,
-              instructions: replyInstructions,
-              ...(requestId ? { requestId } : {}),
-              ...(result.surface ? { requestSurface: result.surface } : {}),
-              replyOptions: replyOptions.map((option) => ({
-                label: option.label.trim(),
-                text: option.text.trim(),
-              })),
-              source: privateReplySourceFromBinding(sourceBinding),
-            },
-            updatedAt: this.now(),
-          });
-          this.notifyBindingChanged("private-reply-awaiting");
-        }
-        await this.clearTerminalPrivateResponseActivity(
-          continuationBinding,
-          request.context.turnId,
-        );
-      } catch (error) {
-        this.logger.warn?.("messaging private response continuation bind failed", {
-          backend: request.context.backend,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: request.context.threadId,
+        privateConversation = await this.adapter.resolvePrivateConversation({
+          actor: origin.origin.event.actor,
+          ...(awaitReply ? { replyContinuationRequired: true } : {}),
+          source: origin.origin.event.channel,
+          routingState: origin.origin.event.routingState,
         });
+      } catch (error) {
         return {
           ok: false,
           error: {
             code: "internal_error",
             message:
-              "The private response was delivered, but replies to it could not be routed back to this Agent. Further source output remains suppressed.",
+              error instanceof Error
+                ? `Could not resolve a private conversation: ${error.message}`
+                : "Could not resolve a private conversation.",
           },
         };
       }
+      if (
+        privateConversation.outcome !== "resolved"
+        || !privateConversation.conversation
+        || privateConversation.channel !== origin.origin.event.channel.channel
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: privateConversation.outcome === "unsupported"
+              ? "unsupported_operation"
+              : "internal_error",
+            message:
+              privateConversation.errorMessage
+              ?? "The messaging provider could not resolve a private conversation.",
+          },
+        };
+      }
+
+      const privateEvent: MessagingInboundEvent = {
+        ...origin.origin.event,
+        id: `${origin.origin.event.id}:private-response:${this.now()}`,
+        channel: {
+          channel: privateConversation.channel,
+          conversation: privateConversation.conversation,
+        },
+        receivedAt: this.now(),
+        routingState: privateConversation.routingState,
+      };
+      const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+      if (awaitReply && !sourceBinding) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: "A private reply needs an originating conversation for its completion.",
+          },
+        };
+      }
+      const sourceThread = sourceBinding
+        ? await this.resolveBoundThreadSummary(sourceBinding)
+        : undefined;
+      const attributionLabel = sourceBinding
+        ? responseAttributionLabel(sourceBinding, sourceThread)
+        : "PwrAgent Agent";
+      const requestId = awaitReply ? randomUUID() : undefined;
+      // Interactive cards use one provider text block. Keep long private content
+      // on the ordinary message path so provider block limits cannot clip it.
+      const buttonActions = awaitReply && requestId && actionCapacity >= 2 && text.length <= 2_000
+        ? [
+            ...replyOptions.map((option, index) => ({
+              id: `private-reply:${requestId}:reply:${index}`,
+              label: option.label,
+              style: "primary" as const,
+            })),
+            {
+              id: `private-reply:${requestId}:cancel`,
+              label: "Cancel",
+              style: "secondary" as const,
+            },
+          ]
+        : [];
+      const result = await this.deliver(
+        buttonActions.length > 0
+          ? {
+              ...buildConfirmationIntent({
+                id: this.newIntentId("private-response"),
+                capabilityProfile: this.capabilityProfile,
+                createdAt: this.now(),
+                title: attributionLabel,
+                body: `${text}\n\nChoose a button or reply in this message's thread. Completion returns to the original conversation.`,
+                actions: buttonActions,
+              }),
+              allowedActorIds: [origin.origin.event.actor.platformUserId],
+              bindingId: sourceBinding?.id,
+            }
+          : {
+              id: this.newIntentId("private-response"),
+              kind: "message",
+              bindingId: sourceBinding?.id,
+              createdAt: this.now(),
+              role: "assistant",
+              attribution: {
+                label: attributionLabel,
+                hint: awaitReply
+                  ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
+                  : "Private Request · Reply in Thread to Respond to this Agent",
+              },
+              parts: [{ type: "text", text, markdown: "markdown" }],
+            },
+        undefined,
+        privateEvent,
+      );
+      if (!isVisibleAssistantStreamDelivery(result)) {
+        return {
+          ok: false,
+          error: {
+            code: result.outcome === "unsupported"
+              ? "unsupported_operation"
+              : "internal_error",
+            message:
+              result.errorMessage
+              ?? "The private response was not delivered, so the source response was not suppressed.",
+          },
+        };
+      }
+
+      this.privateResponses.delivered(privateReceipt);
+      let sourceStreamsCancelled = true;
+      let sourceWorkingUpdatesCancelled = true;
+      if (sourceBinding) {
+        this.toolUpdatePolicy.flush({
+          bindingId: sourceBinding.id,
+          clear: true,
+          turnId: request.context.turnId,
+        });
+        this.clearTurnProse(sourceBinding.id, request.context.turnId);
+        [sourceStreamsCancelled, sourceWorkingUpdatesCancelled] = await Promise.all([
+          this.cancelAssistantStreamsForTurn(
+            sourceBinding,
+            request.context.turnId,
+          ),
+          this.cancelWorkingUpdatesForTurn(
+            sourceBinding,
+            request.context.turnId,
+          ),
+        ]);
+      }
+      if (!sourceStreamsCancelled || !sourceWorkingUpdatesCancelled) {
+        return {
+          ok: false,
+          error: {
+            code: "internal_error",
+            message:
+              "The private response was delivered, but existing source output could not be fully retracted. Further source output remains suppressed.",
+          },
+        };
+      }
+      if (sourceBinding) {
+        await this.clearTerminalPrivateResponseActivity(
+          sourceBinding,
+          request.context.turnId,
+        );
+      }
+      if (awaitReply && (!sourceBinding || !result.continuation)) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message:
+              "The private response was delivered, but this provider did not return a reply thread for the requested continuation. Further source output remains suppressed.",
+          },
+        };
+      }
+      if (sourceBinding && result.continuation) {
+        try {
+          let continuationBinding = await this.bindChannelToThread(
+            {
+              ...privateEvent,
+              id: `${privateEvent.id}:continuation`,
+              channel: result.continuation.channel,
+              routingState: result.continuation.routingState,
+            },
+            {
+              backend: request.context.backend,
+              recordTransition: false,
+              statusPresentation: "on_demand",
+              threadId: request.context.threadId,
+              targetKind: sourceBinding.targetKind ?? "agent_thread",
+            },
+          );
+          if (awaitReply) {
+            continuationBinding = await this.options.store.upsertBinding({
+              ...continuationBinding,
+              privateReplyContinuation: {
+                createdAt: this.now(),
+                expiresAt: this.now() + PRIVATE_REPLY_CONTINUATION_TTL_MS,
+                instructions: replyInstructions,
+                ...(requestId ? { requestId } : {}),
+                ...(result.surface ? { requestSurface: result.surface } : {}),
+                replyOptions: replyOptions.map((option) => ({
+                  label: option.label.trim(),
+                  text: option.text.trim(),
+                })),
+                source: privateReplySourceFromBinding(sourceBinding),
+              },
+              updatedAt: this.now(),
+            });
+            this.notifyBindingChanged("private-reply-awaiting");
+          }
+          await this.clearTerminalPrivateResponseActivity(
+            continuationBinding,
+            request.context.turnId,
+          );
+        } catch (error) {
+          this.logger.warn?.("messaging private response continuation bind failed", {
+            backend: request.context.backend,
+            error: error instanceof Error ? error.message : String(error),
+            threadId: request.context.threadId,
+          });
+          return {
+            ok: false,
+            error: {
+              code: "internal_error",
+              message:
+                "The private response was delivered, but replies to it could not be routed back to this Agent. Further source output remains suppressed.",
+            },
+          };
+        }
+      }
+      return {
+        ok: true,
+        data: {
+          awaitingReply: awaitReply,
+          channel: result.channel,
+          deliveredAt: result.deliveredAt,
+          outcome: "delivered",
+          recipient: summarizeMessagingActor(origin.origin.event.actor),
+        },
+      };
+    } finally {
+      this.privateResponses.finishTool(privateReceipt);
     }
-    return {
-      ok: true,
-      data: {
-        awaitingReply: awaitReply,
-        channel: result.channel,
-        deliveredAt: result.deliveredAt,
-        outcome: "delivered",
-        recipient: summarizeMessagingActor(origin.origin.event.actor),
-      },
-    };
   }
 
   private async sendMessagingFileFromAgentMessagingOrigin(
