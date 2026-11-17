@@ -35,7 +35,7 @@ import {
 } from "../app-server/thread-pending-wakes";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
-import { parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller } from "../app-server/thread-dependency-ci-runs";
+import { CI_RUN_URL_FORMS, parseCiRunUrl, readCiRun, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
 import {
   getProjectForgeAutomationIndex,
   summarizeProjectHeldWakeup,
@@ -10094,6 +10094,7 @@ class DesktopAppServerService {
         },
         readThread: (condition) => this.readDependencyThread(condition),
         readCiRun: async (url) => await this.readDependencyCiRun(url),
+        ciRunUrlOptions: () => this.ciRunUrlOptions(),
         ciRunChecked: (url) => this.getThreadDependencyCiRunPoller().checked(url),
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
@@ -10160,10 +10161,17 @@ class DesktopAppServerService {
   }
 
   private async readDependencyCiRun(url: string) {
-    const ref = parseCiRunUrl(url);
-    if (!ref) throw new Error("Not a GitHub Actions run on github.com.");
+    // Parsed again at every check, so a host the operator removed is no longer read.
+    const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
+    if (!ref) throw new Error(`Not a CI run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
     const client = this.getForgeCiClient();
-    return await readCiRun(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
+    return await readCiRun(async (repository, path) => repository.provider === "gitlab"
+      ? await client.readGitlab(repository, path)
+      : await client.requestGithub(repository, { path }), ref, Date.now());
+  }
+
+  private ciRunUrlOptions(): CiRunUrlOptions {
+    return { githubEnterpriseHosts: getDesktopSettingsService().resolveGithubEnterpriseHosts() };
   }
 
   /**
@@ -10319,7 +10327,7 @@ class DesktopAppServerService {
       throw new Error("A local backend and waiting threadId are required.");
     }
     if (request.action === "create") {
-      validateDependencyCreate(request);
+      validateDependencyCreate(request, this.ciRunUrlOptions());
       // The resumed turn starts from this text alone, for the operator's
       // dialog as for an agent's tool call.
       if (typeof request.continuation !== "string" || !request.continuation.trim()) {

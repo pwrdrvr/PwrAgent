@@ -5,35 +5,69 @@ import { threadDependencyCiRunId, threadDependencyCiRunOutcomes } from "@pwragen
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 
 /**
- * Continue After a CI run. GitHub sends no event PwrAgent can receive without
- * a GitHub App, so the owner polls each waiting run from the main process: no
- * model, no thread, and no SQLite write per check. A webhook-backed GitHub
- * App would replace the poll.
+ * Continue After a CI run. Neither forge sends an event PwrAgent can receive
+ * without an installed app or webhook, so the owner polls each waiting run
+ * from the main process: no model, no thread, and no SQLite write per check.
+ * A webhook-backed GitHub App would replace the poll.
  */
 
 export type CiRunRef = { repository: ForgeRepository; runId: number; url: string };
-/** One admitted GitHub REST GET, relative to the API root. */
+/** One admitted forge REST GET, relative to the API root. */
 export type CiRunGet = (repository: ForgeRepository, path: string) => Promise<unknown>;
+/** The hosts beyond github.com and gitlab.com that the operator authorized. */
+export type CiRunUrlOptions = { githubEnterpriseHosts?: readonly string[] };
+
+const HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::\d{1,5})?$/;
+export const CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS = 16;
 
 /**
- * A GitHub Actions run on github.com. Automatic reads send the operator's
- * GitHub credentials, so an agent-supplied URL may name only github.com,
- * the same origin rule as automatic PR reads.
+ * `[git] github_enterprise_hosts` as exact hosts. An entry is one hostname,
+ * with a port when the server uses one. Anything else is dropped: a wildcard,
+ * a URL, a path, or a host PwrAgent already knows. An entry never matches a
+ * subdomain or a suffix.
  */
-export function parseCiRunUrl(value: string): CiRunRef | undefined {
+export function normalizeGithubEnterpriseHosts(values: readonly unknown[] | undefined): string[] {
+  const hosts = new Set<string>();
+  for (const value of values ?? []) {
+    const host = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (HOST.test(host) && host !== "github.com" && host !== "gitlab.com") hosts.add(host);
+    if (hosts.size >= CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS) break;
+  }
+  return [...hosts];
+}
+
+/**
+ * A GitHub Actions run or a GitLab pipeline. Automatic reads send the
+ * operator's CLI credentials, so an agent-supplied URL may name only
+ * github.com, gitlab.com, or a GitHub Enterprise host the operator listed.
+ * The host must equal one of those; no pattern widens the list.
+ */
+export function parseCiRunUrl(value: string, options: CiRunUrlOptions = {}): CiRunRef | undefined {
   let url: URL;
   try { url = new URL(value); } catch { return undefined; }
-  if (url.protocol !== "https:" || url.host !== "github.com" || url.username || url.password) return undefined;
+  if (url.protocol !== "https:" || url.username || url.password) return undefined;
+  const host = url.host;
+  if (host === "gitlab.com") {
+    const match = url.pathname.match(/^\/((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/-\/pipelines\/(\d{1,19})\/?$/);
+    const runId = Number(match?.[3]);
+    if (!match || !Number.isSafeInteger(runId) || runId < 1) return undefined;
+    const [owner, repo] = [match[1]!, match[2]!];
+    return { repository: { provider: "gitlab", host, owner, repo }, runId, url: `https://${host}/${owner}/${repo}/-/pipelines/${runId}` };
+  }
+  if (host !== "github.com" && !normalizeGithubEnterpriseHosts(options.githubEnterpriseHosts).includes(host)) return undefined;
   const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/actions\/runs\/(\d{1,19})(?:\/attempts\/\d+)?\/?$/);
   if (!match) return undefined;
   const runId = Number(match[3]);
   if (!Number.isSafeInteger(runId) || runId < 1) return undefined;
   const [owner, repo] = [match[1]!, match[2]!];
   return {
-    repository: { provider: "github", host: "github.com", owner, repo }, runId,
-    url: `https://github.com/${owner}/${repo}/actions/runs/${runId}`,
+    repository: { provider: "github", host, owner, repo }, runId,
+    url: `https://${host}/${owner}/${repo}/actions/runs/${runId}`,
   };
 }
+
+/** What `ciRun.url` may be, for a refusal. */
+export const CI_RUN_URL_FORMS = "https://github.com/<owner>/<repo>/actions/runs/<id>, the same path on a GitHub Enterprise host listed in [git] github_enterprise_hosts, or https://gitlab.com/<group>/<project>/-/pipelines/<id>";
 
 const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
 const SUCCEEDED = new Set(["success", "neutral", "skipped"]);
@@ -50,7 +84,7 @@ export const CI_RUN_UNREADABLE_MS = 24 * 60 * 60_000;
 export const CI_RUN_STREAK_GAP_MS = 15 * 60_000;
 
 function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("GitHub returned an invalid object.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The forge returned an invalid object.");
   return value as Record<string, unknown>;
 }
 
@@ -61,8 +95,13 @@ function label(value: unknown, max = 120): string | undefined {
   return clean ? clean.slice(0, max) : undefined;
 }
 
-/** One check: the run, its latest attempt's jobs, and its pending deployments while it waits. */
+/** One check of a run on its forge, in the one vocabulary `evaluateCiRunCondition` reads. */
 export async function readCiRun(get: CiRunGet, ref: CiRunRef, now: number): Promise<ThreadDependencyCiRunObservation> {
+  return ref.repository.provider === "gitlab" ? await readGitlabPipeline(get, ref, now) : await readGithubRun(get, ref, now);
+}
+
+/** GitHub: the run, its latest attempt's jobs, and its pending deployments while it waits. */
+async function readGithubRun(get: CiRunGet, ref: CiRunRef, now: number): Promise<ThreadDependencyCiRunObservation> {
   const base = `repos/${encodeURIComponent(ref.repository.owner)}/${encodeURIComponent(ref.repository.repo)}/actions/runs/${ref.runId}`;
   const run = record(await get(ref.repository, base));
   if (run.id !== ref.runId || typeof run.status !== "string") throw new Error("GitHub returned a different run.");
@@ -83,7 +122,7 @@ export async function readCiRun(get: CiRunGet, ref: CiRunRef, now: number): Prom
         counts.failed++;
         const steps = Array.isArray(job.steps) ? job.steps.map(record) : [];
         const step = label(steps.find((entry) => typeof entry.conclusion === "string" && FAILED.has(entry.conclusion))?.name);
-        if (failedJobs.length < 8) failedJobs.push({ name: label(job.name) ?? `Job ${String(job.id)}`, url: typeof job.html_url === "string" && job.html_url.startsWith("https://github.com/") ? job.html_url : ref.url, ...(step ? { failedStep: step } : {}) });
+        if (failedJobs.length < 8) failedJobs.push({ name: label(job.name) ?? `Job ${String(job.id)}`, url: sameHostUrl(job.html_url, ref), ...(step ? { failedStep: step } : {}) });
       } else if (conclusion === "cancelled") counts.failed++;
       else if (conclusion === "skipped") counts.skipped++;
       else counts.passed++;
@@ -120,6 +159,114 @@ export async function readCiRun(get: CiRunGet, ref: CiRunRef, now: number): Prom
   };
 }
 
+/** A provider link is kept only when it stays on the run's own host. */
+function sameHostUrl(value: unknown, ref: CiRunRef): string {
+  return typeof value === "string" && value.startsWith(`https://${ref.repository.host}/`) ? value : ref.url;
+}
+
+/** GitLab pipeline statuses in the run vocabulary. Anything else is passed through, and waits. */
+const GITLAB_PIPELINE: Record<string, { status: string; conclusion?: string }> = {
+  success: { status: "completed", conclusion: "success" },
+  failed: { status: "completed", conclusion: "failure" },
+  canceled: { status: "completed", conclusion: "cancelled" },
+  skipped: { status: "completed", conclusion: "skipped" },
+  running: { status: "in_progress" },
+  canceling: { status: "in_progress" },
+  manual: { status: "waiting" },
+  created: { status: "queued" },
+  pending: { status: "queued" },
+  preparing: { status: "queued" },
+  scheduled: { status: "queued" },
+  waiting_for_resource: { status: "queued" },
+  waiting_for_callback: { status: "queued" },
+};
+
+/** A read the token may not make, or a feature the project has off, lists nothing. */
+async function optionalList(get: CiRunGet, ref: CiRunRef, path: string): Promise<Record<string, unknown>[]> {
+  try {
+    const body = await get(ref.repository, path);
+    return Array.isArray(body) ? body.map(record) : [];
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code === "forbidden" || code === "not_found") return [];
+    throw error;
+  }
+}
+
+/**
+ * GitLab: the pipeline, its jobs without retried ones, and what waits for a
+ * person. A gate is a deployment blocked on approval, named by its
+ * environment, or a manual job that can be played now, named by the job.
+ * A pipeline can succeed while an optional manual job still waits, so a
+ * finished pipeline keeps its gates.
+ */
+async function readGitlabPipeline(get: CiRunGet, ref: CiRunRef, now: number): Promise<ThreadDependencyCiRunObservation> {
+  const project = `projects/${encodeURIComponent(`${ref.repository.owner}/${ref.repository.repo}`)}`;
+  const base = `${project}/pipelines/${ref.runId}`;
+  const pipeline = record(await get(ref.repository, base));
+  if (pipeline.id !== ref.runId || typeof pipeline.status !== "string") throw new Error("GitLab returned a different run.");
+  const state = GITLAB_PIPELINE[pipeline.status] ?? { status: label(pipeline.status, 40) ?? "unknown" };
+  const jobs: Record<string, unknown>[] = [];
+  for (let page = 1; page <= MAX_JOB_PAGES; page++) {
+    const body = await get(ref.repository, `${base}/jobs?per_page=100&page=${page}`);
+    const rows = Array.isArray(body) ? body.map(record) : [];
+    jobs.push(...rows);
+    if (rows.length < 100) break;
+  }
+  const counts = { total: jobs.length, passed: 0, failed: 0, running: 0, queued: 0, waiting: 0, skipped: 0 };
+  const failedJobs: NonNullable<ThreadDependencyCiRunObservation["failedJobs"]> = [];
+  const manual: Record<string, unknown>[] = [];
+  for (const job of jobs) {
+    if (job.status === "success") counts.passed++;
+    else if (job.status === "failed") {
+      counts.failed++;
+      // An allowed failure does not fail its pipeline, so it wakes no wait.
+      if (job.allow_failure !== true && failedJobs.length < 8) failedJobs.push({ name: label(job.name) ?? `Job ${String(job.id)}`, url: sameHostUrl(job.web_url, ref) });
+    } else if (job.status === "canceled" || job.status === "canceling") counts.failed++;
+    else if (job.status === "skipped") counts.skipped++;
+    else if (job.status === "running") counts.running++;
+    else if (job.status === "manual") { counts.waiting++; manual.push(job); }
+    else counts.queued++;
+  }
+  let gates: NonNullable<ThreadDependencyCiRunObservation["gates"]> = [];
+  if (state.conclusion !== "failure" && state.conclusion !== "cancelled") {
+    // The deployments API has no pipeline filter; the newest blocked ones are read and matched.
+    const blocked = (await optionalList(get, ref, `${project}/deployments?status=blocked&order_by=id&sort=desc&per_page=100`)).flatMap((entry) => {
+      const deployable = entry.deployable && typeof entry.deployable === "object" ? record(entry.deployable) : {};
+      const owner = deployable.pipeline && typeof deployable.pipeline === "object" ? record(deployable.pipeline) : {};
+      const environment = label(entry.environment && typeof entry.environment === "object" ? record(entry.environment).name : undefined);
+      if (owner.id !== ref.runId || !environment) return [];
+      const summary = entry.approval_summary && typeof entry.approval_summary === "object" ? record(entry.approval_summary) : {};
+      const reviewers = (Array.isArray(summary.rules) ? summary.rules.map(record) : []).flatMap((rule) => {
+        const name = label(rule.access_level_description, 80);
+        return name ? [name] : [];
+      });
+      return [{ jobId: deployable.id, gate: { environment, reviewers: reviewers.slice(0, 8) } }];
+    });
+    const deployed = new Set(blocked.map((entry) => entry.jobId));
+    // A manual trigger job is a bridge, which the jobs list leaves out.
+    const bridges = pipeline.status === "manual" && !blocked.length && !manual.length
+      ? (await optionalList(get, ref, `${base}/bridges?per_page=100`)).filter((bridge) => bridge.status === "manual")
+      : [];
+    gates = [
+      ...blocked.map((entry) => entry.gate),
+      ...[...manual, ...bridges].filter((job) => !deployed.has(job.id)).map((job) => ({ environment: label(job.name) ?? `Job ${String(job.id)}`, reviewers: [] })),
+    ].slice(0, 8);
+  }
+  return {
+    runId: ref.runId,
+    status: state.status !== "completed" && gates.length ? "waiting" : state.status,
+    ...(label(pipeline.name) ? { name: label(pipeline.name) } : {}),
+    ...(state.conclusion ? { conclusion: state.conclusion } : {}),
+    ...(typeof pipeline.sha === "string" ? { headSha: pipeline.sha.slice(0, 64) } : {}),
+    ...(label(pipeline.ref) ? { branch: label(pipeline.ref) } : {}),
+    ...(gates.length ? { gates } : {}),
+    jobs: counts,
+    ...(failedJobs.length ? { failedJobs } : {}),
+    checkedAt: now,
+  };
+}
+
 /**
  * The evidence for a `ci_run` prerequisite after one check. A fired outcome
  * is final: the wait is one-shot. While it waits, the evidence is the same
@@ -146,20 +293,21 @@ export function evaluateCiRunCondition(condition: ThreadDependencyCondition, obs
     return waiting;
   }
   const on = threadDependencyCiRunOutcomes(ciRun);
+  const wanted = ciRun.environments?.length ? new Set(ciRun.environments.map((name) => name.toLowerCase())) : undefined;
+  const gates = on.includes("approval_gate") ? (observation.gates ?? []).filter((gate) => !wanted || wanted.has(gate.environment.toLowerCase())) : [];
+  const needsApproval = () => fired("satisfied", `Needs approval: ${gates.map((gate) => gate.environment).join(", ")}`);
   if (observation.status === "completed") {
     const conclusion = observation.conclusion ?? "unknown";
     if (!SUCCEEDED.has(conclusion)) return fired("failed", `Run finished: ${conclusion}`);
     if (on.includes("finished")) return fired("satisfied", `Run finished: ${conclusion}`);
+    // A GitLab pipeline can succeed while an optional manual job still waits.
+    if (gates.length) return needsApproval();
     return fired("failed", `Run finished (${conclusion}) without ${on.includes("approval_gate") ? "reaching an approval gate" : "a failed job"}`);
   }
   if (on.includes("job_failed") && observation.failedJobs?.length) {
     return fired("failed", `Job failed: ${observation.failedJobs.map((job) => job.name).join(", ").slice(0, 300)}`);
   }
-  if (on.includes("approval_gate") && observation.status === "waiting") {
-    const wanted = ciRun.environments?.length ? new Set(ciRun.environments.map((name) => name.toLowerCase())) : undefined;
-    const gates = (observation.gates ?? []).filter((gate) => !wanted || wanted.has(gate.environment.toLowerCase()));
-    if (gates.length) return fired("satisfied", `Needs approval: ${gates.map((gate) => gate.environment).join(", ")}`);
-  }
+  if (observation.status === "waiting" && gates.length) return needsApproval();
   return waiting;
 }
 
