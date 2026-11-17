@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import type { ResearchSubmission } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
-import { approachTitle, researchLabel, researchRevisionBlocker, type ResearchRunView } from "./research-view-model";
+import { approachTitle, researchReviewStatusLabel, researchRevisionBlocker, type ResearchRunView } from "./research-view-model";
 
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
@@ -40,7 +40,7 @@ function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailab
   return <article className="research-entry" aria-label={`Candidate from ${title}`}>
     <div className="research-entry__meta">
       <span>{title}</span>
-      <span className={`research-chip${submission.review ? submission.review.decision === "accepted" ? " research-chip--done" : "" : " research-chip--attention"}`}>{submission.review ? researchLabel(submission.review.decision) : "Awaiting review"}</span>
+      <span className={`research-chip${submission.review ? submission.review.decision === "accepted" ? " research-chip--done" : "" : " research-chip--attention"}`}>{researchReviewStatusLabel(submission.review?.decision)}</span>
     </div>
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(submission.id)}>{submission.text}</button>
     {submission.paths.length > 0 && <EvidenceList paths={submission.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(submission.id, index)} />}

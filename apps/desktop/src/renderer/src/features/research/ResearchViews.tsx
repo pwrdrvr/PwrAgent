@@ -15,12 +15,11 @@ type Open = (itemId: string) => void;
 export function ResearchMapView({ run, filter, onOpenItem, onShowApproachItems }: {
   run: ResearchRunView; filter: string; onOpenItem: Open; onShowApproachItems: (approachId: string) => void;
 }) {
-  const query = filter.trim().toLowerCase();
   const all = useMemo(() => researchMapBranches(run), [run]);
-  const branches = useMemo(() => researchMapMatches(run, all, query), [run, all, query]);
+  const branches = useMemo(() => researchMapMatches(run, all, filter), [run, all, filter]);
   return <div className="research-map" aria-label="Research map">
     {branches.map((branch) => <MapBranch key={branch.approach.id} run={run} branch={branch} onOpenItem={onOpenItem} onShowApproachItems={onShowApproachItems} />)}
-    {!branches.length && <p className="context-empty">{query ? "No approaches match this filter." : "Approaches appear here once the coordinator starts the run."}</p>}
+    {!branches.length && <p className="context-empty">{filter.trim() ? "No approaches match this filter." : "Approaches appear here once the coordinator starts the run."}</p>}
   </div>;
 }
 

@@ -346,9 +346,14 @@ export function researchApproachStateLabel(approach: Pick<ResearchApproach, "sta
 /** What the Map puts before the title of a branch nested under the item it investigates. */
 export const RESEARCH_FOCUSED_CHILD_PREFIX = "Focused child · ";
 
+/** A candidate's review status: its decision, or "Awaiting review" while it has none. A search hit names that "unreviewed". */
+export function researchReviewStatusLabel(decision: string | undefined): string {
+  return decision && decision !== "unreviewed" ? researchLabel(decision) : "Awaiting review";
+}
+
 /** The label before a contribution on the Map: a finding's kind, or a candidate's review status. */
 export function researchMapLeafLabel(leaf: ResearchMapLeaf): string {
-  return leaf.type === "finding" ? researchLabel(leaf.record.kind) : `Candidate · ${leaf.record.review ? researchLabel(leaf.record.review.decision) : "Awaiting review"}`;
+  return leaf.type === "finding" ? researchLabel(leaf.record.kind) : `Candidate · ${researchReviewStatusLabel(leaf.record.review?.decision)}`;
 }
 
 /** The Map's line for the approach this one overlaps. */
@@ -367,11 +372,17 @@ export function researchMapMoreLabel(branch: Pick<ResearchMapBranch, "approach" 
  * with its label, and the count of the rest. A contribution also matches by
  * the text its excerpt cuts off. The "Open worker" link is a control and is
  * not listed, like "Open source thread" on a finding's card.
+ * `ResearchPanel.test.tsx` checks the rendered branch against these lines.
  */
 function researchMapBranchLines(run: Pick<ResearchRunView, "items">, branch: ResearchMapBranch, nested: boolean): string[] {
   const { approach } = branch;
   return [`${nested ? RESEARCH_FOCUSED_CHILD_PREFIX : ""}${approach.title}`, researchApproachStateLabel(approach), approach.task, approach.note ?? "", researchApproachOverlap(run, approach) ?? "",
     ...branch.leaves.flatMap((leaf) => [`${researchMapLeafLabel(leaf)} ${excerpt(leaf.record.text)}`, leaf.record.text]), researchMapMoreLabel(branch) ?? ""];
+}
+
+/** Text as the Map draws it and as a filter box holds it: each run of white space is one space. */
+function researchDrawnText(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /**
@@ -382,9 +393,9 @@ function researchMapBranchLines(run: Pick<ResearchRunView, "items">, branch: Res
  * owner, and a contribution the branch only counts does not match.
  */
 export function researchMapMatches(run: Pick<ResearchRunView, "items">, branches: ResearchMapBranch[], query: string): ResearchMapBranch[] {
-  const wanted = query.trim().toLowerCase();
+  const wanted = researchDrawnText(query);
   if (!wanted) return branches;
-  const shows = (branch: ResearchMapBranch, nested: boolean): boolean => researchMapBranchLines(run, branch, nested).some((line) => line.toLowerCase().includes(wanted))
+  const shows = (branch: ResearchMapBranch, nested: boolean): boolean => researchMapBranchLines(run, branch, nested).some((line) => researchDrawnText(line).includes(wanted))
     || branch.leaves.some((leaf) => leaf.children.some((child) => shows(child, true)))
     || branch.assignments.some((child) => shows(child, true));
   return branches.filter((branch) => shows(branch, false));

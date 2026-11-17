@@ -359,6 +359,8 @@ describe("research map filter", () => {
   const queryArb = fc.record({ pick: fc.nat(), part: fc.constantFrom(...PARTS, "more" as const, "more" as const, "absent" as const), which: fc.nat(), start: fc.nat(40), length: fc.integer({ min: 1, max: 14 }), upper: fc.boolean() });
   const label = (value: string) => value.replaceAll("_", " ").replace(/^./, (s) => s.toUpperCase());
   const cut = (text: string) => text.length > 100 ? `${text.slice(0, 100).trimEnd()}…` : text;
+  /** A line as the Map draws it: a line break or a run of spaces in a record reads as one space. */
+  const drawn = (part: Part): Part => ({ kind: part.kind, text: part.text.replace(/\s+/g, " ").trim() });
 
   /**
    * Every line `branch` draws, from the replayed run's own records: its title (after "Focused child" when nested), state chip, task, note,
@@ -381,7 +383,7 @@ describe("research map filter", () => {
     }
     if (branch.hidden > 0) parts.push({ kind: "more", text: `${branch.hidden} more from ${approach.title}` });
     for (const child of branch.assignments) parts.push(...shownParts(run, child, true));
-    return parts;
+    return parts.map(drawn);
   }
 
   it("keeps exactly the branches that show the filter text, as the run changes", () => {
@@ -429,7 +431,7 @@ describe("research map filter", () => {
     append({ type: "worker", approachId: "a1", state: "ended" });
     append({ type: "abandoned", approachId: "a1", reason: "Ruled out" });
     append({ type: "finding", finding: { id: "f1", approachId: "a2", kind: "dead_end", text: "The cache is never read", paths: [] } });
-    append({ type: "submission", submission: { id: "s1", approachId: "a2", text: "Drop the cache", paths: [] } });
+    append({ type: "submission", submission: { id: "s1", approachId: "a2", text: "Drop the cache\nand  its index", paths: [] } });
     append({ type: "direction", approachId: "a3", title: "Third", task: "Measure", reason: "Narrowed", overlapsApproachId: "a2" });
     append({ type: "assignment", itemId: "f1", task: "Confirm", approach: { id: "work-1", itemId: "f1", title: "Confirm the read path", task: "Confirm", state: "pending" } });
     const run = projectResearchRun("run", journal);
@@ -441,6 +443,9 @@ describe("research map filter", () => {
     expect(ids("Dead end")).toEqual(["a2"]);
     expect(ids("awaiting review")).toEqual(["a2"]);
     expect(ids("Candidate · Awaiting")).toEqual(["a2"]);
+    // A line break in a record is drawn as a space, and that is what an operator types.
+    expect(ids("the cache and its index")).toEqual(["a2"]);
+    expect(ids("the  cache\tand its")).toEqual(["a2"]);
     expect(ids("overlaps approach 2")).toEqual(["a3"]);
     expect(ids("focused child · confirm")).toEqual(["a2"]);
     expect(ids("  ")).toEqual(["a1", "a2", "a3"]);
