@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +58,7 @@ it("follows newly extracted helpers, reexports, cycles, aliases and lazy imports
 it("rejects an oversized anonymous function extracted into a new module", () => {
   // Exercise the same SSR transform, Oxc compressor, discovery and V8 oracle
   // as CI. Neither fixture has a Composer-prefixed function name.
+  mkdirSync(path.join(repoRoot, ".local"), { recursive: true });
   const directory = mkdtempSync(path.join(repoRoot, ".local/renderer-bytecode-oracle-"));
   const relative = (file: string) => path.relative(rendererRoot, path.join(directory, file)).replaceAll("\\", "/");
   const scopePath = path.join(directory, "scope.json");
