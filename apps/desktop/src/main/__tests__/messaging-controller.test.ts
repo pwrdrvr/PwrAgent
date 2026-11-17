@@ -172,6 +172,29 @@ async function settleHarnessWork(): Promise<void> {
   await Promise.all(tempStores.splice(0).map((store) => store.whenIdle()));
 }
 
+/**
+ * Settles one harness and leaves every other registered harness alone. A test
+ * body must use this, not `settleHarnessWork`: a body that outlives its
+ * timeout keeps running while the next test does, and settling every
+ * registered controller from it disposes the next test's controller, which
+ * then delivers nothing.
+ */
+async function settleHarness(
+  harness: { controller: MessagingController; store: unknown } | undefined,
+): Promise<void> {
+  if (!harness) return;
+  const controllerIndex = harnessControllers.indexOf(harness.controller);
+  if (controllerIndex >= 0) harnessControllers.splice(controllerIndex, 1);
+  harness.controller.dispose();
+  await harness.controller.whenToolUpdatesSettled();
+  await harness.controller.whenQueuedTurnActionsSettled();
+  if (harness.store instanceof MessagingStore) {
+    const storeIndex = tempStores.indexOf(harness.store);
+    if (storeIndex >= 0) tempStores.splice(storeIndex, 1);
+    await harness.store.whenIdle();
+  }
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await settleHarnessWork();
@@ -18578,13 +18601,20 @@ describe("MessagingController", () => {
     expect(harness.startTurn).toHaveBeenCalledTimes(1);
   });
 
-  it.each((["mcp", "command"] as const).flatMap((kind) =>
+  it.for((["mcp", "command"] as const).flatMap((kind) =>
     (["accept", "decline", "cancel"] as const).flatMap((decision) =>
       [false, true].map((ownsTurnQueue) => ({ kind, decision, ownsTurnQueue }))),
-  ))("keeps messaging $kind $decision escalation and queued cancellation live while a steer awaits approval (owner FIFO: $ownsTurnQueue)", async ({ kind, decision, ownsTurnQueue }) => {
+  ))("keeps messaging $kind $decision escalation and queued cancellation live while a steer awaits approval (owner FIFO: $ownsTurnQueue)", async ({ kind, decision, ownsTurnQueue }, { signal }) => {
     // Model: ingress is sequential, as in Telegram polling. A provider's
     // pending steer must not own ingress needed to answer its escalation.
     await fc.assert(fc.asyncProperty(fc.boolean(), async (cancelFirst) => {
+      // A timed-out test keeps running. Stop before starting more work.
+      signal.throwIfAborted();
+      // This property checks ingress and approval ordering, not file
+      // persistence. The JSON store serialized about 94 reads and 46 atomic
+      // rewrites per example, which timed out under full-suite I/O load.
+      const db = openInMemoryStateDb();
+      let created: Awaited<ReturnType<typeof createHarness>> | undefined;
       const permissions = new Set<MessagingPermissionId>(["thread.resume", "message.reply", "thread.status.view"]);
       const ownerStarted: { id: string; input: AppServerTurnInputItem[]; turnId: string }[] = [];
       const owner = new ThreadTurnQueue({ startTurn: async (entry) => {
@@ -18592,7 +18622,8 @@ describe("MessagingController", () => {
         ownerStarted.push({ id: entry.id, input: entry.input, turnId });
         return { backend: entry.backend, threadId: entry.threadId, turnId };
       } });
-      const harness = await createHarness({
+      const harness = created = await createHarness({
+        store: new SqliteMessagingStore(db),
         ...(ownsTurnQueue ? {
           backendOverrides: { ownsTurnQueue: true,
             readQueuedTurn: async (request) => {
@@ -18701,7 +18732,15 @@ describe("MessagingController", () => {
         expect(harness.steerTurn).toHaveBeenCalledTimes(1);
       } finally {
         response.resolve();
-        await click;
+        try {
+          await click;
+        } finally {
+          try {
+            await settleHarness(created);
+          } finally {
+            db.close();
+          }
+        }
       }
     }), { numRuns: 6 });
   });
