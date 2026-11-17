@@ -132,6 +132,14 @@ owner, or an owner recorded without a start time, cannot prove a live owner and
 counts as dead. A live owner's runs and every terminal run are left as they
 are.
 
+A runtime marker expires 45 seconds after its last heartbeat, so a live owner
+can lack a fresh one: the machine has just woken, or its main thread was busy.
+An owner with no matching marker whose process ID is still alive is therefore
+left alone at startup and checked once more 30 seconds later
+(`readAutomationRunOwnerLiveness`). A live owner has rewritten its marker by
+then. One that still has none is a reused process ID, and its runs are
+interrupted.
+
 A dead owner's run becomes `failed` with `failureReason: "interrupted"`, and
 run history shows it as interrupted. It is a reason on `failed` rather than a
 new status so that older builds still read the profile. The run then takes the
@@ -139,7 +147,9 @@ path of any failed run: its artifact is recorded, the automation's output
 actions run, and `automation/run/updated` reaches the Agent thread, where the
 failed-automation row appears above the composer, and the thread's bound
 conversations. Nothing is resumed or replayed. All of a launch's runs change in
-one transaction, and a launch that lost nothing writes nothing.
+one transaction, and a launch that lost nothing writes nothing. A launch that
+stops between interrupting a run and reporting it leaves the report to the
+next launch, which reports every interrupted run that has no failed artifact.
 
 This includes runs that a trigger queued while a quit was pending:
 `quiesceDispatch` holds them so that cancelling the quit can start them, and a

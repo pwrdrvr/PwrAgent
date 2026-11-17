@@ -2006,7 +2006,7 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
   it("reports each run the previous process left unfinished as a failed run on its Agent thread", async () => {
     seedPreviousProcessRuns();
     const done = store.getRun("run-done");
-    const service = new DesktopAutomationService({ registry, store, isRunOwnerAlive: () => false });
+    const service = new DesktopAutomationService({ registry, store, runOwnerLiveness: () => "dead" });
     automationLoggerMock.info.mockClear();
     try {
       service.start();
@@ -2061,6 +2061,7 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
           interruptedRunCount: 2,
           liveOwnerRunCount: 0,
           rescheduledAutomationCount: 0,
+          unconfirmedOwner: false,
         }],
       ]);
     } finally {
@@ -2071,14 +2072,14 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
   it("leaves a live instance's runs alone and reports nothing", async () => {
     seedPreviousProcessRuns();
     const before = ["run-running", "run-queued", "run-done"].map((id) => store.getRun(id));
-    const isRunOwnerAlive = vi.fn(() => true);
-    const service = new DesktopAutomationService({ registry, store, isRunOwnerAlive });
+    const runOwnerLiveness = vi.fn(() => "alive" as const);
+    const service = new DesktopAutomationService({ registry, store, runOwnerLiveness });
     automationLoggerMock.info.mockClear();
     try {
       service.start();
       await Promise.resolve();
 
-      expect(isRunOwnerAlive).toHaveBeenCalledWith(deadOwner);
+      expect(runOwnerLiveness).toHaveBeenCalledWith(deadOwner);
       expect(["run-running", "run-queued", "run-done"].map((id) => store.getRun(id))).toEqual(before);
       expect(runUpdates()).toEqual([]);
       expect(automationLoggerMock.info.mock.calls).toEqual([
@@ -2086,6 +2087,7 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
           interruptedRunCount: 0,
           liveOwnerRunCount: 2,
           rescheduledAutomationCount: 0,
+          unconfirmedOwner: false,
         }],
       ]);
       // The first instance's real outcome still lands.
@@ -2093,6 +2095,72 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
       expect(store.getRun("run-running")?.status).toBe("completed");
     } finally {
       service.dispose();
+    }
+  });
+
+  // A process ID that is alive with no fresh marker is either a live owner
+  // whose marker aged out (the machine just woke) or a reused process ID.
+  it("gives an unconfirmed owner one heartbeat window and leaves its runs alone once it proves alive", async () => {
+    seedPreviousProcessRuns();
+    const before = ["run-running", "run-queued"].map((id) => store.getRun(id));
+    const runOwnerLiveness = vi.fn()
+      .mockReturnValueOnce("unconfirmed")
+      .mockReturnValue("alive");
+    const service = new DesktopAutomationService({
+      registry, store, runOwnerLiveness, runOwnerRecheckDelayMs: 5,
+    });
+    try {
+      service.start();
+      expect(["run-running", "run-queued"].map((id) => store.getRun(id))).toEqual(before);
+      // start() asks once per distinct owner; the recheck asks again.
+      await vi.waitFor(() => expect(runOwnerLiveness.mock.calls.length).toBeGreaterThanOrEqual(2));
+      expect(["run-running", "run-queued"].map((id) => store.getRun(id))).toEqual(before);
+      expect(runUpdates()).toEqual([]);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("interrupts an unconfirmed owner's runs when it still has no marker after the window", async () => {
+    seedPreviousProcessRuns();
+    const service = new DesktopAutomationService({
+      registry, store, runOwnerLiveness: () => "unconfirmed", runOwnerRecheckDelayMs: 5,
+    });
+    try {
+      service.start();
+      expect(store.getRun("run-running")?.status).toBe("running");
+      expect(runUpdates()).toEqual([]);
+
+      await vi.waitFor(() => expect(runUpdates()).toHaveLength(2));
+      expect(store.getRun("run-running")).toMatchObject({ status: "failed", failureReason: "interrupted" });
+      expect(store.getRun("run-queued")).toMatchObject({ status: "failed", failureReason: "interrupted" });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("reports an interrupted run that a previous launch stopped before reporting, exactly once", async () => {
+    seedPreviousProcessRuns();
+    // The previous launch committed the interruption and then stopped.
+    expect(store.reconcileStartup({ now: 5_000 }).interruptedRuns).toHaveLength(2);
+    expect(store.listUnreportedInterruptedRuns().map((run) => run.id)).toEqual(["run-running", "run-queued"]);
+
+    const first = new DesktopAutomationService({ registry, store, runOwnerLiveness: () => "dead" });
+    try {
+      first.start();
+      await vi.waitFor(() => expect(runUpdates()).toHaveLength(2));
+    } finally {
+      first.dispose();
+    }
+    expect(store.listUnreportedInterruptedRuns()).toEqual([]);
+
+    const second = new DesktopAutomationService({ registry, store, runOwnerLiveness: () => "dead" });
+    try {
+      second.start();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(runUpdates()).toHaveLength(2);
+    } finally {
+      second.dispose();
     }
   });
 });

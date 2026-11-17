@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   getAutomationRunOwner,
-  isAutomationRunOwnerAlive,
+  readAutomationRunOwnerLiveness,
 } from "../automations/automation-run-owner";
 import { resolveActiveProfileName, startProfileRuntimeHeartbeat } from "../profile";
 
@@ -26,12 +26,13 @@ it("records this process under the identity its runtime marker carries", () => {
   expect(owner.instanceId).toMatch(/^runtime-v2-/);
   expect(typeof owner.startedAt).toBe("number");
   // Alive without a marker on disk: startup runs before the heartbeat matters.
-  expect(isAutomationRunOwnerAlive(owner)).toBe(true);
+  expect(readAutomationRunOwnerLiveness(owner)).toBe("alive");
 });
 
 it("proves another owner alive only on a full match with a live profile marker", () => {
   const other = { instanceId: "runtime-v2-other-instance", processId: process.pid, startedAt: 5 };
-  expect(isAutomationRunOwnerAlive(other)).toBe(false);
+  // Its process ID is alive but nothing vouches for the identity yet.
+  expect(readAutomationRunOwnerLiveness(other)).toBe("unconfirmed");
 
   const heartbeat = startProfileRuntimeHeartbeat(resolveActiveProfileName(), {
     instanceId: other.instanceId,
@@ -40,15 +41,22 @@ it("proves another owner alive only on a full match with a live profile marker",
     startedAt: other.startedAt,
   });
   try {
-    expect(isAutomationRunOwnerAlive(other)).toBe(true);
+    expect(readAutomationRunOwnerLiveness(other)).toBe("alive");
     // The Research rule: no recorded start time cannot be matched.
-    expect(isAutomationRunOwnerAlive({ instanceId: other.instanceId, processId: other.processId })).toBe(false);
-    // A reused process ID or a restarted instance is a different owner.
-    expect(isAutomationRunOwnerAlive({ ...other, startedAt: 6 })).toBe(false);
-    expect(isAutomationRunOwnerAlive({ ...other, instanceId: "runtime-v2-someone-else" })).toBe(false);
+    expect(readAutomationRunOwnerLiveness({ instanceId: other.instanceId, processId: other.processId })).toBe("dead");
+    // A restarted instance or another instance at a live process ID is not
+    // this owner, but only time separates it from a stale marker.
+    expect(readAutomationRunOwnerLiveness({ ...other, startedAt: 6 })).toBe("unconfirmed");
+    expect(readAutomationRunOwnerLiveness({ ...other, instanceId: "runtime-v2-someone-else" })).toBe("unconfirmed");
   } finally {
     heartbeat.stop();
     fs.rmSync(heartbeat.markerPath, { force: true });
   }
-  expect(isAutomationRunOwnerAlive(other)).toBe(false);
+  expect(readAutomationRunOwnerLiveness(other)).toBe("unconfirmed");
+});
+
+it("calls an owner dead once its process is gone", () => {
+  // No process holds this ID: far above any platform's process ID range in use.
+  const gone = { instanceId: "runtime-v2-gone", processId: 0x3fff_fff0, startedAt: 5 };
+  expect(readAutomationRunOwnerLiveness(gone)).toBe("dead");
 });

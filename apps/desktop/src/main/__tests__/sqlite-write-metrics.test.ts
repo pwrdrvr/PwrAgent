@@ -3061,7 +3061,7 @@ describe("sqlite write metrics", () => {
     const service = new DesktopAutomationService({
       registry,
       store: new AutomationStore(stateDb),
-      isRunOwnerAlive: () => false,
+      runOwnerLiveness: () => "dead",
     });
     try {
       const { writes } = await measureSqliteWrites(async () => {

@@ -248,6 +248,12 @@ export interface AutomationStorage {
     limit?: number;
   }): AutomationRunSummary[];
   reconcileStartup(input?: StartupReconciliationInput): StartupReconciliationResult;
+  /**
+   * Interrupted runs whose report never finished: no artifact records the
+   * failed outcome. A launch that stopped between interrupting a run and
+   * reporting it leaves these for the next one.
+   */
+  listUnreportedInterruptedRuns(): AutomationRunSummary[];
   buildThreadSummaries(): Record<string, AutomationThreadSummary>;
   setRunUsage(params: {
     runId: string;

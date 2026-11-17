@@ -932,6 +932,23 @@ export class AutomationStore implements AutomationStorage {
     };
   }
 
+  listUnreportedInterruptedRuns(): AutomationRunSummary[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT r.* FROM automation_runs r
+         LEFT JOIN automation_run_artifacts a ON a.run_id = r.run_id
+         WHERE r.status = 'failed'
+           AND (a.run_id IS NULL OR a.status <> 'failed')
+           AND CASE WHEN json_valid(r.payload)
+             THEN json_extract(r.payload, '$.failureReason') END = 'interrupted'
+         ORDER BY r.created_at, r.rowid`,
+      )
+      .all() as AutomationRunRow[];
+    return rows
+      .map((row) => this.runFromRow(row))
+      .filter((run): run is AutomationRunSummary => Boolean(run));
+  }
+
   buildThreadSummaries(): Record<string, AutomationThreadSummary> {
     const summaries: Record<string, AutomationThreadSummary> = {};
     for (const automation of this.listAutomations()) {
