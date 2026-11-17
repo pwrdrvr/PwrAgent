@@ -67,6 +67,14 @@ export type McpGatewayToolServiceOptions = {
 /** Exact schemas are indivisible, so a result that would pass this drops a tool instead. */
 const MAX_SEARCH_RESULT_BYTES = 24_000;
 
+/** What a search says about a tool whose exact schema the result has no room for. */
+function schemaBudgetNotice(tool: McpGatewaySource): McpGatewaySearchResult["unavailable"][number] {
+  return {
+    connectionId: tool.connectionId,
+    message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.`,
+  };
+}
+
 type McpGatewaySearchServer = NonNullable<McpGatewaySearchResult["servers"]>[number];
 
 function serverEntry(
@@ -179,7 +187,18 @@ export class McpGatewayToolService {
       }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score
         || a.tool.connectionId.localeCompare(b.tool.connectionId) || a.tool.toolName.localeCompare(b.tool.toolName));
       const result: McpGatewaySearchResult = { tools: [], unavailable };
-      for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
+      const picked = ranked.slice(0, args.limit ?? 3);
+      // A tool turned away adds its notice to `unavailable` after the tools
+      // before it were measured, so each admission keeps room for the notice
+      // of every candidate still to come, and for the comma before each one
+      // that will not be the list's first entry.
+      const noticeBytes = picked.map(({ tool }) => Buffer.byteLength(JSON.stringify(schemaBudgetNotice(tool))));
+      let laterNoticeBytes = noticeBytes.reduce((sum, bytes) => sum + bytes, 0);
+      for (const [index, { tool }] of picked.entries()) {
+        laterNoticeBytes -= noticeBytes[index];
+        const later = picked.length - index - 1;
+        const reserved = later === 0 ? 0
+          : laterNoticeBytes + later - (result.unavailable.length === 0 ? 1 : 0);
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
         const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
@@ -191,8 +210,9 @@ export class McpGatewayToolService {
           ? [...(result.serverInstructions ?? []), { connectionId: tool.connectionId, ...guidance }]
           : result.serverInstructions;
         // Exact schemas are indivisible. Never return truncated valid-looking JSON.
-        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers })) > MAX_SEARCH_RESULT_BYTES) {
-          result.unavailable.push({ connectionId: tool.connectionId, message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.` });
+        const bytes = Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers }));
+        if (bytes + reserved > MAX_SEARCH_RESULT_BYTES) {
+          result.unavailable.push(schemaBudgetNotice(tool));
           continue;
         }
         result.tools.push(entry);

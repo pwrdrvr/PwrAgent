@@ -77,6 +77,46 @@ async function search(all: Server[], query: string, limit: number, withSkills: b
 }
 
 describe("gateway search skills", () => {
+  // Shrunk from seed -1730384507 (path 116:1:0:10:2:2:2:2:3:3:5:6:6:21:21:53:52:51:56:37).
+  // No server publishes skills. Each tool was admitted against the budget,
+  // but a later tool that did not fit added its notice to `unavailable`
+  // unmeasured, and that notice took the result to 24,001 bytes.
+  it("keeps a turned-away tool's notice inside the result budget", async () => {
+    const tool = (name: string, length: number) => ({ name, description: "x".repeat(length) });
+    const all: Server[] = [
+      { id: "one", routed: false, tools: [tool("lookup", 4_265)] },
+      { id: "two", routed: true, tools: [tool("notes", 0), tool("lookup", 8_132)] },
+      { id: "three", routed: true, tools: [tool("lookup", 3_996), tool("issue", 5_766)] },
+    ];
+    for (const withSkills of [true, false]) {
+      const found = await search(all, "notes lookup issue", 5, withSkills);
+      expect(found.unavailable.length).toBeGreaterThan(0);
+      expect(Buffer.byteLength(JSON.stringify(found))).toBeLessThanOrEqual(24_000);
+    }
+  });
+
+  // Random schemas rarely land within a notice's length of the budget, so
+  // the general property found the overflow only once. Here a filler tool
+  // is sized around the last byte a result can hold while a later tool is
+  // always turned away; the probe measures the room, not the notice.
+  it("never passes its budget when a later tool is turned away", async () => {
+    const filler = (length: number): Server => ({ id: "a", routed: true, tools: [{ name: "lookup", description: "x".repeat(length) }] });
+    const oversized: Server = { id: "b", routed: true, tools: [{ name: "lookup_more", description: "x".repeat(30_000) }] };
+    const room = 24_000 - Buffer.byteLength(JSON.stringify(await search([filler(0), oversized], "lookup", 5, true)));
+    // Offset 0 fills the result to its last byte; 1 is the first byte over.
+    const offset = fc.oneof(fc.constantFrom(-1, 0, 1), fc.integer({ min: -400, max: 400 }));
+    await fc.assert(fc.asyncProperty(offset, fc.boolean(), async (offset, withSkills) => {
+      const found = await search([filler(Math.max(0, room + offset)), oversized], "lookup", 5, withSkills);
+      expect(found.unavailable.map((entry) => entry.connectionId)).toContain("b");
+      expect(Buffer.byteLength(JSON.stringify(found))).toBeLessThanOrEqual(24_000);
+      // A schema is admitted whole or not at all.
+      for (const tool of found.tools) {
+        const source = [filler(Math.max(0, room + offset)), oversized].find((entry) => entry.id === tool.connectionId)!;
+        expect(tool.definition.description).toBe(source.tools.find((candidate) => candidate.name === tool.toolName)!.description);
+      }
+    }));
+  });
+
   it("adds skills without costing the result a tool, and within its budget", async () => {
     await fc.assert(fc.asyncProperty(servers, fc.array(word, { minLength: 1, maxLength: 3 }), fc.integer({ min: 1, max: 5 }), async (all, terms, limit) => {
       const query = terms.join(" ");
@@ -85,6 +125,7 @@ describe("gateway search skills", () => {
       expect(found.tools).toEqual(plain.tools);
       expect(found.unavailable).toEqual(plain.unavailable);
       expect(Buffer.byteLength(JSON.stringify(found))).toBeLessThanOrEqual(24_000);
+      expect(Buffer.byteLength(JSON.stringify(plain))).toBeLessThanOrEqual(24_000);
       // Every server the plain search names is still named, unchanged but for skills.
       for (const entry of plain.servers ?? []) {
         const { skills: _skills, skillsComplete: _complete, ...rest } = found.servers!.find((other) => other.connectionId === entry.connectionId)!;
