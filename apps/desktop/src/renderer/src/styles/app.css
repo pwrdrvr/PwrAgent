@@ -37409,6 +37409,28 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
 }
 
+/* A CI run prerequisite opens the run on GitHub. */
+.thread-dependencies__run {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-bright);
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-dependencies__run:hover {
+  text-decoration: underline;
+}
+
+.thread-dependencies__run:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .thread-dependencies__when {
   color: var(--text-secondary);
 }

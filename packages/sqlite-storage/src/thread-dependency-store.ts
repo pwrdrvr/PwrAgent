@@ -23,6 +23,7 @@ function signature(dependency: ThreadDependency): string {
       condition.backend, condition.threadId, condition.when,
       condition.turnId ?? "", condition.prUrl ?? "", condition.headSha ?? "",
       condition.subject ?? "", condition.target?.instanceId ?? "",
+      ...condition.ciRun ? [condition.ciRun] : [],
     ])).sort(),
   ]);
 }

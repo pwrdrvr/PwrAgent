@@ -910,7 +910,8 @@ export class ThreadInspectionTools {
       && (condition as { title?: unknown }).title === undefined
       // A peer's thread or "something else" is not in this machine's list.
       && (condition as { subject?: unknown }).subject === undefined
-      && (condition as { target?: unknown }).target === undefined;
+      && (condition as { target?: unknown }).target === undefined
+      && (condition as { ciRun?: unknown }).ciRun === undefined;
     const missing = (conditions as unknown[]).filter(untitled);
     if (missing.length === 0) return conditions;
     const titles = new Map<string, string>();

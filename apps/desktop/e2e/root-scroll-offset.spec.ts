@@ -37,6 +37,11 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
   const fitted: string[] = [];
   try {
     await expect(app.window.locator(".app-shell")).toBeVisible();
+    // The shell and selected header mount before the list/detail reads land.
+    // The Windows failure screenshot contained only that short pending view,
+    // which need not overflow at 180%. Exercise the loaded smoke layout.
+    await app.window.getByRole("button", { name: "Replay smoke thread", exact: true }).click();
+    await expect(app.window.locator(".app-main .composer")).toBeVisible();
     await fc.assert(fc.asyncProperty(fc.record({
       platform: fc.constantFrom(...PLATFORMS),
       // 960 CSS px at 118% and above is narrower than the 820px breakpoint.
@@ -53,7 +58,10 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
       const stackedOffset = await app.window.evaluate((fraction) => {
         const root = document.scrollingElement;
         if (!root) throw new Error("The document has no scrolling element.");
-        root.scrollTop = (root.scrollHeight - root.clientHeight) * fraction;
+        // A small fraction of a short range can round down to zero physical
+        // pixels (the CI counterexample was 5% at 180%). Exercise a real
+        // scroll even then; a layout with no overflow still fails below.
+        root.scrollTop = Math.max(1, (root.scrollHeight - root.clientHeight) * fraction);
         return root.scrollTop;
       }, scrolled);
       // A stacked page that fits its viewport has no offset to keep, so the
@@ -82,6 +90,8 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
     }), { numRuns: 8, maxSkipsPerRun: 4, examples: [
       [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
       [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
+      [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 180 }, scrolled: 0.05, wide: { width: 960, height: 640 } }],
+      [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 180 }, scrolled: 0.05, wide: { width: 960, height: 640 } }],
     ] });
   } catch (error) {
     if (fitted.length === 0) throw error;

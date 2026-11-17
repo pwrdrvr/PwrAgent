@@ -22,7 +22,11 @@ export type NavigationDirectoryView = Pick<NavigationDirectoryRow,
 
 export type NavigationPresentedThread = NavigationThreadSummary & Partial<Pick<NavigationRow,
   "ref" | "rowRevision" | "ordinaryChildCount" | "viewerChildCount" | "nativeSubAgentGroupPresent" | "nativeSubAgentCount"
->> & { ownerOrdinaryChildCount?: number };
+>> & {
+  ownerOrdinaryChildCount?: number;
+  /** Last accepted owner order; null withdraws it, undefined has not observed it. Never membership. */
+  ownerSiblingPosition?: { parentKey: string; position: number } | null;
+};
 
 /** Loaded row overlays only. Collection membership/count/readiness stays in query resources. */
 export type NavigationLoadedRows = {

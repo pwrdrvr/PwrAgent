@@ -7,8 +7,103 @@ export const THREAD_DEPENDENCIES_CHANNEL = "thread:dependencies";
  * only when the prerequisite thread, the operator, or an agent marks it done.
  */
 export const THREAD_DEPENDENCY_CONDITIONS = [
-  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed",
+  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed", "ci_run",
 ] as const;
+
+/**
+ * What wakes a `ci_run` prerequisite: the run pausing at a deployment
+ * approval gate, a job failing while others still run, or the run finishing.
+ */
+export const THREAD_DEPENDENCY_CI_RUN_OUTCOMES = ["approval_gate", "job_failed", "finished"] as const;
+export type ThreadDependencyCiRunOutcome = (typeof THREAD_DEPENDENCY_CI_RUN_OUTCOMES)[number];
+export const THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS = 8;
+
+/** A CI run prerequisite. PwrAgent checks the run itself; no model polls it. */
+export type ThreadDependencyCiRun = {
+  /** A GitHub Actions run: https://github.com/<owner>/<repo>/actions/runs/<id>. */
+  url: string;
+  /** Omit for all three outcomes. */
+  on?: ThreadDependencyCiRunOutcome[];
+  /** `approval_gate` only for these environments; omit for any gate. */
+  environments?: string[];
+};
+
+/** One check of a CI run, kept in memory while waiting and saved when the wait fires. */
+export type ThreadDependencyCiRunObservation = {
+  runId: number;
+  name?: string;
+  /** The provider's run status: queued, in_progress, waiting, completed, … */
+  status: string;
+  conclusion?: string;
+  attempt?: number;
+  headSha?: string;
+  branch?: string;
+  /** Deployments waiting for approval, from the run's pending deployments. */
+  gates?: { environment: string; reviewers: string[]; waitTimerMinutes?: number }[];
+  jobs?: { total: number; passed: number; failed: number; running: number; queued: number; waiting: number; skipped: number };
+  failedJobs?: { name: string; url: string; failedStep?: string }[];
+  /** The check failed; the wait keeps the last good observation's meaning. */
+  error?: string;
+  /** The forge's code for that failure, such as `not_found`. */
+  errorCode?: string;
+  /** Consecutive failed checks with this `errorCode`. */
+  errorChecks?: number;
+  /** When the current run of failed checks began, whatever their codes. */
+  failingSince?: number;
+  checkedAt: number;
+};
+
+export function threadDependencyCiRunOutcomes(ciRun: Pick<ThreadDependencyCiRun, "on">): ThreadDependencyCiRunOutcome[] {
+  return ciRun.on?.length ? THREAD_DEPENDENCY_CI_RUN_OUTCOMES.filter((outcome) => ciRun.on!.includes(outcome)) : [...THREAD_DEPENDENCY_CI_RUN_OUTCOMES];
+}
+
+const CI_RUN_OUTCOME_PHRASES: Record<ThreadDependencyCiRunOutcome, string> = {
+  approval_gate: "reaches an approval gate",
+  job_failed: "has a failed job",
+  finished: "finishes",
+};
+
+/** "reaches an approval gate, has a failed job, or finishes". */
+export function threadDependencyCiRunPhrase(ciRun: Pick<ThreadDependencyCiRun, "on">): string {
+  const phrases = threadDependencyCiRunOutcomes(ciRun).map((outcome) => CI_RUN_OUTCOME_PHRASES[outcome]);
+  return phrases.length < 3 ? phrases.join(" or ") : `${phrases.slice(0, -1).join(", ")}, or ${phrases.at(-1)}`;
+}
+
+/** The run id in a CI run URL, for labels; undefined when the URL names none. */
+export function threadDependencyCiRunId(url: string): string | undefined {
+  return url.match(/\/actions\/runs\/(\d+)/)?.[1];
+}
+
+/** "Waiting for approval: windows-signing · 2 passed, 1 running" from one check. */
+export function summarizeThreadDependencyCiRun(observation: ThreadDependencyCiRunObservation): string {
+  const state = observation.status === "completed"
+    ? `Finished: ${observation.conclusion ?? "unknown"}`
+    : observation.status === "waiting" && observation.gates?.length
+      ? `Waiting for approval: ${observation.gates.map((gate) => gate.environment).join(", ")}`
+      : observation.status === "in_progress" ? "Running" : observation.status === "unknown" ? "Could not read the run" : observation.status.replace(/_/g, " ");
+  const jobs = observation.jobs;
+  const counts = jobs
+    ? ([["passed", jobs.passed], ["failed", jobs.failed], ["running", jobs.running], ["waiting", jobs.waiting], ["queued", jobs.queued]] as const)
+      .filter(([, count]) => count > 0).map(([name, count]) => `${count} ${name}`).join(", ")
+    : "";
+  return [state.charAt(0).toUpperCase() + state.slice(1), counts, observation.error ? "last check failed" : ""].filter(Boolean).join(" · ");
+}
+
+/** How a prerequisite reads after its name, including a CI run's chosen outcomes. */
+export function threadDependencyConditionPhrase(condition: Pick<ThreadDependencyCondition, "when" | "ciRun">): string {
+  return condition.when === "ci_run" && condition.ciRun
+    ? threadDependencyCiRunPhrase(condition.ciRun)
+    : THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when];
+}
+
+/** A prerequisite's display name: its subject, its saved title, or its CI run. */
+export function threadDependencyConditionName(condition: Pick<ThreadDependencyCondition, "subject" | "title" | "ciRun">): string | undefined {
+  const label = condition.subject?.trim() || condition.title?.trim();
+  if (label) return label;
+  if (!condition.ciRun) return undefined;
+  const id = threadDependencyCiRunId(condition.ciRun.url);
+  return id ? `Run ${id}` : "CI run";
+}
 
 /** Advertised by owners that serve `backend.manageThreadDependencies` to peers. */
 export const THREAD_DEPENDENCIES_FEDERATION_CAPABILITY = "thread_dependencies_v1" satisfies FederationCapability;
@@ -40,6 +135,7 @@ export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD
   pr_merged: "is merged",
   marked_done: "is marked done",
   compaction_completed: "finishes compaction",
+  ci_run: "reaches an approval gate, has a failed job, or finishes",
 };
 
 /**
@@ -74,16 +170,18 @@ export type ThreadDependencyCondition = {
    * owner. Only `marked_done` can be watched across machines.
    */
   target?: Extract<FederationTarget, { scope: "remote" }>;
+  /** `ci_run` only, with an empty `threadId`: the run and what wakes the wait. */
+  ciRun?: ThreadDependencyCiRun;
 };
 
 /** True for a prerequisite that names a thread, on any machine. */
-export function isThreadDependencyThreadCondition(condition: Pick<ThreadDependencyCondition, "subject">): boolean {
-  return condition.subject === undefined;
+export function isThreadDependencyThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "ciRun">): boolean {
+  return condition.subject === undefined && condition.ciRun === undefined;
 }
 
 /** True for a thread prerequisite on the waiting thread's own machine. */
-export function isThreadDependencyLocalThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "target">): boolean {
-  return condition.subject === undefined && condition.target === undefined;
+export function isThreadDependencyLocalThreadCondition(condition: Pick<ThreadDependencyCondition, "subject" | "target" | "ciRun">): boolean {
+  return condition.subject === undefined && condition.target === undefined && condition.ciRun === undefined;
 }
 
 export type ThreadDependencyEvidence = {
@@ -95,6 +193,11 @@ export type ThreadDependencyEvidence = {
   observedAt: number;
   /** `marked_done` only: who marked it done ("operator", "agent:…", "peer:…"). */
   markedDoneBy?: string;
+  /**
+   * `ci_run` only. Saved when the wait fires. While it waits, the owner adds
+   * its latest check to list responses in memory; that copy is never stored.
+   */
+  ciRun?: ThreadDependencyCiRunObservation;
 };
 
 export type ThreadDependency = {

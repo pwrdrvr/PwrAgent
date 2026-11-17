@@ -35,7 +35,7 @@ beforeAll(async () => {
   runtimeRoot = root;
   const outputDirectory = path.join(root, "runtime");
   const fixture = path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts");
-  await buildHeadless({ outputDirectory, plugins: [{ name: "conformance-provider", setup(builder) {
+  await buildHeadless({ outputDirectory, sourcemap: false, logLevel: "warning", plugins: [{ name: "conformance-provider", setup(builder) {
     builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "owned-codex" }));
     builder.onLoad({ filter: /.*/, namespace: "owned-codex" }, () => ({
       contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(fixture)};`, loader: "ts", resolveDir: import.meta.dirname,
@@ -51,7 +51,7 @@ beforeAll(async () => {
     plugins: [{ name: "child-hooks", setup(builder) {
       builder.onResolve({ filter: /^vitest$/ }, () => ({ path: "hooks", namespace: "child-test" }));
       builder.onLoad({ filter: /.*/, namespace: "child-test" }, () => ({
-        contents: `export const afterEach = () => {}; export const afterAll = fn => process.once("exit", () => { try { fn(); } catch (error) { console.error(error.message); process.exitCode = 1; } });`, loader: "js",
+        contents: `export const afterEach = () => {}; export const afterAll = fn => process.once("exit", () => { try { fn(); } catch (error) { require("node:fs").writeSync(2, error.message + "\\n"); process.exitCode = 1; } });`, loader: "js",
       }));
     } }],
   });
@@ -75,6 +75,8 @@ async function builtHost(): Promise<Host> {
   // A synchronous file write survives the driver exiting right after it.
   // Windows can drop a stderr pipe write that is still pending at exit.
   const droppedReplies = path.join(root, "dropped-replies.log");
+  // Startup redirects console.error to a file and Vitest mutes its console
+  // transport. Write failures to stderr directly so the parent can report them.
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
     // The parent owns the channel. A reply that finishes after it disconnected
     // has no reader, so it is dropped instead of crashing the driver.
@@ -117,7 +119,7 @@ async function builtHost(): Promise<Host> {
         } catch (error) { reply({ id: request.id, error: error.message }); }
       });
       reply({ ready: true });
-    }).catch(error => { console.error(error.stack); process.exitCode = 1; if (process.connected) process.disconnect(); });`);
+    }).catch(error => { require("node:fs").writeSync(2, error.stack + "\\n"); process.exitCode = 1; if (process.connected) process.disconnect(); });`);
   const child = fork(driver, [], { env, execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"] });
   // "close" waits for stdio to drain, so `output` is complete when it fires.
   const exited = once(child, "close");

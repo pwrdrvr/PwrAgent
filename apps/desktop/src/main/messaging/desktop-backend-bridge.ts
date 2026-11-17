@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
-import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import type {
@@ -298,8 +298,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         }
         options.signal.throwIfAborted();
         return getDesktopNavigationQueryStore().readPage({ request, scopeKey: "renderer-local",
-          loadIndex: () => loadLocalNavigationQueryIndex({ backend: request.backend,
-            callerReason: "messaging-bounded-navigation", registry: this.registry }) });
+          loadIndex: async () => {
+            await awaitStartupProviderCoverage({ query: request.query, deadlineAt: options.deadlineAt,
+              registry: this.registry, signal: options.signal });
+            return loadLocalNavigationQueryIndex({ backend: request.backend,
+              callerReason: "messaging-bounded-navigation", registry: this.registry });
+          } });
       } });
     } finally { pool.release(consumerId); }
   }

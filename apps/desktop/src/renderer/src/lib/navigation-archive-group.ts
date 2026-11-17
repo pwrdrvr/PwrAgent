@@ -70,6 +70,10 @@ export async function readNavigationArchiveGroup(params: {
       if (page.coverage.state === "degraded") {
         throw new Error("Thread group membership is incomplete: a provider did not list its threads. No threads were archived. Try again once it reconnects.");
       }
+      // The owner waits for its startup provider check within the deadline.
+      if (page.coverage.state === "checking") {
+        throw new Error("PwrAgent is still listing threads from its providers. No threads were archived. Try again in a moment.");
+      }
       if (page.protocol !== 2 || page.unchanged || page.coverage.state !== "complete" || page.entries.length > 10
         || (generation && (generation !== page.generation || epoch !== page.ownerEpoch))) {
         throw new Error("Thread group membership is incomplete or changed during discovery. Refresh and try again.");

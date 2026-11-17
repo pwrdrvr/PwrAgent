@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { headlessOutputManifest } from "./headless-output-manifest.mjs";
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(desktop, "package.json"));
@@ -16,14 +17,22 @@ export const headlessEntries = {
   "outpost-codex-sandbox": "src/main/headless/outpost-codex-sandbox.ts",
 };
 
-export async function buildHeadless({ outputDirectory = path.join(desktop, "out/headless"), plugins = [], portable = false } = {}) {
+export async function buildHeadless({ outputDirectory = path.join(desktop, "out/headless"), plugins = [], portable = false, sourcemap = "external", logLevel = "info" } = {}) {
   const outdir = outputDirectory;
   const result = await build({
     metafile: true,
     entryPoints: Object.fromEntries(Object.entries(headlessEntries).map(([name, entry]) => [name, path.join(desktop, entry)])),
-    outdir, bundle: true, platform: "node", target: "node24", format: "cjs", sourcemap: "external", logLevel: "info",
+    // esbuild splits ESM only. Ship the portable Node 24 graph as ESM with
+    // CJS entry shims; retain the established CJS graph for checkout fixtures.
+    outdir, bundle: true, platform: "node", target: "node24", format: portable ? "esm" : "cjs", splitting: portable,
+    outExtension: { ".js": portable ? ".mjs" : ".js" }, sourcemap, logLevel,
     define: { "process.env.NODE_ENV": '"production"', "import.meta.url": "__pwragentModuleUrl", "import.meta.dirname": "__dirname" },
-    banner: { js: 'const __pwragentModuleUrl = require("node:url").pathToFileURL(__filename).href;' },
+    // Bundled CommonJS dependencies still need a require relative to their
+    // installed chunk, including native modules. All chunks stay beside the
+    // runtime manifest and worker entries so existing asset paths keep working.
+    banner: { js: portable
+      ? 'import { createRequire as __pwragentCreateRequire } from "node:module"; import { fileURLToPath as __pwragentFileURLToPath } from "node:url"; import { dirname as __pwragentDirname } from "node:path"; const require = __pwragentCreateRequire(import.meta.url); const __filename = __pwragentFileURLToPath(import.meta.url); const __dirname = __pwragentDirname(__filename); const __pwragentModuleUrl = import.meta.url;'
+      : 'const __pwragentModuleUrl = require("node:url").pathToFileURL(__filename).href;' },
     plugins: [...plugins, { name: "headless-host-dependencies", setup(builder) {
       builder.onResolve({ filter: /^electron(?:\/|$)/ }, () => { throw new Error("The headless runtime cannot import Electron."); });
       builder.onResolve({ filter: /^[^./]/ }, (args) => {
@@ -41,6 +50,21 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
   });
   const info = JSON.parse(await readFile(path.join(desktop, "package.json"), "utf8"));
   await mkdir(outdir, { recursive: true });
+  for (const name of portable ? Object.keys(headlessEntries) : []) {
+    const entry = Object.values(result.metafile.outputs).find(output => output.entryPoint
+      && path.resolve(output.entryPoint) === path.join(desktop, headlessEntries[name]));
+    if (!entry) throw new Error(`Missing headless entry: ${name}`);
+    // Explicit assignments also make named exports visible to import() of
+    // the CJS shim. require(esm) is synchronous on our supported Node >=24;
+    // optional asynchronous graphs remain behind their original import().
+    const shim = [
+      entry.exports.length ? `const runtime = require("./${name}.mjs");` : `require("./${name}.mjs");`,
+      ...entry.exports.map(key => `exports.${key} = runtime.${key};`),
+      "",
+    ].join("\n");
+    await writeFile(path.join(outdir, `${name}.js`), shim);
+  }
+  if (portable) await writeFile(path.join(outdir, "chunks.json"), JSON.stringify(headlessOutputManifest(result.metafile, headlessEntries)) + "\n");
   await writeFile(path.join(outdir, "package.json"), JSON.stringify({ type: "commonjs" }) + "\n");
   await writeFile(path.join(outdir, "runtime.json"), JSON.stringify({ version: 1, appVersion: info.version, appRoot: portable ? ".." : path.relative(outdir, desktop), resources: portable ? "../resources" : path.relative(outdir, path.join(desktop, "resources")) }) + "\n");
   return result;

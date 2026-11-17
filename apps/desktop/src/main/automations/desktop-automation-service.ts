@@ -845,7 +845,7 @@ export class DesktopAutomationService {
     return {
       run,
       queueStatus: result?.status ?? "failed",
-      queueEntryId: result?.entry.id,
+      queueEntryId: result?.queueEntryId,
       turnId: result?.status === "started" ? result.turnId : undefined,
     };
   }
@@ -864,7 +864,7 @@ export class DesktopAutomationService {
     return {
       run,
       queueStatus: result?.status ?? "failed",
-      queueEntryId: result?.entry.id,
+      queueEntryId: result?.queueEntryId,
       turnId: result?.status === "started" ? result.turnId : undefined,
     };
   }

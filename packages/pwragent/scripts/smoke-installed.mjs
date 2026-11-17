@@ -1,12 +1,13 @@
 // Runs the installed Node owner and a copied, test-owned App Server.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { fork, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { assertPortableStartupLoads } from "./portable-oracle.mjs";
 
 const [cli, fixture, temporary] = process.argv.slice(2);
 const directory = name => { const value = path.join(temporary, name); fs.mkdirSync(value); return value; };
@@ -50,6 +51,45 @@ assert.throws(() => installed.resolve("electron"), /Cannot find module/);
 const terminal = installed("node-pty").spawn("/bin/sh", ["-c", "exit 0"], { cwd: workspace });
 await new Promise(resolve => terminal.onExit(event => { assert.equal(event.exitCode, 0); resolve(); }));
 
+// Public entry filenames are also process boundaries. Exercise the packed
+// workers and fail-closed bridge/hook, not just the owner's exported API.
+async function workerReply(name, request, accepts = () => true) {
+  const child = fork(path.join(installedRoot, "dist", name), [], {
+    cwd: temporary, env: { ...env, CLAUDE_CONFIG_DIR: directory(`claude-${name}`) }, execArgv: [], silent: true,
+  });
+  const done = once(child, "exit");
+  let errors = "";
+  child.stderr.on("data", chunk => { errors = (errors + chunk).slice(-4096); });
+  const reply = new Promise((resolve, reject) => {
+    child.on("message", message => { if (accepts(message)) resolve(message); });
+    done.then(([code]) => reject(new Error(`${name} exited before replying (${code})`)), reject);
+  });
+  try { child.send(request); return await reply; }
+  finally {
+    if (child.connected) child.disconnect();
+    assert.equal((await done)[0], 0, errors);
+  }
+}
+const maintenance = await workerReply("storage-maintenance-worker.js", {
+  dbPath: path.join(temporary, "worker.db"), historyEnabled: false, archived: [], active: [],
+}, message => ["complete", "deferred", "error"].includes(message.phase));
+assert.equal(maintenance.phase, "complete");
+const session = await workerReply("claude-session-reader-worker.js", {
+  id: 1, method: "getSessionMessages", sessionId: randomUUID(),
+});
+assert.equal(session.id, 1);
+assert.deepEqual(session.result, []);
+const bridge = spawnSync(process.execPath, [path.join(installedRoot, "dist/mcp-connection-bridge.js")], {
+  cwd: temporary, env: { ...env, PWRAGENT_MCP_CONNECTION_SOCKET: "", PWRAGENT_MCP_CONNECTION_TOKEN: "" }, encoding: "utf8",
+});
+assert.equal(bridge.status, 1, bridge.stderr);
+assert.match(bridge.stderr, /missing bridge socket or token; refusing to start/);
+const hook = spawnSync(process.execPath, [path.join(installedRoot, "dist/token-miser-hook.js")], {
+  cwd: temporary, env: { ...env, PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH: "" }, input: "{}\n", encoding: "utf8",
+});
+assert.equal(hook.status, 0, hook.stderr);
+assert.equal(hook.stdout, "");
+
 async function command(method, params) {
   const args = [cli, method];
   if (params) {
@@ -65,7 +105,14 @@ async function command(method, params) {
 }
 assert.match(await command("--help"), /PwrAgent Outpost/);
 assert.match(await command("--version"), /^pwragent \d+\.\d+\.\d+/);
-const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspace, "--codex-home", home, "--codex-bin", fixture],
+const trace = path.join(temporary, "daemon-loads.jsonl");
+const preload = path.join(temporary, "trace-loads.cjs");
+fs.writeFileSync(preload, `const { appendFileSync } = require("node:fs");
+require("node:module").registerHooks({ load(url, context, nextLoad) {
+  appendFileSync(${JSON.stringify(trace)}, JSON.stringify(url) + "\\n");
+  return nextLoad(url, context);
+} });`);
+const daemon = spawn(process.execPath, ["--require", preload, cli, "serve", "--workspace", workspace, "--codex-home", home, "--codex-bin", fixture],
   { env, cwd: temporary, stdio: ["ignore", "pipe", "pipe"] });
 const done = once(daemon, "exit");
 let errors = "";
@@ -75,6 +122,7 @@ try {
     daemon.stdout.on("data", chunk => { if (String(chunk).includes('"ready":true')) resolve(); });
     done.then(([code]) => reject(new Error(`Outpost exited before ready (${code}): ${errors}`)));
   });
+  assertPortableStartupLoads(path.join(installedRoot, "dist"), fs.readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line)));
   const state = path.join(env.PWRAGENT_HOME, "profiles/t/state/headless");
   assert.doesNotMatch(errors, /Unhandled electron-log error|can't determine the app name/);
   assert.equal(fs.statSync(path.join(state, "owner.lock")).mode & 0o777, 0o600);

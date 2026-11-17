@@ -381,6 +381,7 @@ import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-brid
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import {
+  awaitStartupProviderCoverage,
   getNavigationDirectorySetAnnouncer,
   loadLocalNavigationQueryIndex,
 } from "../app-server/navigation-query-source";
@@ -7619,9 +7620,12 @@ function localBackendOperations(): FederationBackendOperations {
         getDesktopNavigationQueryPool().read({ consumerId, scopeKey,
           request: { ...request, deadlineAt: rpcOptions?.deadlineAt === undefined ? request.deadlineAt
             : Math.min(request.deadlineAt ?? rpcOptions.deadlineAt, rpcOptions.deadlineAt) },
-          load: ({ signal }) => getDesktopNavigationQueryStore().readPage({
-            loadIndex: () => loadLocalNavigationQueryIndex({ backend: request.backend,
-              callerReason: "federation-navigation-query", signal }),
+          load: ({ signal, deadlineAt }) => getDesktopNavigationQueryStore().readPage({
+            loadIndex: async () => {
+              await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
+              return loadLocalNavigationQueryIndex({ backend: request.backend,
+                callerReason: "federation-navigation-query", signal });
+            },
             request, scopeKey,
           }),
         }));

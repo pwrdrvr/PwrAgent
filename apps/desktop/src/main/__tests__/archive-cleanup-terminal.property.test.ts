@@ -18,7 +18,14 @@ vi.mock("../codex-app-server/stdio-transport", async () => ({
   StdioJsonRpcTransport: (await import("./fixtures/archive-worktree-transport")).ArchiveWorktreeTransport,
 }));
 
-afterEach(() => {
+let activeProperty: Promise<void> | undefined;
+
+afterEach(async () => {
+  // Vitest's timeout aborts the test but does not join its async callback.
+  // Restore the property-owned provider spy and close its real registry
+  // before resetting the shared fake clock or starting another fixture.
+  await activeProperty?.catch(() => {});
+  activeProperty = undefined;
   ArchiveWorktreeTransport.threads = [];
   ArchiveWorktreeTransport.requests = [];
   vi.useRealTimers();
@@ -83,18 +90,21 @@ async function fixture(outcomes: Outcome[], deferred: boolean) {
 describe("terminal archive cleanup recovery", () => {
   // Rule: failed discovery cannot prove cleanup finished. Its saved intent
   // survives both recovery drain and clean quit until discovery succeeds.
-  it("retains unresolved requests through transient metadata failures and retires them after successful discovery", async () => {
+  it("retains unresolved requests through transient metadata failures and retires them after successful discovery", async ({ signal }) => {
     vi.useFakeTimers();
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.boolean(), fc.constantFrom("provider", "overlay"),
+    await (activeProperty = fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.boolean(), fc.constantFrom("provider", "overlay"),
       async (failures, deferred, source) => {
+        signal.throwIfAborted();
         const test = await fixture(["absent"], deferred);
         const original = test.savedIntents();
         const fail = source === "provider"
           ? vi.spyOn(CodexAppServerClient.prototype, "listArchiveCleanupThreadsPage").mockRejectedValue(new Error("Provider temporarily unavailable"))
           : vi.spyOn(test.store, "getArchiveCleanupOverlayStates").mockRejectedValue(new Error("Overlay temporarily unavailable"));
         try {
+          signal.throwIfAborted();
           for (let attempt = 0; attempt < failures; attempt += 1) {
             await drivePacer(test.registry, test.registry.resumeArchiveCleanupsAtStartup());
+            signal.throwIfAborted();
             expect(test.savedIntents()).toEqual(original);
             expect(test.registry.getArchiveCleanupCountForQuit()).toBe(0);
             await test.restart();
@@ -110,7 +120,7 @@ describe("terminal archive cleanup recovery", () => {
           fail.mockRestore();
           await test.close();
         }
-      }), { numRuns: 25, examples: [[1, false, "provider"]] });
+      }), { numRuns: 25, examples: [[1, false, "provider"]] }));
   });
 
   it("preserves a plain recovered request when provider discovery fails", async () => {
@@ -129,15 +139,18 @@ describe("terminal archive cleanup recovery", () => {
 
   // Rule: the durable backlog after recovery contains only checkouts that
   // still need a retry, regardless of completion order or other held owners.
-  it("retires terminal outcomes while preserving active checkout references", async () => {
+  it("retires terminal outcomes while preserving active checkout references", async ({ signal }) => {
     vi.useFakeTimers();
-    await fc.assert(fc.asyncProperty(
+    await (activeProperty = fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom<Outcome>("absent", "external", "blocked"), { minLength: 1, maxLength: 6 }),
       fc.boolean(),
       async (outcomes, deferred) => {
+        signal.throwIfAborted();
         const test = await fixture(outcomes, deferred);
         try {
+          signal.throwIfAborted();
           await drivePacer(test.registry, test.registry.resumeArchiveCleanupsAtStartup());
+          signal.throwIfAborted();
           // Claim as if this process died immediately, without a clean quit
           // that could hide a missing recovery-drain checkpoint.
           const remaining = test.checkpoint.recover("next-process", () => []);
@@ -148,7 +161,7 @@ describe("terminal archive cleanup recovery", () => {
           ]);
         } finally { await test.close(); }
       },
-    ), { numRuns: 25, examples: [[["absent"], true], [["external"], true], [["absent"], false], [["blocked", "absent", "external"], true]] });
+    ), { numRuns: 25, examples: [[["absent"], true], [["external"], true], [["absent"], false], [["blocked", "absent", "external"], true]] }));
   });
 
   it.each(["absent", "external"] as const)("does not report an %s checkout again after a clean restart", async (outcome) => {

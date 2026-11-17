@@ -5207,6 +5207,44 @@ describe("app server ipc", () => {
     await handlers.get("navigation:release-query")?.(event, "sidebar-benchmark");
   });
 
+  it("answers a group-members read made during the startup provider check once the check ends", async () => {
+    // Archive planning accepts only complete coverage. A read in the first
+    // seconds after launch got `checking` and the archive failed with
+    // "membership is incomplete or changed during discovery".
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
+    const { STARTUP_COVERAGE_WAIT_MARGIN_MS } = await import("../app-server/navigation-query-source");
+    listThreads.mockResolvedValue([]);
+    readNavigationQueryIndex.mockReturnValue({ threads: [], directories: [] });
+    registerAppServerIpcHandlers();
+    let run = 0;
+    await fc.assert(fc.asyncProperty(fc.option(fc.integer({ min: 0, max: 100 }), { nil: undefined }), async (endsAfterMs) => {
+      run += 1;
+      let state = "checking";
+      getStartupProviderRefreshStatus.mockImplementation(() => ({ state }));
+      const timer = endsAfterMs === undefined ? undefined : setTimeout(() => {
+        state = "ready";
+        emitRegistryEvent({ backend: "codex",
+          notification: { method: "navigation/providerThreads/refreshed", params: { failedProviders: 0 } } });
+      }, endsAfterMs);
+      const event = { sender: { id: 91_000 + run, once: vi.fn() } };
+      const consumerId = `archive-group:${run}`;
+      // A check that never ends is answered before the caller's deadline.
+      const deadlineAt = Date.now() + STARTUP_COVERAGE_WAIT_MARGIN_MS + 300;
+      try {
+        const page = await navigationReadHandler("backend.getNavigationQueryPage")(event, {
+          protocol: 2, consumer: "main-sidebar", inventory: "owner", pageSize: 10, deadlineAt,
+          query: { kind: "group-members", roots: [{ backend: "codex", threadId: `root-${run}` }] },
+        }, consumerId) as import("@pwragent/shared").NavigationQueryPage;
+        expect(page.coverage.state).toBe(endsAfterMs === undefined ? "checking" : "complete");
+        expect(Date.now()).toBeLessThan(deadlineAt);
+      } finally {
+        clearTimeout(timer);
+        state = "ready";
+        await handlers.get("navigation:release-query")?.(event, consumerId);
+      }
+    }), { numRuns: 8 });
+  });
+
   it("carries renderer causes across IPC into the physical owner and index reads", async () => {
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");

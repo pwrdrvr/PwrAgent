@@ -28,10 +28,10 @@ Manual interaction is allowed and does not share a queue with automation work:
 (`apps/desktop/src/main/automations/desktop-automation-service.ts`). That
 runner calls `startAutomationHeadlessTurn`
 (`apps/desktop/src/main/app-server/backend-registry.ts`), which starts a new
-thread and then a turn on it without submitting to `ThreadTurnQueue`.
-`ThreadQueueAutomationRunner`
-(`apps/desktop/src/main/automations/automation-runner.ts`) does submit to the
-thread FIFO, but only the scheduler tests construct it.
+thread and then a turn on it without submitting to `ThreadTurnQueue`. A runner
+starts a run or throws (`AutomationRunStartResult` in
+`apps/desktop/src/main/automations/automation-runner.ts`); it cannot report a
+run as queued. Only the scheduler queues a run, in the automation's own lane.
 
 The thread context rail is the primary management surface. It shows the
 thread's automations, enabled or paused state, next run, pending/coalesced
