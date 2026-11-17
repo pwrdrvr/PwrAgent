@@ -952,6 +952,9 @@ function threadSummariesEqual(
     left.ordinaryChildCount === right.ordinaryChildCount &&
     left.viewerChildCount === right.viewerChildCount &&
     left.ownerOrdinaryChildCount === right.ownerOrdinaryChildCount &&
+    left.ownerSiblingPosition?.parentKey === right.ownerSiblingPosition?.parentKey &&
+    left.ownerSiblingPosition?.position === right.ownerSiblingPosition?.position &&
+    (left.ownerSiblingPosition === undefined) === (right.ownerSiblingPosition === undefined) &&
     left.nativeSubAgentGroupPresent === right.nativeSubAgentGroupPresent &&
     left.nativeSubAgentCount === right.nativeSubAgentCount &&
     left.id === right.id &&
@@ -3850,8 +3853,8 @@ export function useThreadNavigation(
   const removedDirectoryKeySet = removedDirectoryKeysRef.current;
   const removedDirectoryKeys = useMemo(() => [...removedDirectoryKeySet], [removedDirectoryKeySet]);
   const disclosedParentsRef = useRef<ReturnType<typeof projectDisclosedNavigationParents>>([]);
-  const disclosedParents = useMemo(() => projectDisclosedNavigationParents(state.rows?.threadRows, disclosedParentsRef.current),
-    [state.rows?.threadRows]);
+  const disclosedParents = useMemo(() => projectDisclosedNavigationParents(state.rows?.threadRows, disclosedParentsRef.current, browseMode === "directories"),
+    [state.rows?.threadRows, browseMode]);
   disclosedParentsRef.current = disclosedParents;
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     loadedRowsByQuery, onLoadMore: rememberLoadedRows, onRangeReset: forgetLoadedRows,
@@ -3952,7 +3955,8 @@ export function useThreadNavigation(
           .map((directory) => directory.key);
       }));
       const pendingDirectoryPins = new Set(pendingDirectoryPinsRef.current.keys());
-      const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
+      const retainedKeys = new Set([...pages.values(), ...boundedNavigation.selectionAncestry ? [boundedNavigation.selectionAncestry] : []]
+        .flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       // Acceptance must publish even when reconciliation retains every row
       // and the loading flags are unchanged after a batched refresh.
       setAcceptedPages(pages);
@@ -3990,7 +3994,7 @@ export function useThreadNavigation(
             ...(resource.state.request.query.kind === "exact"
               ? resource.state.request.query.identities.map((ref) => navigationThreadSelectionKey(ref)) : []),
           ]));
-        for (const [id, page] of orderedPages) for (const { row } of page.entries) {
+        for (const [id, page] of orderedPages) for (const { row, placement, siblingOrder } of page.entries) {
           const key = threadSummaryIdentityKey(row);
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
           const previous = threadRows.get(key);
@@ -3998,7 +4002,7 @@ export function useThreadNavigation(
           // fresh read runs. That range supplies membership, not newer row
           // metadata: it must not roll a live PR chip back to an old status.
           if (previous && boundedNavigation.resources.get(id)?.restoredFromCache) continue;
-          let presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
+          let presentedRow: NavigationPresentedThread = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
             ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank,
                 ownerOrdinaryChildCount: row.ordinaryChildCount, viewerChildCount: previous?.viewerChildCount,
                 ordinaryChildCount: row.ordinaryChildCount + (previous?.viewerChildCount ?? 0) }
@@ -4006,6 +4010,20 @@ export function useThreadNavigation(
                 viewerChildCount: row.viewerChildCount,
                 ordinaryChildCount: (previous.ownerOrdinaryChildCount ?? 0) + (row.viewerChildCount ?? 0) } : row
             : row;
+          // Exact batches turn over when selection or loaded membership
+          // changes. Their last accepted sibling positions are row metadata:
+          // retain them with the admitted row, not with the transport lease.
+          // A new owner observation replaces (or withdraws) that metadata.
+          // Directory ancestry can stop before a native parent that belongs
+          // to another owner project; the row still carries that relationship.
+          const siblingParent = placement.kind === "child" ? placement.parent : row.parentThreadId
+            ? { backend: row.parentThreadBackend ?? row.source, threadId: row.parentThreadId,
+                ownerInstanceId: row.parentThreadInstanceId ?? row.ref.ownerInstanceId } : undefined;
+          const ownerSiblingPosition = ownerPage && boundedNavigation.resources.get(id)?.state.request.query.kind === "exact"
+            ? siblingParent && siblingOrder !== undefined
+              ? { parentKey: navigationThreadSelectionKey(siblingParent), position: siblingOrder } : null
+            : previous?.ownerSiblingPosition;
+          if (ownerSiblingPosition !== undefined) presentedRow = { ...presentedRow, ownerSiblingPosition };
           const observedName = threadNameObservationsRef.current.get(key);
           if (observedName) {
             if (row.title === observedName.threadName && row.titleSource === observedName.titleSource) {
@@ -4060,7 +4078,7 @@ export function useThreadNavigation(
       setState((current) => current.loading === loading && current.refreshing === refreshing && current.error === error
         ? current : { ...current, loading, refreshing, error });
     }
-  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
+  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.selectionAncestry, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
   // The effect above folds a landed page into the rows, so a render in which
   // a page lands still shows the rows from before it. In that render the page
   // is not stale, yet nothing built from the rows reflects it. A selection's

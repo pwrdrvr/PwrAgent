@@ -5,15 +5,16 @@ import type {
 import { navigationIdentityKey } from "./navigation-query-state";
 import type { NavigationPresentedThread } from "./navigation-loaded-rows";
 
-/** Row metadata changes do not change the window's ordinary-child disclosure. */
+/** Directories use scoped collection counts; other lenses use accepted owner counts. */
 export function projectDisclosedNavigationParents(
   rows: ReadonlyMap<string, NavigationPresentedThread> | undefined,
   previous: readonly NavigationIdentity[],
+  directoryScoped = false,
 ): readonly NavigationIdentity[] {
   let index = 0;
   let same = true;
   for (const thread of rows?.values() ?? []) {
-    if (thread.subthreadsCollapsed || !thread.ordinaryChildCount) continue;
+    if (thread.subthreadsCollapsed || (!directoryScoped && !thread.ordinaryChildCount)) continue;
     const ref = previous[index++];
     const owner = thread.federation?.ref.target;
     if (!ref || ref.backend !== thread.source || ref.threadId !== thread.id
@@ -22,7 +23,7 @@ export function projectDisclosedNavigationParents(
   if (same && index === previous.length) return previous;
   const refs: NavigationIdentity[] = [];
   for (const thread of rows?.values() ?? []) {
-    if (thread.subthreadsCollapsed || !thread.ordinaryChildCount) continue;
+    if (thread.subthreadsCollapsed || (!directoryScoped && !thread.ordinaryChildCount)) continue;
     const owner = thread.federation?.ref.target;
     refs.push({ backend: thread.source, threadId: thread.id,
       ...(owner?.scope === "remote" ? { ownerInstanceId: owner.instanceId } : {}) });
@@ -160,6 +161,7 @@ export function visibleDisclosedNavigationParents(params: {
   collectionIds: Iterable<string>;
   pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
   disclosedParents: readonly NavigationIdentity[];
+  selectionAncestry?: import("@pwragent/shared").NavigationQueryPage | null;
   directoryKeysByParent?: Map<string, string>;
 }): NavigationIdentity[] {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
@@ -171,7 +173,8 @@ export function visibleDisclosedNavigationParents(params: {
   // and retains an unpinned selected root while Directory threads is closed.
   // Both roots need child demand even though no collection page contains them.
   // An open unpinned collection still owns its visible membership.
-  const selected = params.pages.get("selected-viewer-mount") ?? params.pages.get("selected-context");
+  const selected = params.selectionAncestry !== undefined ? params.selectionAncestry
+    : params.pages.get("selected-viewer-mount") ?? params.pages.get("selected-context");
   const selectedRoot = selected?.entries.find((entry) => entry.placement.kind === "root");
   if (selectedRoot && selected?.selectionDirectory
     && pending.some(({ id }) => id === `directory-pins:${selected.selectionDirectory!.key}`)
@@ -179,7 +182,7 @@ export function visibleDisclosedNavigationParents(params: {
       || !pending.some(({ id }) => id === `directory:${selected.selectionDirectory!.key}`))) {
     const key = navigationIdentityKey(selectedRoot.row.ref);
     const parent = candidates.get(key);
-    if (parent) {
+    if (parent && selectedRoot.row.ordinaryChildCount > 0) {
       visible.set(key, parent);
       params.directoryKeysByParent?.set(key, selected.selectionDirectory.key);
       pending.push(...[`children:${key}`, `children:${key}:viewer`].map((id) => ({ id, directoryKey: selected.selectionDirectory!.key })));
@@ -198,7 +201,9 @@ export function visibleDisclosedNavigationParents(params: {
     for (const entry of page?.entries ?? []) {
       const key = navigationIdentityKey(entry.row.ref);
       const parent = candidates.get(key);
-      if (!parent || visible.has(key)) continue;
+      // A viewer lens can mount only the remote root. Its zero count cannot
+      // veto the native owner's tray; directory membership alone is scoped.
+      if (!parent || (directoryKey !== undefined && !entry.row.ordinaryChildCount) || visible.has(key)) continue;
       visible.set(key, parent);
       if (directoryKey) params.directoryKeysByParent?.set(key, directoryKey);
       pending.push(...[`children:${key}`, `children:${key}:viewer`].map((childId) => ({ id: childId, directoryKey })));
