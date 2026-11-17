@@ -11,6 +11,7 @@ import type {
   AutomationMutationResponse,
   AutomationReplaySource,
   AutomationReplayUnsupportedReason,
+  AutomationRunOwner,
   AutomationRunSummary,
   AutomationRunStatus,
   AutomationRunUsage,
@@ -49,6 +50,7 @@ import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAutomationStorage } from "../storage/desktop-automation-storage.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
+import { isAutomationRunOwnerAlive } from "./automation-run-owner.js";
 import {
   buildPendingDeliveryActionResults,
   executeAutomationOutputActions,
@@ -193,6 +195,8 @@ export class DesktopAutomationService {
         disabled?: boolean;
         disabledReason?: string;
       };
+      /** Defaults to this profile's runtime markers. */
+      isRunOwnerAlive?: (owner: AutomationRunOwner) => boolean;
       store: AutomationStorage;
     },
   ) {
@@ -1145,6 +1149,8 @@ export class DesktopAutomationService {
     threadId: string;
     finalText?: string;
     errorMessage?: string;
+    /** Startup reports its runs in one summary line; per-run detail is debug. */
+    startupReconcile?: boolean;
   }): Promise<void> {
     const run = this.options.store.getRun(params.runId);
     if (!run) {
@@ -1235,7 +1241,9 @@ export class DesktopAutomationService {
       }
     }
     const artifact = this.options.store.getRunArtifact(run.id);
-    if (
+    if (params.startupReconcile) {
+      automationServiceLog.debug("publishing interrupted automation run", logFields);
+    } else if (
       params.status === "terminal"
       || params.status === "failed"
       || params.status === "cancelled"
@@ -1467,7 +1475,58 @@ export class DesktopAutomationService {
           computeNextAutomationRunAt(automation.schedule!, now),
         ]),
     );
-    this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
+    const result = this.options.store.reconcileStartup({
+      now,
+      nextRunAtByAutomationId,
+      isOwnerAlive: this.options.isRunOwnerAlive ?? isAutomationRunOwnerAlive,
+    });
+    automationServiceLog.info("automation startup reconcile finished", {
+      interruptedRunCount: result.interruptedRuns.length,
+      liveOwnerRunCount: result.liveOwnerRunCount,
+      rescheduledAutomationCount: result.rescheduledAutomationCount,
+    });
+    if (result.interruptedRuns.length === 0) return;
+    void this.reportInterruptedRuns(result.interruptedRuns);
+  }
+
+  /**
+   * Tells the operator what the previous process lost, through the path a
+   * failed run takes: the run artifact, the automation's output actions, and
+   * `automation/run/updated` for the Agent thread and its bound conversation.
+   * Nothing is resumed.
+   */
+  private async reportInterruptedRuns(runs: AutomationRunSummary[]): Promise<void> {
+    for (const run of runs) {
+      const automation = this.options.store.getAutomation(run.automationId, {
+        includeDeleted: true,
+      });
+      automationServiceLog.debug("automation run interrupted by a restart", {
+        automationId: run.automationId,
+        automationName: automation?.name,
+        backendTurnId: run.backendTurnId,
+        ownerInstanceId: run.owner?.instanceId,
+        ownerProcessId: run.owner?.processId,
+        runId: run.id,
+        startedAt: run.startedAt,
+        threadId: automation?.threadId,
+      });
+      if (!automation) continue;
+      try {
+        await this.publishAutomationRunUpdate({
+          backend: automation.backend,
+          runId: run.id,
+          status: "failed",
+          threadId: automation.threadId,
+          errorMessage: run.errorMessage,
+          startupReconcile: true,
+        });
+      } catch (error) {
+        automationServiceLog.warn("interrupted automation run report failed", {
+          error: error instanceof Error ? error.message : String(error),
+          runId: run.id,
+        });
+      }
+    }
   }
 
   private startSchedulerIfEnabled(): void {

@@ -1123,6 +1123,26 @@ export type AutomationRunWindow = {
 export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
 
 /**
+ * Why a `failed` run failed, when PwrAgent rather than the provider ended it.
+ * `interrupted`: the process that owned the run stopped before the run
+ * reached an outcome, and a later launch reported the loss. It is a reason on
+ * `failed`, not a status of its own, so builds that predate it still read the
+ * run.
+ */
+export type AutomationRunFailureReason = "interrupted";
+
+/**
+ * The process that created a run: the identity its profile runtime marker
+ * carries. Startup changes another process's run only after this identity is
+ * proved dead. A run without one cannot prove a live owner.
+ */
+export type AutomationRunOwner = {
+  instanceId: string;
+  processId: number;
+  startedAt?: number;
+};
+
+/**
  * Token/cost accounting for one run's headless turn, distilled from the
  * turn-scope ThreadUsageLineRecord the pricing pipeline computes. Cost is the
  * list price at the time the run happened (micros, USD) — deliberately frozen
@@ -1163,6 +1183,10 @@ export type AutomationRunSummary = {
   errorMessage?: string;
   /** Set on `skipped` runs to explain the skip without matching display copy. */
   skipReason?: AutomationRunSkipReason;
+  /** Set on `failed` runs that PwrAgent ended; absent for provider failures. */
+  failureReason?: AutomationRunFailureReason;
+  /** Process that created the run. Absent on runs older builds wrote. */
+  owner?: AutomationRunOwner;
   /**
    * How many inbound messages a `rate_limited` throttle marker has absorbed by
    * coalescing (a bounded count, not a per-message list). Surfaced in the run

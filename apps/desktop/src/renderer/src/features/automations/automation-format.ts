@@ -1,5 +1,6 @@
 import type {
   AutomationBacklogPolicy,
+  AutomationRunFailureReason,
   AutomationRunStatus,
   AutomationScheduleDefinition,
   AutomationStatus,
@@ -48,7 +49,12 @@ export function formatAutomationStatus(status: AutomationStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-export function formatRunStatus(status: AutomationRunStatus): string {
+/** A run a restart ended is a failed run that reads "interrupted" in history. */
+export function formatRunStatus(
+  status: AutomationRunStatus,
+  failureReason?: AutomationRunFailureReason,
+): string {
+  if (status === "failed" && failureReason === "interrupted") return "interrupted";
   return status.replace("_", " ");
 }
 

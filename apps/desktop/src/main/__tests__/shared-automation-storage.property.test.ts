@@ -186,7 +186,7 @@ it("keeps startup reconciliation atomic and outer transactions authoritative ove
       expect(portable.getRunArtifact("r-0")).toBeUndefined();
       desktop.reconcileStartup({ now: 20, nextRunAtByAutomationId: { "a-0": 30 } });
       for (let i = 0; i < count; i++) expect(portable.getRun(`r-${i}`))
-        .toMatchObject({ status: "cancelled", completedAt: 20, backendTurnId: `turn-${i}` });
+        .toMatchObject({ status: "failed", failureReason: "interrupted", completedAt: 20, backendTurnId: `turn-${i}` });
       expect(portable.getAutomation("a-0")?.nextRunAt).toBe(30);
     } finally { db.close(); }
   }), { numRuns: 25 });
