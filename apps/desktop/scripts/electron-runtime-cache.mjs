@@ -97,20 +97,35 @@ function atomicWrite(path, bytes) {
 // Publish a nonempty lock directory atomically. Dead-owner recovery unlinks
 // only that owner's token, then removes an empty directory. It cannot delete
 // a new owner's nonempty lock, even with simultaneous stale-lock recovery.
+//
+// Several processes can remove the same dead token or empty directory at
+// once. The loser normally sees ENOENT. On Windows it can see EPERM while the
+// winner's delete is in progress (measured on unlink, rmdir and readdir).
+// Neither is a failure: the entry is gone or going, and the next poll reads
+// the settled state. A denial that never clears ends at the deadline.
 async function acquireInstallLock(electronDir) {
   const lock = join(electronDir, ".pwragent-runtime-lock");
   const token = `${process.pid}-${randomUUID()}`;
   const candidate = mkdtempSync(join(electronDir, ".runtime-lock-"));
   writeFileSync(join(candidate, token), "");
   const deadline = Date.now() + 120_000;
+  let denied;
+  const removedElsewhere = (error) => {
+    if (error.code === "ENOENT") return true;
+    if (process.platform !== "win32" || error.code !== "EPERM") return false;
+    denied = error;
+    return true;
+  };
   try {
     for (;;) {
       try {
         renameSync(candidate, lock);
         return () => {
           unlinkSync(join(lock, token));
+          // The token is gone, so the lock is released. A waiting process
+          // may already be removing the empty directory.
           try { rmdirSync(lock); } catch (error) {
-            if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
+            if (!removedElsewhere(error) && !["ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
           }
         };
       } catch (error) {
@@ -123,17 +138,17 @@ async function acquireInstallLock(electronDir) {
           try { process.kill(Number(match[1]), 0); } catch (error) {
             if (error.code !== "ESRCH") continue;
             try { unlinkSync(join(lock, owner)); } catch (unlinkError) {
-              if (unlinkError.code !== "ENOENT") throw unlinkError;
+              if (!removedElsewhere(unlinkError)) throw unlinkError;
             }
           }
         }
         try { rmdirSync(lock); } catch (error) {
-          if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
+          if (!removedElsewhere(error) && !["ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
         }
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (!removedElsewhere(error)) throw error;
       }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for Electron installer lock: ${lock}`);
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for Electron installer lock: ${lock}`, { cause: denied });
       await setTimeout(50);
     }
   } finally {
