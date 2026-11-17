@@ -161,6 +161,34 @@ describe("research sync", () => {
     sync.dispose();
   });
 
+  it("leaves the store shown as it was when a sync fails part way through its pages", async () => {
+    const model = owner();
+    const journal = [researchCreatedEvent(2)];
+    model.journals.set("run-1", journal);
+    let state: ResearchSyncState = { writableRunIds: [] };
+    const sync = new ResearchSync(model.reads, thread, (next) => {
+      state = next;
+      if (next.store) expectStoreIsRunAt(next.store, journal);
+    });
+    const drain = async () => { await settle(); while (model.held.length) { model.held.shift()!(); await settle(); } };
+    sync.start();
+    await drain();
+    const shown = state.store!.revision;
+    // Five new findings are two pages of changes. The second page is not answered.
+    for (let i = 0; i < 5; i++) journal.push(nextResearchEvent(projectResearchRun("run-1", journal), { kind: "finding", pick: 0, other: 0, variant: i, flag: false }));
+    sync.notify({ ...thread, runId: "run-1", revision: journal.length });
+    model.fail();
+    await drain();
+    expect(state.error).toBeDefined();
+    expect(state.store?.revision).toBe(shown);
+    expectStoreIsRunAt(state.store!, journal);
+    sync.notify({ ...thread, runId: "run-1", revision: journal.length });
+    await drain();
+    expect(state.error).toBeUndefined();
+    expect(state.store?.revision).toBe(journal.length);
+    sync.dispose();
+  });
+
   it("keeps a change to another run that arrives while the run list is being read", async () => {
     const model = owner();
     model.journals.set("run-1", [researchCreatedEvent(2, { at: 1000 })]);
