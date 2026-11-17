@@ -4,8 +4,11 @@ import {
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
-  type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork,
+  type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork, type ResearchPendingRequest,
 } from "@pwragent/shared/research";
+
+/** An operator request expires if the coordinator has not started it within five minutes. */
+export const RESEARCH_REQUEST_TTL_MS = 5 * 60_000;
 import type { ResearchStorage } from "./research-storage";
 
 export type ResearchExecutionContext = ResearchActor & { kind: "agent"; turnId: string; callId: string };
@@ -48,7 +51,7 @@ export class ResearchService {
   private readonly pendingQueueEvents = new Map<string, Map<string, { status: string; turnId?: string }>>();
   private readonly stops = new Map<string, Promise<ResearchRun>>();
   private readonly workerStops = new Map<string, Promise<void>>();
-  private readonly intents = new Map<string, { id: string; request: PrepareResearchRequest; expiresAt: number }>();
+  private readonly intents = new Map<string, { id: string; request: PrepareResearchRequest; preparedAt: number; expiresAt: number }>();
   private closed = false;
   private readonly now: () => number;
 
@@ -72,7 +75,21 @@ export class ResearchService {
 
   snapshot(thread: ResearchThread): ResearchSnapshot {
     const runs = this.storage.list(thread);
-    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id) };
+    const pending = this.pendingRequest(thread);
+    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id), ...(pending ? { pending } : {}) };
+  }
+
+  /** The thread's unexpired operator request. Memory only: a restart drops it, as the agent's start would also be refused. */
+  private pendingRequest(thread: ResearchThread): ResearchPendingRequest | undefined {
+    const intent = this.intents.get(JSON.stringify([thread.backend, thread.threadId]));
+    if (this.closed || !intent || this.now() >= intent.expiresAt) return undefined;
+    const { backend: _backend, threadId: _threadId, ...request } = intent.request;
+    return { ...request, preparedAt: intent.preparedAt, expiresAt: intent.expiresAt };
+  }
+
+  /** Withdraw the thread's waiting request so a later research_start for it is refused. No writes. */
+  withdraw(thread: ResearchThread): void {
+    if (this.intents.delete(JSON.stringify([thread.backend, thread.threadId]))) this.ports.changed({ backend: thread.backend, threadId: thread.threadId });
   }
   summaries(thread: ResearchThread) {
     return this.storage.summaries(thread).map((run) => ({ id: run.id, objective: run.objective.slice(0, 200), status: run.status, deadlineAt: run.deadlineAt, workerLimit: run.workerLimit, activeWorkers: run.activeWorkers }));
@@ -232,7 +249,9 @@ export class ResearchService {
     if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error("Choose 1–8 workers");
     validateStartResearch({ ...request, approaches: Array.from({ length: request.workers }, (_, i) => ({ title: `Approach ${i + 1}`, task: "Awaiting assignment" })) });
     const id = randomUUID();
-    this.intents.set(JSON.stringify([request.backend, request.threadId]), { id, request: { ...request }, expiresAt: this.now() + 5 * 60_000 });
+    const preparedAt = this.now();
+    this.intents.set(JSON.stringify([request.backend, request.threadId]), { id, request: { ...request }, preparedAt, expiresAt: preparedAt + RESEARCH_REQUEST_TTL_MS });
+    this.ports.changed({ backend: request.backend, threadId: request.threadId });
     return { intentId: id };
   }
 

@@ -13,6 +13,7 @@ import {
   explainMissingNavigationAnchor,
   navigationQueryKey,
   projectNavigationQuery,
+  navigationQuerySnapshotToken,
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
 } from "./navigation-query-projection";
@@ -282,6 +283,9 @@ export class NavigationQueryStore {
     promoteOnTurnEnd: boolean;
     backend: NavigationQueryRequest["backend"];
     remoteMembers: Set<string>;
+    indexToken?: symbol;
+    observedAt?: number;
+    overtaken?: boolean;
     failed?: boolean;
   }>();
 
@@ -475,6 +479,12 @@ export class NavigationQueryStore {
     const key = JSON.stringify([scopeKey, id]);
     const previous = this.attentionViews.get(key);
     if (previous?.failed) throw new NavigationQueryError("navigation_busy", "Attention metadata exceeded its budget. Close this view and open a new one.");
+    const indexToken = navigationQuerySnapshotToken(index);
+    if (indexToken && previous?.indexToken === indexToken && previous.observedAt === observedAt
+      && previous.promoteOnTurnEnd === promoteOnTurnEnd && previous.backend === request.backend) {
+      if (previous.overtaken) this.options.onOvertakenRead?.();
+      return previous.order;
+    }
     if (!previous && this.attentionViews.size >= NAVIGATION_ATTENTION_MAX_VIEWS) {
       throw new NavigationQueryError("navigation_busy", "Attention view budget is occupied.");
     }
@@ -485,7 +495,8 @@ export class NavigationQueryStore {
       promoteOnTurnEnd,
       observedAt,
     });
-    if (previous && navigationAttentionOrderFollows(previous.order, observedAt)) {
+    const overtaken = previous && navigationAttentionOrderFollows(previous.order, observedAt);
+    if (overtaken) {
       // Runs inside the pool's owner-read trace, so it is recorded on that load.
       this.options.onOvertakenRead?.();
     }
@@ -499,7 +510,7 @@ export class NavigationQueryStore {
     if (retainedBytes > NAVIGATION_ATTENTION_MAX_BYTES) {
       throw new NavigationQueryError("navigation_busy", "Attention metadata exceeds its retained budget.");
     }
-    this.attentionViews.set(key, { order, bytes, promoteOnTurnEnd, backend: request.backend, remoteMembers });
+    this.attentionViews.set(key, { order, bytes, promoteOnTurnEnd, backend: request.backend, remoteMembers, indexToken, observedAt, overtaken });
     return order;
   }
 
@@ -542,6 +553,7 @@ export class NavigationQueryStore {
       retainedBytes += bytes - view.bytes;
       view.order = order;
       view.bytes = bytes;
+      view.indexToken = undefined;
     }
   }
 

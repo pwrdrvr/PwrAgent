@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, navigationQuerySnapshotAuxiliaryBytes } from "@pwragent/owner-core/navigation-query-projection";
 
 const index = { threads: [], directories: [], inputRequestThreadKeys: new Set<string>() } as NavigationQueryIndex;
 function deferred() {
@@ -11,6 +12,23 @@ function deferred() {
 }
 
 describe("shared owner index reads", () => {
+  it("charges prepared helpers to the existing retention budget", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const snapshot = createNavigationQuerySnapshot({ directories: [], threads: Array.from({ length: 16_000 }, (_, i) => ({
+      id: String(i), source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
+    })) });
+    expect(Buffer.byteLength(JSON.stringify(snapshot))).toBeLessThan(8 * 1024 * 1024);
+    expect(navigationQuerySnapshotAuxiliaryBytes(snapshot)).toBeGreaterThan(8 * 1024 * 1024);
+    const load = vi.fn(async () => snapshot);
+    await pool.read("large", load);
+    expect(pool.retainedUsage().entries).toBe(1);
+    expect(pool.retainedUsage().bytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(navigationQuerySnapshotAuxiliaryBytes(snapshot)).toBe(0);
+    await pool.read("large", load);
+    expect(load).toHaveBeenCalledTimes(1);
+    pool.invalidate("large");
+  });
+
   it("deduplicates simultaneous views and aborts only after the last release", async () => {
     const pool = new NavigationIndexReadPool();
     const pending = deferred();

@@ -1106,192 +1106,219 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setEditingIndex(position);
     loadIntoFields(neighbor);
   };
-
-  const previewSubscriptionId = useId();
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewMessages, setPreviewMessages] = useState<InboundPreviewMessage[]>(
-    [],
-  );
-  const canPreview = Boolean(
-    props.desktopApi?.startInboundPreview &&
-      props.desktopApi?.onInboundPreviewMessage,
-  );
-  // One preview subscription per source. Keyed by a sorted string so the
-  // effect below restarts only when the set of conversations changes — not on
-  // every render that rebuilds the (equal) array, and not when "Watch another"
-  // merely moves the fields' conversation into the chips.
-  const previewScopeKey = inboundSources
-    .map((source) => automationConversationKey(source))
-    .sort()
-    .join("|");
-  const previewScopes = useMemo(
-    () => inboundSources,
-    // inboundSources is rebuilt each render; its identity is previewScopeKey.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [previewScopeKey],
-  );
-  // The sender picker searches one provider's directory, and its "seen in
-  // this conversation" group needs one conversation: the first source on the
-  // selected provider.
-  const senderScopeConversationId = inboundSources.find(
-    (source) => source.channel === inboundProvider,
-  )?.conversationId;
-  // Each source's answer to "can history be read here?", keyed by source.
-  // Unknown until the main process answers. Starting at `false` made the panel
-  // assert "History is unavailable" for a frame on every provider that has it.
-  const [previewHistoryBySource, setPreviewHistoryBySource] = useState<
-    Record<string, boolean>
-  >({});
-  const previewHistoryAnswers = Object.values(previewHistoryBySource);
-  const previewHistorySupported = previewHistoryAnswers.some(Boolean)
-    ? true
-    : previewHistoryAnswers.length === previewScopes.length
-      && previewScopes.length > 0
-      ? false
-      : undefined;
-  // The scope refusals are knowable before the preview opens. Stated only
-  // when every source shares one, which is always the case for one source.
-  const previewScopeNotes = new Set(inboundSources.map(previewScopeHistoryNote));
-  const [previewHistoryNote] =
-    previewScopeNotes.size === 1 ? previewScopeNotes : [undefined];
-
-  useEffect(() => {
-    if (!previewOpen || previewScopes.length === 0) return;
-    const start = props.desktopApi?.startInboundPreview;
-    const stop = props.desktopApi?.stopInboundPreview;
-    const subscribe = props.desktopApi?.onInboundPreviewMessage;
-    if (!start || !subscribe) return;
-    setPreviewMessages([]);
-    setPreviewHistoryBySource({});
-    let active = true;
-    const subscriptionIds = previewScopes.map(
-      (scope) => `${previewSubscriptionId}:${automationConversationKey(scope)}`,
-    );
-    previewScopes.forEach((scope, index) => {
-      const key = automationConversationKey(scope);
-      const answer = (supported: boolean) => {
-        if (!active) return;
-        setPreviewHistoryBySource((current) => ({ ...current, [key]: supported }));
-      };
-      void start({
-        subscriptionId: subscriptionIds[index],
-        provider: scope.channel,
-        conversationId: scope.conversationId,
-        ...(scope.parentId ? { parentId: scope.parentId } : {}),
-        recipientUserId: scope.recipientUserId,
-        conversationKind: scope.conversationKind,
-      }).then((response) => {
-        answer(response.historySupported === true);
-      }).catch(() => {
-        answer(false);
-      });
-    });
-    const unsubscribe = subscribe((message) => {
-      const inScope = previewScopes.some((scope) =>
-        matchesAutomationConversation(
-          scope,
-          { ...message, channel: message.provider },
-          message.actor.platformUserId,
-        ),
-      );
-      if (!inScope) return;
-      setPreviewMessages((current) =>
-        current.some((entry) => entry.id === message.id)
-          ? current
-          : [message, ...current].slice(0, 25),
-      );
-    });
-    return () => {
-      active = false;
-      unsubscribe?.();
-      for (const subscriptionId of subscriptionIds) {
-        void stop?.({ subscriptionId });
-      }
-    };
-  }, [
+  const {
     previewOpen,
-    previewScopes,
-    previewSubscriptionId,
-    props.desktopApi,
-  ]);
+    setPreviewOpen,
+    previewMessages,
+    canPreview,
+    senderScopeConversationId,
+    previewHistorySupported,
+    previewHistoryNote,
+    previewMessageMatches,
+    observedSenders,
+    addSenderCondition,
+  } = useAutomationInboundPreview();
 
-  // Shares one evaluator with the main-process matcher so the preview can
-  // never claim a match the trigger would reject (or vice versa).
-  const previewMessageMatches = (message: InboundPreviewMessage): boolean =>
-    inboundSources.some((source) => matchesAutomationConversation(
-      source,
-      { ...message, channel: message.provider },
-      message.actor.platformUserId,
-      inboundIncludeReplies,
-    )) && evaluateAutomationInboundConditions(inboundConditions, {
-      text: message.text,
-      platformUserId: message.actor.platformUserId,
-      ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
-    });
+  function useAutomationInboundPreview() {
+    const previewSubscriptionId = useId();
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const [previewMessages, setPreviewMessages] = useState<InboundPreviewMessage[]>(
+      [],
+    );
+    const canPreview = Boolean(
+      props.desktopApi?.startInboundPreview &&
+        props.desktopApi?.onInboundPreviewMessage,
+    );
+    // One preview subscription per source. Keyed by a sorted string so the
+    // effect below restarts only when the set of conversations changes — not on
+    // every render that rebuilds the (equal) array, and not when "Watch another"
+    // merely moves the fields' conversation into the chips.
+    const previewScopeKey = inboundSources
+      .map((source) => automationConversationKey(source))
+      .sort()
+      .join("|");
+    const previewScopes = useMemo(
+      () => inboundSources,
+      // inboundSources is rebuilt each render; its identity is previewScopeKey.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [previewScopeKey],
+    );
+    // The sender picker searches one provider's directory, and its "seen in
+    // this conversation" group needs one conversation: the first source on the
+    // selected provider.
+    const senderScopeConversationId = inboundSources.find(
+      (source) => source.channel === inboundProvider,
+    )?.conversationId;
+    // Each source's answer to "can history be read here?", keyed by source.
+    // Unknown until the main process answers. Starting at `false` made the panel
+    // assert "History is unavailable" for a frame on every provider that has it.
+    const [previewHistoryBySource, setPreviewHistoryBySource] = useState<
+      Record<string, boolean>
+    >({});
+    const previewHistoryAnswers = Object.values(previewHistoryBySource);
+    const previewHistorySupported = previewHistoryAnswers.some(Boolean)
+      ? true
+      : previewHistoryAnswers.length === previewScopes.length
+        && previewScopes.length > 0
+        ? false
+        : undefined;
+    // The scope refusals are knowable before the preview opens. Stated only
+    // when every source shares one, which is always the case for one source.
+    const previewScopeNotes = new Set(inboundSources.map(previewScopeHistoryNote));
+    const [previewHistoryNote] =
+      previewScopeNotes.size === 1 ? previewScopeNotes : [undefined];
 
-  // Senders observed in the live preview stream feed the picker's
-  // "seen in this conversation" group with no extra round trip.
-  const observedSenders = useMemo(() => {
-    const byId = new Map<string, MessagingSenderSuggestion>();
-    for (const message of previewMessages) {
-      if (byId.has(message.actor.platformUserId)) continue;
-      byId.set(message.actor.platformUserId, {
-        platformUserId: message.actor.platformUserId,
-        ...(message.actor.displayName
-          ? { displayName: message.actor.displayName }
-          : {}),
-        ...(message.actor.isBot ? { isBot: true } : {}),
-        source: "conversation",
+    useEffect(() => {
+      if (!previewOpen || previewScopes.length === 0) return;
+      const start = props.desktopApi?.startInboundPreview;
+      const stop = props.desktopApi?.stopInboundPreview;
+      const subscribe = props.desktopApi?.onInboundPreviewMessage;
+      if (!start || !subscribe) return;
+      setPreviewMessages([]);
+      setPreviewHistoryBySource({});
+      let active = true;
+      const subscriptionIds = previewScopes.map(
+        (scope) => `${previewSubscriptionId}:${automationConversationKey(scope)}`,
+      );
+      previewScopes.forEach((scope, index) => {
+        const key = automationConversationKey(scope);
+        const answer = (supported: boolean) => {
+          if (!active) return;
+          setPreviewHistoryBySource((current) => ({ ...current, [key]: supported }));
+        };
+        void start({
+          subscriptionId: subscriptionIds[index],
+          provider: scope.channel,
+          conversationId: scope.conversationId,
+          ...(scope.parentId ? { parentId: scope.parentId } : {}),
+          recipientUserId: scope.recipientUserId,
+          conversationKind: scope.conversationKind,
+        }).then((response) => {
+          answer(response.historySupported === true);
+        }).catch(() => {
+          answer(false);
+        });
       });
-    }
-    return [...byId.values()];
-  }, [previewMessages]);
-
-  /**
-   * "Use sender" on a previewed message. Folds into an existing `is one of`
-   * sender row when there is one, so clicking three messages builds a single
-   * "sender is A, B, or C" condition instead of three mutually exclusive rows
-   * that could never all be true at once.
-   */
-  const addSenderCondition = useCallback(
-    (actor: InboundPreviewMessage["actor"]) => {
-      const label = actor.displayName ?? actor.platformUserId;
-      setSenderLabels((current) => ({
-        ...current,
-        [actor.platformUserId]: label,
-      }));
-      setInboundConditions((current) => {
-        const existing = current.conditions.find(
-          (condition) =>
-            condition.field === "sender" && condition.operator === "is_one_of",
+      const unsubscribe = subscribe((message) => {
+        const inScope = previewScopes.some((scope) =>
+          matchesAutomationConversation(
+            scope,
+            { ...message, channel: message.provider },
+            message.actor.platformUserId,
+          ),
         );
-        if (!existing) {
+        if (!inScope) return;
+        setPreviewMessages((current) =>
+          current.some((entry) => entry.id === message.id)
+            ? current
+            : [message, ...current].slice(0, 25),
+        );
+      });
+      return () => {
+        active = false;
+        unsubscribe?.();
+        for (const subscriptionId of subscriptionIds) {
+          void stop?.({ subscriptionId });
+        }
+      };
+    }, [
+      previewOpen,
+      previewScopes,
+      previewSubscriptionId,
+      props.desktopApi,
+    ]);
+
+    // Shares one evaluator with the main-process matcher so the preview can
+    // never claim a match the trigger would reject (or vice versa).
+    const previewMessageMatches = (message: InboundPreviewMessage): boolean =>
+      inboundSources.some((source) => matchesAutomationConversation(
+        source,
+        { ...message, channel: message.provider },
+        message.actor.platformUserId,
+        inboundIncludeReplies,
+      )) && evaluateAutomationInboundConditions(inboundConditions, {
+        text: message.text,
+        platformUserId: message.actor.platformUserId,
+        ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
+      });
+
+    // Senders observed in the live preview stream feed the picker's
+    // "seen in this conversation" group with no extra round trip.
+    const observedSenders = useMemo(() => {
+      const byId = new Map<string, MessagingSenderSuggestion>();
+      for (const message of previewMessages) {
+        if (byId.has(message.actor.platformUserId)) continue;
+        byId.set(message.actor.platformUserId, {
+          platformUserId: message.actor.platformUserId,
+          ...(message.actor.displayName
+            ? { displayName: message.actor.displayName }
+            : {}),
+          ...(message.actor.isBot ? { isBot: true } : {}),
+          source: "conversation",
+        });
+      }
+      return [...byId.values()];
+    }, [previewMessages]);
+
+    /**
+     * "Use sender" on a previewed message. Folds into an existing `is one of`
+     * sender row when there is one, so clicking three messages builds a single
+     * "sender is A, B, or C" condition instead of three mutually exclusive rows
+     * that could never all be true at once.
+     */
+    const addSenderCondition = useCallback(
+      (actor: InboundPreviewMessage["actor"]) => {
+        const label = actor.displayName ?? actor.platformUserId;
+        setSenderLabels((current) => ({
+          ...current,
+          [actor.platformUserId]: label,
+        }));
+        setInboundConditions((current) => {
+          const existing = current.conditions.find(
+            (condition) =>
+              condition.field === "sender" && condition.operator === "is_one_of",
+          );
+          if (!existing) {
+            return {
+              ...current,
+              conditions: [
+                ...current.conditions,
+                {
+                  id: `condition-${crypto.randomUUID()}`,
+                  field: "sender",
+                  operator: "is_one_of",
+                  values: [actor.platformUserId],
+                },
+              ],
+            };
+          }
+          if (existing.values.includes(actor.platformUserId)) return current;
           return {
             ...current,
-            conditions: [
-              ...current.conditions,
-              {
-                id: `condition-${crypto.randomUUID()}`,
-                field: "sender",
-                operator: "is_one_of",
-                values: [actor.platformUserId],
-              },
-            ],
+            conditions: current.conditions.map((condition) =>
+              condition.id === existing.id
+                ? { ...condition, values: [...condition.values, actor.platformUserId] }
+                : condition,
+            ),
           };
-        }
-        if (existing.values.includes(actor.platformUserId)) return current;
-        return {
-          ...current,
-          conditions: current.conditions.map((condition) =>
-            condition.id === existing.id
-              ? { ...condition, values: [...condition.values, actor.platformUserId] }
-              : condition,
-          ),
-        };
-      });
-    },
-    [],
-  );
+        });
+      },
+      [],
+    );
+    return {
+      previewOpen,
+      setPreviewOpen,
+      previewMessages,
+      canPreview,
+      senderScopeConversationId,
+      previewHistorySupported,
+      previewHistoryNote,
+      previewMessageMatches,
+      observedSenders,
+      addSenderCondition,
+    };
+  }
+
 
   // Connector captions. These state what actually survives into the next
   // stage, so the form reads as a pipeline rather than a pile of fields.
@@ -1712,502 +1739,506 @@ export function AutomationEditor(props: AutomationEditorProps) {
         </label>
 
         <div className="automation-funnel">
-          <AutomationStage verb="When" title="Trigger">
-              <div className="automation-segmented" role="group" aria-label="Trigger kind">
-                {([
-                  ["schedule", "Schedule"],
-                  ["inbound_message", "Inbound message"],
-                ] as const).map(([kind, label]) => (
-                  <button
-                    key={kind}
-                    aria-pressed={triggerKind === kind}
-                    className={`automation-segmented__button${
-                      triggerKind === kind ? " is-active" : ""
-                    }`}
-                    type="button"
-                    onClick={() => {
-                      setTriggerKind(kind);
-                      setValidationError(undefined);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            {triggerKind === "schedule" ? (
-              <>
-                  <div className="automation-segmented" role="group" aria-label="Schedule kind">
-                    {(["interval", "weekdays", "weekly"] as const).map((kind) => (
+          {(function renderAutomationTrigger() {
+            return (
+              <AutomationStage verb="When" title="Trigger">
+                  <div className="automation-segmented" role="group" aria-label="Trigger kind">
+                    {([
+                      ["schedule", "Schedule"],
+                      ["inbound_message", "Inbound message"],
+                    ] as const).map(([kind, label]) => (
                       <button
                         key={kind}
-                        aria-pressed={scheduleKind === kind}
+                        aria-pressed={triggerKind === kind}
                         className={`automation-segmented__button${
-                          scheduleKind === kind ? " is-active" : ""
+                          triggerKind === kind ? " is-active" : ""
                         }`}
                         type="button"
-                        onClick={() => setScheduleKind(kind)}
+                        onClick={() => {
+                          setTriggerKind(kind);
+                          setValidationError(undefined);
+                        }}
                       >
-                        {kind}
+                        {label}
                       </button>
                     ))}
                   </div>
-
-                  {scheduleKind === "interval" ? (
-                    <div className="automation-inline-fields">
-                      <label className="automation-field automation-field--narrow">
-                        <span>Every</span>
-                        <input
-                          min={1}
-                          type="number"
-                          value={intervalEvery}
-                          onChange={(event) => {
-                            setIntervalEvery(event.currentTarget.value);
-                            setValidationError(undefined);
-                          }}
-                        />
-                      </label>
-                      <label className="automation-field automation-field--compact">
-                        <span>Unit</span>
-                        <Select
-                          value={intervalUnit}
-                          options={INTERVAL_UNIT_OPTIONS}
-                          onChange={setIntervalUnit}
-                        />
-                      </label>
-                    </div>
-                  ) : (
-                    <>
-                      <label className="automation-field automation-field--narrow">
-                        <span>Time</span>
-                        <input
-                          type="time"
-                          value={timeOfDay}
-                          onChange={(event) => {
-                            setTimeOfDay(event.currentTarget.value);
-                            setValidationError(undefined);
-                          }}
-                        />
-                      </label>
-                      {scheduleKind === "weekly" ? (
-                        <div className="automation-weekdays" role="group" aria-label="Days">
-                          {AUTOMATION_WEEKDAYS.map((day) => (
-                            <button
-                              key={day}
-                              aria-pressed={daysOfWeek.includes(day)}
-                              className={`automation-weekday${
-                                daysOfWeek.includes(day) ? " is-active" : ""
-                              }`}
-                              type="button"
-                              onClick={() => {
-                                setDaysOfWeek((current) =>
-                                  current.includes(day)
-                                    ? current.filter((entry) => entry !== day)
-                                    : [...current, day],
-                                );
-                                setValidationError(undefined);
-                              }}
-                            >
-                              {DAY_LABELS[day]}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  )}
-              </>
-            ) : (
-              <>
-                    {noProvidersEnabled ? (
-                      <p className="automation-editor__error" role="alert">
-                        No messaging providers are enabled. Enable one in Settings &gt;
-                        Messaging before creating an inbound trigger.
-                      </p>
-                    ) : null}
-                    {sourceSlots.length > 1 ? (
-                      <div className="automation-sources__watching">
-                        <span
-                          className="automation-sources__label"
-                          id={watchingLabelId}
-                        >
-                          Watching
-                        </span>
-                        {/* The sender picker's chip markup, so a removable list
-                            reads the same everywhere in this editor. The chip
-                            open in the fields below is marked; any other opens
-                            there when picked. */}
-                        <ul
-                          aria-labelledby={watchingLabelId}
-                          className="automation-sender-picker__chips"
-                        >
-                          {sourceSlots.map((slot) => {
-                            if (slot.kind === "editing") {
-                              const label = fieldSource
-                                ? formatInboundSourceLabel(fieldSource, {
-                                    withProvider: false,
-                                  })
-                                : fieldConversation.kind === "empty"
-                                  ? "New conversation"
-                                  : "Unfinished conversation";
-                              return (
-                                <li
-                                  aria-current="true"
-                                  className="chip automation-sender-chip automation-source-chip is-editing"
-                                  key="editing"
-                                >
-                                  <span className="automation-source-chip__label">
-                                    {label}
-                                  </span>
-                                  <button
-                                    aria-label={
-                                      fieldSource
-                                        ? `Stop watching ${label}`
-                                        : "Discard this conversation"
-                                    }
-                                    className="automation-sender-chip__remove"
-                                    type="button"
-                                    onClick={removeEditedSource}
-                                  >
-                                    ×
-                                  </button>
-                                </li>
-                              );
-                            }
-                            // The provider is named only where it differs from
-                            // the one selected below.
-                            const label = formatInboundSourceLabel(slot.source, {
-                              withProvider: slot.source.channel !== inboundProvider,
-                            });
-                            return (
-                              <li
-                                className="chip automation-sender-chip automation-source-chip"
-                                key={automationConversationKey(slot.source)}
-                              >
-                                {canOpenSource(slot.source) ? (
-                                  <button
-                                    aria-label={`Edit ${label}`}
-                                    className="automation-source-chip__open"
-                                    title="Edit this conversation"
-                                    type="button"
-                                    onClick={() => openListedSource(slot.index)}
-                                  >
-                                    {label}
-                                  </button>
-                                ) : (
-                                  <span
-                                    className="automation-source-chip__label"
-                                    title={`Enable ${INBOUND_PROVIDER_LABELS[slot.source.channel] ?? slot.source.channel} in Settings > Messaging to edit this conversation.`}
-                                  >
-                                    {label}
-                                  </span>
-                                )}
-                                <button
-                                  aria-label={`Stop watching ${label}`}
-                                  className="automation-sender-chip__remove"
-                                  type="button"
-                                  onClick={() => removeListedSource(slot.index)}
-                                >
-                                  ×
-                                </button>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                        {unfinishedSourceNotice
-                        && fieldConversation.kind === "incomplete" ? (
-                          <p className="automation-sources__notice" role="alert">
-                            Finish this conversation or discard it first:{" "}
-                            {fieldConversation.error}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    <div className="automation-inline-fields">
-                      <label className="automation-field">
-                        <span>Provider</span>
-                        <Select
-                          ref={providerSelectRef}
-                          value={inboundProvider}
-                          options={providerOptions}
-                          onChange={(provider) => {
-                            setInboundProvider(provider);
-                            setGroupSelection("");
-                            setInboundGroupId("");
-                            setTopicSelection("");
-                            setInboundTopicId("");
-                            setValidationError(undefined);
-                          }}
-                        />
-                      </label>
-                      {telegramGroups.length > 0 ? (
-                        <div className="automation-field automation-field--picker">
-                          {/* Not the provider's noun: this list holds DMs as well
-                              as rooms, and the picker composes its accessible
-                              name from this label — "Channel: Dana Okonkwo" was
-                              false for every DM row. */}
-                          <span>Conversation</span>
-                          <MessagingSurfacePicker
-                            key={`inbound:${inboundProvider}`}
-                            fieldLabel="Conversation"
-                            filterConversations
-                            options={conversationOptions(telegramGroups)}
-                            value={pickerValue(groupSelection)}
-                            {...conversationPickerLabels(inboundProvider, "trigger")}
-                            onChange={(picked) => {
-                              const value = selectionValue(picked);
-                              setGroupSelection(value);
-                              setInboundGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
-                              setTopicSelection("");
-                              setInboundTopicId("");
-                              setValidationError(undefined);
-                            }}
-                          />
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {inboundProvider === "discord" ? (
-                      <DiscordChannelHint
-                        canList={Boolean(props.desktopApi?.listDiscordThreadPermissionChannels)}
-                        catalog={discordCatalog}
-                        servers={discordServers}
-                      />
-                    ) : null}
-                    {inboundGroupId.trim()
-                    && !isContactSelection(inboundGroupId)
-                    && groupDeliveryHint(inboundProvider) ? (
-                      <p className="automation-field__hint">
-                        {groupDeliveryHint(inboundProvider)}
-                      </p>
-                    ) : null}
-
-                    {telegramGroups.length === 0 ||
-                    groupSelection === MANUAL_GROUP_VALUE ? (
-                      <div className="automation-field-group">
-                        <div
-                          aria-label="Surface kind"
-                          className="automation-segmented"
-                          role="group"
-                        >
-                          {([
-                            ["channel", conversationPickerLabel(inboundProvider)],
-                            ["dm", "Direct message"],
-                          ] as const).map(([kind, label]) => (
-                            <button
-                              key={kind}
-                              aria-pressed={inboundManualKind === kind}
-                              className={`automation-segmented__button${
-                                inboundManualKind === kind ? " is-active" : ""
-                              }`}
-                              type="button"
-                              onClick={() => {
-                                setInboundManualKind(kind);
-                                setInboundGroupId(
-                                  encodeManualSurface(kind, inboundGroupId),
-                                );
-                                setValidationError(undefined);
-                              }}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                        <label className="automation-field">
-                          <span>
-                            {inboundManualKind === "dm"
-                              ? recipientLabel(inboundProvider)
-                              : conversationLabel(inboundProvider)}
-                          </span>
-                          <input
-                            placeholder={
-                              inboundManualKind === "dm"
-                                ? recipientPlaceholder(inboundProvider)
-                                : conversationPlaceholder(inboundProvider)
-                            }
-                            value={manualSurfaceValue(inboundGroupId)}
-                            onChange={(event) => {
-                              setInboundGroupId(
-                                encodeManualSurface(
-                                  inboundManualKind,
-                                  event.currentTarget.value,
-                                ),
-                              );
-                              setValidationError(undefined);
-                            }}
-                          />
-                        </label>
-                        <p className="automation-field__hint">
-                          {inboundManualKind === "dm"
-                            ? recipientHint(inboundProvider)
-                            : conversationHint(inboundProvider)}
-                        </p>
-                      </div>
-                    ) : null}
-
-                    {canCaptureByCode ? (
-                      <div className="automation-capture">
-                        {captureStatus === "idle" || captureStatus === "error" ? (
+                {triggerKind === "schedule" ? (
+                  <>
+                      <div className="automation-segmented" role="group" aria-label="Schedule kind">
+                        {(["interval", "weekdays", "weekly"] as const).map((kind) => (
                           <button
-                            className="button button--ghost automation-capture__start"
+                            key={kind}
+                            aria-pressed={scheduleKind === kind}
+                            className={`automation-segmented__button${
+                              scheduleKind === kind ? " is-active" : ""
+                            }`}
                             type="button"
-                            onClick={() => void startCaptureByCode()}
+                            onClick={() => setScheduleKind(kind)}
                           >
-                            Not sure of the ID? Register with a code
+                            {kind}
                           </button>
-                        ) : null}
-                        {captureStatus === "waiting" ? (
-                          <div className="automation-capture__panel" role="status">
-                            <p className="automation-capture__lead">
-                              Paste this into the{" "}
-                              {inboundProvider === "telegram"
-                                ? "group or topic"
-                                : conversationPickerLabel(inboundProvider).toLowerCase()}{" "}
-                              you want to watch. PwrAgent will detect it and fill in the
-                              details.
-                            </p>
-                            {captureMessage ? (
-                              <div className="automation-capture__code-row">
-                                <pre className="automation-capture__code">
-                                  {captureMessage}
-                                </pre>
-                                <button
-                                  className="button button--ghost automation-capture__copy"
-                                  type="button"
-                                  onClick={() => void copyCaptureCode()}
-                                >
-                                  {captureCopied ? "Copied" : "Copy"}
-                                </button>
-                              </div>
-                            ) : null}
-                            <div className="automation-capture__actions">
-                              <span className="automation-capture__waiting">
-                                Waiting for the code to arrive...
-                              </span>
-                              <button
-                                className="button button--ghost"
-                                type="button"
-                                onClick={cancelCaptureByCode}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : null}
-                        {captureStatus === "captured" ? (
-                          <p className="automation-capture__captured" role="status">
-                            Captured {capturedName ?? "the conversation"} and authorized it.
-                            The fields above are filled in.
-                          </p>
-                        ) : null}
-                        {captureStatus === "error" && captureError ? (
-                          <p className="automation-editor__error" role="alert">
-                            {captureError}
-                          </p>
-                        ) : null}
+                        ))}
                       </div>
-                    ) : null}
 
-                    {inboundProvider === "telegram" && !isContactSelection(inboundGroupId) ? (
-                      <>
-                        <div
-                          aria-label="Telegram scope"
-                          className="automation-segmented"
-                          role="group"
-                        >
-                          {([
-                            ["group", "Whole group"],
-                            ["topic", "Specific topic"],
-                          ] as const).map(([scope, label]) => (
-                            <button
-                              key={scope}
-                              aria-pressed={telegramScope === scope}
-                              className={`automation-segmented__button${
-                                telegramScope === scope ? " is-active" : ""
-                              }`}
-                              type="button"
-                              onClick={() => {
-                                setTelegramScope(scope);
+                      {scheduleKind === "interval" ? (
+                        <div className="automation-inline-fields">
+                          <label className="automation-field automation-field--narrow">
+                            <span>Every</span>
+                            <input
+                              min={1}
+                              type="number"
+                              value={intervalEvery}
+                              onChange={(event) => {
+                                setIntervalEvery(event.currentTarget.value);
                                 setValidationError(undefined);
                               }}
-                            >
-                              {label}
-                            </button>
-                          ))}
+                            />
+                          </label>
+                          <label className="automation-field automation-field--compact">
+                            <span>Unit</span>
+                            <Select
+                              value={intervalUnit}
+                              options={INTERVAL_UNIT_OPTIONS}
+                              onChange={setIntervalUnit}
+                            />
+                          </label>
                         </div>
-                        {telegramScope === "topic" ? (
-                          <div className="automation-field-group">
-                            {topicOptions.length > 0 ? (
-                              <div className="automation-field automation-field--picker">
-                                <span>Topic</span>
-                                <MessagingSurfacePicker
-                                  fieldLabel="Topic"
-                                  filterConversations={false}
-                                  options={conversationOptions(topicOptions)}
-                                  value={pickerValue(topicSelection)}
-                                  placeholder="Choose a topic"
-                                  searchPlaceholder="Find a topic or ID"
-                                  manualLabel="Enter topic ID manually..."
-                                  sectionLabels={{ other: "Topics" }}
-                                  emptyLabel="No matching topics."
-                                  onChange={(picked) => {
-                                    const value = selectionValue(picked);
-                                    setTopicSelection(value);
-                                    setInboundTopicId(
-                                      value === MANUAL_GROUP_VALUE ? "" : value,
+                      ) : (
+                        <>
+                          <label className="automation-field automation-field--narrow">
+                            <span>Time</span>
+                            <input
+                              type="time"
+                              value={timeOfDay}
+                              onChange={(event) => {
+                                setTimeOfDay(event.currentTarget.value);
+                                setValidationError(undefined);
+                              }}
+                            />
+                          </label>
+                          {scheduleKind === "weekly" ? (
+                            <div className="automation-weekdays" role="group" aria-label="Days">
+                              {AUTOMATION_WEEKDAYS.map((day) => (
+                                <button
+                                  key={day}
+                                  aria-pressed={daysOfWeek.includes(day)}
+                                  className={`automation-weekday${
+                                    daysOfWeek.includes(day) ? " is-active" : ""
+                                  }`}
+                                  type="button"
+                                  onClick={() => {
+                                    setDaysOfWeek((current) =>
+                                      current.includes(day)
+                                        ? current.filter((entry) => entry !== day)
+                                        : [...current, day],
                                     );
                                     setValidationError(undefined);
                                   }}
-                                />
-                              </div>
-                            ) : null}
-                            {topicOptions.length === 0 ||
-                            topicSelection === MANUAL_GROUP_VALUE ? (
-                              <>
-                                <label className="automation-field">
-                                  <span>Topic ID</span>
-                                  <input
-                                    placeholder="e.g. 42"
-                                    value={inboundTopicId}
-                                    onChange={(event) => {
-                                      setInboundTopicId(event.currentTarget.value);
-                                      setValidationError(undefined);
-                                    }}
-                                  />
-                                </label>
-                                <p className="automation-field__hint">
-                                  The forum topic's numeric ID. Keep "Whole group" to watch
-                                  every topic in the group.
-                                </p>
-                              </>
+                                >
+                                  {DAY_LABELS[day]}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                  </>
+                ) : (
+                  <>
+                        {noProvidersEnabled ? (
+                          <p className="automation-editor__error" role="alert">
+                            No messaging providers are enabled. Enable one in Settings &gt;
+                            Messaging before creating an inbound trigger.
+                          </p>
+                        ) : null}
+                        {sourceSlots.length > 1 ? (
+                          <div className="automation-sources__watching">
+                            <span
+                              className="automation-sources__label"
+                              id={watchingLabelId}
+                            >
+                              Watching
+                            </span>
+                            {/* The sender picker's chip markup, so a removable list
+                                reads the same everywhere in this editor. The chip
+                                open in the fields below is marked; any other opens
+                                there when picked. */}
+                            <ul
+                              aria-labelledby={watchingLabelId}
+                              className="automation-sender-picker__chips"
+                            >
+                              {sourceSlots.map((slot) => {
+                                if (slot.kind === "editing") {
+                                  const label = fieldSource
+                                    ? formatInboundSourceLabel(fieldSource, {
+                                        withProvider: false,
+                                      })
+                                    : fieldConversation.kind === "empty"
+                                      ? "New conversation"
+                                      : "Unfinished conversation";
+                                  return (
+                                    <li
+                                      aria-current="true"
+                                      className="chip automation-sender-chip automation-source-chip is-editing"
+                                      key="editing"
+                                    >
+                                      <span className="automation-source-chip__label">
+                                        {label}
+                                      </span>
+                                      <button
+                                        aria-label={
+                                          fieldSource
+                                            ? `Stop watching ${label}`
+                                            : "Discard this conversation"
+                                        }
+                                        className="automation-sender-chip__remove"
+                                        type="button"
+                                        onClick={removeEditedSource}
+                                      >
+                                        ×
+                                      </button>
+                                    </li>
+                                  );
+                                }
+                                // The provider is named only where it differs from
+                                // the one selected below.
+                                const label = formatInboundSourceLabel(slot.source, {
+                                  withProvider: slot.source.channel !== inboundProvider,
+                                });
+                                return (
+                                  <li
+                                    className="chip automation-sender-chip automation-source-chip"
+                                    key={automationConversationKey(slot.source)}
+                                  >
+                                    {canOpenSource(slot.source) ? (
+                                      <button
+                                        aria-label={`Edit ${label}`}
+                                        className="automation-source-chip__open"
+                                        title="Edit this conversation"
+                                        type="button"
+                                        onClick={() => openListedSource(slot.index)}
+                                      >
+                                        {label}
+                                      </button>
+                                    ) : (
+                                      <span
+                                        className="automation-source-chip__label"
+                                        title={`Enable ${INBOUND_PROVIDER_LABELS[slot.source.channel] ?? slot.source.channel} in Settings > Messaging to edit this conversation.`}
+                                      >
+                                        {label}
+                                      </span>
+                                    )}
+                                    <button
+                                      aria-label={`Stop watching ${label}`}
+                                      className="automation-sender-chip__remove"
+                                      type="button"
+                                      onClick={() => removeListedSource(slot.index)}
+                                    >
+                                      ×
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                            {unfinishedSourceNotice
+                            && fieldConversation.kind === "incomplete" ? (
+                              <p className="automation-sources__notice" role="alert">
+                                Finish this conversation or discard it first:{" "}
+                                {fieldConversation.error}
+                              </p>
                             ) : null}
                           </div>
                         ) : null}
-                      </>
-                    ) : null}
+                        <div className="automation-inline-fields">
+                          <label className="automation-field">
+                            <span>Provider</span>
+                            <Select
+                              ref={providerSelectRef}
+                              value={inboundProvider}
+                              options={providerOptions}
+                              onChange={(provider) => {
+                                setInboundProvider(provider);
+                                setGroupSelection("");
+                                setInboundGroupId("");
+                                setTopicSelection("");
+                                setInboundTopicId("");
+                                setValidationError(undefined);
+                              }}
+                            />
+                          </label>
+                          {telegramGroups.length > 0 ? (
+                            <div className="automation-field automation-field--picker">
+                              {/* Not the provider's noun: this list holds DMs as well
+                                  as rooms, and the picker composes its accessible
+                                  name from this label — "Channel: Dana Okonkwo" was
+                                  false for every DM row. */}
+                              <span>Conversation</span>
+                              <MessagingSurfacePicker
+                                key={`inbound:${inboundProvider}`}
+                                fieldLabel="Conversation"
+                                filterConversations
+                                options={conversationOptions(telegramGroups)}
+                                value={pickerValue(groupSelection)}
+                                {...conversationPickerLabels(inboundProvider, "trigger")}
+                                onChange={(picked) => {
+                                  const value = selectionValue(picked);
+                                  setGroupSelection(value);
+                                  setInboundGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
+                                  setTopicSelection("");
+                                  setInboundTopicId("");
+                                  setValidationError(undefined);
+                                }}
+                              />
+                            </div>
+                          ) : null}
+                        </div>
 
-                    {fieldSource || multipleSources ? (
-                      <div className="automation-field-group automation-sources">
-                        {fieldSource ? (
-                          <button
-                            className="button button--ghost automation-sources__add"
-                            type="button"
-                            onClick={watchAnotherConversation}
-                          >
-                            {/* "Conversation", like the picker above: it offers
-                                DMs beside channels and groups. */}
-                            Watch another conversation
-                          </button>
+                        {inboundProvider === "discord" ? (
+                          <DiscordChannelHint
+                            canList={Boolean(props.desktopApi?.listDiscordThreadPermissionChannels)}
+                            catalog={discordCatalog}
+                            servers={discordServers}
+                          />
                         ) : null}
-                        {multipleSources ? (
+                        {inboundGroupId.trim()
+                        && !isContactSelection(inboundGroupId)
+                        && groupDeliveryHint(inboundProvider) ? (
                           <p className="automation-field__hint">
-                            A message in any of these can start a run. They share
-                            the filters, batching window, and hourly cap below.
+                            {groupDeliveryHint(inboundProvider)}
                           </p>
                         ) : null}
-                      </div>
-                    ) : null}
-              </>
-            )}
-          </AutomationStage>
+
+                        {telegramGroups.length === 0 ||
+                        groupSelection === MANUAL_GROUP_VALUE ? (
+                          <div className="automation-field-group">
+                            <div
+                              aria-label="Surface kind"
+                              className="automation-segmented"
+                              role="group"
+                            >
+                              {([
+                                ["channel", conversationPickerLabel(inboundProvider)],
+                                ["dm", "Direct message"],
+                              ] as const).map(([kind, label]) => (
+                                <button
+                                  key={kind}
+                                  aria-pressed={inboundManualKind === kind}
+                                  className={`automation-segmented__button${
+                                    inboundManualKind === kind ? " is-active" : ""
+                                  }`}
+                                  type="button"
+                                  onClick={() => {
+                                    setInboundManualKind(kind);
+                                    setInboundGroupId(
+                                      encodeManualSurface(kind, inboundGroupId),
+                                    );
+                                    setValidationError(undefined);
+                                  }}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            <label className="automation-field">
+                              <span>
+                                {inboundManualKind === "dm"
+                                  ? recipientLabel(inboundProvider)
+                                  : conversationLabel(inboundProvider)}
+                              </span>
+                              <input
+                                placeholder={
+                                  inboundManualKind === "dm"
+                                    ? recipientPlaceholder(inboundProvider)
+                                    : conversationPlaceholder(inboundProvider)
+                                }
+                                value={manualSurfaceValue(inboundGroupId)}
+                                onChange={(event) => {
+                                  setInboundGroupId(
+                                    encodeManualSurface(
+                                      inboundManualKind,
+                                      event.currentTarget.value,
+                                    ),
+                                  );
+                                  setValidationError(undefined);
+                                }}
+                              />
+                            </label>
+                            <p className="automation-field__hint">
+                              {inboundManualKind === "dm"
+                                ? recipientHint(inboundProvider)
+                                : conversationHint(inboundProvider)}
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {canCaptureByCode ? (
+                          <div className="automation-capture">
+                            {captureStatus === "idle" || captureStatus === "error" ? (
+                              <button
+                                className="button button--ghost automation-capture__start"
+                                type="button"
+                                onClick={() => void startCaptureByCode()}
+                              >
+                                Not sure of the ID? Register with a code
+                              </button>
+                            ) : null}
+                            {captureStatus === "waiting" ? (
+                              <div className="automation-capture__panel" role="status">
+                                <p className="automation-capture__lead">
+                                  Paste this into the{" "}
+                                  {inboundProvider === "telegram"
+                                    ? "group or topic"
+                                    : conversationPickerLabel(inboundProvider).toLowerCase()}{" "}
+                                  you want to watch. PwrAgent will detect it and fill in the
+                                  details.
+                                </p>
+                                {captureMessage ? (
+                                  <div className="automation-capture__code-row">
+                                    <pre className="automation-capture__code">
+                                      {captureMessage}
+                                    </pre>
+                                    <button
+                                      className="button button--ghost automation-capture__copy"
+                                      type="button"
+                                      onClick={() => void copyCaptureCode()}
+                                    >
+                                      {captureCopied ? "Copied" : "Copy"}
+                                    </button>
+                                  </div>
+                                ) : null}
+                                <div className="automation-capture__actions">
+                                  <span className="automation-capture__waiting">
+                                    Waiting for the code to arrive...
+                                  </span>
+                                  <button
+                                    className="button button--ghost"
+                                    type="button"
+                                    onClick={cancelCaptureByCode}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                            {captureStatus === "captured" ? (
+                              <p className="automation-capture__captured" role="status">
+                                Captured {capturedName ?? "the conversation"} and authorized it.
+                                The fields above are filled in.
+                              </p>
+                            ) : null}
+                            {captureStatus === "error" && captureError ? (
+                              <p className="automation-editor__error" role="alert">
+                                {captureError}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        {inboundProvider === "telegram" && !isContactSelection(inboundGroupId) ? (
+                          <>
+                            <div
+                              aria-label="Telegram scope"
+                              className="automation-segmented"
+                              role="group"
+                            >
+                              {([
+                                ["group", "Whole group"],
+                                ["topic", "Specific topic"],
+                              ] as const).map(([scope, label]) => (
+                                <button
+                                  key={scope}
+                                  aria-pressed={telegramScope === scope}
+                                  className={`automation-segmented__button${
+                                    telegramScope === scope ? " is-active" : ""
+                                  }`}
+                                  type="button"
+                                  onClick={() => {
+                                    setTelegramScope(scope);
+                                    setValidationError(undefined);
+                                  }}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            {telegramScope === "topic" ? (
+                              <div className="automation-field-group">
+                                {topicOptions.length > 0 ? (
+                                  <div className="automation-field automation-field--picker">
+                                    <span>Topic</span>
+                                    <MessagingSurfacePicker
+                                      fieldLabel="Topic"
+                                      filterConversations={false}
+                                      options={conversationOptions(topicOptions)}
+                                      value={pickerValue(topicSelection)}
+                                      placeholder="Choose a topic"
+                                      searchPlaceholder="Find a topic or ID"
+                                      manualLabel="Enter topic ID manually..."
+                                      sectionLabels={{ other: "Topics" }}
+                                      emptyLabel="No matching topics."
+                                      onChange={(picked) => {
+                                        const value = selectionValue(picked);
+                                        setTopicSelection(value);
+                                        setInboundTopicId(
+                                          value === MANUAL_GROUP_VALUE ? "" : value,
+                                        );
+                                        setValidationError(undefined);
+                                      }}
+                                    />
+                                  </div>
+                                ) : null}
+                                {topicOptions.length === 0 ||
+                                topicSelection === MANUAL_GROUP_VALUE ? (
+                                  <>
+                                    <label className="automation-field">
+                                      <span>Topic ID</span>
+                                      <input
+                                        placeholder="e.g. 42"
+                                        value={inboundTopicId}
+                                        onChange={(event) => {
+                                          setInboundTopicId(event.currentTarget.value);
+                                          setValidationError(undefined);
+                                        }}
+                                      />
+                                    </label>
+                                    <p className="automation-field__hint">
+                                      The forum topic's numeric ID. Keep "Whole group" to watch
+                                      every topic in the group.
+                                    </p>
+                                  </>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </>
+                        ) : null}
+
+                        {fieldSource || multipleSources ? (
+                          <div className="automation-field-group automation-sources">
+                            {fieldSource ? (
+                              <button
+                                className="button button--ghost automation-sources__add"
+                                type="button"
+                                onClick={watchAnotherConversation}
+                              >
+                                {/* "Conversation", like the picker above: it offers
+                                    DMs beside channels and groups. */}
+                                Watch another conversation
+                              </button>
+                            ) : null}
+                            {multipleSources ? (
+                              <p className="automation-field__hint">
+                                A message in any of these can start a run. They share
+                                the filters, batching window, and hourly cap below.
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                  </>
+                )}
+              </AutomationStage>
+            );
+          })()}
 
           <AutomationFlow
             caption={

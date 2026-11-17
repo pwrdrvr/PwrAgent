@@ -2985,6 +2985,8 @@ function scheduleNavigationRefreshTask(callback: () => void): () => void {
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  /** Confirm the complete identity snapshot before any group archive mutation. */
+  confirmArchiveGroup?: (members: readonly NavigationArchiveMember[]) => Promise<boolean>;
   /** Event-triggered reads use a timer task by default; tests inject a task queue. */
   scheduleNavigationRefresh?: (callback: () => void) => () => void;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
@@ -3412,6 +3414,7 @@ export function useThreadNavigation(
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
+  const optionsConfirmArchiveGroup = options.confirmArchiveGroup;
   const removeRemoteThreadPinRequest = desktopApi?.removeRemoteThreadPin;
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
@@ -3682,6 +3685,7 @@ export function useThreadNavigation(
   const manuallySelectedThreadKeysRef = useRecoverableRef("navigation.manualSelections", () => new Set<string>());
   const submittedSeenUpdatedAtByThreadKeyRef = useRecoverableRef("navigation.submittedSeenUpdates", () => new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
+  const refreshCompletionRef = useRef<Promise<void> | undefined>(undefined);
   const archiveRefreshBatchesRef = useRef(0);
   const archiveEventRefreshOwnersRef = useRef(new Map<string, FederationTarget>());
   const mountedRef = useRef(true);
@@ -4095,10 +4099,17 @@ export function useThreadNavigation(
           includeDirectoryIndex: initialRequest.includeDirectoryIndex || queued?.includeDirectoryIndex,
           invalidatedOnly: initialRequest.invalidatedOnly && (!queued || queued.invalidatedOnly === true), owners: queued
           ? mergeNavigationRefreshOwners(queued.owners, initialRequest.owners) : initialRequest.owners };
-        return;
+        return refreshCompletionRef.current;
       }
 
       refreshInFlightRef.current = true;
+      let complete!: () => void;
+      let fail!: (error: unknown) => void;
+      const completion = new Promise<void>((resolve, reject) => { complete = resolve; fail = reject; });
+      // The initiating caller owns the outer async result; concurrent callers
+      // join this same completion, including the coalesced follow-up wave.
+      void completion.catch(() => undefined);
+      refreshCompletionRef.current = completion;
       let nextRequest: typeof initialRequest | undefined = initialRequest;
 
       try {
@@ -4119,14 +4130,24 @@ export function useThreadNavigation(
           );
           nextRequest = queuedRefreshRef.current;
         }
+      } catch (error) {
+        fail(error);
+        throw error;
       } finally {
         refreshInFlightRef.current = false;
+        refreshCompletionRef.current = undefined;
+        complete();
       }
     },
     [performRefresh]
   );
   const refreshNavigation = useCallback(async (caller: NavigationRefreshCaller = "navigation/refresh"): Promise<void> => {
-    await refresh(undefined, undefined, false, { diagnosticTrigger: caller });
+    // A viewer-mount removal publishes its membership event before replying.
+    // Await any still-invalidated work, including an in-flight replacement;
+    // a settled publication needs no second discovery wave. Ordinary refresh
+    // remains a full discovery request.
+    await refresh(undefined, undefined, false, { diagnosticTrigger: caller,
+      invalidatedOnly: caller === "action/remote-pin-remove" });
     await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
   }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
   const refreshThreadMetadata = useCallback(async (thread: NavigationThreadSummary): Promise<void> => {
@@ -8784,14 +8805,13 @@ export function useThreadNavigation(
       }
 
       const threadKey = threadSummaryIdentityKey(thread);
-      const optimisticThreadKey = optimisticThread
-        ? threadSummaryIdentityKey(optimisticThread)
-        : undefined;
-      let targetThreads: NavigationArchiveMember[];
+      let targetThreads: readonly NavigationArchiveMember[];
       try {
-        targetThreads = options?.includeSubthreads
+        targetThreads = Object.freeze(options?.includeSubthreads
           ? await readNavigationArchiveGroup({ api: desktopApi ?? {}, thread, windowTarget: readRendererFederationTarget() })
-          : [thread];
+          : [thread]);
+        if (options?.includeSubthreads && optionsConfirmArchiveGroup
+          && !await optionsConfirmArchiveGroup(targetThreads)) return [];
       } catch (error) {
         setArchiveThreadError({ message: error instanceof Error ? error.message : String(error),
           ...threadActionErrorContext(thread, thread.federation?.ref.target ?? readRendererFederationTarget()) });
@@ -8803,6 +8823,12 @@ export function useThreadNavigation(
         )
       );
       const deferRemoval = !options?.includeSubthreads && deferNestedArchiveRemoval(thread);
+      // Discovery and the operator's confirmation can take minutes. Choose the
+      // fallback selection from the rows and launch on screen now.
+      const optimisticThreadKey = optimisticThreadRef.current
+        ? threadSummaryIdentityKey(optimisticThreadRef.current)
+        : undefined;
+      const rowsAtRemoval = stateRef.current.rows;
 
       for (const targetKey of targetThreadKeys) {
         updateArchivedThreadKey(targetKey, true);
@@ -8837,7 +8863,7 @@ export function useThreadNavigation(
         : undefined;
       setSelectedItemKey((current) =>
         current && targetThreadKeys.has(current)
-          ? nextSelectionKey ?? getFallbackSelectionAfterRemoval(state.rows, {
+          ? nextSelectionKey ?? getFallbackSelectionAfterRemoval(rowsAtRemoval, {
               backend: thread.source,
               federationTarget: thread.federation?.ref.target
                 ?? readRendererFederationTarget(),
@@ -8871,13 +8897,12 @@ export function useThreadNavigation(
       }
       const refreshOptions = { owners: [...refreshOwners.values()] };
       let archiveTarget: NavigationArchiveMember | undefined;
-      let cleanupContextKey: string | undefined;
+      const failures: Array<{ target: NavigationArchiveMember; error: unknown }> = [];
       try {
-        for (const target of targetThreads) {
-          archiveTarget = target;
+        const archiveMember = async (target: NavigationArchiveMember): Promise<void> => {
           const federationTarget = target.federationTarget ?? target.federation?.ref.target
             ?? readRendererFederationTarget();
-          cleanupContextKey = federationTarget?.scope === "remote"
+          const cleanupContextKey = federationTarget?.scope === "remote"
             ? federatedThreadIdentityKey({ backend: target.source, threadId: target.id, target: federationTarget })
             : buildThreadIdentityKey(target.source, target.id);
           const context = threadActionErrorContext(target, federationTarget);
@@ -8885,15 +8910,23 @@ export function useThreadNavigation(
           // Optional display metadata must stay bounded if a peer never sends
           // its completion. The event still carries its authoritative id.
           if (archiveCleanupContexts.current.size > 1024) archiveCleanupContexts.current.delete(archiveCleanupContexts.current.keys().next().value!);
-          const response = await archiveThreadRequest({
-            backend: target.source,
-            threadId: target.id,
-            // Remote viewers may drop their last event subscription with the
-            // archived pin. Retain the response's completion/errors there.
-            ...(federationTarget?.scope === "remote" ? {} : { backgroundCleanup: true }),
-            ...(target.expectedParent !== undefined ? { expectedParent: target.expectedParent } : {}),
-            ...(federationTarget ? { federationTarget } : {}),
-          });
+          let response: Awaited<ReturnType<typeof archiveThreadRequest>>;
+          try {
+            response = await archiveThreadRequest({
+              backend: target.source,
+              threadId: target.id,
+              // Remote viewers may drop their last event subscription with the
+              // archived pin. Retain the response's completion/errors there.
+              ...(federationTarget?.scope === "remote" ? {} : { backgroundCleanup: true }),
+              // The operator selected identities, not parent relationships.
+              // Group changes after confirmation cannot invalidate that list.
+              ...(federationTarget ? { federationTarget } : {}),
+            });
+          } catch (error) {
+            // No archive started, so no completion will ever claim the context.
+            archiveCleanupContexts.current.delete(cleanupContextKey);
+            throw error;
+          }
           if (!response.cleanupPending) archiveCleanupContexts.current.delete(cleanupContextKey);
           const cleanupNotice = formatArchiveCleanupNotice(response.cleanup, context);
           archivedKeys.add(threadSummaryIdentityKey(target));
@@ -8913,11 +8946,23 @@ export function useThreadNavigation(
               ref: target.federation.ref,
             });
           }
+        };
+        for (const target of targetThreads) {
+          archiveTarget = target;
+          try {
+            await archiveMember(target);
+          } catch (error) {
+            failures.push({ target, error });
+          }
+        }
+        if (failures.length) {
+          archiveTarget = failures[0]!.target;
+          const error = failures[0]!.error;
+          throw failures.length === 1 ? error : new Error(`${failures.length} archive operations failed. ${error instanceof Error ? error.message : String(error)}`);
         }
         archiveTarget = undefined;
         await refreshAfterArchive(undefined, undefined, false, refreshOptions);
       } catch (error) {
-        if (cleanupContextKey && archiveTarget && !archivedKeys.has(threadSummaryIdentityKey(archiveTarget))) archiveCleanupContexts.current.delete(cleanupContextKey);
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) {
             updateArchivedThreadKey(targetKey, false);
@@ -8933,13 +8978,12 @@ export function useThreadNavigation(
     },
     [
       archiveThreadRequest,
+      optionsConfirmArchiveGroup,
       updateArchivedThreadKey,
       deferNestedArchiveRemoval,
       desktopApi,
-      optimisticThread,
       refresh,
       removeRemoteThreadPinRequest,
-      state.rows,
       setSelectedItemKey,
     ]
   );

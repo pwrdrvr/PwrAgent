@@ -10,6 +10,7 @@ import {
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
@@ -93,7 +94,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       checkpoint();
       const projected = await params.viewer.project(local);
       signal.throwIfAborted();
-      return projected;
+      return createNavigationQuerySnapshot(projected);
     }
     // Taken before listing. The registry drops its cached and pending
     // listings for a boundary before it tells listeners, so this listing
@@ -120,7 +121,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
-    return index;
+    return createNavigationQuerySnapshot(index);
   }, params.signal, version, params.viewer ? "projection" : "source");
 }
 

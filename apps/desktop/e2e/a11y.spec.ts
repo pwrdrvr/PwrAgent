@@ -58,7 +58,7 @@ import {
 } from "./fixtures/sub-agent-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
-import { seedResearchState, enableResearchFixture } from "./fixtures/research-state-seeding";
+import { seedResearchState, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -781,22 +781,34 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedResearchState(stateDbPathForHomeRoot(homeRoot)); },
       });
       try {
+        // A live run owned by this app, so the run controls and review forms render.
+        seedLiveResearchRun(stateDbPathForHomeRoot(app.homeRoot), readResearchOwnerIdentity(app.homeRoot, app.electronApp.process().pid!));
+        await app.window.reload();
         await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
         await app.window.getByRole("tab", { name: "Research", exact: true }).click();
         const panel = app.window.getByRole("region", { name: "Research", exact: true });
-        await expect(panel.getByLabel("Recorded research graph")).toBeVisible();
-        await runAxe(app.window, "research graph");
-        await panel.getByRole("button", { name: "Board", exact: true }).click();
+        await expect(panel.getByLabel("Research map")).toBeVisible();
+        await expect(panel.getByRole("button", { name: "Stop run…", exact: true })).toBeVisible();
+        await runAxe(app.window, "research map");
+        await panel.getByRole("tab", { name: "Findings", exact: true }).click();
         await expect(panel.getByLabel("Shared findings")).toBeVisible();
-        await runAxe(app.window, "research findings board");
-        await panel.getByRole("button", { name: "Review", exact: true }).click();
-        await expect(panel.getByText(/Formal verification has not been performed/)).toBeVisible();
+        await runAxe(app.window, "research findings");
+        await panel.getByRole("tab", { name: /^Review/ }).click();
+        await expect(panel.getByText(/It is not formal verification/)).toBeVisible();
+        await expect(panel.getByLabel("Reason for your decision").first()).toBeVisible();
         await runAxe(app.window, "research review");
-        await panel.getByRole("button", { name: "Items", exact: true }).click();
+        await panel.getByRole("button", { name: "Stop run…", exact: true }).click();
+        await expect(panel.getByRole("group", { name: "Confirm stopping the run" })).toBeVisible();
+        await runAxe(app.window, "research stop confirmation");
+        await panel.getByRole("button", { name: "Keep running", exact: true }).click();
+        await panel.getByRole("tab", { name: "Items", exact: true }).click();
         await expect(panel.getByLabel("Research items")).toBeVisible();
-        await panel.getByRole("button", { name: /^Finding · Completed A deterministic replay/ }).click();
-        await expect(panel.getByRole("article", { name: "Selected research item" })).toBeVisible();
-        await runAxe(app.window, "research item search and detail");
+        await panel.getByRole("button", { name: /^Counterexample · In progress One failing trace/ }).click();
+        await expect(panel.getByRole("heading", { name: "Counterexample from Invalidation order" })).toBeFocused();
+        await runAxe(app.window, "research item detail");
+        await panel.getByRole("tab", { name: "Activity", exact: true }).click();
+        await expect(panel.getByLabel("Research activity")).toBeVisible();
+        await runAxe(app.window, "research activity");
         await panel.getByRole("button", { name: "New run", exact: true }).click();
         await expect(panel.getByRole("textbox", { name: "Objective", exact: true })).toBeVisible();
         await runAxe(app.window, "research request form");

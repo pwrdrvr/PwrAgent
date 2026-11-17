@@ -115,7 +115,10 @@ through `handoff_task`.
 The Research panel binds its exact objective, worker count, deadline and
 workspace choice to an in-memory request before submitting it to the
 coordinator. That request is caller-scoped, single-use and expires after five
-minutes without admission. It is neither persisted nor federated. Research is
+minutes without admission. It is neither persisted nor federated. The owner's
+snapshot reports the caller's unexpired request so the panel can show it as
+waiting to start, and the operator can withdraw it; a withdrawn, replaced or
+expired request refuses a later `research_start`. Neither path writes. Research is
 an opt-in, default-off experiment stored as `experimental.research_enabled`.
 Its context-rail tab, native/MCP catalogs, IPC and dispatch require this flag
 and Codex Tool Discovery. The five ordinary functions `research_start`,

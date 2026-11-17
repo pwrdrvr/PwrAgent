@@ -1059,6 +1059,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   researchHarnessStatus?: () => Promise<ResearchHarnessStatus>;
   startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchRun>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
+  withdrawResearch?: (thread: ResearchThread) => Promise<void>;
   updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchRun>;
   openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
   onResearchChanged?: (callback: (thread: ResearchThread) => void) => () => void;

@@ -601,6 +601,10 @@ describe("Tangerine Terminal theme contract", () => {
       // How far the 11px hit band reaches over the scrolling neighbour's
       // edge; both seams read it so their geometry cannot drift apart.
       "pane-seam-scroll-side",
+      // Dialog backdrop inset — defined on `.rename-thread-backdrop`, not
+      // `:root`. The archive dialog's height cap subtracts it twice, so the
+      // cap and the backdrop's padding cannot drift. Layout, not theme.
+      "dialog-backdrop-inset",
       // Sidebar width under the 1100px cap — defined on `.app-shell` inside
       // that media query, not `:root`. The painted grid track and
       // `--sidebar-reserve` both derive from it so the resize grip cannot

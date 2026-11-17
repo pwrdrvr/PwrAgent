@@ -1,5 +1,6 @@
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { navigationQuerySnapshotAuxiliaryBytes, releaseNavigationQuerySnapshotProjection } from "@pwragent/owner-core/navigation-query-projection";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
 
@@ -84,8 +85,15 @@ export class NavigationIndexReadPool {
 
   private retain(key: string, index: NavigationQueryIndex, owner: Pending): void {
     if (!this.retentionMs || owner.stale || owner.controller.signal.aborted) return;
-    const bytes = retainedIndexBytes(index);
+    let bytes = retainedIndexBytes(index);
     if (bytes > RETAINED_BYTE_BUDGET) return;
+    const auxiliaryBytes = navigationQuerySnapshotAuxiliaryBytes(index);
+    if (bytes + auxiliaryBytes > RETAINED_BYTE_BUDGET) {
+      // Acceleration must not turn a previously cacheable complete inventory
+      // into a physical provider scan for every page. Keep the immutable
+      // inventory (and its Attention token), with per-query helper fallback.
+      releaseNavigationQuerySnapshotProjection(index);
+    } else bytes += auxiliaryBytes;
     this.evict(key);
     while (this.retained.size >= 8 || this.retainedBytes + bytes > RETAINED_BYTE_BUDGET) this.evict(this.retained.keys().next().value!);
     const timer = setTimeout(() => this.evict(key), this.retentionMs);

@@ -3603,278 +3603,284 @@ export function ThreadView(props: ThreadViewProps) {
   // Each view's own part of the chat column, ahead of the composer slot. The
   // fragments are keyed so React never matches one view's children against
   // another's; only the composer slot, a sibling of these, crosses views.
-  const primaryContent = emptyView ? null : pendingForkEnvironmentSetup ? (
-    <div className="thread-view__launchpad-composer">
-      <LaunchpadEnvironmentSetupPending
-        command={
-          launchpadSetupProgress?.command ??
-          pendingForkEnvironmentSetup.command
-        }
-        confirmedCwd={launchpadSetupProgress?.cwd}
-        cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
-        desktopApi={props.desktopApi}
-        directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
-        environmentName={
-          launchpadSetupProgress?.environmentName ??
-          pendingForkEnvironmentSetup.environmentName
-        }
-        progress={launchpadSetupProgress}
-      />
-    </div>
-  ) : composerLaunchpad ? (
-    <Fragment key="launchpad">
-      {launchpadConnectionsDock === "launchpad" ? (
-        <div
-          ref={launchpadConnectionsRef}
-          aria-label="Connections"
-          className={`thread-view__connections${
-            connectionsArriving ? " is-arriving" : ""
-          }`}
-          role="group"
-          tabIndex={0}
-          onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget) setConnectionsArriving(false);
-          }}
-        >
-          {props.onLaunchpadConnectionsDockChange ? (
-          <div className="thread-view__connections-bar">
-            <button
-              ref={connectionsDockButtonRef}
-              className="thread-view__connections-dock tooltip-target"
-              data-tooltip="Move the connection cards to the sidebar"
-              type="button"
-              onClick={moveConnectionsToSidebar}
-            >
-              <ArrowRightToLineIcon size={14} aria-hidden="true" />
-              Move to sidebar
-            </button>
-          </div>
-          ) : null}
-          <div className="pwrsuite-tiles">{launchpadConnectionTiles}</div>
+  const primaryContent = renderThreadPrimaryContent();
+
+  function renderThreadPrimaryContent() {
+    return (
+      emptyView ? null : pendingForkEnvironmentSetup ? (
+        <div className="thread-view__launchpad-composer">
+          <LaunchpadEnvironmentSetupPending
+            command={
+              launchpadSetupProgress?.command ??
+              pendingForkEnvironmentSetup.command
+            }
+            confirmedCwd={launchpadSetupProgress?.cwd}
+            cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
+            desktopApi={props.desktopApi}
+            directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
+            environmentName={
+              launchpadSetupProgress?.environmentName ??
+              pendingForkEnvironmentSetup.environmentName
+            }
+            progress={launchpadSetupProgress}
+          />
         </div>
-      ) : null}
-      {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
-        <McpAccessPanel
-          backend={composerLaunchpad.backend}
-          desktopApi={props.desktopApi}
-          selection={{
-            connectionIds: composerLaunchpad.mcpConnectionIds ?? [],
-            providerServersEnabled:
-              composerLaunchpad.mcpProviderServersEnabled !== false,
-          }}
-          onDismiss={() => setLaunchpadMcpAccessOpen(false)}
-          onOpenSettings={openMcpConnectionSettings}
-          onSelectionChange={async (selection) => {
-            await props.onUpdateLaunchpad?.(
-              composerLaunchpad.directoryKey,
-              {
-                mcpConnectionIds: selection.connectionIds,
-                mcpProviderServersEnabled:
-                  selection.providerServersEnabled,
-              },
-            );
-          }}
-        />
-      ) : null}
-    </Fragment>
-  ) : (
-    <Fragment key="thread">
-      {/* Inside the chat column, not the header: a conditional row in
-          the header moves `.thread-view__layout`, and the context rail
-          is anchored to it. See `ThreadWarnings`. */}
-      {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
-      {threadTodos && !(contextRailPinned && activeContextTab === "todos") ? (
-        <ThreadTodoStack
-          threadKey={threadTodos.threadKey}
-          todos={threadTodos.todos}
-          view={threadTodos.view}
-          threadRunning={Boolean(props.activeTurnId)}
-          onStartReview={startTodoReview}
-          onDoHere={doTodoHere}
-          findOpen={props.findOpen}
-          revealRequest={props.threadTodoRevealRequest}
-        />
-      ) : null}
-      {props.findOpen ? (
-        <ThreadFindBar
-          containerRef={transcriptPanelRef}
-          refreshKey={visibleTranscriptEntries}
-          initialQuery={props.findInitialQuery}
-          turnId={props.findTurnId}
-          focusNonce={props.findFocusNonce}
-          hasMoreHistory={hasMoreTranscriptHistory}
-          loadingMore={props.loadingMore}
-          onLoadOlder={loadOlderTranscript}
-          onClose={() => props.onFindOpenChange?.(false)}
-        />
-      ) : null}
+      ) : composerLaunchpad ? (
+        <Fragment key="launchpad">
+          {launchpadConnectionsDock === "launchpad" ? (
+            <div
+              ref={launchpadConnectionsRef}
+              aria-label="Connections"
+              className={`thread-view__connections${
+                connectionsArriving ? " is-arriving" : ""
+              }`}
+              role="group"
+              tabIndex={0}
+              onAnimationEnd={(event) => {
+                if (event.target === event.currentTarget) setConnectionsArriving(false);
+              }}
+            >
+              {props.onLaunchpadConnectionsDockChange ? (
+              <div className="thread-view__connections-bar">
+                <button
+                  ref={connectionsDockButtonRef}
+                  className="thread-view__connections-dock tooltip-target"
+                  data-tooltip="Move the connection cards to the sidebar"
+                  type="button"
+                  onClick={moveConnectionsToSidebar}
+                >
+                  <ArrowRightToLineIcon size={14} aria-hidden="true" />
+                  Move to sidebar
+                </button>
+              </div>
+              ) : null}
+              <div className="pwrsuite-tiles">{launchpadConnectionTiles}</div>
+            </div>
+          ) : null}
+          {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
+            <McpAccessPanel
+              backend={composerLaunchpad.backend}
+              desktopApi={props.desktopApi}
+              selection={{
+                connectionIds: composerLaunchpad.mcpConnectionIds ?? [],
+                providerServersEnabled:
+                  composerLaunchpad.mcpProviderServersEnabled !== false,
+              }}
+              onDismiss={() => setLaunchpadMcpAccessOpen(false)}
+              onOpenSettings={openMcpConnectionSettings}
+              onSelectionChange={async (selection) => {
+                await props.onUpdateLaunchpad?.(
+                  composerLaunchpad.directoryKey,
+                  {
+                    mcpConnectionIds: selection.connectionIds,
+                    mcpProviderServersEnabled:
+                      selection.providerServersEnabled,
+                  },
+                );
+              }}
+            />
+          ) : null}
+        </Fragment>
+      ) : (
+        <Fragment key="thread">
+          {/* Inside the chat column, not the header: a conditional row in
+              the header moves `.thread-view__layout`, and the context rail
+              is anchored to it. See `ThreadWarnings`. */}
+          {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
+          {threadTodos && !(contextRailPinned && activeContextTab === "todos") ? (
+            <ThreadTodoStack
+              threadKey={threadTodos.threadKey}
+              todos={threadTodos.todos}
+              view={threadTodos.view}
+              threadRunning={Boolean(props.activeTurnId)}
+              onStartReview={startTodoReview}
+              onDoHere={doTodoHere}
+              findOpen={props.findOpen}
+              revealRequest={props.threadTodoRevealRequest}
+            />
+          ) : null}
+          {props.findOpen ? (
+            <ThreadFindBar
+              containerRef={transcriptPanelRef}
+              refreshKey={visibleTranscriptEntries}
+              initialQuery={props.findInitialQuery}
+              turnId={props.findTurnId}
+              focusNonce={props.findFocusNonce}
+              hasMoreHistory={hasMoreTranscriptHistory}
+              loadingMore={props.loadingMore}
+              onLoadOlder={loadOlderTranscript}
+              onClose={() => props.onFindOpenChange?.(false)}
+            />
+          ) : null}
 
-      <section
-        className="transcript-panel"
-        aria-label="Transcript"
-        ref={transcriptPanelRef}
-      >
-        <TranscriptList
-          entries={visibleTranscriptEntries}
-          rewind={
-            rewindableMessageIds && threadRewindSupport
-              ? {
-                  disabledReason: rewindDisabledReason,
-                  messageIds: rewindableMessageIds,
-                  openMessageId: rewindConfirm?.messageId,
-                  confirmation: rewindConfirm ? (
-                    <ThreadRewindConfirm
-                      key={rewindConfirm.messageId}
-                      busy={rewindConfirm.busy}
-                      error={rewindConfirm.error}
-                      preview={rewindConfirm.preview}
-                      providerLabel={rewindProviderLabel}
-                      summary={rewindConfirm.summary}
-                      support={threadRewindSupport}
-                      onCancel={() => setRewindConfirm(undefined)}
-                      onConfirm={(mode) => {
-                        void executeRewind(mode);
-                      }}
-                    />
-                  ) : undefined,
-                  onOpen: openRewindConfirm,
-                }
-              : undefined
-          }
-          permissionTransitions={selectedThread!.permissionTransitionLog}
-          messagingBindingTransitions={
-            selectedThread!.messagingBindingTransitionLog
-          }
-          questionnaireActivities={
-            selectedThread!.questionnaireActivityLog
-          }
-          turnFailures={selectedThread!.turnFailureLog}
-          rewinds={selectedThread!.rewindLog}
-          rewindUndo={rewindUndo}
-          activeTurnId={props.activeTurnId}
-          activeTurnStartedAt={props.activeTurnStartedAt}
-          applications={props.applications}
-          directoryPaths={threadDirectoryPaths(selectedThread!)}
-          desktopApi={props.desktopApi}
-          error={props.transcriptError}
-          fileViewerContext={fileViewerContext}
-          loading={props.loading}
-          loadingMore={props.loadingMore}
-          linkedMessageId={props.linkedMessageId}
-          linkedMessageRequestKey={props.linkedMessageRequestKey}
-          pagination={visibleTranscriptPagination}
-          parentThreadId={selectedThread!.id}
-          parentThreadBackend={selectedThread!.source}
-          threadLinkSource={transcriptThreadLinkSource}
-          // File-diff activity renders in the LiveWorkRail above
-          // the composer (issue #495). Generic tool activity has no
-          // rail body, so keep it in the transcript while the turn
-          // is live instead of collapsing the UI to a bare
-          // "Thinking" indicator.
-          pendingActivityEntry={pendingTranscriptActivityEntry}
-          pendingAssistantMessage={props.pendingAssistantMessage}
-          transientMessage={props.transientMessage}
-          transientMessages={props.transientMessages}
-          pendingPlanEntry={undefined}
-          pendingMcpInteraction={props.pendingMcpInteraction}
-          pendingRequest={props.pendingRequest}
-          pendingRequestBusy={pendingRequestBusy}
-          pendingUserInput={props.pendingUserInput}
-          pendingStatusText={props.pendingStatusText}
-          agentCommandsStatus={props.agentCommandsStatus}
-          onShowAgentCommands={showAgentCommands}
-          pendingRemoteWork={transcriptRemoteWork}
-          prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
-          runningTurnUsageText={props.runningTurnUsageText}
-          expandedActivityIds={props.expandedTranscriptActivityIds}
-          expandedWorkPhaseGroupIds={
-            props.expandedTranscriptWorkPhaseGroupIds
-          }
-          restoredViewport={props.transcriptViewport}
-          reglueRequestKey={transcriptReglueRequestKey}
-          skills={props.skills}
-          subAgents={selectedThread!.subAgents}
-          pendingProtocolActivityEntry={pendingProtocolActivityEntry}
-          pendingUsageActivityEntry={pendingUsageActivityEntry}
-          threadId={`${selectedThread!.source}:${selectedThread!.id}`}
-          onLoadOlder={loadOlderTranscript}
-          onLinkedMessageHandled={props.onLinkedMessageHandled}
-          onOpenImage={openImageGallery}
-          dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
-          sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
-          onAnswerAsyncQuestions={
-            props.composerDisabled ? undefined : handleAnswerAsyncQuestions
-          }
-          onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
-          onExpandedActivityIdsChange={
-            props.onExpandedTranscriptActivityIdsChange
-          }
-          onExpandedWorkPhaseGroupIdsChange={
-            props.onExpandedTranscriptWorkPhaseGroupIdsChange
-          }
-          onRespondToPendingRequest={respondToPendingRequest}
-          onPendingMcpInteractionChange={(state) => {
-            props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
-          }}
-          onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
-          onPendingUserInputChange={(state) => {
-            props.onUpdatePendingUserInput?.(state.requestId, () => state);
-          }}
-          onSubmitPendingUserInput={submitPendingUserInput}
-          onViewportChange={props.onTranscriptViewportChange}
-        />
-        {pendingRequestError ? (
-          <TranscriptError desktopApi={props.desktopApi} text={pendingRequestError} />
-        ) : null}
-      </section>
+          <section
+            className="transcript-panel"
+            aria-label="Transcript"
+            ref={transcriptPanelRef}
+          >
+            <TranscriptList
+              entries={visibleTranscriptEntries}
+              rewind={
+                rewindableMessageIds && threadRewindSupport
+                  ? {
+                      disabledReason: rewindDisabledReason,
+                      messageIds: rewindableMessageIds,
+                      openMessageId: rewindConfirm?.messageId,
+                      confirmation: rewindConfirm ? (
+                        <ThreadRewindConfirm
+                          key={rewindConfirm.messageId}
+                          busy={rewindConfirm.busy}
+                          error={rewindConfirm.error}
+                          preview={rewindConfirm.preview}
+                          providerLabel={rewindProviderLabel}
+                          summary={rewindConfirm.summary}
+                          support={threadRewindSupport}
+                          onCancel={() => setRewindConfirm(undefined)}
+                          onConfirm={(mode) => {
+                            void executeRewind(mode);
+                          }}
+                        />
+                      ) : undefined,
+                      onOpen: openRewindConfirm,
+                    }
+                  : undefined
+              }
+              permissionTransitions={selectedThread!.permissionTransitionLog}
+              messagingBindingTransitions={
+                selectedThread!.messagingBindingTransitionLog
+              }
+              questionnaireActivities={
+                selectedThread!.questionnaireActivityLog
+              }
+              turnFailures={selectedThread!.turnFailureLog}
+              rewinds={selectedThread!.rewindLog}
+              rewindUndo={rewindUndo}
+              activeTurnId={props.activeTurnId}
+              activeTurnStartedAt={props.activeTurnStartedAt}
+              applications={props.applications}
+              directoryPaths={threadDirectoryPaths(selectedThread!)}
+              desktopApi={props.desktopApi}
+              error={props.transcriptError}
+              fileViewerContext={fileViewerContext}
+              loading={props.loading}
+              loadingMore={props.loadingMore}
+              linkedMessageId={props.linkedMessageId}
+              linkedMessageRequestKey={props.linkedMessageRequestKey}
+              pagination={visibleTranscriptPagination}
+              parentThreadId={selectedThread!.id}
+              parentThreadBackend={selectedThread!.source}
+              threadLinkSource={transcriptThreadLinkSource}
+              // File-diff activity renders in the LiveWorkRail above
+              // the composer (issue #495). Generic tool activity has no
+              // rail body, so keep it in the transcript while the turn
+              // is live instead of collapsing the UI to a bare
+              // "Thinking" indicator.
+              pendingActivityEntry={pendingTranscriptActivityEntry}
+              pendingAssistantMessage={props.pendingAssistantMessage}
+              transientMessage={props.transientMessage}
+              transientMessages={props.transientMessages}
+              pendingPlanEntry={undefined}
+              pendingMcpInteraction={props.pendingMcpInteraction}
+              pendingRequest={props.pendingRequest}
+              pendingRequestBusy={pendingRequestBusy}
+              pendingUserInput={props.pendingUserInput}
+              pendingStatusText={props.pendingStatusText}
+              agentCommandsStatus={props.agentCommandsStatus}
+              onShowAgentCommands={showAgentCommands}
+              pendingRemoteWork={transcriptRemoteWork}
+              prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
+              runningTurnUsageText={props.runningTurnUsageText}
+              expandedActivityIds={props.expandedTranscriptActivityIds}
+              expandedWorkPhaseGroupIds={
+                props.expandedTranscriptWorkPhaseGroupIds
+              }
+              restoredViewport={props.transcriptViewport}
+              reglueRequestKey={transcriptReglueRequestKey}
+              skills={props.skills}
+              subAgents={selectedThread!.subAgents}
+              pendingProtocolActivityEntry={pendingProtocolActivityEntry}
+              pendingUsageActivityEntry={pendingUsageActivityEntry}
+              threadId={`${selectedThread!.source}:${selectedThread!.id}`}
+              onLoadOlder={loadOlderTranscript}
+              onLinkedMessageHandled={props.onLinkedMessageHandled}
+              onOpenImage={openImageGallery}
+              dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
+              sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
+              onAnswerAsyncQuestions={
+                props.composerDisabled ? undefined : handleAnswerAsyncQuestions
+              }
+              onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
+              onExpandedActivityIdsChange={
+                props.onExpandedTranscriptActivityIdsChange
+              }
+              onExpandedWorkPhaseGroupIdsChange={
+                props.onExpandedTranscriptWorkPhaseGroupIdsChange
+              }
+              onRespondToPendingRequest={respondToPendingRequest}
+              onPendingMcpInteractionChange={(state) => {
+                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
+              }}
+              onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
+              onPendingUserInputChange={(state) => {
+                props.onUpdatePendingUserInput?.(state.requestId, () => state);
+              }}
+              onSubmitPendingUserInput={submitPendingUserInput}
+              onViewportChange={props.onTranscriptViewportChange}
+            />
+            {pendingRequestError ? (
+              <TranscriptError desktopApi={props.desktopApi} text={pendingRequestError} />
+            ) : null}
+          </section>
 
-      <LiveWorkRail
-        applications={props.applications}
-        changedFilesEntry={liveWorkRailChangedFilesEntry}
-        desktopApi={props.desktopApi}
-        editedFileGroups={
-          editedFilesDock === "above" ? editedFileGroups : undefined
-        }
-        editedFileCommitStates={editedFileCommitStates}
-        editedFilesWorktreeRoot={editedFilesWorktreeRoot}
-        onOpenEditedFile={handleOpenEditedFile}
-        onScrollToTurn={handleScrollToTurn}
-        pinned={!props.activeTurnId}
-        planEntry={
-          pendingPlanEntry ??
-          (props.activeTurnId ? undefined : lastCompletedPlanEntry)
-        }
-        onMoveEditedFilesToSidebar={
-          editedFilesDock === "above" ? moveEditedFilesToSidebar : undefined
-        }
-      />
+          <LiveWorkRail
+            applications={props.applications}
+            changedFilesEntry={liveWorkRailChangedFilesEntry}
+            desktopApi={props.desktopApi}
+            editedFileGroups={
+              editedFilesDock === "above" ? editedFileGroups : undefined
+            }
+            editedFileCommitStates={editedFileCommitStates}
+            editedFilesWorktreeRoot={editedFilesWorktreeRoot}
+            onOpenEditedFile={handleOpenEditedFile}
+            onScrollToTurn={handleScrollToTurn}
+            pinned={!props.activeTurnId}
+            planEntry={
+              pendingPlanEntry ??
+              (props.activeTurnId ? undefined : lastCompletedPlanEntry)
+            }
+            onMoveEditedFilesToSidebar={
+              editedFilesDock === "above" ? moveEditedFilesToSidebar : undefined
+            }
+          />
 
-      {mcpInventoryRequest
-        && (selectedThread?.source === "codex"
-          || selectedThread?.source === "claude") ? (
-        <McpInventoryPanel
-          desktopApi={props.desktopApi}
-          onDismiss={() => setMcpInventoryRequest(undefined)}
-          request={mcpInventoryRequest}
-          thread={selectedThread}
-        />
-      ) : null}
+          {mcpInventoryRequest
+            && (selectedThread?.source === "codex"
+              || selectedThread?.source === "claude") ? (
+            <McpInventoryPanel
+              desktopApi={props.desktopApi}
+              onDismiss={() => setMcpInventoryRequest(undefined)}
+              request={mcpInventoryRequest}
+              thread={selectedThread}
+            />
+          ) : null}
 
-      {/* The owner serves its gateway inventory and persists the selection. */}
-      {threadMcpAccessOpen
-        && selectedThread
-        && threadMcpAccessSupported ? (
-        <ThreadMcpAccessPanel
-          backend={selectedThread.source}
-          desktopApi={props.desktopApi}
-          threadId={selectedThread.id}
-          federationTarget={mcpFederationTarget}
-          onDismiss={() => setThreadMcpAccessOpen(false)}
-          onOpenSettings={mcpFederationTarget ? undefined : openMcpConnectionSettings}
-        />
-      ) : null}
-    </Fragment>
-  );
+          {/* The owner serves its gateway inventory and persists the selection. */}
+          {threadMcpAccessOpen
+            && selectedThread
+            && threadMcpAccessSupported ? (
+            <ThreadMcpAccessPanel
+              backend={selectedThread.source}
+              desktopApi={props.desktopApi}
+              threadId={selectedThread.id}
+              federationTarget={mcpFederationTarget}
+              onDismiss={() => setThreadMcpAccessOpen(false)}
+              onOpenSettings={mcpFederationTarget ? undefined : openMcpConnectionSettings}
+            />
+          ) : null}
+        </Fragment>
+      )
+    );
+  }
   // The rail's thread-only props. A launchpad or a fork in setup has no
   // thread to describe.
   const contextPanelThreadProps: Partial<ComponentProps<typeof ThreadContextPanel>> =

@@ -811,3 +811,55 @@ describe("research lifecycle model", () => {
     }), { numRuns: 30 });
   });
 });
+
+describe("research pending request model", () => {
+  const ops = fc.array(fc.oneof(
+    fc.record({ op: fc.constant("prepare" as const), thread: fc.constantFrom(0 as const, 1 as const), workers: fc.integer({ min: 1, max: 3 }), minutes: fc.integer({ min: 1, max: 5 }) }),
+    fc.record({ op: fc.constant("advance" as const), ms: fc.integer({ min: 0, max: 4 * 60_000 }) }),
+    fc.record({ op: fc.constant("withdraw" as const), thread: fc.constantFrom(0 as const, 1 as const) }),
+    fc.record({ op: fc.constant("start" as const), thread: fc.constantFrom(0 as const, 1 as const), stale: fc.boolean() }),
+  ), { minLength: 1, maxLength: 14 });
+
+  it("the snapshot shows exactly the latest unexpired, unconsumed, unwithdrawn request for its own thread", async () => {
+    await fc.assert(fc.asyncProperty(ops, async (sequence) => {
+      let now = 1_000;
+      const { service, ports } = fixture({ now: () => now });
+      const threads = [{ backend: "codex" as const, threadId: "coordinator-a" }, { backend: "codex" as const, threadId: "coordinator-b" }];
+      // Model: one slot per thread, replaced by prepare, cleared by withdraw or a successful start, hidden after expiry.
+      const model: Array<{ id: string; objective: string; workers: number; minutes: number; expiresAt: number; superseded: string[] } | undefined> = [undefined, undefined];
+      for (const [index, step] of sequence.entries()) {
+        if (step.op === "advance") now += step.ms;
+        else if (step.op === "prepare") {
+          const changes = vi.mocked(ports.changed).mock.calls.length;
+          const { intentId } = service.prepare({ ...threads[step.thread]!, objective: `Objective ${index}`, workers: step.workers, minutes: step.minutes, workspaceMode: "none" });
+          expect(ports.changed).toHaveBeenCalledTimes(changes + 1);
+          const prior = model[step.thread];
+          model[step.thread] = { id: intentId, objective: `Objective ${index}`, workers: step.workers, minutes: step.minutes,
+            expiresAt: now + 5 * 60_000, superseded: [...(prior?.superseded ?? []), ...(prior ? [prior.id] : [])] };
+        } else if (step.op === "withdraw") {
+          service.withdraw(threads[step.thread]!);
+          if (model[step.thread]) model[step.thread] = { ...model[step.thread]!, id: `withdrawn:${model[step.thread]!.id}`, expiresAt: -1 };
+        } else {
+          const current = model[step.thread];
+          const intentId = !current ? "missing" : step.stale ? current.superseded.at(-1) ?? "never-issued" : current.id;
+          const objective = current?.objective ?? "Unbound";
+          const workers = current?.workers ?? 1;
+          const startRequest: StartResearchRequest = { intentId, objective, minutes: current?.minutes ?? 1, workspaceMode: "none",
+            approaches: Array.from({ length: workers }, (_, i) => ({ title: `Approach ${i}`, task: "Investigate" })) };
+          const call = { ...context, ...threads[step.thread]!, callId: `start-${index}` };
+          const accepted = Boolean(current && !step.stale && now < current.expiresAt && !current.id.startsWith("withdrawn:"));
+          if (accepted) { await service.start(startRequest, call); model[step.thread] = undefined; }
+          else await expect(service.start(startRequest, call)).rejects.toThrow();
+        }
+        for (const [slot, thread] of threads.entries()) {
+          const expected = model[slot];
+          const pending = service.snapshot(thread).pending;
+          if (!expected || now >= expected.expiresAt) expect(pending).toBeUndefined();
+          else expect(pending).toMatchObject({ workers: expected.workers, minutes: expected.minutes, expiresAt: expected.expiresAt, workspaceMode: "none" });
+        }
+      }
+      service.close();
+      for (const thread of threads) expect(service.snapshot(thread).pending).toBeUndefined();
+    }), { numRuns: 120 });
+  });
+});
