@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchSubmission, type ResearchThread } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchSubmission } from "@pwragent/shared";
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
 export type ResearchPhase = { label: string; tone: ResearchTone };
@@ -186,9 +186,4 @@ export function researchMapBranches(run: ResearchRun, leafLimit = 6): ResearchMa
   // A loop of children whose sources are each other has no root; keep each reachable.
   for (const approach of run.approaches) if (!placed.has(approach.id)) branches.push(build(approach));
   return branches;
-}
-
-export function threadOwnerTitle(run: ResearchRun, thread: ResearchThread): string | undefined {
-  if (sameResearchThread(thread, run.coordinator)) return "coordinating thread";
-  return run.approaches.find((a) => a.worker && sameResearchThread(a.worker, thread))?.title;
 }

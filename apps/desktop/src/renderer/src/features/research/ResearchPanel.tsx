@@ -48,7 +48,8 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
   const snapshot = state.snapshot;
   const run = snapshot?.runs.find((r) => r.id === selectedRunId) ?? snapshot?.runs[0];
-  const pendingLive = Boolean(snapshot?.pending);
+  // Read the clock directly: once the request expires, the tick that hid it also stops the timer.
+  const pendingLive = Boolean(snapshot?.pending && snapshot.pending.expiresAt > Date.now());
   const now = useNow(Boolean(run && isResearchRunLive(run)) || pendingLive);
   const pending = snapshot?.pending && now < snapshot.pending.expiresAt ? snapshot.pending : undefined;
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
@@ -74,12 +75,18 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   async function start(values: ResearchStartValues): Promise<boolean> {
     if (!identity || !api?.prepareResearch) return false;
     setBusy(true); setError(""); setNotice("");
+    let prepared = false;
     try {
-      const prepared = await api.prepareResearch({ ...identity, ...values });
-      await send(identity, `Start a research run using research_start with intentId=${prepared.intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, a ${values.minutes}-minute deadline, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently increase the worker count or deadline.`);
+      const { intentId } = await api.prepareResearch({ ...identity, ...values });
+      prepared = true;
+      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, a ${values.minutes}-minute deadline, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently increase the worker count or deadline.`);
       setCreating(false);
       return true;
-    } catch (failure) { setError(message(failure)); return false; }
+    } catch (failure) {
+      // The coordinator never received the request, so it must not wait to start.
+      if (prepared) await api.withdrawResearch?.(identity).catch(() => {});
+      setError(message(failure)); return false;
+    }
     finally { setBusy(false); }
   }
   async function withdraw() {
@@ -143,7 +150,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         options={snapshot.runs.map((r: ResearchRun) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
     </label>}
     {run && <>
-      <ResearchRunCard run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
+      <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }} />
       <div className="research-tabs" role="tablist" aria-label="Research views" onKeyDown={onTabKeyDown}>
@@ -165,7 +172,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
           ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable} coordinator={coordinator}
             onBack={() => { setReturnFocusId(openItemId); setOpenItemId(undefined); }} onOpenItem={openItem} />
           : <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run}
-            query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} />)}
+            query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} onFocusReturned={() => setReturnFocusId(undefined)} />)}
         {view === "activity" && <ResearchActivityView run={run} filter={filter} onOpenItem={openItem} />}
       </div>
     </>}

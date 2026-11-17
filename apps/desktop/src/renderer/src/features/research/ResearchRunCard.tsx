@@ -36,7 +36,7 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       </span>
     </div>}
     {controls && confirmingStop && <div className="research-confirm" role="group" aria-label="Confirm stopping the run">
-      <p>Stop {plural(counts.slotsInUse, "active worker")} and end the run? Its findings and candidates are kept. A stopped run cannot be resumed.</p>
+      <p>{counts.slotsInUse ? `Stop ${plural(counts.slotsInUse, "active worker")} and end the run?` : "End the run?"} Its findings and candidates are kept. A stopped run cannot be resumed.</p>
       <span className="research-actions">
         <button type="button" className="research-button research-button--danger" disabled={busy} onClick={() => { setConfirmingStop(false); onStop(); }}>Stop run</button>
         <button type="button" className="research-button research-button--ghost" autoFocus onClick={() => setConfirmingStop(false)}>Keep running</button>

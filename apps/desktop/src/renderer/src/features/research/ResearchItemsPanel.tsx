@@ -27,9 +27,11 @@ const REVIEW_OPTIONS: SelectOption<ResearchItemsQuery["review"]>[] = [
   { value: "revision_requested", label: "Revision requested" }, { value: "rejected", label: "Rejected" },
 ];
 
-export function ResearchItemsPanel({ api, thread, run, query, onQueryChange, onOpenItem, returnFocusId }: {
+export function ResearchItemsPanel({ api, thread, run, query, onQueryChange, onOpenItem, returnFocusId, onFocusReturned }: {
   api: DesktopApi; thread: ResearchThread; run: ResearchRun; query: ResearchItemsQuery;
-  onQueryChange: (query: ResearchItemsQuery) => void; onOpenItem: (itemId: string) => void; returnFocusId?: string;
+  onQueryChange: (query: ResearchItemsQuery) => void; onOpenItem: (itemId: string) => void;
+  /** Focus this result once it renders, as Back from its detail, then report it so later refreshes leave focus alone. */
+  returnFocusId?: string; onFocusReturned?: () => void;
 }) {
   const id = useId();
   const [text, setText] = useState(query.text);
@@ -41,22 +43,24 @@ export function ResearchItemsPanel({ api, thread, run, query, onQueryChange, onO
   const revision = run.revision;
   // A board change invalidates cursors, so a stale page restarts at the first page.
   const cursor = query.cursor?.revision === revision ? query.cursor : undefined;
-  const search: ResearchSearchQuery = { query: query.text || undefined, type: query.type || undefined, kind: query.kind || undefined,
-    state: query.state || undefined, review: query.review || undefined, approachId: query.approachId, limit: PAGE_SIZE, cursor };
-  const key = JSON.stringify([runId, revision, search, retry]);
+  const { text: queryText, type, kind, state, review, approachId } = query;
+  const key = JSON.stringify([runId, revision, queryText, type, kind, state, review, approachId, cursor, retry]);
   const searchResearch = api.searchResearch;
   useEffect(() => {
     let disposed = false;
     if (!searchResearch) return;
-    void searchResearch({ backend, threadId, runId, query: JSON.parse(key)[2] as ResearchSearchQuery }).then((page) => {
+    const search: ResearchSearchQuery = { query: queryText || undefined, type: type || undefined, kind: kind || undefined,
+      state: state || undefined, review: review || undefined, approachId, limit: PAGE_SIZE, cursor };
+    void searchResearch({ backend, threadId, runId, query: search }).then((page) => {
       if (!disposed) setResult({ key, page });
     }, (failure: unknown) => { if (!disposed) setResult({ key, error: failure instanceof Error ? failure.message : "Research items could not be searched" }); });
     return () => { disposed = true; };
-  }, [searchResearch, backend, threadId, runId, key]);
+  }, [searchResearch, backend, threadId, runId, key, queryText, type, kind, state, review, approachId, cursor]);
   useEffect(() => {
-    if (!returnFocusId) return;
+    if (!returnFocusId || !result.page) return;
     listRef.current?.querySelector<HTMLButtonElement>(`[data-item-id="${CSS.escape(returnFocusId)}"]`)?.focus();
-  }, [returnFocusId, result.page]);
+    onFocusReturned?.();
+  }, [returnFocusId, result.page, onFocusReturned]);
 
   if (!api.searchResearch || !api.readResearchItem) return <p className="context-empty">Item search is unavailable in this window.</p>;
   const current = result.key === key ? result : undefined;

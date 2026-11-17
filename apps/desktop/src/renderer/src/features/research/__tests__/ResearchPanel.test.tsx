@@ -171,6 +171,47 @@ describe("Research panel", () => {
     expect(screen.getByText("Accept a candidate to finish the run.")).toBeInTheDocument();
   });
 
+  it("does not carry a stop confirmation over to another run", async () => {
+    const first = snapshot();
+    const second = projectResearchRun("other-run", first.runs[0]!.events.map((event) => event.data.type === "created" ? { ...event, data: { ...event.data, objective: "Second objective" } } : event));
+    const data: ResearchSnapshot = { runs: [first.runs[0]!, second], writableRunIds: ["run", "other-run"] };
+    data.runs.forEach((run) => { run.deadlineAt = Date.now() + 600_000; });
+    const { api, mocks } = apiFor(data);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop run…" }));
+    expect(screen.getByRole("group", { name: "Confirm stopping the run" })).toBeInTheDocument();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Run" }), /Second objective/);
+    expect(screen.queryByRole("group", { name: "Confirm stopping the run" })).not.toBeInTheDocument();
+    expect(mocks.updateResearch).not.toHaveBeenCalled();
+  });
+
+  it("withdraws a prepared request the coordinating thread did not accept", async () => {
+    const { api, mocks } = apiFor({ runs: [], writableRunIds: [] });
+    mocks.submitThreadReply.mockImplementation(async () => undefined as never);
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.change(await screen.findByLabelText("Objective"), { target: { value: "Investigate cancellation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Request research" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("did not accept");
+    expect(mocks.withdrawResearch).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" });
+  });
+
+  it("returns focus to a result once, not on every later refresh", async () => {
+    const { api, mocks } = apiFor(snapshot(3));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Counterexample Counterexample 1/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "← Back to results" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Counterexample Counterexample 1/ })).toHaveFocus());
+    const search = screen.getByLabelText("Search items");
+    search.focus();
+    const calls = mocks.searchResearch.mock.calls.length;
+    fireEvent.change(search, { target: { value: "Counterexample" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    search.focus();
+    await waitFor(() => expect(mocks.searchResearch.mock.calls.length).toBeGreaterThan(calls));
+    await act(async () => {});
+    expect(search).toHaveFocus();
+  });
+
   it("moves between views with the arrow keys", async () => {
     const { api } = apiFor();
     render(<ResearchPanel desktopApi={api} thread={thread} />);

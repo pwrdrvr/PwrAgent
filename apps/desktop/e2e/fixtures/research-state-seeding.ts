@@ -60,7 +60,10 @@ export const LIVE_RESEARCH_OBJECTIVE = "Find a smaller reproducer for the flaky 
 export function readResearchOwnerIdentity(homeRoot: string, processId: number): { ownerId: string; ownerPid: number; ownerStartedAt: number } {
   const markerDir = path.join(homeRoot, ".pwragent/profiles/default/state/runtime-instances");
   for (const entry of fs.readdirSync(markerDir)) {
-    const marker = JSON.parse(fs.readFileSync(path.join(markerDir, entry), "utf8")) as { instanceId?: string; processId?: number; startedAt?: number };
+    // The heartbeat writes through a temporary file; skip anything that is not a complete marker.
+    if (!entry.endsWith(".json")) continue;
+    let marker: { instanceId?: string; processId?: number; startedAt?: number };
+    try { marker = JSON.parse(fs.readFileSync(path.join(markerDir, entry), "utf8")); } catch { continue; }
     if (marker.processId === processId && marker.instanceId && marker.startedAt) return { ownerId: marker.instanceId, ownerPid: processId, ownerStartedAt: marker.startedAt };
   }
   throw new Error("The running owner's runtime marker was not found");
