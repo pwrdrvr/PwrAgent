@@ -37,7 +37,8 @@ patches, plain-object stand-ins and reads inside catchable regions.
 | Admission and draining | `MessagingTurnAdmission` still owns debounce/start admission and its duplicate queued-entry collection. The controller still owns drain requests, timers and pending drains. Retirement into `ThreadTurnQueue` remains required. |
 | Private responses | `MessagingPrivateResponses` owns one discriminated state per turn and `transitionPrivateResponse` owns its changes. `MessagingPrivateReplyClaims` owns continuation request receipts, which are keyed by request ID rather than turn ID. The controller retains delivery effects and forwards state changes to these owners. |
 | Bindings | The controller's existing `runDetachPipeline` remains the single detach pipeline. Its extraction belongs to the binding-service PR. |
-| Commands, callbacks, inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
+| Commands | `MessagingCommandHandlers` owns dispatch, schedule management, help, review entry and command routing for monitors, default Agents and Claude continuation. It delegates existing workflows through `MessagingCommandHost`. |
+| Callbacks, inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
 
 The event router receives only the collaborators it uses: a narrow store port,
 clock, logger and lazy typed host. It never imports its facade. The facade
@@ -175,9 +176,66 @@ gateway code, and a separate handoff card proposes the fix to its existing
 owner. Both protected fixtures are byte identical to the pinned baseline. No
 test timeout required an isolation run.
 
+## Command owner and observable protocol
+
+The command extraction starts at main
+`337cf083a1894aab6e6e8b5328c55b5a97411cde`, after #3810 merged. Twelve
+methods move to `MessagingCommandHandlers`, with ten shared pure declarations
+in `messaging-command-helpers.ts`. `MessagingCommandContext` names one store
+operation, six optional backend operations, the capability profile, clock and
+27 exact workflow ports. Construction reads none of these collaborators.
+Adapter delivery and logging remain in the existing workflow owners because
+the command methods do not use them directly. Host methods and wrapped store
+overlays resolve at the original call sites, including after awaits.
+
+Run `node scripts/inventory-messaging-commands.mjs --verify`. The checker audit
+records 406 command effects/branches and 44 resolved references. Its 507 broad
+test-seam candidates include backend mocks with similar method names; no test
+casts or spies target the twelve moved facade operations. Verification compares
+all moved bodies and helper declarations against pinned main, and checks every
+retained controller method after reversing only caller/port substitutions.
+
+`messaging-command-observable.property.test.ts` drives public controller input,
+real SQLite bindings, a contrived accepting/rejecting backend and an adapter.
+The oracle observes backend decisions before visible confirmations, invalid
+input, mutation aliases, failure reporting and replacement store overlays.
+It passes unchanged on pinned main and extracted production.
+
+The actual owner model generates valid command sessions and access changes from
+an independent policy table. Scheduler properties interleave separate command
+permission continuations. Focused tests also cover provider action budgets,
+late-bound stores/hosts, optional getter reads and receivers, exception identity
+and awaited workflow effects. Pure helper properties cover aliases, units,
+scope parsing, attribution and failure interpretation.
+
+Run `node scripts/mutate-messaging-commands.mjs --baseline` for the pinned
+production oracle, or omit the flag for extracted production and eleven
+deliberate mutations. All eleven fail assertions: permission, scope exemptions,
+dispatch, awaits, receiver binding, getter error boundaries, schedule payloads,
+failed acceptance, facade callers, host ports and stale store capture. The
+script rejects bootstrap/import/missing-owner failures as evidence, restores
+sources after each mutation and checks protected fixture hashes. Logs stay in
+`.local/pwr-149-commands/`; run this separately from other source checks.
+
+The final base is main `6bfb1efff40106882e1dc82d9ee90e5662636aad`; its two
+additional commits do not overlap the extraction. The controller falls from
+23,420 to 22,568 lines. The command owner, helpers and context are 656, 240 and
+48 lines respectively. Fourteen focused tests pass. Protected/focused
+verification passes 106 files and 4,915 tests, with two skipped. All required
+static checks pass, and both protected fixtures match pinned main byte for byte.
+
+The full suite passes 2,082 files and 29,042 tests, with 107 tests skipped;
+five tests fail in three files. Agent IPC, a messaging approval/queue protocol
+and the auto-updater model time out at five seconds, followed by two
+auto-updater staging assertions. All affected files plus the command owner
+properties pass together in isolation: 719 tests, one skipped. The timeout
+investigation is proposed to its existing owner in to-do card
+`aebdc93f-1217-4f4d-b04f-d3e103c1ba9a`. No timeout, worker or concurrency
+configuration is changed, and this PR does not claim the full suite passed.
+
 ## Remaining state-machine work
 
-The turn/drain machine, canonical queue retirement, the five remaining named
+The turn/drain machine, canonical queue retirement, the four remaining named
 extractions, controller size reduction and the parent's registry/test size
 criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is

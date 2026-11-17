@@ -10,8 +10,11 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { resolveGitLabReposForDirectory } from "./git-remote";
 import { FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 import type { GitLabTerminalPayload } from "./pr-terminal-details";
+import { gitlabMergeTrainStatus } from "./pr-merge-queue";
 
 const execFileAsync = promisify(execFile);
+/** How long a project whose merge train setting could not be read waits before it is asked again. */
+const MERGE_TRAIN_RETRY_MS = 60 * 60_000;
 /** Concurrent `glab` subprocesses admitted at once. */
 const API_CONCURRENCY = 3;
 export class GitLabReadError extends Error {
@@ -165,6 +168,8 @@ export class GitLabPrFetcher {
   private requestSequence = 0;
   private activeWrites = 0;
   private readonly tokens = new Map<string, { at: number; token: string }>();
+  private readonly mergeTrains = new Map<string, Promise<boolean | undefined>>();
+  private readonly mergeTrainRetryAt = new Map<string, number>();
   private readonly options: GitLabPrFetcherOptions;
 
   constructor(options: GitLabPrFetcherOptions = {}) {
@@ -412,6 +417,69 @@ export class GitLabPrFetcher {
     return status;
   }
 
+  /**
+   * Whether the project merges through merge trains. A project setting
+   * (GitLab Premium), so it is read once per project and kept for the life
+   * of the process; the status poll and the merge tool share the answer.
+   * GitLab's free tier has no setting, which reads as no. Every MR of a
+   * project shares one read, including reads that start together. The read
+   * is charged to the PR status budget; when it cannot run (the budget is
+   * spent, or GitLab fails) the answer is unknown, the caller treats the
+   * project as having no train, and the project is not asked again for
+   * `MERGE_TRAIN_RETRY_MS`. A status poll never pays for it per MR.
+   */
+  async mergeTrainsEnabled(host: string, project: string): Promise<boolean | undefined> {
+    const key = `${host}\u0000${project}`;
+    const retryAt = this.mergeTrainRetryAt.get(key);
+    if (retryAt !== undefined && Date.now() < retryAt) return undefined;
+    let read = this.mergeTrains.get(key);
+    if (!read) {
+      read = this.api<{ merge_trains_enabled?: boolean }>(
+        host, `projects/${encodeURIComponent(project)}`, true, false, undefined, false, true,
+      ).then((payload) => payload?.merge_trains_enabled === true, () => {
+        this.mergeTrains.delete(key);
+        this.mergeTrainRetryAt.set(key, Date.now() + MERGE_TRAIN_RETRY_MS);
+        return undefined;
+      });
+      this.mergeTrains.set(key, read);
+    }
+    return await read;
+  }
+
+  /**
+   * The MR's merge train car. GitLab answers 404 for an MR that is not on a
+   * train, which reads as no car. Any other failure fails the status read, so
+   * the poller keeps what it last saw rather than flipping a queued MR to
+   * unqueued for a round.
+   */
+  async readMergeTrainCar(host: string, project: string, iid: number): Promise<{
+    status?: string; created_at?: string; updated_at?: string; pipeline?: { status?: string } | null;
+  } | undefined> {
+    try {
+      return await this.api(host, `projects/${encodeURIComponent(project)}/merge_trains/merge_requests/${iid}`, true, false, undefined, false, true);
+    } catch (error) {
+      if (error instanceof GitLabReadError && error.status === 404) return undefined;
+      throw error;
+    }
+  }
+
+  private async readMergeTrain(ref: GitLabRef, pr: PrSummary): Promise<PrSummary["mergeQueue"]> {
+    const project = `${ref.owner}/${ref.repo}`;
+    if (await this.mergeTrainsEnabled(ref.host, project) !== true) return undefined;
+    // A merged or closed MR is not polled again, and its train is over.
+    const car = pr.lifecycleState === "open" ? await this.readMergeTrainCar(ref.host, project, ref.number) : undefined;
+    return gitlabMergeTrainStatus({
+      lifecycle: pr.lifecycleState ?? "open",
+      enabled: true,
+      car: car ? {
+        status: car.status ?? null,
+        createdAt: car.created_at ?? null,
+        updatedAt: car.updated_at ?? null,
+        pipelineStatus: car.pipeline?.status ?? null,
+      } : null,
+    });
+  }
+
   async fetchByRef(ref: GitLabRef, requestTokenTaken = false): Promise<PrSummary> {
     const payload = await this.api<GitLabMrPayload>(ref.host,
       `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, true, requestTokenTaken);
@@ -438,7 +506,8 @@ export class GitLabPrFetcher {
       throw new Error("GitLab returned a different merge request identity.");
     }
     this.failures.delete(ref.host);
-    return pr;
+    const mergeQueue = await this.readMergeTrain({ ...ref, owner: pr.org, repo: pr.repo }, pr);
+    return mergeQueue ? { ...pr, mergeQueue } : pr;
   }
 
   /** One MR read for merge details when a merge or close watch fires. */

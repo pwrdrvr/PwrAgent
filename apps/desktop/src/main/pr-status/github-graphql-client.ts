@@ -1,7 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { graphql } from "@octokit/graphql";
-import { resolvePullRequestIdentity, type PrSummary } from "@pwragent/shared";
+import {
+  resolvePullRequestIdentity,
+  type PrLifecycleState,
+  type PrMergeQueueStatus,
+  type PrSummary,
+} from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
@@ -21,6 +26,8 @@ import {
   type GhCheckSuitePayload,
 } from "./pr-derivations";
 import type { GithubTerminalNode } from "./pr-terminal-details";
+import { githubMergeQueueStatus } from "./pr-merge-queue";
+import { isMergeQueueRepository, noteMergeQueueRepository } from "./merge-queue-repositories";
 import {
   hasForgeRepositoryName,
   recordForgeRepositoryName,
@@ -219,6 +226,11 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * `totalCount` rides the `commits` connection this fragment already selects.
  * `updatedAt` is deliberately absent — it moves on every comment and label,
  * which would churn snapshot equality for something no surface displays.
+ *
+ * `isMergeQueueEnabled` and `mergeQueueEntry` are a scalar and an object, and
+ * cost no rate-limit points. The queue's last event is a connection
+ * (`PR_QUEUE_EVENTS_FRAGMENT`), so only the poll of a repository known to use
+ * a queue asks for it.
  */
 const PR_STATUS_FRAGMENT = `
 fragment PrStatus on PullRequest {
@@ -240,6 +252,8 @@ fragment PrStatus on PullRequest {
   closedAt
   headRepository { name }
   headRepositoryOwner { login }
+  isMergeQueueEnabled
+  mergeQueueEntry { state position enqueuedAt }
   commits(last: 1) {
     totalCount
     nodes {
@@ -261,6 +275,25 @@ fragment PrStatus on PullRequest {
           nodes { status workflowRun { id } }
         }
       }
+    }
+  }
+}`;
+
+/**
+ * Whether the queue removed the PR, and why, or landed it. A connection, so
+ * it costs rate-limit points: with it, a poll of 40 PRs cost 2 points instead
+ * of 1 (`rateLimit(dryRun: true)`, 2026-11-17). Only a PR in a repository
+ * known to use a merge queue asks for it (`isMergeQueueRepository`). A
+ * repository joins that list from `isMergeQueueEnabled` on its first poll, so
+ * its removal reasons follow from the next round.
+ */
+const PR_QUEUE_EVENTS_FRAGMENT = `
+fragment PrQueueEvents on PullRequest {
+  queueEvents: timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+    nodes {
+      __typename
+      ... on AddedToMergeQueueEvent { createdAt }
+      ... on RemovedFromMergeQueueEvent { createdAt reason }
     }
   }
 }`;
@@ -312,6 +345,19 @@ export type GraphqlPrNode = {
   closedAt?: string | null;
   headRepository?: { name?: string | null } | null;
   headRepositoryOwner?: { login?: string | null } | null;
+  isMergeQueueEnabled?: boolean | null;
+  mergeQueueEntry?: {
+    state?: string | null;
+    position?: number | null;
+    enqueuedAt?: string | null;
+  } | null;
+  queueEvents?: {
+    nodes?: ({
+      __typename?: string | null;
+      createdAt?: string | null;
+      reason?: string | null;
+    } | null)[] | null;
+  } | null;
   commits?: {
     totalCount?: number | null;
     nodes?: (
@@ -350,25 +396,29 @@ export function buildBatchedPrQuery(refs: PrRef[]): {
   const variableDecls: string[] = [];
   const selections: string[] = [];
   const variables: Record<string, string | number> = {};
+  let queueEvents = false;
 
   refs.forEach((ref, index) => {
     const owner = `o${index}`;
     const name = `n${index}`;
     const number = `p${index}`;
+    const queued = isMergeQueueRepository("github.com", ref.owner, ref.repo);
+    queueEvents ||= queued;
     variableDecls.push(`$${owner}: String!`, `$${name}: String!`, `$${number}: Int!`);
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` pullRequest(number: $${number}) { ...PrStatus } }`,
+      + ` pullRequest(number: $${number}) { ...PrStatus${queued ? " ...PrQueueEvents" : ""} } }`,
     );
     variables[owner] = ref.owner;
     variables[name] = ref.repo;
     variables[number] = ref.number;
   });
 
+  // GraphQL refuses a document that defines a fragment it does not use.
   const query = `query PollPullRequests(${variableDecls.join(", ")}) {
 ${selections.join("\n")}
 }
-${PR_STATUS_FRAGMENT}`;
+${PR_STATUS_FRAGMENT}${queueEvents ? PR_QUEUE_EVENTS_FRAGMENT : ""}`;
 
   return { query, variables };
 }
@@ -631,6 +681,14 @@ export function mapGraphqlPrNode(
   };
   const commitShas = normalizeCommitShas([headCommit?.oid]);
   const headSha = node.headRefOid?.trim() || commitShas[0];
+  const lifecycleState = deriveLifecycleState(shaped);
+  const mergeQueue = readGraphqlMergeQueue(node, lifecycleState);
+  // The poll already carries the queue setting, so a merge in this
+  // repository learns about its queue without a request of its own.
+  if (node.isMergeQueueEnabled === true && node.url) {
+    const ref = parsePrRefFromUrl(node.url);
+    if (ref) noteMergeQueueRepository("github.com", ref.owner, ref.repo);
+  }
 
   return {
     ...resolvePullRequestIdentity({
@@ -649,9 +707,10 @@ export function mapGraphqlPrNode(
     ...(checksStillRunning ? { checksStillRunning: true } : {}),
     ...(skippedOnly && checkState === "passing" ? { checksAllSkipped: true as const } : {}),
     ...(failedCheckUrl ? { failedCheckUrl } : {}),
-    lifecycleState: deriveLifecycleState(shaped),
+    lifecycleState,
     reviewState: deriveReviewState(shaped),
     mergeState: deriveMergeState(shaped),
+    ...(mergeQueue ? { mergeQueue } : {}),
     ...(headSha ? { headSha } : {}),
     ...(commitShas.length > 0 ? { commitShas } : {}),
     ...readPrCount(node.additions, "additions"),
@@ -663,6 +722,22 @@ export function mapGraphqlPrNode(
     ...readPrTimestamp(node.closedAt, "closedAt"),
     url: node.url,
   };
+}
+
+function readGraphqlMergeQueue(
+  node: GraphqlPrNode,
+  lifecycle: PrLifecycleState,
+): PrMergeQueueStatus | undefined {
+  const last = node.queueEvents?.nodes?.filter((event) => event !== null).at(-1);
+  const type = last?.__typename === "AddedToMergeQueueEvent"
+    ? "added"
+    : last?.__typename === "RemovedFromMergeQueueEvent" ? "removed" : undefined;
+  return githubMergeQueueStatus({
+    lifecycle,
+    enabled: node.isMergeQueueEnabled === true,
+    entry: node.mergeQueueEntry ?? null,
+    lastEvent: type ? { type, createdAt: last?.createdAt ?? null, reason: last?.reason ?? null } : null,
+  });
 }
 
 /**

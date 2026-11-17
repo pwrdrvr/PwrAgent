@@ -1,8 +1,9 @@
-import type { ThreadTodo } from "@pwragent/shared";
+import type { PrSummary, ThreadTodo } from "@pwragent/shared";
 import { threadTodoActionProject } from "@pwragent/shared";
 import { useMemo } from "react";
 import {
   parsePullRequestUrl,
+  useOptionalLivePullRequest,
   useThreadPullRequestNumber,
 } from "../../lib/pull-request-links";
 import { PullRequestLinkChip } from "../pr-status/PullRequestLinkChip";
@@ -21,9 +22,21 @@ export function TodoPullRequestChip(props: {
   pullRequest: string;
 }) {
   const { todo, pullRequest } = props;
-  const isNumber = /^\d+$/.test(pullRequest);
+  const pr = useTodoPullRequest(todo, pullRequest);
+  if (pr) {
+    return <PullRequestLinkChip pr={pr} />;
+  }
+  return <>{/^\d+$/.test(pullRequest) ? `#${pullRequest}` : pullRequest}</>;
+}
+
+/**
+ * The merge card's pull request, resolved as its chip resolves it. Undefined
+ * when nothing resolves.
+ */
+export function useTodoPullRequest(todo: ThreadTodo, pullRequest: string | undefined): PrSummary | undefined {
+  const isNumber = pullRequest !== undefined && /^\d+$/.test(pullRequest);
   const fromUrl = useMemo(
-    () => isNumber ? undefined : parsePullRequestUrl(pullRequest),
+    () => pullRequest === undefined || isNumber ? undefined : parsePullRequestUrl(pullRequest),
     [isNumber, pullRequest],
   );
   const fromThread = useThreadPullRequestNumber(isNumber
@@ -35,9 +48,10 @@ export function TodoPullRequestChip(props: {
         federationTarget: todo.federationTarget,
       }
     : undefined);
-  const pr = fromUrl ?? fromThread;
-  if (pr) {
-    return <PullRequestLinkChip pr={pr} />;
-  }
-  return <>{isNumber ? `#${pullRequest}` : pullRequest}</>;
+  return fromUrl ?? fromThread;
+}
+
+/** The merge card's pull request with its live status, for its queue state. */
+export function useTodoLivePullRequest(todo: ThreadTodo, pullRequest: string | undefined): PrSummary | undefined {
+  return useOptionalLivePullRequest(useTodoPullRequest(todo, pullRequest));
 }
