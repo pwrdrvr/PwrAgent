@@ -378,7 +378,13 @@ polling off, registration is refused, as it is for a PR prerequisite.
 A failed check keeps the last observation and marks it stale. A passing
 failure, such as a rate limit, keeps the wait waiting. A run that is gone ends
 the wait with a failure after three consecutive `not_found` checks. Any other
-failure that lasts 24 hours does the same, so no wait polls forever.
+failure that lasts 24 hours does the same, so no wait polls forever. A gap of
+more than 15 minutes between checks, such as sleep or a paused project, starts
+the count again, so unchecked time never ends a wait. The count lives in
+memory, so a restart also starts it again.
+
+Windows hear about a changed check at once and an unchanged one at most every
+2 minutes, because each announcement refreshes every window and peer.
 
 A future PwrAgent GitHub App should replace this polling with `workflow_run`
 and `deployment_review` webhooks.

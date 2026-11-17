@@ -8,7 +8,7 @@ import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
 import {
-  CI_RUN_GONE_CHECKS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, readCiRun,
+  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, readCiRun,
 } from "../app-server/thread-dependency-ci-runs";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
@@ -86,7 +86,7 @@ describe("CI run prerequisite evaluation", () => {
   it("gives up on a run that is gone or unreadable for a day, and waits through passing failures", () => {
     // Raw check results: a readable run with no milestone yet, or a failure with a forge code.
     const checkArb = fc.record({
-      gapMs: fc.constantFrom(30_000, 120_000, 2 * 60 * 60_000, 9 * 60 * 60_000),
+      gapMs: fc.constantFrom(30_000, 120_000, 14 * 60_000, 16 * 60_000, 9 * 60 * 60_000),
       failure: fc.constantFrom(undefined, "not_found", "rate_limited", "forbidden", "unauthenticated"),
     });
     fc.assert(fc.property(fc.array(checkArb, { maxLength: 30 }), (checks) => {
@@ -103,6 +103,8 @@ describe("CI run prerequisite evaluation", () => {
         const seen = check.failure
           ? { runId: 8841207733, status: "unknown", error: `GitHub said ${check.failure}`, errorCode: check.failure, checkedAt: at }
           : observation({ checkedAt: at });
+        // Unchecked time (sleep, a paused project) never counts toward giving up.
+        if (check.gapMs > CI_RUN_STREAK_GAP_MS) { notFound = 0; failingSince = undefined; }
         notFound = check.failure === "not_found" ? notFound + 1 : 0;
         failingSince = check.failure ? failingSince ?? at : undefined;
         if (expected === "waiting" && check.failure && (notFound >= CI_RUN_GONE_CHECKS || at - failingSince! >= CI_RUN_UNREADABLE_MS)) expected = "failed";
@@ -111,6 +113,21 @@ describe("CI run prerequisite evaluation", () => {
         expect(previous.state).toBe(expected);
       }
     }));
+  });
+
+  it("gives up after a day of failed checks, but not across a sleep between two failures", () => {
+    const condition = ciRunCondition();
+    const failed = (checkedAt: number) => ({ runId: 8841207733, status: "unknown", error: "GitHub returned HTTP 403.", errorCode: "forbidden", checkedAt });
+    let merged: ThreadDependencyCiRunObservation | undefined;
+    let evidence: ThreadDependencyEvidence | undefined;
+    for (let at = 0; at <= CI_RUN_UNREADABLE_MS; at += 120_000) {
+      merged = mergeCiRunCheck(merged, failed(at));
+      evidence = evaluateCiRunCondition(condition, merged, evidence, at);
+    }
+    expect(evidence).toMatchObject({ state: "failed", reason: "Run could not be read for 24 hours: GitHub returned HTTP 403." });
+    // The lid closes on a failed check and opens 60 hours later on another.
+    const slept = mergeCiRunCheck(mergeCiRunCheck(undefined, failed(0)), failed(60 * 60 * 60_000));
+    expect(evaluateCiRunCondition(condition, slept, undefined, 0).state).toBe("waiting");
   });
 
   it("never leaves a finished run waiting", () => {
@@ -355,15 +372,19 @@ describe("Continue After a CI run", () => {
     });
   });
 
-  it("announces every check, so windows show when the run was last checked", async () => {
+  it("announces a changed check at once and an unchanged one every 2 minutes, so the checked time stays current", async () => {
     const changed = vi.fn(async () => undefined);
     const agent = coordinator({ changed });
     await create(agent);
     changed.mockClear();
     await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 2 }));
-    await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 3 }));
+    await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 30_002 }));
+    expect(changed).toHaveBeenCalledTimes(1);
+    await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 120_002 }));
     expect(changed).toHaveBeenCalledTimes(2);
-    expect(agent.withCiRunObservations(store.active())[0]!.evidence[0]!.ciRun?.checkedAt).toBe(3);
+    await agent.handleCiRunObservation(RUN_URL, observation({ checkedAt: 150_002, jobs: { total: 5, passed: 3, failed: 0, running: 1, queued: 1, waiting: 0, skipped: 0 } }));
+    expect(changed).toHaveBeenCalledTimes(3);
+    expect(agent.withCiRunObservations(store.active())[0]!.evidence[0]!.ciRun?.checkedAt).toBe(150_002);
   });
 
   it("reports a run that is gone after three 404s and stops checking it", async () => {

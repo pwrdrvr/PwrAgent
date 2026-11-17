@@ -43,6 +43,11 @@ const MAX_JOB_PAGES = 10;
 export const CI_RUN_GONE_CHECKS = 3;
 /** Any failure that lasts this long ends the wait, so no wait polls forever. */
 export const CI_RUN_UNREADABLE_MS = 24 * 60 * 60_000;
+/**
+ * Checks run at most 2 min apart. A longer gap (sleep, a paused project, PR
+ * polling off) starts a new failure streak, so unchecked time never counts.
+ */
+export const CI_RUN_STREAK_GAP_MS = 15 * 60_000;
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("GitHub returned an invalid object.");
@@ -182,7 +187,7 @@ export function describeCiRunObservation(observation: ThreadDependencyCiRunObser
 export function mergeCiRunCheck(previous: ThreadDependencyCiRunObservation | undefined,
   observation: ThreadDependencyCiRunObservation): ThreadDependencyCiRunObservation {
   if (!observation.error) return observation;
-  const streak = previous?.error ? previous : undefined;
+  const streak = previous?.error && observation.checkedAt - previous.checkedAt <= CI_RUN_STREAK_GAP_MS ? previous : undefined;
   const base: ThreadDependencyCiRunObservation = { ...previous ?? observation };
   delete base.errorCode;
   return {

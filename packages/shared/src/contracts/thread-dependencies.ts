@@ -80,7 +80,7 @@ export function summarizeThreadDependencyCiRun(observation: ThreadDependencyCiRu
     ? `Finished: ${observation.conclusion ?? "unknown"}`
     : observation.status === "waiting" && observation.gates?.length
       ? `Waiting for approval: ${observation.gates.map((gate) => gate.environment).join(", ")}`
-      : observation.status === "in_progress" ? "Running" : observation.status === "unknown" ? "Not checked yet" : observation.status.replace(/_/g, " ");
+      : observation.status === "in_progress" ? "Running" : observation.status === "unknown" ? "Could not read the run" : observation.status.replace(/_/g, " ");
   const jobs = observation.jobs;
   const counts = jobs
     ? ([["passed", jobs.passed], ["failed", jobs.failed], ["running", jobs.running], ["waiting", jobs.waiting], ["queued", jobs.queued]] as const)

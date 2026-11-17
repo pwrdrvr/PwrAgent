@@ -9,7 +9,8 @@ import {
   THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
   THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH, THREAD_DEPENDENCY_MAX_STEPS, THREAD_DEPENDENCY_STEP_MAX_LENGTH,
   THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH, threadDependencyMarkDoneIndex,
-  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS, THREAD_DEPENDENCY_CI_RUN_OUTCOMES, threadDependencyCiRunId, threadDependencyCiRunOutcomes,
+  THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS, THREAD_DEPENDENCY_CI_RUN_OUTCOMES, summarizeThreadDependencyCiRun, threadDependencyCiRunId,
+  threadDependencyCiRunOutcomes,
   threadDependencyConditionName, threadDependencyConditionPhrase,
   THREAD_DEPENDENCY_PROMPT_ANY_MET, THREAD_DEPENDENCY_PROMPT_FAILED, THREAD_DEPENDENCY_PROMPT_INTRO,
   THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
@@ -125,6 +126,8 @@ export class ThreadDependencyCoordinator {
   private readonly closedCompactionTurns = new Map<string, string>();
   /** The latest check of each waiting CI run. Memory only: checks write nothing. */
   private readonly ciRuns = new Map<string, ThreadDependencyCiRunObservation>();
+  /** When each run's latest check was last announced to windows. */
+  private readonly ciRunAnnouncedAt = new Map<string, number>();
 
   constructor(private readonly options: Options) {}
 
@@ -305,13 +308,18 @@ export class ThreadDependencyCoordinator {
       // A failed check keeps what the last good one saw, and counts toward giving up.
       const current = mergeCiRunCheck(previous, observation);
       this.ciRuns.set(url, current);
-      // Windows show the latest check and when it ran, so every check is
-      // announced. A save announces itself; the announcement writes nothing.
+      // Windows show the latest check and when it ran. Announce a changed
+      // summary at once, and an unchanged one at most every 2 minutes: an
+      // announcement refreshes every window and peer. A save announces itself.
+      const last = this.ciRunAnnouncedAt.get(url);
+      const announce = !previous || summarizeThreadDependencyCiRun(previous) !== summarizeThreadDependencyCiRun(current)
+        || last === undefined || current.checkedAt - last >= CI_RUN_ANNOUNCE_MS;
+      if (announce) this.ciRunAnnouncedAt.set(url, current.checkedAt);
       for (const item of this.options.store.active()) {
         if (!item.conditions.some((condition) => condition.ciRun?.url === url)) continue;
         await this.evaluate(item);
         const after = this.options.store.get(item.backend, item.threadId, item.id);
-        if (after && JSON.stringify(after) === JSON.stringify(item)) await this.options.changed(after);
+        if (announce && after && JSON.stringify(after) === JSON.stringify(item)) await this.options.changed(after);
       }
     });
   }
@@ -334,7 +342,11 @@ export class ThreadDependencyCoordinator {
         if (eligible(item)) wanted.add(url);
       }
     }
-    for (const url of this.ciRuns.keys()) if (!waiting.has(url)) this.ciRuns.delete(url);
+    for (const url of this.ciRuns.keys()) {
+      if (waiting.has(url)) continue;
+      this.ciRuns.delete(url);
+      this.ciRunAnnouncedAt.delete(url);
+    }
     return [...wanted];
   }
 
@@ -752,6 +764,9 @@ export class ThreadDependencyCoordinator {
 }
 
 class LostDependencyClaim extends Error {}
+
+/** The slowest steady check cadence: an unchanged check is announced no more often. */
+const CI_RUN_ANNOUNCE_MS = 120_000;
 
 function evidenceFor(item: ThreadDependency, condition: ThreadDependencyCondition): ThreadDependencyEvidence | undefined {
   const key = JSON.stringify(condition);
