@@ -2252,14 +2252,15 @@ export class ClaudeBackend {
    * or not: it marks the turn's provider refresh as settled for listeners.
    */
   private async refreshUsage(live: LiveSession, options: { announce?: "always" | "changed" } = {}) {
+    const since = this.planLimits.mark("claude");
     const usage = await claudeTelemetry(() => live.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
-    // Each CLI answers from its own reading, which can be older than one
-    // already shown, so a probe merges forward like a stream event. A probe
-    // that timed out or returned nothing keeps the last good reading. Only an
-    // account Claude does not meter by subscription clears it.
+    // A full probe can report a reset credit without changing the reset date.
+    // Accept that decrease unless another reading overtook the request. A
+    // failed or empty probe keeps the last good reading; only an account
+    // Claude does not meter by subscription clears it.
     const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
     let changed = false;
-    if (limits.length > 0) changed = this.mergeRateLimits(limits, true);
+    if (limits.length > 0) changed = this.mergeRateLimits(limits, true, since);
     else if (usage && !usage.rate_limits_available && claudeHasNoPlanLimits(this.installation)) {
       changed = this.clearRateLimits();
     }
@@ -2271,14 +2272,14 @@ export class ClaudeBackend {
 
   /**
    * Merge one reading into the account's limits; see PlanLimitStore. Each
-   * CLI reads on its own schedule, so no reading is known to be the newest.
-   * A probe is precise; a stream event is whole percent with its reset
-   * rounded up to the hour. Returns whether the shown limits changed; a
-   * change is also written for the next launch.
+   * CLI streams on its own schedule, so stream arrival does not establish
+   * freshness. A probe carries its request revision and is precise; a stream
+   * event is whole percent with its reset rounded up to the hour. Returns
+   * whether the shown limits changed; a change is saved for the next launch.
    */
-  private mergeRateLimits(reading: BackendRateLimitSummary[], precise: boolean): boolean {
+  private mergeRateLimits(reading: BackendRateLimitSummary[], precise: boolean, since?: number): boolean {
     const changed = this.planLimits.record("claude", {
-      limits: reading.map(canonicalClaudeRateLimit), precise, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+      limits: reading.map(canonicalClaudeRateLimit), precise, since, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
       // A probe is a reading of the account. A stream event names one or two
       // windows, and dates the rest as read now only when it names them all.
       ...(precise ? { dated: true } : {}),
