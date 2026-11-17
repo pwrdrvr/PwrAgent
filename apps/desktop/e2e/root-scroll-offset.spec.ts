@@ -53,8 +53,12 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
         root.scrollTop = (root.scrollHeight - root.clientHeight) * fraction;
         return root.scrollTop;
       }, scrolled);
-      // The stacked layout has to be scrollable, or this checks nothing.
-      expect(stackedOffset, `${platform} at ${narrow.zoom}% scrolls the stacked layout`).toBeGreaterThan(0);
+      // A stacked page that fits its viewport has no offset to keep, so the
+      // case checks nothing. The smoke fixture's stacked page is about 355 CSS
+      // px tall on the Windows runner, so it fits at 180% of a 640px window
+      // there and overflows at 300%. fast-check counts only cases that pass
+      // this, and `maxSkipsPerRun` fails the property when too few scroll.
+      fc.pre(stackedOffset > 0);
       await sizeWindow({ ...wide, zoom: 100 });
       const offsets = await app.window.evaluate(() => {
         const shell = document.querySelector(".app-shell");
@@ -70,7 +74,7 @@ test("leaves the app shell unscrolled after a scroll in the stacked high-zoom la
         return scrolled;
       });
       expect(offsets, `${platform}: ${narrow.width}x${narrow.height} at ${narrow.zoom}%, then ${wide.width}x${wide.height} at 100%`).toEqual([]);
-    }), { numRuns: 8, examples: [
+    }), { numRuns: 8, maxSkipsPerRun: 1, examples: [
       [{ platform: "linux", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
       [{ platform: "win32", narrow: { width: 960, height: 640, zoom: 300 }, scrolled: 1, wide: WIDE }],
     ] });
