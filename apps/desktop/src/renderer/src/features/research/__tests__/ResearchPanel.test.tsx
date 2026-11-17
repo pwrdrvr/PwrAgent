@@ -338,6 +338,29 @@ describe("Research panel", () => {
     expect(list).toHaveFocus();
   });
 
+  it("counts events the Activity read found beyond the board it was given", async () => {
+    const data = snapshot(250);
+    const { api, mocks } = apiFor(data);
+    // The journal grew after the board was read: the head page already holds seq 253.
+    const grown = projectResearchRun("run", [...data.runs[0]!.events, { seq: 253, commandId: "late", signature: "t", at: 2000, actor,
+      data: { type: "finding", finding: { id: "late", approachId: "a1", kind: "note", text: "Newer than the board", paths: [] } } } as ResearchEvent]);
+    mocks.readResearchEvents.mockImplementation(async (request) => researchEventPage(grown, request.range));
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByText("Showing the latest 100 of 253 events.")).toBeInTheDocument();
+    expect(screen.getByText("Showing the latest 100 of 253 events.")).not.toHaveAttribute("role");
+  });
+
+  it("says Activity is unavailable when the window cannot read events", async () => {
+    const { api } = apiFor();
+    render(<ResearchPanel desktopApi={{ ...api, readResearchEvents: undefined }} thread={thread} />);
+    await screen.findByLabelText("Research map");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByText("Activity is unavailable in this window.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading activity…")).not.toBeInTheDocument();
+  });
+
   it("discards a read that completes after the selected thread changes", async () => {
     const first = Promise.withResolvers<ResearchSnapshot>();
     const second = snapshot();

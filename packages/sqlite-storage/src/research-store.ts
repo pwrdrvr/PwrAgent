@@ -94,9 +94,9 @@ export class ResearchStore implements ResearchStorage {
     return this.stateDb.raw.transaction(() => this.threadRunIds(thread, limit).flatMap((id) => {
       const header = this.header(id);
       if (!header) return [];
-      const counts = this.stateDb.raw.prepare(`SELECT count(*) AS candidates,
+      const counts = this.stateDb.raw.prepare(`SELECT
         coalesce(sum(review_state = 'unreviewed'), 0) AS unreviewed, coalesce(sum(review_state = 'accepted'), 0) AS accepted
-        FROM research_items WHERE run_id = ? AND item_type = 'submission'`).get(id) as { candidates: number; unreviewed: number; accepted: number };
+        FROM research_items WHERE run_id = ? AND item_type = 'submission'`).get(id) as { unreviewed: number; accepted: number };
       return [{ ...header, ...counts }];
     })).deferred();
   }

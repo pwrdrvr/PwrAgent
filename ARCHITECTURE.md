@@ -182,7 +182,7 @@ and queue reconciliation. Repeated or unrelated queue events write nothing.
 The renderer reads research through IPC. This first integration serves local
 Codex threads; federation viewers must use the owning instance. Each
 `research:changed` read returns the thread's run summaries (header fields plus
-candidate counts, from SQL without replaying a journal), the operator's waiting
+review counts, from SQL without replaying a journal), the operator's waiting
 request, and the board of one selected run: its projection without the event
 journal or the item projection. Item records repeat the approach, finding and
 candidate lists, so the board names each item only in `createdSeq`, and the

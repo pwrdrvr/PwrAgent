@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchBoardEntry, sameResearchThread, type ResearchApproach, type ResearchBoardEntry, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchRunSummary, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchBoardIndex, sameResearchThread, type ResearchApproach, type ResearchBoardEntry, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunBoard, type ResearchRunSummary, type ResearchSubmission } from "@pwragent/shared";
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
 export type ResearchPhase = { label: string; tone: ResearchTone };
@@ -118,6 +118,11 @@ export type ResearchActivityRow = { seq: number; at: number; kind: string; actor
 /** One row per loaded event, newest first as given. Approach IDs are replaced with their titles. */
 export function researchActivityRows(run: ResearchRunBoard, events: readonly ResearchEvent[]): ResearchActivityRow[] {
   const title = (id: string) => approachTitle(run, id);
+  let index: Map<string, ResearchBoardEntry> | undefined;
+  const itemExcerpt = (itemId: string) => {
+    const entry = (index ??= researchBoardIndex(run)).get(itemId);
+    return entry ? excerpt(researchItemText(entry), 80) : itemId;
+  };
   const rows: ResearchActivityRow[] = [];
   for (const event of events) {
     const data = event.data;
@@ -137,7 +142,7 @@ export function researchActivityRows(run: ResearchRunBoard, events: readonly Res
       case "delivery_failed": rows.push(row("Delivery unconfirmed", data.reason)); break;
       case "delivery": rows.push(row("Revision feedback", `${data.delivery.approachId ? `${title(data.delivery.approachId)}: ` : ""}${researchLabel(data.delivery.state)}`, data.delivery.approachId)); break;
       case "assignment": rows.push(row("Child assigned", data.task, data.itemId)); break;
-      case "item_work": rows.push(row(researchLabel(data.work.state), data.work.note ?? itemExcerpt(run, data.itemId), data.itemId)); break;
+      case "item_work": rows.push(row(researchLabel(data.work.state), data.work.note ?? itemExcerpt(data.itemId), data.itemId)); break;
     }
   }
   return rows;
@@ -182,11 +187,6 @@ export function appendResearchActivityOlder(window: ResearchActivityWindow, page
   if (page.runId !== window.runId || !oldest || window.nextBeforeSeq !== oldest.seq || page.events[0]?.seq !== oldest.seq - 1) return window;
   const { nextBeforeSeq: _previous, ...rest } = window;
   return { ...rest, events: [...window.events, ...page.events], ...(page.nextBeforeSeq !== undefined ? { nextBeforeSeq: page.nextBeforeSeq } : {}) };
-}
-
-function itemExcerpt(run: ResearchRunBoard, itemId: string): string {
-  const entry = researchBoardEntry(run, itemId);
-  return entry ? excerpt(researchItemText(entry), 80) : itemId;
 }
 
 export function researchItemText(item: ResearchItem | ResearchBoardEntry): string {

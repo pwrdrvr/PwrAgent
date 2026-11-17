@@ -134,7 +134,7 @@ export type ResearchRun = {
 /** The operator's bound request, waiting for this thread to call research_start. Owner memory only. */
 export type ResearchPendingRequest = Omit<PrepareResearchRequest, "backend" | "threadId"> & { preparedAt: number; expiresAt: number };
 /** A run header with the review counts the run list needs to name its phase. */
-export type ResearchRunSummary = ResearchRunHeader & { candidates: number; unreviewed: number; accepted: number };
+export type ResearchRunSummary = ResearchRunHeader & { unreviewed: number; accepted: number };
 /**
  * One run's board: its projection without the event journal, which Activity
  * reads in pages, or the item projection, whose records repeat approaches,
@@ -353,23 +353,26 @@ export function researchRunBoard(run: ResearchRun): ResearchRunBoard {
   return { ...board, createdSeq: Object.fromEntries(items.map((item) => [item.id, item.createdSeq])) };
 }
 
-/** The board's record for an item id, or undefined when the run has no such item. */
+/** Every item's record by id. Build it once when looking up many items. */
+export function researchBoardIndex(board: Pick<ResearchRunBoard, "approaches" | "findings" | "submissions" | "createdSeq">): Map<string, ResearchBoardEntry> {
+  const index = new Map<string, ResearchBoardEntry>();
+  const seq = (id: string) => Object.hasOwn(board.createdSeq, id) ? board.createdSeq[id] : undefined;
+  for (const record of board.approaches) { const createdSeq = seq(record.id); if (createdSeq !== undefined) index.set(record.id, { id: record.id, type: "approach", record, createdSeq }); }
+  for (const record of board.submissions) { const createdSeq = seq(record.id); if (createdSeq !== undefined) index.set(record.id, { id: record.id, type: "submission", record, createdSeq }); }
+  for (const record of board.findings) { const createdSeq = seq(record.id); if (createdSeq !== undefined) index.set(record.id, { id: record.id, type: "finding", record, createdSeq }); }
+  return index;
+}
+
+/** The board's record for one item id, or undefined when the run has no such item. */
 export function researchBoardEntry(board: Pick<ResearchRunBoard, "approaches" | "findings" | "submissions" | "createdSeq">, id: string): ResearchBoardEntry | undefined {
-  if (!Object.hasOwn(board.createdSeq, id)) return undefined;
-  const createdSeq = board.createdSeq[id]!;
-  const finding = board.findings.find((f) => f.id === id);
-  if (finding) return { id, type: "finding", record: finding, createdSeq };
-  const submission = board.submissions.find((s) => s.id === id);
-  if (submission) return { id, type: "submission", record: submission, createdSeq };
-  const approach = board.approaches.find((a) => a.id === id);
-  return approach ? { id, type: "approach", record: approach, createdSeq } : undefined;
+  return Object.hasOwn(board.createdSeq, id) ? researchBoardIndex(board).get(id) : undefined;
 }
 
 /** The in-memory oracle for a stored run summary. */
 export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
     ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, deadlineAt: run.deadlineAt, workspaceMode: run.workspaceMode, status: run.status,
-    workerLimit: run.workerLimit, activeWorkers: run.activeWorkers, candidates: run.submissions.length,
+    workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length };
 }
 

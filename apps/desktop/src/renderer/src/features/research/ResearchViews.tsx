@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { ResearchApproach, ResearchFinding, ResearchRunBoard, ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
@@ -96,7 +96,10 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
   const activity = useResearchActivity(api, thread, run.id, run.revision);
   const query = filter.trim().toLowerCase();
   const loaded = activity.loaded.events;
-  const rows = researchActivityRows(run, loaded).filter((row) => !query || `${row.kind} ${row.actor} ${row.text}`.toLowerCase().includes(query));
+  const allRows = useMemo(() => researchActivityRows(run, loaded), [run, loaded]);
+  const rows = query ? allRows.filter((row) => `${row.kind} ${row.actor} ${row.text}`.toLowerCase().includes(query)) : allRows;
+  // A head read can land before the board that announced it.
+  const total = Math.max(run.revision, loaded[0]?.seq ?? 0);
 
   const older = activity.loaded.nextBeforeSeq !== undefined;
   const list = useRef<HTMLOListElement>(null);
@@ -117,10 +120,11 @@ export function ResearchActivityView({ api, thread, run, filter, onOpenItem }: {
           : <p className="research-activity__text">{row.text}</p>}
       </li>)}
     </ol>
-    {!loaded.length && !activity.error && <p role="status" className="context-empty">Loading activity…</p>}
+    {!activity.available && <p className="context-empty">Activity is unavailable in this window.</p>}
+    {activity.available && !loaded.length && !activity.error && <p role="status" className="context-empty">Loading activity…</p>}
     {loaded.length > 0 && query && !rows.length && <p className="context-empty">No loaded activity matches this filter.</p>}
     {loaded.length > 0 && <div className="research-activity__footer">
-      <span className="research-muted" role="status">{older ? `Showing the latest ${loaded.length} of ${run.revision} events.` : `All ${plural(loaded.length, "event")}.`}</span>
+      <span className="research-muted">{older ? `Showing the latest ${loaded.length} of ${total} events.` : `All ${plural(loaded.length, "event")}.`}</span>
       {older && <button type="button" className="research-button" disabled={activity.loadingOlder || !activity.available} onClick={() => { requestedOlder.current = true; activity.showOlder(); }}>
         {activity.loadingOlder ? "Loading…" : "Show older"}
       </button>}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { projectResearchRun, researchBoardEntry, researchRunBoard, type ResearchEvent, type ResearchEventData } from "../research";
+import { projectResearchRun, researchBoardEntry, researchBoardIndex, researchRunBoard, type ResearchEvent, type ResearchEventData } from "../research";
 
 const actor = { kind: "agent", backend: "codex", threadId: "parent" } as const;
 describe("research journal projection", () => {
@@ -70,8 +70,12 @@ describe("research journal projection", () => {
       const { events: _events, items: _items, ...rest } = run;
       expect(board).toEqual({ ...rest, createdSeq: board.createdSeq });
       expect(Object.keys(board.createdSeq).sort()).toEqual(run.items.map((i) => i.id).sort());
+      const index = researchBoardIndex(board);
+      expect(index.size).toBe(run.items.length);
       for (const item of run.items) {
-        expect(researchBoardEntry(board, item.id)).toEqual({ id: item.id, type: item.type, record: item.record, createdSeq: item.createdSeq });
+        const expected = { id: item.id, type: item.type, record: item.record, createdSeq: item.createdSeq };
+        expect(researchBoardEntry(board, item.id)).toEqual(expected);
+        expect(index.get(item.id)).toEqual(expected);
       }
       expect(researchBoardEntry(board, "missing")).toBeUndefined();
       expect(researchBoardEntry(board, "constructor")).toBeUndefined();

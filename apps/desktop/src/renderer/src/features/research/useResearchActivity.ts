@@ -21,6 +21,8 @@ export function useResearchActivity(api: DesktopApi | undefined, thread: Researc
   const [error, setError] = useState("");
   const current = useRef(loaded);
   const queue = useRef<Promise<void>>(Promise.resolve());
+  // A head read waiting in the queue already reads everything above the window when it runs.
+  const headQueued = useRef(false);
   const live = useRef(true);
   useEffect(() => {
     live.current = true;
@@ -39,8 +41,10 @@ export function useResearchActivity(api: DesktopApi | undefined, thread: Researc
 
   useEffect(() => {
     if (current.current.runId !== runId) commit(emptyResearchActivity(runId));
-    if (!read) return;
+    if (!read || headQueued.current) return;
+    headQueued.current = true;
     void enqueue(async () => {
+      headQueued.current = false;
       if (!live.current || current.current.runId !== runId) return;
       try {
         const page = await read({ backend, threadId, runId, range: researchActivityHeadRange(current.current, RESEARCH_ACTIVITY_PAGE) });
