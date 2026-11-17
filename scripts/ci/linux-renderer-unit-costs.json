@@ -1,0 +1,30 @@
+{
+  "sourceRun": 44007133052,
+  "sourceCommit": "5b0a3817a53cce336bffe9db08e667f8011c5213",
+  "minimumMeasuredMs": 5000,
+  "fallbackMs": 1000,
+  "files": {
+    "apps/desktop/src/renderer/src/__tests__/app-shell.test.tsx": 34467,
+    "apps/desktop/src/renderer/src/features/automations/__tests__/automation-editor.test.tsx": 10341,
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer.test.tsx": 27984,
+    "apps/desktop/src/renderer/src/features/federation-activity/FederationActivity.test.tsx": 10778,
+    "apps/desktop/src/renderer/src/features/federation-activity/UsageActivity.test.tsx": 8561,
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/pinned-group.test.tsx": 5769,
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar.test.tsx": 23259,
+    "apps/desktop/src/renderer/src/features/settings/__tests__/AccessControlSettings.test.tsx": 6191,
+    "apps/desktop/src/renderer/src/features/settings/__tests__/FederationSettings.test.tsx": 8384,
+    "apps/desktop/src/renderer/src/features/settings/__tests__/PluginsSettings.test.tsx": 5471,
+    "apps/desktop/src/renderer/src/features/settings/__tests__/settings-screen.test.tsx": 32402,
+    "apps/desktop/src/renderer/src/features/star-map/__tests__/StarMapChatCard.test.tsx": 10301,
+    "apps/desktop/src/renderer/src/features/star-map/__tests__/StarMapScreen.test.tsx": 7988,
+    "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-view-stability.test.tsx": 5563,
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/markdown-parse-work.test.tsx": 6009,
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-view.test.tsx": 15151,
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/mounted-review.property.test.tsx": 5524,
+    "apps/desktop/src/renderer/src/lib/__tests__/navigation-refresh-render-budget.test.tsx": 15015,
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.bounded.test.tsx": 5047,
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.bulk-archive.property.test.tsx": 7201,
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.test.tsx": 17223,
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.test.tsx": 23602
+  }
+}
