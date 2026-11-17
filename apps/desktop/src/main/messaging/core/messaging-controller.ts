@@ -1046,7 +1046,10 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly queuedTurnDrainTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly queuedTurnDrainTimers = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    settle: () => void;
+  }>();
   private readonly queuedTurnDrains = new Map<string, Promise<void>>();
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
@@ -4571,19 +4574,23 @@ export class MessagingController {
     // A start emits ordered lifecycle events. It cannot acknowledge while
     // the event that released it is still awaiting this listener. Leave the
     // delivery stack before draining, and coalesce terminal + idle releases.
+    const { promise: drain, resolve: settle } = Promise.withResolvers<void>();
+    this.queuedTurnDrains.set(key, drain);
+    void drain.finally(() => this.queuedTurnDrains.delete(key));
     const timer = setTimeout(() => {
       this.queuedTurnDrainTimers.delete(key);
-      if (this.disposed) return;
-      const drain = this.startNextQueuedTurn(binding).catch((error) => {
+      if (this.disposed) {
+        settle();
+        return;
+      }
+      void this.startNextQueuedTurn(binding).catch((error) => {
         this.logger.warn?.("messaging queued turn dispatch failed", {
           threadId: binding.threadId,
           error: error instanceof Error ? error.message : String(error),
         });
-      });
-      this.queuedTurnDrains.set(key, drain);
-      void drain.finally(() => this.queuedTurnDrains.delete(key));
+      }).finally(settle);
     }, 0);
-    this.queuedTurnDrainTimers.set(key, timer);
+    this.queuedTurnDrainTimers.set(key, { timer, settle });
   }
 
   private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
@@ -7546,7 +7553,10 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
-    for (const timer of this.queuedTurnDrainTimers.values()) clearTimeout(timer);
+    for (const { timer, settle } of this.queuedTurnDrainTimers.values()) {
+      clearTimeout(timer);
+      settle();
+    }
     this.queuedTurnDrainTimers.clear();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
@@ -7592,7 +7602,7 @@ export class MessagingController {
   /**
    * Resolves once the tool-update batches that a flush timer already started
    * have finished delivering, including their store writes, and then once
-   * every queued-turn drain already begun has finished. dispose() is
+   * every scheduled or running queued-turn drain has finished. dispose() is
    * synchronous and only stops new batches.
    */
   async whenToolUpdatesSettled(): Promise<void> {
@@ -7601,9 +7611,9 @@ export class MessagingController {
   }
 
   /**
-   * Resolves once every queued-turn drain that has already begun has finished,
-   * including the start it submits and the queued notice it retires. A drain
-   * scheduled but not yet begun is not awaited.
+   * Resolves once every queued-turn drain scheduled or running at the time of
+   * the call has finished, including the start it submits and the queued notice
+   * it retires. dispose() cancels and settles drains that have not yet begun.
    */
   async whenQueuedTurnDrainsSettled(): Promise<void> {
     await Promise.allSettled([...this.queuedTurnDrains.values()]);
