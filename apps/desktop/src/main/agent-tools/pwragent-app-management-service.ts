@@ -32,7 +32,7 @@ export type CodexAppServerDiagnostics = {
 
 export type PwrAgentAppManagementServiceOptions = {
   /** Re-resolves trusted Agent identity and actor permissions; absent means deny. */
-  authorize?: (context: PwrAgentAppManagementContext) => Promise<boolean>;
+  authorize?: (context: PwrAgentAppManagementContext, phase?: "accepted") => Promise<boolean>;
   prepareRestart?: (context: PwrAgentAppManagementContext, verification: {
     operationId: string; expectedVersion: string; previousRuntimeId: string;
   }) => Promise<() => void>;
@@ -56,8 +56,8 @@ export function createPwrAgentAppManagementHandler(
     .digest("hex");
   const activeOperation = (): boolean => operation !== undefined
     && operation.status !== "cancelled" && operation.status !== "failed";
-  const authorized = async (request: PwrAgentAppRequest): Promise<boolean> => {
-    try { return await options.authorize?.(request.context) === true; } catch { return false; }
+  const authorized = async (request: PwrAgentAppRequest, phase?: "accepted"): Promise<boolean> => {
+    try { return await options.authorize?.(request.context, phase) === true; } catch { return false; }
   };
   const data = (
     action: PwrAgentAppManagementData["action"],
@@ -149,7 +149,7 @@ export function createPwrAgentAppManagementHandler(
           // confirmation or install. No timer guesses when the caller heard it.
           void request.context.responseFlushed.then(async () => {
             if (cancelled()) return;
-            if (!await authorized(request)) {
+            if (!await authorized(request, "accepted")) {
               current.status = "cancelled";
               current.message = "Authorization changed before acknowledgement. Lifecycle request cancelled.";
               return;
@@ -163,7 +163,7 @@ export function createPwrAgentAppManagementHandler(
             current.status = "confirming";
             let releaseContinuation: (() => void) | undefined;
             const authorizeAgent = async (): Promise<boolean> => {
-              const allowed = await authorized(request);
+              const allowed = await authorized(request, "accepted");
               return allowed && current.status !== "cancelled";
             };
             try {

@@ -2549,9 +2549,10 @@ export class DesktopBackendRegistry {
 
   private readonly appManagementCallSources = new WeakMap<object, string>();
 
-  async canManagePwrAgent(context: import("@pwragent/shared").PwrAgentAppManagementContext, discovery = false): Promise<boolean> {
+  async canManagePwrAgent(context: import("@pwragent/shared").PwrAgentAppManagementContext, discovery = false, acceptedOperation = false): Promise<boolean> {
     let sourceKey: string | undefined;
     const allowed = await authorizeAppManagement({
+      allowCompleted: acceptedOperation && this.appManagementCallSources.has(context),
       isActive: (caller) => Boolean(caller.backend && caller.threadId && caller.turnId
         && this.isLiveDynamicToolCall(caller.backend, { threadId: caller.threadId, turnId: caller.turnId })),
       isToolAllowed: () => !localAgentToolRefusal("manage_pwragent"),
@@ -2582,7 +2583,7 @@ export class DesktopBackendRegistry {
     context: import("@pwragent/shared").PwrAgentAppManagementContext,
     verification: { operationId: string; expectedVersion: string; previousRuntimeId: string },
   ): Promise<() => void> {
-    if (!context.backend || !context.threadId || !context.turnId || !await this.canManagePwrAgent(context)) {
+    if (!context.backend || !context.threadId || !context.turnId || !await this.canManagePwrAgent(context, false, true)) {
       throw new Error("The restart caller is no longer authorized.");
     }
     const origin = await this.readTurnCausalMessagingOrigin({ backend: context.backend, threadId: context.threadId, turnId: context.turnId });

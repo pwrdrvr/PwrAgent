@@ -4,6 +4,7 @@ import type { PwrAgentAppRequest } from "@pwragent/shared";
 import type { AppUpdateStatus } from "../../shared/app-metadata";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
+import { authorizeAppManagement } from "../agent-tools/app-management-authorization";
 
 let state: AppUpdateStatus;
 const nativeInstall = vi.fn();
@@ -106,4 +107,27 @@ it("does not resurrect a cancellation while post-acknowledgement authorization i
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(nativeInstall).not.toHaveBeenCalled();
   expect(await handler(request({ action: "status" }))).toMatchObject({ data: { operation: { status: "cancelled" } } });
+});
+
+it("keeps an accepted restart authorized when its initiating turn ends during quieting", async () => {
+  state = { status: "downloaded", version: "1.4.8" };
+  let active = true;
+  const ports = { isActive: () => active, isToolAllowed: () => true, isAgent: async () => true,
+    readOrigin: async () => ({ kind: "messaging" as const, causalMessagingSource: { ownerId: "profile", requestId: "owner" } }),
+    authorizeActor: async () => true };
+  const handler = createPwrAgentAppManagementHandler({ startedAt: 1, version: () => "1.4.7",
+    authorize: async (context, phase?: string) => await authorizeAppManagement({ ...ports, allowCompleted: phase === "accepted" }, context) });
+  quit.mockImplementation(async (options) => {
+    expect(await options.authorizeAgent()).toBe(true);
+    expect(options.beforeQuit()).toBe(true);
+    active = false; // The Agent finishes after receiving the quiet steer.
+    if (!await options.authorizeAgent() || !options.beforeQuit()) return false;
+    options.performQuit();
+    return true;
+  });
+  await handler(request({ action: "restart", expectedVersion: "1.4.8" }, Promise.resolve()));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(nativeInstall).toHaveBeenCalledOnce();
+  // A fresh request never inherits the accepted operation's authority.
+  expect(await handler(request({ action: "status" }))).toMatchObject({ ok: false });
 });

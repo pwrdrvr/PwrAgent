@@ -29,7 +29,10 @@ ambiguous actors, non-enforcing legacy RBAC, revoked provider access, downgraded
 roles and contained members are denied. Actor and role are never tool arguments.
 Discovery and execution both enforce this policy across provider backends, using
 the retained causal actor and its messaging owner, including remote verification.
-The serving owner alone runs lifecycle effects.
+The serving owner alone runs lifecycle effects. New calls require a live turn.
+A host-bound accepted operation may outlive its initiating turn during quieting,
+while still rechecking that exact retained actor, Agent designation and current
+permissions. A fresh context cannot inherit that exception.
 
 An authenticated chat request supplies the operation decision; it never opens
 a desktop quit confirmation. Agent designation and actor authority are checked

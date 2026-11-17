@@ -52,3 +52,13 @@ it("does not transfer an earlier actor's authority when a steer changes the caus
     expect(await authorizeAppManagement(ports, { backend: "codex", threadId: "manager", turnId: "turn" })).toBe(false);
   }));
 });
+
+it("accepted operations outlive turn completion without bypassing Agent or actor revocation (generated)", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (agent, grant) => {
+    const ports = { allowCompleted: true, isActive: () => false, isToolAllowed: () => true,
+      isAgent: async () => agent, readOrigin: async () => source, authorizeActor: async () => grant };
+    const context = { backend: "codex" as const, threadId: "manager", turnId: "completed-turn" };
+    expect(await authorizeAppManagement(ports, context)).toBe(agent && grant);
+    expect(await authorizeAppManagement({ ...ports, allowCompleted: false }, context)).toBe(false);
+  }));
+});

@@ -43976,8 +43976,9 @@ command = "pnpm dev"
     await overlayStore.upsertThreadMessageOrigin!({ backend: "codex", threadId: "agent-thread", messageId: "user:turn-1",
       origin: { kind: "messaging", causalMessagingSource: { ownerId: "profile", requestId: "request" } } });
     const registry = createDesktopBackendRegistry({ appManagementHandler, codexClient, overlayStore });
+    let actorAllowed = true;
     registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
-      checkDynamicToolPermission: () => ({ allowed: true }), authorizeRetainedTool: async () => ({ allowed: true }) });
+      checkDynamicToolPermission: () => ({ allowed: true }), authorizeRetainedTool: async () => ({ allowed: actorAllowed }) });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -44019,6 +44020,15 @@ command = "pnpm dev"
       context: { backend: "codex", threadId: "agent-thread", turnId: "turn-1" },
       args: { action: "status" },
     });
+
+    const acceptedContext = { backend: "codex" as const, threadId: "agent-thread", turnId: "turn-1" };
+    expect(await registry.canManagePwrAgent(acceptedContext)).toBe(true);
+    await emitCompletedTurn(registry, "codex", "agent-thread", "turn-1");
+    expect(await registry.canManagePwrAgent(acceptedContext)).toBe(false);
+    expect(await registry.canManagePwrAgent({ ...acceptedContext }, false, true)).toBe(false);
+    expect(await registry.canManagePwrAgent(acceptedContext, false, true)).toBe(true);
+    actorAllowed = false;
+    expect(await registry.canManagePwrAgent(acceptedContext, false, true)).toBe(false);
 
     await registry.close();
   });
