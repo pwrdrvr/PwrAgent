@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   BackendLaunchpadOptions,
@@ -7,6 +8,7 @@ import type {
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
   ThreadTodo,
+  ThreadTodoProject,
 } from "@pwragent/shared";
 import {
   CODEX_SPEED_LABELS,
@@ -85,6 +87,31 @@ function pickSpeed(settings: SpeedSettings): SpeedSettings {
     ...(settings.serviceTier !== undefined ? { serviceTier: settings.serviceTier } : {}),
     ...(settings.fastMode !== undefined ? { fastMode: settings.fastMode } : {}),
   };
+}
+
+/**
+ * A removed worktree cannot supply environments or seed a new workspace.
+ * Use its linked project checkout when it still exists. An existing
+ * worktree keeps its own catalog, even when that catalog is empty.
+ */
+export async function resolveThreadTodoStartCwd(params: {
+  cwd?: string;
+  project?: ThreadTodoProject;
+}): Promise<string | undefined> {
+  const cwd = params.cwd;
+  const projectPath = params.project?.path;
+  if (!projectPath || (cwd && path.resolve(cwd) === path.resolve(projectPath))) return cwd;
+  const isDirectory = async (directory: string): Promise<boolean> => {
+    try {
+      return (await stat(directory)).isDirectory();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return false;
+      throw error;
+    }
+  };
+  if (cwd && await isDirectory(cwd)) return cwd;
+  return await isDirectory(projectPath) ? projectPath : cwd;
 }
 
 /**
@@ -180,7 +207,7 @@ export async function listThreadTodoDispatchEnvironments(
       };
     }
     return await describe({
-      cwd: todo.targetProject?.path ?? todo.cwd,
+      cwd: await resolveThreadTodoStartCwd({ cwd: todo.targetProject?.path ?? todo.cwd, project }),
       ...(project ? { project } : {}),
       ...(todo.targetProject ? {} : { threadEnvironmentId: () => deps.readThreadEnvironmentId(todo) }),
     });

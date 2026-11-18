@@ -36,6 +36,7 @@ import {
 } from "./thread-todo-projects.js";
 import { resolveThreadTodoModel } from "./thread-todo-models.js";
 import {
+  resolveThreadTodoStartCwd,
   resolveThreadTodoStartEnvironment,
   resolveThreadTodoStartSpeed,
   threadTodoSpeedNeedsDestination,
@@ -663,7 +664,7 @@ export function createThreadTodoRunners(params: {
       return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: assertNotHeld });
     },
     startThread: async ({
-      sourceBackend, sourceThreadId, cwd, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
+      sourceBackend, sourceThreadId, cwd: requestedCwd, project, crossProject, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,
     }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
@@ -704,10 +705,11 @@ export function createThreadTodoRunners(params: {
         ...optional("inherited", inheritedSpeed),
       });
       const workMode = chosenWorkMode ?? action.workMode;
+      const cwd = await resolveThreadTodoStartCwd({ cwd: requestedCwd, project });
       const codexEnvironment = await resolveThreadTodoStartEnvironment({
         requested: environment,
         cwd,
-        source: crossProject ? undefined : source.codexEnvironmentRuntime,
+        source: crossProject || cwd !== requestedCwd ? undefined : source.codexEnvironmentRuntime,
       });
       const settings = {
         executionMode,

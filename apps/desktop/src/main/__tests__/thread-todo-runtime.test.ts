@@ -21,6 +21,7 @@ import {
 } from "../thread-todos/thread-todo-runtime";
 import { withThreadTodoPlanNote } from "../thread-todos/thread-todo-plan";
 import type { ThreadTodoProjectCandidate } from "../thread-todos/thread-todo-projects";
+import { listThreadTodoDispatchEnvironments } from "../thread-todos/thread-todo-dispatch";
 
 /** The card whose action the operator ran. */
 const CARD = { id: "todo-1", title: "Rewrite the CLI" };
@@ -490,6 +491,48 @@ describe("dispatch access mode compatibility", () => {
 });
 
 describe("operator dispatch choices", () => {
+  it("lists and starts from the main checkout after the raising worktree is deleted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "todo-deleted-worktree-"));
+    const repo = path.join(root, "repo");
+    const worktree = path.join(root, "worktree");
+    try {
+      await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
+      await writeFile(path.join(repo, ".codex", "environments", "dev.toml"), 'name = "Dev"\n');
+      await mkdir(worktree);
+      await rm(worktree, { recursive: true });
+      const project = { key: `directory:${repo}`, label: "Repo", path: repo };
+      const own = {
+        environmentId: "dev", environmentName: "Dev", executionTarget: "local" as const,
+        setupStatus: "completed" as const,
+      };
+      const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, codexEnvironmentRuntime: own });
+      const action = { type: "start_thread" as const, prompt: "Go" };
+      const card: ThreadTodo = {
+        ...CARD, backend: "codex", threadId: "source", kind: "handoff", status: "open",
+        action, cwd: worktree, sourceProject: project,
+        createdAt: 0, updatedAt: 0,
+      };
+      const listed = await listThreadTodoDispatchEnvironments({ id: card.id }, {
+        getTodo: () => card, listProjects: async () => [],
+        readThreadEnvironmentId: async () => "dev", readProjectPresetId: async () => undefined,
+      });
+      expect(listed.environments).toEqual([{ id: "dev", name: "Dev" }]);
+      for (const workMode of ["local", "worktree"] as const) {
+        await runners.startThread({
+          sourceBackend: "codex", sourceThreadId: "source", cwd: worktree, project, crossProject: false,
+          todo: CARD, action, workMode, environment: listed.defaultEnvironmentId,
+        });
+        expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({
+          cwd: repo, workMode, rerunCodexEnvironmentSetup: true,
+          codexEnvironmentRuntime: { environmentId: "dev", environmentName: "Dev", executionTarget: "local" },
+          ...(workMode === "worktree" ? { worktreeBase: "default_branch", requiredWorkMode: "worktree" } : {}),
+        }));
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("applies the operator's Where, environment and speed to a local start", async () => {
     const { registry, runners } = fakeRegistry({
       ...FULL_ACCESS_SOL,
