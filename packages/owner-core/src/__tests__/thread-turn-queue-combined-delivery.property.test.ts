@@ -1,7 +1,13 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
-import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "../thread-turn-queue";
+import {
+  isSteerableAgentTraffic,
+  planQueuedDeliveries,
+  ThreadTurnQueue,
+  type ThreadTurnQueueEntry,
+  type ThreadTurnQueueLifecycleEvent,
+} from "../thread-turn-queue";
 
 /**
  * The rule (ARCHITECTURE.md, "Combined deliveries"): messages from agents,
@@ -293,5 +299,92 @@ describe("combined deliveries", () => {
     } finally {
       queue.close();
     }
+  });
+});
+
+describe("combined delivery bookkeeping", () => {
+  it("every member hears started and terminal, even when an observer rejects for one of them", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 2, max: 8 }),
+      fc.nat(),
+      fc.constantFrom<"started" | "terminal">("started", "terminal"),
+      async (count, rejectAt, rejectOn) => {
+        const events: ThreadTurnQueueLifecycleEvent[] = [];
+        let active = true;
+        const queue = new ThreadTurnQueue({
+          startTurn: async () => ({ ...THREAD, turnId: "combined-turn" }),
+          canSteerThread: () => false,
+          isThreadActive: () => active,
+          onLifecycle: (event) => {
+            events.push(event);
+            if (event.type === rejectOn && event.entry.id === ids[rejectAt % count]) {
+              throw new Error(`observer refused ${event.type}`);
+            }
+          },
+        });
+        const ids: string[] = [];
+        try {
+          for (let index = 0; index < count; index++) {
+            ids.push((await queue.submitSteer({
+              ...THREAD, origin: "manual", input: [{ type: "text", text: `report ${index}` }],
+              messageOrigin: { kind: "sub-agent" },
+            })).entry.id);
+          }
+          active = false;
+          await queue.releaseThread({ ...THREAD });
+          await flush();
+          await queue.releaseThread({ ...THREAD, turnId: "combined-turn", status: "completed" }).catch(() => undefined);
+          await flush();
+          const heard = (type: string) => events.filter((event) => event.type === type).map((event) => event.entry.id);
+          expect(heard("started")).toEqual(ids);
+          expect(heard("terminal")).toEqual(ids);
+        } finally {
+          queue.close();
+        }
+      },
+    ), { numRuns: 50 });
+  });
+
+  it("a named retry finds its original acceptance instead of admitting a second entry", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), async (retries) => {
+      const queue = new ThreadTurnQueue({
+        startTurn: async () => ({ ...THREAD, turnId: "never" }),
+        isThreadActive: () => true,
+      });
+      try {
+        const wake = { ...THREAD, id: "decision-batch:one", origin: "automation" as const,
+          input: [{ type: "text" as const, text: "Decision batch finished" }], messageOrigin: { kind: "pwragent" as const } };
+        const first = await queue.submitSteer(wake);
+        for (let attempt = 0; attempt < retries; attempt++) {
+          const again = await queue.submitSteer(wake);
+          expect(again.entry.id).toBe(first.entry.id);
+        }
+        expect(queue.getQueuedEntries(THREAD).map((entry) => entry.id)).toEqual(["decision-batch:one"]);
+        await expect(queue.submitSteer({ ...wake, input: [{ type: "text", text: "Different" }] })).rejects.toThrow(/reused/);
+      } finally {
+        queue.close();
+      }
+    }), { numRuns: 20 });
+  });
+
+  it("a review's Auto-fix and PR automation wakes keep their own turns", () => {
+    expect(isSteerableAgentTraffic({ kind: "pwragent" })).toBe(true);
+    expect(isSteerableAgentTraffic({ kind: "pwragent", reviewAutoFix: { reviewId: "review-1", findingCount: 2 } })).toBe(false);
+    expect(isSteerableAgentTraffic({ kind: "pwragent", prAutomation: { kind: "auto-fix", prKey: "github.com/o/r#1", prNumber: 1, headSha: "abc" } })).toBe(false);
+    expect(isSteerableAgentTraffic({ kind: "pwragent", systemReason: "app-restart" })).toBe(false);
+  });
+
+  it("names a settings difference as settings, not approval", () => {
+    const base = { ...THREAD, origin: "manual" as const, delivery: "queued-steer" as const, createdAt: 1, messageOrigin: { kind: "agent" as const } };
+    const plan = planQueuedDeliveries([
+      { ...base, id: "a", input: [{ type: "text", text: "a" }] },
+      { ...base, id: "b", input: [{ type: "text", text: "b" }], reasoningEffort: "high" },
+      { ...base, id: "c", input: [{ type: "text", text: "c" }], reasoningEffort: "high", messageOrigin: { kind: "agent", operatorApproved: true } },
+    ]);
+    expect(plan.map((group) => [group.entryIds, group.boundary])).toEqual([
+      [["a"], undefined],
+      [["b"], "settings"],
+      [["c"], "approval"],
+    ]);
   });
 });
