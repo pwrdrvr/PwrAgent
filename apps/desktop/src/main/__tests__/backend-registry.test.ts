@@ -31,7 +31,7 @@ import {
   resetProjectForgeAutomationIndexForTests,
 } from "../app-server/project-forge-automation-index";
 import { launchpadStorageKey } from "@pwragent/shared";
-import { agentMessageAccessRefusalMessage } from "@pwragent/shared";
+import { agentMessageAccessRefusalMessage, isAgentMessageAccessRefusal } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
@@ -53671,7 +53671,7 @@ script = "printf setup"
       startTurnDelay?: Promise<unknown>;
     }) {
       const codexClient = new MockBackendClient({
-        initializeResult: { methods: ["turn/start"] },
+        initializeResult: { methods: ["turn/start", "turn/steer"] },
         ...(params.startTurnDelay ? { startTurnDelay: params.startTurnDelay } : {}),
         threads: [{
           source: "codex",
@@ -53793,10 +53793,18 @@ script = "printf setup"
     });
 
     it("refuses a steer into a thread with more access", async () => {
-      const { registry } = await createAccessRegistry({
+      const { codexClient, registry } = await createAccessRegistry({
         senderMode: "default",
         targetMode: "auto",
         block: true,
+      });
+      await discoverCodexBackendForTest(registry);
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "target-thread", turnId: "target-turn", turn: { id: "target-turn" } },
+        },
       });
 
       const response = await callRegistryMcpTool({
@@ -53818,6 +53826,7 @@ script = "printf setup"
         isError: true,
         structuredContent: { code: "forbidden" },
       });
+      expect(codexClient.lastSteerTurnParams).toBeUndefined();
 
       await registry.close();
     });
@@ -53970,6 +53979,85 @@ script = "printf setup"
       }));
 
       await registry.close();
+    });
+
+    it("refuses an agent's message wherever the owner submits it, and nothing else", async () => {
+      // A local tool call, a peer's federated send, a scheduled steer held
+      // after its turn ended, and a steer into a running turn all reach the
+      // owner through one of these entry points.
+      const MODES = THREAD_EXECUTION_MODES_BY_ACCESS;
+      const rank = (mode: ThreadExecutionMode) => MODES.indexOf(mode);
+      const ORIGINS = ["operator", "messaging", "agent", "peer-agent", "approved-todo"] as const;
+      const ENTRIES = ["submitTurn", "submitHeldTurn", "steer"] as const;
+      const originFor = (
+        origin: (typeof ORIGINS)[number],
+        executionMode: ThreadExecutionMode | undefined,
+      ): AppServerThreadMessageOrigin | undefined => {
+        if (origin === "operator") return undefined;
+        if (origin === "messaging") return { kind: "messaging" };
+        return {
+          kind: "agent",
+          ...(origin === "approved-todo" ? { operatorApproved: true } : {}),
+          sourceThread: {
+            backend: "codex",
+            threadId: "parent-thread",
+            ...(origin === "peer-agent" ? { instanceId: "pwr_peer" } : {}),
+            ...(executionMode ? { executionMode } : {}),
+          },
+        };
+      };
+      for (const entry of ENTRIES) {
+        for (const origin of ORIGINS) {
+          for (const senderMode of [undefined, ...MODES]) {
+            for (const targetMode of MODES) {
+              const { registry } = await createAccessRegistry({
+                senderMode: "default",
+                targetMode,
+                block: true,
+              });
+              const target = {
+                backend: "codex" as const,
+                threadId: "target-thread",
+                input: [{ type: "text" as const, text: "Run the release script.", text_elements: [] }],
+                messageOrigin: originFor(origin, senderMode),
+              };
+              // An older sender names no mode, which counts as Default Access.
+              const refused = (origin === "agent" || origin === "peer-agent")
+                && rank(targetMode) > rank(senderMode ?? "default");
+              let refusal: string | undefined;
+              if (entry === "steer") {
+                await registry.publishLocalEvent({
+                  backend: "codex",
+                  notification: {
+                    method: "turn/started",
+                    params: { threadId: "target-thread", turnId: "target-turn", turn: { id: "target-turn" } },
+                  },
+                });
+                const response = await registry.controlActiveTurn({
+                  ...target,
+                  operation: "steer",
+                  requestId: `steer-${origin}-${senderMode}-${targetMode}`,
+                });
+                refusal = !response.ok && response.error.code === "forbidden"
+                  ? response.error.message
+                  : undefined;
+              } else {
+                const submitted = entry === "submitTurn"
+                  ? registry.submitTurn({ ...target, origin: "manual" })
+                  : registry.submitHeldTurn({ ...target, queueEntryId: "held-1", holdReason: "Held for retry." });
+                refusal = await submitted.then(
+                  () => undefined,
+                  (error: unknown) => error instanceof Error ? error.message : String(error),
+                );
+              }
+              const scenario = { entry, origin, senderMode, targetMode };
+              expect({ ...scenario, refused: refusal !== undefined && isAgentMessageAccessRefusal(refusal) })
+                .toEqual({ ...scenario, refused });
+              await registry.close();
+            }
+          }
+        }
+      }
     });
   });
 
@@ -76886,7 +76974,13 @@ describe("agent tool access ceiling", () => {
     // stored mode as it stands then. It can neither take nor drop the
     // operator's approval of the text it replaces.
     it("checks a sender's replacement against the target's current mode and keeps approval with its text", async () => {
-      const sourceThread = { backend: "codex" as const, instanceId: "pwr_peer", threadId: "peer-thread" };
+      // The peer runs at Full Access, so only the target ceiling is under test.
+      const sourceThread = {
+        backend: "codex" as const,
+        instanceId: "pwr_peer",
+        threadId: "peer-thread",
+        executionMode: "full-access" as const,
+      };
       const origin = (approved: boolean) => ({
         kind: "agent" as const,
         sourceThread,

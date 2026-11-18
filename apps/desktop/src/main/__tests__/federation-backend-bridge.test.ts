@@ -14,7 +14,6 @@ import {
   agentMessageAccessRefusalMessage,
   buildFederatedThreadRef,
   rankThreadJumpMatches,
-  threadExecutionModeExceeds,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -924,32 +923,36 @@ describe("federation backend bridge", () => {
   });
 
   describe("agent messages to higher-access threads", () => {
+    // The bridge does not judge access: the owner's registry refuses an agent's
+    // message where it submits the turn. The bridge must hand that check the
+    // sender's mode unaltered and carry the owner's refusal back to the peer.
+    const refusal = agentMessageAccessRefusalMessage({
+      senderExecutionMode: "default",
+      targetExecutionMode: "full-access",
+    });
+
     function createOwner() {
-      const startTurn = vi.fn(async () => ({
-        backend: "codex" as const,
-        threadId: "owner-thread",
-        turnId: "owner-turn",
-      }));
+      const startTurn = vi.fn(async (request: {
+        messageOrigin?: { sourceThread?: { executionMode?: ThreadExecutionMode } };
+      }) => {
+        if (request.messageOrigin?.sourceThread?.executionMode !== "full-access") {
+          throw new Error(refusal);
+        }
+        return {
+          backend: "codex" as const,
+          threadId: "owner-thread",
+          turnId: "owner-turn",
+        };
+      });
       const controlActiveTurn = vi.fn(async () => ({
-        ok: true as const,
+        ok: false as const,
         backend: "codex" as const,
         threadId: "owner-thread",
         requestId: "steer-1",
-        turnId: "owner-turn",
-        disposition: "steered" as const,
+        error: { code: "forbidden", message: refusal },
       }));
-      // The owner's own check: its thread runs with Full Access.
-      const checkAgentMessageAccess = vi.fn(async (request: {
-        senderExecutionMode: ThreadExecutionMode | undefined;
-      }) => {
-        const sender = request.senderExecutionMode ?? "default";
-        const target = "full-access" as const;
-        return threadExecutionModeExceeds(target, sender)
-          ? agentMessageAccessRefusalMessage({
-              senderExecutionMode: sender,
-              targetExecutionMode: target,
-            })
-          : undefined;
+      const replaceQueuedMessage = vi.fn(async () => {
+        throw new Error(refusal);
       });
       const replies: FederationProtocolEnvelope[] = [];
       const router = new FederationRouter({
@@ -966,8 +969,8 @@ describe("federation backend bridge", () => {
         backend: {
           startTurn,
           controlActiveTurn,
+          replaceQueuedMessage,
         } as unknown as FederationBackendOperations,
-        checkAgentMessageAccess,
       });
       const send = async (id: string, method: string, params: unknown) => {
         await router.routeEnvelope({
@@ -984,7 +987,7 @@ describe("federation backend bridge", () => {
           },
         });
       };
-      return { checkAgentMessageAccess, controlActiveTurn, replies, send, startTurn };
+      return { controlActiveTurn, replaceQueuedMessage, replies, send, startTurn };
     }
 
     const agentOrigin = (executionMode?: ThreadExecutionMode) => ({
@@ -996,16 +999,16 @@ describe("federation backend bridge", () => {
       },
     });
 
-    it("refuses a peer agent's message on the owner, whatever the peer's own setting", async () => {
+    it("hands the owner every agent message with the sender's own mode", async () => {
       const owner = createOwner();
 
-      await owner.send("send-default", FEDERATION_BACKEND_METHODS.startTurn, {
+      await owner.send("send-full", FEDERATION_BACKEND_METHODS.startTurn, {
         backend: "codex",
         threadId: "owner-thread",
         input: [{ type: "text", text: "Run the release script" }],
-        messageOrigin: agentOrigin("default"),
+        messageOrigin: agentOrigin("full-access"),
       });
-      // An older peer sends no mode; it counts as Default Access.
+      // An older peer sends no mode; the owner counts that as Default Access.
       await owner.send("send-legacy", FEDERATION_BACKEND_METHODS.startTurn, {
         backend: "codex",
         threadId: "owner-thread",
@@ -1020,29 +1023,53 @@ describe("federation backend bridge", () => {
         input: [{ type: "text", text: "Also push the tag" }],
         messageOrigin: agentOrigin("default"),
       });
+      await owner.send("replace-default", FEDERATION_BACKEND_METHODS.replaceQueuedMessage, {
+        backend: "codex",
+        threadId: "owner-thread",
+        entryId: "queued-1",
+        input: [{ type: "text", text: "Push the tag instead" }],
+        messageOrigin: agentOrigin("default"),
+      });
 
-      expect(owner.startTurn).not.toHaveBeenCalled();
-      expect(owner.controlActiveTurn).not.toHaveBeenCalled();
-      expect(owner.checkAgentMessageAccess).toHaveBeenCalledWith({
+      const senderModes = [
+        ...owner.startTurn.mock.calls,
+        ...owner.controlActiveTurn.mock.calls,
+        ...owner.replaceQueuedMessage.mock.calls,
+      ].map(([request]) => (request as {
+        messageOrigin: { sourceThread: { executionMode?: string; instanceId?: string } };
+      }).messageOrigin.sourceThread);
+      expect(senderModes).toEqual([
+        expect.objectContaining({ instanceId: "viewer_one", executionMode: "full-access" }),
+        expect.not.objectContaining({ executionMode: expect.anything() }),
+        expect.objectContaining({ instanceId: "viewer_one", executionMode: "default" }),
+        expect.objectContaining({ instanceId: "viewer_one", executionMode: "default" }),
+      ]);
+    });
+
+    it("carries the owner's refusal back to the peer", async () => {
+      const owner = createOwner();
+
+      await owner.send("send-default", FEDERATION_BACKEND_METHODS.startTurn, {
         backend: "codex",
         threadId: "owner-thread",
-        senderExecutionMode: "default",
+        input: [{ type: "text", text: "Run the release script" }],
+        messageOrigin: agentOrigin("default"),
       });
-      expect(owner.checkAgentMessageAccess).toHaveBeenCalledWith({
+      await owner.send("steer-default", FEDERATION_BACKEND_METHODS.controlActiveTurn, {
+        operation: "steer",
         backend: "codex",
         threadId: "owner-thread",
-        senderExecutionMode: undefined,
+        requestId: "steer-1",
+        input: [{ type: "text", text: "Also push the tag" }],
+        messageOrigin: agentOrigin("default"),
       });
+
       expect(owner.replies).toContainEqual(expect.objectContaining({
         kind: "error",
         requestId: "send-default",
         error: expect.objectContaining({
           message: expect.stringContaining("Blocked by the operator's setting"),
         }),
-      }));
-      expect(owner.replies).toContainEqual(expect.objectContaining({
-        kind: "error",
-        requestId: "send-legacy",
       }));
       expect(owner.replies).toContainEqual(expect.objectContaining({
         kind: "response",
@@ -1052,52 +1079,6 @@ describe("federation backend bridge", () => {
           error: expect.objectContaining({ code: "forbidden" }),
         }),
       }));
-    });
-
-    it("delivers a to-do card the operator approved, whatever the sender's access", async () => {
-      const owner = createOwner();
-
-      await owner.send("send-todo", FEDERATION_BACKEND_METHODS.startTurn, {
-        backend: "codex",
-        threadId: "owner-thread",
-        input: [{ type: "text", text: "Run the release script" }],
-        messageOrigin: {
-          ...agentOrigin("default"),
-          operatorApproved: true,
-          threadTodo: { id: "todo-access", title: "Run the release" },
-        },
-      });
-
-      expect(owner.checkAgentMessageAccess).not.toHaveBeenCalled();
-      expect(owner.startTurn).toHaveBeenCalledTimes(1);
-    });
-
-    it("delivers an equal-access agent message and an operator's message", async () => {
-      const owner = createOwner();
-
-      await owner.send("send-full", FEDERATION_BACKEND_METHODS.startTurn, {
-        backend: "codex",
-        threadId: "owner-thread",
-        input: [{ type: "text", text: "Run the release script" }],
-        messageOrigin: agentOrigin("full-access"),
-      });
-      // Text an operator typed on the viewer carries no agent origin.
-      await owner.send("send-operator", FEDERATION_BACKEND_METHODS.startTurn, {
-        backend: "codex",
-        threadId: "owner-thread",
-        input: [{ type: "text", text: "Run the release script" }],
-      });
-
-      expect(owner.startTurn).toHaveBeenCalledTimes(2);
-      expect(owner.startTurn).toHaveBeenCalledWith(expect.objectContaining({
-        messageOrigin: expect.objectContaining({
-          sourceThread: expect.objectContaining({
-            instanceId: "viewer_one",
-            executionMode: "full-access",
-          }),
-        }),
-      }));
-      expect(owner.checkAgentMessageAccess).toHaveBeenCalledTimes(1);
     });
   });
 

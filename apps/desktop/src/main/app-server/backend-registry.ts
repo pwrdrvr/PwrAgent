@@ -2855,6 +2855,26 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Throws when an agent's message may not reach this owner's thread: the
+   * target's access ceiling (#3010) and the agent-message access setting.
+   * Every path that admits an agent's text calls it as the text is submitted,
+   * held or replaced, for local and federated sends alike; a steer into a
+   * running turn meets the same setting in `controlActiveTurn`.
+   */
+  private async assertAgentMessageAccess(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): Promise<void> {
+    await this.assertAgentMessageWithinThreadAccess(params);
+    const refusal = await this.checkAgentMessageAccess(params);
+    if (refusal) throw new Error(refusal);
+  }
+
+  /**
    * Why an agent's message to a thread this instance owns must not go, or
    * undefined when it may. With `general.block_agent_messages_to_higher_access`
    * on, a target above the sender is refused: its agent would act on the
@@ -2863,19 +2883,21 @@ export class DesktopBackendRegistry {
    * whichever is higher, or a raw approval or sandbox override above both. A
    * lower mode the message names does not lower it. The text stays in the
    * thread's history, where every later turn at the thread's own access
-   * reads it. An older peer sends no mode and counts as Default Access. Only
-   * agent tool calls come here; operator-typed text never does.
+   * reads it. The sender's mode travels in the agent origin; an older peer
+   * sends none, which counts as Default Access. Only an agent origin is
+   * checked, and never an operator-approved to-do card.
    */
-  async checkAgentMessageAccess(params: {
+  private async checkAgentMessageAccess(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    senderExecutionMode: ThreadExecutionMode | undefined;
+    messageOrigin?: AppServerThreadMessageOrigin;
     approvalPolicy?: string;
     sandbox?: string;
   }): Promise<string | undefined> {
+    if (params.messageOrigin?.kind !== "agent" || params.messageOrigin.operatorApproved) return undefined;
     if (!this.resolveBlockAgentMessagesToHigherAccessFn()) return undefined;
     const target = { backend: params.backend, threadId: params.threadId };
-    const senderExecutionMode = params.senderExecutionMode ?? "default";
+    const senderExecutionMode = params.messageOrigin.sourceThread?.executionMode ?? "default";
     const overlay = await this.overlayStore.getThreadOverlayState(target);
     const turnId = this.getActiveTurnForThread(target)?.turnId;
     const targetExecutionMode = [
@@ -9236,7 +9258,7 @@ export class DesktopBackendRegistry {
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    await this.assertAgentMessageWithinThreadAccess(params);
+    await this.assertAgentMessageAccess(params);
     await this.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
@@ -9299,7 +9321,7 @@ export class DesktopBackendRegistry {
     title?: string;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    await this.assertAgentMessageWithinThreadAccess(params);
+    await this.assertAgentMessageAccess(params);
     // No lock check: a held entry starts nothing until it is released, and
     // the release is refused while the thread is locked. Holding is how a
     // lock pauses a delivery, such as a monitor's result, without losing it.
@@ -10382,7 +10404,7 @@ export class DesktopBackendRegistry {
     }
     // The replacement is submitted again under the settings the entry keeps,
     // so it meets the thread's access as it stands now.
-    await this.assertAgentMessageWithinThreadAccess({
+    await this.assertAgentMessageAccess({
       backend: request.backend,
       threadId: request.threadId,
       executionMode: entry.executionMode,
@@ -12035,6 +12057,19 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
         requestId: request.requestId,
         error: { code: PROJECT_PAUSED_ERROR_CODE, message: projectRefusal },
+      };
+    }
+    // A steer delivers its text to the running turn, at that turn's access.
+    const accessRefusal = request.operation === "steer"
+      ? await this.checkAgentMessageAccess(request)
+      : undefined;
+    if (accessRefusal) {
+      return {
+        ok: false,
+        backend: request.backend,
+        threadId: request.threadId,
+        requestId: request.requestId,
+        error: { code: "forbidden", message: accessRefusal },
       };
     }
     const requestKey = [
@@ -19935,15 +19970,14 @@ export class DesktopBackendRegistry {
           localResolutionError = error;
         }
       }
-      // A local target is checked before the sender's receipt is written, so
-      // a refused message leaves nothing behind. A remote owner checks its own.
-      // An operator-approved to-do dispatch is the operator's own decision,
-      // and the card is where a refused agent is sent, so it is never checked.
-      if (localThread && !options?.operatorApproved) {
+      // submitTurn enforces the setting on the owner. Asking the same question
+      // here first keeps a refused local message from writing the sender's
+      // receipt; a remote owner refuses before it accepts anything.
+      if (localThread) {
         const refusal = await this.checkAgentMessageAccess({
           backend,
           threadId,
-          senderExecutionMode: messageOrigin.sourceThread?.executionMode,
+          messageOrigin,
           approvalPolicy: request.args.approvalPolicy,
           sandbox: request.args.sandbox,
         });
@@ -20398,19 +20432,6 @@ export class DesktopBackendRegistry {
         );
       } else {
         if (localThread) {
-          if (request.operation === "steer_thread") {
-            const refusal = await this.checkAgentMessageAccess({
-              backend,
-              threadId,
-              senderExecutionMode: messageOrigin.sourceThread?.executionMode,
-            });
-            if (refusal) {
-              return threadOrchestrationFailure("forbidden", refusal, {
-                backend,
-                threadId,
-              });
-            }
-          }
           const backendSummary = (
             await this.listBackends({ includeUnavailable: true })
           ).backends.find((candidate) => candidate.kind === backend);
