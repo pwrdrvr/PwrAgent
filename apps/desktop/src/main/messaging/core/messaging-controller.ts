@@ -1,3 +1,5 @@
+import { MessagingPendingRequestWorkflow } from "./messaging-pending-request-workflow";
+import type { MessagingPendingRequestHost } from "./messaging-pending-request-context";
 import { MessagingAgentTools } from "./messaging-agent-tools";
 import type { MessagingAgentToolHost } from "./messaging-agent-tool-context";
 import { MessagingMonitorWorkflow } from "./messaging-monitor-workflow";
@@ -16,12 +18,12 @@ import type { MessagingCallbackHost } from "./messaging-callback-context";
 import { readThreadExecutionModeValue, readAcpRuntimeOptionSource, PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, branchPageIndexFromValue, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, readMessagingToolUpdateModeValue, formatDefaultAgentScope, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
-import { messageOriginForInboundEvent, readStringValue } from "./messaging-command-helpers";
+import { readStringValue } from "./messaging-command-helpers";
 import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
-import { threadIdForBackendEvent, asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, isTerminalTurnLifecycle, assistantStreamKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type AssistantStreamDelta, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantStreamBuffer, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import { asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, assistantStreamKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type AssistantStreamDelta, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantStreamBuffer, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { automatedWorkStartedLabel, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
@@ -30,19 +32,19 @@ import { readMessagingLaunchpadContext, type MessagingLaunchpadContext, type Mes
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
-import { buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, readProviderResponseBlockNotification, describeProviderResponseBlock, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
-import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, isAcpBackendId, isAppServerBackendKind, readProviderResponseBlockNotification, describeProviderResponseBlock, stripCodexGitActionDirectives } from "@pwragent/shared";
+import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
-import { capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import { capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
 import { defaultAgentBackendSupport, defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
-import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply, MessagingThreadAdmissionState } from "./messaging-adapter.js";
+import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply } from "./messaging-adapter.js";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
-import { buildActivityIntent, buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
+import { buildActivityIntent, buildConfirmationIntent, buildErrorIntent, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
 import { buildArtifactDeliveryIntent, buildArtifactInlineFallbackIntent, type MessagingArtifact, type MessagingArtifactMessageIntent } from "./messaging-artifact-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
@@ -73,6 +75,7 @@ import { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingInboundHost } from "./messaging-inbound-context";
 import { assistantImageDeliverySignature, isMessagingToolOriginBinding, summarizeNavigationThreadForMessaging, responseAttributionLabel, isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
 import { formatTimeOfDay, isPermanentMessagingTargetFailure } from "./messaging-monitor-helpers";
+
 
 
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
@@ -276,7 +279,6 @@ export class MessagingController {
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
-  private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly queuedTurnActions = new Set<Promise<void>>();
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly turns: MessagingTurns;
@@ -366,6 +368,9 @@ export class MessagingController {
   private readonly monitorWorkflow: MessagingMonitorWorkflow;
   private monitorHostPorts?: MessagingMonitorHost;
 
+  private readonly pendingRequests: MessagingPendingRequestWorkflow;
+  private pendingRequestHostPorts?: MessagingPendingRequestHost;
+
   constructor(private readonly options: MessagingControllerOptions) {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
@@ -416,6 +421,14 @@ export class MessagingController {
       get now() { return readNow(); },
       get logger() { return readLogger(); },
       host: () => this.callbackHost(),
+    });
+    this.pendingRequests = new MessagingPendingRequestWorkflow({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.pendingRequestHost(),
     });
     const readAgentToolConfig = () => this.options;
     const readPrivateResponses = () => this.privateResponses;
@@ -793,7 +806,7 @@ export class MessagingController {
       get callbackHandlers() { return readController().callbackHandlers; },
       presentSkillsBrowser: (...args) => this.presentSkillsBrowser(...args),
       handleReviewTextAnswer: (...args) => this.reviewWorkflow.handleReviewTextAnswer(...args),
-      handleQuestionnaireTextAnswer: (...args) => this.handleQuestionnaireTextAnswer(...args),
+      handleQuestionnaireTextAnswer: (...args) => this.pendingRequests.handleQuestionnaireTextAnswer(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
       cycleToolUpdateMode: (...args) => this.cycleToolUpdateMode(...args),
@@ -879,6 +892,33 @@ export class MessagingController {
       monitorAuthorizedActorIds: (...args) => this.accessControl.monitorAuthorizedActorIds(...args),
       readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
       bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
+    };
+  }
+
+  private pendingRequestHost(): MessagingPendingRequestHost {
+    return this.pendingRequestHostPorts ??= {
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      bindingsForAgentTurn: (...args) => this.bindingsForAgentTurn(...args),
+      readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
+      reconcileIdleTurn: (...args) => this.reconcileIdleTurn(...args),
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      flushPendingTurnProseBeforeElicitation: (...args) => this.flushPendingTurnProseBeforeElicitation(...args),
+      deliver: (...args) => this.deliver(...args),
+      reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
+      setActiveTurn: (...args) => this.setActiveTurn(...args),
+      signalTurnActivity: (...args) => this.signalTurnActivity(...args),
+      renderAutomaticBindingStatus: (...args) => this.bindingService.renderAutomaticBindingStatus(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
+      isTurnOccupied: (...args) => this.inboundTurns.isTurnOccupied(...args),
+      resolveSteerableActiveTurn: (...args) => this.resolveSteerableActiveTurn(...args),
+      rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
+      startPreparedInput: (...args) => this.inboundTurns.startPreparedInput(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
+      agentMessagingOriginForPendingIntent: (...args) => this.agentMessagingOriginForPendingIntent(...args),
+      getActiveTurn: (...args) => this.getActiveTurn(...args),
+      logBindingTurnStateChange: (...args) => this.logBindingTurnStateChange(...args),
     };
   }
 
@@ -983,10 +1023,10 @@ export class MessagingController {
       bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
-      submitApprovalAction: (...args) => this.submitApprovalAction(...args),
-      retireApprovalIntent: (...args) => this.retireApprovalIntent(...args),
-      resumeBindingForPendingIntent: (...args) => this.resumeBindingForPendingIntent(...args),
-      handleQuestionnaireAction: (...args) => this.handleQuestionnaireAction(...args),
+      submitApprovalAction: (...args) => this.pendingRequests.submitApprovalAction(...args),
+      retireApprovalIntent: (...args) => this.pendingRequests.retireApprovalIntent(...args),
+      resumeBindingForPendingIntent: (...args) => this.pendingRequests.resumeBindingForPendingIntent(...args),
+      handleQuestionnaireAction: (...args) => this.pendingRequests.handleQuestionnaireAction(...args),
       handleReviewAction: (...args) => this.reviewWorkflow.handleReviewAction(...args),
       get turnAdmission() { return readController().turnAdmission; },
       isDisposed: () => this.disposed,
@@ -1094,14 +1134,14 @@ export class MessagingController {
     const readController = () => this;
     return this.backendEventPorts = {
       refreshStatusSurfacesForBackend: (...args) => this.refreshStatusSurfacesForBackend(...args),
-      retireAnsweredAsyncQuestionnaires: (...args) => this.retireAnsweredAsyncQuestionnaires(...args),
+      retireAnsweredAsyncQuestionnaires: (...args) => this.pendingRequests.retireAnsweredAsyncQuestionnaires(...args),
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
       reconcileQueuedAgentMessagingOrigin: (...args) => this.reconcileQueuedAgentMessagingOrigin(...args),
       rememberContextUsageSummary: (...args) => this.rememberContextUsageSummary(...args),
-      handleBackendRequestResolved: (...args) => this.handleBackendRequestResolved(...args),
+      handleBackendRequestResolved: (...args) => this.pendingRequests.handleBackendRequestResolved(...args),
       handleExecutionModeQueued: (...args) => this.handleExecutionModeQueued(...args),
       refreshStatusSurfacesForThread: (...args) => this.bindingService.refreshStatusSurfacesForThread(...args),
       handleExecutionModeQueueCleared: (...args) => this.handleExecutionModeQueueCleared(...args),
@@ -1145,7 +1185,7 @@ export class MessagingController {
       markAssistantMessageDelivered: (...args) => this.markAssistantMessageDelivered(...args),
       resolveAssistantMessageImages: (...args) => this.resolveAssistantMessageImages(...args),
       deliverAssistantImages: (...args) => this.deliverAssistantImages(...args),
-      deliverAsyncQuestionnaire: (...args) => this.deliverAsyncQuestionnaire(...args),
+      deliverAsyncQuestionnaire: (...args) => this.pendingRequests.deliverAsyncQuestionnaire(...args),
       flushAssistantStreamForEvent: (...args) => this.flushAssistantStreamForEvent(...args),
       deliverAssistantMessage: (...args) => this.deliverAssistantMessage(...args),
       deliverAssistantProseForBackendEvent: (...args) => this.deliverAssistantProseForBackendEvent(...args),
@@ -1217,131 +1257,7 @@ export class MessagingController {
     request: AppServerPendingRequestNotification,
     federationTarget?: FederationTarget,
   ): Promise<void> {
-    const key = JSON.stringify([
-      backend,
-      request.params.threadId,
-      request.params.requestId,
-      federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined,
-    ]);
-    const existing = this.pendingRequestPresentations.get(key);
-    if (existing) {
-      await existing;
-      return;
-    }
-    // Reserve before the first store read completes so overlapping redisplays
-    // cannot both create an intent for the same backend request.
-    const presentation = this.presentBackendPendingRequest(backend, request, federationTarget);
-    this.pendingRequestPresentations.set(key, presentation);
-    try {
-      await presentation;
-    } finally {
-      this.pendingRequestPresentations.delete(key);
-    }
-  }
-
-  private async presentBackendPendingRequest(
-    backend: AppServerBackendKind,
-    request: AppServerPendingRequestNotification,
-    federationTarget?: FederationTarget,
-  ): Promise<void> {
-    const persistentBindings = this.filterBindingsForChannel(
-      await this.options.store.findActiveBindingsForThread({
-        backend,
-        threadId: request.params.threadId,
-      }),
-    ).filter((binding) =>
-      bindingMatchesFederationTarget(binding, federationTarget)
-    );
-    const bindings = this.bindingsForAgentTurn(
-      backend,
-      request.params.threadId,
-      request.params.turnId ?? undefined,
-      persistentBindings,
-    );
-
-    const existingIntents = await this.options.store.findActivePendingIntentsForRequest({
-      backend,
-      threadId: request.params.threadId,
-      requestId: request.params.requestId,
-      now: this.now(),
-    });
-    for (const binding of bindings) {
-      // Desktop transcript recovery also reaches messaging. Keep the existing
-      // actionable message and any questionnaire answers for this binding.
-      if (existingIntents.some((intent) => intent.bindingId === binding.id)) {
-        continue;
-      }
-      const intent = this.intentForPendingRequest(request);
-      if (!intent) {
-        continue;
-      }
-      intent.bindingId = binding.id;
-      intent.requestContext = {
-        backend,
-        method: request.method,
-        requestId: request.params.requestId,
-        threadId: request.params.threadId,
-        turnId: request.params.turnId ?? undefined,
-      };
-      intent.audit = buildMessagingAuditContext({
-        action: "pending_request.presented",
-        actor: {
-          platformUserId: binding.authorizedActorIds[0] ?? "unknown",
-        },
-        backend,
-        bindingId: binding.id,
-        channel: binding.channel,
-        now: this.now(),
-        threadId: request.params.threadId,
-      });
-      if (request.params.turnId) {
-        const threadStatus = await this.readBackendThreadStatus(binding);
-        if (threadStatus === "idle") {
-          await this.reconcileIdleTurn(binding, "pending_request");
-          continue;
-        }
-      }
-      const pendingIntent = await this.storePendingIntent(intent, binding);
-      await this.flushPendingTurnProseBeforeElicitation(
-        binding,
-        request.params.turnId,
-      );
-      const delivery = await this.deliver(intent, binding);
-      let deliveredPendingIntent = pendingIntent;
-      if (delivery.surface) {
-        deliveredPendingIntent = {
-          ...pendingIntent,
-          surface: delivery.surface,
-        };
-        await this.options.store.upsertPendingIntent(deliveredPendingIntent);
-      }
-      if (request.params.turnId) {
-        const reconciledTurn = await this.reconcileActiveTurnFromBackendStatus(
-          binding,
-          "pending_request",
-        );
-        if (isTerminalTurnLifecycle(reconciledTurn)) {
-          await this.retireStalePendingIntent(deliveredPendingIntent);
-          continue;
-        }
-        const threadStatus = await this.readBackendThreadStatus(binding);
-        if (threadStatus === "idle") {
-          await this.retireStalePendingIntent(deliveredPendingIntent);
-          await this.reconcileIdleTurn(binding, "pending_request");
-          continue;
-        }
-        const activeTurn: MessagingActiveTurnSummary = {
-          turnId: request.params.turnId,
-          status: "waiting",
-          updatedAt: this.now(),
-        };
-        this.setActiveTurn(binding, activeTurn);
-        await this.signalTurnActivity(binding, activeTurn, {
-          force: true,
-        });
-        await this.bindingService.renderAutomaticBindingStatus(binding);
-      }
-    }
+    await this.pendingRequests.handleBackendPendingRequest(backend, request, federationTarget);
   }
 
   private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
@@ -1473,578 +1389,6 @@ export class MessagingController {
       });
     }).finally(() => { this.queuedTurnActions.delete(task); });
     this.queuedTurnActions.add(task);
-  }
-
-  private async handleQuestionnaireTextAnswer(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundTextEvent,
-  ): Promise<boolean> {
-    if (pendingIntent.intent.kind !== "questionnaire") {
-      return false;
-    }
-
-    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
-    const question = intent.questions[intent.currentIndex];
-    const value = event.text.trim();
-    if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
-      return false;
-    }
-
-    const updated = this.questionnaireWithRecordedAnswer(intent, {
-      kind: "custom",
-      value,
-    });
-    if (this.questionnaireReadyToSubmit(updated)) {
-      await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
-      return true;
-    }
-
-    await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
-    return true;
-  }
-
-  private async handleQuestionnaireAction(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent,
-    action: MessagingSurfaceAction,
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "questionnaire") {
-      return;
-    }
-
-    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
-    if (action.id === "questionnaire:skip") {
-      if (intent.asyncReply) {
-        await this.options.store.deletePendingIntent(pendingIntent.id);
-        await this.deliverQuestionnaireIntent(
-          pendingIntent,
-          { ...intent, phase: "skipped" },
-          event,
-        );
-      }
-      return;
-    }
-
-    if (action.id === "questionnaire:back") {
-      await this.updateQuestionnairePendingIntent(
-        pendingIntent,
-        this.questionnaireWithPreviousQuestion(intent),
-        event,
-      );
-      return;
-    }
-
-    if (action.id === "questionnaire:next") {
-      await this.updateQuestionnairePendingIntent(
-        pendingIntent,
-        this.questionnaireWithNextQuestion(intent),
-        event,
-      );
-      return;
-    }
-
-    if (action.id === "questionnaire:submit") {
-      if (!this.questionnaireReadyToSubmit(intent)) {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("questionnaire-incomplete"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: this.now(),
-            title: "Answer each question",
-            body: "Review the input request and answer every question before submitting.",
-            fallbackText: "Answer each question before submitting.",
-          }),
-          undefined,
-          event,
-        );
-        return;
-      }
-
-      await this.submitAndRetireQuestionnaire(pendingIntent, intent, event);
-      return;
-    }
-
-    const updated = this.questionnaireWithOptionAnswer(intent, action.id);
-    if (updated !== intent) {
-      if (this.questionnaireReadyToSubmit(updated)) {
-        await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
-        return;
-      }
-
-      await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
-    }
-  }
-
-  private questionnaireWithOptionAnswer(
-    intent: MessagingQuestionnaireIntent,
-    optionId: string,
-  ): MessagingQuestionnaireIntent {
-    if (intent.phase !== "answering") {
-      return intent;
-    }
-
-    const question = intent.questions[intent.currentIndex];
-    const option = question?.options.find((candidate) => candidate.id === optionId);
-    if (!option) {
-      return intent;
-    }
-
-    return this.questionnaireWithRecordedAnswer(intent, {
-      kind: "option",
-      optionId: option.id,
-      value: typeof option.value === "string" ? option.value : option.label,
-    });
-  }
-
-  private questionnaireWithRecordedAnswer(
-    intent: MessagingQuestionnaireIntent,
-    answer: MessagingQuestionnaireAnswer,
-  ): MessagingQuestionnaireIntent {
-    const answers = [...intent.answers];
-    answers[intent.currentIndex] = answer;
-
-    const nextIndex = intent.currentIndex + 1;
-    if (nextIndex < intent.questions.length) {
-      return {
-        ...intent,
-        answers,
-        currentIndex: nextIndex,
-        phase: "answering",
-      };
-    }
-
-    return {
-      ...intent,
-      answers,
-      phase: "answering",
-    };
-  }
-
-  private questionnaireWithNextQuestion(
-    intent: MessagingQuestionnaireIntent,
-  ): MessagingQuestionnaireIntent {
-    if (intent.phase !== "answering") {
-      return intent;
-    }
-    if (!messagingQuestionnaireAnswerComplete(intent.answers[intent.currentIndex])) {
-      return intent;
-    }
-    if (intent.currentIndex >= intent.questions.length - 1) {
-      return intent;
-    }
-    return {
-      ...intent,
-      currentIndex: intent.currentIndex + 1,
-    };
-  }
-
-  private questionnaireReadyToSubmit(intent: MessagingQuestionnaireIntent): boolean {
-    return (
-      intent.currentIndex >= intent.questions.length - 1 &&
-      intent.answers.every(messagingQuestionnaireAnswerComplete)
-    );
-  }
-
-  private async submitAndRetireQuestionnaire(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<void> {
-    if (intent.asyncReply) {
-      await this.submitAsyncQuestionnaire(pendingIntent, intent, event);
-      return;
-    }
-    const submittedIntent: MessagingQuestionnaireIntent = {
-      ...intent,
-      phase: "submitted",
-    };
-    await this.submitQuestionnaireIntent(submittedIntent);
-    await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    await this.resumeBindingForPendingIntent(
-      pendingIntent,
-      "pending_request.submitted",
-    );
-  }
-
-  private questionnaireWithPreviousQuestion(
-    intent: MessagingQuestionnaireIntent,
-  ): MessagingQuestionnaireIntent {
-    if (intent.phase === "review") {
-      return {
-        ...intent,
-        currentIndex: Math.max(0, intent.questions.length - 1),
-        phase: "answering",
-      };
-    }
-    if (intent.phase !== "answering" || intent.currentIndex <= 0) {
-      return intent;
-    }
-    return {
-      ...intent,
-      currentIndex: intent.currentIndex - 1,
-    };
-  }
-
-  private async updateQuestionnairePendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<void> {
-    const result = await this.deliverQuestionnaireIntent(pendingIntent, intent, event);
-    await this.options.store.upsertPendingIntent({
-      ...pendingIntent,
-      intent,
-      surface: result.surface ?? pendingIntent.surface,
-    });
-  }
-
-  private async deliverQuestionnaireIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event?: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<MessagingDeliveryResult> {
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    const targetSurface = pendingIntent.surface ?? (
-      event?.kind === "callback" ? event.interaction : undefined
-    );
-    const deliveryIntent: MessagingQuestionnaireIntent = targetSurface
-      ? {
-          ...intent,
-          delivery: {
-            mode: "update",
-            replaceMarkup: true,
-            fallback: "present_new",
-          },
-          targetSurface,
-        }
-      : intent;
-    return await this.deliver(deliveryIntent, binding, event);
-  }
-
-  /**
-   * Presents the questions a Codex async question message asked. Nothing is
-   * waiting on the answer, so the turn keeps its working state.
-   */
-  private async deliverAsyncQuestionnaire(
-    asyncQuestions: { itemId: string; questions: CodexAsyncQuestion[] },
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-    turnId: string | undefined,
-  ): Promise<void> {
-    const threadId = threadIdForBackendEvent(event) ?? binding.threadId;
-    const intent = buildAsyncQuestionnaireIntent({
-      asyncReply: {
-        backend: event.backend,
-        itemId: asyncQuestions.itemId,
-        threadId,
-      },
-      capabilityProfile: this.capabilityProfile,
-      createdAt: this.now(),
-      id: this.newIntentId("async-question"),
-      questions: asyncQuestions.questions,
-    });
-    intent.bindingId = binding.id;
-    intent.audit = buildMessagingAuditContext({
-      action: "async_question.presented",
-      actor: {
-        platformUserId: binding.authorizedActorIds[0] ?? "unknown",
-      },
-      backend: event.backend,
-      bindingId: binding.id,
-      channel: binding.channel,
-      now: this.now(),
-      threadId,
-    });
-    const pendingIntent = await this.storePendingIntent(intent, binding);
-    await this.flushPendingTurnProseBeforeElicitation(binding, turnId);
-    const delivery = await this.deliver(intent, binding);
-    if (delivery.outcome === "failed") {
-      // No turn end retires an async card, so one nobody can see would take
-      // the operator's next message as its answer.
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      return;
-    }
-    if (delivery.surface) {
-      await this.options.store.upsertPendingIntent({
-        ...pendingIntent,
-        surface: delivery.surface,
-      });
-    }
-  }
-
-  /**
-   * A Codex async question has no pending request to answer. The answers go
-   * back as one message in Codex's reply envelope: steered into the turn when
-   * one is running, as Codex expects, and otherwise as a new turn.
-   */
-  private async submitAsyncQuestionnaire(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<void> {
-    const asyncReply = intent.asyncReply;
-    if (!asyncReply) {
-      return;
-    }
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    const text = formatCodexAsyncQuestionReply(
-      intent.questions.map((question, index) => ({
-        questionItemId: codexAsyncQuestionItemId(asyncReply.itemId, index),
-        question: question.question,
-        answer: intent.answers[index]?.value ?? "",
-      })),
-    );
-    if (!text) {
-      return;
-    }
-    if (!binding || binding.revokedAt) {
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("async-question-unavailable"),
-          createdAt: this.now(),
-          title: "Question unavailable",
-          body: "This conversation is no longer bound to the thread that asked.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    if (
-      !(await this.accessControl.requirePermission(
-        event,
-        "message.reply",
-        "questionnaire:async-reply",
-      ))
-      || !(await this.accessControl.requireRemoteScopeForBinding(
-        event,
-        binding,
-        "questionnaire:async-reply:remote-instance",
-      ))
-    ) {
-      return;
-    }
-
-    // Retire the card before sending: the reply's own echo would otherwise
-    // find it still pending and close it a second time.
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    const sent = await this.sendAsyncQuestionReply({
-      binding,
-      event,
-      preview: summarizeCodexAsyncQuestionReply(
-        intent.answers.map((answer) => ({ answer: answer?.value ?? "" })),
-      ),
-      text,
-    });
-    if (!sent) {
-      await this.updateQuestionnairePendingIntent(pendingIntent, intent, event);
-      return;
-    }
-    await this.deliverQuestionnaireIntent(
-      pendingIntent,
-      { ...intent, phase: "submitted" },
-      event,
-    );
-  }
-
-  private async sendAsyncQuestionReply(params: {
-    binding: MessagingBindingRecord;
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent;
-    preview: string;
-    text: string;
-  }): Promise<boolean> {
-    const { binding, event } = params;
-    const input: AppServerTurnInputItem[] = [{ type: "text", text: params.text }];
-    const threadKey = threadKeyForBinding(binding);
-    let admissionState: MessagingThreadAdmissionState;
-    try {
-      admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: binding.backend,
-        federationTarget: federationTargetForBinding(binding),
-        threadId: binding.threadId,
-      });
-    } catch (error) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("async-question-reply-failed"),
-          createdAt: this.now(),
-          title: "Answer could not be sent",
-          body: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        }),
-        binding,
-        event,
-      );
-      return false;
-    }
-
-    if (await this.inboundTurns.isTurnOccupied(binding, threadKey, admissionState)) {
-      const activeTurn = await this.resolveSteerableActiveTurn(
-        binding,
-        "async_question_reply",
-      );
-      if (
-        this.options.backend.steerTurn
-        && activeTurn
-        && ["working", "waiting"].includes(activeTurn.status)
-      ) {
-        try {
-          await this.options.backend.steerTurn({
-            backend: binding.backend,
-            federationTarget: federationTargetForBinding(binding),
-            threadId: binding.threadId,
-            expectedTurnId: activeTurn.turnId,
-            input,
-            requestId: this.newIntentId("async-question-reply"),
-            messageOrigin: messageOriginForInboundEvent(event, this.rememberHumanMessagingSource(binding, event)?.ref),
-          });
-          return true;
-        } catch (error) {
-          this.logger.warn?.("messaging async question reply could not steer", {
-            bindingId: binding.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-    }
-
-    const started = await this.inboundTurns.startPreparedInput({
-      admissionState,
-      binding,
-      event,
-      input,
-      preview: params.preview,
-      threadKey,
-    });
-    return started !== "failed";
-  }
-
-  /**
-   * An async question answered anywhere closes its card here, so a later
-   * chat message is not captured as a second answer.
-   */
-  private async retireAnsweredAsyncQuestionnaires(
-    event: AgentEvent,
-    threadId: ThreadIdentifier,
-    replies: readonly CodexAsyncQuestionReply[],
-  ): Promise<void> {
-    const answers = new Map(
-      replies.map((reply) => [reply.questionItemId, reply.answer]),
-    );
-    const answeredIds = new Set(answers.keys());
-    const pendingIntents =
-      await this.options.store.findActivePendingAsyncQuestionnaires({
-        backend: event.backend,
-        threadId,
-        now: this.now(),
-      });
-    for (const pendingIntent of pendingIntents) {
-      if (
-        pendingIntent.intent.kind !== "questionnaire"
-        || !this.isChannelInScope(pendingIntent.channel)
-      ) {
-        continue;
-      }
-      const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
-      const itemId = intent.asyncReply?.itemId;
-      if (
-        !itemId
-        || !intent.questions.some((_, index) =>
-          isCodexAsyncQuestionAnswered(answeredIds, itemId, index)
-        )
-      ) {
-        continue;
-      }
-      const binding = pendingIntent.bindingId
-        ? await this.options.store.getBinding(pendingIntent.bindingId)
-        : undefined;
-      if (binding && !bindingMatchesFederationTarget(binding, event.federationTarget)) {
-        continue;
-      }
-      const answered: MessagingQuestionnaireIntent = {
-        ...intent,
-        answers: intent.questions.map((question, index) => {
-          const value = answers.get(codexAsyncQuestionItemId(itemId, index))
-            ?? answers.get(itemId);
-          if (!value) {
-            return intent.answers[index] ?? null;
-          }
-          const option = question.options.find((candidate) => candidate.value === value);
-          return option
-            ? { kind: "option", optionId: option.id, value }
-            : { kind: "custom", value };
-        }),
-        phase: "submitted",
-      };
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.deliverQuestionnaireIntent(pendingIntent, answered);
-    }
-  }
-
-  private async submitQuestionnaireIntent(
-    intent: MessagingQuestionnaireIntent,
-  ): Promise<void> {
-    const requestContext = intent.requestContext;
-    if (!requestContext || !this.options.backend.submitServerRequest) {
-      return;
-    }
-    const binding = intent.bindingId
-      ? await this.options.store.getBinding(intent.bindingId)
-      : undefined;
-
-    await this.options.backend.submitServerRequest({
-      backend: requestContext.backend,
-      federationTarget: binding
-        ? federationTargetForBinding(binding)
-        : undefined,
-      threadId: requestContext.threadId,
-      turnId: requestContext.turnId,
-      requestId: requestContext.requestId,
-      response: {
-        answers: Object.fromEntries(
-          intent.questions.map((question, index) => [
-            question.id,
-            {
-              answers: questionnaireAnswerValue(intent.answers[index]),
-            },
-          ]),
-        ),
-      },
-    });
-  }
-
-  private async submitApprovalAction(
-    intent: Extract<MessagingSurfaceIntent, { kind: "approval" }>,
-    actionId: string,
-  ): Promise<MessagingApprovalDecision | undefined> {
-    const requestContext = intent.requestContext;
-    const action = intent.decisions.find((candidate) => candidate.id === actionId);
-    const decision = action?.decision;
-    if (!requestContext || !action || !this.options.backend.submitServerRequest) {
-      return decision;
-    }
-    const binding = intent.bindingId
-      ? await this.options.store.getBinding(intent.bindingId)
-      : undefined;
-
-    await this.options.backend.submitServerRequest({
-      backend: requestContext.backend,
-      federationTarget: binding
-        ? federationTargetForBinding(binding)
-        : undefined,
-      threadId: requestContext.threadId,
-      turnId: requestContext.turnId,
-      requestId: requestContext.requestId,
-      response: action.response ?? { decision },
-    });
-    return decision;
   }
 
   /**
@@ -2252,118 +1596,6 @@ export class MessagingController {
     threadId: ThreadIdentifier,
   ): string {
     return buildThreadIdentityKey(backend, threadId);
-  }
-
-  private async handleBackendRequestResolved(event: AgentEvent): Promise<void> {
-    if (event.notification.method !== "serverRequest/resolved") {
-      return;
-    }
-
-    const pendingIntents =
-      await this.options.store.findActivePendingIntentsForRequest({
-        backend: event.backend,
-        threadId: event.notification.params.threadId,
-        requestId: event.notification.params.requestId,
-        now: this.now(),
-      });
-
-    for (const pendingIntent of pendingIntents.filter((intent) =>
-      this.isChannelInScope(intent.channel),
-    )) {
-      const binding = pendingIntent.bindingId
-        ? await this.options.store.getBinding(pendingIntent.bindingId)
-        : undefined;
-      if (
-        binding &&
-        !bindingMatchesFederationTarget(binding, event.federationTarget)
-      ) {
-        continue;
-      }
-      await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.resumeBindingForPendingIntent(
-        pendingIntent,
-        event.notification.method,
-      );
-    }
-  }
-
-  private async retireApprovalIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    event?: MessagingInboundCallbackEvent,
-    responseLabel = "Resolved",
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "approval") {
-      return;
-    }
-
-    const targetSurface = pendingIntent.surface ?? event?.interaction;
-    if (!targetSurface) {
-      return;
-    }
-
-    try {
-      await this.deliver(
-        {
-          ...pendingIntent.intent,
-          body: approvalBodyWithResponse(pendingIntent.intent.body, responseLabel),
-          decisions: [],
-          delivery: {
-            mode: "update",
-            replaceMarkup: true,
-            fallback: "fail",
-          },
-          fallbackText: `Approval response received: ${responseLabel}.`,
-          targetSurface,
-        },
-        undefined,
-        event,
-      );
-    } catch (error) {
-      this.logger.debug?.("messaging approval retirement update failed", {
-        error: error instanceof Error ? error.message : String(error),
-        intentId: pendingIntent.intent.id,
-      });
-    }
-  }
-
-  private async resumeBindingForPendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    reason: string,
-  ): Promise<MessagingBindingRecord | undefined> {
-    const bindingId = pendingIntent.bindingId;
-    const turnId = pendingIntent.intent.requestContext?.turnId;
-    if (!bindingId || !turnId) {
-      return undefined;
-    }
-
-    const origin = this.agentMessagingOriginForPendingIntent(pendingIntent);
-    const binding = await this.options.store.getBinding(bindingId)
-      ?? origin?.deliveryBinding
-      ?? origin?.binding;
-    const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
-    if (
-      !binding ||
-      binding.revokedAt ||
-      !activeTurn ||
-      activeTurn.turnId !== turnId ||
-      activeTurn.status !== "waiting"
-    ) {
-      return undefined;
-    }
-
-    const resumedTurn: MessagingActiveTurnSummary = {
-      ...activeTurn,
-      status: "working",
-      updatedAt: this.now(),
-    };
-    this.setActiveTurn(binding, resumedTurn);
-    this.logBindingTurnStateChange(binding, activeTurn, resumedTurn, reason);
-    await this.signalTurnActivity(binding, resumedTurn, {
-      force: true,
-      reason,
-    });
-    return binding;
   }
 
   /**
@@ -5612,13 +4844,6 @@ export class MessagingController {
     await this.reconcileActiveTurnFromBackendStatus(binding, reason);
   }
 
-  private async retireStalePendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-  ): Promise<void> {
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
-  }
-
   private async readBackendThreadStatus(
     binding: MessagingBindingRecord,
   ): Promise<string | undefined> {
@@ -6510,30 +5735,6 @@ export class MessagingController {
       updatedAt: now,
       displayName: event.actor.displayName ?? event.actor.username,
     };
-  }
-
-  private intentForPendingRequest(
-    request: AppServerPendingRequestNotification,
-  ): MessagingSurfaceIntent | undefined {
-    if (request.method === "item/tool/requestUserInput") {
-      return buildQuestionnaireIntent({
-        id: this.newIntentId("questionnaire"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        request: request as AppServerToolRequestUserInputNotification,
-      });
-    }
-
-    if (isMessagingInteractivePendingRequest(request)) {
-      return buildApprovalIntent({
-        id: this.newIntentId("approval"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        request,
-      });
-    }
-
-    return undefined;
   }
 
   private async storePendingIntent(
@@ -8170,21 +7371,6 @@ function isUserInitiatedDeliveryEvent(
   );
 }
 
-function approvalBodyWithResponse(body: string, responseLabel: string): string {
-  const blocks = body
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-  const preservedBlocks = blocks.filter((block, index) => {
-    if (index === 0) {
-      return false;
-    }
-    return !/^Reply with\b/i.test(block);
-  });
-
-  return [...preservedBlocks, `Response Received: ${responseLabel}`].join("\n\n");
-}
-
 function sleepUntil(
   retryAt: number,
   now: () => number,
@@ -8465,11 +7651,4 @@ function readStatusStopTurnValue(
   return {
     turnId,
   };
-}
-
-function questionnaireAnswerValue(
-  answer: MessagingQuestionnaireAnswer | null | undefined,
-): string[] {
-  const value = answer?.value.trim();
-  return value ? [value] : [];
 }
