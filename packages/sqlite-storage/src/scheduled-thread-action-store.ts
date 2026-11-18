@@ -521,12 +521,15 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     }).immediate();
   }
 
-  listHeldHolds(): ScheduledThreadActionHold[] {
+  listHeldHolds(id?: string): ScheduledThreadActionHold[] {
+    // A suspended thread's follow-ups cannot be claimed, so listing them
+    // would only make every scheduler pass try and fail.
     const rows = this.stateDb.raw.prepare(
       `SELECT action_id, claim_owner, error_message FROM scheduled_thread_actions
-       WHERE status = 'held'
+       WHERE status = 'held' AND (? IS NULL OR action_id = ?)
+         AND NOT ` + SUSPENDED_AGENT_FOLLOW_UP + `
        ORDER BY scheduled_for ASC, created_at ASC`,
-    ).all() as Array<{ action_id: string; claim_owner: string | null; error_message: string | null }>;
+    ).all(id ?? null, id ?? null) as Array<{ action_id: string; claim_owner: string | null; error_message: string | null }>;
     return rows.map((row) => ({
       id: row.action_id,
       ...(row.claim_owner ? { holderId: row.claim_owner } : {}),

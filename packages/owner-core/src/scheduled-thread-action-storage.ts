@@ -98,7 +98,11 @@ export interface ScheduledThreadActionStorage {
     params: ScheduledThreadActionClaim,
     options: { readmit: boolean },
   ): ScheduledThreadAction | undefined;
-  listHeldHolds(): ScheduledThreadActionHold[];
+  /**
+   * Held actions a claim could take, or the one with `id`. A suspended
+   * thread's agent follow-ups are left out.
+   */
+  listHeldHolds(id?: string): ScheduledThreadActionHold[];
   markQueued(
     id: string,
     queueEntryId: string,

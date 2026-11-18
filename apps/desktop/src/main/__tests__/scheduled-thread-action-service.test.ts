@@ -302,6 +302,33 @@ describe("ScheduledThreadActionService", () => {
       queueEntryId: "scheduled-turn:scheduled-1",
       errorMessage: refusal,
     });
+
+    harness.service.start();
+    const queueEvent = async (manualReleaseRequired: boolean): Promise<void> => {
+      for (const listener of harness.listeners) {
+        await listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: "scheduled-turn:scheduled-1",
+              origin: "scheduled",
+              status: "queued",
+              manualReleaseRequired,
+              ...(manualReleaseRequired ? { errorMessage: refusal } : {}),
+            },
+          },
+        } as never);
+      }
+    };
+    // Republished while the lock still holds it: nothing was released.
+    await queueEvent(true);
+    expect(store.get("scheduled-1")).toMatchObject({ status: "held" });
+    // The unlock's release takes a lease before the queue starts it.
+    await queueEvent(false);
+    expect(store.get("scheduled-1")).toMatchObject({ status: "queued", errorMessage: undefined });
+    harness.service.dispose();
   });
 
   it("persists a registry hold and retries its existing queue entry", async () => {

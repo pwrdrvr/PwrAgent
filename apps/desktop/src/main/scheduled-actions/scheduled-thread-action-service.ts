@@ -459,7 +459,7 @@ export class ScheduledThreadActionService {
    */
   private claimForSendNow(id: string): ScheduledThreadAction | undefined {
     const params = this.claimParams();
-    const hold = this.options.store.listHeldHolds().find((candidate) => candidate.id === id);
+    const [hold] = this.options.store.listHeldHolds(id);
     if (!hold || hold.holderId === this.ownerId) return this.options.store.claim(id, params);
     if (hold.holderId && this.isOwnerAlive(hold.holderId)) {
       throw new Error("Another PwrAgent instance on this profile holds this action. Send it from there.");
@@ -656,6 +656,7 @@ export class ScheduledThreadActionService {
       status?: unknown;
       turnId?: unknown;
       errorMessage?: unknown;
+      manualReleaseRequired?: unknown;
     };
     if (typeof params.queueEntryId !== "string") return;
     const actionId = actionIdFromQueueEntryId(params.queueEntryId);
@@ -669,7 +670,10 @@ export class ScheduledThreadActionService {
       )
         // An unlock announces each entry it releases before the queue starts
         // it. The lease taken here is what a crash before the start leaves.
-        ?? this.options.store.markHeldQueued(actionId, params.queueEntryId, this.claimParams());
+        // An entry the queue still holds, as at its admission, is no release.
+        ?? (params.manualReleaseRequired === true
+          ? undefined
+          : this.options.store.markHeldQueued(actionId, params.queueEntryId, this.claimParams()));
       if (!updated && this.options.store.get(actionId)?.status === "cancelled") {
         // Cancelled where this queue could not reach the entry, such as from
         // another instance on the profile. It must not start here.
