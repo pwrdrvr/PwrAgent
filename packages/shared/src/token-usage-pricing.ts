@@ -341,6 +341,12 @@ const OPENAI_GPT56_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 9);
 // https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/
 const OPENAI_GPT56_REPRICING_CATALOG_VERSION = "2026-07-30";
 const OPENAI_GPT56_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 30);
+// https://developers.openai.com/api/docs/changelog (August 7 launch)
+// https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest
+const OPENAI_DAYBREAK_BLUE_MODEL = "gpt-daybreak-blue-latest";
+const OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL = "Daybreak Blue Latest";
+const OPENAI_DAYBREAK_BLUE_PRICING_CATALOG_VERSION = "2026-08-07";
+const OPENAI_DAYBREAK_BLUE_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 7, 7);
 // https://developers.openai.com/api/docs/models/gpt-5.6-sol
 const OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION = "2026-08-21";
 const OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 7, 21);
@@ -669,6 +675,33 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     minimumInputTokens: 272_001,
     rateBandId: "input-gt-272k",
     requiresRequestInputTokens: true,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
+    model: OPENAI_DAYBREAK_BLUE_MODEL,
+    displayModel: OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL,
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.4,
+    outputUsdPerMillion: 20,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_DAYBREAK_BLUE_PRICING_CATALOG_VERSION,
+    model: OPENAI_DAYBREAK_BLUE_MODEL,
+    displayModel: OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL,
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_DAYBREAK_BLUE_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 5,
+    cachedInputUsdPerMillion: 0.5,
+    outputUsdPerMillion: 30,
   },
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
@@ -1184,6 +1217,21 @@ const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
     displayModel: "GPT-6 Luna",
     fastRateMultiplier: 2,
     standardRates: { inputCreditsPerMillion: 2.5, cachedInputCreditsPerMillion: 0.25, outputCreditsPerMillion: 12.5 },
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
+    model: OPENAI_DAYBREAK_BLUE_MODEL,
+    displayModel: OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL,
+    effectiveFrom: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    standardRates: { inputCreditsPerMillion: 100, cachedInputCreditsPerMillion: 10, outputCreditsPerMillion: 500 },
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_DAYBREAK_BLUE_PRICING_CATALOG_VERSION,
+    model: OPENAI_DAYBREAK_BLUE_MODEL,
+    displayModel: OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL,
+    effectiveFrom: OPENAI_DAYBREAK_BLUE_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    standardRates: { inputCreditsPerMillion: 125, cachedInputCreditsPerMillion: 12.5, outputCreditsPerMillion: 750 },
   }),
   ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,

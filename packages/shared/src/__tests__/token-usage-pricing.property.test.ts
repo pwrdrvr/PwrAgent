@@ -37,6 +37,74 @@ function usdMicros(tokens: number, centsPerMillion: number): number {
   return Math.floor((tokens * centsPerMillion + 50) / 100);
 }
 
+describe("Daybreak Blue Latest pricing", () => {
+  const model = "gpt-daybreak-blue-latest";
+  const launch = Date.UTC(2026, 7, 7);
+  const solRepricing = Date.UTC(2026, 7, 21);
+
+  it("prices the reported alias at the GPT-5.6 Sol Standard rate in effect at the time", () => {
+    // OpenAI names GPT-5.6 Sol as the alias target and publishes the same credit rates.
+    fc.assert(fc.property(
+      fc.record({
+        uncachedInputTokens: fc.integer({ min: 1, max: 800_000 }),
+        cachedInputTokens: fc.integer({ min: 0, max: 100_000 }),
+        outputTokens: fc.integer({ min: 1, max: 100_000 }),
+      }),
+      fc.integer({ min: launch, max: solRepricing - 1 }),
+      fc.integer({ min: solRepricing, max: Date.UTC(2026, 10, 18) }),
+      (tokens, before, after) => {
+        for (const at of [before, after]) {
+          const usage = { ...tokens, at, model };
+          const solUsage = { ...usage, model: "gpt-5.6-sol" };
+          const cost = estimateTokenUsageCost(solUsage);
+          const credits = estimateOpenAiCodexCreditUsage(solUsage);
+          expect(cost).toBeDefined();
+          expect(credits).toBeDefined();
+          expect(estimateTokenUsageCost(usage)).toMatchObject({
+            model,
+            totalCostMicros: cost?.totalCostMicros,
+          });
+          expect(estimateOpenAiCodexCreditUsage(usage)).toMatchObject({
+            model,
+            totalCreditMicros: credits?.totalCreditMicros,
+          });
+        }
+      },
+    ));
+  });
+
+  it("starts pricing at launch and uses the published rates at the Sol price cut", () => {
+    const usage = { ...noUsage, model, outputTokens: 100_000 };
+    expect(estimateTokenUsageCost({ ...usage, at: launch - 1 })).toBeUndefined();
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: launch - 1 })).toBeUndefined();
+    expect(estimateTokenUsageCost({ ...usage, at: solRepricing - 1 })?.totalCostMicros).toBe(3_000_000);
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: solRepricing - 1 })?.totalCredits).toBe(75);
+    expect(estimateTokenUsageCost({ ...usage, at: solRepricing })).toMatchObject({
+      inputUsdPerMillion: 4,
+      cachedInputUsdPerMillion: 0.4,
+      outputUsdPerMillion: 20,
+    });
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: solRepricing })).toMatchObject({
+      inputCreditsPerMillion: 100,
+      cachedInputCreditsPerMillion: 10,
+      outputCreditsPerMillion: 500,
+    });
+  });
+
+  it("shows the Daybreak alias and its estimate on the usage activity row", () => {
+    const activity = buildTokenUsageActivityEntry({
+      createdAt: Date.UTC(2026, 10, 18),
+      id: "daybreak-usage",
+      model,
+      tokenUsage: { last: { outputTokens: 100_000 } },
+    });
+    expect(activity?.details).toContainEqual(expect.objectContaining({
+      id: "daybreak-usage-cost",
+      label: "Cost: $2.00 list price for Daybreak Blue Latest Standard",
+    }));
+  });
+});
+
 describe("OpenAI Ultrafast API pricing", () => {
   it("uses the published date and request bands and bills each token category once", () => {
     fc.assert(fc.property(
