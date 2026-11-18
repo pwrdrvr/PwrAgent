@@ -1,4 +1,5 @@
 import { readRendererListingDiagnostics, setRendererListingDiagnosticsEnabled } from "../diagnostics/renderer-listing-diagnostics";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import {
   app,
   BrowserWindow,
@@ -126,7 +127,7 @@ const MAIN_WINDOW_MIN_HEIGHT = 640;
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const sharedMainHotCpuProfiler = new SharedHotCpuProfiler();
-type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop">;
+type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmListingDiagnostics">;
 
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
@@ -592,14 +593,15 @@ export function createMainWindow(options?: {
   let rendererLoaded = false;
   let diagnosticsStopping = false;
   let hotCpuProfilerConfigKey: string | null = null;
-  let hotCpuProfilerPromise: Promise<HotCpuProfilerLifecycle | null> | null = null;
+  let hotCpuProfilerPromise: Promise<HotCpuProfilerLifecycle> | null = null;
   let hotCpuProfilerGeneration = 0;
   let hotCpuProfilerSyncQueue: Promise<void> = Promise.resolve();
 
   const createTargetHotCpuProfiler = async (
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
     target: "main" | "renderer",
-  ): Promise<HotCpuProfilerLifecycle | null> => {
+    getListingsAtStop?: () => ReturnType<typeof listingDiagnostics.snapshot> | undefined,
+  ): Promise<HotCpuProfiler | null> => {
     const appBuildMetadata = await resolveAppBuildMetadata();
     const created = await createHotCpuProfileSession({
       config: hotCpuConfig,
@@ -650,7 +652,7 @@ export function createMainWindow(options?: {
         isDestroyed: () => webContents.isDestroyed(),
         isDevToolsOpened: () => webContents.isDevToolsOpened(),
         takeHeapSnapshot: (filePath) => webContents.takeHeapSnapshot(filePath),
-        readDiagnostics: () => readRendererListingDiagnostics(webContents),
+        readDiagnostics: () => readRendererListingDiagnostics(webContents, getListingsAtStop?.()),
         setListingDiagnosticsEnabled: (enabled) => setRendererListingDiagnosticsEnabled(webContents, enabled),
       },
     });
@@ -658,8 +660,9 @@ export function createMainWindow(options?: {
 
   const createHotCpuProfiler = async (
     config: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
-  ): Promise<HotCpuProfilerLifecycle | null> => {
-    const renderer = await createTargetHotCpuProfiler(config, "renderer");
+  ): Promise<HotCpuProfilerLifecycle> => {
+    let listingsAtStop: ReturnType<typeof listingDiagnostics.snapshot> | undefined;
+    const renderer = await createTargetHotCpuProfiler(config, "renderer", () => listingsAtStop);
     const owner = Symbol("main-hot-cpu-window");
     let stopped = false;
     return {
@@ -674,7 +677,12 @@ export function createMainWindow(options?: {
           ),
         });
       },
+      rearmListingDiagnostics: async () => {
+        if (!stopped) await renderer?.rearmListingDiagnostics();
+      },
       stop: async (reason = "stopped") => {
+        // The last main owner can clear its ring before a renderer writes its sidecar.
+        if (!stopped && renderer?.hasActiveProfile) listingsAtStop = listingDiagnostics.snapshot();
         stopped = true;
         const results = await Promise.allSettled([
           renderer?.stop(reason),
@@ -697,7 +705,7 @@ export function createMainWindow(options?: {
 
     try {
       const profiler = await profilerPromise;
-      await profiler?.stop(reason);
+      await profiler.stop(reason);
     } catch (error: unknown) {
       hotCpuLog.warn("failed to stop hot CPU diagnostics", {
         reason,
@@ -724,7 +732,7 @@ export function createMainWindow(options?: {
     });
   };
 
-  const runHotCpuProfilerSync = async (reason: string): Promise<void> => {
+  const runHotCpuProfilerSync = async (reason: string, reloaded: boolean): Promise<void> => {
     try {
       if (diagnosticsStopping || !rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
         return;
@@ -773,8 +781,10 @@ export function createMainWindow(options?: {
       const nextConfigKey = hotCpuConfigKey(hotCpuConfig);
       if (hotCpuProfilerPromise) {
         if (hotCpuProfilerConfigKey === nextConfigKey) {
-          // Reload creates a new renderer ring while the monitor survives.
-          await setRendererListingDiagnosticsEnabled(webContents, true);
+          if (reloaded) {
+            const profiler = await hotCpuProfilerPromise;
+            await profiler.rearmListingDiagnostics();
+          }
           return;
         }
         await stopHotCpuProfiler(reason);
@@ -785,13 +795,7 @@ export function createMainWindow(options?: {
       hotCpuProfilerPromise = createHotCpuProfiler(hotCpuConfig);
       const profiler = await hotCpuProfilerPromise;
       if (generation !== hotCpuProfilerGeneration) {
-        await profiler?.stop("settings-changed");
-        return;
-      }
-
-      if (!profiler) {
-        hotCpuProfilerPromise = null;
-        hotCpuProfilerConfigKey = null;
+        await profiler.stop("settings-changed");
         return;
       }
 
@@ -804,10 +808,10 @@ export function createMainWindow(options?: {
     }
   };
 
-  const syncHotCpuProfiler = (reason: string) => {
+  const syncHotCpuProfiler = (reason: string, reloaded = false) => {
     hotCpuProfilerSyncQueue = hotCpuProfilerSyncQueue.then(
-      () => runHotCpuProfilerSync(reason),
-      () => runHotCpuProfilerSync(reason),
+      () => runHotCpuProfilerSync(reason, reloaded),
+      () => runHotCpuProfilerSync(reason, reloaded),
     );
     void hotCpuProfilerSyncQueue;
   };
@@ -917,15 +921,16 @@ export function createMainWindow(options?: {
       mainLog.error("renderer process gone", details);
     });
 
-    if (typeof webContents.once === "function") {
-      webContents.once("did-finish-load", () => {
-        rendererLoaded = true;
+    webContents.on("did-finish-load", () => {
+      const reloaded = rendererLoaded;
+      rendererLoaded = true;
+      if (!reloaded) {
         void heapMonitorPromise.then((monitors) => {
           if (!diagnosticsStopping) return monitors?.rendererMonitor.start();
         });
-        syncHotCpuProfiler("did-finish-load");
-      });
-    }
+      }
+      syncHotCpuProfiler("did-finish-load", reloaded);
+    });
   }
 
   if (isDevelopment && typeof webContents.on === "function") {

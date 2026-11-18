@@ -6,14 +6,18 @@ artifact. Main captures include `listings`; renderer captures include both
 in-memory accounting until a CPU artifact is saved. It makes no per-event log,
 filesystem, IPC, or SQLite write. SQLite cost is **0 MB/day**.
 
-Schema version 2 arms these two rings only while their CPU monitor is on.
+In normal app sessions, schema version 2 arms each ring while its CPU monitor
+is on. Each renderer reload re-arms the new document while its monitor runs.
 Stopping the monitor clears its ring and removes renderer input listeners.
+When a renderer CPU capture is still saving at shutdown, its sidecar uses the
+main-ring snapshot taken before the shared main monitor can clear it. Unpackaged
+replay E2E also arms the main ring for failure attachments without CPU profiling.
 Backing slots contain serialized, allowlisted scalar records, never requests,
 notifications, thread objects, DOM nodes or event objects. Main's promise
 identity lookup remains a WeakMap and is replaced when monitoring stops.
-Pending operations from an earlier monitor cannot attach stale parent IDs or
-end records to a newly enabled monitor. Disabled accounting preserves the
-existing asynchronous operation completion boundary.
+Pending operations from an earlier monitor cannot attach stale parent IDs,
+end records, or settlement records to a newly enabled monitor. Disabled
+accounting preserves the existing asynchronous operation completion boundary.
 
 ## Reading a capture
 

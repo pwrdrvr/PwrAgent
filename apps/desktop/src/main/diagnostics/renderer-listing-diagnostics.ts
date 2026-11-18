@@ -1,7 +1,7 @@
 import type { HotCpuTarget } from "./hot-cpu-target";
 import { listingDiagnostics } from "./listing-diagnostics";
 
-/** Fixed scalar control, once per monitor start/stop; no event transport. */
+/** Fixed scalar control for monitor start, reload and stop; no event transport. */
 export async function setRendererListingDiagnosticsEnabled(target: HotCpuTarget & {
   executeJavaScript?: (expression: string) => Promise<unknown>;
 }, enabled: boolean): Promise<void> {
@@ -21,8 +21,10 @@ export async function setRendererListingDiagnosticsEnabled(target: HotCpuTarget 
 }
 
 /** One bounded CDP read per saved profile, never on the event/IPC hot path. */
-export async function readRendererListingDiagnostics(target: HotCpuTarget): Promise<Record<string, unknown>> {
-  const listings = listingDiagnostics.snapshot();
+export async function readRendererListingDiagnostics(
+  target: HotCpuTarget,
+  listings = listingDiagnostics.snapshot(),
+): Promise<Record<string, unknown>> {
   let clearDeadline = () => {};
   try {
     const response = await Promise.race([

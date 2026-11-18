@@ -78,6 +78,41 @@ it("measures admission wait separately from the API duration", async () => {
   } finally { complete(); controller.dispose(); vi.restoreAllMocks(); }
 });
 
+it("records a settlement only in the interval that recorded its dispatch", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.array(fc.boolean(), { maxLength: 6 }),
+    async (initiallyEnabled, failed, controls) => {
+      setNavigationListingDiagnosticsEnabled(false);
+      setNavigationListingDiagnosticsEnabled(initiallyEnabled);
+      const dispatched = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<NavigationQueryPage>();
+      const getNavigationQueryPage = vi.fn(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const controller = new NavigationWindowQueries({ getNavigationQueryPage });
+      try {
+        controller.setDemand(new Map([["inbox", request]]));
+        const refreshed = controller.refresh();
+        await dispatched.promise;
+        for (const enabled of controls) setNavigationListingDiagnosticsEnabled(enabled);
+        if (failed) response.reject(new Error("simulated navigation read failure"));
+        else response.resolve(page);
+        await refreshed;
+
+        const phases = ring.snapshot().events.filter((event) => event.phase === "dispatch" || event.phase === "settled");
+        if (initiallyEnabled && controls.every(Boolean)) {
+          expect(phases).toMatchObject([{ phase: "dispatch" }, { phase: "settled", outcome: failed ? "error" : "ok" }]);
+          expect(phases[1]?.read).toBe(phases[0]?.read);
+        } else {
+          expect(phases).toEqual([]);
+        }
+      } finally {
+        response.resolve(page);
+        controller.dispose();
+      }
+    }), { examples: [[true, false, [false, true]], [true, true, [false, true]], [false, false, [true]]] });
+});
+
 it("does not charge prior API time as queue wait on a page-size retry", async () => {
   setNavigationListingDiagnosticsEnabled(true);
   let now = 1000;

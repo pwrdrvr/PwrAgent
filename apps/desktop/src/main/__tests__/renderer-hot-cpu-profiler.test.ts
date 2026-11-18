@@ -198,13 +198,17 @@ describe("HotCpuProfiler", () => {
     const profiler = createProfiler({ config, session: session.session, target: { ...target,
       setListingDiagnosticsEnabled: (value) => { enabled(value); } },
       getAppMetrics: () => [], logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    await profiler.rearmListingDiagnostics();
     expect(enabled).not.toHaveBeenCalled();
     await profiler.start();
     expect(enabled.mock.calls).toEqual([[true]]);
+    await profiler.rearmListingDiagnostics();
+    expect(enabled.mock.calls).toEqual([[true], [true]]);
     await profiler.stop("fixture");
-    expect(enabled.mock.calls).toEqual([[true], [false]]);
+    expect(enabled.mock.calls).toEqual([[true], [true], [false]]);
+    await profiler.rearmListingDiagnostics();
     await profiler.stop("again");
-    expect(enabled).toHaveBeenCalledTimes(2);
+    expect(enabled).toHaveBeenCalledTimes(3);
   });
 
   const sampleTrackers = new WeakMap<

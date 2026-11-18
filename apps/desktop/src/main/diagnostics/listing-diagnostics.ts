@@ -57,17 +57,21 @@ export class ListingDiagnostics {
   private sequence = 0;
   private readonly context = new AsyncLocalStorage<{ id: number; generation: number }>();
   private identities = new WeakMap<object, number>();
+  private readonly recordingSources = new Set<"cpu-monitor" | "replay">();
   private enabled = false;
   private generation = 0;
   private readonly totals: Record<string, number> = {};
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  setEnabled(enabled: boolean): void {
-    if (this.enabled === enabled) return;
-    this.enabled = enabled;
+  setEnabled(enabled: boolean, source: "cpu-monitor" | "replay" = "cpu-monitor"): void {
+    if (enabled) this.recordingSources.add(source);
+    else this.recordingSources.delete(source);
+    const recording = this.recordingSources.size > 0;
+    if (this.enabled === recording) return;
+    this.enabled = recording;
     this.generation++;
-    if (enabled) return;
+    if (recording) return;
     this.ring.fill(undefined);
     this.next = this.recorded = 0;
     this.identities = new WeakMap();

@@ -140,6 +140,17 @@ export class HotCpuProfiler {
     await this.startPromise;
   }
 
+  get hasActiveProfile(): boolean {
+    return this.profiling || this.stopProfilePromise !== null;
+  }
+
+  async rearmListingDiagnostics(): Promise<void> {
+    if (!this.startPromise || this.stopped) return;
+    await this.startPromise;
+    // The new document has its own ring even though the monitor survived.
+    if (!this.stopped) await this.setListingDiagnosticsEnabled(true, true);
+  }
+
   private async startInner(): Promise<void> {
     const startedAt = this.now();
     await this.session.appendEvent({
@@ -183,8 +194,8 @@ export class HotCpuProfiler {
     await this.shutdownPromise;
   }
 
-  private async setListingDiagnosticsEnabled(enabled: boolean): Promise<void> {
-    if (this.listingDiagnosticsEnabled === enabled) return;
+  private async setListingDiagnosticsEnabled(enabled: boolean, rearm = false): Promise<void> {
+    if (!rearm && this.listingDiagnosticsEnabled === enabled) return;
     this.listingDiagnosticsEnabled = enabled;
     try {
       await this.target.setListingDiagnosticsEnabled?.(enabled);
@@ -207,13 +218,10 @@ export class HotCpuProfiler {
     // blocked heap snapshot cannot deadlock shutdown. Recheck after the sample
     // settles in case it crossed into profiling while shutdown was starting.
     const captureSamplePromise = this.captureSamplePromise;
-    const activeProfileStop =
-      this.profiling || this.stopProfilePromise
-        ? this.stopProfile(reason)
-        : null;
+    const activeProfileStop = this.hasActiveProfile ? this.stopProfile(reason) : null;
     await Promise.all([captureSamplePromise, activeProfileStop]);
 
-    if (this.profiling || this.stopProfilePromise) {
+    if (this.hasActiveProfile) {
       await this.stopProfile(reason);
     }
 

@@ -734,6 +734,7 @@ export class NavigationWindowQueries {
             const attemptFields = { ...fields, batch, refreshBatch, logical: diagnostic.logical, attempt: diagnostic.attempt,
               cause: diagnostic.cause, caller: diagnostic.caller, trigger: diagnostic.trigger, invalidations: diagnostic.invalidations,
               cursor: Boolean(request.cursor), rows, waitMs };
+            const generation = navigationListingDiagnostics.recordingGeneration;
             navigationListingDiagnostics.record({ ...attemptFields, phase: "dispatch" });
             let page: NavigationQueryPage;
             try {
@@ -741,9 +742,9 @@ export class NavigationWindowQueries {
                 ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
                 readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
               }, resource.token);
-              navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "ok", durationMs: Math.max(0, Date.now() - sentAt) });
+              navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "ok", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
             } catch (error) {
-              navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "error", durationMs: Math.max(0, Date.now() - sentAt) });
+              navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "error", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
               throw error;
             }
             if (this.pageBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;

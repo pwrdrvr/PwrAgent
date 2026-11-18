@@ -18,18 +18,22 @@ const PHASES = new Set(["effect", "dispose", "demand", "refresh", "queued", "dis
 export class NavigationListingDiagnostics {
   private readonly events: Array<string | undefined> = new Array(CAPACITY);
   private enabled = false;
+  private generation = 0;
   private recorded = 0;
   private next = 0;
   private interactionSlot: number | undefined;
+  get recordingGeneration(): number { return this.generation; }
   setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
     this.enabled = enabled;
+    this.generation++;
     if (enabled) return;
     this.events.fill(undefined);
     this.recorded = this.next = 0;
     this.interactionSlot = undefined;
   }
-  record(event: Omit<Event, "at">): void {
-    if (!this.enabled || !PHASES.has(event.phase)) return;
+  record(event: Omit<Event, "at">, generation = this.generation): void {
+    if (!this.enabled || generation !== this.generation || !PHASES.has(event.phase)) return;
     // Copy fixed scalars only: never stringify the caller or retain its objects.
     const entry: Event = { at: Date.now(), view: 0, effect: 0, phase: event.phase };
     for (const key of ["view", "effect", "logical", "attempt", "count", "batch", "refreshBatch", "read", "resource", "rows", "invalidations", "waitMs", "durationMs", "lastAt"] as const) {
