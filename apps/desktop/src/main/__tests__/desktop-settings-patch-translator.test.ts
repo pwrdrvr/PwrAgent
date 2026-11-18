@@ -327,30 +327,30 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
-  it("writes the Markdown math rendering flag", () => {
-    const edits = desktopSettingsPatchToEdits({
-      experimental: {
-        markdownMathRendering: true,
-      },
-    });
-
-    expect(edits).toEqual([
-      {
-        op: "set",
-        path: ["experimental", "markdown_math_rendering"],
-        value: true,
-      },
+  it("writes Markdown rendering to [general.markdown] only when no legacy key exists", () => {
+    expect(desktopSettingsPatchToEdits({
+      general: { markdown: { incrementalRendering: true, mathRendering: false } },
+    })).toEqual([
+      { op: "set", path: ["general", "markdown", "incremental_rendering"], value: true },
+      { op: "set", path: ["general", "markdown", "math_rendering"], value: false },
     ]);
   });
 
-  it("writes the incremental Markdown rendering flag", () => {
-    expect(desktopSettingsPatchToEdits({
-      experimental: { incrementalMarkdownRendering: true },
-    })).toEqual([{
-      op: "set",
-      path: ["experimental", "incremental_markdown_rendering"],
-      value: true,
-    }]);
+  it("updates a legacy [experimental] Markdown key beside the current one", () => {
+    const tables = parseTomlTables("[experimental]\nmarkdown_math_rendering = true\n", "config.toml");
+    expect(desktopSettingsPatchToEdits(
+      { general: { markdown: { mathRendering: false } } },
+      tables,
+    )).toEqual([
+      {
+        op: "ensureCommentBefore",
+        path: ["experimental", "markdown_math_rendering"],
+        marker: "pwragent-legacy-settings",
+        comment: "# pwragent-legacy-settings key=markdown_math_rendering shape=boolean used_through=1.4.10 kept_for_older_clients",
+      },
+      { op: "set", path: ["experimental", "markdown_math_rendering"], value: false },
+      { op: "set", path: ["general", "markdown", "math_rendering"], value: false },
+    ]);
   });
 
   it("writes the thread pricing summary flag", () => {
