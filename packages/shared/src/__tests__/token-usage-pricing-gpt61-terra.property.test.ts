@@ -1,7 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
-  estimateOpenAiCodexCreditUsage,
   estimateOpenAiTokenUsageCost,
   resolveTokenUsagePriceUnavailableReason,
 } from "../token-usage-pricing";
@@ -59,10 +58,9 @@ describe("GPT-6.1 Terra API pricing", () => {
     ), { examples: [[rates.min, 200, 300, 1_000], [rates.max, 200, 300, 1_000]] });
   });
 
-  it.each(["standard", "fast"])("applies %s API rates from launch and preserves the Codex credit lookup", (serviceTier) => {
+  it.each(["standard", "fast"])("leaves %s API usage before launch unpriced", (serviceTier) => {
     const usage = { model, serviceTier, uncachedInputTokens: 1_000, cachedInputTokens: 0, outputTokens: 100 };
     expect(estimateOpenAiTokenUsageCost({ ...usage, at: releasedAt - 1 })).toBeUndefined();
-    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: releasedAt })).toBeUndefined();
   });
 
   it("leaves Ultrafast unpriced", () => {
