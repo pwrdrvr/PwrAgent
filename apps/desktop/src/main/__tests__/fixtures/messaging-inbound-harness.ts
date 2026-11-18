@@ -102,6 +102,7 @@ export async function messagingInboundHarness(options: {
   });
   return {
     db, controller, controllerOptions, backend, store, channel, trace, deliveries, starts, admissions, hooks, event,
+    setThreadStatus: (next: "idle" | "active") => { status = next; },
     finish: async (terminal: "completed" | "failed" | "cancelled", turnId = `fixture-turn-${starts.length}`) => {
       status = "idle";
       await controller.handleBackendEvent({ backend: options.backend ?? "codex", notification: terminal === "failed" ? {

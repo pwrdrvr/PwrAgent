@@ -1,3 +1,4 @@
+import type { MessagingTurns } from "./messaging-turn-state";
 import { type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { readProviderResponseBlockNotification, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
 import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationRunOutputDecision, AppServerThreadMessageOrigin, FederationTarget, MessagingBindingTargetKind, MessagingToolUpdateMode, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
@@ -39,6 +40,7 @@ export interface MessagingBackendEventHost {
   readonly handleAutomationTurnStarted: (params: { messageOrigin?: AppServerThreadMessageOrigin; automationName?: string; automationRunId?: string; backend: AppServerBackendKind; bindings: MessagingBindingRecord[]; threadId: ThreadIdentifier; turnId: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly handleAutomationTurnTerminal: (params: { automationRunId?: string; backend: AppServerBackendKind; bindings: MessagingBindingRecord[]; event: AgentEvent; finalText?: string; threadId: ThreadIdentifier; turnId: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly isAutomationTurnEvent: (event: AgentEvent, binding: MessagingBindingRecord, fallbackTurnId?: string) => boolean;
+  readonly observeBackendTurn: MessagingTurns["observeBackend"];
   readonly setActiveTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
   readonly logBindingTurnStateChange: (binding: MessagingBindingRecord, previousTurn: MessagingActiveTurnSummary | undefined, nextTurn: MessagingActiveTurnSummary | undefined, reason: string) => void;
   readonly deliverToolActivityForBackendEvent: (event: AgentEvent, binding: MessagingBindingRecord, activeTurnId?: string) => Promise<void>;
