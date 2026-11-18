@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.4.12 - 2026-11-18
+
+- Claude Usage - Let a precise usage probe correct stale weekly and model-specific readings even while active Claude threads stream coarse usage updates. Fix limits remaining stuck at 100% after reset credits without letting an older window overwrite a newer one.
+- Shared Checkout Cleanup - Remove stale deferred cleanup requests when their archived owner is deleted, and let a surviving archived owner take over a scheduled retry. Keep fresh ownership checks and recovery snapshots so an abandoned request no longer prevents reclaiming the shared checkout.
+- Scheduled Action Recovery - Re-admit actions held by a thread lock after their holding process has died, so unlocking or Send Now works after restart. Leave live owners' holds alone, and report uncertain work that may already have started as failed rather than replaying it.
+- Grok Sign-in - Show Sign in required when capability discovery rejects authentication, with a copyable login command for the selected executable and a Check sign-in action. Keep recovery guidance visible until discovery succeeds.
+- Deleted Worktrees - Resolve start-thread cards against their linked main checkout when the saved worktree no longer exists, restoring environment choices and rerunning setup for the fallback checkout. Existing worktrees and explicitly selected projects remain authoritative.
+- macOS Dock - Restore the previously frontmost window when returning to PwrAgent through the Dock, preserve shown modal focus, and stop treating window occlusion as an intentional hide.
+- Maintenance Efficiency - Batch adjacent Git layout observations into one command instead of repeatedly launching Git for the same inspection. Keep later ownership, snapshot, and removal checks fresh.
+- Minor - Internal messaging workflow extractions and tighter cleanup of timed-out tests and checkout fixtures.
+
 ## v1.4.11 - 2026-11-18
 
 - GPT-6.2 and GPT-6.1 Terra Pricing - Add API cost and Codex purchased-credit estimates for GPT-6.2 Astra, GPT-6.2 Sol, and GPT-6.1 Terra, including Standard and Fast rates. Account for cached input, cache writes, and request-scoped API long-context bands without applying the API surcharge to Codex purchased-credit estimates. Group GPT-6.2 models with their siblings in model pickers.
