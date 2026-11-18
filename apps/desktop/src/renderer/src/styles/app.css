@@ -43512,6 +43512,14 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-primary);
 }
 
+/* An agent command's Copy after a copy: the transcript copy button's
+   confirmed state, held for 1.4s. */
+.composer__queued-env-action-actions .composer__queued-env-action-copy.is-copied {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
 .composer__queued-env-action-actions .composer__queued-env-action-terminate {
   color: color-mix(in srgb, var(--danger-text) 74%, var(--text-muted));
 }
