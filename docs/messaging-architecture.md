@@ -941,6 +941,8 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-command-handlers.ts` | Command dispatch, schedule management, help, review entry, Claude continuation and monitor/default-agent command routing through lazy typed workflow ports |
 | `apps/desktop/src/main/messaging/core/messaging-command-context.ts` | Narrow command store/backend collaborators and exact workflow port signatures; reads remain late bound |
 | `apps/desktop/src/main/messaging/core/messaging-command-helpers.ts` | Pure command parsing and shared message-origin attribution used by command and inbound workflows |
+| `apps/desktop/src/main/messaging/core/messaging-review-workflow.ts` | Review picker, workspace/target/reviewer choices, capability checks, pending records and accepted-review confirmations; backend admission owns execution |
+| `apps/desktop/src/main/messaging/core/messaging-review-context.ts` | Narrow review store/backend collaborators and six lazy host ports with preserved receiver and error boundaries |
 | `apps/desktop/src/main/messaging/core/messaging-callback-handlers.ts` | Callback dispatch, approval identity, browse/help navigation, queue/status controls, risk confirmations, monitor actions and private replies |
 | `apps/desktop/src/main/messaging/core/messaging-callback-context.ts` | Lazy callback collaborators and exact workflow/data ports; queue and private-response state remain in their existing owners |
 | `apps/desktop/src/main/messaging/core/messaging-callback-helpers.ts` | Pure callback payload readers, surface/owner identity checks and provider-aware new-thread option normalization |

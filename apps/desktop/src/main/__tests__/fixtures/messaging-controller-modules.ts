@@ -14,6 +14,8 @@ import type { MessagingBindingService } from "../../messaging/core/messaging-bin
 import type { MessagingBindingHost } from "../../messaging/core/messaging-binding-context";
 import type { MessagingInboundTurns } from "../../messaging/core/messaging-inbound-turns";
 import type { MessagingInboundHost } from "../../messaging/core/messaging-inbound-context";
+import type { MessagingReviewWorkflow } from "../../messaging/core/messaging-review-workflow";
+import type { MessagingReviewHost } from "../../messaging/core/messaging-review-context";
 
 // Test-only access to the actual owner and the facade's late-bound host ports.
 // No moved state or moved operation is accessed through the controller.
@@ -33,6 +35,8 @@ export function messagingModules(controller: MessagingController): {
   readonly bindingHost: () => MessagingBindingHost;
   readonly inbound: MessagingInboundTurns;
   readonly inboundHost: () => MessagingInboundHost;
+  readonly reviews: MessagingReviewWorkflow;
+  readonly reviewHost: () => MessagingReviewHost;
 } {
   const ports = controller as unknown as {
     readonly turns: MessagingTurns;
@@ -50,6 +54,8 @@ export function messagingModules(controller: MessagingController): {
     bindingHost(): MessagingBindingHost;
     readonly inboundTurns: MessagingInboundTurns;
     inboundHost(): MessagingInboundHost;
+    readonly reviewWorkflow: MessagingReviewWorkflow;
+    reviewHost(): MessagingReviewHost;
   };
   return {
     turns: ports.turns,
@@ -67,5 +73,7 @@ export function messagingModules(controller: MessagingController): {
     bindingHost: () => ports.bindingHost(),
     inbound: ports.inboundTurns,
     inboundHost: () => ports.inboundHost(),
+    reviews: ports.reviewWorkflow,
+    reviewHost: () => ports.reviewHost(),
   };
 }

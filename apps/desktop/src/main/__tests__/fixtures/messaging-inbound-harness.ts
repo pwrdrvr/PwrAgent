@@ -18,6 +18,7 @@ export async function messagingInboundHarness(options: {
   allowResume?: boolean;
   ownsQueue?: boolean;
   clock?: () => number;
+  maxActions?: number;
 } = {}) {
   const db = openInMemoryStateDb();
   const store = new SqliteMessagingStore(db);
@@ -65,6 +66,7 @@ export async function messagingInboundHarness(options: {
       };
     },
   } satisfies MessagingBackendBridge;
+  const actionCapabilities = PERMISSIVE_CAPABILITY_PROFILE.actions;
   const controllerOptions: MessagingControllerOptions = {
     store, backend, channel: channel.channel, authorizedActorIds: ["fixture-actor"], now: options.clock ?? (() => ++now), inputDebounceMs: 0,
     responseModeForConversation: () => options.responseMode ?? "every_message",
@@ -76,7 +78,8 @@ export async function messagingInboundHarness(options: {
     adapter: {
       capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, conversationInput: {
         ...PERMISSIVE_CAPABILITY_PROFILE.conversationInput, reportsBotMention: options.reportsMention ?? false,
-      } },
+      }, ...(options.maxActions === undefined || !actionCapabilities
+        ? {} : { actions: { ...actionCapabilities, maxActions: options.maxActions } }) },
       deliver: async intent => {
         trace.push(`deliver:${intent.kind}`);
         if (hooks.postStartFailure && intent.kind === "status") throw new Error("Fixture post-acceptance failure");
