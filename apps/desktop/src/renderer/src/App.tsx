@@ -39,6 +39,7 @@ import {
   federatedThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   resolveNewThreadBackend,
@@ -1662,6 +1663,10 @@ function DesktopAppShell(props: {
     [],
   );
   const settings = props.settings;
+  const markdown = settings.snapshot?.general.markdown;
+  // The bootstrap projection can authorize imports while discovery is pending.
+  const startupMarkdown = props.bootstrapConfig.snapshot?.markdown
+    ?? (settings.snapshot ? DESKTOP_MARKDOWN_RENDERING_DEFAULTS : undefined);
 
   // Persisted layout setters — update local state immediately and write the
   // new value to config.toml's [ui] section so it survives a relaunch. The
@@ -4868,11 +4873,9 @@ function DesktopAppShell(props: {
             ) : ThreadViewComponent ? (
               <MarkdownRenderingOptionsProvider
                 incrementalEnabled={
-                  settings.snapshot?.general.markdown?.incrementalRendering.value ?? true
+                  markdown?.incrementalRendering.value ?? startupMarkdown?.incrementalRendering ?? false
                 }
-                mathEnabled={
-                  settings.snapshot?.general.markdown?.mathRendering.value ?? true
-                }
+                mathEnabled={markdown?.mathRendering.value ?? startupMarkdown?.mathRendering ?? false}
               >
                 <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
                   <HtmlPreviewPreferencesProvider

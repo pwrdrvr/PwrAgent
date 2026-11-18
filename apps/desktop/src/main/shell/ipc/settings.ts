@@ -74,6 +74,7 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import {
+  DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   isAcpBackendId,
   isMessagingRuntimeSecret,
   resolveDesktopLogsViewerPreferences,
@@ -1745,6 +1746,8 @@ export function registerSettingsIpcHandlers(
     async (): Promise<ReadDesktopConfigBootstrapResponse> => {
       const store = getDesktopConfigStore();
       const fileStatus = store.fileStatus();
+      const general = store.read("general");
+      const markdown = general.settings.markdown;
       return {
         snapshot: {
           version: store.version(),
@@ -1752,11 +1755,16 @@ export function registerSettingsIpcHandlers(
           ...(fileStatus.kind === "invalid"
             ? { configError: fileStatus.error }
             : {}),
-          appearance: store.read("general").appearance,
+          appearance: general.appearance,
           onboarding: store.read("onboarding"),
           logs: resolveDesktopLogsViewerPreferences(store.read("ui").logs),
-          htmlPreviewRunScripts:
-            store.read("general").settings.htmlPreviewRunScripts ?? false,
+          htmlPreviewRunScripts: general.settings.htmlPreviewRunScripts ?? false,
+          markdown: {
+            incrementalRendering: markdown?.incrementalRendering
+              ?? DESKTOP_MARKDOWN_RENDERING_DEFAULTS.incrementalRendering,
+            mathRendering: markdown?.mathRendering
+              ?? DESKTOP_MARKDOWN_RENDERING_DEFAULTS.mathRendering,
+          },
         },
       };
     },
