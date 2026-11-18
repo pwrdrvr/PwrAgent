@@ -2036,7 +2036,14 @@ describe("bootstrapApp", () => {
   });
 
   describe("Dock activation with windows open", () => {
+    // Dock activation and did-resign-active are macOS events; off macOS a
+    // focus also rebuilds the painted menu, which these fakes do not model.
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
     async function bootWithWindows() {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
       startupProfilerInstance.start.mockResolvedValue();
       await import("../shell/index");
       await flushMicrotasks();
