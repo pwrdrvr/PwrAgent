@@ -211,7 +211,9 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await expect(panel).not.toBeVisible();
     await app.window.screenshot({ path: testInfo.outputPath("todo-start-thread.png") });
     await stack.getByRole("button", { name: "Handoff options" }).click();
-    await stack.getByRole("menuitemradio", { name: "Send to thread…" }).click();
+    // The split menu floats on the body, outside the stack.
+    await app.window.getByRole("menu", { name: "Handoff options" })
+      .getByRole("menuitemradio", { name: "Send to thread…" }).click();
     await expect(stack.getByRole("button", { name: "Send request", exact: true })).toBeDisabled();
     // The ⌘K palette's search, as you type: no Search button, and Enter picks
     // the active row.
@@ -230,7 +232,8 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await stack.getByRole("button", { name: "Show the whole proposed prompt" }).click();
     await app.window.screenshot({ path: testInfo.outputPath("todo-send-request.png") });
     await stack.getByRole("button", { name: "Handoff options" }).click();
-    await stack.getByRole("menuitemradio", { name: "Start a new thread" }).click();
+    await app.window.getByRole("menu", { name: "Handoff options" })
+      .getByRole("menuitemradio", { name: "Start a new thread" }).click();
     await stack.getByRole("button", { name: "Start thread", exact: true }).click();
     await expect.poll(() => app.getLastStartTurn()).toMatchObject({ model: "gpt-5.5", reasoningEffort: "xhigh" });
     await expect(stack).toContainText("Last used in this thread");
