@@ -46,17 +46,16 @@ int ${entry}(${parameters}) {
 }
 `);
   let attempt = 0;
-  const program = (options = {}) => {
+  const program = (options = {}, profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) => {
     const label = { root, attempt: ++attempt };
     const build = `buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, reuse: process.platform !== "win32", ...options })})`;
-    const profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE;
     return `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
       ${profile ? `import { profileNativeBuild } from ${JSON.stringify(new URL("./native-relay-oracle-profile.mjs", import.meta.url).href)};` : ""}
       console.log(JSON.stringify(${profile ? `profileNativeBuild(${JSON.stringify(label)}, () => ${build})` : build}));`;
   };
-  const command = (options) => ["--input-type=module", "-e", program(options)];
+  const command = (options, profile) => ["--input-type=module", "-e", program(options, profile)];
   const build = (options, env = process.env) => {
-    const args = command(options);
+    const args = command(options, env.PWRAGENT_NATIVE_ORACLE_PROFILE);
     const started = performance.now();
     try { return parseOutput(execFileSync(process.execPath, args, { encoding: "utf8", env, stdio: "pipe" })); }
     finally { appendNativeOracleTiming({ kind: "build-process", label: { root, attempt }, ms: performance.now() - started }); }
@@ -91,6 +90,36 @@ function machine(output) {
   expect(bytes.subarray(pe, pe + 4).toString()).toBe("PE\0\0");
   return bytes.readUInt16LE(pe + 4) === 0xaa64 ? "arm64" : bytes.readUInt16LE(pe + 4) === 0x8664 ? "x64" : "unknown";
 }
+
+it("inspects each native Mach-O input once while preserving emitted code and cache sealing", () => {
+  const f = fixture();
+  if (process.platform !== "darwin") {
+    const output = f.build({ reuse: true });
+    expect(machine(output)).toBe(process.arch);
+    expect(observe(output)).toBe("source-one header-one flag-1");
+    return;
+  }
+  const log = join(f.root, "inspections.jsonl");
+  const output = f.build({ reuse: true }, { ...process.env, PWRAGENT_NATIVE_ORACLE_PROFILE: log });
+  expect(machine(output)).toBe(process.arch);
+  expect(observe(output)).toBe("source-one header-one flag-1");
+  expect(existsSync(`${output}.build.json`)).toBe(true);
+  const records = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const build = records.find((record) => record.kind === "native-build");
+  expect(build.completed).toBe(true);
+  expect(build.lockRemaining).toBe(false);
+  expect(build.inspectionsOmitted).toBe(0);
+  expect(build.inspections.length).toBeGreaterThan(0);
+  // Raw Mach-O load commands belong to the file. Loader context may change
+  // resolution, but must not launch another inspector for unchanged bytes.
+  const targets = new Set(build.inspections.map((call) => call.before.real));
+  expect(build.inspections).toHaveLength(targets.size);
+  for (const call of build.inspections) {
+    expect(call.mode).toBe("-l");
+    expect(call.status).toBe(0);
+    expect(call.before).toEqual(call.after);
+  }
+});
 
 it("emitted native code follows source, included headers and compiler flags at the same output path", () => {
   const f = fixture();
