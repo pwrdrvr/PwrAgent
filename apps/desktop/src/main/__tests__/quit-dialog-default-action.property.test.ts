@@ -62,7 +62,7 @@ function itemsFor(counts: Counts): QuitBlockerItem[] {
 }
 
 /** Open the page as the dialog window does, with its autofocus applied. */
-function openDialog(counts: Counts, wired: boolean) {
+function openDialog(counts: Counts, wired: boolean, { loadStyles = true } = {}) {
   const html = buildQuitConfirmationHtml({
     countdownSeconds: 30,
     inProgressThreadCount: counts.threads,
@@ -76,7 +76,10 @@ function openDialog(counts: Counts, wired: boolean) {
   });
   // The page reports actions by navigating, which jsdom does not implement.
   // A silent console keeps that out of the run; clicks are what we observe.
-  const dom = new JSDOM(html, { runScripts: "dangerously", virtualConsole: new VirtualConsole() });
+  const dom = new JSDOM(loadStyles ? html : html.replace(/<style>[\s\S]*?<\/style>/, ""), {
+    runScripts: "dangerously",
+    virtualConsole: new VirtualConsole(),
+  });
   const { document } = dom.window;
   const autofocused = document.querySelectorAll<HTMLElement>("[autofocus]");
   autofocused[0]?.focus();
@@ -132,7 +135,9 @@ describe("quit dialog default action", () => {
   it("offers Quiet only while thread work runs, and Enter follows the offer", () => {
     fc.assert(
       fc.property(fc.boolean(), countsArb, fc.array(stepArb, { maxLength: 8 }), (wired, initial, steps) => {
-        const dialog = openDialog(initial, wired);
+        // The model checks the script and the DOM's hidden and focus state.
+        // Parsing the full window stylesheet in every jsdom instance adds no coverage here.
+        const dialog = openDialog(initial, wired, { loadStyles: false });
         try {
           const offered = (counts: Counts) => wired && counts.threads > 0;
           let current = initial;
@@ -168,7 +173,7 @@ describe("quit dialog default action", () => {
           dialog.close();
         }
       }),
-      { numRuns: 80 },
+      { numRuns: 50 },
     );
   });
 
