@@ -302,6 +302,22 @@ describe("provider-specific Codex runtimes", () => {
     expect(exits).toHaveBeenLastCalledWith(new Set(["openai-thread"]));
   });
 
+  it("limits an exit to the threads of the one generation that exited", async () => {
+    const { primary, client } = setup();
+    primary.raw.startThread
+      .mockResolvedValueOnce({ threadId: "draining-thread" })
+      .mockResolvedValueOnce({ threadId: "current-thread" });
+    const exits = vi.fn();
+    client.onAppServerUnexpectedExit(exits);
+    await client.startThread({ model: "gpt-5.5" });
+    await client.startThread({ model: "gpt-5.5" });
+    await client.startThread({ model: "@bonsai/Bonsai.gguf" });
+    // A generation pool names the replaced process's threads; the current
+    // process's turns, and another provider's, did not end with it.
+    for (const listener of primary.exits) (listener as (threadIds?: ReadonlySet<string>) => void)(new Set(["draining-thread", "new-thread"]));
+    expect(exits).toHaveBeenLastCalledWith(new Set(["draining-thread"]));
+  });
+
   it("runs recovery on the owning client and closes every runtime even when one close fails", async () => {
     const { primary, local, create, client } = setup();
     await client.startThread({ model: "@bonsai/Bonsai.gguf" });

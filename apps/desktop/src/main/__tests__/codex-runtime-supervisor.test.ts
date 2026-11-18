@@ -389,6 +389,45 @@ describe("invalid-ID recovery", () => {
   });
 });
 
+describe("app server generation boundary", () => {
+  const facts = ["terminal", "toolItem", "subAgent", "announcedTurn", "providerActive", "queued", "pendingStart"] as const;
+  const processBound = new Set<(typeof facts)[number]>(["terminal", "toolItem", "subAgent", "announcedTurn", "providerActive"]);
+
+  it("binds a thread to its process only for work that process must finish (oracle)", () => {
+    fc.assert(fc.property(
+      fc.subarray([...facts]),
+      fc.constantFrom(undefined, "turn", "compact") as fc.Arbitrary<"turn" | "compact" | undefined>,
+      (present, reservation) => {
+        const threadId = "thread-boundary";
+        const turnState = new RegistryTurnState();
+        if (present.includes("announcedTurn")) turnState.registerTurn({ backend: "codex", threadId, turnId: "turn-1" });
+        if (present.includes("providerActive")) turnState.observeStatus(threadId, "active", turnState.reserveStatusSequence());
+        if (reservation) turnState.reserveStart(threadId, reservation);
+        const service = supervisor({
+          turnState,
+          host: {
+            threadHasActiveTurn: (id: string) => turnState.hasActiveTurn(id),
+            liveSubAgentMonitorIds: () => present.includes("subAgent") ? ["monitor"] : [],
+            threadStarts: { hasPending: () => present.includes("pendingStart") },
+            threadTurnQueue: { getQueuedEntries: () => present.includes("queued") ? [{}] : [] },
+          },
+        });
+        if (present.includes("terminal")) internals(service).codexBackgroundTerminals.set(threadId, [terminal("cmd")]);
+        if (present.includes("toolItem")) {
+          internals(service).liveCodexToolItemsByThread.set(threadId, new Map([["item", { itemType: "mcptoolcall" } as LiveCodexToolItem]]));
+        }
+        const bound = service.codexThreadBoundToAppServer(threadId);
+        // Queued input, pending starts and reserved starts (a compaction's
+        // too, before Codex accepts it) run on whichever generation serves
+        // the thread next; they must not keep it on a replaced process.
+        expect(bound).toBe(present.some((fact) => processBound.has(fact)));
+        // Any of it delays the replaced process's stop.
+        expect(service.codexThreadNeedsLiveEvents(threadId)).toBe(present.length > 0 || reservation !== undefined);
+      },
+    ), { numRuns: 300 });
+  });
+});
+
 describe("registry adapters and shutdown", () => {
   it("reads no host or store port while constructing", () => {
     const refuse = new Proxy({}, { get: () => { throw new Error("read during construction"); } });

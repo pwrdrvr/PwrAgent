@@ -1,6 +1,7 @@
 import type { JsonRpcConnectionOptions, JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { CodexExecutableIdentity } from "./app-server-installation";
 
 export type CodexClientLogger = NonNullable<JsonRpcConnectionOptions["logger"]>;
 export type CodexAppServerExit = {
@@ -8,7 +9,12 @@ export type CodexAppServerExit = {
   signal: NodeJS.Signals | null;
   stderrPreview: string[];
 };
-export type CodexAppServerProcessInfo = { pid: number; startedAt: number };
+export type CodexAppServerProcessInfo = {
+  pid: number;
+  startedAt: number;
+  /** The file the process was launched from, read just before the spawn. */
+  executable?: CodexExecutableIdentity;
+};
 export type CodexClientTransport = JsonRpcTransport & {
   waitForResponseFlush?: (id: string | number) => Promise<void>;
   getProcessInfo?: () => CodexAppServerProcessInfo | undefined;

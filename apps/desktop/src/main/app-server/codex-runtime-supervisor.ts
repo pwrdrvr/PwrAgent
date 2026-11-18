@@ -419,7 +419,7 @@ export class CodexRuntimeSupervisor {
    * change or handoff in flight, a background terminal or live tool item,
    * queued input, or a history repair waiting to run.
    */
-  private codexThreadNeedsLiveEvents(threadId: string): boolean {
+  codexThreadNeedsLiveEvents(threadId: string): boolean {
     if (this.host().threadHasActiveTurn(threadId, "codex")) return true;
     const turnPrefix = `codex:${threadId}:`;
     for (const key of this.context.turnState.registeredTurnKeys()) {
@@ -435,6 +435,28 @@ export class CodexRuntimeSupervisor {
       || this.context.turnState.hasRetry(threadId)
       || this.host().threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length > 0
       || this.pendingCodexInvalidIdRecoveries.some((recovery) => recovery.params.threadId === threadId);
+  }
+
+  /**
+   * Work on a Codex thread that only the app server process running it can
+   * finish: a turn Codex announced, accepted or reports active, a live review,
+   * an accepted compaction, a background terminal or live tool item, or live
+   * sub-agent workers. A replaced app server
+   * generation keeps serving a thread only while this holds
+   * (`app-server-generation-pool.ts`). Queued input, reserved starts,
+   * retries and lifecycle changes are not bound to a process; they run on
+   * the generation that serves the thread next, which resumes it.
+   */
+  codexThreadBoundToAppServer(threadId: string): boolean {
+    const turnPrefix = `codex:${threadId}:`;
+    for (const key of this.context.turnState.registeredTurnKeys()) {
+      if (key.startsWith(turnPrefix)) return true;
+    }
+    // A start reservation alone is not bound: its turn has not reached a process.
+    return this.context.turnState.hasActiveTurn(threadId, true)
+      || this.codexBackgroundTerminals.has(threadId)
+      || this.liveCodexToolItemsByThread.has(threadId)
+      || this.host().liveSubAgentMonitorIds("codex", threadId).length > 0;
   }
 
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {

@@ -17,6 +17,7 @@ import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attrib
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
+import { createCodexAppServerGenerationPool } from "../codex-app-server/app-server-generation-pool";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { prepareProviderModelRuntime } from "../codex-app-server/provider-model-runtime";
 import { preparePortableProviderRuntime } from "../codex-app-server/portable-provider-runtime";
@@ -655,11 +656,29 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     }
     return client;
   };
+  // Each runtime replaces its app server when the Codex installation under
+  // it changes, draining work on the old process instead of stopping it.
+  const generationLog = getMainLogger("pwragent:codex-generations");
+  const createCodexGenerations = (provider?: CodexModelProviderSettings): CodexAppServerClient =>
+    createCodexAppServerGenerationPool(() => createCodexClient(provider), {
+      isThreadBusy: (threadId) => ports.codexThreadNeedsLiveEvents(threadId),
+      isThreadPinned: (threadId) => ports.codexThreadBoundToAppServer(threadId),
+      onGenerationPromoted: (event) => {
+        if (provider) return;
+        ports.handleCodexAppServerGenerationPromoted(event);
+        const { current } = event;
+        if (current?.version) settingsService?.noteRunningCodexVersion(current.command, current.version);
+      },
+      logger: {
+        info: (message, fields) => generationLog.info(message, { ...fields, ...(provider ? { provider: provider.id } : {}) }),
+        warn: (message, fields) => generationLog.warn(message, { ...fields, ...(provider ? { provider: provider.id } : {}) }),
+      },
+    });
   const codexClient: RegistryDependencies["codexClient"] = options?.codexClient ?? replayClients?.codexClient ?? createProviderRuntimeClient(
-    createCodexClient(),
+    createCodexGenerations(),
     {
       resolveProviders: () => settingsService?.resolveCodexModelProviders?.() ?? [],
-      create: createCodexClient,
+      create: createCodexGenerations,
     },
   );
   initialize.push(() => {

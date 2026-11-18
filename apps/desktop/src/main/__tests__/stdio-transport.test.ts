@@ -215,6 +215,37 @@ describe("StdioJsonRpcTransport", () => {
     expect(exited).toHaveBeenCalledTimes(1);
   });
 
+  it("records the file it launched from, read before the spawn", async () => {
+    const order: string[] = [];
+    const executable = {
+      command: "/opt/homebrew/bin/codex",
+      realPath: "/opt/homebrew/Caskroom/codex/0.160.0/codex",
+      ino: 42,
+      version: "0.160.0",
+    };
+    resolveCodexCommandMock.mockResolvedValueOnce({ command: executable.command, source: "path", version: "0.160.0" } as never);
+    const readExecutableIdentity = vi.fn(async (command: string, version?: string) => {
+      order.push("read");
+      expect({ command, version }).toEqual({ command: executable.command, version: "0.160.0" });
+      return executable;
+    });
+    const child = Object.assign(new MockCodexChildProcess(), { pid: 4321 });
+    spawnMock.mockImplementationOnce(() => {
+      order.push("spawn");
+      return child;
+    });
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: "/fixture/identity-codex" },
+      readExecutableIdentity,
+    });
+    await transport.connect();
+    expect(order).toEqual(["read", "spawn"]);
+    expect(transport.getProcessInfo()).toEqual(expect.objectContaining({ executable }));
+    await transport.close();
+    expect(transport.getProcessInfo()).toBeUndefined();
+  });
+
   it("stops further requests after a rejected refresh token", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);

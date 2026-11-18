@@ -1,9 +1,12 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
 import type { CodexAppServerClient } from "./desktop-client";
 
-type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
+export type CodexClientRoute =
+  "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
+type Route = CodexClientRoute;
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
-const ROUTES: Record<keyof CodexAppServerClient, Route> = {
+// The app server generation pool routes by the same table.
+export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   close: "all",
   getAppServerRestartStatus: "primary",
   onAppServerRestartStatusChanged: "primary",
@@ -12,6 +15,11 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   resetAppServerRestarts: "all",
   readAppServerProcessSample: "primary",
   getAppServerRecycleStatus: "primary",
+  // A generation pool's own lifecycle; each runtime has one.
+  readAppServerExecutable: "primary",
+  threadDependsOnAppServer: "primary",
+  releaseThread: "primary",
+  retireAppServerWhenIdle: "primary",
   // Each runtime owns a process; each decides from its own sample.
   maybeRecycleIdleAppServer: "all",
   getSubscribedThreadCount: "primary",
@@ -94,6 +102,9 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   steerTurn: "thread",
   isAuthenticationRequired: "primary",
 };
+const ROUTES = CODEX_CLIENT_ROUTES;
+// Generation pool controls (`app-server-generation-pool.ts`): every runtime's pool acts.
+const POOL_CONTROLS = new Set(["checkAppServerInstallation"]);
 
 type Method = keyof CodexAppServerClient;
 type Callback = (...args: unknown[]) => unknown;
@@ -153,9 +164,13 @@ export function createProviderRuntimeClient(
         if ((owner ? runtimes.get(owner) : undefined) !== (client === primary ? undefined : client)) return;
       }
       return callback(...values);
-    }] : subscription.method === "onAppServerUnexpectedExit" ? [() => {
-      const affected = new Set([...owners].filter(([, owner]) =>
-        provider ? owner === provider : !owner || !runtimes.has(owner)).map(([id]) => id));
+    }] : subscription.method === "onAppServerUnexpectedExit" ? [(threadIds?: ReadonlySet<string>) => {
+      const ownedHere = (owner: string | undefined): boolean =>
+        provider ? owner === provider : !owner || !runtimes.has(owner);
+      // A generation pool names the threads of the one process that exited.
+      const affected = threadIds
+        ? new Set([...threadIds].filter((id) => ownedHere(owners.get(id))))
+        : new Set([...owners].filter(([, owner]) => ownedHere(owner)).map(([id]) => id));
       return callback(affected);
     }] : subscription.method === "onRequest" && provider ? [(value: unknown) => {
       const request = record(value);
@@ -221,6 +236,16 @@ export function createProviderRuntimeClient(
   attach(primary);
   return new Proxy(primary, {
     get(target, property) {
+      if (typeof property === "string" && POOL_CONTROLS.has(property)) {
+        const control = Reflect.get(target, property, target);
+        if (typeof control !== "function") return control;
+        return async () => {
+          await Promise.allSettled([primary, ...runtimes.values()].map((client) => {
+            const run = Reflect.get(client, property, client);
+            return typeof run === "function" ? (run as Callback).call(client) : undefined;
+          }));
+        };
+      }
       if (typeof property !== "string" || !Object.hasOwn(ROUTES, property)
         || typeof Reflect.get(target, property, target) !== "function") return Reflect.get(target, property, target);
       const method = property as Method;
