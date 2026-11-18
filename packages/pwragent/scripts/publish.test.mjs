@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { publishRelease, verifyRelease } from "./publish.mjs";
 import { requiresReadOnlyRecovery } from "./release-context.mjs";
-import { registryRetryDelay } from "./release.mjs";
+import { registryCacheObservation, registryRetryDelay } from "./release.mjs";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const source = { tag: "v1.3.7", commit: "a".repeat(40) };
@@ -295,4 +295,20 @@ test("verification-only occupied-version recovery preserves later and maintenanc
   const attempt = { ...receipt(), branch: "releases/1.3", distTag: "release-1.3" };
   assert.equal((await verifyRelease(request, attempt, verifier([maintenance]).deps)).distTag, "release-1.3");
   assert.equal((await verifyRelease(request, { ...attempt, distTag: null }, verifier([maintenance]).deps)).distTag, "release-1.3");
+});
+
+
+test("cache observations log only allowlisted public headers and the delay used by the verifier", () => {
+  for (const phase of ["package-validation", "submission-preflight", "verification"]) {
+    for (const age of [0, 60, 301]) {
+      const response = { status: 200, headers: new Headers({
+        age: String(age), "cache-control": "max-age=300", "retry-after": "60",
+        "set-cookie": "secret", authorization: "private",
+      }) };
+      assert.deepEqual(registryCacheObservation(response, phase, 0), {
+        phase, observedAt: 0, status: 200, cacheHeaders: { age: String(age), "cache-control": "max-age=300", "retry-after": "60" },
+        retryAfterMs: Math.max(300 - age, 60) * 1000,
+      });
+    }
+  }
 });

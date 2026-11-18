@@ -850,16 +850,29 @@ jobs:
             --notes-file "$notes"
           )
 
-          gh release create "${release_args[@]}" \
-            mac-dist/* \
-            windows-dist/* \
-            linux-dist/*.deb \
-            linux-dist/*.rpm \
-            linux-dist/*.pacman \
-            linux-dist/*.tar.gz \
-            linux-dist/latest-linux*.yml \
-            linux-dist/SHA256SUMS \
+          assets=(
+            mac-dist/*
+            windows-dist/*
+            linux-dist/*.deb
+            linux-dist/*.rpm
+            linux-dist/*.pacman
+            linux-dist/*.tar.gz
+            linux-dist/latest-linux*.yml
+            linux-dist/SHA256SUMS
             debug-dist/*
+          )
+
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+            if node apps/desktop/scripts/verify-existing-release.mjs "$RELEASE_TAG" "$notes" "${assets[@]}"; then
+              exit 0
+            else
+              existing_status=$?
+              if [ "$existing_status" -ne 4 ]; then exit "$existing_status"; fi
+            fi
+          fi
+          gh release create "${release_args[@]}" "${assets[@]}"
 
           is_prerelease="$(gh release view "$RELEASE_TAG" \
             --repo pwrdrvr/PwrAgent \
@@ -944,6 +957,13 @@ jobs:
 
           if [ ! -s "$notes" ]; then
             echo "::error::No CHANGELOG.md notes found for $RELEASE_TAG ($VERSION)" >&2
+            exit 1
+          fi
+
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            current_notes="$(gh release view "$RELEASE_TAG" --repo pwrdrvr/PwrAgent --json body --jq '.body')"
+            if [ "$current_notes" = "$(cat "$notes")" ]; then exit 0; fi
+            echo "::error::Published release notes differ from the tagged changelog." >&2
             exit 1
           fi
 

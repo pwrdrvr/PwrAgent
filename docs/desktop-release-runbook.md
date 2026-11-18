@@ -402,11 +402,17 @@ artifact remains a fallback, not a prerequisite for successful publication.
 
 ### Recovery proposal when assets were published before a job timeout
 
-This is a separate operator-authorized procedure to design and review, not a
-reason to rerun or retag an existing release. Workflow edits on `main` do not
-change the workflow stored at an existing tag. A failed-job rerun can encounter
-an already-created release, and dispatching the tagged workflow still uses its
-old time budget. Neither is a safe general recovery for this case.
+For tags carrying the current workflow, retry the failed asset-publication job
+on the original run when its producer jobs succeeded. It reloads the retained
+platform and debug outputs, checks the remote tag commit, then compares the
+published prerelease's notes and exact asset names, sizes, and SHA-256 digests.
+A complete match continues without creating, editing, or uploading release
+assets. Missing or mismatched evidence stops recovery. Reuse the original
+producer jobs by rerunning failed jobs only.
+
+Older tags run the workflow stored at the tag. Recovery for those tags needs
+a separate operator-authorized procedure. Changes on `main` cannot recover
+a historical release or justify moving its tag.
 
 For v1.4.9, preserve source `fef2605487bcdc1c10cf031f81eaee15901deb92`,
 run `44021090875`, all published assets, and the original retained platform,

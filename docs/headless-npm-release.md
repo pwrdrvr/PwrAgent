@@ -163,7 +163,9 @@ Our policy allows the first post-submission read at least 30 minutes after the
 attempt finished. This is a project policy interval. A pre-submit packument GET
 could populate a shared cache, but the retained release logs do not establish
 that it caused a later stale response. A known pre-submit cache deadline can
-postpone the first read. Each completion attempt makes at most one verification
+postpone the first read. The existing reads log their phase, observation time,
+HTTP status, and the public Age, Cache-Control, and Retry-After headers when
+present. Each completion attempt makes at most one verification
 read. If the metadata is still pending, the next read is due after at least 20
 more minutes. `Cache-Control` shared/max age minus `Age` and `Retry-After` can push
 that deadline later. A deadline outside the existing 40-minute verification

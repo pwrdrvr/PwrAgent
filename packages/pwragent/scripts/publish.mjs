@@ -134,14 +134,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const previous = existsSync(verificationPath) ? JSON.parse(readFileSync(verificationPath, "utf8")) : undefined;
     // A prior success is rechecked as well; only a pending receipt carries a
     // next-read constraint. Never use a saved success as registry evidence.
-    const receipt = await verifyRelease(input, attempt, { readRegistry: readPublicRegistrySnapshot,
+    const receipt = await verifyRelease(input, attempt, { readRegistry: () => readPublicRegistrySnapshot("verification"),
       previousVerification: previous?.status === "verification-pending" ? previous : undefined });
     writeFileSync(verificationPath, JSON.stringify(receipt, null, 2) + "\n");
     console.log(JSON.stringify(receipt));
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `status=${receipt.status}\n`);
   } else {
     const receipt = await publishRelease(input, {
-      readRegistry: readPublicRegistrySnapshot,
+      readRegistry: () => readPublicRegistrySnapshot("submission-preflight"),
       previousReceipt: existsSync(attemptPath) ? JSON.parse(readFileSync(attemptPath, "utf8")) : undefined,
       resume: requiresReadOnlyRecovery(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_RUN_ATTEMPT),
       recordReceipt: (receipt) => writeFileSync(attemptPath, JSON.stringify(receipt, null, 2) + "\n"),
