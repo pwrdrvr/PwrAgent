@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { DictationApi } from "../../../../shared/audio-transcription";
 import { startDictationCapture } from "./dictation-capture";
 
-type View = { phase: "idle" | "connecting" | "listening" | "finishing"; text?: string; error?: string };
+export type ComposerDictationView = {
+  phase: "idle" | "connecting" | "listening" | "finishing";
+  text?: string;
+  error?: string;
+};
 type Recording = {
   id: string;
   abort: AbortController;
@@ -20,12 +24,13 @@ export function useComposerDictation(
   scope: string,
   insert: (text: string) => boolean,
 ) {
-  const [view, setView] = useState<View>({ phase: "idle" });
+  const [view, setView] = useState<ComposerDictationView>({ phase: "idle" });
   const recording = useRef<Recording>(undefined);
   const latest = useRef({ scope, insert });
   latest.current = { scope, insert };
 
-  useEffect(() => {
+  // Revoke capture in the same commit that hides or replaces its controls.
+  useLayoutEffect(() => {
     setView({ phase: "idle" });
     return () => {
       const active = recording.current;

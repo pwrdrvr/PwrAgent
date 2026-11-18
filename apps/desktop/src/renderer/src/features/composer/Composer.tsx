@@ -365,6 +365,7 @@ import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { useComposerDictation } from "./useComposerDictation";
+import { ComposerDictationFeedback } from "./ComposerDictationFeedback";
 import { DICTATION_PRICE } from "../../../../shared/audio-transcription";
 
 export type ComposerProps = {
@@ -387,6 +388,7 @@ export type ComposerProps = {
   prAutoDispatchAllowed?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
+  composerCovered?: boolean;
   /**
    * Surface a transient app-level toast (image attachment limit reached,
    * pasted image rejected on a non-vision model). Plumbed up to the shared
@@ -6251,7 +6253,8 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
-  const dictationApi = filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
+  const dictationApi = !props.composerCovered
+    && filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
     ? props.desktopApi?.dictation
     : undefined;
   const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) => {
@@ -13631,6 +13634,8 @@ function useComposerController(props: ComposerProps) {
         );
       })}
 
+      <ComposerDictationFeedback phase={dictation.phase} text={dictation.text} error={dictation.error} />
+
       {/* Last in the band, nearest the input it describes. Hidden once the
           launchpad is submitted: the starting thread is no longer a draft
           to detach. */}
@@ -15394,18 +15399,7 @@ function useComposerController(props: ComposerProps) {
             </ReferencePicker>
           ) : null}
 
-          {dictationApi ? (
-            <button
-              type="button"
-              className={`composer__toggle tooltip-target${dictation.phase === "idle" ? "" : " is-active"}`}
-              aria-label={dictationLabel}
-              data-tooltip={dictation.phase === "idle" ? `Dictate with OpenAI · ${DICTATION_PRICE}` : dictationLabel}
-              disabled={dictation.phase === "finishing" || launchpadSubmitting}
-              onClick={() => void dictation.toggle()}
-            >
-              <MicIcon size={15} aria-hidden="true" />
-            </button>
-          ) : null}
+          {dictationApi && (!preparingSend || dictation.phase === "idle") ? renderDictationButton() : null}
           <ComposerThreadOptionsMenu
             agentThread={props.thread?.agentChange && !props.thread.agentChange.error
               ? props.thread.agentChange.enabled
@@ -15469,6 +15463,21 @@ function useComposerController(props: ComposerProps) {
           />
         </div>
       ) : null
+    );
+  }
+
+  function renderDictationButton(): ReactNode {
+    return (
+      <button
+        type="button"
+        className={`composer__toggle tooltip-target${dictation.phase === "idle" ? "" : " is-active"}`}
+        aria-label={dictationLabel}
+        data-tooltip={dictation.phase === "idle" ? `Dictate with OpenAI · ${DICTATION_PRICE}` : dictationLabel}
+        disabled={dictation.phase === "finishing" || (dictation.phase === "idle" && launchpadSubmitting)}
+        onClick={() => void dictation.toggle()}
+      >
+        <MicIcon size={15} aria-hidden="true" />
+      </button>
     );
   }
 
@@ -15664,6 +15673,8 @@ function useComposerController(props: ComposerProps) {
               })
               : undefined}
           />
+          {/* Keep the active microphone control out of the disabled fieldset. */}
+          {dictationApi && preparingSend && dictation.phase !== "idle" ? renderDictationButton() : null}
           {preparingSend ? (
             <button
               className="button button--ghost composer__cancel-preparation"
@@ -16424,19 +16435,6 @@ function useComposerController(props: ComposerProps) {
           </p>
         ) : null}
 
-        {dictation.error ? <p className="composer__meta composer__meta--error" role="alert">{dictation.error}</p> : null}
-        {dictation.phase !== "idle" ? (
-          <p className="composer__meta" aria-live="polite">
-            {dictation.phase === "connecting" ? "Connecting to OpenAI…"
-              : dictation.phase === "listening" ? "Listening…"
-                : "Finalizing transcript…"}
-          </p>
-        ) : null}
-        {dictation.text ? (
-          <p className="composer__meta composer__dictation-preview" aria-label="Live transcript">
-            {dictation.text}
-          </p>
-        ) : null}
         <div className="composer__input-wrap" ref={inputWrapRef}>
           {isReviewComposerOpen ? (
             renderComposerReviewConfig()

@@ -4105,6 +4105,7 @@ function DesktopAppShell(props: {
               backend.available
           ),
         composerImplementation: settings.composerImplementation,
+        composerCovered: layerView !== undefined,
         composerDraftStore,
         desktopApi: remoteReadsSuspended ? undefined : threadDesktopApi,
         launchpadError: navigation.launchpadError,

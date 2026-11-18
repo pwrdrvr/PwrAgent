@@ -42,6 +42,7 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
     const connection = await app.electronApp.evaluateHandle((_electron, args) => {
       const wire = {
         started: 0,
+        closed: 0,
         committed: 0,
         bytes: 0,
         matchedKey: false,
@@ -84,6 +85,7 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
         }
         close() {
           this.readyState = Original.CLOSED;
+          wire.closed++;
         }
       }
       globalThis.WebSocket = new Proxy(Original, {
@@ -158,6 +160,24 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
       unexpected: [],
     });
     await reply.locator("xpath=ancestor::form[1]").screenshot({ path: testInfo.outputPath("composer-dictated.png") });
+
+    for (const [open, exit] of [
+      ["Open settings", "Exit Settings"],
+      ["Open automations", "Exit Automations"],
+    ]) {
+      const before = await connection.jsonValue();
+      await start.click();
+      await expect(page.getByRole("button", { name: "Stop dictation", exact: true })).toBeVisible();
+      await expect.poll(async () => (await connection.jsonValue()).bytes).toBeGreaterThan(before.bytes);
+      await page.getByRole("button", { name: open, exact: true }).first().click();
+      await expect(page.locator(".app-main")).toHaveAttribute("inert", "");
+      await expect.poll(async () => (await connection.jsonValue()).closed).toBe(before.closed + 1);
+      expect((await connection.jsonValue()).committed).toBe(before.committed);
+
+      await page.getByRole("button", { name: exit, exact: true }).click();
+      await expect(start).toBeEnabled();
+      await expect(reply.locator("p")).toHaveText([DRAFT, TRANSCRIPT]);
+    }
   } finally {
     await app.close();
   }

@@ -48531,6 +48531,11 @@ button.composer__subthread-source-parent:hover {
   line-height: 1.45;
 }
 
+.composer__dictation-feedback {
+  display: grid;
+  gap: 4px;
+}
+
 .composer__dictation-preview {
   max-height: 5em;
   overflow: auto;
