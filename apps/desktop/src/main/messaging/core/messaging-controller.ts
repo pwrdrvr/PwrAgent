@@ -1,5 +1,7 @@
 import { MessagingAgentTools } from "./messaging-agent-tools";
 import type { MessagingAgentToolHost } from "./messaging-agent-tool-context";
+import { MessagingMonitorWorkflow } from "./messaging-monitor-workflow";
+import type { MessagingMonitorHost } from "./messaging-monitor-context";
 import { MessagingNewThreadWorkflow } from "./messaging-new-thread-workflow";
 import type { MessagingNewThreadHost } from "./messaging-new-thread-context";
 import { MessagingReviewWorkflow } from "./messaging-review-workflow";
@@ -11,10 +13,10 @@ import type { MessagingAccessHost } from "./messaging-access-context";
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
-import { readThreadExecutionModeValue, readAcpRuntimeOptionSource, PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, branchPageIndexFromValue, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, readMessagingToolUpdateModeValue, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
+import { readThreadExecutionModeValue, readAcpRuntimeOptionSource, PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, branchPageIndexFromValue, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, readMessagingToolUpdateModeValue, formatDefaultAgentScope, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
-import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
+import { messageOriginForInboundEvent, readStringValue } from "./messaging-command-helpers";
 import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
@@ -32,9 +34,8 @@ import { buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItem
 import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
-import { buildMonitorStatusIntent, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT, MESSAGING_MONITOR_INTERVAL_MS, nextMonitorIntervalMs, nextMonitorThreadLimit, normalizeMonitorIntervalMs, normalizeMonitorThreadLimit, selectMonitorThreads, type MessagingMonitorNavigation, type MessagingMonitorRows } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
 import { defaultAgentBackendSupport, defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
@@ -71,6 +72,7 @@ import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, agentMessag
 import { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingInboundHost } from "./messaging-inbound-context";
 import { assistantImageDeliverySignature, isMessagingToolOriginBinding, summarizeNavigationThreadForMessaging, responseAttributionLabel, isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
+import { formatTimeOfDay, isPermanentMessagingTargetFailure } from "./messaging-monitor-helpers";
 
 
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
@@ -89,15 +91,6 @@ export type MessagingWorkingCardState = {
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const messagingControllerLog = getMainLogger("pwragent:messaging");
-
-type MonitorStateOptions = Pick<
-  MessagingMonitorState,
-  | "intervalMs"
-  | "pinnedThreadLimit"
-  | "recentThreadLimit"
-  | "showLastResponseSnippet"
-  | "showStatusLine"
->;
 
 type AutomationTurnMessagingContext = {
   automationName?: string;
@@ -119,22 +112,6 @@ function executionModeForBinding(
   navigation?: MessagingNavigationContext,
 ): ThreadExecutionMode | undefined {
   return resolveExecutionModeForBinding(binding, navigation).mode;
-}
-
-function federationTargetForThread(
-  thread: NavigationThreadSummary,
-): FederationTarget | undefined {
-  return thread.federation?.ref.target.scope === "remote"
-    ? thread.federation.ref.target
-    : undefined;
-}
-
-function threadKeyForNavigationThread(
-  thread: NavigationThreadSummary,
-): string {
-  return thread.federation
-    ? federatedThreadIdentityKey(thread.federation.ref)
-    : buildThreadIdentityKey(thread.source, thread.id);
 }
 
 export type MessagingControllerDeliveryBudgetEvent = {
@@ -338,14 +315,6 @@ export class MessagingController {
   private readonly queueRecoveries: MessagingQueueRecoveries;
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
-  private readonly monitorTimersByBindingId = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
-  private readonly monitorTimersBySubscriptionId = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
   // Set once dispose() runs. A monitor tick that was already in-flight when
   // dispose() cleared the timer maps would otherwise re-arm a fresh recurring
   // timer at the end of its run (the timer-map `has` guard is false post-clear),
@@ -394,6 +363,8 @@ export class MessagingController {
 
   private readonly agentToolWorkflow: MessagingAgentTools;
   private agentToolHostPorts?: MessagingAgentToolHost;
+  private readonly monitorWorkflow: MessagingMonitorWorkflow;
+  private monitorHostPorts?: MessagingMonitorHost;
 
   constructor(private readonly options: MessagingControllerOptions) {
     const readStore = () => this.options.store;
@@ -462,6 +433,21 @@ export class MessagingController {
       now: () => this.now(),
       get logger() { return readLogger(); },
       host: () => this.agentToolHost(),
+    });
+    const readMonitorConfig = () => this.options;
+    const readTurns = () => this.turns;
+    const readDisposed = () => this.disposed;
+    this.monitorWorkflow = new MessagingMonitorWorkflow({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get turns() { return readTurns(); },
+      get disposed() { return readDisposed(); },
+      get config() { return readMonitorConfig(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.monitorHost(),
     });
     const readBindingConfig = () => this.options;
     this.bindingService = new MessagingBindingService({
@@ -535,30 +521,7 @@ export class MessagingController {
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
-    await this.inboundTurns.cleanupExpiredPrivateReplyContinuations();
-    if (this.options.channel) {
-      const subscriptions =
-        await this.options.store.findActiveMonitorSubscriptionsForChannelKind({
-          channel: this.options.channel,
-        });
-      for (const subscription of subscriptions) {
-        if (subscription.monitor.enabled) {
-          await this.runMonitorSubscriptionTick(subscription.id);
-        }
-      }
-    }
-
-    const backends = await this.resolveMonitorBackendKinds();
-    for (const backend of backends) {
-      const bindings = this.filterBindingsForChannel(
-        await this.options.store.findActiveBindingsForBackend({ backend }),
-      );
-      for (const binding of bindings) {
-        if (binding.monitor?.enabled) {
-          await this.runMonitorTick(binding.id);
-        }
-      }
-    }
+    await this.monitorWorkflow.startMonitoringForEnabledBindings();
   }
 
   private accessHost(): MessagingAccessHost {
@@ -861,7 +824,7 @@ export class MessagingController {
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       reconcileActiveTurnFromThreadStatus: (...args) => this.reconcileActiveTurnFromThreadStatus(...args),
       get backendEventRouter() { return readController().backendEventRouter; },
-      observeManagedTopicFromInbound: (...args) => this.observeManagedTopicFromInbound(...args),
+      observeManagedTopicFromInbound: (...args) => this.monitorWorkflow.observeManagedTopicFromInbound(...args),
       requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       loadNewThreadBackendChoices: (...args) => this.newThreadWorkflow.loadNewThreadBackendChoices(...args),
       deliverSelectedNewThreadBackendUnavailable: (...args) => this.newThreadWorkflow.deliverSelectedNewThreadBackendUnavailable(...args),
@@ -904,6 +867,18 @@ export class MessagingController {
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       resolveActorPermissions: (...args) => this.accessControl.resolveActorPermissions(...args),
       desktopActivityLog: (...args) => this.desktopActivityLog(...args),
+    };
+  }
+
+  private monitorHost(): MessagingMonitorHost {
+    return this.monitorHostPorts ??= {
+      cleanupExpiredPrivateReplyContinuations: (...args) => this.inboundTurns.cleanupExpiredPrivateReplyContinuations(...args),
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      monitorAuthorizedActorIds: (...args) => this.accessControl.monitorAuthorizedActorIds(...args),
+      readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
+      bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
     };
   }
 
@@ -956,13 +931,13 @@ export class MessagingController {
       presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
-      stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
-      enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
-      resolveMonitorControlTopic: (...args) => this.resolveMonitorControlTopic(...args),
-      eventForManagedTopic: (...args) => this.eventForManagedTopic(...args),
-      renderTopicCleanupProposal: (...args) => this.renderTopicCleanupProposal(...args),
-      runTopicMonitorFanout: (...args) => this.runTopicMonitorFanout(...args),
-      renderTopicControlStatus: (...args) => this.renderTopicControlStatus(...args),
+      stopMonitoringForChannel: (...args) => this.monitorWorkflow.stopMonitoringForChannel(...args),
+      enableAndRenderChannelMonitor: (...args) => this.monitorWorkflow.enableAndRenderChannelMonitor(...args),
+      resolveMonitorControlTopic: (...args) => this.monitorWorkflow.resolveMonitorControlTopic(...args),
+      eventForManagedTopic: (...args) => this.monitorWorkflow.eventForManagedTopic(...args),
+      renderTopicCleanupProposal: (...args) => this.monitorWorkflow.renderTopicCleanupProposal(...args),
+      runTopicMonitorFanout: (...args) => this.monitorWorkflow.runTopicMonitorFanout(...args),
+      renderTopicControlStatus: (...args) => this.monitorWorkflow.renderTopicControlStatus(...args),
     };
   }
 
@@ -975,10 +950,10 @@ export class MessagingController {
       newIntentId: (...args) => this.newIntentId(...args),
       readBoundNavigationThread: (...args) => this.readBoundNavigationThread(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
-      disableChannelMonitorSubscription: (...args) => this.disableChannelMonitorSubscription(...args),
+      disableChannelMonitorSubscription: (...args) => this.monitorWorkflow.disableChannelMonitorSubscription(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       flushToolUpdatesForBinding: (...args) => this.flushToolUpdatesForBinding(...args),
-      stopMonitoringForBinding: (...args) => this.stopMonitoringForBinding(...args),
+      stopMonitoringForBinding: (...args) => this.monitorWorkflow.stopMonitoringForBinding(...args),
       isChannelInScope: (...args) => this.isChannelInScope(...args),
       get showStreamingOptionConfig() { return readController().showStreamingOptionConfig; },
       contextUsageSummaryForBinding: (...args) => this.contextUsageSummaryForBinding(...args),
@@ -1052,9 +1027,9 @@ export class MessagingController {
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
       ensureFullAccessEscalationAllowed: (...args) => this.accessControl.ensureFullAccessEscalationAllowed(...args),
       updateBindingPreferences: (...args) => this.bindingService.updateBindingPreferences(...args),
-      stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
-      enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
-      deliverInvalidTopicApproval: (...args) => this.deliverInvalidTopicApproval(...args),
+      stopMonitoringForChannel: (...args) => this.monitorWorkflow.stopMonitoringForChannel(...args),
+      enableAndRenderChannelMonitor: (...args) => this.monitorWorkflow.enableAndRenderChannelMonitor(...args),
+      deliverInvalidTopicApproval: (...args) => this.monitorWorkflow.deliverInvalidTopicApproval(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       detachBinding: (...args) => this.bindingService.detachBinding(...args),
@@ -3414,14 +3389,7 @@ export class MessagingController {
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
     this.inboundTurns.clearAdmissionTiming();
-    for (const timer of this.monitorTimersByBindingId.values()) {
-      clearTimeout(timer);
-    }
-    this.monitorTimersByBindingId.clear();
-    for (const timer of this.monitorTimersBySubscriptionId.values()) {
-      clearTimeout(timer);
-    }
-    this.monitorTimersBySubscriptionId.clear();
+    this.monitorWorkflow.dispose();
     this.inboundTurns.clearPendingPrompts();
     this.toolUpdatePolicy.dispose();
     this.taskMonitorMessagingOrigins.clear();
@@ -3888,759 +3856,6 @@ export class MessagingController {
     }
 
     await this.bindingService.recreateBindingStatus(binding, event);
-  }
-
-  private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
-    return channel.channel === "telegram" &&
-      (channel.conversation.kind === "topic" || channel.conversation.kind === "channel");
-  }
-
-  private async resolveMonitorControlTopic(
-    event: MessagingInboundCommandEvent,
-  ): Promise<MessagingManagedTopicRecord | undefined> {
-    if (event.channel.conversation.kind === "topic") {
-      return await this.upsertManagedTopicFromChannel(event, {
-        source: "owned",
-        lifecycle: "open",
-        recommendation: "keep",
-      });
-    }
-
-    if (event.channel.conversation.kind !== "channel") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-not-supergroup"),
-          createdAt: this.now(),
-          title: "Telegram supergroup required",
-          body: "Open Monitor from a Telegram supergroup or one of its topics so PwrAgent can manage forum topics.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    const supergroupId = event.channel.conversation.id;
-    const knownTopics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId,
-    });
-    const existing = knownTopics.find(
-      (topic) => topic.source === "owned" && topic.lifecycle !== "deleted",
-    );
-    if (existing) {
-      return existing;
-    }
-
-    if (!this.adapter.createManagedConversation) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-create-unsupported"),
-          createdAt: this.now(),
-          title: "Topic creation unavailable",
-          body: "This adapter cannot create a PwrAgent control topic. Run this from an existing Telegram topic to adopt it instead.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    const result = await this.adapter.createManagedConversation({
-      actor: event.actor,
-      parent: event.channel,
-      routingState: event.routingState,
-      title: "PwrAgent topic owner",
-    });
-    if (result.outcome !== "created" || !result.conversation) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-create-failed"),
-          createdAt: this.now(),
-          title: "Topic creation failed",
-          body: result.errorMessage ?? "Telegram could not create the PwrAgent control topic.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    return await this.options.store.upsertManagedTopic(
-      managedTopicRecordFromConversation({
-        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-        channel: event.channel.channel,
-        conversation: result.conversation,
-        now: this.now(),
-        routingState: result.routingState,
-        source: "owned",
-      }),
-    );
-  }
-
-  private eventForManagedTopic(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-    args: string[],
-  ): MessagingInboundCommandEvent {
-    return {
-      ...event,
-      id: `${event.id}:topic:${topic.id}`,
-      kind: "command",
-      channel: topicChannelRef(topic),
-      command: "monitor",
-      args,
-      rawText: `/monitor ${args.join(" ")}`,
-      routingState: topic.routingState ?? event.routingState,
-    };
-  }
-
-  private async deliverInvalidTopicApproval(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("topics-approval-invalid"),
-        createdAt: this.now(),
-        title: "Topic action expired",
-        body: "That cleanup proposal is no longer active. Run /monitor topics cleanup to refresh it.",
-        recoverable: true,
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async renderTopicControlStatus(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-  ): Promise<void> {
-    const rights = await this.adapter.getManagedConversationRights?.({
-      actor: event.actor,
-      channel: event.channel,
-      routingState: event.routingState,
-    });
-    const topics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId: topic.supergroupId,
-    });
-    const rightsLines = rights
-      ? formatManagedTopicRights(rights.operations)
-      : ["Topic operations: unsupported by this adapter"];
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-control"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "PwrAgent topic owner",
-        body: [
-          `Control topic: ${topic.title ?? topic.topicId}`,
-          `Known topics: ${topics.length}`,
-          "",
-          ...rightsLines,
-          "",
-          "Use /monitor topics cleanup for a dry-run cleanup proposal.",
-          "Use /monitor topics fanout to create or reuse per-thread monitor topics.",
-        ].join("\n"),
-        actions: [
-          {
-            id: "monitor:topics:cleanup",
-            label: "Dry Run Cleanup",
-            style: "secondary",
-            fallbackText: "/monitor topics cleanup",
-          },
-          {
-            id: "monitor:topics:fanout",
-            label: "Fanout",
-            style: "secondary",
-            fallbackText: "/monitor topics fanout",
-          },
-        ],
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async renderTopicCleanupProposal(
-    event: MessagingInboundEvent,
-    controlTopic: MessagingManagedTopicRecord,
-  ): Promise<void> {
-    const topics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId: controlTopic.supergroupId,
-    });
-    const now = this.now();
-    const items = topics
-      .filter((topic) => topic.lifecycle !== "deleted")
-      .map((topic): MessagingTopicCleanupProposalItem => {
-        const action =
-          topic.id === controlTopic.id ||
-          topic.source === "owned" ||
-          topic.source === "linked"
-            ? "keep"
-            : topic.lifecycle === "closed"
-              ? "delete"
-              : "close";
-        return {
-          id: topic.topicId,
-          action,
-          reason:
-            action === "keep"
-              ? "owned or linked topic"
-              : action === "delete"
-                ? "already closed known topic"
-                : "known topic not owned or linked to a PwrAgent thread",
-          title: topic.title,
-          topicRecordId: topic.id,
-        };
-      });
-    const proposal: MessagingTopicCleanupProposalRecord = {
-      id: `topic-cleanup:${controlTopic.supergroupId}:${now}`,
-      authorizedActorIds: this.accessControl.monitorAuthorizedActorIds(event),
-      channel: event.channel.channel,
-      controlTopicRecordId: controlTopic.id,
-      createdAt: now,
-      items,
-      status: "pending",
-      supergroupId: controlTopic.supergroupId,
-      updatedAt: now,
-    };
-    await this.options.store.upsertTopicCleanupProposal(proposal);
-    const actions = items
-      .filter((item) => item.action === "close" || item.action === "delete")
-      .slice(0, 6)
-      .map((item) => ({
-        id: `monitor:topics:approve:${proposal.id}:${item.id}`,
-        label: `${item.action === "delete" ? "Delete" : "Close"} ${item.title ?? item.id}`,
-        style: item.action === "delete" ? "danger" as const : "secondary" as const,
-        fallbackText: `/monitor topics approve ${proposal.id} ${item.id}`,
-      }));
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-cleanup"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: now,
-        title: "Topic cleanup dry run",
-        body: formatTopicCleanupProposalBody(items),
-        actions,
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async runTopicMonitorFanout(
-    event: MessagingInboundEvent,
-    controlTopic: MessagingManagedTopicRecord,
-  ): Promise<void> {
-    if (!this.adapter.createManagedConversation) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-fanout-unsupported"),
-          createdAt: this.now(),
-          title: "Topic creation unavailable",
-          body: "This adapter cannot create managed topics.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    const snapshot = await this.readMonitorRows();
-    const selected = selectMonitorThreads({ navigation: snapshot }).threads.slice(0, 3);
-    const created: string[] = [];
-    const reused: string[] = [];
-    const failed: string[] = [];
-    for (const row of selected) {
-      const target = federationTargetForThread(row);
-      const thread = await this.readExactNavigationThread({ ref: { backend: row.source, threadId: row.id,
-        ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) }, federationTarget: target });
-      if (!thread || thread.archivedAt) {
-        failed.push(row.title);
-        continue;
-      }
-      const existing = await this.options.store.findThreadTopicLink({
-        backend: thread.source,
-        channel: event.channel.channel,
-        supergroupId: controlTopic.supergroupId,
-        threadId: thread.id,
-      });
-      if (existing) {
-        const topic = await this.options.store.getManagedTopic(existing.topicRecordId);
-        if (topic) {
-          await this.ensureManagedTopicBinding(event, topic, thread);
-        }
-        reused.push(thread.title);
-        continue;
-      }
-      const result = await this.adapter.createManagedConversation({
-        actor: event.actor,
-        parent: event.channel,
-        routingState: event.routingState,
-        title: topicTitleForThread(thread),
-      });
-      if (result.outcome !== "created" || !result.conversation) {
-        failed.push(thread.title);
-        continue;
-      }
-      const topic = await this.options.store.upsertManagedTopic(
-        managedTopicRecordFromConversation({
-          actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-          channel: event.channel.channel,
-          conversation: result.conversation,
-          now: this.now(),
-          routingState: result.routingState,
-          source: "linked",
-        }),
-      );
-      await this.options.store.upsertThreadTopicLink({
-        id: `topic-link:${event.channel.channel}:${controlTopic.supergroupId}:${thread.source}:${thread.id}`,
-        backend: thread.source,
-        channel: event.channel.channel,
-        createdAt: this.now(),
-        supergroupId: controlTopic.supergroupId,
-        threadId: thread.id,
-        topicRecordId: topic.id,
-        updatedAt: this.now(),
-      });
-      const bindingOutcome = await this.ensureManagedTopicBinding(event, topic, thread);
-      if (bindingOutcome === "conflict") {
-        failed.push(thread.title);
-        continue;
-      }
-      await this.deliverTopicSeed(event, topic, thread);
-      created.push(thread.title);
-    }
-
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-fanout"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Topic fanout complete",
-        body: [
-          `Created: ${created.length}${created.length ? ` (${created.join(", ")})` : ""}`,
-          `Reused: ${reused.length}${reused.length ? ` (${reused.join(", ")})` : ""}`,
-          `Failed: ${failed.length}${failed.length ? ` (${failed.join(", ")})` : ""}`,
-        ].join("\n"),
-        actions: [],
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async deliverTopicSeed(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-    thread: NavigationThreadSummary,
-  ): Promise<void> {
-    const project =
-      thread.linkedDirectories[0]?.label ??
-      thread.linkedDirectories[0]?.path;
-    await this.deliver({
-      id: this.newIntentId("topic-seed"),
-      kind: "message",
-      createdAt: this.now(),
-      audit: buildMessagingAuditContext({
-        action: "topics.seed",
-        actor: event.actor,
-        backend: thread.source,
-        channel: topicChannelRef(topic),
-        now: this.now(),
-        threadId: thread.id,
-      }),
-      parts: [
-        {
-          type: "text",
-          text: [
-            `Monitoring: ${thread.title}`,
-            `Backend: ${thread.source}`,
-            project ? `Project: ${project}` : undefined,
-            thread.updatedAt ? `Updated: ${formatTimeOfDay(thread.updatedAt)}` : undefined,
-            "",
-            "This topic is attached to the thread for follow-up messages.",
-          ].filter(Boolean).join("\n"),
-        },
-      ],
-    });
-  }
-
-  private async ensureManagedTopicBinding(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-    thread: NavigationThreadSummary,
-  ): Promise<"bound" | "existing" | "conflict"> {
-    const channel = topicChannelRef(topic);
-    const existing = await this.options.store.findActiveBindingForChannel(channel);
-    if (existing) {
-      if (existing.backend === thread.source && existing.threadId === thread.id) {
-        return "existing";
-      }
-      this.logger.debug?.("managed topic already bound to another thread", {
-        backend: existing.backend,
-        bindingId: existing.id,
-        threadId: existing.threadId,
-        topicId: topic.topicId,
-      });
-      return "conflict";
-    }
-
-    await this.bindingService.bindChannelToThread(
-      {
-        ...event,
-        id: `${event.id}:topic-bind:${topic.id}`,
-        kind: "command",
-        channel,
-        command: "monitor",
-        args: ["topics", "fanout"],
-        rawText: "/monitor topics fanout",
-        receivedAt: this.now(),
-        routingState: topic.routingState ?? event.routingState,
-      } satisfies MessagingInboundCommandEvent,
-      {
-        backend: thread.source,
-        threadId: thread.id,
-      },
-    );
-    return "bound";
-  }
-
-  private async observeManagedTopicFromInbound(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    if (
-      event.channel.conversation.kind !== "topic" ||
-      !event.channel.conversation.parentId
-    ) {
-      return;
-    }
-    const observedAt = event.receivedAt;
-    await this.options.store.mergeManagedTopicObservation({
-      ...managedTopicRecordFromConversation({
-        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-        channel: event.channel.channel,
-        conversation: event.channel.conversation,
-        now: observedAt,
-        routingState: event.routingState,
-        source: "observed",
-      }),
-      lastObservedAt: observedAt,
-      lifecycle: "open",
-      updatedAt: observedAt,
-    });
-  }
-
-  private async upsertManagedTopicFromChannel(
-    event: MessagingInboundEvent,
-    options: Pick<
-      MessagingManagedTopicRecord,
-      "source" | "lifecycle" | "recommendation"
-    >,
-  ): Promise<MessagingManagedTopicRecord> {
-    const now = this.now();
-    const existing = await this.options.store.findManagedTopicByConversation({
-      channel: event.channel.channel,
-      supergroupId: event.channel.conversation.parentId ?? "",
-      topicId: event.channel.conversation.id,
-    });
-    return await this.options.store.upsertManagedTopic({
-      ...managedTopicRecordFromConversation({
-        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-        channel: event.channel.channel,
-        conversation: event.channel.conversation,
-        now,
-        routingState: event.routingState,
-        source: options.source,
-      }),
-      ...existing,
-      authorizedActorIds: existing?.authorizedActorIds.length
-        ? existing.authorizedActorIds
-        : this.accessControl.monitorAuthorizedActorIds(event),
-      lastObservedAt: now,
-      lifecycle: options.lifecycle,
-      recommendation: options.recommendation ?? existing?.recommendation,
-      routingState: event.routingState ?? existing?.routingState,
-      source: existing?.source === "owned" || existing?.source === "linked"
-        ? existing.source
-        : options.source,
-      updatedAt: now,
-    });
-  }
-
-  private async enableAndRenderChannelMonitor(
-    event: MessagingInboundEvent,
-    action: MonitorCommandAction = { kind: "start" },
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    const now = this.now();
-    const existing =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
-    const monitorOptions = resolveMonitorStateOptions(existing?.monitor, action);
-    const subscription = await this.options.store.upsertMonitorSubscription({
-      id: existing?.id ?? buildMonitorSubscriptionId(event.channel),
-      channel: event.channel,
-      authorizedActorIds: existing?.authorizedActorIds.length
-        ? existing.authorizedActorIds
-        : this.accessControl.monitorAuthorizedActorIds(event),
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      monitor: {
-        ...existing?.monitor,
-        enabled: true,
-        intervalMs: monitorOptions.intervalMs,
-        lastRenderedAt: existing?.monitor.lastRenderedAt,
-        pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
-        recentThreadLimit: monitorOptions.recentThreadLimit,
-        showLastResponseSnippet: monitorOptions.showLastResponseSnippet,
-        showStatusLine: monitorOptions.showStatusLine,
-        updatedAt: now,
-      },
-      monitorSurface: existing?.monitorSurface,
-    });
-    if (existing) {
-      this.clearMonitorSubscriptionTimer(existing.id);
-    }
-    try {
-      const rendered = await this.renderChannelMonitorStatus(subscription, event);
-      this.scheduleMonitorSubscriptionTick(rendered);
-      return rendered;
-    } catch (error) {
-      this.logger.debug?.("messaging channel monitor initial render failed", {
-        error: error instanceof Error ? error.message : String(error),
-        subscriptionId: subscription.id,
-      });
-      this.scheduleMonitorSubscriptionTick(subscription);
-      return subscription;
-    }
-  }
-
-  private async stopMonitoringForChannel(
-    event: MessagingInboundEvent,
-  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
-    const subscription =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
-    if (!subscription) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("monitor-stopped"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Monitor stopped",
-          body: "Monitor was not running for this conversation.",
-          actions: [],
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    this.clearMonitorSubscriptionTimer(subscription.id);
-    const now = this.now();
-    if (subscription.monitorSurface) {
-      try {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("monitor-stopped"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: now,
-            title: "Monitor stopped",
-            body: "Recent thread updates will no longer post to this conversation.",
-            actions: [],
-            delivery: {
-              mode: this.capabilityProfile.text.supportsMessageEdit
-                ? "update"
-                : "present",
-              replaceMarkup: true,
-              fallback: "present_new",
-            },
-            targetSurface: this.capabilityProfile.text.supportsMessageEdit
-              ? subscription.monitorSurface
-              : undefined,
-          }),
-          undefined,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging channel monitor stop update failed", {
-          error: error instanceof Error ? error.message : String(error),
-          subscriptionId: subscription.id,
-        });
-      }
-    } else {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("monitor-stopped"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: now,
-          title: "Monitor stopped",
-          body: "Recent thread updates will no longer post to this conversation.",
-          actions: [],
-        }),
-        undefined,
-        event,
-      );
-    }
-
-    return await this.options.store.upsertMonitorSubscription({
-      ...subscription,
-      monitor: {
-        ...subscription.monitor,
-        enabled: false,
-        intervalMs: subscription.monitor.intervalMs,
-        lastRenderedAt: subscription.monitor.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
-  }
-
-  private async enableAndRenderMonitor(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-  ): Promise<MessagingBindingRecord> {
-    const enabledBinding = await this.options.store.upsertBinding({
-      ...binding,
-      monitor: {
-        enabled: true,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: binding.monitor?.lastRenderedAt,
-        updatedAt: this.now(),
-      },
-      updatedAt: this.now(),
-    });
-    try {
-      const rendered = await this.renderMonitorStatus(enabledBinding, event);
-      this.scheduleMonitorTick(rendered);
-      return rendered;
-    } catch (error) {
-      this.logger.debug?.("messaging monitor initial render failed", {
-        bindingId: enabledBinding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: enabledBinding.threadId,
-      });
-      this.scheduleMonitorTick(enabledBinding);
-      return enabledBinding;
-    }
-  }
-
-  private async stopMonitoringForBinding(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    options: { deliverStatus?: boolean } = {},
-  ): Promise<MessagingBindingRecord> {
-    this.clearMonitorTimer(binding.id);
-    const now = this.now();
-    const deliverStatus = options.deliverStatus ?? true;
-    if (deliverStatus && binding.monitorSurface) {
-      try {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("monitor-stopped"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: now,
-            title: "Monitor stopped",
-            body: "Recent thread updates will no longer post to this conversation.",
-            actions: [],
-            delivery: {
-              mode: "update",
-              replaceMarkup: true,
-              fallback: "present_new",
-            },
-            targetSurface: binding.monitorSurface,
-          }),
-          binding,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging monitor stop update failed", {
-          bindingId: binding.id,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: binding.threadId,
-        });
-      }
-    } else if (deliverStatus && event) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("monitor-stopped"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: now,
-          title: "Monitor stopped",
-          body: binding.monitor?.enabled
-            ? "Recent thread updates will no longer post to this conversation."
-            : "Monitor was not running for this conversation.",
-          actions: [],
-        }),
-        binding,
-        event,
-      );
-    }
-
-    return await this.options.store.upsertBinding({
-      ...binding,
-      monitor: {
-        enabled: false,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: binding.monitor?.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
-  }
-
-  private async disableChannelMonitorSubscription(
-    subscription: MessagingMonitorSubscriptionRecord,
-    event?: MessagingInboundEvent,
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    this.clearMonitorSubscriptionTimer(subscription.id);
-    const now = this.now();
-    if (subscription.monitorSurface) {
-      try {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("monitor-detached"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: now,
-            title: "Monitor detached",
-            body: "Recent thread updates will no longer post to this conversation.",
-            actions: [],
-            delivery: {
-              mode: "update",
-              replaceMarkup: true,
-              fallback: "fail",
-            },
-            targetSurface: subscription.monitorSurface,
-          }),
-          undefined,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging channel monitor detach update failed", {
-          error: error instanceof Error ? error.message : String(error),
-          subscriptionId: subscription.id,
-        });
-      }
-    }
-    return await this.options.store.upsertMonitorSubscription({
-      ...subscription,
-      monitor: {
-        ...subscription.monitor,
-        enabled: false,
-        intervalMs: subscription.monitor.intervalMs,
-        lastRenderedAt: subscription.monitor.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
   }
 
   private async presentSkillsBrowser(
@@ -6229,376 +5444,6 @@ export class MessagingController {
     binding: MessagingBindingRecord,
   ): Promise<boolean>{
     return await this.bindingService.handleBindingRevokeRequest(binding);
-  }
-
-  private async readMonitorRows(monitor?: MessagingMonitorState, federationTarget?: FederationTarget): Promise<MessagingMonitorRows> {
-    const read = this.options.backend.getNavigationQueryPage?.bind(this.options.backend);
-    if (!read) throw new Error("Upgrade the owning instance to navigation query protocol 2 before opening a monitor.");
-    const sections = [
-      { pinned: "include" as const, size: normalizeMonitorThreadLimit(monitor?.pinnedThreadLimit, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT) },
-      { pinned: "exclude" as const, size: normalizeMonitorThreadLimit(monitor?.recentThreadLimit, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT) },
-    ];
-    const pages = await Promise.all(sections.filter((section) => section.size > 0).map(async (section) => {
-      const page = await read({ protocol: 2, consumer: "agent-tool", federationTarget,
-        query: { kind: "star-map", filters: { pinned: section.pinned } }, pageSize: section.size });
-      if (page.protocol !== 2 || page.unchanged) throw new Error("The owning instance did not provide a monitor row page.");
-      return page.entries.map((entry) => entry.row);
-    }));
-    return { kind: "bounded-monitor", threads: pages.flat() };
-  }
-
-  private async renderMonitorStatus(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingMonitorNavigation,
-  ): Promise<MessagingBindingRecord> {
-    const snapshot =
-      navigation ??
-      (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
-    const now = this.now();
-    // Startup and timer renders have no inbound operator event.
-    const countsAsActivity = event !== undefined;
-    const activeTurns = await this.resolveMonitorActiveTurns(
-      snapshot,
-      binding.monitor,
-      countsAsActivity,
-    );
-    const snippetsByThreadKey = await this.resolveMonitorSnippets(
-      snapshot,
-      binding.monitor,
-      countsAsActivity,
-    );
-    const intent = buildMonitorStatusIntent({
-      activeTurnsByThreadKey: activeTurns,
-      binding,
-      capabilityProfile: this.capabilityProfile,
-      createdAt: now,
-      id: this.newIntentId("monitor"),
-      navigation: snapshot,
-      snippetsByThreadKey,
-      topicControls: this.supportsMonitorTopicControls(event?.channel ?? binding.channel),
-    });
-    const result = await this.deliver(intent, binding, event);
-    const latestBinding = await this.options.store.getBinding(binding.id);
-    if (latestBinding?.revokedAt) {
-      this.clearMonitorTimer(binding.id);
-      return latestBinding;
-    }
-    const currentBinding = latestBinding ?? binding;
-    return await this.options.store.upsertBinding({
-      ...currentBinding,
-      monitor: {
-        ...currentBinding.monitor,
-        enabled: true,
-        intervalMs:
-          currentBinding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: now,
-        updatedAt: now,
-      },
-      monitorSurface:
-        result.surface && result.outcome !== "failed"
-          ? result.surface
-          : currentBinding.monitorSurface,
-      updatedAt: now,
-    });
-  }
-
-  private async renderChannelMonitorStatus(
-    subscription: MessagingMonitorSubscriptionRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingMonitorNavigation,
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    const snapshot =
-      navigation ??
-      (await this.readMonitorRows(subscription.monitor));
-    const now = this.now();
-    const countsAsActivity = event !== undefined;
-    const activeTurns = await this.resolveMonitorActiveTurns(
-      snapshot,
-      subscription.monitor,
-      countsAsActivity,
-    );
-    const snippetsByThreadKey = await this.resolveMonitorSnippets(
-      snapshot,
-      subscription.monitor,
-      countsAsActivity,
-    );
-    const intent = {
-      ...buildMonitorStatusIntent({
-        activeTurnsByThreadKey: activeTurns,
-        bindingId: subscription.id,
-        capabilityProfile: this.capabilityProfile,
-        createdAt: now,
-        id: this.newIntentId("monitor"),
-        monitor: subscription.monitor,
-        monitorSurface: subscription.monitorSurface,
-        navigation: snapshot,
-        snippetsByThreadKey,
-        topicControls: this.supportsMonitorTopicControls(event?.channel ?? subscription.channel),
-      }),
-      allowedActorIds: subscription.authorizedActorIds,
-      ...(event
-        ? {}
-        : {
-            audit: buildMessagingAuditContext({
-              action: "monitor.deliver",
-              actor: {
-                platformUserId: subscription.authorizedActorIds[0] ?? "unknown",
-              },
-              bindingId: subscription.id,
-              channel: subscription.channel,
-              now,
-            }),
-          }),
-    };
-    const result = await this.deliver(intent, undefined, event);
-    if (isPermanentMessagingTargetFailure(result)) {
-      const revoked = await this.options.store.revokeMonitorSubscription({
-        subscriptionId: subscription.id,
-        revokedAt: now,
-      });
-      this.clearMonitorSubscriptionTimer(subscription.id);
-      return revoked ?? {
-        ...subscription,
-        revokedAt: now,
-        updatedAt: now,
-      };
-    }
-
-    const latest =
-      await this.options.store.getMonitorSubscription(subscription.id);
-    if (latest?.revokedAt) {
-      this.clearMonitorSubscriptionTimer(subscription.id);
-      return latest;
-    }
-    const current = latest ?? subscription;
-    return await this.options.store.upsertMonitorSubscription({
-      ...current,
-      monitor: {
-        ...current.monitor,
-        enabled: true,
-        intervalMs: current.monitor.intervalMs,
-        lastRenderedAt: now,
-        updatedAt: now,
-      },
-      monitorSurface:
-        result.surface && result.outcome !== "failed"
-          ? result.surface
-          : current.monitorSurface,
-      updatedAt: now,
-    });
-  }
-
-  private scheduleMonitorTick(binding: MessagingBindingRecord): void {
-    if (
-      this.disposed ||
-      binding.revokedAt ||
-      !binding.monitor?.enabled ||
-      this.monitorTimersByBindingId.has(binding.id)
-    ) {
-      return;
-    }
-
-    const intervalMs = binding.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
-    const timer = setTimeout(() => {
-      this.monitorTimersByBindingId.delete(binding.id);
-      void this.runMonitorTick(binding.id);
-    }, intervalMs);
-    this.monitorTimersByBindingId.set(binding.id, timer);
-  }
-
-  private scheduleMonitorSubscriptionTick(
-    subscription: MessagingMonitorSubscriptionRecord,
-  ): void {
-    if (
-      this.disposed ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled ||
-      this.monitorTimersBySubscriptionId.has(subscription.id)
-    ) {
-      return;
-    }
-
-    const intervalMs =
-      subscription.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
-    const timer = setTimeout(() => {
-      this.monitorTimersBySubscriptionId.delete(subscription.id);
-      void this.runMonitorSubscriptionTick(subscription.id);
-    }, intervalMs);
-    this.monitorTimersBySubscriptionId.set(subscription.id, timer);
-  }
-
-  private clearMonitorTimer(bindingId: string): void {
-    const timer = this.monitorTimersByBindingId.get(bindingId);
-    if (!timer) {
-      return;
-    }
-    clearTimeout(timer);
-    this.monitorTimersByBindingId.delete(bindingId);
-  }
-
-  private clearMonitorSubscriptionTimer(subscriptionId: string): void {
-    const timer = this.monitorTimersBySubscriptionId.get(subscriptionId);
-    if (!timer) {
-      return;
-    }
-    clearTimeout(timer);
-    this.monitorTimersBySubscriptionId.delete(subscriptionId);
-  }
-
-  private async runMonitorTick(bindingId: string): Promise<void> {
-    const binding = await this.options.store.getBinding(bindingId);
-    if (!binding || binding.revokedAt || !binding.monitor?.enabled) {
-      this.clearMonitorTimer(bindingId);
-      return;
-    }
-
-    let rendered: MessagingBindingRecord | undefined;
-    try {
-      rendered = await this.renderMonitorStatus(binding);
-    } catch (error) {
-      this.logger.debug?.("messaging monitor tick failed", {
-        bindingId,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
-    }
-
-    const latest = rendered ?? await this.options.store.getBinding(bindingId);
-    if (latest && !latest.revokedAt && latest.monitor?.enabled) {
-      this.scheduleMonitorTick(latest);
-    }
-  }
-
-  private async runMonitorSubscriptionTick(subscriptionId: string): Promise<void> {
-    const subscription =
-      await this.options.store.getMonitorSubscription(subscriptionId);
-    if (
-      !subscription ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled
-    ) {
-      this.clearMonitorSubscriptionTimer(subscriptionId);
-      return;
-    }
-
-    let rendered: MessagingMonitorSubscriptionRecord | undefined;
-    try {
-      rendered = await this.renderChannelMonitorStatus(subscription);
-    } catch (error) {
-      this.logger.debug?.("messaging channel monitor tick failed", {
-        error: error instanceof Error ? error.message : String(error),
-        subscriptionId,
-      });
-    }
-
-    const latest =
-      rendered ?? await this.options.store.getMonitorSubscription(subscriptionId);
-    if (latest && !latest.revokedAt && latest.monitor.enabled) {
-      this.scheduleMonitorSubscriptionTick(latest);
-    }
-  }
-
-  private async resolveMonitorActiveTurns(
-    navigation: MessagingMonitorNavigation,
-    monitor?: MessagingMonitorState,
-    countsAsActivity = true,
-  ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
-    const activeTurns = new Map(this.turns.snapshot());
-    if (!this.options.backend.readThreadStatus) {
-      return activeTurns;
-    }
-
-    const threads = selectMonitorThreads({ monitor, navigation }).threads;
-    await Promise.all(
-      threads.map(async (thread) => {
-        const threadKey = threadKeyForNavigationThread(thread);
-        const existing = activeTurns.get(threadKey);
-        try {
-          const status = await this.options.backend.readThreadStatus?.({
-            backend: thread.source,
-            federationTarget: federationTargetForThread(thread),
-            threadId: thread.id,
-            ...(countsAsActivity ? {} : { countsAsActivity: false }),
-          });
-          if (status === "active") {
-            activeTurns.set(threadKey, {
-              status: existing?.status === "waiting" ? "waiting" : "working",
-              turnId: existing?.turnId ?? `${threadKey}:monitor`,
-              updatedAt: this.now(),
-            });
-          } else if (
-            status === "idle" &&
-            existing &&
-            (existing.status === "working" || existing.status === "waiting")
-          ) {
-            activeTurns.set(threadKey, {
-              ...existing,
-              status: "completed",
-              updatedAt: this.now(),
-            });
-          }
-        } catch (error) {
-          this.logger.debug?.("messaging monitor thread status read failed", {
-            backend: thread.source,
-            error: error instanceof Error ? error.message : String(error),
-            threadId: thread.id,
-          });
-        }
-      }),
-    );
-    return activeTurns;
-  }
-
-  private async resolveMonitorSnippets(
-    navigation: MessagingMonitorNavigation,
-    monitor?: MessagingMonitorState,
-    countsAsActivity = true,
-  ): Promise<ReadonlyMap<string, string>> {
-    const snippets = new Map<string, string>();
-    if (
-      monitor?.showLastResponseSnippet !== true ||
-      !this.options.backend.readThreadLastAssistantMessage
-    ) {
-      return snippets;
-    }
-
-    const threads = selectMonitorThreads({ monitor, navigation }).threads;
-    await Promise.all(
-      threads.map(async (thread) => {
-        const threadKey = threadKeyForNavigationThread(thread);
-        try {
-          const text =
-            await this.options.backend.readThreadLastAssistantMessage?.({
-              backend: thread.source,
-              federationTarget: federationTargetForThread(thread),
-              threadId: thread.id,
-              ...(countsAsActivity ? {} : { countsAsActivity: false }),
-            });
-          const trimmed = text?.trim();
-          if (trimmed) {
-            snippets.set(threadKey, trimmed);
-          }
-        } catch (error) {
-          this.logger.debug?.("messaging monitor thread snippet read failed", {
-            backend: thread.source,
-            error: error instanceof Error ? error.message : String(error),
-            threadId: thread.id,
-          });
-        }
-      }),
-    );
-    return snippets;
-  }
-
-  private async resolveMonitorBackendKinds(): Promise<AppServerBackendKind[]> {
-    const listed = await this.options.backend.listBackends?.({
-      includeUnavailable: true,
-    });
-    if (listed?.backends.length) {
-      return [...new Set(listed.backends.map((backend) => backend.kind))];
-    }
-    return ["codex"];
   }
 
   private async reconcileActiveTurnFromBackendStatus(
@@ -8826,216 +7671,6 @@ export class MessagingController {
 
 export { isMessagingInteractivePendingRequest };
 
-/**
- * Format a wall-clock timestamp as `HH:MM AM/PM` for messaging audit
- * messages. Mirrors the format the user sees in the desktop transcript.
- */
-function formatTimeOfDay(epochMs: number): string {
-  const date = new Date(epochMs);
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const period = hours >= 12 ? "PM" : "AM";
-  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
-  const paddedMinutes = minutes < 10 ? `0${minutes}` : String(minutes);
-  return `${displayHours}:${paddedMinutes} ${period}`;
-}
-
-function resolveMonitorStateOptions(
-  monitor: MessagingMonitorState | undefined,
-  action: MonitorCommandAction,
-): MonitorStateOptions {
-  const currentPinned = normalizeMonitorThreadLimit(
-    monitor?.pinnedThreadLimit,
-    MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
-  );
-  const currentIntervalMs = normalizeMonitorIntervalMs(
-    monitor?.intervalMs,
-    MESSAGING_MONITOR_INTERVAL_MS,
-  );
-  const currentRecent = normalizeMonitorThreadLimit(
-    monitor?.recentThreadLimit,
-    MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
-  );
-  const currentShowStatusLine = monitor?.showStatusLine === true;
-  const currentShowSnippet = monitor?.showLastResponseSnippet === true;
-
-  switch (action.kind) {
-    case "cycle-pinned":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: nextMonitorThreadLimit(currentPinned),
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "cycle-recent":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: nextMonitorThreadLimit(currentRecent),
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "cycle-interval":
-      return {
-        intervalMs: nextMonitorIntervalMs(currentIntervalMs),
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "toggle-status-line":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: !currentShowStatusLine,
-      };
-    case "toggle-snippet":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: !currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-pinned":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: normalizeMonitorThreadLimit(action.count, currentPinned),
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-interval":
-      return {
-        intervalMs: normalizeMonitorIntervalMs(action.intervalMs, currentIntervalMs),
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-recent":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: normalizeMonitorThreadLimit(action.count, currentRecent),
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-status-line":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: action.enabled,
-      };
-    case "set-snippet":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: action.enabled,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "refresh":
-    case "start":
-    case "stop":
-    case "topics-adopt":
-    case "topics-cleanup":
-    case "topics-fanout":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-  }
-}
-
-function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {
-  return `monitor:${buildMessagingConversationKey(channel)}`;
-}
-
-function managedTopicRecordFromConversation(params: {
-  actorIds: string[];
-  channel: MessagingChannelKind;
-  conversation: MessagingChannelRef["conversation"];
-  now: number;
-  routingState?: MessagingAdapterState;
-  source: MessagingManagedTopicRecord["source"];
-}): MessagingManagedTopicRecord {
-  const supergroupId = params.conversation.parentId ?? params.conversation.id;
-  const topicId = params.conversation.kind === "topic"
-    ? params.conversation.id
-    : "";
-  return {
-    id: `topic:${params.channel}:${supergroupId}:${topicId}`,
-    authorizedActorIds: params.actorIds,
-    channel: params.channel,
-    conversation: params.conversation,
-    createdAt: params.now,
-    lastObservedAt: params.now,
-    lifecycle: "open",
-    routingState: params.routingState,
-    source: params.source,
-    supergroupId,
-    title: params.conversation.title,
-    topicId,
-    updatedAt: params.now,
-  };
-}
-
-function topicTitleForThread(thread: NavigationThreadSummary): string {
-  const trimmed = thread.title.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, 120) : `${thread.source} thread`;
-}
-
-function formatManagedTopicRights(
-  operations: readonly MessagingManagedConversationOperationSupport[],
-): string[] {
-  return operations.map((operation) => {
-    const label =
-      operation.operation === "create_child"
-        ? "create"
-        : operation.operation;
-    if (operation.supported) {
-      return `${label}: available`;
-    }
-    return `${label}: unavailable${operation.missingPermission ? ` (${operation.missingPermission})` : operation.reason ? ` (${operation.reason})` : ""}`;
-  });
-}
-
-function formatTopicCleanupProposalBody(
-  items: readonly MessagingTopicCleanupProposalItem[],
-): string {
-  if (items.length === 0) {
-    return [
-      "No known topics yet.",
-      "",
-      "Telegram bots cannot list every historical topic. Adopt topics from inside the topic first, then run cleanup again.",
-    ].join("\n");
-  }
-  const grouped = {
-    keep: items.filter((item) => item.action === "keep"),
-    close: items.filter((item) => item.action === "close"),
-    delete: items.filter((item) => item.action === "delete"),
-  };
-  return [
-    "Dry run only. No topic will be closed or deleted until you approve one of the actions below.",
-    "",
-    `Keep: ${grouped.keep.length}`,
-    ...grouped.keep.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
-    `Close candidates: ${grouped.close.length}`,
-    ...grouped.close.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
-    `Delete candidates: ${grouped.delete.length}`,
-    ...grouped.delete.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
-  ].join("\n");
-}
-
 function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,
   context: MessagingWorkspaceHandoffContext,
@@ -9633,17 +8268,6 @@ function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean, manualRet
     ? " To submit it as a steering message, click Steer."
     : "";
   return `${quotedPreview}\n\nI got your message, but there is a turn in progress. I've queued it to be sent when the turn completes.${steeringSentence} You can cancel if you don't want this queued.`;
-}
-
-function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
-  return (
-    result.outcome === "failed" &&
-    Boolean(
-      result.errorMessage?.match(
-        /\bUnknown Channel\b|chat not found|message thread not found/i,
-      ),
-    )
-  );
 }
 
 function shouldRetryArtifactInline(
