@@ -24714,6 +24714,84 @@ script = "echo setup"
     await registry.close();
   });
 
+  it.each(["overlay", "provider"])("keeps GPT-6.1-Sol high from the %s when switching to GPT-6.2-Sol", async (settingsSource) => {
+    const source = "gpt-6.1-sol";
+    const destination = "gpt-6.2-sol";
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+      models: [source, destination].map((id) => ({
+        id,
+        defaultReasoningEffort: "low",
+        reasoningEfforts: ["low", "high"],
+        supportsReasoning: true,
+      })),
+    });
+    const readThreadModelSettings = vi.fn(async () => ({ model: source, reasoningEffort: "high" }));
+    Object.assign(codexClient, { readThreadModelSettings });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+    const thread = { backend: "codex" as const, threadId: "existing" };
+    try {
+      if (settingsSource === "overlay") {
+        await registry.setThreadModelSettings({ ...thread, model: source, reasoningEffort: "high" });
+      }
+      await expect(registry.setThreadModelSettings({ ...thread, model: destination }))
+        .resolves.toMatchObject({ model: destination, reasoningEffort: "high" });
+      expect(await overlayStore.getThreadOverlayState(thread)).toMatchObject({
+        model: destination,
+        reasoningEffort: "high",
+      });
+      if (settingsSource === "provider") {
+        expect(readThreadModelSettings).toHaveBeenCalledExactlyOnceWith({ threadId: thread.threadId });
+      } else {
+        expect(readThreadModelSettings).not.toHaveBeenCalled();
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("chooses the first supported effort from the thread's destination memory, profile default, and current effort", async () => {
+    const source = "gpt-6.1-sol";
+    const destination = "gpt-6.2-sol";
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("medium", "high", "xhigh"),
+      fc.option(fc.constantFrom("medium", "high", "xhigh"), { nil: undefined }),
+      fc.option(fc.constantFrom("medium", "high"), { nil: undefined }),
+      async (current, configured, remembered) => {
+        const reasoningEffortsByModel: Record<string, string> = {};
+        if (configured) reasoningEffortsByModel[destination] = configured;
+        const registry = createDesktopBackendRegistry({
+          codexClient: new MockBackendClient({
+            initializeResult: { methods: ["thread/start"] },
+            models: [
+              { id: source, defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high", "xhigh"], supportsReasoning: true },
+              { id: destination, defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high"], supportsReasoning: true },
+            ],
+          }),
+          overlayStore: createOverlayStoreMock(),
+          resolveProviderModelDefaults: () => ({
+            codex: { model: destination, reasoningEffortsByModel },
+          }),
+        });
+        const thread = { backend: "codex" as const, threadId: "existing" };
+        try {
+          if (remembered) {
+            await registry.setThreadModelSettings({ ...thread, model: destination, reasoningEffort: remembered });
+          }
+          await registry.setThreadModelSettings({ ...thread, model: source, reasoningEffort: current });
+          const expected = remembered
+            ?? (configured === "xhigh" ? undefined : configured)
+            ?? (current === "xhigh" ? "low" : current);
+          await expect(registry.setThreadModelSettings({ ...thread, model: destination }))
+            .resolves.toMatchObject({ model: destination, reasoningEffort: expected });
+        } finally {
+          await registry.close();
+        }
+      },
+    ), { numRuns: 30 });
+  });
+
   it("never applies or acknowledges a migration from a different Codex model provider", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("gpt-old", "@mathos/old", "@bonsai/old"),

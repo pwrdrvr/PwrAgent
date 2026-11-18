@@ -14440,7 +14440,7 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
-    await this.assertRequestedThreadModelAvailable(params);
+    const observedCodexSettings = await this.assertRequestedThreadModelAvailable(params);
     const modelSettingsManuallyUpdatedAt =
       "model" in params || "reasoningEffort" in params
         ? Date.now()
@@ -14449,7 +14449,7 @@ export class DesktopBackendRegistry {
       ...(modelSettingsManuallyUpdatedAt !== undefined
         ? { modelSettingsManuallyUpdatedAt }
         : {}),
-    });
+    }, observedCodexSettings);
   }
 
   /**
@@ -14606,15 +14606,34 @@ export class DesktopBackendRegistry {
       modelMigrationRevision?: string;
       modelSettingsManuallyUpdatedAt?: number;
     },
+    observedCodexSettings?: { reasoningEffort?: string },
   ): Promise<SetThreadModelSettingsResponse> {
-    const current = await this.overlayStore.getThreadOverlayState({
+    const identity = {
       backend: params.backend,
       threadId: params.threadId,
-    });
+    };
+    const current = await this.overlayStore.getThreadOverlayState(identity);
+    const requestedModel = params.model;
     const modelChanged =
-      "model" in params &&
-      params.model !== undefined &&
-      params.model !== current?.model;
+      requestedModel !== undefined && requestedModel !== current?.model;
+    let fallbackReasoningEfforts: ModelSettings["fallbackReasoningEfforts"];
+    if (params.backend === "codex" && modelChanged && !("reasoningEffort" in params)) {
+      const providerKey = providerPickerValue(params.backend, requestedModel);
+      const configured = this.resolveProviderModelDefaultsFn()[providerKey];
+      // Older or externally created threads can have provider settings without
+      // a PwrAgent model overlay. Read just this thread's settings in that case.
+      const currentEffort = current?.reasoningEffort
+        ?? observedCodexSettings?.reasoningEffort
+        ?? this.threadInfoStore.getSummary(identity)?.reasoningEffort
+        ?? (observedCodexSettings === undefined
+          ? (await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId })
+            .catch(() => undefined))?.reasoningEffort
+          : undefined);
+      fallbackReasoningEfforts = [
+        configured?.reasoningEffortsByModel[requestedModel],
+        currentEffort,
+      ];
+    }
     const modelSettings = await this.resolveModelSettings(
       params.backend,
       {
@@ -14626,6 +14645,7 @@ export class DesktopBackendRegistry {
               ? undefined
               : current?.reasoningEffort,
         reasoningEffortsByModel: current?.reasoningEffortsByModel,
+        fallbackReasoningEfforts,
         serviceTier:
           "serviceTier" in params
             ? params.serviceTier
@@ -15647,18 +15667,20 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     model?: string;
-  }): Promise<void> {
+  }): Promise<{ reasoningEffort?: string } | undefined> {
     if (params.model === undefined) return;
     assertThreadModelSettingsAvailable(params.backend,
       await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
       { model: params.model });
     if (params.backend === "codex") {
+      let observedCodexSettings: { reasoningEffort?: string } | undefined;
       if (this.resolveCodexModelProvidersFn().length > 0
         && this.codexClient.reportedModelProviderForThread
         && !this.codexClient.reportedModelProviderForThread(params.threadId)) {
-        await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId });
+        observedCodexSettings = await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId }) ?? {};
       }
       this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
+      return observedCodexSettings;
     }
   }
 

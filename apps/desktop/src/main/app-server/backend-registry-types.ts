@@ -957,6 +957,8 @@ export type ModelSettings = {
   model?: string;
   reasoningEffort?: string;
   reasoningEffortsByModel?: Record<string, string>;
+  /** Used when neither the requested effort nor the destination model's remembered effort is supported. */
+  fallbackReasoningEfforts?: readonly (string | undefined)[];
   serviceTier?: string;
   fastMode?: boolean;
   providerSettings?: NavigationLaunchpadDefaults["providerSettings"];
