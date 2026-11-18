@@ -22,6 +22,7 @@ const entries = [
   "src/renderer/storage-maintenance.html",
 ];
 const worker = "src/renderer/src/features/thread-detail/image-diff/pixel-diff.worker.ts";
+const audioWorklet = "src/renderer/src/features/composer/dictation-capture.worklet.js";
 // The Outpost daemon loads this before the owner starts (sandbox preflight).
 const outpostSandboxEntry = "src/main/headless/outpost-codex-sandbox.ts";
 
@@ -34,6 +35,26 @@ function walkFiles(root: string): string[] {
     const file = path.join(root, entry.name);
     return entry.isDirectory() ? walkFiles(file) : /\.[cm]?[jt]sx?$/.test(file) && !/\.test\.|\.d\.[cm]?ts$/.test(file) ? [file] : [];
   });
+}
+
+function audioWorkletEntry(
+  file: string,
+  call: ts.CallExpression,
+  receiver: ts.Expression,
+): string | undefined {
+  const [asset] = call.arguments;
+  if (!ts.isPropertyAccessExpression(receiver) || receiver.name.text !== "audioWorklet"
+    || call.arguments.length !== 1 || !asset || !ts.isPropertyAccessExpression(asset) || asset.name.text !== "href") return;
+
+  const url = asset.expression;
+  if (!ts.isNewExpression(url) || !ts.isIdentifier(url.expression) || url.expression.text !== "URL"
+    || url.arguments?.length !== 2) return;
+
+  const [specifier, base] = url.arguments;
+  if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith(".")
+    || base?.getText() !== "import.meta.url") return;
+
+  return path.relative(desktop, path.resolve(path.dirname(file), specifier.text.split("?")[0])).replaceAll(path.sep, "/");
 }
 
 // Instrument the actual loud getters, not their import sites. Tree shaking must
@@ -85,7 +106,7 @@ function oraclePlugin(cost: BundleCost): Plugin {
       // Assets and third-party packages cannot import desktop owner modules.
       // Vite's worker wrapper is data here; the worker itself has its own case.
       builder.onResolve({ filter: /\.(?:css|svg|png|webp|jpg|woff2?|wasm)(?:\?.*)?$|\?(?:raw|url|worker)/ }, () => ({ external: true }));
-      builder.onLoad({ filter: /\.[cm]?tsx?$/ }, (args) => {
+      builder.onLoad({ filter: /\.(?:[cm]?tsx?|worklet\.js)$/ }, (args) => {
         const started = performance.now();
         const text = fs.readFileSync(args.path, "utf8");
         cost.loads++;
@@ -93,7 +114,8 @@ function oraclePlugin(cost: BundleCost): Plugin {
         if (text.includes("before startOwnerServices")) cost.candidates++;
         const contents = instrumentOwnerGetters(args.path, text, cost);
         cost.loadMs += performance.now() - started;
-        return { contents, loader: args.path.endsWith(".tsx") ? "tsx" : "ts" };
+        const loader = args.path.endsWith(".js") ? "js" : args.path.endsWith(".tsx") ? "tsx" : "ts";
+        return { contents, loader };
       });
     },
   };
@@ -163,7 +185,7 @@ async function bundle(owner: BuildOwner, entry: string, extraSource?: string): P
   }
 }
 
-it("covers every configured production entry and every inline worker", () => {
+it("covers every configured production entry, inline worker, and audio worklet", () => {
   const started = performance.now();
   const found: string[] = [];
   const config = source(path.join(desktop, "electron.vite.config.ts"));
@@ -182,16 +204,30 @@ it("covers every configured production entry and every inline worker", () => {
   visit(config);
   expect(found.sort()).toEqual([...entries].sort());
   const workers: string[] = [];
+  const worklets: string[] = [];
   const otherWorkerDeclarations: string[] = [];
   for (const file of walkFiles(path.join(desktop, "src"))) {
     const text = fs.readFileSync(file, "utf8");
-    if (/new\s+(?:Shared)?Worker\s*\(|\.addModule\s*\(/.test(text)) otherWorkerDeclarations.push(file);
+    if (/new\s+(?:Shared)?Worker\s*\(/.test(text)) otherWorkerDeclarations.push(file);
+    if (/\.addModule\s*\(/.test(text)) {
+      const visitModuleLoads = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+          && node.expression.name.text === "addModule") {
+          const entry = audioWorkletEntry(file, node, node.expression.expression);
+          if (entry) worklets.push(entry);
+          else otherWorkerDeclarations.push(file);
+        }
+        ts.forEachChild(node, visitModuleLoads);
+      };
+      visitModuleLoads(source(file, text));
+    }
     for (const match of text.matchAll(/from\s+["']([^"']+\?worker[^"']*)["']/g)) {
       const candidate = path.resolve(path.dirname(file), match[1].split("?")[0]);
       workers.push(path.relative(desktop, fs.existsSync(candidate) ? candidate : `${candidate}.ts`).replaceAll(path.sep, "/"));
     }
   }
   expect(workers).toEqual([worker]);
+  expect(worklets).toEqual([audioWorklet]);
   expect(otherWorkerDeclarations).toEqual([]);
   expect(walkFiles(desktop).filter((file) => file.endsWith("electron.vite.config.ts")))
     .toEqual([path.join(desktop, "electron.vite.config.ts")]);
@@ -208,7 +244,7 @@ it("covers every configured production entry and every inline worker", () => {
   console.info("production-entry-oracle inventory", JSON.stringify({ wallMs: performance.now() - started }));
 });
 
-for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker, outpostSandboxEntry]) {
+for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker, audioWorklet, outpostSandboxEntry]) {
   it(`${entry} retains no owner getter in its executable bundle`, async (owner) => {
     const script = entry.endsWith(".html")
       ? fs.readFileSync(path.join(desktop, entry), "utf8").match(/<script\s+type="module"\s+src="([^"]+)"/)?.[1]
