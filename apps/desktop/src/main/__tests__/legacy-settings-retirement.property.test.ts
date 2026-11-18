@@ -126,6 +126,23 @@ describe("legacy settings retirement", () => {
     expect(tables.experimental?.markdown_math_rendering).toBeUndefined();
   });
 
+  it("removes only the retired key's own marker, never another key's", () => {
+    const foreignMarker =
+      "# pwragent-legacy-settings key=token_miser_enabled shape=boolean used_through=1.1.0-alpha.1 kept_for_older_clients";
+    const configPath = writeConfig([
+      "[experimental]",
+      foreignMarker,
+      "markdown_math_rendering = false",
+      "",
+    ].join("\n"));
+
+    retireLegacyDesktopSettings(configPath, "1.6.0");
+
+    const text = fs.readFileSync(configPath, "utf8");
+    expect(text).not.toContain("markdown_math_rendering");
+    expect(text).toContain(foreignMarker);
+  });
+
   it("does nothing to a config without legacy keys or a missing file", () => {
     const text = "[general]\nnotifications_enabled = true\n";
     const configPath = writeConfig(text);

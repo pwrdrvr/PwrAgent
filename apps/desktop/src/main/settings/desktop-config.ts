@@ -686,7 +686,13 @@ export function retireLegacyDesktopSettings(
         edits.push({ op: "set", path: current, value: legacyValue });
       }
     }
-    edits.push({ op: "delete", path: legacy, marker: LEGACY_SETTINGS_MARKER });
+    // Match this key's own marker, not any legacy marker that happens to sit
+    // above it in a hand-edited file.
+    edits.push({
+      op: "delete",
+      path: legacy,
+      marker: `${LEGACY_SETTINGS_MARKER} key=${legacy[1]} `,
+    });
     retired.push(legacy.join("."));
   }
   if (edits.length === 0) {
