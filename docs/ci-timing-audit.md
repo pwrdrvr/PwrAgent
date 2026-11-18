@@ -11,12 +11,14 @@ Sample range: 2026-11-17T20:49:54Z through 2026-11-18T19:21:26Z. Workflow `26199
 - Original-attempt job metadata: 200/200 runs; 200 distinct head SHAs.
 - Events: {'pull_request': 139, 'push': 61}; main branch: 61, other branches: 139.
 - Latest conclusions at snapshot: {'None': 1, 'cancelled': 18, 'failure': 41, 'success': 140}. These are not initial-test success rates: retries may recover failures.
-- Rerun IDs: [44374979692, 44328352146, 44203670501, 44173417742]. Job statistics use attempt 1 only. Artifacts on these IDs retain unknown attempt and are excluded from initial-test rankings.
+- Rerun IDs: [44374979692, 44328352146, 44203670501, 44173417742]. Job statistics use attempt 1 only. Artifacts on these IDs and artifacts outside the verified attempt 1 job window have unknown provenance and are excluded from initial-test rankings.
 - Artifacts: {'downloaded': 1665, 'not-selected-redundant-or-no-timings': 3792, 'budget-excluded': 421}. Download order is newest run then name; budget exclusions bias per-test coverage toward recent runs, not the job sample.
 - Timing formats: {'playwright-html-embedded-zip': 1207, 'vitest-json': 284}; 162/200 runs have downloaded per-test observations (including unknown-attempt artifacts).
 - Per-test known-initial run coverage by platform: {'linux': 160, 'macos': 70, 'windows': 69}. Unit duration coverage is macOS Vitest JSON only; Linux/Windows compact retry reports contain outcomes, not durations. Runs listing no artifacts: 2. Listed expired artifacts: 0.
+- Skipped timing members: 0 unreadable and 0 above the size limit. See timing-coverage.json.
+- Windows shutdown diagnostics are grouped by sample and lane. Ordinary Windows observations have no diagnostic sample.
 - Missing, interrupted, not-run, and skipped timings are not imputed. Interrupted/cancelled job durations are censored observations, not completed workloads. Timeout rates reflect API job conclusions; a job-budget termination may be labelled cancelled.
-- Platforms/lane names/runner labels stay separate. Runner image versions are unavailable in job API metadata. All longitudinal tables below are descriptive mixtures across source revisions and potentially runner images; they establish observed cost, not matched performance or speedup. Strict head-SHA cohorts have one run each, so within-revision variation is not estimable.
+- Platforms/lane names/runner labels stay separate. Runner image versions are unavailable in job API metadata. All longitudinal tables below are descriptive mixtures across source revisions and potentially runner images; they establish observed cost, not matched performance or speedup. Each head SHA appears once in the manifest, so within-revision variation is unavailable.
 - queueAndDependencyS is run-created to job-start: it includes scheduling AND dependency waits. Pure scheduler queue is unavailable; do not quote it as queue alone.
 - Test-command steps include harness/startup/hooks; per-test Playwright durations include test hooks. Sum of case durations is serial load, not wall time or the workflow DAG critical path.
 
@@ -52,14 +54,14 @@ Per-step seconds, descriptive p50 / p95. A missing phase is not zero; multiple c
 | Job | Phase | n | p50 / p95 s |
 |---|---|---:|---|
 | Linux Desktop E2E (lane 1 of 4) | setup/other | 1407 | 2.0 / 20.0 |
-| Linux Desktop E2E (lane 1 of 4) | test-command | 204 | 460.5 / 523.9 |
-| Linux Desktop E2E (lane 1 of 4) | retry | 199 | 1.0 / 2.0 |
+| Linux Desktop E2E (lane 1 of 4) | test-command | 201 | 462.0 / 524.0 |
+| Linux Desktop E2E (lane 1 of 4) | retry | 1 | 5.0 / 5.0 |
 | Windows desktop-main (lane 1 of 2) | setup/other | 1200 | 2.0 / 56.0 |
 | Windows desktop-main (lane 1 of 2) | test-command | 200 | 632.5 / 704.0 |
-| Windows desktop-main (lane 1 of 2) | retry | 213 | 2.0 / 3.0 |
+| Windows desktop-main (lane 1 of 2) | retry | 11 | 4.0 / 6.0 |
 | Windows desktop-main (lane 2 of 2) | setup/other | 1200 | 2.0 / 56.0 |
 | Windows desktop-main (lane 2 of 2) | test-command | 200 | 515.5 / 654.1 |
-| Windows desktop-main (lane 2 of 2) | retry | 218 | 2.0 / 4.1 |
+| Windows desktop-main (lane 2 of 2) | retry | 13 | 5.0 / 8.4 |
 
 Slowest observed test-job wall duration per run (not a full DAG critical path): Windows desktop-main (lane 1 of 2): 97 runs; macOS Desktop E2E (lane 1 of 4): 44 runs; Windows desktop-main (lane 2 of 2): 33 runs; macOS Desktop E2E (lane 2 of 4): 6 runs; macOS unit tests (lane 1 of 4): 4 runs; macOS Desktop E2E (lane 4 of 4): 4 runs.
 
@@ -105,4 +107,4 @@ Descriptive only; n≥10 and p50≥1s. Ranked by IQR/median to resist isolated o
 
 Run `python3 scripts/ci/audit-runs.py collect --before 2026-11-18T19:21:26Z`, `python3 scripts/ci/audit-runs.py artifacts`, `python3 scripts/ci/audit-tests.py`, `python3 scripts/ci/audit-runs.py summarize`, then `python3 scripts/ci/audit-report.py`. Frozen cache makes resumption deterministic; use a fresh --root to select a new sample. Four workers, transport-only bounded backoff, 128 MiB/ZIP and 2 GiB compressed download budget. No reruns or remote mutations. Raw ZIPs, manifest, SHA hashes, JSONL observations, status counts, full quantiles and phase breakdowns remain under ignored `.local/ci-audit/`.
 
-Unit/E2E classification reports and deletion branches are independent. Timing alone cannot establish uselessness. Every removal needs protected behavior, a surviving stronger test, source evidence, and native CI validation. No local unit/typecheck/E2E was run for this audit. Static Oxlint, typed lint, and boundaries passed (existing warnings). Expected deletion savings remain estimates until measured.
+Unit/E2E classification reports and deletion branches are independent. Timing alone cannot establish uselessness. Every removal needs protected behavior, a surviving stronger test, source evidence, and native CI validation. Expected deletion savings remain estimates until measured.

@@ -81,12 +81,15 @@ def phase(name):
     name = name.lower()
     if re.match(r"^(?:post )?checkout\b", name):
         return "setup/other"
-    if "retry" in name:
+    if name in {"retry failed unit tests", "retry failed e2e tests"}:
         return "retry"
-    if "upload" in name or "record" in name or "verify" in name or "check" in name:
-        return "report/check"
-    if "test" in name and "install" not in name:
+    if name in {
+        "test", "test (unit)", "test standalone headless cli",
+        "run desktop replay-backed electron tests",
+    }:
         return "test-command"
+    if re.search(r"\b(upload|record|verify|check|require|report|reports)\b", name) or name == "select failed e2e tests":
+        return "report/check"
     if "build" in name or "package" in name:
         return "build"
     return "setup/other"

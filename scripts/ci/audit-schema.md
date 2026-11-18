@@ -7,8 +7,9 @@ Source baseline: `fcef4ee4c933c52d79c7ac23785bdcf6bbbf78a0`.
 workflow 261997450 (`.github/workflows/ci.yml`), ordered created_at/id descending,
 all events/branches/conclusions. `runs/<runId>.json` contains original attempt 1
 `run`, latest selection metadata `latest`, original `jobs`, and all run-level
-`artifacts`. Run-level artifacts do not guarantee original-attempt provenance;
-created_at and embedded attempt identifiers must be checked before attribution.
+`artifacts`. Run-level artifacts require a creation timestamp inside the
+completed original attempt's job window. Artifacts on known rerun IDs or
+without enough timing evidence retain unknown attempt provenance.
 No timings means unknown, never zero. Recovered retries remain initial failures.
 
 `jobs.jsonl` / `steps.jsonl`: runId, attempt, headSha, event, branch, jobId,
@@ -23,10 +24,14 @@ unavailable/pending), sha256, members [{member,sizeBytes}]. ZIP SHA is exact.
 ZIPs stay under zips/<artifactId>.zip; no paths are extracted. The dedicated
 audit-tests.py reads bounded Vitest JSON and Playwright HTML embedded ZIPs.
 Each tests.jsonl row records run/artifact/member/platform/lane/attempt/command/
-retry/file/title/status/duration provenance. Rerun-ID artifact attempts stay null.
+retry/file/title/status/duration provenance. The diagnosticSample field and
+final test-summary group element carry the Windows shutdown sample number.
+Ordinary observations have a null sample.
 Playwright's preserved first report supplies the initial command when a retry
-was prepared. The regular report in that artifact is kept outside initial
-statistics, even when its internal retry index is zero.
+was prepared. A different embedded report in the regular location is kept as
+a retry. An unchanged copy is counted once. With retry markers but without a
+readable preserved report, command provenance remains unknown.
+`timing-coverage.json` records unreadable and size-excluded members separately.
 Vitest internal retry index is unavailable (null); Playwright exposes it.
 Skipped/interrupted durations are excluded from quantiles, never imputed.
 Longitudinal summaries retain distinct head counts but are descriptive only;
@@ -51,3 +56,6 @@ Reproduce: `python3 scripts/ci/audit-runs.py collect`, then `artifacts`,
 sample. Four metadata/download workers; bounded transport-only retries; 128 MiB per ZIP,
 2 GiB total default. Budget exclusion is explicit. No CI mutation/rerun, registry,
 release or credential reads. Cache and raw evidence stay ignored under .local.
+
+Run `python3 scripts/ci/verify-audit.py` to check normalization and rendering
+against synthetic workflow metadata and archived report variants without forge access.
