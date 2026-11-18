@@ -17,7 +17,7 @@ const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 // A real executable posing as the login shell lets the parent control native
 // retirement over stdin, without loading the operator's interactive dotfiles.
-it.skipIf(process.platform === "win32").each(["active-shell", "inherited-stdio"])("native retirement oracle: %s", async (mode) => {
+it.skipIf(process.platform === "win32").each(["active-shell", "inherited-stdio", "failed-shell", "timeout"])("native retirement oracle: %s", async (mode) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "settings-shell-native-"));
   const shell = path.join(root, "shell");
   const release = path.join(root, "release");
@@ -33,6 +33,7 @@ it.skipIf(process.platform === "win32").each(["active-shell", "inherited-stdio"]
     const { spawn } = require("node:child_process");
     process.stdout.write("ready\\n");
     process.stdin.once("data", () => {
+      if (${JSON.stringify(mode)} === "failed-shell") process.exit(1);
       process.stdout.write("__PWRAGENT_LOGIN_SHELL_ENV_START__\\nHYDRATED=native\\n__PWRAGENT_LOGIN_SHELL_ENV_END__\\n");
       if (${JSON.stringify(mode)} === "inherited-stdio") {
         const child = spawn(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(holder)}], { stdio: ["ignore", 1, 2, "ipc"] });
@@ -69,7 +70,7 @@ it.skipIf(process.platform === "win32").each(["active-shell", "inherited-stdio"]
       expect(child.stdout!.destroyed).toBe(false);
       expect(child.killed).toBe(false);
     }
-    expect.soft(closed).toBe(false);
+    if (mode !== "inherited-stdio") expect(closed).toBe(false);
     if (mode === "inherited-stdio") {
       const exits = children.map(child => once(child, "exit"));
       for (const child of children) child.stdin!.end("release\n");
@@ -77,14 +78,18 @@ it.skipIf(process.platform === "win32").each(["active-shell", "inherited-stdio"]
       await drain();
       expect(children.every(child => child.exitCode === 0)).toBe(true);
       expect(children.every(child => !child.stdout!.destroyed)).toBe(true);
-      expect.soft(closed).toBe(false);
+      expect(closed).toBe(false);
       fs.writeFileSync(release, "release");
-    } else {
+    } else if (mode !== "timeout") {
       for (const child of children) child.stdin!.end("release\n");
     }
     await Promise.all([closing, secondClose]);
+    for (const child of children) {
+      expect(child.killed).toBe(mode === "timeout");
+      expect(child.signalCode).toBe(mode === "timeout" ? "SIGTERM" : null);
+    }
     expect(children.every(child => child.stdout!.destroyed && child.stderr!.destroyed)).toBe(true);
-    expect((await Promise.all(requests)).every(env => env.HYDRATED === "native")).toBe(true);
+    expect((await Promise.all(requests)).every(env => env.HYDRATED === (mode === "failed-shell" || mode === "timeout" ? undefined : "native"))).toBe(true);
     await Promise.all([service.resolveCodexSpawnEnvAsync(), service.resolveTerminalSpawnEnvAsync()]);
     expect(children).toHaveLength(2);
   } finally {

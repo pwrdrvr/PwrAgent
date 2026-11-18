@@ -12,7 +12,7 @@ vi.mock("node:child_process", async (original) => ({
   execFile: vi.fn(),
 }));
 
-const marked = "__PWRAGENT_LOGIN_SHELL_ENV_START__\nPATH=/shell/bin\nHYDRATED=yes\nELECTRON_RUN_AS_NODE=1\n__PWRAGENT_LOGIN_SHELL_ENV_END__\n";
+const marked = "__PWRAGENT_LOGIN_SHELL_ENV_START__\nPATH=/shell/bin\nHYDRATED=yes\nELECTRON_RENDERER_URL=http://fixture.invalid\n__PWRAGENT_LOGIN_SHELL_ENV_END__\n";
 const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
 type Probe = { child: ChildProcess; callback(error: Error | null, stdout: string, stderr: string): void };
 const roots: string[] = [];
@@ -34,7 +34,7 @@ function fixture() {
   });
   let now = 0;
   const service = new DesktopSettingsService({
-    env: { HOME: root, SHELL: "/fixture/shell", PATH: "/parent/bin" },
+    env: { HOME: root, SHELL: "/fixture/shell", PATH: "/parent/bin", ELECTRON_RENDERER_URL: "http://parent.invalid" },
     configPath, configStore, codexHome: path.join(root, "codex"),
     secretStore: new MemoryDesktopSecretStore(), now: () => now,
   });
@@ -58,6 +58,7 @@ it.skipIf(process.platform === "win32").each([
     for (const call of vi.mocked(execFile).mock.calls) {
       expect(call[2]).toMatchObject({ timeout: 2_500, maxBuffer: 1024 * 1024 });
       expect(call[2]).not.toHaveProperty("signal");
+      expect((call[2] as { env: NodeJS.ProcessEnv }).env.ELECTRON_RENDERER_URL).toBeUndefined();
     }
     let closed = false;
     const closing = service.closeCommandDiscovery().then(() => { closed = true; });
@@ -82,7 +83,7 @@ it.skipIf(process.platform === "win32").each([
     expect(values[1]).toBe(values[5]);
     for (const env of values) {
       expect(env.HYDRATED).toBe(failure ? undefined : "yes");
-      expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      expect(env.ELECTRON_RENDERER_URL).toBeUndefined();
     }
     expire();
     await Promise.all([read("codex"), read("terminal")]);
@@ -101,14 +102,17 @@ it.skipIf(process.platform === "win32").each([
 
 it.skipIf(process.platform === "win32")("stops admission before first use, including synchronous hydration", async () => {
   const { service, configStore, probes } = fixture();
+  const requests: Promise<NodeJS.ProcessEnv>[] = [];
   try {
     await service.closeCommandDiscovery();
     service.resolveCodexSpawnEnv();
-    await Promise.all([service.resolveCodexSpawnEnvAsync(), service.resolveTerminalSpawnEnvAsync()]);
+    requests.push(service.resolveCodexSpawnEnvAsync(), service.resolveTerminalSpawnEnvAsync());
     expect(probes).toHaveLength(0);
+    await Promise.all(requests);
   } finally {
     for (const probe of probes) { probe.callback(null, marked, ""); probe.child.emit("close", 0, null); }
     await service.closeCommandDiscovery();
+    await Promise.all(requests);
     configStore.dispose();
   }
 });
