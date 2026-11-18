@@ -929,6 +929,19 @@ class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
 
+type IdleSubmission = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  input: AppServerTurnInputItem[];
+  origin?: ThreadTurnQueueOrigin;
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
+/** What `submitTurnIfIdle` returns when a wake may join a running turn. */
+type JoinedSubmissionResult =
+  | ThreadTurnQueueImmediateSubmissionResult
+  | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>;
+
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
   /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
@@ -10185,15 +10198,20 @@ export class DesktopBackendRegistry {
     return { results };
   }
 
-  async submitTurnIfIdle(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true }): Promise<JoinedSubmissionResult>;
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
+  async submitTurnIfIdle(params: IdleSubmission & {
+    /**
+     * A PwrAgent wake (Continue After, a PR watch) joins a running turn, or
+     * starts one, and shares its delivery with the agent and system messages
+     * waiting beside it. A running turn no longer reads as busy; a lock, an
+     * archive, a handoff, a workspace move or a checkout restore still does.
+     */
+    joinRunningTurn?: boolean;
+  }): Promise<JoinedSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", ...entry } = params;
+    const { origin = "manual", joinRunningTurn = false, ...entry } = params;
+    const join = joinRunningTurn && isSteerableAgentTraffic(entry.messageOrigin);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
     // The durable archive observation also covers watches restored at startup,
     // before provider listings have populated this process's information store.
@@ -10206,21 +10224,23 @@ export class DesktopBackendRegistry {
       // Retired PR work can still be in flight when archive completes.
       // Discard its admission without resuming the thread or cancelling cleanup.
       || isArchived()
-      || this.threadHasActiveTurn(params.threadId, params.backend)
+      || (!join && this.threadHasActiveTurn(params.threadId, params.backend))
       || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
       || this.threadArchiveCoordinator.checkoutRestoreRecords.has(buildThreadIdentityKey(params.backend, params.threadId))
     ) {
       return { status: "busy" };
     }
     try {
-      return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+      return await this.admitThreadAttachments(entry, (input, onAdmission): Promise<JoinedSubmissionResult> => {
         // Attachment preparation can yield to an archive notification.
         if (isArchived()) return Promise.resolve({ status: "busy" as const });
-        return this.threadTurnQueue.submitIfIdle({
-          ...entry,
-          input,
-          origin,
-        }, { onAdmission });
+        return join
+          ? this.threadTurnQueue.submitSteer({ ...entry, input, origin }, { onAdmission })
+          : this.threadTurnQueue.submitIfIdle({
+            ...entry,
+            input,
+            origin,
+          }, { onAdmission });
       });
     } catch (error) {
       // Turn preparation yields after the queue's idle check. If a backend

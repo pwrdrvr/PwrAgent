@@ -50406,6 +50406,47 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(1);
   });
 
+  it.each(["running", "idle"] as const)("lets Continue After and PR watch wakes share one delivery when the thread is %s", async (state) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] },
+      startTurnResults: [{ threadId: "parent", turnId: "wake-turn" }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) =>
+      ({ threadId: params.threadId, turnId: params.expectedTurnId }));
+    if (state === "running") {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "parent", turnId: "running-turn", turn: { id: "running-turn" } },
+      } });
+    }
+    const wake = (text: string, messageOrigin: AppServerThreadMessageOrigin) => registry.submitTurnIfIdle({
+      backend: "codex", threadId: "parent", origin: "automation", joinRunningTurn: true,
+      input: [{ type: "text", text }], messageOrigin,
+    });
+    const results = await Promise.all([
+      wake("Worker A finished", { kind: "pwragent", dependencyId: "dependency-a" }),
+      wake("Worker B finished", { kind: "pwragent", dependencyId: "dependency-b" }),
+      wake("Worker C finished", { kind: "pwragent", dependencyId: "dependency-c" }),
+      wake("PR #12 checks passed", { kind: "pwragent", prAutomation: { kind: "watch", prKey: "github.com/o/r#12", prNumber: 12, headSha: "abc" } }),
+    ]);
+    for (let index = 0; index < 6; index++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(results.every((result) => result.status !== "busy")).toBe(true);
+    const delivered = [
+      ...(state === "idle" ? [codexClient.lastStartTurnParams?.input ?? []] : []),
+      ...steers.mock.calls.map(([request]) => request.input),
+    ].map((input) => input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n")).join("\n");
+    for (const text of ["Worker A finished", "Worker B finished", "Worker C finished", "PR #12 checks passed"]) {
+      expect(delivered).toContain(text);
+    }
+    // One wakeup: the running turn takes them all, or an idle thread starts
+    // exactly one turn and the rest join it.
+    expect(codexClient.startTurnCallCount).toBe(state === "idle" ? 1 : 0);
+    expect(steers.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "parent")]).toBeUndefined();
+  });
+
   it("keeps cross-thread admissions immutable while a previous steer dispatches, then steers them together", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
     const correspondenceStore = new ThreadCorrespondenceStore();

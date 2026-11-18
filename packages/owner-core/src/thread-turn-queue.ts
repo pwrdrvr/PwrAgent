@@ -317,17 +317,18 @@ const COMBINABLE_ORIGIN_KINDS: ReadonlySet<AppServerThreadMessageOriginKind> = n
  * Whether a message comes from an agent, a monitor or PwrAgent itself, and so
  * joins a running turn instead of waiting for its own. A restart's
  * continuation and a compaction recovery have their own delivery paths.
- * A review's Auto-fix and a PR automation wake are their own turns by
+ * A review's Auto-fix and a PR Auto-fix repair are their own turns by
  * design: they must not interrupt work the operator started, and their
- * owners track that turn by its queue events. Operator and messaging-app
- * sends are human and keep their own turns.
+ * owners track that turn by its queue events. A PR watch's wake is ordinary
+ * PwrAgent traffic. Operator and messaging-app sends are human and keep
+ * their own turns.
  */
 export function isSteerableAgentTraffic(origin: AppServerThreadMessageOrigin | undefined): boolean {
   return Boolean(origin && COMBINABLE_ORIGIN_KINDS.has(origin.kind))
     && origin?.systemReason !== "app-restart"
     && origin?.systemReason !== "compaction-recovery"
     && !origin?.reviewAutoFix
-    && !origin?.prAutomation;
+    && origin?.prAutomation?.kind !== "auto-fix";
 }
 
 /** Whether this queued entry may share a delivery with its neighbors. */

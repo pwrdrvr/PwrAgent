@@ -65,14 +65,16 @@ type Options = {
     /**
      * `held` and `discarded`: the consumer's project is paused, and its
      * wake-up policy kept the prompt as a held message or dropped it. Either
-     * way the dependency is delivered; nothing retries it.
+     * way the dependency is delivered; nothing retries it. `queued`: the wake
+     * waits in the consumer's queue and joins its running turn, or the next
+     * one, at the next drain; its own `started` event delivers it
+     * (`handleDeliveryProgress`).
      */
-    status: "started" | "busy" | "held" | "discarded";
+    status: "started" | "queued" | "busy" | "held" | "discarded";
     turnId?: string;
   }>;
   changed(dependency: ThreadDependency): Promise<void>;
   canDispatch?: (dependency: ThreadDependency) => boolean;
-  isConsumerBusy?: (dependency: ThreadDependency) => boolean;
   /**
    * The consumer's owner confirms it is idle: no turn this instance started
    * and none in progress in the provider's own thread read. Without it, a
@@ -114,15 +116,23 @@ type Options = {
 const CURRENT_STATUS_MAX_AGE_MS = 60_000;
 const DISPATCH_CLAIM_MAX_AGE_MS = 5 * 60_000;
 const identity = (value: { backend: string; threadId: string }): string => JSON.stringify([value.backend, value.threadId]);
+const deliveryIdentity = (item: Pick<ThreadDependency, "backend" | "threadId" | "id">): string =>
+  JSON.stringify([item.backend, item.threadId, item.id]);
 
 export class ThreadDependencyCoordinator {
   private work = Promise.resolve();
   /**
-   * Consumers that refused or took a continuation. Only the consumer's own
-   * terminal or idle notification, or its owner confirming it idle, clears
-   * one, so a pass admits at most one continuation per consumer.
+   * Consumers whose provider refused a continuation as busy: a turn the
+   * registry did not start was running. Only the consumer's own terminal or
+   * idle notification, or its owner confirming it idle, clears one.
    */
   private readonly busyConsumers = new Set<string>();
+  /**
+   * Claims whose wake this process admitted to the consumer's queue and that
+   * have not reached it yet. Memory only: the claim stays `dispatching`, and
+   * after a restart reconcile treats it as any interrupted claim.
+   */
+  private readonly queuedDeliveries = new Set<string>();
   // Live lifecycle only. Replay reads never enter this map. No per-item writes.
   private readonly compactions = new Map<string, { turnId: string; started: Set<string>; completed: Set<string> }>();
   private readonly closedCompactionTurns = new Map<string, string>();
@@ -384,6 +394,8 @@ export class ThreadDependencyCoordinator {
       await this.recoverIdleConsumers();
       for (const item of this.options.store.active()) {
         if (item.status === "dispatching") {
+          // Still waiting in this process's queue; its own event settles it.
+          if (this.queuedDeliveries.has(deliveryIdentity(item))) continue;
           if (this.options.hasDeliveryReceipt?.(item)) {
             await this.save(item, item.compaction ? settledCompaction(item) : { ...item, status: "delivered", error: undefined });
             continue;
@@ -399,6 +411,28 @@ export class ThreadDependencyCoordinator {
           if (!item.error) await this.save(item, { ...item, error: "Continuation delivery was interrupted. Inspect this thread before scheduling another dependency." });
         } else await this.evaluate(item);
       }
+    });
+  }
+
+  /**
+   * A queued wake's own queue event. `started` delivers it into that turn,
+   * alone or sharing a combined delivery. `cancelled` means it never ran:
+   * the claim stays for review, as an uncertain delivery does, so the same
+   * prerequisite does not wake the thread again on its own.
+   */
+  handleDeliveryProgress(progress: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    dependencyId: string;
+    status: "started" | "cancelled";
+    turnId?: string;
+  }): Promise<void> {
+    return this.serialize(async () => {
+      const item = this.options.store.get(progress.backend, progress.threadId, progress.dependencyId);
+      if (!item || item.status !== "dispatching" || !this.queuedDeliveries.delete(deliveryIdentity(item))) return;
+      await this.save(item, progress.status === "started"
+        ? { ...item, status: "delivered", turnId: progress.turnId, error: undefined }
+        : { ...item, error: "The queued continuation was cancelled before it reached the thread. Inspect this thread before scheduling another dependency." });
     });
   }
 
@@ -626,7 +660,10 @@ export class ThreadDependencyCoordinator {
     if (current.outcome === "failure" && isRepairableDependencyFailure(current)) return;
     // A card needs no idle consumer: it starts no turn.
     if (threadDependencyDeliveryTarget(current) === "operator") return this.remind(current);
-    if (this.options.isConsumerBusy?.(current) || this.busyConsumers.has(identity(current))) return;
+    // A running turn does not hold the wake back: the queue steers it in, or
+    // starts one turn, sharing that delivery with whatever else waits. Only a
+    // provider's busy refusal of an earlier wake holds this consumer.
+    if (this.busyConsumers.has(identity(current))) return;
     // A sibling claim may already have started this consumer. Do not admit
     // another saved plan until that uncertain delivery has been reviewed.
     if (this.options.store.active().some((other) => identity(other) === identity(current)
@@ -644,9 +681,13 @@ export class ThreadDependencyCoordinator {
         origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id,
           causalMessagingSource: claim.causalMessagingSource, causalMessagingAmbiguous: claim.causalMessagingAmbiguous },
       });
-      // A started turn holds the consumer as a refusal does: its terminal
-      // event, or the owner confirming idle, admits the next ready wait.
-      if (result.status === "busy" || result.status === "started") this.busyConsumers.add(identity(claim));
+      // A refusal holds the consumer until its terminal or idle event, or
+      // the owner confirming idle, admits the next ready wait.
+      if (result.status === "busy") this.busyConsumers.add(identity(claim));
+      if (result.status === "queued") {
+        this.queuedDeliveries.add(deliveryIdentity(claim));
+        return;
+      }
       await this.save(claim, result.status === "busy"
         ? { ...claim, status: "ready" }
         : { ...claim, status: "delivered", turnId: result.turnId });

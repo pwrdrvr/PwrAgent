@@ -545,7 +545,13 @@ thread is idle or cannot steer. It stops at a human message, an explicit
 the cap. Order never changes. Each member keeps its own lifecycle events and
 correspondence receipt, and the dispatched entry lists them in
 `deliveredEntryIds`. Operator, composer and messaging-app sends are never
-combined: three queued operator messages start three turns. A mutable batch
+combined: three queued operator messages start three turns. Continue After
+and PR watch wakes enter the same way, through `submitTurnIfIdle` with
+`joinRunningTurn`: a running turn no longer reads as busy, while a lock, an
+archive, a handoff, a workspace move or a checkout restore still does. A
+queued Continue After claim stays `dispatching` until its own `started` queue
+event delivers it; a cancelled one is held for review, never replayed. A
+review's Auto-fix and a PR Auto-fix repair keep their own turns. A mutable batch
 from an older build (#2530) can still come back through a quiet restart's
 saved queue. It reads and dispatches as before, but no sender can replace part
 of it: its id covers other senders' input.

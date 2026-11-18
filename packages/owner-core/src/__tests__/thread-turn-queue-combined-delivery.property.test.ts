@@ -367,10 +367,12 @@ describe("combined delivery bookkeeping", () => {
     }), { numRuns: 20 });
   });
 
-  it("a review's Auto-fix and PR automation wakes keep their own turns", () => {
+  it("a review's Auto-fix and a PR Auto-fix keep their own turns; a PR watch wake joins", () => {
     expect(isSteerableAgentTraffic({ kind: "pwragent" })).toBe(true);
     expect(isSteerableAgentTraffic({ kind: "pwragent", reviewAutoFix: { reviewId: "review-1", findingCount: 2 } })).toBe(false);
     expect(isSteerableAgentTraffic({ kind: "pwragent", prAutomation: { kind: "auto-fix", prKey: "github.com/o/r#1", prNumber: 1, headSha: "abc" } })).toBe(false);
+    expect(isSteerableAgentTraffic({ kind: "pwragent", prAutomation: { kind: "watch", prKey: "github.com/o/r#1", prNumber: 1, headSha: "abc" } })).toBe(true);
+    expect(isSteerableAgentTraffic({ kind: "pwragent", dependencyId: "dependency-1" })).toBe(true);
     expect(isSteerableAgentTraffic({ kind: "pwragent", systemReason: "app-restart" })).toBe(false);
   });
 

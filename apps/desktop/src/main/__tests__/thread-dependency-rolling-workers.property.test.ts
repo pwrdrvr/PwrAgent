@@ -39,6 +39,8 @@ class ProviderModel {
   /** turn/start requests the provider received while a turn was active. */
   readonly duplicateStarts: string[] = [];
   readonly startedFor = new Map<string, string>();
+  /** Continuations the registry's queue steered into a turn it had started. */
+  readonly steeredInto = new Map<string, string>();
   private sequence = 0;
 
   constructor() {
@@ -79,9 +81,20 @@ class ProviderModel {
   }
 }
 
-/** The registry's `submitTurnIfIdle` around the client's resume, then turn/start. */
-function submitThrough(provider: ProviderModel) {
+/**
+ * The registry's `submitTurnIfIdle` with `joinRunningTurn`. A turn the
+ * registry started takes the wake into its queue, which steers it in and
+ * reports the wake's own `started` event. Otherwise the client resumes the
+ * thread, then turn/start.
+ */
+function submitThrough(provider: ProviderModel, started: (dependencyId: string, turnId: string) => void) {
   return async (params: { threadId: string; messageOrigin: { dependencyId?: string } }) => {
+    const active = provider.active(params.threadId);
+    if (active && provider.registryStarted.has(active.id)) {
+      provider.steeredInto.set(params.messageOrigin.dependencyId!, active.id);
+      started(params.messageOrigin.dependencyId!, active.id);
+      return { status: "queued" as const };
+    }
     try {
       try {
         provider.resume(params.threadId);
@@ -126,7 +139,11 @@ async function withHarness(run: (harness: {
   const db = StateDb.open(dbPath);
   const store = new ThreadDependencyStore(db.raw);
   const provider = new ProviderModel();
-  const submit = vi.fn(submitThrough(provider));
+  // The queue reports a steered wake's started event after admission returns.
+  const late: { coordinator?: ThreadDependencyCoordinator } = {};
+  const submit = vi.fn(submitThrough(provider, (dependencyId, turnId) => {
+    void late.coordinator?.handleDeliveryProgress({ backend: "codex", threadId: CONSUMER, dependencyId, status: "started", turnId });
+  }));
   let now = 1_000;
   const coordinator = new ThreadDependencyCoordinator({
     store, submit, changed: async () => {},
@@ -138,11 +155,11 @@ async function withHarness(run: (harness: {
       turns: provider.turns.get(target.threadId)!.map((turn) => ({ ...turn })),
       prs: [],
     }),
-    isConsumerBusy: (dependency) => provider.registryStarted.has(provider.active(dependency.threadId)?.id ?? ""),
     // Owner-confirmed idle: the registry holds no turn and the provider's
     // own thread read shows none in progress.
     confirmConsumerIdle: async (target) => !provider.active(target.threadId),
   });
+  late.coordinator = coordinator;
   const delayed: ProviderEvent[] = [];
   const handle = (event: ProviderEvent) => coordinator.handleThreadEvent(
     { backend: "codex", threadId: event.threadId }, event.turn, true);
@@ -177,7 +194,7 @@ const isReady = (item: ThreadDependency) => item.status === "ready" && item.outc
 const uncertain = (store: ThreadDependencyStore) => store.active().filter((item) => item.status === "dispatching" && item.error);
 
 describe("rolling worker Continue After lifecycle", () => {
-  it("reaches one continuation per idle period without uncertain claims, duplicates, or superseded pile-up", async () => {
+  it("delivers every continuation without uncertain claims, duplicate starts, or superseded pile-up", async () => {
     await fc.assert(fc.asyncProperty(fc.array(command, { minLength: 8, maxLength: 40, size: "max" }), async (commands) => {
       await withHarness(async ({ store, provider, coordinator, deliver, flush, register, independentPlans, submit }) => {
         for (const step of commands) {
@@ -221,10 +238,12 @@ describe("rolling worker Continue After lifecycle", () => {
         }
         expect(store.active()).toEqual([]);
         const ended = store.list("codex", CONSUMER);
-        // Each admitted continuation started exactly one provider turn.
+        // Each continuation names the turn it reached: one it started, or the
+        // running turn the queue steered it into. Each provider turn/start
+        // belongs to exactly one continuation.
         const delivered = ended.filter((item) => item.status === "delivered");
-        expect(new Set(delivered.map((item) => item.turnId)).size).toBe(delivered.length);
-        expect(delivered.every((item) => provider.startedFor.get(item.id) === item.turnId)).toBe(true);
+        expect(delivered.every((item) => (provider.startedFor.get(item.id) ?? provider.steeredInto.get(item.id)) === item.turnId)).toBe(true);
+        expect(new Set(provider.startedFor.values()).size).toBe(provider.startedFor.size);
         expect(submit.mock.results.filter((result) => result.type === "return").length).toBeGreaterThanOrEqual(delivered.length);
         // Independent waits are never retired as superseded.
         for (const plan of independentPlans) {
