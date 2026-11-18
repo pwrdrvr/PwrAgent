@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.11 - 2026-11-18
+
+- GPT-6.2 and GPT-6.1 Terra Pricing - Add API cost and Codex purchased-credit estimates for GPT-6.2 Astra, GPT-6.2 Sol, and GPT-6.1 Terra, including Standard and Fast rates. Account for cached input, cache writes, and request-scoped API long-context bands without applying the API surcharge to Codex purchased-credit estimates. Group GPT-6.2 models with their siblings in model pickers.
+- Ultrafast and Historical Costs - Price supported GPT-6-family Ultrafast tiers with date-aware promotional rates and use the recorded usage timestamp for historical activity. Unsupported model/tier combinations remain unpriced, including Terra Ultrafast. Purchased-credit estimates use the paid rate card, not included subscription-allowance multipliers; displayed costs remain estimates rather than provider invoices.
+- Agent Follow-ups - Let an agent schedule, list, and cancel bounded one-shot follow-ups for its own thread. Show them in Waiting For with operator cancellation and loop protection, respect lock/pause/archive gates, and preserve the originating messaging permissions. Ambiguous follow-ups interrupted under a dead owner are not automatically replayed.
+- Agent Instructions - Deliver saved Agent instructions to Codex and ACP as well as Claude, including the supported resume and edit paths, without writing instruction files into the Agent's repository.
+- Codex Model Providers - Isolate model, reasoning, and access defaults for OpenAI and each configured endpoint so changing one provider does not overwrite another's choices. Refresh discovery on every explicit provider-list save, even when its text is unchanged, and reject stale discovery results after a save or outage.
+- Markdown Rendering - Move incremental Markdown and math rendering into General settings, with incremental rendering now enabled by default. Preserve existing choices and wait for preferences before loading optional renderers.
+- Combined Deliveries - Let waiting agent, monitor, and PwrAgent messages share one compatible delivery instead of starting separate model wakeups. Preserve each message's cancellation and replacement identity, keep different approval/settings batches separate, and use canonical queue admission for messaging turns.
+- Recovery and Diagnostics - Stop transcript retry loops after Codex logout, defer login-shell probes until a provider needs them, and own in-flight probes through shutdown. Capture navigation-burst diagnostics only during CPU monitoring, and clarify missing versus orphaned checkout cleanup results.
+- Usage and Interface - Correct Claude usage after resets, add Copy agent command to the Actions rail, keep remote thread pages within their viewer budget, preserve Research Map filtering against visible branch content, and align workspace recovery cards with the composer.
+- Packaging and Security - Reuse and parallelize Outpost native preparation, use native ESM entries while deferring messaging workflows, update Hono for security advisories, and update the terminal runtime. Includes IPC readiness and lifecycle/test-cleanup fixes.
+
 ## v1.4.10 - 2026-11-17
 
 - Continue After CI - Resume a thread when a GitHub Actions run or GitLab pipeline reaches an approval gate, fails a job, or finishes, without using a model-powered polling monitor. Support GitHub Enterprise hosts explicitly allowed in configuration. Show waiting CI runs and their gates in Waiting For; PwrAgent never approves deployments automatically.
