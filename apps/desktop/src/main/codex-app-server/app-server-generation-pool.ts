@@ -151,6 +151,9 @@ export function createCodexAppServerGenerationPool(
   // The newest selection this pool serves, and the one whose start failed.
   let appliedSelection = 0;
   let failedSelection: number | undefined;
+  // A selection change not yet settled. New work waits for it even while it
+  // waits behind another rollover, so nothing starts on the old selection.
+  let selecting: Promise<CodexAppServerRolloverOutcome> | undefined;
   const applySelection = (selection: number): void => {
     appliedSelection = Math.max(appliedSelection, selection);
     failedSelection = undefined;
@@ -430,7 +433,16 @@ export function createCodexAppServerGenerationPool(
     return rollover;
   };
 
-  const rolloverAppServer = async ({ selection }: { selection: number }): Promise<CodexAppServerRolloverOutcome> => {
+  const rolloverAppServer = (params: { selection: number }): Promise<CodexAppServerRolloverOutcome> => {
+    const run = applySelectionChange(params);
+    selecting = run;
+    void run.finally(() => {
+      if (selecting === run) selecting = undefined;
+    });
+    return run;
+  };
+
+  const applySelectionChange = async ({ selection }: { selection: number }): Promise<CodexAppServerRolloverOutcome> => {
     try {
       // A rollover already starting may have resolved the previous selection.
       while (rollover) await rollover;
@@ -481,6 +493,7 @@ export function createCodexAppServerGenerationPool(
   };
 
   const beforeNewWork = async (): Promise<void> => {
+    if (selecting) await selecting;
     if (rollover) {
       await rollover;
       return;

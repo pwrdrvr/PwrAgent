@@ -729,7 +729,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           ports.codexRuntimeRestartPending = true;
           ports.managedCodexRuntimeSwitchPending = true;
           ports.redescribeCachedCodexRuntime(change.runtime);
-          return ports.maybeRestartCodexForManagedRuntimeChange();
+          return ports.requestCodexRuntimeSwitch();
         }),
       );
     }

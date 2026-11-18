@@ -280,6 +280,85 @@ describe("Codex selection changes with app server generations", () => {
     }
   });
 
+  it("returns from a selection change before the new app server's handshake, while new work waits for it", async () => {
+    vi.useFakeTimers();
+    try {
+      const turnState = new RegistryTurnState();
+      const complete = vi.fn();
+      let service!: CodexRuntimeSupervisor;
+      const fixture = poolFixture({
+        isThreadBusy: (threadId) => service.codexThreadNeedsLiveEvents(threadId),
+        isThreadPinned: (threadId) => service.codexThreadBoundToAppServer(threadId),
+      });
+      service = supervisor({
+        turnState,
+        codex: fixture.pool,
+        host: {
+          nativeVoiceLeases: 0,
+          tokenMiserServerCapabilities: new WeakMap(),
+          resolveTokenMiserEnabledFn: () => false,
+          threadHasActiveTurn: (threadId: string) => turnState.hasActiveTurn(threadId),
+          liveSubAgentMonitorIds: () => [],
+          threadStarts: { hasPending: () => false },
+          threadTurnQueue: { getQueuedEntries: () => [] },
+        },
+        dependencies: { markManagedCodexRuntimeSwitchCompleteFn: complete },
+      });
+      const running = (await fixture.pool.startThread({})).threadId;
+      const { turnId } = await fixture.pool.startTurn({ threadId: running, input: [] });
+      turnState.registerTurn({ backend: "codex", threadId: running, turnId });
+
+      // The selected build takes its time to answer `initialize`.
+      let answer!: () => void;
+      fixture.handshakes.push(new Promise<void>((resolve) => { answer = resolve; }));
+      fixture.select("/opt/codex-managed-next");
+      service.setRuntimeRestartPending(true);
+      service.setManagedRuntimeSwitchPending(true);
+      let returned = false;
+      // As a Settings write or managed discovery calls it.
+      const request = service.requestCodexRuntimeSwitch().then(() => { returned = true; });
+      await settle(10);
+      expect(returned).toBe(true);
+      await request;
+
+      // New work started meanwhile waits for the new selection.
+      let started: string | undefined;
+      const starting = fixture.pool.startThread({}).then((result) => { started = result.threadId; });
+      await settle(10);
+      expect(started).toBeUndefined();
+      expect(complete).not.toHaveBeenCalled();
+      answer();
+      await starting;
+      expect(fixture.gen(Number(started!.slice(1, started!.indexOf("-")))).launchedFrom.command)
+        .toBe("/opt/codex-managed-next");
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+      // The turn on the old process kept running throughout.
+      expect(fixture.gen(1).running.has(running)).toBe(true);
+      expect(fixture.gen(1).state.retired).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs a selection requested during a switch as soon as that switch settles", async () => {
+    let finishFirst!: (outcome: { kind: "promoted"; generation: number }) => void;
+    const rolloverAppServer = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue({ kind: "promoted", generation: 3 });
+    const service = supervisor({
+      codex: { close: vi.fn(), resetAppServerRestarts: vi.fn(), rolloverAppServer },
+      host: { nativeVoiceLeases: 0, tokenMiserServerCapabilities: new WeakMap(), resolveTokenMiserEnabledFn: () => false },
+    });
+    service.setRuntimeRestartPending(true);
+    await service.requestCodexRuntimeSwitch();
+    service.setRuntimeRestartPending(true);
+    const second = service.maybeRestartCodexForManagedRuntimeChange();
+    finishFirst({ kind: "promoted", generation: 2 });
+    expect(await second).toBe(true);
+    expect(rolloverAppServer.mock.calls).toEqual([[{ selection: 1 }], [{ selection: 2 }]]);
+    expect(service.runtimeRestartPending).toBe(false);
+  });
+
   it("leaves a managed switch pending while a newer selection is still waiting", async () => {
     let finishFirst!: (outcome: { kind: "promoted"; generation: number }) => void;
     const rolloverAppServer = vi.fn()

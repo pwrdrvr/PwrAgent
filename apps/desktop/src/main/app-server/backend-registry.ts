@@ -2024,6 +2024,7 @@ export class DesktopBackendRegistry {
       get managedCodexRuntimeSwitchPending() { return current().codexRuntimeSupervisor.managedRuntimeSwitchPending; },
       set managedCodexRuntimeSwitchPending(value) { current().codexRuntimeSupervisor.setManagedRuntimeSwitchPending(value); },
       maybeRestartCodexForManagedRuntimeChange: (...args: Parameters<typeof this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange>) => this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange(...args),
+      requestCodexRuntimeSwitch: () => current().codexRuntimeSupervisor.requestCodexRuntimeSwitch(),
       get mcpConnectionService() { return current().mcpConnectionService; },
       get mcpGatewayTools() { return current().mcpGatewayTools; },
       get messagingHandler() { return current().messagingHandler; },
@@ -3698,7 +3699,7 @@ export class DesktopBackendRegistry {
     }
     this.modelCatalog.invalidate("codex");
     this.codexRuntimeSupervisor.setRuntimeRestartPending(true);
-    await this.codexRuntimeSupervisor.maybeRestartCodexForManagedRuntimeChange();
+    await this.codexRuntimeSupervisor.requestCodexRuntimeSwitch();
   }
 
   async synchronizeProviderRuntimeSelections(): Promise<void> {

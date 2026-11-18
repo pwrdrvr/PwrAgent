@@ -1139,7 +1139,11 @@ export class CodexRuntimeSupervisor {
     const rollover = codex.rolloverAppServer?.bind(codex);
     if (!rollover && this.hasActiveCodexRuntimeWork()) return false;
     if (this.codexRuntimeRestartPromise) {
-      return await this.codexRuntimeRestartPromise;
+      const applied = await this.codexRuntimeRestartPromise;
+      // A newer selection requested while that one ran is still pending;
+      // with generations it runs now rather than at the next Codex activity.
+      if (!rollover || !this.codexRuntimeRestartPending || this.context.lifecycle.closed) return applied;
+      return await this.maybeRestartCodexForManagedRuntimeChange();
     }
 
     const completesManagedSwitch = this.managedCodexRuntimeSwitchPending;
@@ -1204,6 +1208,25 @@ export class CodexRuntimeSupervisor {
         this.codexRuntimeRestartPromise = undefined;
       }
     }
+  }
+
+  /**
+   * The selected Codex changed. With app server generations this starts the
+   * switch and returns without waiting for the new generation's handshake: a
+   * Settings write or managed discovery must not stall for seconds on it, and
+   * the pool already holds new work until the switch settles. A client
+   * without generations is closed at an idle boundary, as callers expect.
+   */
+  async requestCodexRuntimeSwitch(): Promise<void> {
+    if (!this.context.providers.codex?.rolloverAppServer) {
+      await this.maybeRestartCodexForManagedRuntimeChange();
+      return;
+    }
+    void this.maybeRestartCodexForManagedRuntimeChange().catch((error) => {
+      backendRegistryLog.warn("Codex selection change failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /** A successful turn may leave commands, but cannot leave an MCP/search call running. */

@@ -361,6 +361,27 @@ describe("Codex app server selection changes", () => {
     );
   });
 
+  it("holds new work for a selection change still waiting behind another rollover", async () => {
+    const fixture = poolFixture();
+    await fixture.pool.startThread({});
+    let release!: () => void;
+    fixture.handshakes.push(new Promise<void>((resolve) => { release = resolve; }));
+    fixture.upgrade("0.161.0");
+    const upgrading = fixture.pool.checkAppServerInstallation();
+    await vi.waitFor(() => expect(fixture.generations).toHaveLength(2));
+    fixture.select("/opt/codex-b");
+    const selecting = fixture.pool.rolloverAppServer({ selection: 1 });
+    // Started after the selection changed: it must not land on the upgrade's
+    // generation, which still runs the old selection.
+    const started = fixture.pool.startThread({});
+    release();
+    await upgrading;
+    await selecting;
+    const { threadId } = await started;
+    expect(threadId).toMatch(/^g3-/);
+    expect(fixture.gen(3).launchedFrom.command).toBe("/opt/codex-b");
+  });
+
   it("rolls again after an installation rollover that started before the selection changed", async () => {
     const fixture = poolFixture();
     await fixture.pool.startThread({});
