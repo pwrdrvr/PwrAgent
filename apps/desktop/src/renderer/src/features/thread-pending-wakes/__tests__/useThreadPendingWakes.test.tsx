@@ -93,7 +93,7 @@ describe("useThreadPendingWakes", () => {
   it("reads a local thread's list, and reads it again when a wake source changes for the thread", async () => {
     const { api, requests, emit } = fakeApi([
       { ok: true, wakes: [wake], ended: [] },
-      { ok: true, wakes: [], ended: [], incomplete: true },
+      { ok: true, wakes: [], ended: [], incomplete: true, followUpsSuspended: true },
     ]);
     const { result } = renderHook(() => useThreadPendingWakes(thread, api as never));
     await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [wake], peer: false }));
@@ -104,7 +104,7 @@ describe("useThreadPendingWakes", () => {
     emit({ backend: "claude", notification: { method: "turn/started", params: { threadId: "waiting" } } } as unknown as AgentEvent);
     // Scheduled actions name their thread inside the action.
     emit({ backend: "claude", notification: { method: "thread/scheduledAction/updated", params: { action: { threadId: "waiting" } } } } as unknown as AgentEvent);
-    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [], incomplete: true }));
+    await waitFor(() => expect(result.current.state).toMatchObject({ status: "ready", wakes: [], incomplete: true, followUpsSuspended: true }));
     expect(requests.filter((request) => request.action === "list")).toHaveLength(2);
   });
 
@@ -182,9 +182,10 @@ describe("useThreadPendingWakes", () => {
     const other: ThreadPendingWake = { ...wake, key: "backend_task:t2", task: { ...wake.task, processId: "t2" } };
     const { result, rerender } = renderHook(
       ({ current }: { current: NavigationThreadSummary }) => useThreadPendingWakes(current, api as never),
-      { initialProps: { current: { ...thread, federation, pendingWakes: [wake, other], pendingWakesIncomplete: true } } },
+      { initialProps: { current: { ...thread, federation, pendingWakes: [wake, other], pendingWakesIncomplete: true,
+        pendingWakesFollowUpsSuspended: true } } },
     );
-    expect(result.current.state).toMatchObject({ status: "ready", incomplete: true });
+    expect(result.current.state).toMatchObject({ status: "ready", incomplete: true, followUpsSuspended: true });
     await act(async () => {
       await result.current.stop("backend_task:t1");
     });

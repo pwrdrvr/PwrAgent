@@ -11,6 +11,7 @@ import {
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { buildThreadPendingWakes, type ThreadPendingWakeReaders } from "../app-server/thread-pending-wakes";
 import { AgentFollowUpWorld, FOLLOW_UP_THREAD, type CrashPoint } from "./helpers/agent-follow-up-world";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
@@ -569,6 +570,57 @@ describe("agent follow-up loop guard", () => {
       await world.service.rearmAgentFollowUps(FOLLOW_UP_THREAD);
       await world.settle();
       expect(world.admittedCount(tripped)).toBe(1);
+    });
+  });
+
+  it("still reports a suspension after the operator cancels the last waiting follow-up", async () => {
+    await withWorld(async (world) => {
+      const readers: ThreadPendingWakeReaders = {
+        prWatches: async () => [], prWatchHistory: async () => [], autoFix: async () => [], dependencies: async () => [],
+        scheduledActions: (thread, endedLimit) => world.store.listPendingWakes({ ...thread, endedLimit }),
+        monitors: () => [], recentSubAgents: async () => [], backendTasks: async () => [], backendWakes: () => [],
+        hold: async () => undefined, heldEntries: () => [],
+      };
+      // Oracle: Waiting for reports a suspension exactly when the guard holds one.
+      const expectProjectionMatchesGuard = async (): Promise<void> => {
+        const list = await buildThreadPendingWakes(readers, FOLLOW_UP_THREAD, { endedLimit: 0 });
+        expect(list.followUpsSuspended === true).toBe(followUpsSuspended(world));
+      };
+      const fire = async (): Promise<string> => {
+        const created = await world.create(1);
+        if (!("id" in created)) throw new Error(created.refused);
+        await world.tick(2 * MINUTE);
+        return created.id;
+      };
+      for (let index = 0; index < AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW; index += 1) await fire();
+      await expectProjectionMatchesGuard();
+      const tripped = await fire();
+      expect(followUpsSuspended(world)).toBe(true);
+      await expectProjectionMatchesGuard();
+
+      // Cancelling does not rearm, so the operator must still see the notice.
+      await world.service.cancel({ id: tripped });
+      expect(world.store.listPendingWakes({ ...FOLLOW_UP_THREAD, endedLimit: 0 }))
+        .toEqual({ actions: [], followUpsSuspended: true });
+      expect(followUpsSuspended(world)).toBe(true);
+      await expectProjectionMatchesGuard();
+      await world.restart();
+      await world.tick(AGENT_FOLLOW_UP_FIRED_WINDOW_MS + MINUTE);
+      await expectProjectionMatchesGuard();
+
+      // An operator action on the thread is not an agent follow-up and is not marked.
+      const operator = await world.service.create({
+        ...FOLLOW_UP_THREAD, kind: "turn", origin: "desktop", scheduledFor: world.clock + 60 * MINUTE,
+        displayText: "Operator message", turn: { input: [{ type: "text", text: "Operator message" }] },
+      });
+      const listed = world.store.listPendingWakes({ ...FOLLOW_UP_THREAD, endedLimit: 0 });
+      expect(listed.followUpsSuspended).toBe(true);
+      expect(listed.actions).toEqual([expect.objectContaining({ id: operator.action.id })]);
+      expect(listed.actions[0]).not.toHaveProperty("followUpSuspended");
+
+      await world.service.rearmAgentFollowUps(FOLLOW_UP_THREAD);
+      expect(world.store.listPendingWakes({ ...FOLLOW_UP_THREAD, endedLimit: 0 })).not.toHaveProperty("followUpsSuspended");
+      await expectProjectionMatchesGuard();
     });
   });
 

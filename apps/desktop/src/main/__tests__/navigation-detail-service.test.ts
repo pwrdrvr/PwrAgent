@@ -582,7 +582,8 @@ describe("NavigationDetailService", () => {
       prWatchHistory: vi.fn(async () => []),
       autoFix: vi.fn(async () => []),
       dependencies: vi.fn(async () => []),
-      scheduledActions: vi.fn(() => ({ actions: [] })),
+      // A suspension with nothing waiting still reaches the peer viewer.
+      scheduledActions: vi.fn(() => ({ actions: [], followUpsSuspended: true as const })),
       monitors: vi.fn(() => [monitor]),
       recentSubAgents: vi.fn(async () => []),
       backendTasks: vi.fn(async () => []),
@@ -597,6 +598,7 @@ describe("NavigationDetailService", () => {
     const local = await service.readSelectedDetail(request);
     expect(local.thread).not.toHaveProperty("pendingWakes");
     expect(local.thread).not.toHaveProperty("pendingWakesIncomplete");
+    expect(local.thread).not.toHaveProperty("pendingWakesFollowUpsSuspended");
     monitor.lastActivityAt = 3;
     const refreshed = await service.readSelectedDetail({ ...request, knownRevision: local.revision });
     expect(refreshed).toMatchObject({ revision: local.revision, unchanged: true });
@@ -615,6 +617,7 @@ describe("NavigationDetailService", () => {
     mocks.listActiveThreadPrStatusWatches.mockClear();
     const detail = await peer.getNavigationSelectedDetail!(request);
     expect(detail.thread?.pendingWakes).toEqual([expect.objectContaining({ kind: "monitor", lastActivityAt: 3 })]);
+    expect(detail.thread?.pendingWakesFollowUpsSuspended).toBe(true);
     expect(project).toHaveBeenCalledExactlyOnceWith(request.ref, mocks.prWatches);
     expect(mocks.listActiveThreadPrStatusWatches).toHaveBeenCalledExactlyOnceWith(request.ref);
     expect(readers.prWatches).not.toHaveBeenCalled();

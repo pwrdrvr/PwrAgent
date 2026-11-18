@@ -287,14 +287,28 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
 
   /** Bounded metadata for Waiting for. History is admitted only on panel demand. */
   listPendingWakes(thread: { backend: string; threadId: string; endedLimit: number }): PendingWakeScheduledActions {
-    // The guard is read in this statement, so a suspended follow-up costs
-    // the Waiting for projection no extra query.
-    const active = this.stateDb.raw.prepare(
-      `SELECT ` + ROW_COLUMNS + `, ` + SUSPENDED_AGENT_FOLLOW_UP + ` AS follow_up_suspended
-       FROM scheduled_thread_actions
-       WHERE backend = ? AND thread_id = ? AND status IN ('scheduled', 'held')
+    // The guard is read in this statement, so a suspension costs the Waiting
+    // for projection no extra query. The guard side always yields one row, so
+    // a suspension with no waiting follow-up still reaches the panel: the
+    // operator may have cancelled it, which does not rearm the thread.
+    const joined = this.stateDb.raw.prepare(
+      `SELECT ` + ROW_COLUMNS + `,
+         guard.suspended AS follow_ups_suspended,
+         (origin = 'agent' AND guard.suspended) AS follow_up_suspended
+       FROM (
+         SELECT EXISTS (
+           SELECT 1 FROM thread_agent_follow_up_guards
+           WHERE backend = ? AND thread_id = ? AND suspended_at IS NOT NULL
+         ) AS suspended
+       ) AS guard
+       LEFT JOIN scheduled_thread_actions
+         ON backend = ? AND thread_id = ? AND status IN ('scheduled', 'held')
        ORDER BY CASE WHEN status = 'scheduled' THEN 0 ELSE 1 END, scheduled_for, created_at, action_id LIMIT 101`,
-    ).all(thread.backend, thread.threadId) as Array<ScheduledThreadActionRow & { follow_up_suspended?: number }>;
+    ).all(thread.backend, thread.threadId, thread.backend, thread.threadId) as Array<
+      Omit<ScheduledThreadActionRow, "action_id"> & { action_id: string | null; follow_ups_suspended: number; follow_up_suspended?: number }>;
+    const followUpsSuspended = joined.some((row) => row.follow_ups_suspended === 1);
+    const active = joined.filter((row): row is ScheduledThreadActionRow & { follow_ups_suspended: number; follow_up_suspended?: number } =>
+      row.action_id !== null);
     const ended = thread.endedLimit === 0 ? [] : this.stateDb.raw.prepare(
       `SELECT ` + ROW_COLUMNS + ` FROM scheduled_thread_actions
        WHERE backend = ? AND thread_id = ? AND status IN ('started', 'cancelled', 'failed')
@@ -319,7 +333,11 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         scheduledFor: row.scheduled_for, queueEntryId: row.queue_entry_id ?? undefined, displayText, createdAt: row.created_at, updatedAt: row.updated_at,
         ...(row.follow_up_suspended ? { followUpSuspended: true as const } : {}) };
     });
-    return { actions, ...(incomplete ? { incomplete: true as const } : {}) };
+    return {
+      actions,
+      ...(followUpsSuspended ? { followUpsSuspended: true as const } : {}),
+      ...(incomplete ? { incomplete: true as const } : {}),
+    };
   }
 
   listProjectionPage(request: ListScheduledThreadActionsRequest): ListScheduledThreadActionsResponse {
