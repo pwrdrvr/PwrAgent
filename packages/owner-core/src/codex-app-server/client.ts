@@ -6183,6 +6183,9 @@ function isSparkModelId(id: string): boolean {
 }
 
 function formatCodexModelLabel(id: string, displayName?: string): string {
+  if (id.toLowerCase() === "gpt-daybreak-blue-latest") {
+    return "Daybreak Blue Latest";
+  }
   const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
   if (!match) {
     return displayName?.trim() || id;

@@ -37,6 +37,113 @@ function usdMicros(tokens: number, centsPerMillion: number): number {
   return Math.floor((tokens * centsPerMillion + 50) / 100);
 }
 
+describe("Daybreak Blue Latest pricing", () => {
+  const model = "gpt-daybreak-blue-latest";
+  const launch = Date.UTC(2026, 7, 7);
+  const solRepricing = Date.UTC(2026, 7, 21);
+
+  // OpenAI GPT-5.6 Sol rate card: input, cached input, 30-minute cache write,
+  // and output, in cents per million tokens. The August cut reduced $5/$30
+  // to $4/$20, and the model page specifies the context and cache-write rules.
+  // https://developers.openai.com/api/docs/models/gpt-5.6-sol
+  const rateCards = [
+    { at: launch, short: [500, 50, 625, 3000], long: [1000, 100, 1250, 4500] },
+    { at: solRepricing, short: [400, 40, 500, 2000], long: [800, 80, 1000, 3000] },
+  ] as const;
+
+  it.each(rateCards)("applies the full-request rate only above 272K input at $at", ({ at, short, long }) => {
+    fc.assert(fc.property(
+      fc.integer({ min: 100_001, max: 271_999 }),
+      fc.integer({ min: 272_002, max: 922_000 }),
+      fc.integer({ min: 1, max: 100_000 }),
+      fc.integer({ min: 1, max: 100_000 }),
+      (shortInput, longInput, cachedInputTokens, outputTokens) => {
+        for (const inputTokens of [shortInput, 272_000, 272_001, longInput]) {
+          const uncachedInputTokens = inputTokens - cachedInputTokens;
+          const usage = { at, model, uncachedInputTokens, cachedInputTokens, outputTokens };
+          const [input, cached, , output] = inputTokens > 272_000 ? long : short;
+          expect(estimateTokenUsageCost({ ...usage, inputTokenScope: "request" })).toMatchObject({
+            totalCostMicros:
+              usdMicros(uncachedInputTokens, input)
+              + usdMicros(cachedInputTokens, cached)
+              + usdMicros(outputTokens, output),
+          });
+          expect(estimateTokenUsageCost({ ...usage, inputTokenScope: "aggregate" })).toMatchObject({
+            totalCostMicros:
+              usdMicros(uncachedInputTokens, short[0])
+              + usdMicros(cachedInputTokens, short[1])
+              + usdMicros(outputTokens, short[3]),
+          });
+        }
+      },
+    ));
+  });
+
+  it.each(rateCards)("charges cache-write tokens once in both request bands at $at", ({ at, short, long }) => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 100_000 }),
+      fc.integer({ min: 1, max: 100_000 }),
+      (ordinaryInputTokens, cacheWriteInputTokens) => {
+        for (const [extraInputTokens, rates] of [[0, short], [272_000, long]] as const) {
+          const regularInputTokens = ordinaryInputTokens + extraInputTokens;
+          const uncachedInputCostMicros = usdMicros(regularInputTokens, rates[0]);
+          const cacheWriteInputCostMicros = usdMicros(cacheWriteInputTokens, rates[2]);
+          expect(estimateTokenUsageCost({
+            ...noUsage, at, model, inputTokenScope: "request", cacheWriteInputTokens,
+            uncachedInputTokens: regularInputTokens + cacheWriteInputTokens,
+          })).toMatchObject({
+            uncachedInputCostMicros,
+            cacheWriteInputCostMicros,
+            totalCostMicros: uncachedInputCostMicros + cacheWriteInputCostMicros,
+          });
+        }
+      },
+    ));
+  });
+
+  it("prices a one-token cache write separately from one ordinary input token", () => {
+    expect(estimateTokenUsageCost({
+      ...noUsage,
+      at: solRepricing,
+      model,
+      inputTokenScope: "request",
+      uncachedInputTokens: 2,
+      cacheWriteInputTokens: 1,
+    })?.totalCostMicros).toBe(9);
+  });
+
+  it("starts pricing at launch and uses the published rates at the Sol price cut", () => {
+    const usage = { ...noUsage, model, outputTokens: 100_000 };
+    expect(estimateTokenUsageCost({ ...usage, at: launch - 1 })).toBeUndefined();
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: launch - 1 })).toBeUndefined();
+    expect(estimateTokenUsageCost({ ...usage, at: solRepricing - 1 })?.totalCostMicros).toBe(3_000_000);
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: solRepricing - 1 })?.totalCredits).toBe(75);
+    expect(estimateTokenUsageCost({ ...usage, at: solRepricing })).toMatchObject({
+      inputUsdPerMillion: 4,
+      cachedInputUsdPerMillion: 0.4,
+      outputUsdPerMillion: 20,
+    });
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, at: solRepricing })).toMatchObject({
+      inputCreditsPerMillion: 100,
+      cachedInputCreditsPerMillion: 10,
+      outputCreditsPerMillion: 500,
+    });
+  });
+
+  it("shows the $2.70 long-context estimate for 300K input and 10K output on the usage activity row", () => {
+    const activity = buildTokenUsageActivityEntry({
+      createdAt: Date.UTC(2026, 10, 18),
+      id: "daybreak-usage",
+      model,
+      tokenUsage: { last: { inputTokens: 300_000, outputTokens: 10_000 } },
+    });
+    expect(activity?.details).toContainEqual(expect.objectContaining({
+      id: "daybreak-usage-cost",
+      label: "Cost: $2.70 list price for Daybreak Blue Latest Standard (>272K input)",
+    }));
+  });
+});
+
 describe("OpenAI Ultrafast API pricing", () => {
   it("uses the published date and request bands and bills each token category once", () => {
     fc.assert(fc.property(

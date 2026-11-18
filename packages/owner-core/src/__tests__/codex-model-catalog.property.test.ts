@@ -93,6 +93,21 @@ describe("Codex model catalog compatibility", () => {
     ));
   });
 
+  it.each(["0.143.0", "0.169.0"])("shows Daybreak Blue Latest when listed by Codex %s", async (version) => {
+    const { client, respond } = fixture(version);
+    const id = "gpt-daybreak-blue-latest";
+    respond({ data: [model(id)], nextCursor: null });
+    try {
+      const menu = buildModelMenu({ kind: "codex", models: await client.listModels() });
+      expect(menu.primary).toContainEqual(expect.objectContaining({
+        id,
+        label: "Daybreak Blue Latest",
+      }));
+    } finally {
+      await client.close();
+    }
+  });
+
   it("keeps GPT-6.2 Sol with audio beside GPT-6.2 Astra and warns about audio", async () => {
     const { client, respond, logger } = fixture();
     respond({ data: [
