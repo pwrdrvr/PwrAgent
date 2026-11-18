@@ -31,17 +31,27 @@ async function repository(root: string): Promise<string> {
 
 // The Git boundary is measured, not replaced: every snapshot and removal runs
 // against the owning Git repository. Archive-all must not read sibling entries
-// for each checkout. A small fleet checks this on every platform; the 200+
-// measurement runs on POSIX because each real Windows removal owns a separate
-// PowerShell Job launcher (0.7-2.1 seconds warm, before the Git work itself).
-async function checkArchiveAllGitBudget(count: number): Promise<void> {
+// for each checkout. Drain the small fleet on every platform. On POSIX,
+// measure consecutive archives while roughly 200 siblings remain registered.
+async function checkArchiveGitBudget(count: number, archiveCount: number): Promise<void> {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-fleet-")));
-  const measurements = { listings: 0, listingLines: 0, outputLines: 0, removals: 0 };
   let boundary: ReturnType<typeof vi.spyOn> | undefined;
   try {
     const repo = await repository(root);
     const checkouts = Array.from({ length: count }, (_, i) => path.join(root, `checkout-${i}`));
     for (const checkout of checkouts) await git(repo, "worktree", "add", "--detach", checkout);
+    const sortPaths = (paths: string[]) => paths.map((entry) =>
+      entry.replaceAll("\\", "/").replace(/^[A-Z]:/, (drive) => drive.toLowerCase())
+    ).sort();
+    const registeredPaths = async () => (await git(repo, "worktree", "list", "--porcelain", "-z"))
+      .split("\0")
+      .filter((entry) => entry.startsWith("worktree "))
+      .map((entry) => entry.slice("worktree ".length));
+    const expectRegistered = async (paths: string[]) =>
+      expect(sortPaths(await registeredPaths())).toEqual(sortPaths([repo, ...paths]));
+    await expectRegistered(checkouts);
+
+    const measurements = { listings: 0, outputLines: 0, removals: 0 };
     const runGit = gitBoundary.runGitCommand;
     boundary = vi.spyOn(gitBoundary, "runGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await runGit(cwd, args, options);
@@ -49,24 +59,24 @@ async function checkArchiveAllGitBudget(count: number): Promise<void> {
       measurements.outputLines += lines;
       if (args[0] === "worktree" && args[1] === "list") {
         measurements.listings++;
-        measurements.listingLines += lines;
       }
       if (args[0] === "worktree" && args[1] === "remove") measurements.removals++;
       return result;
     });
     const service = new WorktreeArchiveService();
-    for (const [i, checkout] of checkouts.entries()) {
+    for (const [i, checkout] of checkouts.slice(0, archiveCount).entries()) {
+      measurements.listings = 0;
+      measurements.outputLines = 0;
+      measurements.removals = 0;
       const snapshot = await service.archive({ backend: "codex", threadId: `fleet-${i}`, repositoryPath: repo, worktreePath: checkout });
       expect(snapshot.sourceHead).toMatch(/^[0-9a-f]{40,64}$/);
+      expect(measurements.removals).toBe(1);
+      expect(measurements.listings, JSON.stringify(measurements)).toBe(0);
+      expect(measurements.outputLines).toBeLessThanOrEqual(8);
     }
     boundary.mockRestore();
-    expect((await git(repo, "worktree", "list", "--porcelain")).match(/^worktree /gm)).toHaveLength(1);
-    expect((await git(repo, "for-each-ref", "--format=%(refname)", "refs/codex/snapshots/")).split("\n")).toHaveLength(count);
-    console.info("archive-all Git boundary", { checkouts: count, ...measurements });
-    expect(measurements.removals).toBe(count);
-    expect(measurements.listings, JSON.stringify(measurements)).toBe(0);
-    expect(measurements.listingLines).toBe(0);
-    expect(measurements.outputLines).toBeLessThanOrEqual(8 * count);
+    await expectRegistered(checkouts.slice(archiveCount));
+    expect((await git(repo, "for-each-ref", "--format=%(refname)", "refs/codex/snapshots/")).split("\n")).toHaveLength(archiveCount);
   } finally {
     boundary?.mockRestore();
     await rm(root, { recursive: true, force: true });
@@ -74,7 +84,7 @@ async function checkArchiveAllGitBudget(count: number): Promise<void> {
 }
 
 it("bounds archive-all Git output for a small fleet on every platform", async () => {
-  await checkArchiveAllGitBudget(3);
+  await checkArchiveGitBudget(3, 3);
 });
 
 it("creates no archive branches or empty-change commits, using Git's tree as the oracle", async () => {
@@ -170,7 +180,7 @@ it("serializes deletes by Git common directory while independent repositories pr
 }, 60_000);
 
 it.runIf(process.platform !== "win32")("bounds archive-all Git output independently of a 201-checkout fleet", async () => {
-  await checkArchiveAllGitBudget(201);
+  await checkArchiveGitBudget(201, 3);
 }, 120_000);
 
 // Git owns checkout identity, branch/HEAD and lock state. Generate layouts and
