@@ -60,17 +60,37 @@ An action becomes `held` in three ways:
   registry holds the queue entry, for example because the thread is locked,
   and when a release attempt does not start the turn
   (`apps/desktop/src/main/scheduled-actions/scheduled-thread-action-service.ts`).
-- **At recovery.** `recoverExpiredClaims` returns a recoverable expired action
-  that has `manualReleaseRequired` to `held` and clears its queue entry,
-  whether it was `dispatching` or `queued`. Such an action is neither failed
-  nor re-admitted.
+  It records the holder: the scheduler whose in-memory queue keeps the entry,
+  in `claim_owner` with no lease. Nothing renews it.
+- **At recovery.** `recoverExpiredClaims` returns a recoverable expired
+  `dispatching` action that has `manualReleaseRequired` to `held` and clears
+  its queue entry. Its release had not been attempted, so nothing started.
 
 Two operations take an action out of `held`:
 
 - **Send now.** `claim` accepts `held` as well as `scheduled`, so `sendNow`
   moves the action to `dispatching` and dispatches it. A release that cannot
-  start the turn returns it to `held` with the reason.
+  start the turn returns it to `held` with the reason. When the holder has
+  died, its queue entry is gone: `claimHeld` takes the action from that
+  holder and forgets the entry, so the dispatch admits it again. A holder
+  that is another live instance keeps it, and Send Now there is refused.
+- **Unlock.** An unlock releases the lock's entries in the holder's queue.
+  The queue announces each one as queued before it starts it, and
+  `markHeldQueued` then moves the action to `queued` under the holder's lease.
+  The start moves it to `started`.
 - **Cancel.** `cancel` and `markCancelled` accept `held`.
+
+A lock's hold lives in the holder's memory and dies with it. Every pass of
+the due-action evaluation, which runs at launch, on the heartbeat and when the
+restart gate opens, first looks for `held` actions whose reason is a thread
+lock and whose holder is not alive. It claims each with `claimHeld`, which
+succeeds only while the dead holder still holds it, so two instances cannot
+both take it. The claim drops `manualReleaseRequired`, and the action is
+dispatched as when it came due: a thread still locked holds it again in this
+queue, and an unlocked one starts it. Other held actions, such as a stale
+steering message, wait for the operator as before. This cannot start a turn
+twice, because nothing leaves a holder's queue while its action is still
+`held`.
 
 Each admitted action has a stable queue identity. Multiple scheduled reviews
 behind one active turn keep distinct pending IDs; the registry chains them
@@ -84,8 +104,9 @@ recoverable expired lease is re-admitted from its durable action because the
 registry FIFO itself is in memory. A recoverable expired action in the narrower
 `dispatching` window is marked failed instead: whether the backend accepted it
 is ambiguous, so automatic replay could duplicate operator work. Neither rule
-applies to an action with `manualReleaseRequired`, which returns to `held` as
-described above. Due actions
+applies to an action with `manualReleaseRequired`. A `dispatching` one returns
+to `held` as described above. A `queued` one is marked failed: it is queued
+only while its release is under way, and the release may have started it. Due actions
 are claimed individually immediately before backend admission; later due work
 stays scheduled if an earlier admission blocks.
 
@@ -153,27 +174,27 @@ operator's action, whose `queued` claim is re-admitted: the in-memory queue
 may have started the turn just before the owner died, and an agent's own wake
 must not run twice. The failed action stays visible with its reason.
 
-An unlock starts what a lock held without a new claim. The queue's `started`
-event then moves the `held` action to `started` by its queue entry id.
-
-A lock's hold lives in the in-memory queue. If the owner restarts while a
-follow-up is held, the action stays `held` and the queue entry is gone:
-unlocking starts nothing, and Send Now returns it to `held`. This is true of
-every scheduled action, not only an agent's. Cancel it and schedule it again.
-
-The same hold has one more window. When an unlock starts a held follow-up
-and the owner dies before the queue's `started` event is recorded, the
-action still reads `held` although its turn began. It cannot be sent again,
-because its queue entry is gone, so no turn is duplicated. Cancel reports it
-cancelled. The lifecycle model's oracle is therefore "nothing is admitted
-after a cancel", not "a cancelled follow-up never ran".
+An unlock starts what a lock held without a new claim on the loop guard. The
+release moves the `held` action to `queued` under a lease before the queue
+starts it, so an owner that dies between the start and its record leaves a
+`queued` action, which the next launch marks `failed`. This applies to every
+origin, because the turn may have begun. An action a lock held when its owner
+stopped is admitted again by the next launch, as described under the state
+model, and starts once the thread is unlocked. The lifecycle model's oracle
+is "a cancelled follow-up never ran" and "a held follow-up starts exactly once
+after unlock, including across a restart".
 
 ### Budgets
 
 `agent-follow-up-*` in `sqlite-write-budgets.json`: three commits for a
 follow-up on an idle thread (create; claim with its reservation; started),
 four when it waits behind an active turn, two for create and cancel. A trip
-is one commit and a rearm is one. A suspended thread writes nothing.
+is one commit and a rearm is one. A suspended thread writes nothing. A lock's
+hold costs one commit (`held`), its release one more than a direct start
+(`queued`, then `started`), and a restart while held two (the claim from the
+dead holder, and the new hold): seven for a follow-up held across a restart,
+about 120 KB of WAL. Even 50 such actions a day stay near 6 MB/day. Looking for
+orphaned holds on the heartbeat is a read; it writes only when it takes one.
 `agent-follow-up.property.test.ts` holds the lifecycle model and the guard
 property.
 

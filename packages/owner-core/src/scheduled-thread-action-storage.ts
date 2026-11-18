@@ -42,6 +42,14 @@ export type ScheduledThreadActionClaim = {
   leaseExpiresAt: number;
 };
 
+/** A held action and the scheduler whose in-memory queue holds its entry. */
+export type ScheduledThreadActionHold = {
+  id: string;
+  /** Absent when no live queue can hold it, such as after recovery. */
+  holderId?: string;
+  errorMessage?: string;
+};
+
 /** Scheduled-action persistence without host database or payload-file handles. */
 export interface ScheduledThreadActionStorage {
   create(input: CreateScheduledThreadActionRecord): ScheduledThreadAction;
@@ -79,6 +87,18 @@ export interface ScheduledThreadActionStorage {
   dismissFailed(id: string, now: number): ScheduledThreadAction | undefined;
   claim(id: string, params: ScheduledThreadActionClaim): ScheduledThreadAction | undefined;
   claimNextDue(params: ScheduledThreadActionClaim): ScheduledThreadAction | undefined;
+  /**
+   * Claims a held action only while `holderId` still holds it, forgetting its
+   * queue entry. `readmit` drops the manual release, so the action is
+   * dispatched as when it came due.
+   */
+  claimHeld(
+    id: string,
+    holderId: string | undefined,
+    params: ScheduledThreadActionClaim,
+    options: { readmit: boolean },
+  ): ScheduledThreadAction | undefined;
+  listHeldHolds(): ScheduledThreadActionHold[];
   markQueued(
     id: string,
     queueEntryId: string,
@@ -97,6 +117,18 @@ export interface ScheduledThreadActionStorage {
     errorMessage: string,
     now: number,
     ownerId?: string,
+    /** The scheduler whose in-memory queue keeps the held entry. */
+    holderId?: string,
+  ): ScheduledThreadAction | undefined;
+  /**
+   * The queue is about to start an entry it had held, such as one an unlock
+   * released. Taking a lease first means a crash before the start is recorded
+   * fails the action instead of leaving it held after it ran.
+   */
+  markHeldQueued(
+    id: string,
+    queueEntryId: string,
+    params: ScheduledThreadActionClaim,
   ): ScheduledThreadAction | undefined;
   /**
    * The queue started an entry it had held, such as one a lock released. The

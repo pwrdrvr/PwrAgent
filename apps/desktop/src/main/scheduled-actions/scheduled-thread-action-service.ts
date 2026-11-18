@@ -22,7 +22,10 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
-import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import type {
+  ScheduledThreadActionHold,
+  ScheduledThreadActionStorage,
+} from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { AgentFollowUpRefusal } from "./agent-follow-up-refusal.js";
 import { buildAgentFollowUpToolHandler, type FollowUpThread } from "./agent-follow-up-tool.js";
 
@@ -406,7 +409,7 @@ export class ScheduledThreadActionService {
   async sendNow(
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
-    const claimed = this.options.store.claim(request.id, this.claimParams());
+    const claimed = this.claimForSendNow(request.id);
     await this.publishSuspendedFollowUpThreads();
     if (!claimed) {
       const current = this.options.store.get(request.id);
@@ -433,6 +436,9 @@ export class ScheduledThreadActionService {
     if (this.options.registry.isRestartGateClosed?.()) return;
     this.evaluating = true;
     try {
+      // No await without an orphan: a create that evaluates while this pass
+      // runs is dropped by the guard above, so the pass must stay short.
+      for (const hold of this.orphanedLockHolds()) await this.readmitOrphanedLockHold(hold);
       while (true) {
         const action = this.options.store.claimNextDue(this.claimParams());
         await this.publishSuspendedFollowUpThreads();
@@ -444,6 +450,46 @@ export class ScheduledThreadActionService {
       this.evaluating = false;
       this.scheduleNextTimer();
     }
+  }
+
+  /**
+   * A held action's queue entry lives in its holder's memory. Send Now from
+   * the holder releases that entry. When the holder has died, the entry is
+   * gone, so the claim forgets it and the action is admitted again.
+   */
+  private claimForSendNow(id: string): ScheduledThreadAction | undefined {
+    const params = this.claimParams();
+    const hold = this.options.store.listHeldHolds().find((candidate) => candidate.id === id);
+    if (!hold || hold.holderId === this.ownerId) return this.options.store.claim(id, params);
+    if (hold.holderId && this.isOwnerAlive(hold.holderId)) {
+      throw new Error("Another PwrAgent instance on this profile holds this action. Send it from there.");
+    }
+    return this.options.store.claimHeld(id, hold.holderId, params, {
+      readmit: hold.errorMessage !== undefined && isThreadLockRefusal(hold.errorMessage),
+    });
+  }
+
+  /**
+   * A lock's hold lives in the holder's in-memory queue, which dies with its
+   * process. Admit such an action again here, as when it came due: a locked
+   * thread holds it in this queue, and an unlocked one starts it. Nothing was
+   * started from a dead holder's queue without first moving the action out of
+   * `held` (see `markHeldQueued`), so this cannot run a turn twice.
+   */
+  private orphanedLockHolds(): ScheduledThreadActionHold[] {
+    return this.options.store.listHeldHolds().filter((hold) =>
+      hold.errorMessage !== undefined
+      && isThreadLockRefusal(hold.errorMessage)
+      && hold.holderId !== this.ownerId
+      && !(hold.holderId && this.isOwnerAlive(hold.holderId)));
+  }
+
+  private async readmitOrphanedLockHold(hold: ScheduledThreadActionHold): Promise<void> {
+    const claimed = this.options.store.claimHeld(hold.id, hold.holderId, this.claimParams(), { readmit: true });
+    await this.publishSuspendedFollowUpThreads();
+    if (!claimed) return;
+    await this.publish(claimed);
+    await this.dispatch(claimed);
   }
 
   private async dispatch(action: ScheduledThreadAction): Promise<void> {
@@ -539,6 +585,7 @@ export class ScheduledThreadActionService {
             reason,
             this.now(),
             this.ownerId,
+            this.ownerId,
           );
           if (stillHeld) await this.publish(stillHeld);
         }
@@ -558,6 +605,7 @@ export class ScheduledThreadActionService {
             response.entry.id,
             response.entry.holdReason,
             this.now(),
+            this.ownerId,
             this.ownerId,
           )
         : response.status === "queued"
@@ -618,7 +666,15 @@ export class ScheduledThreadActionService {
         actionId,
         params.queueEntryId,
         this.now(),
-      );
+      )
+        // An unlock announces each entry it releases before the queue starts
+        // it. The lease taken here is what a crash before the start leaves.
+        ?? this.options.store.markHeldQueued(actionId, params.queueEntryId, this.claimParams());
+      if (!updated && this.options.store.get(actionId)?.status === "cancelled") {
+        // Cancelled where this queue could not reach the entry, such as from
+        // another instance on the profile. It must not start here.
+        this.options.registry.cancelQueuedTurn(params.queueEntryId, "Scheduled action cancelled.");
+      }
     } else if (params.status === "held") {
       updated = this.options.store.markHeld(
         actionId,
@@ -627,6 +683,8 @@ export class ScheduledThreadActionService {
           ? params.errorMessage
           : "The queued turn is held for manual retry.",
         this.now(),
+        undefined,
+        this.ownerId,
       );
     } else if (params.status === "started") {
       const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
@@ -819,12 +877,13 @@ export class ScheduledThreadActionService {
     this.leaseTimer.unref?.();
   }
 
+  private isOwnerAlive(ownerId: string): boolean {
+    return this.options.isOwnerAlive?.(ownerId) ?? isSchedulerOwnerAlive(ownerId);
+  }
+
   private recoverExpiredClaims(now: number): void {
     const protectedOwnerIds = new Set(
-      this.options.store.expiredClaimOwnerIds(now).filter((ownerId) =>
-        this.options.isOwnerAlive?.(ownerId)
-          ?? isSchedulerOwnerAlive(ownerId)
-      ),
+      this.options.store.expiredClaimOwnerIds(now).filter((ownerId) => this.isOwnerAlive(ownerId)),
     );
     const recovered = this.options.store.recoverExpiredClaims(
       now,

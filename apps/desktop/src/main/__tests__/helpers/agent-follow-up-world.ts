@@ -180,9 +180,16 @@ export class AgentFollowUpWorld {
   /** The queue starts what it can once the thread is free and unlocked. */
   private async drain(): Promise<void> {
     while (this.alive && !this.busy && !this.locked && this.queue.length > 0) {
+      const head = this.queue[0]!;
+      if (head.held) {
+        // The real queue announces a released hold as queued, while the entry
+        // is still in it, before it starts it.
+        head.held = false;
+        await this.emit(head.id, "queued");
+        if (!this.alive) return;
+        continue;
+      }
       const entry = this.queue.shift()!;
-      // The real queue announces a released hold as queued before it starts it.
-      if (entry.held) await this.emit(entry.id, "queued");
       this.admit(entry.actionId);
       if (this.armedCrash === "after_queue_start") {
         this.crash();
