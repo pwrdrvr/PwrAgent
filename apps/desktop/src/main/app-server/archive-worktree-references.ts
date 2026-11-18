@@ -109,10 +109,23 @@ export class ArchiveWorktreeReferences {
     if (removed) this.additions += 1;
   }
 
-  forgetOwner(key: string): void {
+  forgetOwner(key: string, scheduledWorktrees: readonly DeferredArchiveWorktree[] = []): void {
     const owner = this.owners.get(key);
     if (!owner) return;
-    for (const checkout of [...owner.worktrees.keys()]) this.deleteRow(key, checkout);
+    const scheduledPaths = new Set(scheduledWorktrees.map((row) => row.worktreePath));
+    for (const [checkout, row] of owner.worktrees) {
+      this.deleteRow(key, checkout);
+      if (!scheduledPaths.has(row.worktreePath)) continue;
+      // Scheduling chose this owner to check the checkout on behalf of its
+      // siblings. When that owner is gone, another released owner can try.
+      for (const siblingKey of [...this.checkoutOwners.get(checkout) ?? []]) {
+        const sibling = this.owners.get(siblingKey)!;
+        const retained = sibling.worktrees.get(checkout)!;
+        if (retained.phase === "checking" && !retained.blockers.length) {
+          this.setRow(siblingKey, sibling, checkout, { ...retained, phase: "ready" });
+        }
+      }
+    }
   }
 
   intents(): ArchiveCleanupIntent[] {
