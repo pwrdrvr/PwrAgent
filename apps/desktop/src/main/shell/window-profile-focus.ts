@@ -9,14 +9,27 @@ export function selectWindowForProfileFocus(
   isShown: (window: BrowserWindow) => boolean,
 ): BrowserWindow {
   const available = windows.filter((window) => !window.isDestroyed());
-  let preferred = [focusedWindow, lastFocusedWindow].find(
+  const preferred = [focusedWindow, lastFocusedWindow].find(
     (window): window is BrowserWindow =>
       Boolean(window && available.includes(window)),
   ) ?? fallbackWindow;
-  // A sheet/modal can own the key window without becoming AppKit's main
-  // window, so it need not have emitted Electron's window "focus" event.
+  return deepestShownModal(preferred, isShown);
+}
+
+/**
+ * A sheet/modal can own the key window without becoming AppKit's main
+ * window, so it need not have emitted Electron's window "focus" event.
+ */
+export function deepestShownModal<Window extends Pick<
+  BrowserWindow,
+  "getChildWindows" | "isDestroyed" | "isModal"
+>>(
+  window: Window,
+  isShown: (window: Window) => boolean,
+): Window {
+  let preferred = window;
   for (;;) {
-    const modal = preferred.getChildWindows().find((child) =>
+    const modal = (preferred.getChildWindows() as unknown as Window[]).find((child) =>
       !child.isDestroyed() && child.isModal() && isShown(child),
     );
     if (!modal) break;
