@@ -66,7 +66,7 @@ been demonstrated.
 | `auto-updater.request-budget.property.test.ts` | #3852 owns request-budget fixtures; keep its independent changes intact. |
 | `backend-registry-wiring.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
 | `checkout-directory-owners.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
-| `checkout-hibernation.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
+| `checkout-hibernation.test.ts` | Historical deadlines remain unattributed. A [later multi-wave batch follow-up](checkout-hibernation-fixture-ownership.md) independently proves whole-test retirement and admission gaps. |
 | `composer-bytecode.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
 | `federation-resumable-blob.property.test.ts` | #3856 joins aborted/dropped receiver generations; exact dropped-chunk regression retained. |
 | `federation-small-blob.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
