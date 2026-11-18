@@ -293,6 +293,9 @@
      that defeat scanning. Themes / future surfaces can override
      this single token to retune both surfaces in lockstep. */
   --chat-column-max: 940px;
+  /* The composer's side padding. The workspace recovery slot beside it uses
+     the same gutter so the two share one column. */
+  --composer-gutter: 16px;
 
   /* Sidebar title size — the user-adjustable text-size axis
      (Settings → General → Appearance → Sidebar text size). 13px is the
@@ -26159,19 +26162,29 @@ a.button {
 }
 
 /* The recovery slot (this card, the hibernated-checkout card that shares it,
-   and the result notice) is a flex item of `.thread-view__primary` beside the
-   composer, not a row inside it, so it does not get the composer's 16px side
-   padding or its centred `--chat-column-max` column. It takes that column
-   itself; otherwise it runs edge to edge across the pane while the composer
-   below it sits inset. The bare composer footer that stands in for the
-   composer under the missing-worktree card is in the same position. See
-   `styles/__tests__/recovery-slot-column.test.ts`. */
-.thread-view__primary > .missing-worktree-card,
-.thread-view__primary > .workspace-recovery-notice,
-.thread-view__primary > .composer__footer {
+   and the result notice) renders in `.thread-view__composer-slot` beside the
+   composer, not as a row inside it. The slot is `display: contents`, so the
+   card is a flex item of `.thread-view__primary` and gets neither the
+   composer's side padding nor its centred `--chat-column-max` column. It takes
+   that column itself; otherwise it runs edge to edge across the pane while the
+   composer below it sits inset. The bare composer footer that stands in for
+   the composer under the missing-worktree card is in the same position.
+   Covered by `styles/__tests__/recovery-slot-column.test.ts` and, against the
+   rendered DOM, `thread-view-missing-worktree.test.tsx`. */
+.thread-view__composer-slot > .missing-worktree-card,
+.thread-view__composer-slot > .workspace-recovery-notice,
+.thread-view__composer-slot > .composer__footer {
   align-self: center;
-  width: calc(100% - 32px);
+  width: calc(100% - 2 * var(--composer-gutter));
   max-width: var(--chat-column-max);
+}
+
+/* Under the slot, the slot's own bottom margin is the gap to the composer.
+   The composer's top padding would double it (24px against the design's
+   12px). */
+.thread-view__composer-slot > .missing-worktree-card + .composer,
+.thread-view__composer-slot > .workspace-recovery-notice + .composer {
+  padding-top: 0;
 }
 
 /* The env setup row's scanner, on the card's top edge while Git runs. */
@@ -42027,7 +42040,7 @@ button.pricing-token-miser__folded:focus-visible {
      the panel-style breathing room above the eyebrow / textarea.
      Horizontal padding stays 16 so the input column lines up with the
      transcript message inset. */
-  padding: 12px 16px 16px;
+  padding: 12px var(--composer-gutter) 16px;
   /* Centering context for the children below (issue #240). The
      composer's bg-panel band stays edge-to-edge but each direct
      child caps its width so the input column matches the transcript
