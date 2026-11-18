@@ -19,5 +19,14 @@ mkdirSync(userData, { recursive: true });
 app.setPath("userData", userData);
 app.setPath("sessionData", userData);
 
-// Set paths before the application can create its first Chromium session.
-await import("../../out/main/index.js");
+if (
+  process.argv.includes("--pwragent-e2e-fail-profile-boot")
+  && process.argv.includes("--profile")
+) {
+  // Exercise a detached relaunch that never reaches the runtime heartbeat.
+  // Its PID directory above records that the replacement actually started.
+  app.exit(1);
+} else {
+  // Set paths before the application can create its first Chromium session.
+  await import("../../out/main/index.js");
+}

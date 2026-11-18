@@ -240,6 +240,8 @@ type LaunchElectronAppParams = {
   };
   /** Additional Chromium arguments appended after the shared E2E switches. */
   extraArgs?: readonly string[];
+  /** Reap fixture-owned detached processes that may have failed before writing a runtime marker. */
+  cleanupDetachedProcesses?: () => Promise<void>;
   /**
    * Runs after the tmp `homeRoot` is created but before Electron
    * launches. Use this to seed
@@ -497,6 +499,7 @@ export async function launchElectronApp(
       diagnosticsFile,
       launchId,
     }).catch(() => undefined);
+    await params.cleanupDetachedProcesses?.().catch(() => undefined);
     await killSpawnedProfileProcessesUnder(homeRoot).catch(() => undefined);
     // Deliberately NOT removing `homeRoot`: on a launch failure the
     // seeded config.toml and whatever profile state exists are the
@@ -664,6 +667,7 @@ async function finishElectronLaunch(args: {
       // process for the operator's chosen profile. Sweep it only after the
       // Playwright-owned tree has completed its bounded graceful/forced close.
       cleanupProfileProcesses: async () => {
+        await params.cleanupDetachedProcesses?.();
         await killSpawnedProfileProcessesUnder(homeRoot);
       },
       removeHomeRoot: async () => {

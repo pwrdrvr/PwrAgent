@@ -1,5 +1,10 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { ELECTRON_E2E_ENTRY } from "./electron-app";
+
+export function graduatedProfileOwnerArg(homeRoot: string): string {
+  return `--pwragent-e2e-wizard-owner=${path.basename(homeRoot)}`;
+}
 
 /**
  * Terminate PwrAgent instances the wizard's profile graduation spawned.
@@ -8,8 +13,7 @@ import { ELECTRON_E2E_ENTRY } from "./electron-app";
  * with `spawn(..., { detached: true })` and `child.unref()`. Detached is the
  * point — the bootstrap window quits and the new instance outlives it — but it
  * also puts that instance outside the process tree `launchElectronApp` reaps,
- * so nothing in the suite has ever shut one down. Every run of these two specs
- * leaves a real PwrAgent running against a temp home.
+ * so fixture teardown must explicitly reap it before deleting its home.
  *
  * On macOS and Linux that leak is invisible: the harness unlinks the home tree
  * out from under the still-open sqlite handles and the test passes. Windows
@@ -17,11 +21,9 @@ import { ELECTRON_E2E_ENTRY } from "./electron-app";
  * `EBUSY: resource busy or locked, unlink '...\state\state.db'` after every
  * assertion has already passed — a cleanup failure reported as a test failure.
  *
- * Matching is on the command line, which carries both this checkout's E2E bootstrap
- * entry and the `--profile <name>` pair the relaunch appends, so it cannot
- * reach another checkout's instance or the operator's own app. It cannot reach
- * the Playwright-owned window either: that one is launched without `--profile`
- * (the harness selects a profile through the environment).
+ * Match this checkout's E2E entry, the isolated home token, and the profile
+ * appended by relaunch. The token excludes other Playwright attempts using
+ * the same profile name. The bootstrap has the token but no `--profile`.
  *
  * Best-effort by construction. A process that already exited, a shell that is
  * unavailable, and a kill that is refused are all fine — the caller is on its
@@ -30,8 +32,9 @@ import { ELECTRON_E2E_ENTRY } from "./electron-app";
  */
 export async function killGraduatedProfileInstances(
   profile: string,
+  homeRoot: string,
 ): Promise<void> {
-  const pids = await listGraduatedProfilePids(profile);
+  const pids = selectGraduatedProfilePids(await readProcessTable() ?? [], profile, homeRoot);
   for (const pid of pids) {
     try {
       if (process.platform === "win32") {
@@ -44,7 +47,7 @@ export async function killGraduatedProfileInstances(
     }
   }
   if (pids.length > 0) {
-    await waitForProfileInstancesToExit(profile);
+    await waitForProfileInstancesToExit(profile, homeRoot);
   }
 }
 
@@ -64,7 +67,7 @@ export async function killGraduatedProfileInstances(
  * best-effort — the caller deletes either way, and throwing here would swap one
  * cleanup-shaped failure for another.
  */
-async function waitForProfileInstancesToExit(profile: string): Promise<void> {
+async function waitForProfileInstancesToExit(profile: string, homeRoot: string): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     // A read that FAILED must not end the wait. `readProcessTable` answers
@@ -73,27 +76,29 @@ async function waitForProfileInstancesToExit(profile: string): Promise<void> {
     // empty list at face value would return straight into the `EBUSY: unlink`
     // this wait exists to prevent, now with the wait hiding it.
     const rows = await readProcessTable();
-    if (rows && selectGraduatedProfilePids(rows, profile).length === 0) {
+    if (rows && selectGraduatedProfilePids(rows, profile, homeRoot).length === 0) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
 
-async function listGraduatedProfilePids(profile: string): Promise<number[]> {
-  // Best-effort for the kill path: a failed read there costs one skipped
-  // signal, which the caller already tolerates. The WAIT uses
-  // `selectGraduatedProfilePids` directly so it can tell a failed read apart.
-  return selectGraduatedProfilePids(await readProcessTable() ?? [], profile);
-}
-
 export function selectGraduatedProfilePids(
   rows: ReadonlyArray<{ pid: number; commandLine: string }>,
   profile: string,
+  homeRoot: string,
 ): number[] {
   const pids: number[] = [];
+  const owner = new RegExp(
+    `(^|[\\s"'])${escapeRegExp(graduatedProfileOwnerArg(homeRoot))}([\\s"']|$)`,
+  );
+  const name = new RegExp(`(^|[\\s"'=])${escapeRegExp(profile)}([\\s"']|$)`);
   for (const { pid, commandLine } of rows) {
-    if (pid === process.pid || !commandLine.includes(ELECTRON_E2E_ENTRY)) {
+    if (
+      pid === process.pid
+      || !commandLine.includes(ELECTRON_E2E_ENTRY)
+      || !owner.test(commandLine)
+    ) {
       continue;
     }
     // `replaceProfileLaunchArgs` appends the flag and its value as two argv
@@ -103,10 +108,9 @@ export function selectGraduatedProfilePids(
     // `--profile <entry> personal`. Match the bare switch and the profile
     // name as separate whole arguments. The Playwright-owned window has no
     // `--profile` at all.
-    const name = escapeRegExp(profile);
     if (
       !/(^|[\s"'])--profile([\s"'=]|$)/.test(commandLine)
-      || !new RegExp(`(^|[\\s"'=])${name}([\\s"']|$)`).test(commandLine)
+      || !name.test(commandLine)
     ) {
       continue;
     }
