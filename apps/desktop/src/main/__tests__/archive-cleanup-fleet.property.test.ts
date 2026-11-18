@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
@@ -78,7 +78,7 @@ vi.mock("../app-server/thread-assets", async (importOriginal) => ({
 }));
 
 const THREADS = ["t0", "t1", "t2", "t3", "t4", "t5"];
-const CHECKOUTS = ["/contrived/worktrees/c0", "/contrived/worktrees/c1", "/contrived/worktrees/c2", "/contrived/worktrees/c3"];
+const CHECKOUTS = ["/contrived/worktrees/c0", "/contrived/worktrees/c1", "/contrived/worktrees/c2", "/contrived/worktrees/c3"] as const;
 /** A symlink to c0: an owner reached through it is still c0's owner. */
 const ALIAS = "/contrived/aliases/c0";
 const PLACES = [...CHECKOUTS, ALIAS, `${CHECKOUTS[1]}/nested`, "/contrived/projects/home"];
@@ -183,14 +183,31 @@ async function tolerate(work: () => Promise<unknown>): Promise<void> {
 
 type Command = fc.AsyncCommand<object, World>;
 
+async function archive(world: World, thread: string): Promise<void> {
+  if (world.fleet.rows.get(thread)?.archived !== false) return;
+  await tolerate(async () => await world.registry.archiveThread({ backend: "codex", threadId: thread, backgroundCleanup: true }));
+  if (world.fleet.rows.get(thread)?.archived) world.cleanupRequested.add(thread);
+}
+
+async function deleteThread(world: World, thread: string): Promise<void> {
+  if (!world.fleet.rows.delete(thread)) return;
+  world.fleet.overlays.delete(thread);
+  world.cleanupRequested.delete(thread);
+  await publish(world, "thread/deleted", thread);
+}
+
+async function restart(world: World): Promise<void> {
+  // Quit checkpoints what is pending; a new process claims and resumes it.
+  await drive(world.registry.close());
+  world.instance += 1;
+  start(world);
+  await drive(world.registry.resumeArchiveCleanupsAtStartup());
+}
+
 const commands: Array<fc.Arbitrary<Command>> = [
   fc.record({ thread: fc.constantFrom(...THREADS) }).map(({ thread }) => ({
     check: () => true,
-    run: async (_model, world) => {
-      if (world.fleet.rows.get(thread)?.archived !== false) return;
-      await tolerate(async () => await world.registry.archiveThread({ backend: "codex", threadId: thread, backgroundCleanup: true }));
-      if (world.fleet.rows.get(thread)?.archived) world.cleanupRequested.add(thread);
-    },
+    run: async (_model, world) => await archive(world, thread),
     toString: () => `archive(${thread})`,
   })),
   fc.record({ thread: fc.constantFrom(...THREADS), checkout: fc.constantFrom(...CHECKOUTS, ALIAS) }).map(({ thread, checkout }) => ({
@@ -250,12 +267,7 @@ const commands: Array<fc.Arbitrary<Command>> = [
   })),
   fc.record({ thread: fc.constantFrom(...THREADS) }).map(({ thread }) => ({
     check: () => true,
-    run: async (_model, world) => {
-      if (!world.fleet.rows.delete(thread)) return;
-      world.fleet.overlays.delete(thread);
-      world.cleanupRequested.delete(thread);
-      await publish(world, "thread/deleted", thread);
-    },
+    run: async (_model, world) => await deleteThread(world, thread),
     toString: () => `delete(${thread})`,
   })),
   fc.integer({ min: 1, max: 6 }).map((ticks) => ({
@@ -265,13 +277,7 @@ const commands: Array<fc.Arbitrary<Command>> = [
   })),
   fc.constant<Command>({
     check: () => true,
-    run: async (_model, world) => {
-      // Quit checkpoints what is pending; a new process claims and resumes it.
-      await drive(world.registry.close());
-      world.instance += 1;
-      start(world);
-      await drive(world.registry.resumeArchiveCleanupsAtStartup());
-    },
+    run: async (_model, world) => await restart(world),
     toString: () => "restart",
   }),
 ];
@@ -282,65 +288,92 @@ const initialWorld = fc.record({
   extras: fc.array(fc.subarray([...CHECKOUTS, ALIAS], { maxLength: 2 }), { minLength: THREADS.length, maxLength: THREADS.length }),
 });
 
-const worlds: World[] = [];
-afterEach(async () => {
-  for (const world of worlds.splice(0)) {
-    await drive(world.registry.close()).catch(() => {});
-    world.db.close();
+function expectArchiveOwnership(world: World): void {
+  expect(world.violations).toEqual([]);
+  for (const checkout of CHECKOUTS) {
+    const removed = fsModel.removed.has(checkout);
+    const owners = archivedOwners(world, checkout).filter((owner) => world.cleanupRequested.has(owner));
+    if (!removed && owners.length && !activeUsers(world, checkout).length) {
+      throw new Error(`${checkout} was released by its last active user but never removed (owners ${owners.join(", ")})`);
+    }
+    if (removed) {
+      const holders = world.snapshots.get(checkout) ?? new Set<string>();
+      for (const owner of world.owedSnapshots.get(checkout) ?? []) {
+        if (!holders.has(owner)) throw new Error(`${owner} owned ${checkout} when it was removed but holds no snapshot`);
+      }
+    }
   }
-  vi.useRealTimers();
-});
+}
+
+async function runScenario(
+  dbPath: string,
+  initial: { places: string[]; extras: string[][] },
+  run: (world: World) => Promise<void>,
+): Promise<void> {
+  vi.useFakeTimers();
+  fsModel.removed.clear();
+  fsModel.aliases.clear();
+  fsModel.aliases.set(ALIAS, CHECKOUTS[0]!);
+  const db = StateDb.open(dbPath);
+  db.raw.prepare("DELETE FROM meta WHERE key GLOB 'archive_cleanup_checkpoint_*'").run();
+  const fleet: Fleet = { rows: new Map(), overlays: new Map(), targets: [...THREADS], checkouts: new Set(CHECKOUTS) };
+  THREADS.forEach((id, index) => {
+    fleet.rows.set(id, { thread: raw(id, initial.places[index]!), archived: false, updatedAt: 1_000 + index });
+    const extras = initial.extras[index]!;
+    if (extras.length) fleet.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories: extras.map((value) => worktree(`${id}:${value}`, value)) });
+  });
+  const world: World = {
+    fleet, registry: undefined as never, instance: 0, clock: 10_000, cleanupRequested: new Set(), snapshots: new Map(), owedSnapshots: new Map(), violations: [],
+    db, checkpoint: new ArchiveCleanupCheckpointStore(db.raw, { processId: 4242, processAlive: () => false }),
+  };
+  start(world);
+  try {
+    await run(world);
+    await settle(world);
+    expectArchiveOwnership(world);
+  } finally {
+    try { await drive(world.registry.close()); }
+    finally {
+      db.close();
+      vi.useRealTimers();
+    }
+  }
+}
 
 describe("bulk archive cleanup model", () => {
+  it.each(["t0", "t5"])("releases the shared checkout after restart when %s is deleted first", async (firstDeleted) => {
+    const temp = createTempStateDb("pwragent-archive-model-");
+    const [c0, , c2, c3] = CHECKOUTS;
+    try {
+      await runScenario(temp.dbPath, {
+        places: [c0, c0, c2, c3, c0, c0],
+        extras: [[], [], [], [], [], []],
+      }, async (world) => {
+        await archive(world, "t1");
+        await deleteThread(world, "t4");
+        await archive(world, "t0");
+        await restart(world);
+        expect(new Set(archivedOwners(world, c0))).toEqual(new Set(["t0", "t1"]));
+        expect(activeUsers(world, c0)).toEqual(["t5"]);
+        expect(fsModel.removed.has(c0)).toBe(false);
+        await deleteThread(world, firstDeleted);
+        await deleteThread(world, firstDeleted === "t0" ? "t5" : "t0");
+        expect(archivedOwners(world, c0)).toEqual(["t1"]);
+      });
+    } finally {
+      removeTempStateDbDir(temp.tempDir);
+    }
+  });
+
   it("never removes a used checkout, releases every final reference, and keeps every owner restorable", async () => {
     const temp = createTempStateDb("pwragent-archive-model-");
     try {
       await fc.assert(fc.asyncProperty(initialWorld, fc.commands(commands, { maxCommands: 14 }), async (initial, generated) => {
-        vi.useFakeTimers();
-        fsModel.removed.clear();
-        fsModel.aliases.clear();
-        fsModel.aliases.set(ALIAS, CHECKOUTS[0]!);
-        const db = StateDb.open(temp.dbPath);
-        db.raw.prepare("DELETE FROM meta WHERE key GLOB 'archive_cleanup_checkpoint_*'").run();
-        const fleet: Fleet = { rows: new Map(), overlays: new Map(), targets: [...THREADS], checkouts: new Set(CHECKOUTS) };
-        THREADS.forEach((id, index) => {
-          fleet.rows.set(id, { thread: raw(id, initial.places[index]!), archived: false, updatedAt: 1_000 + index });
-          const extras = initial.extras[index]!;
-          if (extras.length) fleet.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories: extras.map((value) => worktree(`${id}:${value}`, value)) });
+        await runScenario(temp.dbPath, initial, async (world) => {
+          await fc.asyncModelRun(() => ({ model: {}, real: world }), generated);
         });
-        const world: World = {
-          fleet, registry: undefined as never, instance: 0, clock: 10_000, cleanupRequested: new Set(), snapshots: new Map(), owedSnapshots: new Map(), violations: [],
-          db, checkpoint: new ArchiveCleanupCheckpointStore(db.raw, { processId: 4242, processAlive: () => false }),
-        };
-        worlds.push(world);
-        start(world);
-        await fc.asyncModelRun(() => ({ model: {}, real: world }), generated);
-        await settle(world);
-        expect(world.violations).toEqual([]);
-        for (const checkout of CHECKOUTS) {
-          const removed = fsModel.removed.has(checkout);
-          const owners = archivedOwners(world, checkout).filter((owner) => world.cleanupRequested.has(owner));
-          if (!removed && owners.length && !activeUsers(world, checkout).length) {
-            throw new Error(`${checkout} was released by its last active user but never removed (owners ${owners.join(", ")})`);
-          }
-          if (removed) {
-            const holders = world.snapshots.get(checkout) ?? new Set<string>();
-            for (const owner of world.owedSnapshots.get(checkout) ?? []) {
-              if (!holders.has(owner)) throw new Error(`${owner} owned ${checkout} when it was removed but holds no snapshot`);
-            }
-          }
-        }
-        await drive(world.registry.close());
-        db.close();
-        worlds.splice(worlds.indexOf(world), 1);
-        vi.useRealTimers();
       }), { numRuns: 30 });
     } finally {
-      // A failed run leaves its world open; Windows cannot remove an open database.
-      for (const world of worlds.splice(0)) {
-        await drive(world.registry.close()).catch(() => {});
-        world.db.close();
-      }
       removeTempStateDbDir(temp.tempDir);
     }
   }, 60_000);
