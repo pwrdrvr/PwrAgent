@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { MessagingBrowseSessionRecord, MessagingInboundCallbackEvent } from "@pwragent/messaging-interface";
-import { isSameMessagingSurface, normalizeNewThreadSessionForBackend, readBindingTargetFromValue, readFullAccessRiskContext, readHelpNavAction, readHelpPageIndex, readPermissionsQueueCancelAction, readPrivateReplyAction, readQueuedTurnAction } from "../messaging/core/messaging-callback-helpers";
+import { isSameMessagingSurface, normalizeNewThreadSessionForBackend, readBindingTargetFromValue, readFullAccessRiskContext, readHelpNavAction, readHelpPageIndex, readPermissionsQueueCancelAction, readPrivateReplyAction, readQueuedTurnAction, readNullableStringValue, readThreadExecutionModeValue, readAcpRuntimeOptionSource } from "../messaging/core/messaging-callback-helpers";
 
 const id = fc.stringMatching(/^[a-z]{1,8}$/);
 function event(actionId: string): MessagingInboundCallbackEvent {
@@ -11,6 +11,22 @@ function event(actionId: string): MessagingInboundCallbackEvent {
 }
 
 describe("messaging callback helpers", () => {
+  it("accepts only declared access/runtime choices and preserves an explicit nullable string", () => {
+    const value = fc.oneof(fc.string(), fc.integer(), fc.boolean(), fc.array(fc.string(), { maxLength: 3 }),
+      fc.record({ fixture: fc.string() }), fc.constantFrom("default", " default ", "auto", "full-access", "mode", "configOption", "model", null));
+    fc.assert(fc.property(value, raw => {
+      const normalized = typeof raw === "string" ? raw : undefined;
+      expect(readNullableStringValue({ slot: raw }, "slot")).toBe(typeof raw === "string" || raw === null ? raw : undefined);
+      expect(readThreadExecutionModeValue({ executionMode: raw })).toBe(
+        ["default", "auto", "full-access"].includes(normalized ?? "") ? normalized : undefined,
+      );
+      expect(readAcpRuntimeOptionSource({ source: raw })).toBe(
+        ["mode", "configOption", "model"].includes(normalized ?? "") ? normalized : undefined,
+      );
+      expect(readNullableStringValue([raw], "slot")).toBeUndefined();
+    }));
+  });
+
   it("preserves queue and private-reply identities with the documented option bound", () => {
     fc.assert(fc.property(id, fc.constantFrom("cancel" as const, "retry" as const, "steer" as const), fc.integer({ min: -2, max: 5 }), (key, kind, optionIndex) => {
       expect(readQueuedTurnAction(event(`queued-turn:${kind}:${key}`))).toEqual({ kind, entryId: key });
