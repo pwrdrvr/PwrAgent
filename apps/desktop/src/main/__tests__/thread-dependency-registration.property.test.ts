@@ -30,14 +30,12 @@ describe("dependency registration admission", () => {
       await withStore(async (store) => {
         const waits = Array.from({ length: count }, (_, index) => dependency(`wait-${index}`));
         waits.forEach((item) => store.register(item));
-        let busy = false;
         const submit = vi.fn(async () => {
           if (submit.mock.calls.length === 1) throw new Error("Transport lost after possible admission");
-          busy = true;
           return { status: "started" as const, turnId: "continued" };
         });
         const coordinator = new ThreadDependencyCoordinator({
-          store, submit, changed: async () => {}, isConsumerBusy: () => busy,
+          store, submit, changed: async () => {},
           readThread: async () => ({ turns: waits.map((item) => ({ id: item.id, status: "completed" as const })), prs: [] }),
         });
         await coordinator.reconcile();
@@ -45,8 +43,10 @@ describe("dependency registration admission", () => {
         expect(submit).toHaveBeenCalledTimes(1);
         expect(store.active().filter((item) => item.error)).toHaveLength(1);
         store.dismiss("codex", "consumer", "wait-0", 2);
+        // Review releases every held wait at once; the consumer's queue
+        // shares them in one delivery instead of one turn each.
         await coordinator.reconcile();
-        expect(submit).toHaveBeenCalledTimes(2);
+        expect(submit).toHaveBeenCalledTimes(count);
       });
     }), { numRuns: 10 });
   });
@@ -74,7 +74,7 @@ describe("dependency registration admission", () => {
     }), { numRuns: 25 });
   });
 
-  it("retires reviewed uncertain deliveries together, never replays them, and then admits one held wait", async () => {
+  it("retires reviewed uncertain deliveries together, never replays them, and then admits the held waits", async () => {
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
     await fc.assert(fc.asyncProperty(
       fc.integer({ min: 1, max: 31 }), fc.integer({ min: 0, max: 3 }), fc.boolean(),
@@ -107,9 +107,9 @@ describe("dependency registration admission", () => {
           });
           expect(writes.commits).toBe(1);
           expect(store.list("codex", "consumer").filter((item) => uncertainIds.includes(item.id)).every((item) => item.status === "dismissed")).toBe(true);
-          // Dismissal releases the held waits; the consumer takes one at a time.
+          // Dismissal releases the held waits, and all of them are admitted.
           await coordinator.reconcile();
-          expect(submit).toHaveBeenCalledTimes(heldIds.length ? 1 : 0);
+          expect(submit).toHaveBeenCalledTimes(heldIds.length);
           for (const call of submit.mock.calls as unknown as [{ messageOrigin: { dependencyId: string } }][]) {
             expect(uncertainIds).not.toContain(call[0].messageOrigin.dependencyId);
           }

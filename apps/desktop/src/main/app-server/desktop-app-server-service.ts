@@ -10156,7 +10156,6 @@ class DesktopAppServerService {
             causalMessagingSource: dependency.causalMessagingSource, causalMessagingAmbiguous: dependency.causalMessagingAmbiguous },
           () => canSubmit() && !this.resolveThreadForgeProject(dependency)?.automation.paused, admit);
         },
-        isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
         confirmConsumerIdle: async (target) => await this.confirmDependencyConsumerIdle(target),
         // PR conditions also wait while the consumer's project holds PR
         // watches. A paused project's turn-only wake is held or discarded
@@ -10230,13 +10229,16 @@ class DesktopAppServerService {
     input: { type: "text"; text: string }[];
     origin: "automation";
     messageOrigin: import("@pwragent/shared").AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started" | "busy" | "held" | "discarded"; turnId?: string }> {
+  }): Promise<{ status: "started" | "queued" | "busy" | "held" | "discarded"; turnId?: string }> {
     const registry = getDesktopBackendRegistry();
     const project = this.resolveThreadForgeProject(request);
     // A lock already holds every source, so it wins: the dependency waits
     // for unlock exactly as it does in an active project.
     if (!project?.automation.paused || await registry.isThreadLocked(request)) {
-      return await registry.submitTurnIfIdle(request);
+      // The wake joins a running turn, or starts one, and shares that
+      // delivery with the agent and system messages waiting beside it.
+      const submitted = await registry.submitTurnIfIdle({ ...request, joinRunningTurn: true });
+      return submitted.status === "started" ? { status: "started", turnId: submitted.turnId } : { status: submitted.status };
     }
     // The prompt's first evidence line names the prerequisite that fired.
     const evidence = (request.input[0]?.text ?? "").split("\n")
@@ -10565,8 +10567,17 @@ class DesktopAppServerService {
         task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
       }
     } else if (notification.method === "thread/turnQueue/updated" && typeof notification.params.status === "string"
-      && ["cancelled", "terminal"].includes(notification.params.status)) {
-      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+      && ["started", "cancelled", "terminal"].includes(notification.params.status)) {
+      const coordinator = this.getThreadDependencyCoordinator();
+      const { status, threadId, turnId } = notification.params;
+      const dependencyId = (notification.params.messageOrigin as import("@pwragent/shared").AppServerThreadMessageOrigin | undefined)?.dependencyId;
+      // A continuation that waited in the queue is delivered by its own event.
+      const progress = dependencyId && (status === "started" || status === "cancelled")
+        ? coordinator.handleDeliveryProgress({ backend: event.backend, threadId, dependencyId, status,
+          ...(typeof turnId === "string" ? { turnId } : {}) })
+        : Promise.resolve();
+      task = status === "started" ? progress
+        : progress.then(async () => await coordinator.handleThreadEvent({ backend: event.backend, threadId }, undefined, true));
     } else if (notification.method === "pullRequest/status/updated") {
       const pr = notification.params.pr;
       if (pr && typeof pr === "object" && "url" in pr && typeof pr.url === "string") {

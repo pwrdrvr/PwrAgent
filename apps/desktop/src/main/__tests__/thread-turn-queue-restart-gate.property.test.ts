@@ -352,7 +352,7 @@ describe("thread turn queue behind the restart gate (model)", () => {
 });
 
 it("refuses fresh admissions atomically once quiet shutdown begins", async () => {
-  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("submit", "submitSteer", "submitGroupedSteer", "submitHeld"), { minLength: 1, maxLength: 12 }), async (methods) => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("submit", "submitSteer", "submitSteer", "submitHeld"), { minLength: 1, maxLength: 12 }), async (methods) => {
     let quieting = false;
     const queue = new ThreadTurnQueue({
       startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: "turn" }),

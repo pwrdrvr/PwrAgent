@@ -4832,6 +4832,7 @@ function threadMessageOriginFromUnknown(
     record.kind === "pwragent"
       ? threadMessageReviewAutoFixOriginFromUnknown(record.reviewAutoFix)
       : undefined;
+  const deliveredMessages = threadMessageDeliveredMessagesFromUnknown(record.deliveredMessages);
   const source = record.sourceThread;
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
@@ -4842,6 +4843,7 @@ function threadMessageOriginFromUnknown(
       ...(subAgent ? { subAgent } : {}),
       ...(prAutomation ? { prAutomation } : {}),
       ...(reviewAutoFix ? { reviewAutoFix } : {}),
+      ...(deliveredMessages ? { deliveredMessages } : {}),
     };
   }
   const sourceRecord = source as Record<string, unknown>;
@@ -4856,6 +4858,7 @@ function threadMessageOriginFromUnknown(
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
       ...(reviewAutoFix ? { reviewAutoFix } : {}),
+      ...(deliveredMessages ? { deliveredMessages } : {}),
     };
   }
   // A to-do marker names the thread that raised the card, so it needs one.
@@ -4891,7 +4894,37 @@ function threadMessageOriginFromUnknown(
     ...(subAgent ? { subAgent } : {}),
     ...(prAutomation ? { prAutomation } : {}),
     ...(reviewAutoFix ? { reviewAutoFix } : {}),
+    ...(deliveredMessages ? { deliveredMessages } : {}),
   };
+}
+
+/**
+ * The senders of a combined delivery. Every member must read as a valid
+ * origin, or the message shows as one; a member never carries its own list.
+ */
+function threadMessageDeliveredMessagesFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin["deliveredMessages"] | undefined {
+  if (!Array.isArray(value) || value.length < 2) return undefined;
+  const members: NonNullable<AppServerThreadMessageOrigin["deliveredMessages"]> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+    const record = item as Record<string, unknown>;
+    const origin = threadMessageOriginFromUnknown(record.origin);
+    if (
+      !origin
+      || typeof record.receivedAt !== "number"
+      || !Number.isFinite(record.receivedAt)
+      || typeof record.inputItemCount !== "number"
+      || !Number.isInteger(record.inputItemCount)
+      || record.inputItemCount < 0
+    ) {
+      return undefined;
+    }
+    const { deliveredMessages: _nested, ...memberOrigin } = origin;
+    members.push({ origin: memberOrigin, receivedAt: record.receivedAt, inputItemCount: record.inputItemCount });
+  }
+  return members;
 }
 
 function threadMessageReviewAutoFixOriginFromUnknown(

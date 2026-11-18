@@ -120,7 +120,7 @@ describe("a registered wake keeps the calling turn's messaging provenance", () =
         const submit = vi.fn(async (_request: { messageOrigin?: AppServerThreadMessageOrigin }) =>
           ({ status: "started" as const, turnId: "woken" }));
         const coordinator = new ThreadDependencyCoordinator({
-          store, submit, changed: async () => {}, isConsumerBusy: () => false,
+          store, submit, changed: async () => {},
           readThread: async ({ threadId }) => threadId === WORKER ? worker : { turns: [], prs: [] },
         });
         const router = harness(turnOrigins(turnId, origin, otherOrigin), {
@@ -210,7 +210,7 @@ describe("a wake that answers several requesters is no wider than the narrowest"
         const submit = vi.fn(async (_request: { messageOrigin?: AppServerThreadMessageOrigin }) =>
           ({ status: "started" as const, turnId: "woken" }));
         const coordinator = new ThreadDependencyCoordinator({
-          store, submit, changed: async () => {}, isConsumerBusy: () => false,
+          store, submit, changed: async () => {},
           readThread: async ({ threadId }) => threadId === WORKER ? worker : { turns: [], prs: [] },
         });
         for (const requester of requesters) {

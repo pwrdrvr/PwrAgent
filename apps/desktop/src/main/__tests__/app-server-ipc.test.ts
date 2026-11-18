@@ -2126,9 +2126,12 @@ describe("app server ipc", () => {
     const autoDispatch = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
     const cache = vi.spyOn(service, "writePrStatusesToCache").mockResolvedValue(undefined);
     const publish = vi.spyOn(service, "publishPullRequestStatusUpdates").mockResolvedValue(undefined);
-    const submit = vi.fn(async () => ({ status: "started" as const, turnId: "continuation" }));
+    // A busy consumer refuses the wake, as a provider does for a turn the
+    // registry did not start; the refusal holds it until its idle event.
+    const submit = vi.fn(async (): Promise<{ status: "started" | "busy"; turnId?: string }> =>
+      busy ? { status: "busy" } : { status: "started", turnId: "continuation" });
     const agent = new ThreadDependencyCoordinator({
-      store, submit, changed: async () => undefined, now: () => now, isConsumerBusy: () => busy,
+      store, submit, changed: async () => undefined, now: () => now,
       readThread: async (condition) => ({ turns: [], prs: condition.threadId === "prerequisite" ? [...service.prStatusRegistry.values()] : [] }),
     });
     try {
@@ -2142,11 +2145,12 @@ describe("app server ipc", () => {
         now += 61_000; busy = false;
         await agent.handleThreadEvent({ backend: "codex", threadId: "consumer" }, undefined, true);
       }
-      expect(submit).not.toHaveBeenCalled();
+      const refused = scenario === "busy-consumer" ? 1 : 0;
+      expect(submit).toHaveBeenCalledTimes(refused);
       cache.mockClear(); publish.mockClear();
       await expect(service.applyPolledPrStatuses([pr], now)).resolves.toEqual([]);
       expect(store.list("codex", "consumer")[0].evidence[0]).toMatchObject({ state: "satisfied" });
-      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit).toHaveBeenCalledTimes(refused + 1);
       expect(store.list("codex", "consumer")[0]).toMatchObject({ status: "delivered", outcome: "success" });
       expect(cache).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
 
@@ -2163,7 +2167,9 @@ describe("app server ipc", () => {
       expectSqliteWriteBudget({ scenario: "thread-dependencies-unchanged-service-polls", writes,
         note: "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.",
       });
-      expect(submit).toHaveBeenCalledTimes(1);
+      // The busy consumer refused its wake once; its latch holds through
+      // every poll until its idle event.
+      expect(submit).toHaveBeenCalledTimes(refused + 2);
       expect(cache).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
       const refresh = vi.spyOn(agent, "handlePrEvent");
       await service.applyPolledPrStatuses([pr], now - 1);

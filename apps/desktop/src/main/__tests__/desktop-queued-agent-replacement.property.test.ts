@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { ThreadTurnQueue, type ThreadTurnQueueEntry, type ThreadTurnQueueLifecycleEvent } from "@pwragent/owner-core/thread-turn-queue";
+import { planQueuedDeliveries, ThreadTurnQueue, type ThreadTurnQueueEntry, type ThreadTurnQueueLifecycleEvent } from "@pwragent/owner-core/thread-turn-queue";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 
 const ref = { backend: "codex" as const, threadId: "recipient" };
@@ -49,7 +49,7 @@ it("sender receipts retain original accepted input while cancellation and fresh 
   }));
 });
 
-it("replacement preserves generated FIFO positions, grouped neighbors, independent holds and pause revisions under a new identity", async () => {
+it("replacement preserves generated FIFO positions, agent neighbors, independent holds and pause revisions under a new identity", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 4 }), fc.integer({ min: 0, max: 4 }), fc.boolean(), fc.boolean(),
     fc.array(fc.string({ minLength: 1, maxLength: 80 }), { minLength: 1, maxLength: 5 }), async (before, after, grouped, paused, edits) => {
       const events: ThreadTurnQueueLifecycleEvent[] = [], sends: ThreadTurnQueueEntry[] = [];
@@ -60,11 +60,11 @@ it("replacement preserves generated FIFO positions, grouped neighbors, independe
       try {
         for (let n = 0; n < before; n++) await queue.submit({ ...ref, origin: "manual", id: `before-${n}`, input: input(`before-${n}`) });
         let accepted = grouped
-          ? await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input("alice-original"), messageOrigin: origin("alice") })
+          ? await queue.submitSteer({ ...ref, origin: "manual", input: input("alice-original"), messageOrigin: origin("alice") })
           : await queue.submit({ ...ref, origin: "manual", input: input("alice-original"), messageOrigin: origin("alice") });
         if (grouped) {
-          await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input("bob-evidence"), messageOrigin: origin("bob") });
-          await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input("alice-overlap"), messageOrigin: origin("alice") });
+          await queue.submitSteer({ ...ref, origin: "manual", input: input("bob-evidence"), messageOrigin: origin("bob") });
+          await queue.submitSteer({ ...ref, origin: "manual", input: input("alice-overlap"), messageOrigin: origin("alice") });
         }
         for (let n = 0; n < after; n++) await queue.submit({ ...ref, origin: "manual", id: `after-${n}`, input: input(`after-${n}`) });
         if (paused) await queue.setEntryPaused(accepted.entry.id, true);
@@ -81,8 +81,9 @@ it("replacement preserves generated FIFO positions, grouped neighbors, independe
           expect(queue.getQueuedEntries(ref).filter(entry => entry.id !== next!.id)).toEqual(entries.filter(entry => entry.id !== old.id));
           expect(next).toMatchObject({ manualReleaseRequired: old.manualReleaseRequired, holdReason: old.holdReason,
             ...(paused ? { paused: true, pauseRevision: 1 } : {}) });
-          expect(next!.agentMessages?.map(message => [message.origin?.sourceThread?.threadId, message.input])).toEqual(grouped
-            ? [["alice", input(text)], ["bob", input("bob-evidence")]] : undefined);
+          // Only Alice's own entry changes; her neighbors keep their own text.
+          expect(next!.input).toEqual(input(text));
+          expect(next).not.toHaveProperty("agentMessages");
           expect(events.slice(offset).map(event => [event.type, event.entry.id])).toEqual([["cancelled", old.id], ["queued", next!.id]]);
           expect(events.at(-1)).toMatchObject({ position: index + 1 });
           expect(await queue.replaceQueuedAgentInput(old.id, input("stale"), origin("alice").sourceThread)).toBeUndefined();
@@ -99,12 +100,17 @@ it("replacement preserves generated FIFO positions, grouped neighbors, independe
         busy = false;
         queue.drainAll();
         await drain();
-        for (const expected of waiting) {
-          expect(sends.at(-1)).toEqual(expected);
-          await queue.releaseThread({ ...ref, turnId: expected.id, status: "completed" });
+        // Agent messages waiting together share a delivery; everything else
+        // goes out alone, in FIFO order.
+        const plan = planQueuedDeliveries(waiting).map(group => group.entryIds);
+        for (const ids of plan) {
+          const sent = sends.at(-1)!;
+          expect(sent.deliveredEntryIds ?? [sent.id]).toEqual(ids);
+          if (ids.length === 1) expect(sent).toEqual(waiting.find(entry => entry.id === ids[0]));
+          await queue.releaseThread({ ...ref, turnId: sent.id, status: "completed" });
           await drain();
         }
-        expect(sends.map(entry => entry.id)).toEqual(waiting.map(entry => entry.id));
+        expect(sends.flatMap(entry => entry.deliveredEntryIds ?? [entry.id])).toEqual(waiting.map(entry => entry.id));
       } finally { queue.close(); }
     }), { numRuns: 50 });
 });
@@ -179,7 +185,7 @@ it("serialized replacement rereads earlier controls and cannot restore cancelled
   }), { numRuns: 25 });
 });
 
-it("untouched grouped senders retain their returned replacement handles through arbitrary peer replacements", async () => {
+it("untouched senders keep their own queue ids through arbitrary peer replacements", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob", "carol"), { minLength: 2, maxLength: 12 }), fc.boolean(), async (senders, admit) => {
     let busy = true;
     const sends: ThreadTurnQueueEntry[] = [];
@@ -189,12 +195,12 @@ it("untouched grouped senders retain their returned replacement handles through 
     const handles = new Map<string, string>(), expected = new Map<string, string>();
     try {
       for (const sender of ["alice", "bob", "carol"]) {
-        const accepted = await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input(sender), messageOrigin: origin(sender) });
+        const accepted = await queue.submitSteer({ ...ref, origin: "manual", input: input(sender), messageOrigin: origin(sender) });
         handles.set(sender, accepted.entry.id); expected.set(sender, sender);
       }
       for (const [index, sender] of senders.entries()) {
-        const previous = queue.getQueuedEntries(ref)[0]!, snapshot = structuredClone(previous);
         const text = `${sender}-${index}`, oldHandle = handles.get(sender)!;
+        const previous = queue.getQueuedEntries(ref).find(entry => entry.id === oldHandle)!, snapshot = structuredClone(previous);
         const next = await queue.replaceQueuedAgentInput(oldHandle, input(text), origin(sender).sourceThread, origin(sender));
         expect(next, `${sender}'s returned handle still names its waiting contribution`).toBeDefined();
         handles.set(sender, next!.id); expected.set(sender, text);
@@ -202,13 +208,13 @@ it("untouched grouped senders retain their returned replacement handles through 
         expect(previous).toEqual(snapshot);
         expect(queue.getQueuedEntries(ref).find(entry => entry.id === previous.id)).toBeUndefined();
         expect(queue.cancelEntry(previous.id)).toBeUndefined();
-        expect(new Map(next!.agentMessages!.map(message => [message.origin!.sourceThread!.threadId,
-          message.input.flatMap(item => item.type === "text" ? [item.text] : []).join("")]))).toEqual(expected);
+        expect(new Map([...handles].map(([who, id]) => [who, queue.getQueuedEntries(ref).find(entry => entry.id === id)!
+          .input.flatMap(item => item.type === "text" ? [item.text] : []).join("")]))).toEqual(expected);
         expect(await queue.replaceQueuedAgentInput(oldHandle, input("stale own retry"), origin(sender).sourceThread)).toBeUndefined();
         expect(await queue.replaceQueuedAgentInput(handles.get("bob")!, input("forged"), { ...origin("bob").sourceThread, instanceId: "wrong-instance" })).toBeUndefined();
       }
       if (admit) { busy = false; queue.drainAll(); await drain(); }
-      else queue.cancelEntry(queue.getQueuedEntries(ref)[0]!.id);
+      else for (const entry of queue.getQueuedEntries(ref)) queue.cancelEntry(entry.id);
       for (const [sender, handle] of handles) expect(await queue.replaceQueuedAgentInput(handle, input("retired"), origin(sender).sourceThread)).toBeUndefined();
       await drain();
       expect(queue.getQueuedEntries(ref)).toEqual([]);
