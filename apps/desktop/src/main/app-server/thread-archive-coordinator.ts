@@ -1764,7 +1764,7 @@ export class ThreadArchiveCoordinator {
     }
   }
 
-  cancelArchiveCleanups(key: string): void {
+  private cancelArchiveCleanups(key: string): void {
     const scheduled = this.pendingArchiveCleanupIntents.get(key) ?? this.archiveCleanupRetryIntents.get(key);
     this.archiveCleanupRetryIntents.delete(key);
     this.archiveWorktreeReferences.forgetOwner(key, scheduled?.deferredWorktrees);
@@ -4498,6 +4498,11 @@ export class ThreadArchiveCoordinator {
   prepareArchiveReferenceChanges(backend: AppServerBackendKind, notification: AppServerNotification): Promise<void> | undefined {
     const previous = this.archiveReferenceNotificationWork.get(notification);
     if (previous) return previous;
+    // Provider ingress and publication share a notification object. A delayed
+    // publication must not cancel cleanup from an archive accepted since ingress.
+    if (notification.method === "thread/unarchived" || notification.method === "thread/deleted") {
+      this.cancelArchiveCleanups(buildThreadIdentityKey(backend, notification.params.threadId));
+    }
     let work: Promise<void> | undefined;
     if (notification.method === "navigation/threadDirectories/updated") {
       const ids = readRecord(notification.params)?.threadIds;

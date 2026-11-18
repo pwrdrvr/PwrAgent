@@ -16526,9 +16526,6 @@ export class DesktopBackendRegistry {
             }
           }
           const archiveWorkspaceChanged = this.threadArchiveCoordinator.invalidateArchiveCleanupForNotification(backend, notification, "provider");
-          if (notification.method === "thread/unarchived" || notification.method === "thread/deleted") {
-            this.threadArchiveCoordinator.cancelArchiveCleanups(buildThreadIdentityKey(backend, notification.params.threadId));
-          }
           const archiveReferences = this.threadArchiveCoordinator.prepareArchiveReferenceChanges(backend, notification);
           if (archiveWorkspaceChanged && this.threadArchiveCoordinator.archiveWorktreeRemovalAdmissionRecords.size) await this.threadArchiveCoordinator.prepareArchiveWorkspaceChanges(backend, notification, archiveWorkspaceChanged);
           if (archiveReferences) await archiveReferences;
@@ -21414,9 +21411,6 @@ export class DesktopBackendRegistry {
       }
       this.navigationDirectoryScope.invalidate(event);
       const archiveWorkspaceChanged = this.threadArchiveCoordinator.invalidateArchiveCleanupForNotification(event.backend, event.notification);
-      if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
-        this.threadArchiveCoordinator.cancelArchiveCleanups(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
-      }
       const archiveReferences = this.threadArchiveCoordinator.prepareArchiveReferenceChanges(event.backend, event.notification);
       if (archiveWorkspaceChanged && this.threadArchiveCoordinator.archiveWorktreeRemovalAdmissionRecords.size) await this.threadArchiveCoordinator.prepareArchiveWorkspaceChanges(event.backend, event.notification, archiveWorkspaceChanged);
       if (archiveReferences) await archiveReferences;

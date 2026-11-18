@@ -121,8 +121,8 @@ function archivedOwners(world: World, checkout: string): string[] {
   return [...world.fleet.rows].filter(([id, row]) => row.archived && uses(world, id, checkout)).map(([id]) => id);
 }
 
-function start(world: World): void {
-  const { registry } = buildFleetRegistry(fsModel, world.fleet, world.checkpoint, {
+function start(world: World): ReturnType<typeof buildFleetRegistry> {
+  const fixture = buildFleetRegistry(fsModel, world.fleet, world.checkpoint, {
     instanceId: `model-${world.instance}`,
     parkBeforeRemove: async () => await new Promise((resolve) => setTimeout(resolve, ARCHIVE_CLEANUP_PAUSE_MS)),
     onRemove: (checkout) => {
@@ -138,7 +138,8 @@ function start(world: World): void {
       world.snapshots.set(checkout, holders);
     },
   });
-  world.registry = registry;
+  world.registry = fixture.registry;
+  return fixture;
 }
 
 async function publish(world: World, method: string, threadId: string): Promise<void> {
@@ -187,6 +188,15 @@ async function archive(world: World, thread: string): Promise<void> {
   if (world.fleet.rows.get(thread)?.archived !== false) return;
   await tolerate(async () => await world.registry.archiveThread({ backend: "codex", threadId: thread, backgroundCleanup: true }));
   if (world.fleet.rows.get(thread)?.archived) world.cleanupRequested.add(thread);
+}
+
+function restoreProviderRow(world: World, thread: string): boolean {
+  const row = world.fleet.rows.get(thread);
+  if (!row?.archived) return false;
+  row.archived = false;
+  row.updatedAt = ++world.clock;
+  world.cleanupRequested.delete(thread);
+  return true;
 }
 
 async function deleteThread(world: World, thread: string): Promise<void> {
@@ -255,13 +265,8 @@ const commands: Array<fc.Arbitrary<Command>> = [
   fc.record({ thread: fc.constantFrom(...THREADS) }).map(({ thread }) => ({
     check: () => true,
     run: async (_model, world) => {
-      const row = world.fleet.rows.get(thread);
-      if (!row?.archived) return;
       // A reported restore from outside this registry.
-      row.archived = false;
-      row.updatedAt = ++world.clock;
-      world.cleanupRequested.delete(thread);
-      await publish(world, "thread/unarchived", thread);
+      if (restoreProviderRow(world, thread)) await publish(world, "thread/unarchived", thread);
     },
     toString: () => `restore(${thread})`,
   })),
@@ -308,7 +313,7 @@ function expectArchiveOwnership(world: World): void {
 async function runScenario(
   dbPath: string,
   initial: { places: string[]; extras: string[][] },
-  run: (world: World) => Promise<void>,
+  run: (world: World, fixture: ReturnType<typeof buildFleetRegistry>) => Promise<void>,
 ): Promise<void> {
   vi.useFakeTimers();
   fsModel.removed.clear();
@@ -326,9 +331,9 @@ async function runScenario(
     fleet, registry: undefined as never, instance: 0, clock: 10_000, cleanupRequested: new Set(), snapshots: new Map(), owedSnapshots: new Map(), violations: [],
     db, checkpoint: new ArchiveCleanupCheckpointStore(db.raw, { processId: 4242, processAlive: () => false }),
   };
-  start(world);
+  const fixture = start(world);
   try {
-    await run(world);
+    await run(world, fixture);
     await settle(world);
     expectArchiveOwnership(world);
   } finally {
@@ -338,6 +343,39 @@ async function runScenario(
       vi.useRealTimers();
     }
   }
+}
+
+async function runDelayedUnarchive(dbPath: string, owner: string, user: string, settleBeforeEmit: boolean): Promise<void> {
+  const [checkout, otherCheckout] = CHECKOUTS;
+  await runScenario(dbPath, {
+    places: THREADS.map((thread) => thread === owner || thread === user ? checkout : otherCheckout),
+    extras: THREADS.map(() => []),
+  }, async (world, fixture) => {
+    await archive(world, owner);
+    await settle(world);
+    expect(restoreProviderRow(world, owner)).toBe(true);
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    // The provider event has applied its lifecycle changes at ingress by the
+    // time it writes the tombstone. Park it here before the registry emits it.
+    fixture.setThreadArchiveTombstone.mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+    });
+    const delivery = fixture.receiveProviderNotification({ method: "thread/unarchived", params: { threadId: owner } });
+    try {
+      await drive(entered.promise);
+      await archive(world, owner);
+      if (settleBeforeEmit) await settle(world);
+      expect(archivedOwners(world, checkout)).toEqual([owner]);
+      expect(activeUsers(world, checkout)).toEqual([user]);
+    } finally {
+      resume.resolve();
+      await drive(delivery);
+    }
+    // Publication of the earlier unarchive cannot retire the newer cleanup.
+    await deleteThread(world, user);
+  });
 }
 
 describe("bulk archive cleanup model", () => {
@@ -360,6 +398,30 @@ describe("bulk archive cleanup model", () => {
         await deleteThread(world, firstDeleted === "t0" ? "t5" : "t0");
         expect(archivedOwners(world, c0)).toEqual(["t1"]);
       });
+    } finally {
+      removeTempStateDbDir(temp.tempDir);
+    }
+  });
+
+  it.each([
+    { owner: "t2", user: "t3", settleBeforeEmit: false },
+    { owner: "t0", user: "t1", settleBeforeEmit: true },
+  ])("keeps cleanup for $owner when an earlier unarchive finally emits", async ({ owner, user, settleBeforeEmit }) => {
+    const temp = createTempStateDb("pwragent-archive-model-");
+    try {
+      await runDelayedUnarchive(temp.dbPath, owner, user, settleBeforeEmit);
+    } finally {
+      removeTempStateDbDir(temp.tempDir);
+    }
+  });
+
+  it("preserves the later archive across delayed unarchive delivery", async () => {
+    const temp = createTempStateDb("pwragent-archive-model-");
+    try {
+      const threads = fc.shuffledSubarray(THREADS, { minLength: 2, maxLength: 2 });
+      await fc.assert(fc.asyncProperty(threads, fc.boolean(), async ([owner, user], settleBeforeEmit) => {
+        await runDelayedUnarchive(temp.dbPath, owner!, user!, settleBeforeEmit);
+      }), { numRuns: 12 });
     } finally {
       removeTempStateDbDir(temp.tempDir);
     }
