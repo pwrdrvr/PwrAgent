@@ -92,7 +92,8 @@ export function researchApproach(run: Pick<ResearchRunView, "items">, id: string
 }
 
 /** Why a revision cannot be requested for this candidate, or undefined when it can. */
-export function researchRevisionBlocker(run: Pick<ResearchRunView, "status" | "items" | "activeWorkers" | "workerLimit">, submission: ResearchSubmission, live: boolean): string | undefined {
+export function researchRevisionBlocker(run: Pick<ResearchRunView, "status" | "items" | "activeWorkers" | "workerLimit" | "harness">, submission: ResearchSubmission, live: boolean): string | undefined {
+  if (run.harness) return "Revision feedback requires the source service.";
   if (!live || run.status !== "running") return "Revisions need a running run.";
   const approach = researchApproach(run, submission.approachId);
   if (!approach?.worker) return "This candidate's worker is unavailable.";
@@ -103,6 +104,11 @@ export function researchRevisionBlocker(run: Pick<ResearchRunView, "status" | "i
 
 export function approachTitle(run: Pick<ResearchRunView, "items">, id: string): string {
   return researchApproach(run, id)?.title ?? id;
+}
+
+export function researchSourceLabel(run: Pick<ResearchRunView, "items">, itemId: string): string {
+  const source = run.items.get(itemId)?.provenance;
+  return source ? `Source ${source.member ?? "service"} · record ${source.seq} · SHA-256 ${source.digest.slice(0, 12)}` : "Source provenance unavailable";
 }
 
 /**
@@ -134,9 +140,9 @@ export function researchActivityRows(run: Pick<ResearchRunView, "items" | "appro
   for (const event of events) {
     const data = event.data;
     // Worker admission and delivery receipts are recorded by the owner, whoever triggered them.
-    const system = data.type === "worker" || data.type === "delivery" || data.type === "delivery_failed";
+    const system = data.type === "worker" || data.type === "delivery" || data.type === "delivery_failed" || data.type === "harness";
     const row = (kind: string, text: string, itemId?: string): ResearchActivityRow => ({ seq: event.seq, at: event.at, kind,
-      actor: system ? "PwrAgent" : researchActorLabel(run, event.actor, event.commandId), text, ...(itemId ? { itemId } : {}) });
+      actor: event.provenance ? `Source ${event.provenance.member ?? "service"}` : system ? "PwrAgent" : researchActorLabel(run, event.actor, event.commandId), text, ...(itemId ? { itemId } : {}) });
     switch (data.type) {
       case "created": rows.push(row("Run requested", data.objective)); break;
       case "worker": rows.push(row("Worker", `${title(data.approachId)}: ${researchLabel(data.state)}${data.note ? ` · ${data.note}` : ""}`, data.approachId)); break;
@@ -150,6 +156,8 @@ export function researchActivityRows(run: Pick<ResearchRunView, "items" | "appro
       case "delivery": rows.push(row("Revision feedback", `${data.delivery.approachId ? `${title(data.delivery.approachId)}: ` : ""}${researchLabel(data.delivery.state)}`, data.delivery.approachId)); break;
       case "assignment": rows.push(row("Child assigned", data.task, data.itemId)); break;
       case "item_work": rows.push(row(researchLabel(data.work.state), data.work.note ?? itemExcerpt(data.itemId), data.itemId)); break;
+      case "harness": rows.push(row("Harness", data.state.note)); break;
+      case "harness_observation": rows.push(row(`Harness ${data.event}`, data.text)); break;
     }
   }
   return rows;
@@ -307,11 +315,12 @@ export type ResearchMapBranch = { approach: ResearchApproach; leaves: ResearchMa
  * whose chain of sources loops, stays reachable as a top-level branch.
  * `hidden` counts the contributions a branch does not show.
  */
-export function researchMapBranches(run: Pick<ResearchRunView, "approaches" | "items" | "leaves">): ResearchMapBranch[] {
+export function researchMapBranches(run: Pick<ResearchRunView, "approaches" | "items" | "leaves" | "harness">): ResearchMapBranch[] {
   /** Children by the ID they nest under: a shown leaf, or the approach that owns their source. */
   const childrenOf = new Map<string, Array<{ approach: ResearchApproach; sourceSeq: number }>>();
   const rooted = new Set<string>();
-  for (const approach of run.approaches) {
+  const approaches = run.harness ? run.approaches.filter((a) => run.harness!.members.some((_, index) => a.id === `a${index + 1}`)) : run.approaches;
+  for (const approach of approaches) {
     const source = approach.itemId && approach.itemId !== approach.id ? run.items.get(approach.itemId) : undefined;
     if (!source) { rooted.add(approach.id); continue; }
     const shown = source.type === "approach" || run.leaves.get(source.approachId)?.leafIds.includes(source.id);
@@ -332,9 +341,9 @@ export function researchMapBranches(run: Pick<ResearchRunView, "approaches" | "i
     });
     return { approach, leaves, hidden: Math.max(0, (entry ? entry.findings + entry.candidates : 0) - leaves.length), assignments };
   };
-  const branches = run.approaches.filter((approach) => rooted.has(approach.id)).map(build);
+  const branches = approaches.filter((approach) => rooted.has(approach.id)).map(build);
   // A loop of children whose sources are each other has no root; keep each reachable.
-  for (const approach of run.approaches) if (!placed.has(approach.id)) branches.push(build(approach));
+  for (const approach of approaches) if (!placed.has(approach.id)) branches.push(build(approach));
   return branches;
 }
 

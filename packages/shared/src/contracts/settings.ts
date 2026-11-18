@@ -2338,6 +2338,7 @@ export type DesktopConfigDomainKey =
   | "messaging"
   | "federation"
   | "models"
+  | "research"
   | "providers"
   | "applications"
   | "git"

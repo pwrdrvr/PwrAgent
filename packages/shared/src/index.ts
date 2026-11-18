@@ -152,5 +152,6 @@ export {
 } from "./combined-delivery";
 export * from "./thread-replay-paging";
 export * from "./transcript-image-sources";
+export * from "./research-harness";
 export * from "./research";
 export * from "./pr-merge-queue";

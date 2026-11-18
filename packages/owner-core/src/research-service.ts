@@ -21,6 +21,7 @@ export type ResearchAssignmentReceipt = { runId: string; itemId: string; version
 /** The adapter has confirmed that no model turn was admitted. */
 export class ResearchAdmissionRefused extends Error {}
 export type ResearchPorts = {
+  stopHarness?: (id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string) => Promise<ResearchRunHeader>;
   enabled?: () => boolean;
   spawn: (context: ResearchExecutionContext, task: string, title: string, workspaceMode: StartResearchRequest["workspaceMode"],
     onCreated: (worker: ResearchThread) => void) => Promise<ResearchThread & { turnId?: string }>;
@@ -72,7 +73,9 @@ export class ResearchService {
       if (run.ownerId === this.ports.ownerId) this.scheduleDeadline(run);
       else if (!this.ports.isOwnerAlive(run)) {
         this.append(run, `recovery:${this.ports.ownerId}`, this.operator(run), {
-          type: "status", status: "interrupted", reason: "The owning process ended. Inspect the retained worker threads before starting a new run.",
+          type: "status", status: "interrupted", reason: run.harness
+            ? "The owning process ended. Reconcile the retained Harness source records before starting a new run."
+            : "The owning process ended. Inspect the retained worker threads before starting a new run.",
         });
       }
     }
@@ -136,14 +139,15 @@ export class ResearchService {
   }
 
   /** The workspace-relative path of one piece of evidence, and the thread whose workspace holds it. */
-  readEvidence(id: string, itemId: string, pathIndex: number, actor: ResearchActor): { relativePath: string; source: ResearchThread } {
-    this.memberHeader(id, actor);
+  readEvidence(id: string, itemId: string, pathIndex: number, actor: ResearchActor): { relativePath: string; source: ResearchThread; harnessWorkspace?: string } {
+    const run = this.memberHeader(id, actor);
     const item = this.storage.readItem(id, itemId);
     const relativePath = item && item.type !== "approach" ? item.record.paths[pathIndex] : undefined;
     // The author of evidence is whoever appended it, not a field its text can claim.
     const created = item ? this.storage.events(id, { afterSeq: item.createdSeq - 1, beforeSeq: item.createdSeq + 1, limit: 1 }).events[0] : undefined;
     if (!relativePath || !created) throw new Error("Evidence source is unavailable");
-    return { relativePath, source: { backend: created.actor.backend, threadId: created.actor.threadId } };
+    return { relativePath, source: { backend: created.actor.backend, threadId: created.actor.threadId },
+      ...(created.provenance && run.harness ? { harnessWorkspace: run.harness.workspace } : {}) };
   }
 
   /** What a command changed, for a compact receipt: the item it created or named, and its revision delivery. */
@@ -206,6 +210,7 @@ export class ResearchService {
   private async performAssignment(request: ResearchAssignRequest, context: ResearchExecutionContext, key: string, signature: string): Promise<ResearchAssignmentReceipt> {
     this.requireOpen();
     const run = this.memberHeader(request.runId, context);
+    if (run.harness) throw new Error("Harness member admission belongs to the configured bridge");
     if (!sameResearchThread(run.coordinator, context)) throw new Error("Only the coordinating thread can assign research items");
     if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
     const duplicate = this.storage.findCommand(run.id, key);
@@ -244,6 +249,7 @@ export class ResearchService {
   async work(id: string, requestId: string, command: ResearchWorkCommand, actor: ResearchActor): Promise<ResearchItem> {
     this.requireOpen();
     const header = this.accessibleHeader(id, actor);
+    if (header.harness) throw new Error("Harness observations do not support native worker assignments");
     if (header.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
     const signature = JSON.stringify(command);
     const duplicate = this.storage.findCommand(id, requestId);
@@ -411,6 +417,8 @@ export class ResearchService {
     if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
     const run = this.memberHeader(id, actor);
+    if (run.harness && !["review", "stop", "finish"].includes(command.action)) throw new Error("Harness records are immutable source observations");
+    if (run.harness && command.action === "review" && command.decision === "revision_requested") throw new Error("Bridge revision delivery is unavailable; record rejection or acceptance locally");
     if (run.ownerId !== this.ports.ownerId) throw new Error("This run belongs to another process. Open its worker threads to inspect interrupted work.");
     const signature = JSON.stringify(command);
     const duplicate = this.storage.findCommand(id, requestId);
@@ -515,6 +523,10 @@ export class ResearchService {
 
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRunHeader> {
     const run = this.memberHeader(id, actor);
+    if (run.harness) {
+      if (!this.ports.stopHarness) throw new Error("Harness cancellation is unavailable");
+      return await this.ports.stopHarness(id, actor, outcome, reason);
+    }
     if (actor.kind !== "operator" && !sameResearchThread(actor, run.coordinator)) throw new Error("Only the coordinator or operator may stop a run");
     if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
     const pending = this.stops.get(id);
