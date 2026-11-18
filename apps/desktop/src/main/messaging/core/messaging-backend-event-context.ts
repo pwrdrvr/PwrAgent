@@ -8,7 +8,7 @@ import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliv
 import { type MessagingArtifact } from "./messaging-artifact-renderer.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
-import { type MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import { type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantStreamBuffer, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 
 export interface MessagingBackendEventHost {
@@ -75,7 +75,6 @@ export interface MessagingBackendEventHost {
   readonly renderAutomaticBindingStatus: (binding: MessagingBindingRecord, event?: MessagingInboundEvent, navigation?: MessagingNavigationContext) => Promise<MessagingBindingRecord>;
   readonly threadContextWithNameFromEvent: (binding: MessagingBindingRecord, event: AgentEvent) => Promise<MessagingThreadContext>;
   readonly signalTurnActivity: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary, options?: { force?: boolean; reason?: string; refreshMs?: number; }) => Promise<void>;
-  readonly scheduleNextQueuedTurn: (binding: MessagingBindingRecord) => void;
   readonly activeAgentMessagingOriginsByTurnKey: Map<string, ActiveAgentMessagingOrigin>;
   readonly completePrivateReplyContinuation: (bindingId: string) => Promise<void>;
   readonly forgetAutomationTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string) => void;

@@ -1,3 +1,4 @@
+import { MessagingQueueRecoveries, type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import { MessagingTurns } from "./messaging-turn-state";
 import { MessagingAccessControl } from "./messaging-access-control";
 import type { MessagingAccessHost } from "./messaging-access-context";
@@ -61,7 +62,7 @@ import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import { type MessagingAttachmentPolicy } from "./messaging-attachment-processor.js";
 import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
 import { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
-import { MessagingTurnAdmission, threadKeyForBinding, type MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import { MessagingTurnAdmission, threadKeyForBinding } from "./messaging-turn-admission.js";
 import { renderAutomationDecisionForMessaging, renderAutomationOutputForMessaging } from "../../automations/automation-output-decision.js";
 import { registerAutomationSourceMessageDeliveryHandler, registerAutomationTargetMessageDeliveryHandler } from "../../automations/automation-action-executor.js";
 import { MessagingBindingService } from "./messaging-binding-service";
@@ -415,6 +416,7 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
+  private readonly queueRecoveries: MessagingQueueRecoveries;
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
   private readonly monitorTimersByBindingId = new Map<
@@ -470,14 +472,8 @@ export class MessagingController {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
     const readLogger = () => this.logger;
-    const readTurnAdmission = () => this.turnAdmission;
-    this.turns = new MessagingTurns({
-      get logger() { return readLogger(); },
-      host: () => ({
-        get turnAdmission() { return readTurnAdmission(); },
-        startNextQueuedTurn: (...args) => this.startNextQueuedTurn(...args),
-      }),
-    });
+    this.turns = new MessagingTurns();
+    this.queueRecoveries = new MessagingQueueRecoveries({ get now() { return readNow(); } });
     this.backendEventRouter = new MessagingBackendEventRouter({
       get store() { return readStore(); },
       get now() { return readNow(); },
@@ -546,7 +542,6 @@ export class MessagingController {
     this.showStreamingOptionConfig = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
-      now: this.now,
       onBundleReady: async (bundle) => {
         await this.inboundTurns.handleAdmittedTurnBundle(bundle);
       },
@@ -1032,12 +1027,13 @@ export class MessagingController {
       handleQuestionnaireAction: (...args) => this.handleQuestionnaireAction(...args),
       handleReviewAction: (...args) => this.handleReviewAction(...args),
       get turnAdmission() { return readController().turnAdmission; },
+      isDisposed: () => this.disposed,
+      get queueRecoveries() { return readController().queueRecoveries; },
       get sharedQueueNotices() { return readController().sharedQueueNotices; },
       requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       startPreparedInput: (...args) => this.inboundTurns.startPreparedInput(...args),
       retireQueuedTurnNotice: (...args) => this.retireQueuedTurnNotice(...args),
       trackQueuedTurnAction: (...args) => this.trackQueuedTurnAction(...args),
-      steerQueuedTurn: (...args) => this.steerQueuedTurn(...args),
       resolveSteerableActiveTurn: (...args) => this.resolveSteerableActiveTurn(...args),
       deliverQueuedTurnNotice: (...args) => this.deliverQueuedTurnNotice(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
@@ -1124,7 +1120,6 @@ export class MessagingController {
       agentMessagingOriginForPendingIntent: (...args) => this.agentMessagingOriginForPendingIntent(...args),
       readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
       reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
-      startNextQueuedTurn: (...args) => this.startNextQueuedTurn(...args),
       get privateReplyClaims() { return readController().privateReplyClaims; },
       deliverPrivateReplyButtonState: (...args) => this.deliverPrivateReplyButtonState(...args),
       completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
@@ -1199,7 +1194,6 @@ export class MessagingController {
       renderAutomaticBindingStatus: (...args) => this.bindingService.renderAutomaticBindingStatus(...args),
       threadContextWithNameFromEvent: (...args) => this.bindingService.threadContextWithNameFromEvent(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
-      scheduleNextQueuedTurn: (...args) => this.scheduleNextQueuedTurn(...args),
       get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
       completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
       forgetAutomationTurn: (...args) => this.forgetAutomationTurn(...args),
@@ -1341,7 +1335,7 @@ export class MessagingController {
       if (request.params.turnId) {
         const threadStatus = await this.readBackendThreadStatus(binding);
         if (threadStatus === "idle") {
-          await this.reconcileIdleTurnAndStartNext(binding, "pending_request");
+          await this.reconcileIdleTurn(binding, "pending_request");
           continue;
         }
       }
@@ -1366,13 +1360,12 @@ export class MessagingController {
         );
         if (isTerminalTurnLifecycle(reconciledTurn)) {
           await this.retireStalePendingIntent(deliveredPendingIntent);
-          await this.startNextQueuedTurn(binding);
           continue;
         }
         const threadStatus = await this.readBackendThreadStatus(binding);
         if (threadStatus === "idle") {
           await this.retireStalePendingIntent(deliveredPendingIntent);
-          await this.reconcileIdleTurnAndStartNext(binding, "pending_request");
+          await this.reconcileIdleTurn(binding, "pending_request");
           continue;
         }
         const activeTurn: MessagingActiveTurnSummary = {
@@ -1970,9 +1963,7 @@ export class MessagingController {
     const result = await this.deliver(intent, entry.binding);
     if (result.surface) {
       if (entry.ownerQueueEntryId) entry.surface = result.surface;
-      this.turnAdmission.updateQueuedEntry(entry, {
-        surface: result.surface,
-      });
+      this.queueRecoveries.surface(entry.id, result.surface);
     }
   }
 
@@ -2067,149 +2058,6 @@ export class MessagingController {
       });
     }).finally(() => { this.queuedTurnActions.delete(task); });
     this.queuedTurnActions.add(task);
-  }
-
-  private async steerQueuedTurn(
-    entry: MessagingQueuedTurnEntry,
-    event: MessagingInboundCallbackEvent,
-  ): Promise<void> {
-    try {
-      await this.submitQueuedTurnSteer(entry, event);
-    } finally {
-      // A failed status lookup or delivery must also release the claim.
-      if (this.turnAdmission.findQueuedEntry(entry.id)?.status === "steering") {
-        this.turnAdmission.updateQueuedEntry(entry, { status: "queued" });
-      }
-      // Turn completion can arrive before the steer acknowledgement. Its
-      // drain stopped at this claim, so recheck the owning backend now.
-      if (this.turns.takeDrainRequest(entry.threadKey) && !this.disposed) {
-        await this.startNextQueuedTurn(entry.binding);
-      }
-    }
-  }
-
-  private async submitQueuedTurnSteer(
-    entry: MessagingQueuedTurnEntry,
-    event: MessagingInboundCallbackEvent,
-  ): Promise<void> {
-    const activeTurn = await this.resolveSteerableActiveTurn(
-      entry.binding,
-      "queued_turn_steer",
-    );
-    if (this.disposed) return;
-    if (
-      entry.pdfAttachments?.length ||
-      !this.options.backend.steerTurn ||
-      !activeTurn ||
-      !["working", "waiting"].includes(activeTurn.status)
-    ) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("queued-turn-steer-unavailable"),
-          createdAt: this.now(),
-          title: "Steer unavailable",
-          body: "There is no active turn available to steer. The message is still queued.",
-          recoverable: true,
-        }),
-        entry.binding,
-        event,
-      );
-      return;
-    }
-
-    try {
-      await this.options.backend.steerTurn({
-        backend: entry.binding.backend,
-        federationTarget: federationTargetForBinding(entry.binding),
-        threadId: entry.binding.threadId,
-        expectedTurnId: activeTurn.turnId,
-        input: entry.input,
-        requestId: entry.id,
-        messageOrigin: messageOriginForInboundEvent(entry.event, entry.event ? this.rememberHumanMessagingSource(entry.binding, entry.event)?.ref : undefined),
-      });
-    } catch (error) {
-      if (this.disposed) return;
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("queued-turn-steer-failed"),
-          createdAt: this.now(),
-          title: "Steer failed",
-          body: `${
-            error instanceof Error ? error.message : String(error)
-          }\n\nThe message is still queued.`,
-          recoverable: true,
-        }),
-        entry.binding,
-        event,
-      );
-      return;
-    }
-    if (this.disposed) return;
-    const steered = this.turnAdmission.updateQueuedEntry(entry, {
-      status: "steered",
-    });
-    await this.retireQueuedTurnNotice(
-      steered,
-      "Queued message was sent as a steering message.",
-      event,
-    );
-  }
-
-  private scheduleNextQueuedTurn(binding: MessagingBindingRecord): void {
-    this.turns.schedule(binding);
-  }
-
-  private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
-    const threadKey = this.threadKeyForBinding(binding);
-    const admissionState = await this.options.backend.getThreadAdmissionState({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: binding.threadId,
-    });
-    if (await this.inboundTurns.isTurnOccupied(binding, threadKey, admissionState)) {
-      return;
-    }
-
-    const entry = this.turnAdmission.peekNextQueued(threadKey);
-    if (!entry || entry.manualRetryRequired) {
-      if (this.turnAdmission.hasDispatchingEntry(threadKey)) this.turns.requestDrain(threadKey);
-      return;
-    }
-
-    this.turnAdmission.updateQueuedEntry(entry, { status: "submitting" });
-    let startResult: "started" | "queued" | "failed";
-    try {
-      startResult = await this.inboundTurns.startPreparedInput({
-        binding: entry.binding,
-        event: entry.event,
-        input: entry.input,
-        pdfAttachments: entry.pdfAttachments,
-        privateResponseRequested: entry.privateResponseRequested,
-        preview: entry.preview,
-        queueOnConcurrentStart: false,
-        threadKey,
-        admissionState,
-      });
-    } finally {
-      if (this.turnAdmission.findQueuedEntry(entry.id)?.status === "submitting") {
-        this.turnAdmission.updateQueuedEntry(entry, { status: "queued" });
-      }
-    }
-    if (startResult !== "started") {
-      return;
-    }
-
-    const submitted = this.turnAdmission.updateQueuedEntry(entry, {
-      status: "submitted",
-    });
-    this.turnAdmission.removeQueuedEntry(submitted);
-    await this.retireQueuedTurnNotice(
-      submitted,
-      "Queued message sent as the next turn.",
-    );
-    if (this.turns.takeDrainRequest(threadKey) && !this.disposed) {
-      await this.startNextQueuedTurn(binding);
-    }
   }
 
   private async handleQuestionnaireTextAnswer(
@@ -3259,16 +3107,6 @@ export class MessagingController {
           });
         }
       }
-      // The queued notice offers Steer, and the queue starts the reply
-      // after the turn ends.
-      await this.inboundTurns.queuePreparedInput({
-        binding,
-        event,
-        input,
-        preview: params.preview,
-        threadKey,
-      });
-      return true;
     }
 
     const started = await this.inboundTurns.startPreparedInput({
@@ -4740,6 +4578,7 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
+    this.queueRecoveries.dispose();
     this.turns.dispose();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
@@ -4775,26 +4614,12 @@ export class MessagingController {
     this.queuedAgentMessagingOriginsByQueueKey.clear();
   }
 
-  /**
-   * Resolves once the tool-update batches that a flush timer already started
-   * have finished delivering, including their store writes, and then once
-   * every scheduled or running queued-turn drain has finished. dispose() is
-   * synchronous and only stops new batches.
-   */
+  /** Resolves after already-started tool-update batches finish their writes. */
   async whenToolUpdatesSettled(): Promise<void> {
     await this.toolUpdatePolicy.whenIdle();
-    await this.whenQueuedTurnDrainsSettled();
   }
 
-  /**
-   * Resolves once every queued-turn drain scheduled or running at the time of
-   * the call has finished, including the start it submits and the queued notice
-   * it retires. dispose() cancels and settles drains that have not yet begun.
-   */
-  async whenQueuedTurnDrainsSettled(): Promise<void> {
-    await this.turns.whenDrainsSettled();
-  }
-
+  /** Resolves after detached queued-message actions finish. */
   async whenQueuedTurnActionsSettled(): Promise<void> {
     await Promise.all(this.queuedTurnActions);
   }
@@ -9404,12 +9229,11 @@ export class MessagingController {
     }
   }
 
-  private async reconcileIdleTurnAndStartNext(
+  private async reconcileIdleTurn(
     binding: MessagingBindingRecord,
     reason: string,
   ): Promise<void> {
     await this.reconcileActiveTurnFromBackendStatus(binding, reason);
-    await this.startNextQueuedTurn(binding);
   }
 
   private async retireStalePendingIntent(

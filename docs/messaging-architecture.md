@@ -629,6 +629,21 @@ no PR lookup, Git working-state probe, launchpad hydration, directory-fleet
 walk, or connected-peer enumeration. The shared turn FIFO remains the final
 race-safe admission authority if activity changes after the targeted read.
 
+Every prepared input, including an async-question answer whose steer failed,
+goes through the owning backend's `startTurn` admission. Messaging reports a
+queued answer only after that owner accepts it into `ThreadTurnQueue`. A busy
+refusal is a failed send; messaging does not create a second admission FIFO.
+`MessagingTurnAdmission` only coalesces inbound events and tracks starts in
+progress. `MessagingTurns` projects bus activity and reconciles late start
+acknowledgements; it owns no dispatch timers.
+
+If cancelling an owner queue entry succeeds but steering and replacement
+admission both fail, `MessagingQueueRecoveries` holds that input for explicit
+Retry, Steer or Cancel. Its per-entry reducer owns the exclusive retry receipt,
+failed retry, terminal cleanup and late notice surface. Held inputs have no
+ordering or automatic drain. Acceptance transfers the input to the owner FIFO;
+shutdown retires the held records. No additional persistence is involved.
+
 After routing and permission checks, an idle target gets a bounded typing
 lease before the controller awaits backend startup. MCP preparation, a cold
 provider, and the activity API response must not delay the first activity
@@ -934,7 +949,8 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-binding-helpers.ts` | Targeted thread projection, conversation labels and workspace handoff context |
 | `apps/desktop/src/main/messaging/core/messaging-inbound-turns.ts` | Text/media routing, default-Agent admission, input preparation, turn startup, pending prompt buffers and admission timing |
 | `apps/desktop/src/main/messaging/core/messaging-inbound-context.ts` | Lazy store, backend, adapter, configuration and exact workflow ports for inbound effects |
-| `apps/desktop/src/main/messaging/core/messaging-turn-state.ts` | Pure turn/drain reducer, bus lifecycle projection, start-acceptance reconciliation and receipt-owned drain timers/settlement |
+| `apps/desktop/src/main/messaging/core/messaging-turn-state.ts` | Pure turn reducer, bus lifecycle projection and start-acceptance reconciliation; owner-core owns draining |
+| `apps/desktop/src/main/messaging/core/messaging-queue-recoveries.ts` | Explicitly held failed recovery input, exclusive retry receipts and terminal cleanup; no admission FIFO |
 | `apps/desktop/src/main/messaging/core/messaging-inbound-helpers.ts` | Command parsing, private-response request recognition, turn settings and launchpad/environment projections |
 | `apps/desktop/src/main/messaging/core/messaging-access-control.ts` | Actor admission, capability and federation gates, retained-source authorization, dynamic-tool attribution, and Full Access policy/warnings |
 | `apps/desktop/src/main/messaging/core/messaging-access-context.ts` | Lazy access-policy, store and adapter collaborators, plus exact delivery, pending-intent and origin-reading ports |

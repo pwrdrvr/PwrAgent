@@ -1,4 +1,4 @@
-import { readStringValue } from "./messaging-command-helpers";
+import { messageOriginForInboundEvent, readStringValue } from "./messaging-command-helpers";
 import { federationTargetForBinding } from "./messaging-backend-event-helpers";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
 import { readMessagingLaunchpadContext } from "./messaging-launchpad-context";
@@ -12,7 +12,7 @@ import { nextMessagingStreamingResponseMode } from "./messaging-status-card.js";
 import { acpBackendUsesExecutionModePermissions, buildMessagingAcpRuntimeModeSummary } from "./messaging-acp-runtime.js";
 import { skillsBrowserPageFromValue } from "./messaging-skills-browser.js";
 import { type MessagingThreadContext } from "./messaging-thread-state.js";
-import { type MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import { type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import { readPrivateReplyAction, type PrivateReplyAction, readCommandAction, readHelpNavAction, readBrowseAction, readPermissionsQueueCancelAction, readMonitorAction, readFullAccessRiskAction, readAcpRuntimeRiskAction, readStatusAction, readQueuedTurnAction, type QueuedTurnAction, readBindingTarget, boundThreadConfirmationBody, boundThreadFallbackText, approvalResponseLabel, buildQueuedInputPreview, isSameMessagingSurface, readHelpPageIndex, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, branchPageIndexFromValue, newThreadOptionsForSession, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, clearNewThreadProviderPreferences, normalizeReasoningEffortForModel, formatDefaultAgentScope, normalizeMonitorCallbackAction, topicChannelRef, findThreadForBinding, readFullAccessRiskContext, type FullAccessRiskWarningContext, readAcpRuntimeRiskContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext } from "./messaging-callback-helpers";
 import type { MessagingCallbackContext } from "./messaging-callback-context";
 
@@ -23,7 +23,7 @@ export class MessagingCallbackHandlers {
     event: MessagingInboundCallbackEvent,
     action: QueuedTurnAction,
   ): Promise<void> {
-    const entry = this.context.host().turnAdmission.findQueuedEntry(action.entryId)
+    const entry = this.context.host().queueRecoveries.get(action.entryId)
       ?? [...this.context.host().sharedQueueNotices.values()].flatMap((state) =>
         state.phase === "announcing" || state.phase === "queued" ? [state.entry] : [],
       ).find((candidate) => candidate.id === action.entryId);
@@ -46,18 +46,25 @@ export class MessagingCallbackHandlers {
       if (!entry.manualRetryRequired
         || !(await this.context.host().requirePermission(event, "message.reply", "queued-turn:retry"))
         || !(await this.context.host().requireRemoteScopeForBinding(event, entry.binding, "queued-turn:retry:remote-instance"))
-        || this.context.host().turnAdmission.findQueuedEntry(entry.id)?.status !== "queued"
         || this.context.host().turnAdmission.isStarting(entry.threadKey)) return;
-      const result = await this.context.host().startPreparedInput({
-        binding: entry.binding, event: entry.event, input: entry.input,
-        pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
-        preview: entry.preview, threadKey: entry.threadKey, queueOnConcurrentStart: false,
-      });
-      if (result === "failed") return;
-      this.context.host().turnAdmission.removeQueuedEntry(entry);
-      await this.context.host().retireQueuedTurnNotice(entry, result === "queued"
-        ? "Queued message handed to the thread queue."
-        : "Queued message sent as the next turn.", event);
+      const claim = this.context.host().queueRecoveries.claim(entry.id);
+      if (!claim) return;
+      let accepted = false;
+      try {
+        const result = await this.context.host().startPreparedInput({
+          binding: entry.binding, event: entry.event, input: entry.input,
+          pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
+          preview: entry.preview, threadKey: entry.threadKey, reportBusyRefusal: false,
+        });
+        if (result === "failed") return;
+        accepted = true;
+        this.context.host().queueRecoveries.settle(entry.id, claim.receipt, true);
+        await this.context.host().retireQueuedTurnNotice(entry, result === "queued"
+          ? "Queued message handed to the thread queue."
+          : "Queued message sent as the next turn.", event);
+      } finally {
+        this.context.host().queueRecoveries.settle(entry.id, claim.receipt, accepted);
+      }
       return;
     }
 
@@ -74,23 +81,50 @@ export class MessagingCallbackHandlers {
     }
 
     if (action.kind === "cancel") {
-      const cancelled = this.context.host().turnAdmission.updateQueuedEntry(entry, {
-        status: "cancelled",
-      });
-      await this.context.host().retireQueuedTurnNotice(
-        cancelled,
-        "Queued message cancelled.",
-        event,
-      );
+      if (this.context.host().queueRecoveries.cancel(entry.id)) {
+        await this.context.host().retireQueuedTurnNotice(entry, "Queued message cancelled.", event);
+      }
       return;
     }
 
-    // Claim before the first await. Duplicate clicks and turn completion
-    // cannot dispatch the same queued input while its provider call waits.
-    const claimed = this.context.host().turnAdmission.updateQueuedEntry(entry, { status: "steering" });
-    // Ingress must return even if steering waits for an escalation answer:
-    // sequential provider polling needs ingress to deliver that answer.
-    this.context.host().trackQueuedTurnAction(entry, this.context.host().steerQueuedTurn(claimed, event));
+    // Recovery input has no owner queue entry. Claim it before the first
+    // await, but release ingress so escalation answers can still arrive.
+    const claim = this.context.host().queueRecoveries.claim(entry.id);
+    if (claim) this.context.host().trackQueuedTurnAction(entry, this.steerRecovery(entry, event, claim.receipt));
+  }
+
+  private async steerRecovery(entry: MessagingQueuedTurnEntry, event: MessagingInboundCallbackEvent, receipt: symbol): Promise<void> {
+    let accepted = false;
+    try {
+      const active = await this.context.host().resolveSteerableActiveTurn(entry.binding, "queued_turn_steer");
+      if (this.context.host().isDisposed()) return;
+      if (entry.pdfAttachments?.length || !this.context.backend.steerTurn || !active || !["working", "waiting"].includes(active.status)) {
+        await this.context.host().deliver(buildErrorIntent({ id: this.context.host().newIntentId("queued-turn-steer-unavailable"),
+          createdAt: this.context.now(), title: "Steer unavailable",
+          body: "There is no active turn available to steer. The message is still queued.", recoverable: true,
+        }), entry.binding, event);
+        return;
+      }
+      try {
+        await this.context.backend.steerTurn({ backend: entry.binding.backend, federationTarget: federationTargetForBinding(entry.binding),
+          threadId: entry.binding.threadId, expectedTurnId: active.turnId, input: entry.input, requestId: entry.id,
+          messageOrigin: messageOriginForInboundEvent(entry.event, entry.event ? this.context.host().rememberHumanMessagingSource(entry.binding, entry.event)?.ref : undefined),
+        });
+      } catch (error) {
+        if (this.context.host().isDisposed()) return;
+        await this.context.host().deliver(buildErrorIntent({ id: this.context.host().newIntentId("queued-turn-steer-failed"),
+          createdAt: this.context.now(), title: "Steer failed",
+          body: `${error instanceof Error ? error.message : String(error)}\n\nThe message is still queued.`, recoverable: true,
+        }), entry.binding, event);
+        return;
+      }
+      accepted = true;
+      this.context.host().queueRecoveries.settle(entry.id, receipt, true);
+      if (this.context.host().isDisposed()) return;
+      await this.context.host().retireQueuedTurnNotice(entry, "Queued message was sent as a steering message.", event);
+    } finally {
+      this.context.host().queueRecoveries.settle(entry.id, receipt, accepted);
+    }
   }
 
   private async handleSharedQueuedTurnCallback(
@@ -124,20 +158,20 @@ export class MessagingCallbackHandlers {
           const restored = await this.context.host().startPreparedInput({
             binding: entry.binding, event: entry.event, input: content.input,
             pdfAttachments: entry.pdfAttachments, privateResponseRequested: entry.privateResponseRequested,
-            preview: entry.preview, threadKey: entry.threadKey, queueOnConcurrentStart: false,
+            preview: entry.preview, threadKey: entry.threadKey, reportBusyRefusal: false,
           });
           if (restored === "failed") {
             // The owner no longer has this input. Retain a separate recovery
             // entry until an operator's Retry is accepted; idle events must
             // not repeatedly submit it while the owner is unavailable.
-            const recovery = this.context.host().turnAdmission.enqueue({
+            const recovery = this.context.host().queueRecoveries.hold({
               binding: entry.binding, event: entry.event, input: content.input,
               pdfAttachments: entry.pdfAttachments,
               privateResponseRequested: entry.privateResponseRequested,
               preview: buildQueuedInputPreview(content.input.flatMap((item) => item.type === "text" ? [item.text] : [])) || entry.preview,
-              threadKey: entry.threadKey, manualRetryRequired: true,
+              threadKey: entry.threadKey,
             });
-            await this.context.host().deliverQueuedTurnNotice(recovery);
+            if (recovery) await this.context.host().deliverQueuedTurnNotice(recovery);
           }
           throw error;
         }
@@ -2266,7 +2300,6 @@ export class MessagingCallbackHandlers {
     );
     await this.context.store.deletePendingIntent(pendingIntent.id);
     await this.context.host().retireApprovalIntent(pendingIntent, event, "Resolved");
-    await this.context.host().startNextQueuedTurn(binding);
     return true;
   }
 

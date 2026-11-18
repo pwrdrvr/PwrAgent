@@ -916,7 +916,6 @@ export class MessagingBackendEventRouter {
         if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
           await this.context.host().renderAutomaticBindingStatus(binding);
         }
-        this.context.host().scheduleNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
         const previousTurn = activeTurn;
         activeTurn = {
