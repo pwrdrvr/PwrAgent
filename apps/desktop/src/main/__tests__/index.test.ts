@@ -422,6 +422,7 @@ vi.mock("../shell/ipc/agent-ipc", () => ({
 }));
 
 vi.mock("../shell/ipc/native-voice", () => ({
+  nativeVoiceBusy: () => false,
   nativeVoiceMediaRules: nativeVoiceMediaRulesFixture,
   registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
 }));

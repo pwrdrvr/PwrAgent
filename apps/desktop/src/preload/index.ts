@@ -2,7 +2,11 @@ import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchS
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
-import { TRANSCRIBE_AUDIO_FILE_CHANNEL, type AudioTranscriptionResult } from "../shared/audio-transcription";
+import {
+  DICTATION_AUDIO_CHANNEL, DICTATION_CANCEL_CHANNEL, DICTATION_EVENT_CHANNEL,
+  DICTATION_FINISH_CHANNEL, DICTATION_START_CHANNEL,
+  type DictationApi, type DictationEvent,
+} from "../shared/audio-transcription";
 import {
   HTML_PREVIEW_NAVIGATION_CHANNEL,
   type HtmlPreviewNavigationEvent,
@@ -1310,8 +1314,17 @@ let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
-  transcribeAudioFile: (): Promise<AudioTranscriptionResult> =>
-    ipcRenderer.invoke(TRANSCRIBE_AUDIO_FILE_CHANNEL),
+  dictation: {
+    start: (id) => ipcRenderer.invoke(DICTATION_START_CHANNEL, id),
+    audio: (id, pcm) => ipcRenderer.invoke(DICTATION_AUDIO_CHANNEL, id, pcm),
+    finish: (id) => ipcRenderer.invoke(DICTATION_FINISH_CHANNEL, id),
+    cancel: (id) => ipcRenderer.invoke(DICTATION_CANCEL_CHANNEL, id),
+    onEvent: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: DictationEvent) => callback(value);
+      ipcRenderer.on(DICTATION_EVENT_CHANNEL, listener);
+      return () => { ipcRenderer.removeListener(DICTATION_EVENT_CHANNEL, listener); };
+    },
+  } satisfies DictationApi,
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
     await ipcRenderer.invoke("thread:dependencies", request),
   manageThreadPrWatches: async (request: import("@pwragent/shared").ThreadPrWatchesRequest): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> =>

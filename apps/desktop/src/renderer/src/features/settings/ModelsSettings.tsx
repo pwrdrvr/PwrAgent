@@ -90,7 +90,7 @@ import {
   useAcpAgentCatalog,
 } from "./useAcpAgentCatalog";
 import { SettingsSwitch } from "./SettingsSwitch";
-import { AUDIO_TRANSCRIPTION_PRICE } from "../../../../shared/audio-transcription";
+import { DICTATION_PRICE } from "../../../../shared/audio-transcription";
 import { SecretField } from "./SecretField";
 import {
   DECISION_PROVIDER_FOCUS,
@@ -704,13 +704,13 @@ export function ModelsSettings(props: {
         <SettingsPanelHead
           eyebrow="AI Providers"
           title="Audio transcription"
-          help={`Convert a recording to text with OpenAI gpt-transcribe. OpenAI bills your API project ${AUDIO_TRANSCRIPTION_PRICE} of audio. The composer lets you review the transcript and add it to your draft.`}
+          help={`Use the composer microphone to dictate with OpenAI gpt-live-transcribe. OpenAI bills your API project ${DICTATION_PRICE} of audio. Stop dictation to add the transcript to your draft.`}
         />
         <SettingsSection title="Connection" sectionId="audio-transcription-connection">
           <div className="settings-fields">
             <SecretField
               label="OpenAI project API key"
-              sub="Use a Platform project key with access to the Audio Transcriptions endpoint. Billing is separate from your ChatGPT or Codex subscription."
+              sub="Use an OpenAI Platform project key with Realtime API access. Billing is separate from your ChatGPT or Codex subscription."
               secret="openaiTranscriptionApiKey"
               state={key}
               disabled={props.saving || !key.writable}
@@ -989,7 +989,7 @@ export function ModelsSettings(props: {
           />
           <SettingsIndexRow
             name="Audio transcription"
-            meta="Recorded speech with gpt-transcribe"
+            meta="Live composer dictation with gpt-live-transcribe"
             chip={props.snapshot.models.audioTranscriptionApiKey?.configured ? "Key saved" : "No API key"}
             chipKind={props.snapshot.models.audioTranscriptionApiKey?.configured ? "ok" : "muted"}
             onOpen={() => props.onFocusChange?.(AUDIO_TRANSCRIPTION_FOCUS)}

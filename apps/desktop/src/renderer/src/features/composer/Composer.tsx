@@ -169,6 +169,7 @@ import {
   PencilIcon,
   PlanIcon,
   PlayIcon,
+  MicIcon,
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
@@ -363,7 +364,8 @@ import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
 import { PendingSpinner } from "../../components/PendingSpinner";
-import { AudioTranscriptionDialog } from "./AudioTranscriptionDialog";
+import { useComposerDictation } from "./useComposerDictation";
+import { DICTATION_PRICE } from "../../../../shared/audio-transcription";
 
 export type ComposerProps = {
   activeTurnId?: string;
@@ -3329,8 +3331,7 @@ function useComposerController(props: ComposerProps) {
 
   function useComposerSessionState() {
     const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
-    // Composer voice entry points stay hidden until dictation can edit only the
-    // draft. Keep the bar so an already-open session or failed stop can be ended.
+    // Keep the bar so an already-open voice session or failed stop can be ended.
     const { threadId: nativeVoiceThreadId } = threadVoiceTarget(props.thread, props.launchpad);
     const threadLinks = useThreadLinks();
     const pullRequestLinks = usePullRequestLinks();
@@ -6250,15 +6251,19 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
-  const referenceTriggerRef = useRef<HTMLButtonElement>(null);
-  const [transcriptionScope, setTranscriptionScope] = useState<string>();
-  const transcribeAudio = !filesystemFederationTarget && !isReviewComposerOpen
-    ? props.desktopApi?.transcribeAudioFile
+  const dictationApi = filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
+    ? props.desktopApi?.dictation
     : undefined;
-
-  useEffect(() => {
-    setTranscriptionScope(undefined);
-  }, [composerScopeKey, transcribeAudio]);
+  const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) => {
+    const inserted = activeComposerScopeKeyRef.current === composerScopeKey
+      && inputRef.current?.appendPlainText(text) === true;
+    if (inserted) focusComposerInput();
+    return inserted;
+  });
+  const dictationLabel = dictation.phase === "idle" ? "Dictate with OpenAI"
+    : dictation.phase === "connecting" ? "Cancel dictation"
+      : dictation.phase === "listening" ? "Stop dictation"
+        : "Finishing dictation";
 
   useEffect(() => {
     if (!isReviewComposerOpen) {
@@ -15361,13 +15366,8 @@ function useComposerController(props: ComposerProps) {
                     }
                   : undefined
               }
-              onTranscribeAudio={transcribeAudio ? () => {
-                setAddReferenceMenuOpen(false);
-                setTranscriptionScope(composerScopeKey);
-              } : undefined}
             >
               <button
-                ref={referenceTriggerRef}
                 type="button"
                 className="composer__toggle tooltip-target"
                 aria-label="Add reference"
@@ -15392,6 +15392,19 @@ function useComposerController(props: ComposerProps) {
                 <PlusIcon size={15} aria-hidden="true" />
               </button>
             </ReferencePicker>
+          ) : null}
+
+          {dictationApi ? (
+            <button
+              type="button"
+              className={`composer__toggle tooltip-target${dictation.phase === "idle" ? "" : " is-active"}`}
+              aria-label={dictationLabel}
+              data-tooltip={dictation.phase === "idle" ? `Dictate with OpenAI · ${DICTATION_PRICE}` : dictationLabel}
+              disabled={dictation.phase === "finishing" || launchpadSubmitting}
+              onClick={() => void dictation.toggle()}
+            >
+              <MicIcon size={15} aria-hidden="true" />
+            </button>
           ) : null}
           <ComposerThreadOptionsMenu
             agentThread={props.thread?.agentChange && !props.thread.agentChange.error
@@ -16411,6 +16424,19 @@ function useComposerController(props: ComposerProps) {
           </p>
         ) : null}
 
+        {dictation.error ? <p className="composer__meta composer__meta--error" role="alert">{dictation.error}</p> : null}
+        {dictation.phase !== "idle" ? (
+          <p className="composer__meta" aria-live="polite">
+            {dictation.phase === "connecting" ? "Connecting to OpenAI…"
+              : dictation.phase === "listening" ? "Listening…"
+                : "Finalizing transcript…"}
+          </p>
+        ) : null}
+        {dictation.text ? (
+          <p className="composer__meta composer__dictation-preview" aria-label="Live transcript">
+            {dictation.text}
+          </p>
+        ) : null}
         <div className="composer__input-wrap" ref={inputWrapRef}>
           {isReviewComposerOpen ? (
             renderComposerReviewConfig()
@@ -16504,15 +16530,6 @@ function useComposerController(props: ComposerProps) {
         </fieldset>
         {renderComposerFooter()}
         </form>
-        {transcribeAudio && transcriptionScope === composerScopeKey ? (
-          <AudioTranscriptionDialog
-            transcribe={transcribeAudio}
-            onInsert={(text) => activeComposerScopeKeyRef.current === composerScopeKey
-              && Boolean(inputRef.current?.appendPlainText(text))}
-            onClose={() => setTranscriptionScope(undefined)}
-            returnFocus={referenceTriggerRef}
-          />
-        ) : null}
         {fullAccessRiskDialog}
         {renderComposerImageLightbox()}
       </>
