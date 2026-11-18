@@ -179,6 +179,8 @@ type AcpRolloutStoreLike = {
 
 type AcpActiveTurn = {
   assistantText: string;
+  /** The agent compacted its history while this prompt ran. */
+  compacted?: boolean;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
@@ -1655,6 +1657,15 @@ export class AcpAgentClient {
     ) {
       activeTurn.onTerminalUpdate?.();
     }
+    // Grok reports a compaction, which may summarize the instruction block
+    // away, so the next prompt carries it again. A compaction replayed by
+    // session/load happened before the block was last recorded.
+    if (updateKind === "auto_compact_completed" && !fromSessionLoad) {
+      if (activeTurn) activeTurn.compacted = true;
+      if (this.options.store.getSession(this.options.backendId, sessionId)?.agentInstructionsDigest) {
+        this.recordDeliveredAgentInstructions(sessionId, undefined);
+      }
+    }
     if (isProviderTranscriptReplayUpdate(update)) {
       if (loadState) {
         loadState.replayedTranscript = true;
@@ -2227,9 +2238,9 @@ export class AcpAgentClient {
         },
         ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
       );
-      // Recorded once the agent has answered the prompt. A prompt that fails
-      // leaves the session due the instructions again.
-      if (sendInstructions) {
+      // Recorded once the agent has answered the prompt. A prompt that fails,
+      // or that compacted the block away, leaves the session due it again.
+      if (sendInstructions && !activeTurn?.compacted) {
         this.recordDeliveredAgentInstructions(params.sessionId, digest);
       }
       return result;

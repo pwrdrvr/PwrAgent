@@ -1,0 +1,3 @@
+{
+  "acp-compaction-instruction-redelivery": {"commits": 1, "note": "Two reports of one Grok compaction: the first clears the session's delivery record, the second finds nothing to clear; one commit (~16 KB WAL) per compaction, ~0.16 MB/day at 10 compactions a day", "observedWalBytes": 0, "rowsChanged": 1, "statements": 1}
+}

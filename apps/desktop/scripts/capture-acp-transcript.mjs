@@ -37,6 +37,12 @@ if (!COMMAND) {
 const ARGS = (flag("args") ?? "").split(",").filter(Boolean);
 const CWD = flag("cwd", os.tmpdir());
 const PROMPT = flag("prompt", "tell me your favorite breakfast cereal");
+// Each `--then-prompt <text>` is sent after the first prompt, in order, in the
+// same session — for behavior that needs several turns, such as compaction
+// (send the agent's `/compact` command as one of them).
+const THEN_PROMPTS = process.argv.flatMap((arg, index) => (
+  arg === "--then-prompt" ? [process.argv[index + 1]] : []
+));
 const QUIET_MS = Number(flag("quiet-ms", "6000"));
 const HARD_TIMEOUT_MS = Number(flag("timeout-ms", "180000"));
 const ALLOW_TOOLS = process.argv.includes("--allow-tools");
@@ -237,6 +243,9 @@ try {
     prompt: [{ type: "text", text: PROMPT }],
   });
   promptCompleted = true;
+  for (const text of THEN_PROMPTS) {
+    await send("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+  }
   // A refusal is part of the capture, not a failed one.
   for (const method of AFTER_METHODS) {
     await send(method, { sessionId }).catch(() => undefined);
