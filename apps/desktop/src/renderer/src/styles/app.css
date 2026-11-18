@@ -26158,6 +26158,19 @@ a.button {
   color: var(--text-primary);
 }
 
+/* The recovery slot (this card, the hibernated-checkout card that shares it,
+   and the result notice) is a flex item of `.thread-view__primary` beside the
+   composer, not a row inside it, so it does not get the composer's 16px side
+   padding or its centred `--chat-column-max` column. It takes that column
+   itself; otherwise it runs edge to edge across the pane while the composer
+   below it sits inset. See `styles/__tests__/recovery-slot-column.test.ts`. */
+.thread-view__primary > .missing-worktree-card,
+.thread-view__primary > .workspace-recovery-notice {
+  align-self: center;
+  width: calc(100% - 32px);
+  max-width: var(--chat-column-max);
+}
+
 /* The env setup row's scanner, on the card's top edge while Git runs. */
 .missing-worktree-card--busy::before {
   position: absolute;
