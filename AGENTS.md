@@ -79,6 +79,7 @@ Read the task-specific references below before doing the work they cover. They c
 - Use existing theme tokens before local CSS. Prefer thread-first information hierarchy. Do not put scaffold narration or placeholder implementation text in the UI.
 - Before changing window chrome, title strips, brand marks, breadcrumbs, eyebrows, or path/application rows, read [docs/desktop-chrome-tokens.md](docs/desktop-chrome-tokens.md). Reuse canonical token references and `BrandLockup`; keep brand presentation identical across windows and change contract tests with intentional token changes.
 - Before changing lenses, Attention membership/order, unread state, drafts, pins, drag/grouping, reply acceptance, queued sends, or owner/federation behavior affecting them, read [docs/thread-navigation-rules.md](docs/thread-navigation-rules.md).
+- Before changing how an Agent's instructions reach a backend, or adding a backend, read [docs/agent-instructions.md](docs/agent-instructions.md). Each backend delivers them once; an Agent in a repository never has an instruction file written there.
 - Threads are first-class and can exist without a directory or link to multiple Git directories. Keep unsent drafts local to the viewer's machine; never federate draft text. Report replies only after backend acceptance, including queued sends; failed sends keep the thread in Attention.
 
 ## Pull Requests, Releases, and Licenses

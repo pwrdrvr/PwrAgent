@@ -27,7 +27,7 @@ export interface ThreadNamingHost {
   readTitle(identity: OwnerThreadIdentity): Promise<AppServerThreadSummary | undefined>;
   renameProvider(request: RenameThreadRequest, titleSource: AppServerThreadTitleSource): Promise<{ threadId: string }>;
   getAgent(identity: OwnerThreadIdentity): Promise<ThreadAgentMetadata | undefined>;
-  setAgent(identity: OwnerThreadIdentity, agent: Pick<ThreadAgentMetadata, "name" | "instructions">): Promise<void>;
+  setAgent(identity: OwnerThreadIdentity, agent: Pick<ThreadAgentMetadata, "name" | "instructions" | "instructionsDelivery">): Promise<void>;
   invalidate(backend: AppServerBackendKind): void;
   emit(event: AgentEvent): Promise<void>;
   now(): number;
@@ -141,6 +141,8 @@ export class ThreadNamingLifecycle {
     if (agent) await this.host.setAgent(renamed, {
       name: request.name.trim(),
       ...(agent.instructions ? { instructions: agent.instructions } : {}),
+      // A rename changes the name only. How the instructions are delivered stays.
+      ...(agent.instructionsDelivery ? { instructionsDelivery: agent.instructionsDelivery } : {}),
     });
     this.host.invalidate(backend);
     if (!isAcpBackendId(backend)) await this.announce(backend, result.threadId, request.name, source, options);

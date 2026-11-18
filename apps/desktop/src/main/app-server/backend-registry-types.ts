@@ -309,6 +309,10 @@ export type BackendClient = {
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
+  provideThreadDeveloperInstructions?: CodexAppServerClient["provideThreadDeveloperInstructions"];
+  replaceThreadDeveloperInstructions?(
+    params: Parameters<CodexAppServerClient["replaceThreadDeveloperInstructions"]>[0],
+  ): Promise<void>;
   startThread(params: {
     cwd?: string;
     ephemeral?: boolean;
@@ -325,6 +329,7 @@ export type BackendClient = {
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadSource;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
+    developerInstructions?: string;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
