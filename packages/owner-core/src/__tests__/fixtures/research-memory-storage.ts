@@ -5,9 +5,28 @@ import {
 } from "@pwragent/shared/research";
 import type { ResearchStorage } from "../../research-storage";
 
+const replayed = new WeakMap<ResearchEvent[], ResearchRun>();
+
+/** Reuse a frozen snapshot until its append-only journal grows. */
+export function replayResearchJournal(id: string, records: ResearchEvent[] | undefined): ResearchRun | undefined {
+  if (!records) return undefined;
+  const held = replayed.get(records);
+  if (held?.id === id && held.revision === records.length) return held;
+  const run = deepFreeze(projectResearchRun(id, structuredClone(records)));
+  replayed.set(records, run);
+  return run;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
+  return value;
+}
+
 /**
- * Journals in memory. Every read replays the journal and answers from
- * `projectResearchRun`, so this storage is the oracle for what a stored
+ * Journals in memory. Reads answer from `projectResearchRun` at the current
+ * revision, so this storage is the oracle for what a stored
  * projection must return. Membership follows the SQLite store: the
  * coordinator, or any thread a worker event has named.
  */
@@ -17,8 +36,7 @@ export class MemoryResearchStorage implements ResearchStorage {
   readonly workers = new Map<string, ResearchThread[]>();
 
   get(id: string): ResearchRun | undefined {
-    const records = this.records.get(id);
-    return records ? projectResearchRun(id, structuredClone(records)) : undefined;
+    return replayResearchJournal(id, this.records.get(id));
   }
   /** Every run, replayed, newest first as the SQLite store orders them. */
   all(): ResearchRun[] {

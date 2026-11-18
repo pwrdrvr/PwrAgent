@@ -39,13 +39,13 @@ describe("messaging inbound owner", () => {
       const trace: string[] = [];
       const actual = messagingModules(f.controller).inboundHost();
       // Object spread cannot copy prototype operations from an actual owner.
-      // Supply the exact queue operations as bound ports, even though this
+      // Supply the exact ingress operations as bound ports, even though this
       // protocol only appends; no missing method may turn a mutation green.
       const admission = actual.turnAdmission;
       const admissionPorts = {
         append: async () => { trace.push("replacement append"); },
         markStarting: admission.markStarting.bind(admission), clearStarting: admission.clearStarting.bind(admission),
-        isStarting: admission.isStarting.bind(admission), enqueue: admission.enqueue.bind(admission),
+        isStarting: admission.isStarting.bind(admission),
       };
       let selected: MessagingInboundHost = {
         ...actual,
@@ -73,7 +73,7 @@ describe("messaging inbound owner", () => {
       const owner = new MessagingInboundTurns(contextFor(f, () => ({ ...actual, turnAdmission: {
         append: async () => { if (++calls === 1) throw failure; },
         markStarting: admission.markStarting.bind(admission), clearStarting: admission.clearStarting.bind(admission),
-        isStarting: admission.isStarting.bind(admission), enqueue: admission.enqueue.bind(admission),
+        isStarting: admission.isStarting.bind(admission),
       } })));
       const failure = new Error("Fixture append rejection");
       try {
@@ -102,7 +102,7 @@ describe("messaging inbound owner", () => {
           turnAdmission: {
             append: async () => { appended++; },
             markStarting: admission.markStarting.bind(admission), clearStarting: admission.clearStarting.bind(admission),
-            isStarting: admission.isStarting.bind(admission), enqueue: admission.enqueue.bind(admission),
+            isStarting: admission.isStarting.bind(admission),
           },
         })));
         await owner.handleText(f.event());

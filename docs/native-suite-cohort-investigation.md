@@ -66,7 +66,7 @@ been demonstrated.
 | `auto-updater.request-budget.property.test.ts` | #3852 owns request-budget fixtures; keep its independent changes intact. |
 | `backend-registry-wiring.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
 | `checkout-directory-owners.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
-| `checkout-hibernation.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
+| `checkout-hibernation.test.ts` | Historical deadlines remain unattributed. A [later multi-wave batch follow-up](checkout-hibernation-fixture-ownership.md) independently proves whole-test retirement and admission gaps. |
 | `composer-bytecode.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
 | `federation-resumable-blob.property.test.ts` | #3856 joins aborted/dropped receiver generations; exact dropped-chunk regression retained. |
 | `federation-small-blob.property.test.ts` | Investigated deadline-only observation; no independent current invariant or readiness failure demonstrated. Preserve the historical failure without attributing it to load or isolated success. |
@@ -127,3 +127,65 @@ build hook and repository CI. The documented sandbox-only signing bootstrap is
 rerun with the exact command natively; binaries and signature checks are not
 changed. Protected recordings and SQLite budgets remain byte-identical to the
 base. No local E2E run is claimed by these unit-test results.
+
+## Held-updater follow-up after #3876
+
+This is new evidence, not a reclassification of the historical deadlines above.
+The turn-state extraction at `a473f7b70` passed 29,501 tests but timed out only
+in the held Windows installer property after 243.53 seconds. Its isolated
+11-test file passed in 2.54 seconds. The immutable log hashes are
+`6286f43e66c58799a755237ef5d96c9bc8289dd5d372089b3b34999e02273442`
+and `f8f08f3a5afd59c38c04bd43348049e02a3ef96c63da6236f75e8ff03a221389`.
+The updater test is byte-identical between that base and investigation main
+`3f204925845904aaead5e8fa2281c05683736013`; the messaging extraction is not part
+of this fix. The older request-budget and inbound-turn runs also contain this
+property's deadline, without a seed or staging assertion. Their initiating
+causes remain unattributed.
+
+A single instrumented normal-default native full run on investigation main
+reproduced the same sole deadline: 29,533 passed, one failed, 108 skipped,
+295.23 seconds. The model reached 336 of its 400 sessions and issued 11,196
+native scheduling fences. It spent 3,480 ms awaiting those fences, with 1,327 ms
+of worker-process CPU in 5,020 ms wall time. This directly observes scheduling
+delay in this run; load average alone did not establish it. No seed was printed.
+Phase timings overlap, and instrumentation contributes overhead.
+
+The fixture unconditionally waited three native turns after every command,
+including idle commands. It also omitted cached-installer validation promises
+from its readiness/retirement accounting. The new rule joins each cached
+validation before declaring readiness or clearing its cache, reports validation
+failures, and uses one native boundary to drain the synchronous promise graph.
+It rechecks after validation because completion can release another track check.
+
+Four minimal controlled regressions fail against the pre-fix drain. A real
+installer file and gated read show premature readiness, cache retirement before
+the read (ENOENT), and a validation failure lost by the drain. The idle-work
+oracle independently bounds native checkpoints. These gates establish the
+readiness/retirement violation without an elapsed-time race. They do not claim
+that an ENOENT occurred in the supplied full run.
+
+Cold instrumented 400-session probes recorded 13,416 native fences before the
+fix and 4,504 after it (2,851 and 2,863 generated commands respectively). No seed
+was selected or retried. All 400 medium sessions, the 30-command bound, the
+independent on-disk installer oracle, native staging assertions and cancellation
+coverage remain. The four new tests join the existing test owner.
+
+A single post-fix instrumented native full run passed 29,595 tests, 108 skipped,
+in 264.92 seconds. The held property completed all 400 sessions in 1,375 ms,
+with 4,557 fences and 700 ms awaiting them. Main advanced to `73ed37b70` before
+the pre-fix oracle and fixed checks, so this is not a paired whole-suite speed
+comparison. Updater test/production sources and dependency manifests/lockfile
+are unchanged across those bases. An upstream SQLite budget change is retained
+byte-identically to the new base; this PR makes no budget change.
+
+The failed main full-log SHA-256 is
+`d13c7450105d879902d583f791054909d1b219bcc58ff2c6e682523f226cb261`;
+the fixed full-log SHA-256 is
+`0ec8e58ea70c00581bf19d02f14db8696329a8f78d2a7c017126369a2d141560`.
+
+All evidence is retained in `.local/updater-held-deadline/`, including the
+supplied byte-identical logs, failed main comparison, phase observations,
+pre-fix assertions and fixed validation. The own-worktree frozen install and
+normal native bootstrap are used; no investigation static checks overlap the
+full runs. Protected recordings and SQLite budgets match the fixed validation
+base. No local E2E result is claimed.

@@ -97,6 +97,7 @@ type DiscoveryState = {
  */
 export class CodexModelProviderCatalog {
   private readonly discovery = new Map<string, DiscoveryState>();
+  private discoveryGeneration = 0;
 
   constructor(private readonly options: {
     resolveProviders: () => CodexModelProviderSettings[];
@@ -108,6 +109,7 @@ export class CodexModelProviderCatalog {
   }) {}
 
   invalidate(): void {
+    this.discoveryGeneration += 1;
     this.discovery.clear();
   }
 
@@ -118,11 +120,22 @@ export class CodexModelProviderCatalog {
 
   /** Runtime discovery uses the same bounded, authenticated read as the picker. */
   async resolveRuntimeProvider(provider: CodexModelProviderSettings): Promise<CodexModelProviderSettings> {
-    const keys = provider.discoverModels === false ? {} : await this.options.resolveKeys().catch((): Record<string, string> => ({}));
-    const discovered = provider.discoverModels === false ? []
-      : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
+    let discovery: Discovery | undefined;
+    while (provider.discoverModels !== false) {
+      const generation = this.discoveryGeneration;
+      const keys = await this.options.resolveKeys().catch((): Record<string, string> => ({}));
+      const state = await this.discover(provider, keys[provider.id], generation);
+      if (state && this.discovery.get(provider.id) === state) {
+        discovery = state.discovery;
+        break;
+      }
+      // A save or refresh invalidated this read. Join the current discovery
+      // while the runtime's endpoint still belongs to the configured provider.
+      const current = this.options.resolveProviders().find(({ id }) => id === provider.id);
+      if (!current || current.baseUrl !== provider.baseUrl || current.discoverModels === false) break;
+    }
     const metadata = new Map((provider.modelMetadata ?? []).map((model) => [model.id, { ...model }]));
-    for (const model of discovered) {
+    for (const model of discovery?.models ?? []) {
       // Fresh serving limits supersede saved observations. Discovery cannot
       // assert verified search support, so that capability remains separate.
       metadata.set(model.id, { ...model, ...metadata.get(model.id),
@@ -133,13 +146,14 @@ export class CodexModelProviderCatalog {
   }
 
   async listModelOptions(): Promise<BackendModelOption[]> {
+    const generation = this.discoveryGeneration;
     const providers = this.options.resolveProviders();
     if (providers.length === 0) return [];
     const keys = await this.options.resolveKeys().catch((): Record<string, string> => ({}));
     const perProvider = await Promise.all(providers.map(async (provider) => {
       const discovered = provider.discoverModels === false
         ? []
-        : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
+        : (await this.discover(provider, keys[provider.id], generation))?.discovery?.models ?? [];
       return providerModelOptions(provider, discovered);
     }));
     return perProvider.flat();
@@ -199,16 +213,16 @@ export class CodexModelProviderCatalog {
   private async discover(
     provider: CodexModelProviderSettings,
     apiKey: string | undefined,
-  ): Promise<DiscoveryState> {
+    generation: number,
+  ): Promise<DiscoveryState | undefined> {
+    // Settings can save again while a read waits for its provider keys.
+    if (generation !== this.discoveryGeneration) return undefined;
     const now = this.options.now?.() ?? Date.now();
     const fingerprint = `${provider.baseUrl}\u0000${apiKey ? "key" : ""}`;
     const cached = this.discovery.get(provider.id);
-    if (cached?.fingerprint === fingerprint) {
-      if (cached.promise) {
-        await cached.promise;
-        return cached;
-      }
-      if (cached.expiresAt > now) return cached;
+    if (cached?.fingerprint === fingerprint && (cached.promise || cached.expiresAt > now)) {
+      if (cached.promise) await cached.promise;
+      return this.discovery.get(provider.id) === cached ? cached : undefined;
     }
     const state: DiscoveryState = { fingerprint, expiresAt: 0 };
     state.promise = this.fetchModels(provider.baseUrl, apiKey)
@@ -226,7 +240,7 @@ export class CodexModelProviderCatalog {
       });
     this.discovery.set(provider.id, state);
     await state.promise;
-    return state;
+    return this.discovery.get(provider.id) === state ? state : undefined;
   }
 
   private async fetchModels(baseUrl: string, apiKey: string | undefined): Promise<Discovery> {

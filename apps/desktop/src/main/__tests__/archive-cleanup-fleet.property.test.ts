@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
@@ -78,7 +78,7 @@ vi.mock("../app-server/thread-assets", async (importOriginal) => ({
 }));
 
 const THREADS = ["t0", "t1", "t2", "t3", "t4", "t5"];
-const CHECKOUTS = ["/contrived/worktrees/c0", "/contrived/worktrees/c1", "/contrived/worktrees/c2", "/contrived/worktrees/c3"];
+const CHECKOUTS = ["/contrived/worktrees/c0", "/contrived/worktrees/c1", "/contrived/worktrees/c2", "/contrived/worktrees/c3"] as const;
 /** A symlink to c0: an owner reached through it is still c0's owner. */
 const ALIAS = "/contrived/aliases/c0";
 const PLACES = [...CHECKOUTS, ALIAS, `${CHECKOUTS[1]}/nested`, "/contrived/projects/home"];
@@ -121,8 +121,8 @@ function archivedOwners(world: World, checkout: string): string[] {
   return [...world.fleet.rows].filter(([id, row]) => row.archived && uses(world, id, checkout)).map(([id]) => id);
 }
 
-function start(world: World): void {
-  const { registry } = buildFleetRegistry(fsModel, world.fleet, world.checkpoint, {
+function start(world: World): ReturnType<typeof buildFleetRegistry> {
+  const fixture = buildFleetRegistry(fsModel, world.fleet, world.checkpoint, {
     instanceId: `model-${world.instance}`,
     parkBeforeRemove: async () => await new Promise((resolve) => setTimeout(resolve, ARCHIVE_CLEANUP_PAUSE_MS)),
     onRemove: (checkout) => {
@@ -138,7 +138,8 @@ function start(world: World): void {
       world.snapshots.set(checkout, holders);
     },
   });
-  world.registry = registry;
+  world.registry = fixture.registry;
+  return fixture;
 }
 
 async function publish(world: World, method: string, threadId: string): Promise<void> {
@@ -183,14 +184,40 @@ async function tolerate(work: () => Promise<unknown>): Promise<void> {
 
 type Command = fc.AsyncCommand<object, World>;
 
+async function archive(world: World, thread: string): Promise<void> {
+  if (world.fleet.rows.get(thread)?.archived !== false) return;
+  await tolerate(async () => await world.registry.archiveThread({ backend: "codex", threadId: thread, backgroundCleanup: true }));
+  if (world.fleet.rows.get(thread)?.archived) world.cleanupRequested.add(thread);
+}
+
+function restoreProviderRow(world: World, thread: string): boolean {
+  const row = world.fleet.rows.get(thread);
+  if (!row?.archived) return false;
+  row.archived = false;
+  row.updatedAt = ++world.clock;
+  world.cleanupRequested.delete(thread);
+  return true;
+}
+
+async function deleteThread(world: World, thread: string): Promise<void> {
+  if (!world.fleet.rows.delete(thread)) return;
+  world.fleet.overlays.delete(thread);
+  world.cleanupRequested.delete(thread);
+  await publish(world, "thread/deleted", thread);
+}
+
+async function restart(world: World): Promise<void> {
+  // Quit checkpoints what is pending; a new process claims and resumes it.
+  await drive(world.registry.close());
+  world.instance += 1;
+  start(world);
+  await drive(world.registry.resumeArchiveCleanupsAtStartup());
+}
+
 const commands: Array<fc.Arbitrary<Command>> = [
   fc.record({ thread: fc.constantFrom(...THREADS) }).map(({ thread }) => ({
     check: () => true,
-    run: async (_model, world) => {
-      if (world.fleet.rows.get(thread)?.archived !== false) return;
-      await tolerate(async () => await world.registry.archiveThread({ backend: "codex", threadId: thread, backgroundCleanup: true }));
-      if (world.fleet.rows.get(thread)?.archived) world.cleanupRequested.add(thread);
-    },
+    run: async (_model, world) => await archive(world, thread),
     toString: () => `archive(${thread})`,
   })),
   fc.record({ thread: fc.constantFrom(...THREADS), checkout: fc.constantFrom(...CHECKOUTS, ALIAS) }).map(({ thread, checkout }) => ({
@@ -238,24 +265,14 @@ const commands: Array<fc.Arbitrary<Command>> = [
   fc.record({ thread: fc.constantFrom(...THREADS) }).map(({ thread }) => ({
     check: () => true,
     run: async (_model, world) => {
-      const row = world.fleet.rows.get(thread);
-      if (!row?.archived) return;
       // A reported restore from outside this registry.
-      row.archived = false;
-      row.updatedAt = ++world.clock;
-      world.cleanupRequested.delete(thread);
-      await publish(world, "thread/unarchived", thread);
+      if (restoreProviderRow(world, thread)) await publish(world, "thread/unarchived", thread);
     },
     toString: () => `restore(${thread})`,
   })),
   fc.record({ thread: fc.constantFrom(...THREADS) }).map(({ thread }) => ({
     check: () => true,
-    run: async (_model, world) => {
-      if (!world.fleet.rows.delete(thread)) return;
-      world.fleet.overlays.delete(thread);
-      world.cleanupRequested.delete(thread);
-      await publish(world, "thread/deleted", thread);
-    },
+    run: async (_model, world) => await deleteThread(world, thread),
     toString: () => `delete(${thread})`,
   })),
   fc.integer({ min: 1, max: 6 }).map((ticks) => ({
@@ -265,13 +282,7 @@ const commands: Array<fc.Arbitrary<Command>> = [
   })),
   fc.constant<Command>({
     check: () => true,
-    run: async (_model, world) => {
-      // Quit checkpoints what is pending; a new process claims and resumes it.
-      await drive(world.registry.close());
-      world.instance += 1;
-      start(world);
-      await drive(world.registry.resumeArchiveCleanupsAtStartup());
-    },
+    run: async (_model, world) => await restart(world),
     toString: () => "restart",
   }),
 ];
@@ -282,65 +293,149 @@ const initialWorld = fc.record({
   extras: fc.array(fc.subarray([...CHECKOUTS, ALIAS], { maxLength: 2 }), { minLength: THREADS.length, maxLength: THREADS.length }),
 });
 
-const worlds: World[] = [];
-afterEach(async () => {
-  for (const world of worlds.splice(0)) {
-    await drive(world.registry.close()).catch(() => {});
-    world.db.close();
+function expectArchiveOwnership(world: World): void {
+  expect(world.violations).toEqual([]);
+  for (const checkout of CHECKOUTS) {
+    const removed = fsModel.removed.has(checkout);
+    const owners = archivedOwners(world, checkout).filter((owner) => world.cleanupRequested.has(owner));
+    if (!removed && owners.length && !activeUsers(world, checkout).length) {
+      throw new Error(`${checkout} was released by its last active user but never removed (owners ${owners.join(", ")})`);
+    }
+    if (removed) {
+      const holders = world.snapshots.get(checkout) ?? new Set<string>();
+      for (const owner of world.owedSnapshots.get(checkout) ?? []) {
+        if (!holders.has(owner)) throw new Error(`${owner} owned ${checkout} when it was removed but holds no snapshot`);
+      }
+    }
   }
-  vi.useRealTimers();
-});
+}
+
+async function runScenario(
+  dbPath: string,
+  initial: { places: string[]; extras: string[][] },
+  run: (world: World, fixture: ReturnType<typeof buildFleetRegistry>) => Promise<void>,
+): Promise<void> {
+  vi.useFakeTimers();
+  fsModel.removed.clear();
+  fsModel.aliases.clear();
+  fsModel.aliases.set(ALIAS, CHECKOUTS[0]!);
+  const db = StateDb.open(dbPath);
+  db.raw.prepare("DELETE FROM meta WHERE key GLOB 'archive_cleanup_checkpoint_*'").run();
+  const fleet: Fleet = { rows: new Map(), overlays: new Map(), targets: [...THREADS], checkouts: new Set(CHECKOUTS) };
+  THREADS.forEach((id, index) => {
+    fleet.rows.set(id, { thread: raw(id, initial.places[index]!), archived: false, updatedAt: 1_000 + index });
+    const extras = initial.extras[index]!;
+    if (extras.length) fleet.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories: extras.map((value) => worktree(`${id}:${value}`, value)) });
+  });
+  const world: World = {
+    fleet, registry: undefined as never, instance: 0, clock: 10_000, cleanupRequested: new Set(), snapshots: new Map(), owedSnapshots: new Map(), violations: [],
+    db, checkpoint: new ArchiveCleanupCheckpointStore(db.raw, { processId: 4242, processAlive: () => false }),
+  };
+  const fixture = start(world);
+  try {
+    await run(world, fixture);
+    await settle(world);
+    expectArchiveOwnership(world);
+  } finally {
+    try { await drive(world.registry.close()); }
+    finally {
+      db.close();
+      vi.useRealTimers();
+    }
+  }
+}
+
+async function runDelayedUnarchive(dbPath: string, owner: string, user: string, settleBeforeEmit: boolean): Promise<void> {
+  const [checkout, otherCheckout] = CHECKOUTS;
+  await runScenario(dbPath, {
+    places: THREADS.map((thread) => thread === owner || thread === user ? checkout : otherCheckout),
+    extras: THREADS.map(() => []),
+  }, async (world, fixture) => {
+    await archive(world, owner);
+    await settle(world);
+    expect(restoreProviderRow(world, owner)).toBe(true);
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    // The provider event has applied its lifecycle changes at ingress by the
+    // time it writes the tombstone. Park it here before the registry emits it.
+    fixture.setThreadArchiveTombstone.mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+    });
+    const delivery = fixture.receiveProviderNotification({ method: "thread/unarchived", params: { threadId: owner } });
+    try {
+      await drive(entered.promise);
+      await archive(world, owner);
+      if (settleBeforeEmit) await settle(world);
+      expect(archivedOwners(world, checkout)).toEqual([owner]);
+      expect(activeUsers(world, checkout)).toEqual([user]);
+    } finally {
+      resume.resolve();
+      await drive(delivery);
+    }
+    // Publication of the earlier unarchive cannot retire the newer cleanup.
+    await deleteThread(world, user);
+  });
+}
 
 describe("bulk archive cleanup model", () => {
+  it.each(["t0", "t5"])("releases the shared checkout after restart when %s is deleted first", async (firstDeleted) => {
+    const temp = createTempStateDb("pwragent-archive-model-");
+    const [c0, , c2, c3] = CHECKOUTS;
+    try {
+      await runScenario(temp.dbPath, {
+        places: [c0, c0, c2, c3, c0, c0],
+        extras: [[], [], [], [], [], []],
+      }, async (world) => {
+        await archive(world, "t1");
+        await deleteThread(world, "t4");
+        await archive(world, "t0");
+        await restart(world);
+        expect(new Set(archivedOwners(world, c0))).toEqual(new Set(["t0", "t1"]));
+        expect(activeUsers(world, c0)).toEqual(["t5"]);
+        expect(fsModel.removed.has(c0)).toBe(false);
+        await deleteThread(world, firstDeleted);
+        await deleteThread(world, firstDeleted === "t0" ? "t5" : "t0");
+        expect(archivedOwners(world, c0)).toEqual(["t1"]);
+      });
+    } finally {
+      removeTempStateDbDir(temp.tempDir);
+    }
+  });
+
+  it.each([
+    { owner: "t2", user: "t3", settleBeforeEmit: false },
+    { owner: "t0", user: "t1", settleBeforeEmit: true },
+  ])("keeps cleanup for $owner when an earlier unarchive finally emits", async ({ owner, user, settleBeforeEmit }) => {
+    const temp = createTempStateDb("pwragent-archive-model-");
+    try {
+      await runDelayedUnarchive(temp.dbPath, owner, user, settleBeforeEmit);
+    } finally {
+      removeTempStateDbDir(temp.tempDir);
+    }
+  });
+
+  it("preserves the later archive across delayed unarchive delivery", async () => {
+    const temp = createTempStateDb("pwragent-archive-model-");
+    try {
+      const threads = fc.shuffledSubarray(THREADS, { minLength: 2, maxLength: 2 });
+      await fc.assert(fc.asyncProperty(threads, fc.boolean(), async ([owner, user], settleBeforeEmit) => {
+        await runDelayedUnarchive(temp.dbPath, owner!, user!, settleBeforeEmit);
+      }), { numRuns: 12 });
+    } finally {
+      removeTempStateDbDir(temp.tempDir);
+    }
+  });
+
   it("never removes a used checkout, releases every final reference, and keeps every owner restorable", async () => {
     const temp = createTempStateDb("pwragent-archive-model-");
     try {
       await fc.assert(fc.asyncProperty(initialWorld, fc.commands(commands, { maxCommands: 14 }), async (initial, generated) => {
-        vi.useFakeTimers();
-        fsModel.removed.clear();
-        fsModel.aliases.clear();
-        fsModel.aliases.set(ALIAS, CHECKOUTS[0]!);
-        const db = StateDb.open(temp.dbPath);
-        db.raw.prepare("DELETE FROM meta WHERE key GLOB 'archive_cleanup_checkpoint_*'").run();
-        const fleet: Fleet = { rows: new Map(), overlays: new Map(), targets: [...THREADS], checkouts: new Set(CHECKOUTS) };
-        THREADS.forEach((id, index) => {
-          fleet.rows.set(id, { thread: raw(id, initial.places[index]!), archived: false, updatedAt: 1_000 + index });
-          const extras = initial.extras[index]!;
-          if (extras.length) fleet.overlays.set(id, { backend: "codex", threadId: id, extraLinkedDirectories: extras.map((value) => worktree(`${id}:${value}`, value)) });
+        await runScenario(temp.dbPath, initial, async (world) => {
+          await fc.asyncModelRun(() => ({ model: {}, real: world }), generated);
         });
-        const world: World = {
-          fleet, registry: undefined as never, instance: 0, clock: 10_000, cleanupRequested: new Set(), snapshots: new Map(), owedSnapshots: new Map(), violations: [],
-          db, checkpoint: new ArchiveCleanupCheckpointStore(db.raw, { processId: 4242, processAlive: () => false }),
-        };
-        worlds.push(world);
-        start(world);
-        await fc.asyncModelRun(() => ({ model: {}, real: world }), generated);
-        await settle(world);
-        expect(world.violations).toEqual([]);
-        for (const checkout of CHECKOUTS) {
-          const removed = fsModel.removed.has(checkout);
-          const owners = archivedOwners(world, checkout).filter((owner) => world.cleanupRequested.has(owner));
-          if (!removed && owners.length && !activeUsers(world, checkout).length) {
-            throw new Error(`${checkout} was released by its last active user but never removed (owners ${owners.join(", ")})`);
-          }
-          if (removed) {
-            const holders = world.snapshots.get(checkout) ?? new Set<string>();
-            for (const owner of world.owedSnapshots.get(checkout) ?? []) {
-              if (!holders.has(owner)) throw new Error(`${owner} owned ${checkout} when it was removed but holds no snapshot`);
-            }
-          }
-        }
-        await drive(world.registry.close());
-        db.close();
-        worlds.splice(worlds.indexOf(world), 1);
-        vi.useRealTimers();
       }), { numRuns: 30 });
     } finally {
-      // A failed run leaves its world open; Windows cannot remove an open database.
-      for (const world of worlds.splice(0)) {
-        await drive(world.registry.close()).catch(() => {});
-        world.db.close();
-      }
       removeTempStateDbDir(temp.tempDir);
     }
   }, 60_000);

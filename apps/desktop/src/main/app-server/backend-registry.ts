@@ -576,7 +576,6 @@ import { getMainLogger } from "../log";
 import {
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
-import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
@@ -960,10 +959,7 @@ export class DesktopBackendRegistry {
   private readonly threadDirectoryService: ThreadDirectoryService;
   private readonly codexRuntimeSupervisor: CodexRuntimeSupervisor;
   private readonly codexClient: BackendClient;
-  private readonly configStore?: Pick<
-    DesktopConfigStore,
-    "read" | "subscribe"
-  >;
+  private readonly configStore: RegistryDependencies["configStore"];
   private codexBackendSummary?: BackendSummary;
   private codexBackendGeneration = 0;
   /**
@@ -1658,11 +1654,12 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly codexProviderCatalogRetry: CodexProviderCatalogRetry;
   /**
-   * Bumped on every saved change to the Codex model provider list. A model
-   * read that began before the change describes the old list, so it must
-   * not be published over the newer one.
+   * Bumped on every explicit save or change from disk to the Codex model
+   * provider list. Reads from an earlier revision cannot publish over it.
    */
   private codexModelProviderRevision = 0;
+  /** Orders catalog refreshes that share one saved provider list. */
+  private codexModelProviderRefreshRevision = 0;
   /** Publications of provider list changes, in the order they were saved. */
   private codexModelProviderPublication: Promise<void> = Promise.resolve();
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
@@ -16269,14 +16266,15 @@ export class DesktopBackendRegistry {
 
   /**
    * `refreshCodexProviderCatalogs`, also saying whether the read reached the
-   * cached summary. It does not when the summary was dropped or replaced
-   * during the read, or a newer provider list was saved.
+   * cached summary. A newer refresh, provider save, or runtime change can
+   * supersede it while it reads.
    */
   private async refreshAndPublishCodexProviderCatalogs(
     options: { rereadProviders?: true | readonly string[] } = {},
   ): Promise<{ states: readonly CodexModelProviderCatalogState[]; published: boolean }> {
     const generation = this.codexBackendGeneration;
     const providerRevision = this.codexModelProviderRevision;
+    const refreshRevision = ++this.codexModelProviderRefreshRevision;
     const reread = options.rereadProviders;
     if (reread === true) {
       this.codexModelProviderCatalog?.invalidate();
@@ -16284,19 +16282,24 @@ export class DesktopBackendRegistry {
       for (const providerId of reread ?? []) this.codexModelProviderCatalog?.invalidateProvider(providerId);
     }
     this.modelCatalog.invalidate("codex");
-    const models = await this.modelCatalog.readModels("codex", reread ? "settings-refresh" : "provider-catalog-retry");
+    const result = await this.modelCatalog.readModels("codex", reread ? "settings-refresh" : "provider-catalog-retry").then(
+      (models) => ({ models }),
+      (error: unknown) => ({ error }),
+    );
     const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
+    if (
+      this.closed
+      || generation !== this.codexBackendGeneration
+      || providerRevision !== this.codexModelProviderRevision
+      || refreshRevision !== this.codexModelProviderRefreshRevision
+    ) return { states, published: false };
+    if ("error" in result) throw result.error;
     // A refresh from Settings that finds a provider down arms the automatic
     // retry. The retry's own refresh is ignored here; it observes on return.
     this.codexProviderCatalogRetry.observe(states);
-    // A provider list saved during the read publishes its own refresh.
-    if (
-      generation !== this.codexBackendGeneration
-      || providerRevision !== this.codexModelProviderRevision
-      || !this.codexBackendSummary
-    ) return { states, published: false };
+    if (!this.codexBackendSummary) return { states, published: false };
     const { codexModelProviders: previousStates, ...summary } = this.codexBackendSummary;
-    const launchpadOptions = buildLaunchpadOptions("codex", models);
+    const launchpadOptions = buildLaunchpadOptions("codex", result.models);
     const changed = JSON.stringify([summary.launchpadOptions, previousStates ?? []])
       !== JSON.stringify([launchpadOptions, states]);
     this.codexBackendSummary = {
@@ -16407,9 +16410,14 @@ export class DesktopBackendRegistry {
    * leaves; a newer save publishes its own list instead.
    */
   private async publishKnownCodexProviderModels(revision: number): Promise<void> {
+    const refreshRevision = this.codexModelProviderRefreshRevision;
     await this.codexModelProviderCatalog?.listModelOptions().catch(() => []);
     const summary = this.codexBackendSummary;
-    if (!summary || this.closed || revision !== this.codexModelProviderRevision) return;
+    if (
+      !summary || this.closed
+      || revision !== this.codexModelProviderRevision
+      || refreshRevision !== this.codexModelProviderRefreshRevision
+    ) return;
     const { codexModelProviders: _previousStates, ...rest } = summary;
     const ownModels = (summary.launchpadOptions?.models ?? []).filter((model) => !model.providerId);
     const known = this.codexModelProviderCatalog?.knownCatalog() ?? { models: [], states: [] };
@@ -16518,9 +16526,6 @@ export class DesktopBackendRegistry {
             }
           }
           const archiveWorkspaceChanged = this.threadArchiveCoordinator.invalidateArchiveCleanupForNotification(backend, notification, "provider");
-          if (notification.method === "thread/unarchived" || notification.method === "thread/deleted") {
-            this.threadArchiveCoordinator.cancelArchiveCleanups(buildThreadIdentityKey(backend, notification.params.threadId));
-          }
           const archiveReferences = this.threadArchiveCoordinator.prepareArchiveReferenceChanges(backend, notification);
           if (archiveWorkspaceChanged && this.threadArchiveCoordinator.archiveWorktreeRemovalAdmissionRecords.size) await this.threadArchiveCoordinator.prepareArchiveWorkspaceChanges(backend, notification, archiveWorkspaceChanged);
           if (archiveReferences) await archiveReferences;
@@ -21406,9 +21411,6 @@ export class DesktopBackendRegistry {
       }
       this.navigationDirectoryScope.invalidate(event);
       const archiveWorkspaceChanged = this.threadArchiveCoordinator.invalidateArchiveCleanupForNotification(event.backend, event.notification);
-      if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
-        this.threadArchiveCoordinator.cancelArchiveCleanups(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
-      }
       const archiveReferences = this.threadArchiveCoordinator.prepareArchiveReferenceChanges(event.backend, event.notification);
       if (archiveWorkspaceChanged && this.threadArchiveCoordinator.archiveWorktreeRemovalAdmissionRecords.size) await this.threadArchiveCoordinator.prepareArchiveWorkspaceChanges(event.backend, event.notification, archiveWorkspaceChanged);
       if (archiveReferences) await archiveReferences;

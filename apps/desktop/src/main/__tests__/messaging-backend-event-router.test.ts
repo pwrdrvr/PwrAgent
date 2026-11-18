@@ -2,14 +2,11 @@ import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
-import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
-import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type { MessagingBackendEventContext } from "../messaging/core/messaging-backend-event-context";
 import { MessagingBackendEventRouter } from "../messaging/core/messaging-backend-event-router";
-import { MessagingController } from "../messaging/core/messaging-controller";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { messagingModules } from "./fixtures/messaging-controller-modules";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { messagingCanonicalQueueHarness } from "./fixtures/messaging-canonical-queue-harness";
 
 function gate() {
   let resolve!: () => void;
@@ -17,27 +14,13 @@ function gate() {
   return { promise, resolve };
 }
 
-function fixture() {
-  const db = openInMemoryStateDb();
-  const store = new SqliteMessagingStore(db);
-  const controller = new MessagingController({
-    store, backend: {} as MessagingBackendBridge, authorizedActorIds: [], now: () => 1_000,
-    adapter: { capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE, deliver: async () => ({ channel: "telegram", deliveredAt: 1_000, outcome: "presented" }) },
-    logger: {},
-  });
-  const modules = messagingModules(controller);
-  return {
-    store, ...modules,
-    close: async () => {
-      controller.dispose();
-      await controller.whenToolUpdatesSettled();
-      db.close();
-    },
-  };
+async function fixture() {
+  const real = await messagingCanonicalQueueHarness();
+  return { store: real.store, ...messagingModules(real.controller), close: () => real.close() };
 }
 
 const binding: MessagingBindingRecord = {
-  id: "binding", backend: "codex", threadId: "fixture-thread", createdAt: 1_000, updatedAt: 1_000,
+  id: "fixture-binding", backend: "codex", threadId: "fixture-thread", createdAt: 1_000, updatedAt: 1_000,
   authorizedActorIds: [], channel: { channel: "telegram", conversation: { id: "fixture-conversation", kind: "dm" } },
 };
 
@@ -52,7 +35,7 @@ describe("MessagingBackendEventRouter", () => {
   });
 
   it("uses the current host and store after an awaited queue outcome", async () => {
-    const f = fixture();
+    const f = await fixture();
     const entered = gate();
     const release = gate();
     const effects: string[] = [];
@@ -90,7 +73,7 @@ describe("MessagingBackendEventRouter", () => {
   });
 
   it("tracks pending failed-event delivery without swallowing its exception", async () => {
-    const f = fixture();
+    const f = await fixture();
     const entered = gate();
     const release = gate();
     const failure = new Error("Fixture delivery failure");
@@ -121,8 +104,8 @@ describe("MessagingBackendEventRouter", () => {
     }
   });
 
-  it.each(["completed", "interrupted"] as const)("awaits terminal cleanup before activity and queue draining (%s)", async (status) => {
-    const f = fixture();
+  it.each(["completed", "interrupted"] as const)("awaits terminal cleanup before activity (%s)", async (status) => {
+    const f = await fixture();
     const entered = gate();
     const release = gate();
     const effects: string[] = [];
@@ -133,7 +116,6 @@ describe("MessagingBackendEventRouter", () => {
       clearTurnProse: () => { effects.push("prose"); },
       signalTurnActivity: async () => { effects.push("activity"); },
       renderAutomaticBindingStatus: async () => { effects.push("status"); return binding; },
-      scheduleNextQueuedTurn: () => { effects.push("drain"); },
       forgetAutomationTurn: () => { effects.push("automation origin"); },
       forgetAgentMessagingOrigin: () => { effects.push("messaging origin"); },
     };
@@ -150,7 +132,7 @@ describe("MessagingBackendEventRouter", () => {
       release.resolve();
       await handling;
       // Successful turns do not force a status card; interruption does.
-      expect(effects).toEqual(["flush", "card", "prose", "activity", ...(status === "interrupted" ? ["status"] : []), "drain", "automation origin", "messaging origin"]);
+      expect(effects).toEqual(["flush", "card", "prose", "activity", ...(status === "interrupted" ? ["status"] : []), "automation origin", "messaging origin"]);
     } finally {
       release.resolve();
       await handling;
@@ -159,7 +141,7 @@ describe("MessagingBackendEventRouter", () => {
   });
 
   it("preserves early exits for private/transient activity and backend rate limits", async () => {
-    const f = fixture();
+    const f = await fixture();
     const read = vi.spyOn(f.store, "findActiveBindingsForThread");
     try {
       await f.backendEvents.handleBackendEvent({ backend: "codex", notification: { method: "account/rateLimits/updated", params: { rateLimits: {} } } });

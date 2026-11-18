@@ -10,13 +10,14 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, projectResearchRun, sameResearchThread, researchApproachOccupiesSlot, searchResearchItems,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, searchResearchItems,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEvent, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork,
 } from "@pwragent/shared/research";
 import { ResearchAdmissionRefused, RESEARCH_REQUEST_TTL_MS, type ResearchAssignmentReceipt, type ResearchExecutionContext, type ResearchPorts } from "../../research-service";
+import { replayResearchJournal } from "./research-memory-storage";
 
 /** The storage contract the replay-based service was written against. */
 export interface ReplayResearchStorage {
@@ -34,14 +35,6 @@ export interface ReplayResearchStorage {
   append(id: string, revision: number, event: ResearchEvent): void;
 }
 
-/** Frozen all the way down, so a caller that wrote to a shared replay would throw. */
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
-  Object.freeze(value);
-  for (const child of Object.values(value)) deepFreeze(child);
-  return value;
-}
-
 /**
  * Journals in memory. Every read answers from a replay, so it is the
  * storage's own oracle. A journal is replayed once per length and the frozen
@@ -52,16 +45,9 @@ export class ReplayMemoryStorage implements ReplayResearchStorage {
   readonly records = new Map<string, ResearchEvent[]>();
   readonly keys = new Map<string, string>();
   readonly workers = new Map<string, ResearchThread[]>();
-  private readonly replayed = new Map<string, { length: number; run: ResearchRun }>();
   findByStartKey(key: string) { const id = this.keys.get(key); return id ? this.get(id) : undefined; }
   get(id: string) {
-    const records = this.records.get(id);
-    if (!records) return undefined;
-    const held = this.replayed.get(id);
-    if (held?.length === records.length) return held.run;
-    const run = deepFreeze(projectResearchRun(id, structuredClone(records)));
-    this.replayed.set(id, { length: records.length, run });
-    return run;
+    return replayResearchJournal(id, this.records.get(id));
   }
   /** Newest first, as the SQLite store lists them. */
   list(thread?: ResearchThread) {

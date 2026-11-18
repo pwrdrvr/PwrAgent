@@ -1,4 +1,5 @@
 import type { MessagingTurns } from "../../messaging/core/messaging-turn-state";
+import type { MessagingQueueRecoveries } from "../../messaging/core/messaging-queue-recoveries";
 import type { MessagingTurnAdmission } from "../../messaging/core/messaging-turn-admission";
 import type { MessagingAccessControl } from "../../messaging/core/messaging-access-control";
 import type { MessagingAccessHost } from "../../messaging/core/messaging-access-context";
@@ -18,6 +19,7 @@ import type { MessagingInboundHost } from "../../messaging/core/messaging-inboun
 // No moved state or moved operation is accessed through the controller.
 export function messagingModules(controller: MessagingController): {
   readonly turns: MessagingTurns;
+  readonly queueRecoveries: MessagingQueueRecoveries;
   readonly admission: MessagingTurnAdmission;
   readonly access: MessagingAccessControl;
   readonly accessHost: () => MessagingAccessHost;
@@ -34,6 +36,7 @@ export function messagingModules(controller: MessagingController): {
 } {
   const ports = controller as unknown as {
     readonly turns: MessagingTurns;
+    readonly queueRecoveries: MessagingQueueRecoveries;
     readonly turnAdmission: MessagingTurnAdmission;
     readonly accessControl: MessagingAccessControl;
     accessHost(): MessagingAccessHost;
@@ -50,6 +53,7 @@ export function messagingModules(controller: MessagingController): {
   };
   return {
     turns: ports.turns,
+    queueRecoveries: ports.queueRecoveries,
     admission: ports.turnAdmission,
     access: ports.accessControl,
     accessHost: () => ports.accessHost(),

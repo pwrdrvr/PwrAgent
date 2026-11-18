@@ -1221,13 +1221,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         : undefined,
     },
   });
-  let providersFingerprint = JSON.stringify(resolveCodexModelProvidersFn());
-  const refreshCodexProviderModels = (): void => {
-    const next = JSON.stringify(ports.resolveCodexModelProvidersFn());
-    if (next === providersFingerprint) return;
-    providersFingerprint = next;
-    // Publish the change on the cached Codex summary, not just drop the
-    // caches behind it: windows and federation peers read that summary.
+  const publishCodexProviderModels = (): void => {
     void ports.applyCodexModelProviderConfigChange().catch((error: unknown) => {
       backendRegistryLog.warn("Codex model provider change not published", {
         error: error instanceof Error ? error.message : String(error),
@@ -1236,9 +1230,15 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   };
   initialize.push(() => {
     if (ports.configStore) {
-      ports.unsubscribers.push(ports.configStore.subscribe(["models"], refreshCodexProviderModels));
+      ports.unsubscribers.push(ports.configStore.subscribeCodexModelProviders(publishCodexProviderModels));
     } else if (typeof settingsService?.onConfigWritten === "function") {
-      ports.unsubscribers.push(settingsService.onConfigWritten(refreshCodexProviderModels));
+      let providersFingerprint = JSON.stringify(ports.resolveCodexModelProvidersFn());
+      ports.unsubscribers.push(settingsService.onConfigWritten(() => {
+        const next = JSON.stringify(ports.resolveCodexModelProvidersFn());
+        if (next === providersFingerprint) return;
+        providersFingerprint = next;
+        publishCodexProviderModels();
+      }));
     }
   });
   const queuedMessageTitler = new QueuedMessageTitler({

@@ -176,7 +176,7 @@ export type DesktopBackendRegistryOptions = {
   resolveCodexAppServerRecycleSettings?: () => CodexAppServerRecycleSettings;
   /** Test seam: how long a Codex thread idles before it is released. */
   codexThreadIdleUnsubscribeMs?: number;
-  configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
+  configStore?: Pick<DesktopConfigStore, "read" | "subscribe" | "subscribeCodexModelProviders">;
   resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
   resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
   resolveManagedTokenMiserActivationRequired?: () => boolean;
@@ -226,10 +226,7 @@ export interface RegistryDependencies {
   threadDirectoryService: ThreadDirectoryService;
   codexRuntimeSupervisor: CodexRuntimeSupervisor;
   ownerAdmission?: ThreadOwnerAdmission;
-  configStore?: Pick<
-    DesktopConfigStore,
-    "read" | "subscribe"
-  >;
+  configStore?: DesktopBackendRegistryOptions["configStore"];
   runtimeInstanceId: string;
   projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
   restartContinuationStore?: RestartContinuationStoreLike;

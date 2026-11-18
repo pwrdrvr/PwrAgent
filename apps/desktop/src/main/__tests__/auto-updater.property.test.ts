@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 // Ported from pwrdrvr/PwrGit#554 (ef3d79acc). Release slots follow the
 // runbook's tag scheme; the independent oracle never calls compareSemver.
 // PwrAgent returns at `available`, so its model settles downloads through
@@ -18,6 +22,7 @@ const fake = vi.hoisted(() => {
   const macrotask = globalThis.setImmediate;
   const handlers = new Map<string, Set<Handler>>();
   const nativeHandlers = new Map<string, Handler>();
+  const cachedValidations = new Set<Promise<string[]>>();
   const native = {
     checkForUpdates: vi.fn(),
     once: (event: string, handler: Handler) => nativeHandlers.set(event, handler),
@@ -40,6 +45,7 @@ const fake = vi.hoisted(() => {
     feedTag: "",
     shown: undefined as AppUpdateStatus | undefined,
     quitHandlerAdded: false,
+    validateCached: undefined as (() => Promise<void>) | undefined,
     ran: [] as Array<{ file: string | undefined; onDisk: boolean }>,
   };
   const emit = (event: string, ...args: unknown[]): void => {
@@ -95,9 +101,13 @@ const fake = vi.hoisted(() => {
       if (state.disk.has(version)) {
         // Cached validation hashes the file before emitting update-downloaded.
         downloadPromise = new Promise<void>((resolve) => macrotask(resolve)).then(() => {
-          landed(version);
-          return [];
+          const complete = (): string[] => {
+            landed(version);
+            return [];
+          };
+          return state.validateCached ? state.validateCached().then(complete) : complete();
         });
+        cachedValidations.add(downloadPromise);
       } else {
         // electron-updater has ONE pending cache across tracks. Starting a
         // different download deletes the old installer but leaves file stale.
@@ -130,6 +140,7 @@ const fake = vi.hoisted(() => {
     autoUpdater,
     native,
     nativeHandlers,
+    cachedValidations,
     macrotask,
     stop,
     succeed: () => {
@@ -139,6 +150,9 @@ const fake = vi.hoisted(() => {
       pending.resolve([]);
     },
     reset: () => {
+      if (cachedValidations.size) {
+        throw new Error("Cached validation still belongs to this session");
+      }
       handlers.clear();
       nativeHandlers.clear();
       native.checkForUpdates.mockReset();
@@ -147,6 +161,7 @@ const fake = vi.hoisted(() => {
       state.pending = undefined;
       state.shown = undefined;
       state.quitHandlerAdded = false;
+      state.validateCached = undefined;
       state.ran = [];
       state.changed = () => {};
       autoUpdater.autoInstallOnAppQuit = false;
@@ -530,13 +545,22 @@ type Model = { feed: Set<string>; train: Train; downloading: boolean; handedOff:
 type World = { updater: Updater; owner: UpdaterTestOwner };
 type Action = "publish" | "selectTrain" | "check" | "succeed" | "fail" | "cancel" | "restart";
 
-/** The real macrotask drains microtasks without relying on a guessed number
- * of Promise.resolve calls. Cached validation and queued selection checks
- * can each need a turn. Fake timers control only the updater's own timers;
- * no real sleeps or live network requests are used. */
+/** One native checkpoint flushes the production promise graph. Cached file
+ * validation owns an asynchronous completion of its own: join it, then check
+ * again for work released by that completion. Ready sessions need no guessed
+ * extra turns, and delayed validation must not outlive its installer cache. */
 async function settle(): Promise<void> {
-  for (let turn = 0; turn < 3; turn++) {
+  for (;;) {
     await new Promise<void>((resolve) => fake.macrotask(resolve));
+    const validating = [...fake.cachedValidations];
+    if (!validating.length) return;
+    const results = await Promise.allSettled(validating);
+    for (const work of validating) fake.cachedValidations.delete(work);
+    const errors: unknown[] = [];
+    for (const result of results) {
+      if (result.status === "rejected") errors.push(result.reason);
+    }
+    if (errors.length) throw new AggregateError(errors, "Cached installer validation failed");
   }
 }
 
@@ -550,7 +574,7 @@ async function drainSession(updater: Updater): Promise<void> {
   // check. Drain that work before clearing listeners, timers or the cache.
   for (;;) {
     await settle();
-    if (!fake.state.pending && fake.nativeHandlers.size === 0) break;
+    if (!fake.state.pending && fake.nativeHandlers.size === 0 && fake.cachedValidations.size === 0) break;
     if (fake.state.pending) {
       expect(updater.cancelAppUpdateDownload()).toEqual({ canceled: true });
     }
@@ -868,5 +892,136 @@ describe("macOS cross-track staging", () => {
       fc.constantFrom<Train>("stable", "beta"),
       (patch, beta, train) => runMacStagingSession(scope, patch, beta, train),
     ), { numRuns: 25, markInterruptAsFailure: true }));
+  });
+});
+
+
+// The native checkpoint is an observable scheduling boundary, not elapsed time.
+// Control its callbacks while a separate, real filesystem validation is gated.
+function readinessFences() {
+  const native = fake.macrotask;
+  const ready: Array<() => void> = [];
+  let count = 0;
+  const spy = vi.spyOn(fake, "macrotask").mockImplementation(callback => {
+    count++;
+    ready.push(() => callback());
+    return native(() => {});
+  });
+  return {
+    get count() { return count; },
+    async drain(signal: AbortSignal) {
+      while (ready.length) {
+        signal.throwIfAborted();
+        ready.splice(0).forEach(complete => complete());
+        await new Promise<void>(resolve => native(resolve));
+      }
+    },
+    restore: () => spy.mockRestore(),
+  };
+}
+
+async function cachedInstallerFixture() {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-held-cache-"));
+  const installer = path.join(directory, "PwrAgent-1.1.0.exe");
+  await writeFile(installer, "contrived cached installer bytes");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  useWindowsUpdater();
+  fake.reset();
+  fake.state.feed = new Set([BASELINE, "v1.1.0"]);
+  fake.state.train = "stable";
+  fake.state.disk.add("1.1.0");
+  fake.state.file = "1.1.0";
+  fake.state.validateCached = async () => {
+    entered.resolve();
+    await release.promise;
+    expect(await readFile(installer, "utf8")).toBe("contrived cached installer bytes");
+  };
+  vi.resetModules();
+  const updater = await import("../shell/auto-updater");
+  updater.initAutoUpdater();
+  await entered.promise;
+  const validation = [...fake.cachedValidations][0]!;
+  const outcome = validation.then(() => undefined, error => error);
+  return { directory, installer, updater, release: () => release.resolve(), outcome };
+}
+
+it("cache readiness cannot finish before the real installer validation", async ({ signal }) => {
+  await owner.run(async () => {
+    const fixture = await cachedInstallerFixture();
+    const fences = readinessFences();
+    let ready = false;
+    const settling = settle().then(() => { ready = true; });
+    try {
+      await fences.drain(signal);
+      expect({ ready, installerExists: existsSync(fixture.installer) }).toEqual({ ready: false, installerExists: true });
+    } finally {
+      fences.restore();
+      fixture.release();
+      await settling;
+      await fixture.outcome;
+      await drainSession(fixture.updater);
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  });
+});
+
+it("cache retirement joins validation before removing its real installer", async ({ signal }) => {
+  await owner.run(async () => {
+    const fixture = await cachedInstallerFixture();
+    const fences = readinessFences();
+    let drained = false;
+    const closing = drainSession(fixture.updater).then(async () => {
+      drained = true;
+      await rm(fixture.directory, { recursive: true, force: true });
+    });
+    let premature = false;
+    let outcome: unknown;
+    try {
+      await fences.drain(signal);
+      premature = drained;
+      if (drained) await closing;
+    } finally {
+      fences.restore();
+      fixture.release();
+      await closing;
+      outcome = await fixture.outcome;
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+    expect({ premature, validationFailed: outcome !== undefined }).toEqual({ premature: false, validationFailed: false });
+  });
+});
+
+it("cache readiness uses one native boundary when no work remains", async ({ signal }) => {
+  await owner.run(async () => {
+    const fences = readinessFences();
+    const settled = settle();
+    try {
+      await fences.drain(signal);
+      await settled;
+      expect(fences.count).toBe(1);
+    } finally {
+      fences.restore();
+    }
+  });
+});
+
+it("cache readiness propagates a real installer validation error", async ({ signal }) => {
+  await owner.run(async () => {
+    const fixture = await cachedInstallerFixture();
+    await rm(fixture.directory, { recursive: true, force: true });
+    const fences = readinessFences();
+    const settling = settle().then(() => undefined, error => error);
+    try {
+      await fences.drain(signal);
+    } finally {
+      fences.restore();
+      fixture.release();
+    }
+    const error = await settling;
+    await fixture.outcome;
+    await drainSession(fixture.updater);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors[0]).toMatchObject({ code: "ENOENT" });
   });
 });

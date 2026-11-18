@@ -14,6 +14,7 @@ import {
   type ListBackendsResponse,
 } from "@pwragent/shared";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FEDERATION_BACKEND_METHODS,
@@ -382,6 +383,24 @@ describe("Codex model provider publication", () => {
     });
   });
 
+  it("re-reads an unchanged provider list saved after its endpoint goes down", async () => {
+    const save: Operation = {
+      kind: "save",
+      providers: [
+        { id: "mathos", models: [], discoverModels: true, port: 18081 },
+        { id: "bonsai", models: [], discoverModels: false, port: 18081 },
+      ],
+      settle: false,
+    };
+    await runScenario({
+      discoverFirst: false,
+      turnActive: false,
+      operations: [save, { kind: "endpoint", up: false }, save, { kind: "retry", endpointUp: true }],
+      // First save and read, second save and read, then the recovery read.
+      scheduler: fc.schedulerFor([1, 2, 3, 4, 5]),
+    });
+  });
+
   it("removes a provider and keeps listed models when its endpoint and Codex's list fail", async () => {
     await runScenario({
       discoverFirst: true,
@@ -559,9 +578,9 @@ describe("Codex model provider publication", () => {
     });
   });
 
-  describe("a read that began before a save lands after it", () => {
+  describe("overlapping reads of the provider catalog", () => {
     type Gate = { resolve: () => void };
-    async function gatedOwner() {
+    async function gatedOwner(scheduler?: fc.Scheduler) {
       const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-late-read-"));
       const configPath = path.join(tempRoot, "config.toml");
       await writeFile(configPath, "");
@@ -571,11 +590,16 @@ describe("Codex model provider publication", () => {
         ({ id: "mathos", name: "MathOS", baseUrl: "http://127.0.0.1:18080/v1", models });
       await configStore.write({ models: { codex: { providers: [mathos(["old-listed"])] } } }, ["models"]);
       let gated = false;
+      let scheduledReads = 0;
       const gates: Gate[] = [];
       const fetchCalls: Array<() => void> = [];
       const fetchStarted = () => new Promise<void>((resolve) => { fetchCalls.push(resolve); });
       const providerFetch = vi.fn(async () => {
         fetchCalls.shift()?.();
+        if (gated && scheduler) {
+          const response = new Response(JSON.stringify({ data: [{ id: `mathos-refresh-${++scheduledReads}` }] }));
+          return await scheduler.schedule(Promise.resolve(response), "provider /models");
+        }
         if (gated) await new Promise<void>((resolve) => { gates.push({ resolve }); });
         return new Response(JSON.stringify({ data: [{ id: "mathos-coder" }] }));
       });
@@ -659,5 +683,81 @@ describe("Codex model provider publication", () => {
         await owner.dispose();
       }
     });
+
+    async function checkOverlappingRefreshes(scheduler: fc.Scheduler) {
+      const owner = await gatedOwner(scheduler);
+      try {
+        await owner.registry.listBackends(
+          { includeUnavailable: true, refreshModels: "codex" },
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
+        owner.gate();
+        const refresh = owner.registry.constructionPorts().refreshCodexProviderCatalogs;
+        const firstRead = owner.fetchStarted();
+        const first = refresh({ rereadProviders: ["mathos"] });
+        await firstRead;
+        const secondRead = owner.fetchStarted();
+        const second = refresh({ rereadProviders: ["mathos"] });
+        await secondRead;
+        await scheduler.waitFor(Promise.all([first, second]));
+
+        // The newest refresh's endpoint reply owns the picker in either completion order.
+        expect(await owner.providerModelIds()).toEqual(["@mathos/old-listed", "@mathos/mathos-refresh-2"]);
+      } finally {
+        await owner.dispose();
+      }
+    }
+
+    it("keeps the newest Settings refresh's models under either reply order", async () => {
+      await fc.assert(fc.asyncProperty(fc.scheduler(), checkOverlappingRefreshes), { numRuns: 12 });
+    });
+
+    it("keeps the second Settings refresh's models when the first reply finishes last", async () => {
+      await checkOverlappingRefreshes(fc.schedulerFor([2, 1]));
+    });
+  });
+
+  async function checkRuntimeDiscovery(invalidateWhile: "keys" | "models", servingLimit: number) {
+    const provider = {
+      ...toSettings({ id: "mathos", models: ["fixture"], discoverModels: true, port: 18080 }),
+      modelMetadata: [{ id: "fixture", contextWindow: 65_536 }],
+    };
+    const reply = (contextWindow: number) => new Response(JSON.stringify({
+      data: [{ id: "fixture", context_window: contextWindow }],
+    }));
+    const keys = Promise.withResolvers<Record<string, string>>();
+    const oldReply = Promise.withResolvers<Response>();
+    const oldRequestStarted = Promise.withResolvers<void>();
+    const resolveKeys = vi.fn<() => Promise<Record<string, string>>>().mockResolvedValue({});
+    const fetch = vi.fn(async () => reply(servingLimit));
+    if (invalidateWhile === "keys") {
+      resolveKeys.mockReturnValueOnce(keys.promise);
+    } else {
+      fetch.mockImplementationOnce(() => {
+        oldRequestStarted.resolve();
+        return oldReply.promise;
+      });
+    }
+    const catalog = new CodexModelProviderCatalog({ resolveProviders: () => [provider], resolveKeys, fetch });
+    const runtime = catalog.resolveRuntimeProvider(provider);
+    if (invalidateWhile === "models") await oldRequestStarted.promise;
+    catalog.invalidate();
+    keys.resolve({});
+    oldReply.resolve(reply(131_072));
+
+    // The endpoint's current serving limit wins over saved metadata and invalidated replies.
+    expect((await runtime).modelMetadata).toEqual([{ id: "fixture", contextWindow: servingLimit }]);
+  }
+
+  it("uses the live runtime limit when discovery is invalidated during keys or models", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("keys" as const, "models" as const),
+      fc.integer({ min: 1_024, max: 32_768 }),
+      checkRuntimeDiscovery,
+    ), { numRuns: 16 });
+  });
+
+  it("uses the current 16K limit when a runtime's older provider reply lands after a save", async () => {
+    await checkRuntimeDiscovery("models", 16_384);
   });
 });
