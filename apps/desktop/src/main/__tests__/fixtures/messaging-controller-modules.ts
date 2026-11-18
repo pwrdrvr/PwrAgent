@@ -1,3 +1,5 @@
+import type { MessagingAgentTools } from "../../messaging/core/messaging-agent-tools";
+import type { MessagingAgentToolHost } from "../../messaging/core/messaging-agent-tool-context";
 import type { MessagingTurns } from "../../messaging/core/messaging-turn-state";
 import type { MessagingQueueRecoveries } from "../../messaging/core/messaging-queue-recoveries";
 import type { MessagingTurnAdmission } from "../../messaging/core/messaging-turn-admission";
@@ -39,6 +41,8 @@ export function messagingModules(controller: MessagingController): {
   readonly inboundHost: () => MessagingInboundHost;
   readonly reviews: MessagingReviewWorkflow;
   readonly reviewHost: () => MessagingReviewHost;
+  readonly agentTools: MessagingAgentTools;
+  readonly agentToolHost: () => MessagingAgentToolHost;
   readonly newThreads: MessagingNewThreadWorkflow;
   readonly newThreadHost: () => MessagingNewThreadHost;
 } {
@@ -60,6 +64,8 @@ export function messagingModules(controller: MessagingController): {
     inboundHost(): MessagingInboundHost;
     readonly reviewWorkflow: MessagingReviewWorkflow;
     reviewHost(): MessagingReviewHost;
+    readonly agentToolWorkflow: MessagingAgentTools;
+    agentToolHost(): MessagingAgentToolHost;
     readonly newThreadWorkflow: MessagingNewThreadWorkflow;
     newThreadHost(): MessagingNewThreadHost;
   };
@@ -81,6 +87,8 @@ export function messagingModules(controller: MessagingController): {
     inboundHost: () => ports.inboundHost(),
     reviews: ports.reviewWorkflow,
     reviewHost: () => ports.reviewHost(),
+    agentTools: ports.agentToolWorkflow,
+    agentToolHost: () => ports.agentToolHost(),
     newThreads: ports.newThreadWorkflow,
     newThreadHost: () => ports.newThreadHost(),
   };
