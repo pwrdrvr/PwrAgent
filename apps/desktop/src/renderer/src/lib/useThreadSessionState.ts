@@ -3223,6 +3223,7 @@ function buildPendingTurnUsage(params: {
   existing?: TurnUsageAccumulator;
   fastMode?: boolean;
   model?: string;
+  pricingAt: number;
   serviceTier?: string;
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
@@ -3270,6 +3271,7 @@ function buildPendingTurnUsage(params: {
         fastMode: params.fastMode,
         id: `live-turn-usage-${turnId}`,
         model: params.model,
+        pricingAt: params.pricingAt,
         serviceTier: params.serviceTier,
         summaryPrefix: "Turn usage",
         tokenUsage: tokenUsagePayloadFromBreakdown(turnUsage),
@@ -3456,6 +3458,7 @@ function findKnownTurnUsageMetadata(
 ): {
   createdAt?: number;
   isTurnUsage?: boolean;
+  pricingAt?: number;
   turn?: AppServerThreadTurnMetadata;
 } {
   if (!turnId) {
@@ -3489,7 +3492,7 @@ function findKnownTurnUsageMetadata(
   const createdAt = entry?.turn?.completedAt ?? entry?.createdAt;
   return {
     ...(typeof createdAt === "number" ? { createdAt } : {}),
-    ...(entryIsTurnUsage ? { isTurnUsage: true } : {}),
+    ...(entryIsTurnUsage ? { isTurnUsage: true, pricingAt: createdAt } : {}),
     ...(turn ? { turn } : {}),
   };
 }
@@ -7974,11 +7977,16 @@ export function useThreadSessionState(params: {
           const usageEntryId = knownCompletedTurnUsage
             ? `live-turn-usage-${turn?.id ?? notificationThreadId}`
             : `live-token-usage-${turn?.id ?? notificationThreadId}`;
+          const pricingAt = event.usagePricingAt
+            ?? knownTurnUsage.pricingAt
+            ?? recentlyCompletedTurnUsage?.turn.completedAt
+            ?? Date.now();
           let usageEntry = buildTokenUsageActivityEntry({
             createdAt: knownTurnUsage.createdAt,
             fastMode,
             id: usageEntryId,
             model,
+            pricingAt,
             serviceTier,
             ...(knownCompletedTurnUsage ? { summaryPrefix: "Turn usage" } : {}),
             tokenUsage: event.notification.params.tokenUsage,
@@ -8000,6 +8008,7 @@ export function useThreadSessionState(params: {
               existing: current.pendingTurnUsage,
               fastMode,
               model,
+              pricingAt,
               serviceTier,
               tokenUsage: event.notification.params.tokenUsage,
               turn,
@@ -8018,6 +8027,7 @@ export function useThreadSessionState(params: {
               existing: recentlyCompletedTurnUsage.accumulator,
               fastMode,
               model,
+              pricingAt,
               serviceTier,
               tokenUsage: event.notification.params.tokenUsage,
               turn,

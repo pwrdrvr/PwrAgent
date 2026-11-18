@@ -139,6 +139,11 @@ export type ThreadUsageLineRecord = {
   // owner's decision must not be replaced by a reference catalog on read.
   pricingBasis?: "aggregate" | "request-components" | "provider-reported" | "decisions-output-uncharged" | "configured-provider";
   pricingRateId?: string;
+  /** Rates and paid-credit estimate for the measured requests in this line. */
+  requestPricing?: {
+    apiRateIds: readonly string[];
+    codexCredits?: { rateIds: readonly string[]; totalCreditMicros: number };
+  };
   reasoningEffort?: string;
   reasoningOutputTokens: number;
   scope: ThreadUsageLineScope;

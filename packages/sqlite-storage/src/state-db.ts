@@ -1157,6 +1157,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   pricing_catalog_version    TEXT,
   pricing_basis              TEXT,
   pricing_rate_id            TEXT,
+  request_pricing            TEXT,
   uncached_input_cost_micros INTEGER NOT NULL,
   cache_write_input_cost_micros INTEGER NOT NULL DEFAULT 0,
   cached_input_cost_micros   INTEGER NOT NULL,
@@ -3345,6 +3346,10 @@ function ensureThreadUsageRequestPricingColumns(db: BetterSqlite3.Database): voi
     {
       name: "pricing_basis",
       sql: "ALTER TABLE thread_usage_lines ADD COLUMN pricing_basis TEXT",
+    },
+    {
+      name: "request_pricing",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN request_pricing TEXT",
     },
   ];
   for (const column of columns) {

@@ -7,6 +7,7 @@ import {
 } from "./overlay-transcript-entries";
 import {
   anchorTurnUsageEntries,
+  estimateOpenAiCodexCreditUsage,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   resolveTokenUsagePriceUnavailableReason,
@@ -589,6 +590,7 @@ export function readTaskMonitorTokenUsageRecords(
 
 export function foldLiveThreadRequestUsage(params: {
   current: LiveThreadRequestUsage | undefined;
+  observedAt: number;
   tokenUsage: unknown;
 }): LiveThreadRequestUsage | undefined {
   const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
@@ -627,20 +629,20 @@ export function foldLiveThreadRequestUsage(params: {
     ) {
       return params.current;
     }
-    if (taskMonitorTokenUsageEqual(priorRequest, latestUsage)) {
+    if (!priorRequest || taskMonitorTokenUsageEqual(priorRequest.tokens, latestUsage)) {
       return params.current;
     }
     return {
       cumulativeInputTokens: normalizedCumulativeInputTokens,
       requests: [
         ...params.current.requests.slice(0, -1),
-        latestUsage,
+        { ...priorRequest, tokens: latestUsage },
       ],
     };
   }
   return {
     cumulativeInputTokens: normalizedCumulativeInputTokens,
-    requests: [...(params.current?.requests ?? []), latestUsage],
+    requests: [...(params.current?.requests ?? []), { observedAt: params.observedAt, tokens: latestUsage }],
   };
 }
 
@@ -826,10 +828,9 @@ export function normalizeTaskMonitorPricingTokens(
 }
 
 export function estimateRequestComponentsCost(params: {
-  at?: number;
   fastMode?: boolean;
   model?: string;
-  requests: readonly TaskMonitorTokenUsageBreakdown[];
+  requests: Readonly<LiveThreadRequestUsage["requests"]>;
   serviceTier?: string;
   turnTokenUsage: TaskMonitorTokenUsageBreakdown;
 }): RequestComponentsCost | undefined {
@@ -837,7 +838,7 @@ export function estimateRequestComponentsCost(params: {
     return undefined;
   }
   const requestTotal = params.requests.reduce<TaskMonitorTokenUsageBreakdown>(
-    (total, request) => addTaskMonitorTokenUsage(total, request) ?? total,
+    (total, request) => addTaskMonitorTokenUsage(total, request.tokens) ?? total,
     {},
   );
   const normalizedRequestTotal = normalizeTaskMonitorPricingTokens(requestTotal);
@@ -857,21 +858,15 @@ export function estimateRequestComponentsCost(params: {
     return undefined;
   }
 
-  const costs = params.requests.map((request) => {
-    const tokens = normalizeTaskMonitorPricingTokens(request);
-    return estimateTokenUsageCost({
-      at: params.at,
-      cacheWriteInputTokens: tokens.cacheWriteInputTokens,
-      cachedInputTokens: tokens.cachedInputTokens,
-      fastMode: params.fastMode,
-      inputTokenScope: "request",
-      model: params.model,
-      outputTokens: tokens.outputTokens,
-      reasoningOutputTokens: tokens.reasoningOutputTokens,
-      serviceTier: params.serviceTier,
-      uncachedInputTokens: tokens.uncachedInputTokens,
-    });
-  });
+  const requests = params.requests.map((request) => ({
+    ...normalizeTaskMonitorPricingTokens(request.tokens),
+    at: request.observedAt,
+    fastMode: params.fastMode,
+    inputTokenScope: "request" as const,
+    model: params.model,
+    serviceTier: params.serviceTier,
+  }));
+  const costs = requests.map(estimateTokenUsageCost);
   if (costs.some((cost) => cost === undefined)) {
     return undefined;
   }
@@ -883,7 +878,6 @@ export function estimateRequestComponentsCost(params: {
     priced.some(
       (cost) =>
         cost.catalogId !== first.catalogId
-        || cost.catalogVersion !== first.catalogVersion
         || cost.currency !== first.currency
         || cost.provider !== first.provider
         || cost.serviceTier !== first.serviceTier,
@@ -891,7 +885,17 @@ export function estimateRequestComponentsCost(params: {
   ) {
     return undefined;
   }
-  const rateIds = new Set(priced.map((cost) => cost.rateId));
+  const apiRateIds = [...new Set(priced.map((cost) => cost.rateId))];
+  const catalogVersions = new Set(priced.map((cost) => cost.catalogVersion));
+  const creditEstimates = first.provider === "openai"
+    ? requests.map(estimateOpenAiCodexCreditUsage)
+    : [];
+  const codexCredits = creditEstimates.length && creditEstimates.every((estimate) => estimate !== undefined)
+    ? {
+        rateIds: [...new Set(creditEstimates.map((estimate) => estimate.rateId))],
+        totalCreditMicros: creditEstimates.reduce((total, estimate) => total + estimate.totalCreditMicros, 0),
+      }
+    : undefined;
   return {
     cacheWriteInputCostMicros: priced.reduce(
       (total, cost) => total + cost.cacheWriteInputCostMicros,
@@ -902,14 +906,15 @@ export function estimateRequestComponentsCost(params: {
       0,
     ),
     catalogId: first.catalogId,
-    catalogVersion: first.catalogVersion,
+    ...(catalogVersions.size === 1 ? { catalogVersion: first.catalogVersion } : {}),
     currency: first.currency,
     outputCostMicros: priced.reduce(
       (total, cost) => total + cost.outputCostMicros,
       0,
     ),
     provider: first.provider,
-    ...(rateIds.size === 1 ? { rateId: first.rateId } : {}),
+    ...(apiRateIds.length === 1 ? { rateId: first.rateId } : {}),
+    requestPricing: { apiRateIds, ...(codexCredits ? { codexCredits } : {}) },
     serviceTier: first.serviceTier,
     totalCostMicros: priced.reduce(
       (total, cost) => total + cost.totalCostMicros,
@@ -1655,7 +1660,7 @@ export function buildLiveThreadUsageLine(params: {
   contextWindow?: LiveThreadContextWindowObservation;
   observedReplays?: ObservedContextReplayTally;
   reasoningEffort?: string;
-  requestTokenUsages?: readonly TaskMonitorTokenUsageBreakdown[];
+  requestTokenUsages?: Readonly<LiveThreadRequestUsage["requests"]>;
   serviceTier?: string;
   startedAt?: number;
   threadId: string;
@@ -1682,7 +1687,6 @@ export function buildLiveThreadUsageLine(params: {
   const createdAt = params.createdAt ?? params.completedAt ?? Date.now();
   const requestComponentsCost = params.requestTokenUsages
     ? estimateRequestComponentsCost({
-        at: createdAt,
         fastMode: params.fastMode,
         model: params.model,
         requests: params.requestTokenUsages,
@@ -1768,7 +1772,10 @@ export function buildLiveThreadUsageLine(params: {
     provider: cost?.provider ?? fallbackUsageProvider(params.backend),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
-    ...(requestComponentsCost ? { pricingBasis: "request-components" as const } : {}),
+    ...(requestComponentsCost ? {
+      pricingBasis: "request-components" as const,
+      requestPricing: requestComponentsCost.requestPricing,
+    } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
     ...(params.reasoningEffort
       ? { reasoningEffort: params.reasoningEffort }

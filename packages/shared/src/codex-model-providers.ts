@@ -518,7 +518,7 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
 ): T {
   const upstreamModel = line.model ? parseCodexProviderModelId(line.model).model : undefined;
   const directRate = upstreamModel ? findCodexModelProviderRate(provider, upstreamModel) : undefined;
-  const { priceUnavailableReason: _previousReason, accountKey: _previousAccount, pricingBasis: previousBasis, ...rest } = line;
+  const { priceUnavailableReason: _previousReason, accountKey: _previousAccount, pricingBasis: previousBasis, requestPricing, ...rest } = line;
   const base = {
     ...rest,
     pricingBasis: directRate ? "configured-provider" as const
@@ -559,6 +559,7 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
       ...base,
       pricingCatalogId: line.pricingCatalogId,
       pricingCatalogVersion: line.pricingCatalogVersion,
+      ...(requestPricing ? { requestPricing } : {}),
       currency: line.currency,
     } as T;
   }
