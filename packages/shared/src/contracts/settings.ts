@@ -1418,12 +1418,16 @@ export type DesktopSettingsSnapshot = {
      */
     liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
-     * Renders LaTeX delimiters in thread Markdown with KaTeX. Disabled by
-     * default so the renderer does not load the math runtime until an operator
-     * explicitly opts into the experiment.
+     * Renders LaTeX delimiters in thread Markdown with KaTeX. On by default;
+     * the math runtime loads only for messages that may contain math. Shown
+     * under General settings, though the key stays in `[experimental]`.
      */
     markdownMathRendering?: DesktopSettingsValue<boolean>;
-    /** Opt-in incremental Markdown parser and block reuse. Defaults to off. */
+    /**
+     * Incremental Markdown parser and block reuse while a response streams.
+     * On by default. Shown under General settings, though the key stays in
+     * `[experimental]`.
+     */
     incrementalMarkdownRendering?: DesktopSettingsValue<boolean>;
     /**
      * Controls whether the released thread context-rail Pricing tab is visible.

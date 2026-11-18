@@ -3241,8 +3241,6 @@ describe("SettingsScreen", () => {
     >;
     delete experimental.liveTranscriptEventFiltering;
     delete experimental.codexDefaultModeRequestUserInput;
-    delete experimental.markdownMathRendering;
-    delete experimental.incrementalMarkdownRendering;
     const settings = createSettingsState(snapshot);
 
     render(
@@ -3259,17 +3257,9 @@ describe("SettingsScreen", () => {
     const questionsSwitch = screen.getByRole("switch", {
       name: "Enable Codex skill questions",
     });
-    const mathSwitch = screen.getByRole("switch", {
-      name: "Enable Markdown math rendering",
-    });
-    const incrementalSwitch = screen.getByRole("switch", {
-      name: "Enable incremental Markdown rendering",
-    });
 
     expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
-    expect(mathSwitch).toHaveAttribute("aria-checked", "true");
-    expect(incrementalSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(filteringSwitch);
     await waitFor(() => {
@@ -3284,19 +3274,51 @@ describe("SettingsScreen", () => {
         experimental: { codexDefaultModeRequestUserInput: true },
       });
     });
+  });
 
+  it("shows Markdown rendering under General, on by default, and keeps its experimental keys", async () => {
+    const snapshot = createSnapshot();
+    const experimental = snapshot.experimental as Partial<
+      typeof snapshot.experimental
+    >;
+    delete experimental.markdownMathRendering;
+    delete experimental.incrementalMarkdownRendering;
+    const settings = createSettingsState(snapshot);
+
+    const { unmount } = render(
+      <SettingsScreen initialSection="general" settings={settings} />,
+    );
+
+    const section = screen.getByRole("region", { name: "Markdown rendering" });
+    const incrementalSwitch = within(section).getByRole("switch", {
+      name: "Incremental rendering",
+    });
+    const mathSwitch = within(section).getByRole("switch", {
+      name: "Math rendering",
+    });
+    expect(incrementalSwitch).toHaveAttribute("aria-checked", "true");
+    expect(mathSwitch).toHaveAttribute("aria-checked", "true");
+    // JSX attribute strings keep backslashes literally; the delimiters are
+    // single-backslash LaTeX.
+    expect(section).toHaveTextContent("Typeset \\(…\\) and \\[…\\] expressions");
+
+    fireEvent.click(incrementalSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { incrementalMarkdownRendering: false },
+      });
+    });
     fireEvent.click(mathSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { markdownMathRendering: false },
       });
     });
-    fireEvent.click(incrementalSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { incrementalMarkdownRendering: true },
-      });
-    });
+
+    unmount();
+    render(<SettingsScreen initialSection="experimental" settings={settings} />);
+    expect(screen.queryByText(/Markdown rendering/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Markdown math/i)).not.toBeInTheDocument();
   });
 
   it("offers research as a default-off experiment and writes only its feature flag", async () => {

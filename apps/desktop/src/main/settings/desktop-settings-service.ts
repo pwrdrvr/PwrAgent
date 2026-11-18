@@ -1225,7 +1225,7 @@ export class DesktopSettingsService {
         ),
         incrementalMarkdownRendering: this.resolveConfigBoolean(
           config.experimental?.incrementalMarkdownRendering,
-          false,
+          true,
         ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,

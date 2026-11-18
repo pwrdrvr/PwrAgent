@@ -1004,6 +1004,16 @@ function SettingsSectionBody(props: {
         onInteractiveSvgChange={async (patch) => {
           await props.settings.writeConfig({ general: patch });
         }}
+        onMarkdownMathRenderingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { markdownMathRendering: enabled },
+          });
+        }}
+        onIncrementalMarkdownRenderingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { incrementalMarkdownRendering: enabled },
+          });
+        }}
         onHtmlPreviewRunScriptsChange={async (htmlPreviewRunScripts) => {
           await props.settings.writeConfig({
             general: { htmlPreviewRunScripts },
@@ -1151,16 +1161,6 @@ function SettingsSectionBody(props: {
         onLiveTranscriptEventFilteringChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { liveTranscriptEventFiltering: enabled },
-          });
-        }}
-        onMarkdownMathRenderingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { markdownMathRendering: enabled },
-          });
-        }}
-        onIncrementalMarkdownRenderingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { incrementalMarkdownRendering: enabled },
           });
         }}
         onThreadToolAccountingChange={async (enabled: boolean) => {
