@@ -358,16 +358,17 @@ export class NavigationWindowQueries {
     // action can consume a seen/status invalidation without becoming its cause.
     const batch = ++this.nextDiagnosticBatch;
     const forceRead = (resource: Resource) => !invalidatedOnly || (includeDirectoryIndex && resource.value.id === "directory-index");
-    const joinPinReads = trigger === "action/remote-pin-add";
-    const selected = resources.filter((resource) => (forceRead(resource) || resource.invalidated
-      || (joinPinReads && resource.pending && resource.pinPublicationPending))
+    const owesPinRead = (resource: Resource) => trigger === "action/remote-pin-add" && resource.pinPublicationPending;
+    const selected = resources.filter((resource) => (forceRead(resource) || resource.invalidated || owesPinRead(resource))
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))));
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
     const batchPinLoading = selected.some((resource) => resource.pinPublicationPending && !resource.pending);
     let startedReads = false;
     const refreshed = Promise.all(selected.map(async (resource) => {
-      if (forceRead(resource) || resource.invalidated) {
+      const pending = resource.pending;
+      let retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
+      if (forceRead(resource) || resource.invalidated || (!pending && owesPinRead(resource))) {
         resource.diagnosticRefreshBatch = batch;
         if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
         resource.diagnosticTrigger ??= trigger;
@@ -377,14 +378,21 @@ export class NavigationWindowQueries {
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
         if (resource.pending) resource.refreshAfterPending = true;
-        const pending = resource.pending;
         const read = this.read(resource, false, undefined, false, "refresh", !batchPinLoading);
         startedReads ||= batchPinLoading && !pending && Boolean(resource.pending);
         await read;
       }
-      // A caller awaiting refresh owns the coalesced replacement too, not
-      // merely the stale read that happened to occupy this resource first.
-      while (this.isCurrent(resource) && resource.pending) await resource.pending;
+      while (this.isCurrent(resource)) {
+        if (resource.pending) {
+          await resource.pending;
+          continue;
+        }
+        // The receipt can arrive while the broadcast's read is still in
+        // flight. Give that failed read the same recovery as a late receipt.
+        if (!retryJoinedPinRead || !owesPinRead(resource)) break;
+        retryJoinedPinRead = false;
+        await this.read(resource, false);
+      }
     }));
     // The pin discovery wave queues its reads in one turn. Publish its
     // loading state once, with every newly queued read marked as loading.
@@ -462,7 +470,8 @@ export class NavigationWindowQueries {
     const { request, page } = resource.value.state;
     const anchor = resource.anchor;
     if (request.query.kind !== "directory" || anchor?.kind !== "thread") return false;
-    const params = event.notification.params as { sourceMethod?: string; threadId?: string; instanceId?: string; pinned?: boolean };
+    const params = event.notification.params as { sourceMethod?: string; threadId?: string; instanceId?: string; pinned?: boolean;
+      anchorChanges?: NavigationIdentity[] };
     const method = event.notification.method === "navigation/invalidated" ? params.sourceMethod : event.notification.method;
     const viewerPin = method === "navigation/remoteThreadPins/changed";
     const pinned = viewerPin ? params.pinned : method === "thread/pin/added" ? true
@@ -475,10 +484,13 @@ export class NavigationWindowQueries {
     const ref = { backend: event.backend, threadId: params.threadId,
       ownerInstanceId: viewerPin ? params.instanceId
         : event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined };
-    if (navigationIdentityKey(anchor.ref) !== navigationIdentityKey(ref)) return false;
+    const moved = viewerPin && params.anchorChanges?.length ? params.anchorChanges : [ref];
+    const moves = (ref: NavigationIdentity) => moved.some((changed) => navigationIdentitiesEqual(changed, ref));
+    if (!moves(anchor.ref)) return false;
     const entries = page?.entries ?? [];
-    const index = entries.findIndex(({ row }) => navigationIdentityKey(row.ref) === navigationIdentityKey(ref));
-    const neighbor = entries[index + 1] ?? entries[index - 1];
+    const index = entries.findIndex(({ row }) => navigationIdentitiesEqual(row.ref, anchor.ref));
+    const neighbor = entries.find(({ row }, i) => i > index && !moves(row.ref))
+      ?? entries.findLast(({ row }, i) => i < index && !moves(row.ref));
     resource.anchor = neighbor ? { kind: "thread", ref: neighbor.row.ref } : undefined;
     resource.value = { ...resource.value, state: { ...resource.value.state, rebaselineRequired: false } };
     return true;
@@ -904,6 +916,7 @@ export class NavigationWindowQueries {
           extensions += 1;
         }
         this.acceptState(resource, next);
+        resource.pinPublicationPending = false;
         resource.membershipUncertain = false;
         resource.prAttachmentsUncertain = false;
       } catch (error) {
@@ -928,7 +941,6 @@ export class NavigationWindowQueries {
           if (repeat && !resource.value.state.rebaselineRequired) {
             void this.read(resource, false);
           } else {
-            resource.pinPublicationPending = false;
             resource.value = { ...resource.value, loading: false };
             this.publish();
           }

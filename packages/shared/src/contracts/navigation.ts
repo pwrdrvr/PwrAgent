@@ -2920,6 +2920,8 @@ export type RemoteThreadPinPublication = {
   instanceId: string;
   threadId: string;
   pinned: true;
+  /** All departing root anchors when the mount also ranks a companion. */
+  anchorChanges?: NavigationIdentity[];
 };
 
 /** Exact persisted viewer membership, independent of loaded navigation pages. */

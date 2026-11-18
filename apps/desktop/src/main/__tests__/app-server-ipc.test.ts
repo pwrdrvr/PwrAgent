@@ -6654,18 +6654,13 @@ describe("app server ipc", () => {
     ).toBe("string");
   });
 
-  it("pins a remote sub-thread's reachable parent as a companion", async () => {
+  it.each([false, true])("publishes one remote sub-thread mount with companion auto-rank %s", async (autoRank) => {
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
-    addRemoteThreadPinStore.mockClear();
-    publishLocalEvent.mockClear();
-    listThreads.mockClear();
-    federationMock.runtime.remoteNavigationQueryPage.mockClear();
-    hasRemoteThreadPin.mockClear();
-    hasRemoteThreadPin.mockResolvedValueOnce(false);
+    const parentRef = buildFederatedThreadRef({ backend: "codex", instanceId: "peer-parent", threadId: "parent-1" });
     const parentSummary = {
       ref: { backend: "codex", threadId: "parent-1", ownerInstanceId: "peer-parent" },
       rowRevision: "parent-revision",
@@ -6673,16 +6668,34 @@ describe("app server ipc", () => {
       id: "parent-1",
       title: "MCP registration",
       titleSource: "explicit" as const,
-      linkedDirectories: [],
+      linkedDirectories: [{ id: "dir-app", kind: "local" as const, label: "app", path: "/peer/app" }],
       inbox: { inInbox: false },
     };
+    registerAppServerIpcHandlers();
+    if (autoRank) {
+      reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
+        backend: "all", fetchedAt: 1234, unchanged: false,
+        threads: (params as { threads: unknown[] }).threads, inboxThreadKeys: [],
+        directories: [{ key: "directory:/repo/app", kind: "directory", label: "app", path: "/repo/app",
+          threadKeys: [], needsAttentionCount: 0, latestUpdatedAt: 2000, directoryThreadsCollapsed: true }],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+      }));
+      await readLegacyOwnerMaterialization?.({}, {} satisfies GetNavigationSnapshotRequest);
+      listPinnedThreadOverlayRanks.mockResolvedValueOnce([{ pinnedRank: "0" }]);
+      listRemoteThreadPins.mockResolvedValueOnce([{ ref: parentRef, addedAt: 1_000, instanceLabel: "Parent peer", summary: parentSummary }]);
+    }
+    addRemoteThreadPinStore.mockClear();
+    publishLocalEvent.mockClear();
+    listThreads.mockClear();
+    setRemoteThreadLocalPin.mockClear();
+    federationMock.runtime.remoteNavigationQueryPage.mockClear();
+    hasRemoteThreadPin.mockClear();
+    hasRemoteThreadPin.mockResolvedValueOnce(false);
     federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
       protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
       counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
       entries: [{ row: parentSummary, orderKey: "0", placement: { kind: "root" } }],
     });
-
-    registerAppServerIpcHandlers();
 
     const childRef = buildFederatedThreadRef({
       backend: "codex",
@@ -6710,11 +6723,7 @@ describe("app server ipc", () => {
       pinnedVia: "explicit",
     });
     expect(addRemoteThreadPinStore.mock.calls[1][0]).toMatchObject({
-      ref: buildFederatedThreadRef({
-        backend: "codex",
-        instanceId: "peer-parent",
-        threadId: "parent-1",
-      }),
+      ref: parentRef,
       summary: parentSummary,
       pinnedVia: "companion",
     });
@@ -6735,7 +6744,11 @@ describe("app server ipc", () => {
     });
     expect(pinNotices).toHaveLength(1);
     expect(reply).toMatchObject({ publication: pinNotices[0] });
-    expect(pinNotices[0]).toMatchObject({ instanceId: "peer-laptop", threadId: "child-1", publicationId: expect.any(String) });
+    expect(pinNotices[0]).toMatchObject({ publicationId: expect.any(String), ...(autoRank ? {
+      instanceId: "peer-parent", threadId: "parent-1", anchorChanges: [parentSummary.ref,
+        { backend: "codex", ownerInstanceId: "peer-laptop", threadId: "child-1" }],
+    } : { instanceId: "peer-laptop", threadId: "child-1" }) });
+    expect(setRemoteThreadLocalPin).toHaveBeenCalledTimes(autoRank ? 1 : 0);
   });
 
   it("does not companion-pin an already-pinned or unreachable parent", async () => {

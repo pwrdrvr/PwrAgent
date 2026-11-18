@@ -8808,15 +8808,20 @@ class DesktopAppServerService {
     });
 
     // Publish the mount after both rows and any visibility rank are written.
-    // Use the ranked identity when it moved between directory sections so
-    // the renderer can retire an unpinned anchor on that row.
+    // The ranked companion moves sections and the previously orphaned child
+    // can leave the roots altogether. Retire either unpinned anchor.
     const changedRef = rankedRef ?? request.ref;
+    const changedInstanceId = isRemoteFederationTarget(changedRef.target) ? changedRef.target.instanceId : instanceId;
     const publication = {
       publicationId: randomUUID(),
       backend: changedRef.backend,
-      instanceId: isRemoteFederationTarget(changedRef.target) ? changedRef.target.instanceId : instanceId,
+      instanceId: changedInstanceId,
       threadId: changedRef.threadId,
       pinned: true as const,
+      ...(rankedRef && companionParentRef ? { anchorChanges: [
+        { backend: rankedRef.backend, threadId: rankedRef.threadId, ownerInstanceId: changedInstanceId },
+        { backend: request.ref.backend, threadId: request.ref.threadId, ownerInstanceId: instanceId },
+      ] } : {}),
     };
     await getDesktopBackendRegistry().publishLocalEvent({
       backend: publication.backend,
