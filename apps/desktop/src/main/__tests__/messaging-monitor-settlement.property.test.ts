@@ -84,13 +84,13 @@ describe("Monitor render settlement", () => {
     }
   });
 
-  it("lets only subsequent commands change the state after Stop", async () => {
+  it("lets the latest monitor command own settlement", async () => {
     await fc.assert(fc.asyncProperty(
       fc.uniqueArray(fc.record({
         order: fc.integer(),
         outcome: fc.constantFrom("success", "permanent-failure", "throw"),
       }), { minLength: 1, maxLength: 4, selector: item => item.order }),
-      fc.constantFrom("stop", "restart", "new-settings"),
+      fc.constantFrom("stop", "restart", "settings-after-stop", "settings-only"),
       async (renders, next) => {
         const f = await monitorHarness(renders.length);
         const pending: Promise<void>[] = [];
@@ -99,15 +99,16 @@ describe("Monitor render settlement", () => {
             pending.push(index === 0 ? f.command("monitor") : f.command("monitor", "interval", "30"));
             await slot.entered.promise;
           }
-          await f.command("monitor", "stop");
+          if (next !== "settings-only") await f.command("monitor", "stop");
           if (next === "restart") await f.command("monitor");
-          if (next === "new-settings") await f.command("monitor", "interval", "300");
+          const setsInterval = next === "settings-after-stop" || next === "settings-only";
+          if (setsInterval) await f.command("monitor", "interval", "300");
 
-          // Stop removes the old surface. A subsequent command may install a new one.
+          // The latest command determines whether a surface exists and its refresh interval.
           const expected = await f.read();
           expect(expected?.monitor.enabled).toBe(next !== "stop");
           expect(Boolean(expected?.monitorSurface)).toBe(next !== "stop");
-          if (next === "new-settings") expect(expected?.monitor.intervalMs).toBe(300_000);
+          if (setsInterval) expect(expected?.monitor.intervalMs).toBe(300_000);
           const order = renders.map((_, index) => index).sort((a, b) => renders[a]!.order - renders[b]!.order);
           for (const index of order) {
             f.slots[index]!.release.resolve(renders[index]!.outcome);
@@ -205,6 +206,7 @@ describe("Monitor render settlement", () => {
 
   it("preserves a bound monitor's detach from a late startup tick", async () => {
     const f = await monitorHarness(1, "binding");
+    const revoke = vi.spyOn(f.store, "revokeBinding");
     let startup: Promise<void> | undefined;
     try {
       const binding = await f.store.findActiveBindingForChannel(f.channel);
@@ -222,7 +224,9 @@ describe("Monitor render settlement", () => {
       f.slots[0]!.release.resolve("permanent-failure");
       await startup;
       expect(await f.store.getBinding(binding.id)).toEqual(detached);
+      expect(revoke).toHaveBeenCalledTimes(1);
     } finally {
+      revoke.mockRestore();
       await f.close(startup ? [startup] : []);
     }
   });
