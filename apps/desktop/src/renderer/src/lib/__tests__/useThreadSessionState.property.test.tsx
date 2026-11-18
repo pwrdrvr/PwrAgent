@@ -830,3 +830,23 @@ it("joins an admitted ledger case and its hook reads before retiring the rendere
     finally { clock.mockRestore(); }
   }
 });
+
+// Seed -1090695356, path "21:0:4:18:19:24". The first send's echo
+// is missed. Its promoted placeholder must leave the second send's
+// position intact across a stale read, so turn 4's tool stays above
+// turn 5's user message when the second echo arrives.
+it("keeps a completed tool above the echo of a later repeated send", () => ledgerLifetime.run(async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("compact", 0, false),
+      new LedgerCommand("send", 0, true),
+      new LedgerCommand("start", 0, true),
+      new LedgerCommand("item", 0, true),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("send", 1, true),
+      new LedgerCommand("resolve", 1, true),
+      new LedgerCommand("start", 1, false),
+    ]);
+  } finally { clock.mockRestore(); }
+}));
