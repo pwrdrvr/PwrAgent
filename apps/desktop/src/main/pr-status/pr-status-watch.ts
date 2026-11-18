@@ -2,6 +2,7 @@ import { createPrWatchOwnerId } from "./pr-watch-owner";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
+  CausalMessagingContext,
   AppServerTurnInputItem,
   PrSummary,
   PullRequestTerminalDetails,
@@ -53,6 +54,16 @@ export function terminalWakeOutcomeOf(pr: PrSummary): PrTerminalWakeOutcome | un
   return pr.mergeQueue?.state === "removed" && pr.mergeQueue.removedAt !== undefined
     ? "dequeued"
     : undefined;
+}
+
+/** The contact whose turn armed the watch, carried onto the turn it starts. */
+function watchCausalContext(
+  watch: ThreadPullRequestWatchSummary,
+): CausalMessagingContext {
+  return {
+    ...(watch.causalMessagingSource ? { causalMessagingSource: watch.causalMessagingSource } : {}),
+    ...(watch.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
+  };
 }
 
 /** Terminal details are immutable once read; keep a few for busy retries. */
@@ -354,6 +365,7 @@ export class PrStatusWatchCoordinator {
             headSha: details?.headSha ?? pr.headSha ?? claim.watch.headSha,
             outcome,
           },
+          ...watchCausalContext(claim.watch),
         },
       });
       if (submission.status === "busy") {
@@ -432,6 +444,7 @@ export class PrStatusWatchCoordinator {
             headSha: claim.watch.headSha,
             outcome,
           },
+          ...watchCausalContext(claim.watch),
         },
       });
       if (submission.status === "busy") {

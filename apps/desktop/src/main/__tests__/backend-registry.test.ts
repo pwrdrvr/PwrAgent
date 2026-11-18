@@ -57005,11 +57005,12 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
+    // A turn the local operator started carries no messaging contact.
     expect(handler).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "agent-thread",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
-    });
+    }, {});
     expect(response).toMatchObject({ success: true });
 
     await registry.close();

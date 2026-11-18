@@ -65,6 +65,7 @@ import {
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
+  type CausalMessagingContext,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
   type BackendModelOption,
@@ -539,6 +540,8 @@ export type PullRequestReferenceResolver = (params: {
 
 export type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
+  /** The calling turn's messaging contact, from its stored origin; never from arguments. */
+  provenance?: CausalMessagingContext,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
 export type DirectoryGitStatusWriter = (params: {

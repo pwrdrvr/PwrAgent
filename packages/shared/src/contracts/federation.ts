@@ -128,6 +128,13 @@ export const FEDERATION_CAPABILITIES = [
    * viewer offers Continue After on an older owner's threads read-only.
    */
   "thread_dependencies_v1",
+  /**
+   * The owner keeps the messaging contact a Continue After create carries,
+   * so the turn the wait starts is checked against that contact's role. A
+   * viewer refuses a contact's create toward an owner without it, which
+   * would run the wait as the peer.
+   */
+  "thread_dependency_provenance_v1",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

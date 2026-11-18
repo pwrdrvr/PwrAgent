@@ -142,7 +142,7 @@ export * from "./acp-permission-mode";
 export * from "./uuid-v7";
 
 export type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary, TerminalSnapshot } from "./contracts/terminal";
-export { mergeCausalMessagingContext } from "./messaging-causal-context";
+export { mergeCausalMessagingContext, type CausalMessagingContext } from "./messaging-causal-context";
 export {
   combinedDeliveryInput,
   combinedDeliveryPreamble,

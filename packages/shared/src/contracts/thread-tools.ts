@@ -620,6 +620,14 @@ export type ThreadPullRequestWatchSummary = {
   createdBy?: "agent" | "operator";
   /** The head this CI watch was armed at before a push moved it. */
   followedFrom?: string;
+  /**
+   * The messaging contact whose turn armed the watch. The turn it starts
+   * keeps that contact as its source, so its tool calls are checked against
+   * the contact's role. Watches merged from different requesters are
+   * ambiguous.
+   */
+  causalMessagingSource?: import("./normalized-app-server").MessagingCausalSourceRef;
+  causalMessagingAmbiguous?: boolean;
 };
 
 /**
