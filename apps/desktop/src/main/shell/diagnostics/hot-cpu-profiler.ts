@@ -100,6 +100,7 @@ export class HotCpuProfiler {
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
+  private listingDiagnosticsEnabled = false;
 
   constructor(options: {
     config: Extract<HotCpuProfileConfig, { enabled: true }>;
@@ -139,6 +140,17 @@ export class HotCpuProfiler {
     await this.startPromise;
   }
 
+  get hasActiveProfile(): boolean {
+    return this.profiling || this.stopProfilePromise !== null;
+  }
+
+  async rearmListingDiagnostics(): Promise<void> {
+    if (!this.startPromise || this.stopped) return;
+    await this.startPromise;
+    // The new document has its own ring even though the monitor survived.
+    if (!this.stopped) await this.setListingDiagnosticsEnabled(true, true);
+  }
+
   private async startInner(): Promise<void> {
     const startedAt = this.now();
     await this.session.appendEvent({
@@ -158,6 +170,7 @@ export class HotCpuProfiler {
       },
     });
     await this.ensureRecording(startedAt.getTime());
+    await this.setListingDiagnosticsEnabled(true);
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
       target: this.session.target ?? "renderer",
       sessionDirectory: this.session.directoryPath,
@@ -177,8 +190,19 @@ export class HotCpuProfiler {
     }
 
     this.stopped = true;
-    this.shutdownPromise = this.stopInner(reason);
+    this.shutdownPromise = this.stopInner(reason).finally(() => this.setListingDiagnosticsEnabled(false));
     await this.shutdownPromise;
+  }
+
+  private async setListingDiagnosticsEnabled(enabled: boolean, rearm = false): Promise<void> {
+    if (!rearm && this.listingDiagnosticsEnabled === enabled) return;
+    this.listingDiagnosticsEnabled = enabled;
+    try {
+      await this.target.setListingDiagnosticsEnabled?.(enabled);
+    } catch {
+      // Optional diagnostics cannot prevent monitor startup or shutdown.
+      this.logger.warn("[pwragent:hot-cpu] listing diagnostics state unavailable");
+    }
   }
 
   private async stopInner(reason: string): Promise<void> {
@@ -194,18 +218,16 @@ export class HotCpuProfiler {
     // blocked heap snapshot cannot deadlock shutdown. Recheck after the sample
     // settles in case it crossed into profiling while shutdown was starting.
     const captureSamplePromise = this.captureSamplePromise;
-    const activeProfileStop =
-      this.profiling || this.stopProfilePromise
-        ? this.stopProfile(reason)
-        : null;
+    const activeProfileStop = this.hasActiveProfile ? this.stopProfile(reason) : null;
     await Promise.all([captureSamplePromise, activeProfileStop]);
 
-    if (this.profiling || this.stopProfilePromise) {
+    if (this.hasActiveProfile) {
       await this.stopProfile(reason);
     }
 
     // An armed recorder without a trigger is discarded, never published.
     await this.discardRecording();
+    await this.setListingDiagnosticsEnabled(false);
     this.detachDebugger();
     await this.session.appendEvent({
       capturedAt: this.now().toISOString(),

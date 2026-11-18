@@ -3155,6 +3155,7 @@ describe("CodexAppServerClient", () => {
     // Other fixtures reset the module registry. Observe the same singleton
     // generation as this client rather than retaining the file's first import.
     const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
+    listingDiagnostics.setEnabled(true);
     const diagnosticStart = listingDiagnostics.snapshot().recorded;
     MockTransport.threadListResultBySearchTerm.set("shared-list", Array.from(
       { length: 500 }, (_, index) => ({
@@ -3204,6 +3205,7 @@ describe("CodexAppServerClient", () => {
       expect(countLists()).toBe(2);
       expect(enrich).toHaveBeenCalledTimes(50);
     } finally {
+      listingDiagnostics.setEnabled(false);
       release();
       await client.close();
     }

@@ -3,6 +3,7 @@ export type HotCpuTarget = {
   debugger: DiagnosticDebugger;
   getOSProcessId: () => number;
   readDiagnostics?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  setListingDiagnosticsEnabled?: (enabled: boolean) => void | Promise<void>;
   isDestroyed?: () => boolean;
   isDevToolsOpened?: () => boolean;
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
