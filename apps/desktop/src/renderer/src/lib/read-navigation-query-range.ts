@@ -1,5 +1,5 @@
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes } from "@pwragent/shared";
 import { applyNavigationPage, beginNavigationPageRead, createNavigationPageState, isNavigationCursorExpired } from "./navigation-query-state";
 
 /** Complete compact metadata/exact demand, never an eager full thread-lens reader. */
@@ -18,7 +18,6 @@ export async function readNavigationQueryRange(params: {
   let state = createNavigationPageState(params.request);
   let restarted = false;
   let retainedBytes = 0;
-  const encoder = new TextEncoder();
   // Range owners can be replaced during mount replay before any IPC starts.
   await Promise.resolve();
   while (true) {
@@ -45,7 +44,7 @@ export async function readNavigationQueryRange(params: {
       throw new Error("Navigation metadata has no complete owner baseline. Retry after the owner finishes refreshing.");
     }
     // Count serialized backing incrementally; do not repeatedly encode the accumulated range.
-    const pageBytes = encoder.encode(JSON.stringify(page)).byteLength;
+    const pageBytes = navigationQueryPageBudgetBytes(page);
     if (pageBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) throw new Error("Navigation metadata page exceeds its wire-byte budget.");
     params.reserveBytes?.(pageBytes);
     retainedBytes += pageBytes;

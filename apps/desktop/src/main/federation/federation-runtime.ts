@@ -191,6 +191,8 @@ import {
   MAX_CELESTIAL_ASSIGNMENTS,
   buildPrependPinRank,
   buildFederatedThreadRef,
+  expandNavigationRemoteOwner,
+  type NavigationRemoteOwner,
   sortSubthreadSummaries,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
@@ -469,7 +471,7 @@ import {
   hasFederationErrorCode,
   type FederationRpcRequestOptions,
 } from "./federation-rpc";
-import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "./federation-navigation-query";
+import { navigationRequestForOwner } from "./federation-navigation-query";
 import {
   FederationPeerUnavailableError,
 } from "./federation-peer-unavailable-error";
@@ -3341,7 +3343,17 @@ export class DesktopFederationRuntime {
     return rpc;
   }
 
+  /** The owner's page with every row filled in, for callers inside this process. */
   async remoteNavigationQueryPage(
+    target: FederationRemoteTarget,
+    request: NavigationQueryRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueryPage> {
+    return this.stampRemoteNavigationQueryPage(target, await this.remoteNavigationOwnerQueryPage(target, request, rpcOptions));
+  }
+
+  /** The owner's page exactly as the owner selected it. */
+  async remoteNavigationOwnerQueryPage(
     target: FederationRemoteTarget,
     request: NavigationQueryRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -3366,18 +3378,22 @@ export class DesktopFederationRuntime {
       }
       throw error;
     }
-    return this.stampRemoteNavigationQueryPage(target, page);
+    return page;
   }
 
-  /** Reapply viewer metadata after expanding an unchanged owner baseline. */
-  stampRemoteNavigationQueryPage(target: FederationRemoteTarget, page: NavigationQueryPage): NavigationQueryPage {
+  /** What this viewer knows about an owner, read when a page is served. */
+  remoteNavigationOwner(target: FederationRemoteTarget): NavigationRemoteOwner {
     const instanceLabel = this.connectedPeerTargets().find(
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
-    return stampRemoteNavigationQueryPage({ instanceLabel, page, target,
+    return { instanceId: target.instanceId, instanceLabel,
       capabilities: this.viewerCapabilitiesFor(target.instanceId, peer), peerStatus: peer?.status ?? "connected",
-      celestialIcon: peer?.celestialIcon });
+      celestialIcon: peer?.celestialIcon };
+  }
+
+  stampRemoteNavigationQueryPage(target: FederationRemoteTarget, page: NavigationQueryPage): NavigationQueryPage {
+    return expandNavigationRemoteOwner({ ...page, remoteOwner: this.remoteNavigationOwner(target) });
   }
 
   async remoteReleaseNavigationAttentionView(target: FederationRemoteTarget, request: NavigationAttentionViewReleaseRequest): Promise<void> {
@@ -7461,7 +7477,9 @@ async function mountRemoteParentForLocalChild(
     const query = { ...requestedQuery, deadlineAt };
     const consumerId = `created-child-parent:${randomUUID()}`;
     try {
-      return await pool.read({ consumerId, request: query, load: async ({ signal, deadlineAt }) => {
+      // The pool is shared with windows, whose reads retain another owner's
+      // page with its rows not yet filled in.
+      return expandNavigationRemoteOwner(await pool.read({ consumerId, request: query, load: async ({ signal, deadlineAt }) => {
         signal.throwIfAborted();
         if (query.federationTarget && isRemoteFederationTarget(query.federationTarget)) {
           return await runtime.remoteNavigationQueryPage(query.federationTarget, query, { signal, deadlineAt });
@@ -7474,7 +7492,7 @@ async function mountRemoteParentForLocalChild(
             return index;
           },
         });
-      } });
+      } }));
     } finally {
       pool.release(consumerId);
     }

@@ -2486,6 +2486,27 @@ export type NavigationQueryPage = {
   unchanged?: boolean;
   /** Empty payload confirms these already retained rows; continuation remains explicit. */
   rangeUnchanged?: { start: number; count: number };
+  /**
+   * Set by a viewer on a page another instance owns, never by the owner.
+   * See `navigation-remote-owner.ts`.
+   */
+  remoteOwner?: NavigationRemoteOwner;
+};
+
+/** One owner's facts for a whole page, as its viewer knows them. */
+export type NavigationRemoteOwner = {
+  instanceId: FederationInstanceId;
+  instanceLabel: string;
+  peerStatus?: FederationPeerSummary["status"];
+  capabilities?: FederationCapability[];
+  celestialIcon?: CelestialIconId;
+  /** This viewer's disclosure for the page's directories, by directory key. */
+  directoryThreadsCollapsed?: Record<string, boolean>;
+  /**
+   * UTF-8 bytes of the owner's content as it arrived, recorded when rows are
+   * filled in. Its presence marks a page whose rows are already filled in.
+   */
+  ownerContentBytes?: number;
 };
 
 export type NavigationMetadataDependencies = {

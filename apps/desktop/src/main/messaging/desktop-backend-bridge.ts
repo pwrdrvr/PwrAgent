@@ -84,6 +84,7 @@ import type { MessagingImagePart } from "@pwragent/messaging-interface";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import {
   buildFederatedThreadRef,
+  expandNavigationRemoteOwner,
   isRemoteFederationTarget,
 } from "@pwragent/shared";
 import type {
@@ -290,7 +291,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const consumerId = `messaging-query:${randomUUID()}`;
     const pool = getDesktopNavigationQueryPool();
     try {
-      return await pool.read({ consumerId, request, load: async (options) => {
+      // The pool is shared with windows, whose reads retain another owner's
+      // page with its rows not yet filled in. Fill them in whichever read
+      // loaded the page.
+      return expandNavigationRemoteOwner(await pool.read({ consumerId, request, load: async (options) => {
         const target = request.federationTarget;
         if (target?.scope === "remote") {
           if (!this.federation?.remoteNavigationQueryPage) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
@@ -304,7 +308,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
             return loadLocalNavigationQueryIndex({ backend: request.backend,
               callerReason: "messaging-bounded-navigation", registry: this.registry });
           } });
-      } });
+      } }));
     } finally { pool.release(consumerId); }
   }
 

@@ -136,7 +136,7 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
   }
 }
 const ownerNavigationTransport = new LocalOwnerNavigationTransport({
-  getNavigationQueryPage: (request, options) => appServerService.getNavigationQueryPage(request, options?.localConsumerId),
+  getNavigationQueryPage: (request, options) => appServerService.getNavigationQueryWirePage(request, options?.localConsumerId),
   getNavigationSelectedDetail: (request, options) => appServerService.getNavigationSelectedDetail(request, options?.localConsumerId),
   getNavigationQueueProjection: (request, options) => appServerService.getNavigationQueueProjection(request, options?.localConsumerId),
   getNavigationLaunchpadConfig: (request, options) => appServerService.getNavigationLaunchpadConfig(request, options?.localConsumerId),

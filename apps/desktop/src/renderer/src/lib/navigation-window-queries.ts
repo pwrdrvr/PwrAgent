@@ -1,6 +1,6 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationIdentity, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -237,7 +237,9 @@ export class NavigationWindowQueries {
     if (!page) return 0;
     let bytes = this.pageSizes.get(page);
     if (bytes === undefined) {
-      bytes = new TextEncoder().encode(JSON.stringify(page)).byteLength;
+      // Another owner's page counts as its owner measured it. What this
+      // viewer filled in shares one block and is not charged per row.
+      bytes = navigationQueryPageBudgetBytes(page);
       this.pageSizes.set(page, bytes);
     }
     return bytes;
@@ -690,13 +692,11 @@ export class NavigationWindowQueries {
         };
         // Rows already on screen are restored outside the saved-depth budget.
         const readPage = async (request: NavigationQueryRequest, restoringDisplayed = false) => {
-          // An owner fills a page up to its own copy of this budget, and a
-          // remote one is then stamped with federation metadata on every row
-          // it served. A page of fat rows can therefore arrive here over a
-          // budget its owner honored — and the request that produced it is
-          // deterministic, so a control that hits this could never succeed
-          // again. Halve the rows and ask again instead of handing the
-          // operator a button that fails identically on every press.
+          // A page is measured as its owner measured it, so one that honored
+          // the budget fits here. An owner that did not would send the same
+          // page on every request, and a control that hit it could never
+          // succeed again. Halve the rows and ask again instead of handing
+          // the operator a button that fails identically on every press.
           let rows = request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
           for (;;) {
             const charged = resuming && Boolean(request.cursor) && !restoringDisplayed;

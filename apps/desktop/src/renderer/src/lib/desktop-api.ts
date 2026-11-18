@@ -1,5 +1,6 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
+import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
@@ -2134,8 +2135,64 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   };
 };
 
+const filledDesktopApis = new WeakMap<DesktopApi, DesktopApi>();
+
+/**
+ * Main sends another owner's page with the owner's facts once, in
+ * `remoteOwner`, and its rows as the owner selected them. Every reader in
+ * this window gets rows already filled in from that block. The filled rows
+ * share the block's values, so they cost the window no copies.
+ */
+function withFilledNavigationPages(api: DesktopApi): DesktopApi {
+  let filled = filledDesktopApis.get(api);
+  if (!filled) {
+    const member = (key: string | symbol): unknown => {
+      const value: unknown = Reflect.get(api, key);
+      return key === "getNavigationQueryPage" && typeof value === "function"
+        ? filledNavigationRead(value as NavigationPageRead) : value;
+    };
+    // A view, not a copy: tests and the preload may replace a member of the
+    // underlying object later, and every other member must stay live.
+    //
+    // The view's target is an empty object, not the API. The preload's API is
+    // frozen by Electron's contextBridge, and a proxy may not answer
+    // differently from a frozen target: the read would throw in the app while
+    // passing against an unfrozen test double. Own keys and descriptors are
+    // reported from the API, so spreading the view still copies each member.
+    filled = new Proxy({} as DesktopApi, {
+      get: (_target, key) => member(key),
+      has: (_target, key) => Reflect.has(api, key),
+      set: (_target, key, value) => Reflect.set(api, key, value),
+      deleteProperty: (_target, key) => Reflect.deleteProperty(api, key),
+      // A test spy redefines the member. It must land on the API, where reads look.
+      defineProperty: (_target, key, descriptor) => Reflect.defineProperty(api, key, descriptor),
+      ownKeys: () => Reflect.ownKeys(api),
+      getOwnPropertyDescriptor: (_target, key) => {
+        const own = Reflect.getOwnPropertyDescriptor(api, key);
+        return own && { value: member(key), enumerable: own.enumerable, configurable: true, writable: true };
+      },
+    });
+    filledDesktopApis.set(api, filled);
+  }
+  return filled;
+}
+
+type NavigationPageRead = NonNullable<DesktopApi["getNavigationQueryPage"]>;
+const filledNavigationReads = new WeakMap<NavigationPageRead, NavigationPageRead>();
+
+/** One wrapper per underlying read, so callers that depend on its identity do not re-run. */
+function filledNavigationRead(read: NavigationPageRead): NavigationPageRead {
+  let filled = filledNavigationReads.get(read);
+  if (!filled) {
+    filled = async (...args) => expandNavigationRemoteOwner(await read(...args));
+    filledNavigationReads.set(read, filled);
+  }
+  return filled;
+}
+
 export function getDesktopApi(): DesktopApi | undefined {
-  return (window as Window & { pwragent?: DesktopApi }).pwragent;
+  const api = (window as Window & { pwragent?: DesktopApi }).pwragent;
+  return api && withFilledNavigationPages(api);
 }
 
 export function useDesktopApi(): DesktopApi | undefined {

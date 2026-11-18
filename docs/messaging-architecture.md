@@ -282,7 +282,7 @@ sequenceDiagram
     Bridge->>Backend: protocol call
 ```
 
-The adapter's job ends at "I converted a platform-specific event into a `MessagingInboundEvent`". Workflow decisions — debouncing, steering, binding resolution — all live in `MessagingController`. Queueing behind a busy thread depends on the backend. The desktop bridge sets `ownsTurnQueue` (`apps/desktop/src/main/messaging/desktop-backend-bridge.ts`), so the controller submits the turn and the thread owner's FIFO queues it, the same FIFO desktop viewers read. The controller queues the input itself (`queuePreparedInput`) only for a backend without that flag. Adapters must not call `turn/start` themselves.
+The adapter's job ends at "I converted a platform-specific event into a `MessagingInboundEvent`". `MessagingController` routes events to workflow owners; `MessagingInboundTurns` owns text/media routing, input preparation and turn startup. Queueing behind a busy thread depends on the backend. The desktop bridge sets `ownsTurnQueue` (`apps/desktop/src/main/messaging/desktop-backend-bridge.ts`), so the inbound owner submits the turn and the thread owner's FIFO queues it, the same FIFO desktop viewers read. The inbound owner queues the input itself (`queuePreparedInput`) only for a backend without that flag. Adapters must not call `turn/start` themselves.
 
 Before ordinary text/media routing, the controller offers the normalized event
 to desktop automations. Enabled inbound-message automations match on provider,
@@ -932,6 +932,9 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-binding-service.ts` | Binding creation, metadata, preferences, status surfaces and their render lock, name sync, binding audits and the single detach pipeline |
 | `apps/desktop/src/main/messaging/core/messaging-binding-context.ts` | Narrow store/backend/adapter ports, lazy configuration and exact workflow collaborators for binding effects |
 | `apps/desktop/src/main/messaging/core/messaging-binding-helpers.ts` | Targeted thread projection, conversation labels and workspace handoff context |
+| `apps/desktop/src/main/messaging/core/messaging-inbound-turns.ts` | Text/media routing, default-Agent admission, input preparation, turn startup, pending prompt buffers and admission timing |
+| `apps/desktop/src/main/messaging/core/messaging-inbound-context.ts` | Lazy store, backend, adapter, configuration and exact workflow ports for inbound effects |
+| `apps/desktop/src/main/messaging/core/messaging-inbound-helpers.ts` | Command parsing, private-response request recognition, turn settings and launchpad/environment projections |
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
 | `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
 | `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |

@@ -7,6 +7,8 @@ import type { MessagingCallbackHandlers } from "../../messaging/core/messaging-c
 import type { MessagingCallbackHost } from "../../messaging/core/messaging-callback-context";
 import type { MessagingBindingService } from "../../messaging/core/messaging-binding-service";
 import type { MessagingBindingHost } from "../../messaging/core/messaging-binding-context";
+import type { MessagingInboundTurns } from "../../messaging/core/messaging-inbound-turns";
+import type { MessagingInboundHost } from "../../messaging/core/messaging-inbound-context";
 
 // Test-only access to the actual owner and the facade's late-bound host ports.
 // No moved state or moved operation is accessed through the controller.
@@ -19,6 +21,8 @@ export function messagingModules(controller: MessagingController): {
   readonly callbackHost: () => MessagingCallbackHost;
   readonly bindings: MessagingBindingService;
   readonly bindingHost: () => MessagingBindingHost;
+  readonly inbound: MessagingInboundTurns;
+  readonly inboundHost: () => MessagingInboundHost;
 } {
   const ports = controller as unknown as {
     readonly backendEventRouter: MessagingBackendEventRouter;
@@ -29,6 +33,8 @@ export function messagingModules(controller: MessagingController): {
     callbackHost(): MessagingCallbackHost;
     readonly bindingService: MessagingBindingService;
     bindingHost(): MessagingBindingHost;
+    readonly inboundTurns: MessagingInboundTurns;
+    inboundHost(): MessagingInboundHost;
   };
   return {
     backendEvents: ports.backendEventRouter,
@@ -39,5 +45,7 @@ export function messagingModules(controller: MessagingController): {
     callbackHost: () => ports.callbackHost(),
     bindings: ports.bindingService,
     bindingHost: () => ports.bindingHost(),
+    inbound: ports.inboundTurns,
+    inboundHost: () => ports.inboundHost(),
   };
 }

@@ -288,6 +288,7 @@ import {
   DEFAULT_PULL_REQUEST_PROVIDER,
   buildPrependPinRank,
   buildFederatedThreadRef,
+  expandNavigationRemoteOwner,
   buildPullRequestStatusKey,
   resolvePullRequestIdentity,
   buildThreadIdentityKey,
@@ -2239,7 +2240,20 @@ class DesktopAppServerService {
     return await promise;
   }
 
+  /** A page for callers in this process: another owner's rows arrive filled in. */
   async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueryPage> {
+    return expandNavigationRemoteOwner(await this.getNavigationQueryWirePage(request, consumerId));
+  }
+
+  /**
+   * A page as it is retained and sent to a window. Another owner's rows stay
+   * as the owner selected them, with this viewer's facts once in
+   * `remoteOwner`; the window fills its rows in from that.
+   */
+  async getNavigationQueryWirePage(
     request: NavigationQueryRequest,
     consumerId?: string,
   ): Promise<NavigationQueryPage> {
@@ -2265,8 +2279,8 @@ class DesktopAppServerService {
     if (!request.federationTarget || !isRemoteFederationTarget(request.federationTarget)) {
       return this.readNavigationQueryPageOnce(request, rpcOptions);
     }
-    // A remote page is measured as this viewer serves it. Stamping and viewer
-    // overlays grow it past what its owner measured.
+    // The viewer's additions ride in `remoteOwner` and do not count against
+    // the budget, so the owner's first page fits. See the helper for the rest.
     return readRemoteNavigationPageWithinBudget({
       request,
       read: (sized) => this.readNavigationQueryPageOnce(sized, rpcOptions),
@@ -2286,15 +2300,17 @@ class DesktopAppServerService {
       const target = request.federationTarget;
       const runtime = getDesktopFederationRuntime();
       const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
-        const result = await runtime.remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
+        const result = await runtime.remoteNavigationOwnerQueryPage(target, ownerRequest, rpcOptions);
         rpcOptions?.signal.throwIfAborted();
         return result;
       });
       rpcOptions?.signal.throwIfAborted();
-      const page = runtime.stampRemoteNavigationQueryPage(target, ownerPage);
+      // The owner's rows are returned untouched. Everything this viewer adds
+      // goes in one block, so the page costs here what it cost its owner.
+      const page: NavigationQueryPage = { ...ownerPage, remoteOwner: runtime.remoteNavigationOwner(target) };
       if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
         const instanceId = request.federationTarget.instanceId;
-        const snapshots = page.entries.flatMap(({ row }) => {
+        const snapshots = expandNavigationRemoteOwner(page).entries.flatMap(({ row }) => {
           const federation = row.federation;
           if (federation?.ref.target.scope !== "remote" || federation.ref.target.instanceId !== instanceId) return [];
           return [{ ref: federation.ref, summary: row, instanceLabel: federation.instanceLabel }];
@@ -2320,13 +2336,15 @@ class DesktopAppServerService {
       rpcOptions?.signal.throwIfAborted();
       // The owner's Forge Automation rides on its rows as stored there; only
       // the disclosure is this viewer's own.
-      const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
+      const directoryThreadsCollapsed: Record<string, boolean> = {};
+      for (const directory of [...(page.directories ?? []), ...(page.selectionDirectory ? [page.selectionDirectory] : [])]) {
         const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
-        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
-          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
-      };
-      return { ...page, directories: page.directories?.map(apply),
-        selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
+        if (collapsed !== undefined && collapsed !== directory.directoryThreadsCollapsed) {
+          directoryThreadsCollapsed[directory.key] = collapsed;
+        }
+      }
+      return Object.keys(directoryThreadsCollapsed).length
+        ? { ...page, remoteOwner: { ...page.remoteOwner!, directoryThreadsCollapsed } } : page;
     }
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {
