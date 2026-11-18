@@ -86,10 +86,19 @@ export class ThreadDependencyStore {
     return row ? JSON.parse(row.payload) as ThreadDependency : undefined;
   }
 
+  /**
+   * A persisted message origin names this delivery: on its own, or as one
+   * member of a combined delivery (`deliveredMessages`).
+   */
   hasDeliveryReceipt(item: ThreadDependency): boolean {
+    const key = threadDependencyDeliveryKey(item);
     return Boolean(this.db.prepare(
-      "SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND json_extract(payload, '$.dependencyId') = ? LIMIT 1",
-    ).get(item.backend, item.threadId, threadDependencyDeliveryKey(item)));
+      `SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND (
+         json_extract(payload, '$.dependencyId') = ?
+         OR EXISTS (SELECT 1 FROM json_each(payload, '$.deliveredMessages') AS member
+           WHERE json_extract(member.value, '$.origin.dependencyId') = ?)
+       ) LIMIT 1`,
+    ).get(item.backend, item.threadId, key, key));
   }
 
   private recoveryGuard(target: Pick<ThreadDependency, "backend" | "threadId">): RecoveryGuard {

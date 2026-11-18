@@ -369,18 +369,37 @@ describe("durable thread dependencies", () => {
     expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered", turnId: "consumer-turn" });
   });
 
-  it("holds a queued wake the operator cancelled for review instead of waking the thread again", async () => {
+  it("ends a queued wake the operator cancelled without waking the thread or holding other waits", async () => {
     const agent = coordinator(); busy = true;
     snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    snapshots.get("security")!.prs = [{ pr: pr({ number: 2, url: "https://github.com/example/fixture/pull/2", checkState: "passing", state: "passing" }), fetchedAt: now }];
     await create(agent);
     const item = store.active()[0]!;
     await agent.handleDeliveryProgress({ backend: "codex", threadId: "dependencies", dependencyId: item.id, status: "cancelled" });
-    expect(store.active()[0]).toMatchObject({ status: "dispatching" });
-    expect(store.active()[0]!.error).toMatch(/cancelled before it reached the thread/);
+    expect(store.list("codex", "dependencies").find((entry) => entry.id === item.id)).toMatchObject({ status: "cancelled" });
     busy = false;
     await agent.handleThreadEvent(condition("dependencies"), { id: "consumer-turn", status: "completed" }, true);
     await agent.handlePrEvent();
     expect(submit).toHaveBeenCalledTimes(1);
+    // A later wait for the same thread is not held behind a review.
+    await create(agent, [condition("security")]);
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles a wake restored by a quiet restart when its own started event arrives", async () => {
+    busy = true;
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await create(coordinator());
+    const item = store.active()[0]!;
+    expect(item.status).toBe("dispatching");
+    // A new process: it did not admit the wake, and reconcile flags the claim.
+    const restarted = coordinator();
+    await restarted.reconcile();
+    expect(store.active()[0]!.error).toMatch(/interrupted/);
+    // The restored queue entry then reaches the thread.
+    await restarted.handleDeliveryProgress({ backend: "codex", threadId: "dependencies", dependencyId: item.id, status: "started", turnId: "restored-turn" });
+    expect(store.list("codex", "dependencies").find((entry) => entry.id === item.id)).toMatchObject({ status: "delivered", turnId: "restored-turn" });
+    expect(store.list("codex", "dependencies").find((entry) => entry.id === item.id)!.error).toBeUndefined();
   });
 
   it("queues every ready wait for one busy consumer instead of admitting one per turn", async () => {
@@ -438,6 +457,21 @@ describe("durable thread dependencies", () => {
     db.raw.prepare("INSERT INTO thread_message_origins(backend, thread_id, message_id, created_at, payload) VALUES (?, ?, ?, ?, ?)").run("codex", "dependencies", "receipt", now, JSON.stringify({ kind: "pwragent", dependencyId: original.id }));
     await coordinator().reconcile();
     expect(store.list("codex", "dependencies")[0].status).toBe("delivered");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("finds the receipt of a wake delivered inside a combined delivery", async () => {
+    const agent = coordinator(); await create(agent);
+    const original = store.active()[0];
+    store.replace(original, { ...original, status: "dispatching", dispatchOwnerPid: 2_000_000_000 });
+    db.raw.prepare("INSERT INTO thread_message_origins(backend, thread_id, message_id, created_at, payload) VALUES (?, ?, ?, ?, ?)").run(
+      "codex", "dependencies", "combined", now, JSON.stringify({ kind: "agent", deliveredMessages: [
+        { origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "lane-a" } }, receivedAt: now, inputItemCount: 1 },
+        { origin: { kind: "pwragent", dependencyId: original.id }, receivedAt: now, inputItemCount: 1 },
+      ] }));
+    await coordinator().reconcile();
+    expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered" });
+    expect(store.list("codex", "dependencies")[0].error).toBeUndefined();
     expect(submit).not.toHaveBeenCalled();
   });
 

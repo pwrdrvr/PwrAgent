@@ -82,6 +82,8 @@ export function splitCombinedDelivery<Part extends { type: string }>(
   textPart: (text: string) => Part,
 ): CombinedDeliveryMember<Part>[] | undefined {
   if (!delivered || delivered.length < 2) return undefined;
+  // A peer-asserted time outside the Date range cannot name a sender line.
+  if (delivered.some((member) => !Number.isFinite(new Date(member.receivedAt).getTime()))) return undefined;
   const count = delivered.length;
   const expected = 1 + delivered.reduce((total, member) => total + 1 + member.inputItemCount, 0);
   if (parts.length === expected && textOf(parts[0]!) === combinedDeliveryPreamble(count)) {

@@ -81,6 +81,14 @@ describe("combined delivery framing", () => {
     }));
   });
 
+  it("leaves a message alone when a recorded time is outside the Date range", () => {
+    fc.assert(fc.property(membersArb(true), fc.constantFrom(1e16, -1e16, Number.MAX_SAFE_INTEGER), (members, receivedAt) => {
+      const parts = combinedDeliveryInput(members).map(toPart);
+      const broken = delivered(members).map((member, index) => index === 0 ? { ...member, receivedAt } : member);
+      expect(splitCombinedDelivery(parts, broken, textOf, textPart)).toBeUndefined();
+    }));
+  });
+
   it("leaves a message alone when it does not have the recorded layout", () => {
     fc.assert(fc.property(membersArb(true), fc.string(), (members, other) => {
       expect(splitCombinedDelivery([textPart(other)], delivered(members), textOf, textPart)).toBeUndefined();

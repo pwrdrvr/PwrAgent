@@ -415,10 +415,13 @@ export class ThreadDependencyCoordinator {
   }
 
   /**
-   * A queued wake's own queue event. `started` delivers it into that turn,
-   * alone or sharing a combined delivery. `cancelled` means it never ran:
-   * the claim stays for review, as an uncertain delivery does, so the same
-   * prerequisite does not wake the thread again on its own.
+   * A queued wake's own queue event. `started` proves delivery into that
+   * turn, alone or sharing a combined delivery, so it settles the claim even
+   * when this process did not admit the wake: a quiet restart restores its
+   * queue, and reconcile may already have flagged that claim as interrupted.
+   * `cancelled` (this process's own admission only) is a certain
+   * non-delivery: the wait ends without waking the thread, and holds no
+   * other wait behind a review.
    */
   handleDeliveryProgress(progress: {
     backend: AppServerBackendKind;
@@ -429,10 +432,13 @@ export class ThreadDependencyCoordinator {
   }): Promise<void> {
     return this.serialize(async () => {
       const item = this.options.store.get(progress.backend, progress.threadId, progress.dependencyId);
-      if (!item || item.status !== "dispatching" || !this.queuedDeliveries.delete(deliveryIdentity(item))) return;
-      await this.save(item, progress.status === "started"
-        ? { ...item, status: "delivered", turnId: progress.turnId, error: undefined }
-        : { ...item, error: "The queued continuation was cancelled before it reached the thread. Inspect this thread before scheduling another dependency." });
+      if (!item || item.status !== "dispatching") return;
+      const admittedHere = this.queuedDeliveries.delete(deliveryIdentity(item));
+      if (progress.status === "started") {
+        await this.save(item, { ...item, status: "delivered", turnId: progress.turnId, error: undefined });
+      } else if (admittedHere) {
+        await this.save(item, { ...item, status: "cancelled", error: undefined });
+      }
     });
   }
 

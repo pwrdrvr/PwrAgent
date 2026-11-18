@@ -550,7 +550,10 @@ and PR watch wakes enter the same way, through `submitTurnIfIdle` with
 `joinRunningTurn`: a running turn no longer reads as busy, while a lock, an
 archive, a handoff, a workspace move or a checkout restore still does. A
 queued Continue After claim stays `dispatching` until its own `started` queue
-event delivers it; a cancelled one is held for review, never replayed. A
+event delivers it, including after a quiet restart restores the queue; one the
+operator cancels ends as `cancelled` without waking the thread. A receipt for
+crash recovery is any persisted message origin naming the dependency, alone or
+inside a combined delivery's `deliveredMessages`. A
 review's Auto-fix and a PR Auto-fix repair keep their own turns. A mutable batch
 from an older build (#2530) can still come back through a quiet restart's
 saved queue. It reads and dispatches as before, but no sender can replace part

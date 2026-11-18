@@ -256,7 +256,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       members: deliveryMembers,
       props,
       rewind,
-      text: messageCopyText,
+      text: combinedDeliveryCopyText(deliveryMembers),
       threadLinks,
     });
   }
@@ -1429,6 +1429,16 @@ function renderMessageHeader(params: {
       </span>
     </header>
   );
+}
+
+/** What Copy takes from a delivery: each section's sender, then its text. */
+function combinedDeliveryCopyText(members: CombinedDeliveryMember<AppServerThreadMessagePart>[]): string {
+  return members.map((member) => {
+    const source = member.origin.sourceThread?.title
+      ?? (member.origin.prAutomation ? formatPrAutomationSource(member.origin.prAutomation) : undefined);
+    const text = member.parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+    return `${labelForOrigin(member.origin)}${source ? ` · ${source}` : ""}\n${text}`;
+  }).join("\n\n");
 }
 
 /**

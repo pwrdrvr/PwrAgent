@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   combinedDeliveryInput,
@@ -87,6 +87,23 @@ describe("a combined delivery in the transcript", () => {
     expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: "lane-a" });
     fireEvent.click(screen.getByRole("button", { name: "Open thread Lane D" }));
     expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: "lane-d" });
+  });
+
+  it("copies each section's sender and text, not the framing written for the model", async () => {
+    const copyText = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ThreadLinkProvider onShowThread={vi.fn()} threads={[thread("lane-d", "Lane D"), thread("lane-a", "Lane A")]}>
+        <TranscriptMessage parentThreadId="parent" parentThreadBackend="codex" skills={[]} desktopApi={{ copyText }} message={delivery("items")} />
+      </ThreadLinkProvider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Copy message" })[0]!);
+    });
+    expect(copyText).toHaveBeenCalledWith([
+      `From thread · Lane D\n${members[0]!.text}`,
+      `From thread · Lane A\n${members[1]!.text}`,
+      `PwrAgent · github.com/acme/release#12\n${members[2]!.text}`,
+    ].join("\n\n"));
   });
 
   it("shows a delivery without the recorded layout as one message", () => {
