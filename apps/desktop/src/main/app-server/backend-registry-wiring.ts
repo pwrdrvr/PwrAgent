@@ -514,7 +514,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   });
   const codexCommand = settingsService?.resolveCodexCommandPreference();
   const codexEnv =
-    typeof settingsService?.resolveCodexSpawnEnv === "function"
+    typeof settingsService?.readCodexSpawnEnvSnapshot === "function"
+      ? settingsService.readCodexSpawnEnvSnapshot()
+      : typeof settingsService?.resolveCodexSpawnEnv === "function"
       ? settingsService.resolveCodexSpawnEnv()
       : undefined;
   const codexSpawnEnv = withTokenMiserBridgeDescriptorEnv(

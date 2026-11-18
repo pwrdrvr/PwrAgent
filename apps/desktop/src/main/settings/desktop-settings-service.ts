@@ -3588,6 +3588,14 @@ export class DesktopSettingsService {
     ).value;
   }
 
+  /** Registry construction needs the cached env, not an interactive shell.
+   * Actual provider launches await resolveCodexSpawnEnvAsync before spawning. */
+  readCodexSpawnEnvSnapshot(): NodeJS.ProcessEnv {
+    return this.options.resolveCodexShellEnv
+      ? this.resolveCodexSpawnEnv()
+      : this.ensureBaseCodexSpawnEnv();
+  }
+
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
     if (this.options.resolveCodexShellEnv) {
       return this.withStartupCodexHome(
