@@ -1,5 +1,5 @@
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
-import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
+import { threadTodoThreadKey, type AddRemoteThreadPinResponse, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
@@ -4651,8 +4651,9 @@ function DesktopAppShell(props: {
               // selectedThreadFederationTarget.
               const instant = threadJump.beginRevealPeek();
               void (async () => {
+                let pinResponse: AddRemoteThreadPinResponse | undefined;
                 try {
-                  await desktopApi?.addRemoteThreadPin?.({
+                  pinResponse = await desktopApi?.addRemoteThreadPin?.({
                     ref,
                     summary: thread,
                     instanceLabel: thread.federation?.instanceLabel,
@@ -4660,7 +4661,7 @@ function DesktopAppShell(props: {
                 } catch (error) {
                   console.warn("Pinning the remote thread failed.", error);
                 }
-                await navigation.refresh("action/remote-pin-add");
+                await navigation.refresh("action/remote-pin-add", pinResponse?.publication);
                 setMainView("thread");
                 navigation.selectThread(thread);
                 requestAnimationFrame(() =>

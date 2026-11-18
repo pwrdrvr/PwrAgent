@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 
 function deferred<T>() {
@@ -8,6 +9,47 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+it("publishes one loading snapshot when a pin refresh queues the admitted directory sections", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom(6, 12), async (size) => {
+    const read = vi.fn(async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+      const key = JSON.stringify(request.query);
+      const ref = { backend: "codex", threadId: key } as const;
+      const row: NavigationRow = { id: key, source: ref.backend, ref, rowRevision: key, title: key, titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+        queueCount: 0, queueState: "unknown" };
+      return { protocol: 2, queryKey: key, generation: key, ownerEpoch: "viewer", countsRevision: key,
+        counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+        entries: [{ row, orderKey: navigationIdentityKey(ref), placement: { kind: "root" } }] };
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    try {
+      const keys = Array.from({ length: size }, (_, i) => `project-${i}`);
+      queries.setDemand(new Map(keys.map((key) => [key, { protocol: 2, inventory: "viewer", consumer: "main-sidebar",
+        query: { kind: "directory", directoryKey: key, roots: "unpinned" } } satisfies NavigationQueryRequest])));
+      await queries.refresh();
+      const population = () => [...queries.getSnapshot().resources.values()].map(({ state }) => state.page?.entries[0]?.row.id);
+      const before = population();
+      queries.invalidate(undefined, [{ scope: "local" }], { backend: "codex", notification: {
+        method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: "mount", pinned: true },
+      } });
+      const loadingSnapshots: number[] = [];
+      const populations: ReturnType<typeof population>[] = [];
+      const unsubscribe = queries.subscribe(() => {
+        loadingSnapshots.push([...queries.getSnapshot().resources.values()].filter(({ loading }) => loading).length);
+        populations.push(population());
+      });
+      read.mockClear();
+      const refresh = queries.refresh(undefined, [{ scope: "local" }], true);
+      const initialLoading = [...loadingSnapshots];
+      await refresh;
+      unsubscribe();
+      expect(initialLoading).toEqual([size]);
+      expect(read).toHaveBeenCalledTimes(size);
+      expect(populations.every((published) => JSON.stringify(published) === JSON.stringify(before))).toBe(true);
+    } finally { queries.dispose(); }
+  }), { numRuns: 12 });
+});
 
 // The owner is a fixed ordered list. A metadata event can fence a read but
 // cannot revoke the operator's saved Load more demand for that list.

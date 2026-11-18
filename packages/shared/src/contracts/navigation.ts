@@ -2910,6 +2910,16 @@ export type AddRemoteThreadPinRequest = {
 
 export type AddRemoteThreadPinResponse = {
   pin: RemoteThreadPin;
+  /** The same viewer membership publication broadcast before this reply. */
+  publication?: RemoteThreadPinPublication;
+};
+
+export type RemoteThreadPinPublication = {
+  publicationId: string;
+  backend: AppServerBackendKind;
+  instanceId: string;
+  threadId: string;
+  pinned: true;
 };
 
 /** Exact persisted viewer membership, independent of loaded navigation pages. */

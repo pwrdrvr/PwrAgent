@@ -8799,7 +8799,7 @@ class DesktopAppServerService {
       instanceId,
       instanceLabel,
     );
-    await this.rankRemotePinForVisibility(request, companionParentRef);
+    const rankedRef = await this.rankRemotePinForVisibility(request, companionParentRef);
 
     logDebug("addRemoteThreadPin", {
       backend: request.ref.backend,
@@ -8807,19 +8807,26 @@ class DesktopAppServerService {
       threadId: request.ref.threadId,
     });
 
+    // Publish the mount after both rows and any visibility rank are written.
+    // Use the ranked identity when it moved between directory sections so
+    // the renderer can retire an unpinned anchor on that row.
+    const changedRef = rankedRef ?? request.ref;
+    const publication = {
+      publicationId: randomUUID(),
+      backend: changedRef.backend,
+      instanceId: isRemoteFederationTarget(changedRef.target) ? changedRef.target.instanceId : instanceId,
+      threadId: changedRef.threadId,
+      pinned: true as const,
+    };
     await getDesktopBackendRegistry().publishLocalEvent({
-      backend: request.ref.backend,
+      backend: publication.backend,
       notification: {
         method: "navigation/remoteThreadPins/changed",
-        params: {
-          instanceId,
-          threadId: request.ref.threadId,
-          pinned: true,
-        },
+        params: publication,
       },
     });
 
-    return { pin };
+    return { pin, publication };
   }
 
   /**
@@ -8907,17 +8914,6 @@ class DesktopAppServerService {
         threadId: parentThreadId,
         childThreadId: request.ref.threadId,
       });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend: parentBackend,
-        notification: {
-          method: "navigation/remoteThreadPins/changed",
-          params: {
-            instanceId: parentInstanceId,
-            threadId: parentThreadId,
-            pinned: true,
-          },
-        },
-      });
       return parentRef;
     } catch (error) {
       // Companion pinning is a convenience — the explicit pin must succeed
@@ -8945,7 +8941,7 @@ class DesktopAppServerService {
   private async rankRemotePinForVisibility(
     request: AddRemoteThreadPinRequest,
     companionParentRef: FederatedThreadRef | undefined,
-  ): Promise<void> {
+  ): Promise<FederatedThreadRef | undefined> {
     try {
       const targetRef = companionParentRef ?? request.ref;
       const overlayStore = this.getOverlayStore();
@@ -9001,24 +8997,12 @@ class DesktopAppServerService {
         threadId: targetRef.threadId,
         directoryKey: home.key,
       });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend: targetRef.backend,
-        notification: {
-          method: "navigation/remoteThreadPins/changed",
-          params: {
-            instanceId:
-              targetRef.target.scope === "remote"
-                ? targetRef.target.instanceId
-                : "",
-            threadId: targetRef.threadId,
-            pinned: true,
-          },
-        },
-      });
+      return targetRef;
     } catch (error) {
       appServerLog.warn("Remote pin visibility rank failed.", {
         error: error instanceof Error ? error.message : String(error),
       });
+      return undefined;
     }
   }
 

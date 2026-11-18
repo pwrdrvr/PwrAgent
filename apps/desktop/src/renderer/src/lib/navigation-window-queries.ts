@@ -13,6 +13,7 @@ import {
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
 const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
+const MAX_RECENT_PIN_PUBLICATIONS = 64;
 /** One click loads a block of rows. Demand page sizes pace a first paint; an
  * explicit continuation is the operator asking for the rest, and answering it
  * with one transport page costs a click and a scroll for every page. */
@@ -121,6 +122,7 @@ export class NavigationWindowQueries {
   private activePageBytes = 0;
   private readonly pageSizes = new WeakMap<NavigationQueryPage, number>();
   private readonly pageDependencies = new WeakMap<NavigationQueryPage, NavigationMetadataDependencies | undefined>();
+  private readonly recentPinPublications = new Set<string>();
   private readonly readWaiters = new Set<() => void>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
@@ -353,29 +355,52 @@ export class NavigationWindowQueries {
     // Keep the caller separate from the event that fenced each page: a queued
     // action can consume a seen/status invalidation without becoming its cause.
     const batch = ++this.nextDiagnosticBatch;
-    const selected = resources.filter((resource) => (!invalidatedOnly || resource.invalidated || (includeDirectoryIndex && resource.value.id === "directory-index"))
+    const forceRead = (resource: Resource) => !invalidatedOnly || (includeDirectoryIndex && resource.value.id === "directory-index");
+    const selected = resources.filter((resource) => (forceRead(resource) || resource.invalidated || (resource.pending && resource.value.state.stale))
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))));
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
-    return Promise.all(selected.map(async (resource) => {
-      resource.diagnosticRefreshBatch = batch;
-      if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
-      resource.diagnosticTrigger ??= trigger;
-      resource.diagnosticCaller ??= safeNavigationDiagnosticTrigger(trigger);
-      // An unscoped refresh can discover membership missed while hidden or
-      // between provider observations. A scoped row refresh already knows
-      // exactly why its baseline is stale.
-      if ((!invalidatedOnly || (includeDirectoryIndex && resource.value.id === "directory-index")) && !resource.invalidated) resource.membershipUncertain = true;
-      if (resource.pending) resource.refreshAfterPending = true;
-      await this.read(resource, false);
+    let startedReads = false;
+    const refreshed = Promise.all(selected.map(async (resource) => {
+      if (forceRead(resource) || resource.invalidated) {
+        resource.diagnosticRefreshBatch = batch;
+        if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
+        resource.diagnosticTrigger ??= trigger;
+        resource.diagnosticCaller ??= safeNavigationDiagnosticTrigger(trigger);
+        // An unscoped refresh can discover membership missed while hidden or
+        // between provider observations. A scoped row refresh already knows
+        // exactly why its baseline is stale.
+        if (!resource.invalidated) resource.membershipUncertain = true;
+        if (resource.pending) resource.refreshAfterPending = true;
+        const pending = resource.pending;
+        const read = this.read(resource, false, undefined, false, "refresh", false);
+        startedReads ||= !pending && Boolean(resource.pending);
+        await read;
+      }
       // A caller awaiting refresh owns the coalesced replacement too, not
       // merely the stale read that happened to occupy this resource first.
       while (this.isCurrent(resource) && resource.pending) await resource.pending;
-    })).then(() => undefined);
+    }));
+    // All these reads begin in the same turn. Copy the resource map and
+    // notify the view once for the wave, with every queued read loading.
+    if (startedReads) this.publish();
+    return refreshed.then(() => undefined);
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
   invalidate(id?: string, owners?: readonly FederationTarget[], event?: AgentEvent): void {
+    if (!id && event?.federationTarget?.scope !== "remote" && event?.notification.method === "navigation/remoteThreadPins/changed") {
+      const publicationId = event.notification.params?.publicationId;
+      // The broadcast and action reply can arrive in either order. Both
+      // acknowledge the same completed writes and fence the same viewer.
+      if (typeof publicationId === "string" && publicationId) {
+        if (this.recentPinPublications.has(publicationId)) return;
+        if (this.recentPinPublications.size === MAX_RECENT_PIN_PUBLICATIONS) {
+          this.recentPinPublications.delete(this.recentPinPublications.values().next().value!);
+        }
+        this.recentPinPublications.add(publicationId);
+      }
+    }
     let changed = false;
     let count = 0;
     const batch = ++this.nextDiagnosticBatch;
@@ -648,7 +673,8 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor, fromStart = false, reason: NavigationQueryRequest["readReason"] = "refresh"): Promise<void> {
+  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor, fromStart = false,
+    reason: NavigationQueryRequest["readReason"] = "refresh", publishLoading = true): Promise<void> {
     if (!this.isCurrent(resource)) return Promise.resolve();
     if (resource.pending) {
       navigationListingDiagnostics.record({ ...this.diagnostic, phase: "coalesced", logical: resource.diagnosticLogical });
@@ -674,7 +700,7 @@ export class NavigationWindowQueries {
     if (budget) budget.until ??= Date.now() + MAX_LOAD_MORE_MS;
     let started = beginNavigationPageRead(resource.value.state);
     resource.value = { ...resource.value, state: started, loading: true };
-    this.publish();
+    if (publishLoading) this.publish();
     const promise = Promise.resolve().then(async () => {
       let acquired = false;
       try {

@@ -2946,6 +2946,8 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
+        /** Correlates a completed explicit mount with its IPC reply. */
+        publicationId?: string;
         /** Complete changed-row set from a published summary refresh whose
          * membership and placement are unchanged. Absent for pin mutations,
          * discovery, archive proofs and availability transitions. Only complete

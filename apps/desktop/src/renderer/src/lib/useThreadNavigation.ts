@@ -4,7 +4,7 @@ import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thr
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
-import type { LaunchpadCreationStatus } from "@pwragent/shared";
+import type { LaunchpadCreationStatus, RemoteThreadPinPublication } from "@pwragent/shared";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
@@ -3082,7 +3082,7 @@ export function useThreadNavigation(
   loaded: boolean;
   providerRefresh?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
   refreshing: boolean;
-  refresh: (caller?: NavigationRefreshCaller) => Promise<void>;
+  refresh: (caller?: NavigationRefreshCaller, pinPublication?: RemoteThreadPinPublication) => Promise<void>;
   refreshThreadMetadata: (thread: NavigationThreadSummary) => Promise<void>;
   materializeDirectoryLaunchpad: (
     directoryKey: string,
@@ -4165,15 +4165,19 @@ export function useThreadNavigation(
     },
     [performRefresh]
   );
-  const refreshNavigation = useCallback(async (caller: NavigationRefreshCaller = "navigation/refresh"): Promise<void> => {
-    // A viewer-mount removal publishes its membership event before replying.
-    // Await any still-invalidated work, including an in-flight replacement;
-    // a settled publication needs no second discovery wave. Ordinary refresh
-    // remains a full discovery request.
-    await refresh(undefined, undefined, false, { diagnosticTrigger: caller,
-      invalidatedOnly: caller === "action/remote-pin-remove" });
+  const refreshNavigation = useCallback(async (
+    caller: NavigationRefreshCaller = "navigation/refresh", pinPublication?: RemoteThreadPinPublication,
+  ): Promise<void> => {
+    // The receipt can establish discovery even before the broadcast arrives.
+    // Both use the same fence, and a settled publication needs no second wave.
+    const owners: FederationTarget[] | undefined = pinPublication ? [{ scope: "local" }] : undefined;
+    if (pinPublication) invalidateNavigation(owners, { backend: pinPublication.backend, notification: {
+      method: "navigation/remoteThreadPins/changed", params: pinPublication,
+    } });
+    await refresh(undefined, undefined, false, { diagnosticTrigger: caller, owners,
+      invalidatedOnly: Boolean(pinPublication) || caller === "action/remote-pin-remove" });
     await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
-  }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
+  }, [invalidateNavigation, refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
   const refreshThreadMetadata = useCallback(async (thread: NavigationThreadSummary): Promise<void> => {
     const target = thread.federation?.ref.target ?? rendererFederationTarget;
     const owners: FederationTarget[] = [target ?? { scope: "local" }];

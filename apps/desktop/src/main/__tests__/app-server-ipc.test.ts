@@ -6661,6 +6661,9 @@ describe("app server ipc", () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     addRemoteThreadPinStore.mockClear();
+    publishLocalEvent.mockClear();
+    listThreads.mockClear();
+    federationMock.runtime.remoteNavigationQueryPage.mockClear();
     hasRemoteThreadPin.mockClear();
     hasRemoteThreadPin.mockResolvedValueOnce(false);
     const parentSummary = {
@@ -6686,7 +6689,7 @@ describe("app server ipc", () => {
       instanceId: "peer-laptop",
       threadId: "child-1",
     });
-    await handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+    const reply = await handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
       ref: childRef,
       instanceLabel: "Laptop",
       summary: {
@@ -6722,6 +6725,17 @@ describe("app server ipc", () => {
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent-1", ownerInstanceId: "peer-parent" }], includeAncestry: false },
     }), expect.objectContaining({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }));
     expect(federationMock.remoteThreadSummaries.threadFromPeer).not.toHaveBeenCalled();
+    expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenCalledTimes(1);
+    expect(listThreads).not.toHaveBeenCalled();
+    // The explicit mount and companion form one membership publication. A
+    // viewer consuming the first notice must be able to see both writes.
+    const pinNotices = publishLocalEvent.mock.calls.flatMap(([event]) => {
+      const notice = (event as AgentEvent | undefined)?.notification;
+      return notice?.method === "navigation/remoteThreadPins/changed" ? [notice.params] : [];
+    });
+    expect(pinNotices).toHaveLength(1);
+    expect(reply).toMatchObject({ publication: pinNotices[0] });
+    expect(pinNotices[0]).toMatchObject({ instanceId: "peer-laptop", threadId: "child-1", publicationId: expect.any(String) });
   });
 
   it("does not companion-pin an already-pinned or unreachable parent", async () => {
