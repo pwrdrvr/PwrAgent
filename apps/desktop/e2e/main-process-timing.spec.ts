@@ -28,7 +28,7 @@ test.describe("main-process timing attachments", () => {
     expect(attachments[0].contentType).toBe("application/json");
     const body = attachments[0].body ?? await readFile(attachments[0].path!);
     const snapshot = JSON.parse(body.toString("utf8"));
-    expect(snapshot.listings).toMatchObject({ schemaVersion: 1, capacity: 4096, retentionMs: 120_000 });
+    expect(snapshot.listings).toMatchObject({ schemaVersion: 2, capacity: 4096, retentionMs: 120_000 });
     expect(Array.isArray(snapshot.listings.events)).toBe(true);
     expect(snapshot.git).toMatchObject({ schemaVersion: 1, retentionMs: 120_000 });
     expect(Array.isArray(snapshot.git.buckets)).toBe(true);
