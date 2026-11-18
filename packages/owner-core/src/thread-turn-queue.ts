@@ -484,6 +484,12 @@ function combinedOrigin(members: readonly ThreadTurnQueueEntry[]): AppServerThre
       },
     } : {}),
     ...mergeCausalMessagingContext(members.map((member) => member.messageOrigin)),
+    // Each sender's own card in the transcript, without their text.
+    deliveredMessages: members.map((member) => ({
+      origin: structuredClone(member.messageOrigin!),
+      receivedAt: member.createdAt,
+      inputItemCount: member.input.length,
+    })),
   };
 }
 

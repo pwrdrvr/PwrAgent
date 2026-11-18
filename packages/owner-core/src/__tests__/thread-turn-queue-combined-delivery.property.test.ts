@@ -376,6 +376,52 @@ describe("combined delivery bookkeeping", () => {
     expect(isSteerableAgentTraffic({ kind: "pwragent", systemReason: "app-restart" })).toBe(false);
   });
 
+  it("records each member's origin and input boundary, so the delivery splits back into its messages", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({
+        sender: fc.integer({ min: 0, max: SENDERS.length - 1 }),
+        texts: fc.array(fc.string({ minLength: 1, maxLength: 30 }), { minLength: 1, maxLength: 3 }),
+      }), { minLength: 2, maxLength: 6 }),
+      async (messages) => {
+        const steers: ThreadTurnQueueEntry[] = [];
+        let clock = 10_000;
+        const queue = new ThreadTurnQueue({
+          startTurn: async () => ({ ...THREAD, turnId: "never" }),
+          canSteerThread: () => true,
+          steerTurn: async (entry) => { steers.push(entry); return { ...THREAD, turnId: "running" }; },
+          isThreadActive: () => true,
+          now: () => ++clock,
+        });
+        try {
+          const admitted: ThreadTurnQueueEntry[] = [];
+          for (const message of messages) {
+            admitted.push((await queue.submitSteer({
+              ...THREAD, origin: "manual",
+              input: message.texts.map((text) => ({ type: "text" as const, text })),
+              messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: SENDERS[message.sender]! } },
+            })).entry);
+          }
+          await flush();
+          expect(steers).toHaveLength(1);
+          const delivery = steers[0]!;
+          const recorded = delivery.messageOrigin?.deliveredMessages ?? [];
+          expect(recorded.map((member) => [member.origin, member.receivedAt]))
+            .toEqual(admitted.map((entry) => [entry.messageOrigin, entry.createdAt]));
+          // Preamble, then per member: its sender line and its own items.
+          let cursor = 1;
+          for (const [index, member] of recorded.entries()) {
+            cursor += 1;
+            expect(delivery.input.slice(cursor, cursor + member.inputItemCount)).toEqual(admitted[index]!.input);
+            cursor += member.inputItemCount;
+          }
+          expect(cursor).toBe(delivery.input.length);
+        } finally {
+          queue.close();
+        }
+      },
+    ), { numRuns: 50 });
+  });
+
   it("names a settings difference as settings, not approval", () => {
     const base = { ...THREAD, origin: "manual" as const, delivery: "queued-steer" as const, createdAt: 1, messageOrigin: { kind: "agent" as const } };
     const plan = planQueuedDeliveries([
