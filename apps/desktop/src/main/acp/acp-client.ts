@@ -294,6 +294,8 @@ export class AcpAgentClient {
    * until session/close, so `closeIdleSessions` releases quiet ones.
    */
   private readonly sessionLastActivityAt = new Map<string, number>();
+  /** The context fill each session last reported live in `usage_update`. */
+  private readonly sessionContextFill = new Map<string, number>();
   /** Permission requests the agent is waiting on, by app session id. */
   private readonly pendingPermissionRequests = new Map<string, number>();
   /**
@@ -619,6 +621,7 @@ export class AcpAgentClient {
 
   private forgetSessionActivity(sessionId: string): void {
     this.sessionLastActivityAt.delete(sessionId);
+    this.sessionContextFill.delete(sessionId);
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
@@ -655,6 +658,7 @@ export class AcpAgentClient {
     this.loadedSessionCwds.clear();
     this.sessionConfigOptions.clear();
     this.sessionLastActivityAt.clear();
+    this.sessionContextFill.clear();
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
@@ -1657,10 +1661,17 @@ export class AcpAgentClient {
     ) {
       activeTurn.onTerminalUpdate?.();
     }
-    // Grok reports a compaction, which may summarize the instruction block
-    // away, so the next prompt carries it again. A compaction replayed by
+    // A compaction may summarize the instruction block away, so the next
+    // prompt carries it again. Grok reports one; Kimi, Qwen and Gemini show
+    // it only as a fall in context fill. A compaction replayed by
     // session/load happened before the block was last recorded.
-    if (updateKind === "auto_compact_completed" && !fromSessionLoad) {
+    if (
+      !fromSessionLoad
+      && (
+        updateKind === "auto_compact_completed"
+        || this.contextFillHalved(sessionId, update, updateKind)
+      )
+    ) {
       if (activeTurn) activeTurn.compacted = true;
       if (this.options.store.getSession(this.options.backendId, sessionId)?.agentInstructionsDigest) {
         this.recordDeliveredAgentInstructions(sessionId, undefined);
@@ -2308,6 +2319,24 @@ export class AcpAgentClient {
     throw new Error(
       `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
     );
+  }
+
+  /**
+   * Context only grows between compactions, so a live fill below half the
+   * last one the session reported means the agent compacted. Kimi, Qwen and
+   * Gemini each report the current fill as `used`.
+   */
+  private contextFillHalved(
+    sessionId: string,
+    update: Record<string, unknown>,
+    updateKind: string | undefined,
+  ): boolean {
+    if (updateKind !== "usage_update") return false;
+    const used = update.used;
+    if (typeof used !== "number" || !Number.isFinite(used)) return false;
+    const previous = this.sessionContextFill.get(sessionId);
+    this.sessionContextFill.set(sessionId, used);
+    return previous !== undefined && used < previous / 2;
   }
 
   /** One write per delivered block: the first delivery and each edit. */

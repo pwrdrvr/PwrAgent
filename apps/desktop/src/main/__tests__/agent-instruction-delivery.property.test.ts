@@ -435,19 +435,24 @@ describe("the ACP instruction block", () => {
   // prompt, and keeps them in its history when it is loaded again, after an
   // idle close or an app restart. A prompt must carry the block exactly when
   // the session does not hold the current text, and a prompt the agent
-  // rejected changed nothing. A compaction the agent reports live (Grok's
-  // `auto_compact_completed`) may summarize the block away, so the session
-  // holds no instructions after it, even when the block came in that same
-  // prompt. A compaction that `session/load` replays is an old one and
+  // rejected changed nothing. A compaction may summarize the block away, so
+  // the session holds no instructions after it, even when the block came in
+  // that same prompt. The client knows of one when Grok reports it
+  // (`auto_compact_completed`), or when the context fill an agent reports in
+  // `usage_update` falls below half the last one this client saw. A smaller
+  // dip is not a compaction. A client that has not seen a live fill since it
+  // started cannot see a fall. Anything `session/load` replays is old and
   // changes nothing.
+  type Compaction = "none" | "reported" | "halved" | "dipped";
   type Step =
-    | { kind: "turn"; fails: boolean; compacts: boolean }
+    | { kind: "turn"; fails: boolean; compaction: Compaction }
     | { kind: "edit"; instructions: string }
     | { kind: "reload"; replaysCompaction: boolean }
     | { kind: "restart"; replaysCompaction: boolean };
+  const compaction = fc.constantFrom<Compaction>("none", "none", "reported", "halved", "dipped");
   const step: fc.Arbitrary<Step> = fc.oneof(
-    { weight: 4, arbitrary: fc.record({ kind: fc.constant("turn" as const), fails: fc.constant(false), compacts: fc.boolean() }) },
-    { weight: 2, arbitrary: fc.record({ kind: fc.constant("turn" as const), fails: fc.constant(true), compacts: fc.boolean() }) },
+    { weight: 4, arbitrary: fc.record({ kind: fc.constant("turn" as const), fails: fc.constant(false), compaction }) },
+    { weight: 2, arbitrary: fc.record({ kind: fc.constant("turn" as const), fails: fc.constant(true), compaction }) },
     { weight: 3, arbitrary: fc.constantFrom("", "alpha", "beta\nsecond line").map((instructions) => ({ kind: "edit" as const, instructions })) },
     { weight: 2, arbitrary: fc.record({ kind: fc.constant("reload" as const), replaysCompaction: fc.boolean() }) },
     { weight: 2, arbitrary: fc.record({ kind: fc.constant("restart" as const), replaysCompaction: fc.boolean() }) },
@@ -457,14 +462,16 @@ describe("the ACP instruction block", () => {
     sessionId,
     update: { sessionUpdate: "auto_compact_completed", tokens_before: 206562, tokens_after: 16989 },
   });
+  const fillUpdate = (used: number) => ({ sessionUpdate: "usage_update", used, size: 1_000_000 });
 
   it("is sent exactly when the loaded agent session does not hold the current instructions", async () => {
     await fc.assert(fc.asyncProperty(fc.array(step, { minLength: 1, maxLength: 16 }), async (steps) => {
       const db = openInMemoryStateDb();
       const store = new AcpSessionStore(db);
       let failNext = false;
-      let compactNext = false;
+      let compactNext: Compaction = "none";
       let replayCompaction = false;
+      let fill = 40_000;
       const connect = async () => {
         const transport = new FakeAcpAgentTransport({
           initialize: { protocolVersion: 1, agentCapabilities: {
@@ -473,14 +480,20 @@ describe("the ACP instruction block", () => {
         });
         const request = transport.request.bind(transport);
         vi.spyOn(transport, "request").mockImplementation(async (method, params, timeoutMs) => {
+          const protocolSessionId = String(params?.sessionId);
           if (method === "session/prompt") {
             transport.requests.push({ method, params });
-            if (compactNext) transport.emitVendorNotification(compactionNotice(String(params!.sessionId)));
+            if (compactNext === "reported") transport.emitVendorNotification(compactionNotice(protocolSessionId));
+            fill = compactNext === "halved" ? Math.floor(fill / 4)
+              : compactNext === "dipped" ? Math.floor(fill * 0.8)
+              : fill + 5_000;
+            transport.emitSessionUpdate(protocolSessionId, fillUpdate(fill));
             if (failNext) throw new Error("JSON-RPC -32000 fixture prompt failure");
             return { stopReason: "end_turn" };
           }
           if (method === "session/load" && replayCompaction) {
-            transport.emitVendorNotification(compactionNotice(String(params!.sessionId)));
+            transport.emitVendorNotification(compactionNotice(protocolSessionId));
+            transport.emitSessionUpdate(protocolSessionId, fillUpdate(1));
           }
           return await request(method, params, timeoutMs);
         });
@@ -493,6 +506,7 @@ describe("the ACP instruction block", () => {
         const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
         let current = "";
         let held = "";
+        let fillSeen = false;
         for (const next of steps) {
           if (next.kind === "edit") {
             current = next.instructions;
@@ -506,10 +520,11 @@ describe("the ACP instruction block", () => {
             replayCompaction = next.replaysCompaction;
             await client.dispose();
             ({ client, transport } = await connect());
+            fillSeen = false;
             await client.ensureSession(store.getSession(ACP, sessionId)!);
           } else {
             failNext = next.fails;
-            compactNext = next.compacts;
+            compactNext = next.compaction;
             const sent = transport.requests.length;
             client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: current });
             await vi.waitFor(() => {
@@ -521,7 +536,9 @@ describe("the ACP instruction block", () => {
             expect(prompt.slice(0, -1)).toEqual(current === held
               ? []
               : [{ type: "text", text: buildAcpAgentInstructionBlock(current) }]);
-            if (next.compacts) held = "";
+            const compacted = next.compaction === "reported" || (next.compaction === "halved" && fillSeen);
+            fillSeen = true;
+            if (compacted) held = "";
             else if (!next.fails) held = current;
           }
         }
@@ -529,21 +546,29 @@ describe("the ACP instruction block", () => {
         await client.dispose();
         db.close();
       }
-    }), { numRuns: 60, examples: [[[
-      { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: true, compacts: false },
-      { kind: "turn", fails: false, compacts: false }, { kind: "turn", fails: false, compacts: false },
-      { kind: "reload", replaysCompaction: false }, { kind: "turn", fails: false, compacts: false },
-      { kind: "restart", replaysCompaction: false }, { kind: "turn", fails: false, compacts: false },
+    }), { numRuns: 80, examples: [[[
+      { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: true, compaction: "none" },
+      { kind: "turn", fails: false, compaction: "none" }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "reload", replaysCompaction: false }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "restart", replaysCompaction: false }, { kind: "turn", fails: false, compaction: "none" },
       { kind: "edit", instructions: "" }, { kind: "restart", replaysCompaction: false },
-      { kind: "turn", fails: false, compacts: false },
+      { kind: "turn", fails: false, compaction: "none" },
     ]], [[
       // The block arrives in the prompt that compacts, so the next one
       // carries it again; a compaction replayed on load does not.
-      { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: false, compacts: true },
-      { kind: "turn", fails: false, compacts: false }, { kind: "turn", fails: false, compacts: true },
-      { kind: "reload", replaysCompaction: true }, { kind: "turn", fails: false, compacts: false },
-      { kind: "turn", fails: false, compacts: false },
-      { kind: "restart", replaysCompaction: true }, { kind: "turn", fails: false, compacts: false },
+      { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: false, compaction: "reported" },
+      { kind: "turn", fails: false, compaction: "none" }, { kind: "turn", fails: false, compaction: "reported" },
+      { kind: "reload", replaysCompaction: true }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "turn", fails: false, compaction: "none" },
+      { kind: "restart", replaysCompaction: true }, { kind: "turn", fails: false, compaction: "none" },
+    ]], [[
+      // An agent that only reports its context fill: a halving is a
+      // compaction, a dip is not, and a replayed low fill is not.
+      { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "turn", fails: false, compaction: "halved" }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "turn", fails: false, compaction: "dipped" }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "reload", replaysCompaction: true }, { kind: "turn", fails: false, compaction: "none" },
+      { kind: "turn", fails: false, compaction: "halved" }, { kind: "turn", fails: false, compaction: "none" },
     ]]] });
   }, 60_000);
 

@@ -16,7 +16,7 @@ decides whether PwrAgent itself must send it.
 |---|---|---|---|---|
 | Claude | Appended to the `claude_code` system prompt | The system prompt of the relaunched process | The system prompt is not compacted | The next turn relaunches the session with the new prompt |
 | Codex | `developerInstructions` on `thread/start` | `developerInstructions` on every `thread/resume` | Codex re-sends the loaded session's developer instructions | The thread is reloaded with the new text, and one developer message announces it |
-| ACP | A marked text block at the front of the first `session/prompt` | Nothing is sent: the block is in the session's history | Grok: the next `session/prompt` carries the block again. Kimi, Qwen, Gemini: nothing is sent, see [compaction](#acp-compaction) | The next `session/prompt` carries the new block |
+| ACP | A marked text block at the front of the first `session/prompt` | Nothing is sent: the block is in the session's history | The next `session/prompt` carries the block again, see [compaction](#acp-compaction) | The next `session/prompt` carries the new block |
 
 ### Claude
 
@@ -113,28 +113,34 @@ ACP has no compaction notification. All four supported agents compact a long
 session on their own, and a summary may drop the block. PwrAgent cannot see
 what a compacted context holds. A `session/load` replay is the transcript the
 agent shows, not the context the model gets, and some harnesses encrypt the
-compacted result. So only an agent's own report of a compaction counts.
+compacted result. So the client acts only on what an agent reports live.
 
-Grok reports one. `_x.ai/session_notification` carries
-`auto_compact_started` and `auto_compact_completed`, for its own compactions
-(at 85% of the context window by default) and for `/compact`. On a live
-`auto_compact_completed`, `AcpAgentClient` clears `agentInstructionsDigest`,
-so the next prompt carries the block. If the compaction ran inside the prompt
-that delivered the block, that delivery is not recorded. A completion that a
-`session/load` replays is ignored, so loading a session does not resend the
-block.
+`AcpAgentClient` treats either of two live signals as a compaction:
 
-The other three report a compaction only as reply text, or not at all.
+- Grok's `auto_compact_completed` on `_x.ai/session_notification`, sent for
+  its own compactions (at 85% of the context window by default) and for
+  `/compact`.
+- A `usage_update` whose `used` is below half of the last one the session
+  reported. Kimi, Qwen and Gemini each report the current context fill there,
+  and the fill only grows between compactions. Qwen sends no fill for a
+  sub-agent. The last fill is kept in memory, so a compaction in the first
+  turn after an app restart goes unseen.
+
+On either signal the client clears `agentInstructionsDigest`, so the next
+prompt carries the block. If the compaction ran inside the prompt that
+delivered the block, that delivery is not recorded. Signals that a
+`session/load` replays are ignored, so loading a session still sends nothing.
+
 Measured on 2026-11-18:
 
 | Agent | Compacts on its own | What the client receives |
 |---|---|---|
 | Grok 1.0.89 | Yes, `[session] auto_compact_threshold_percent`, default 85 | `auto_compact_completed` with `tokens_before` and `tokens_after`. A `/compact` with nothing to shrink still sends one, with equal counts |
-| Kimi Code 2.0.0 | Yes, when free context falls below `loop_control.reserved_context_size` | Only `agent_message_chunk` text: "Compacting conversation context", then "Compaction completed." with message and token counts |
-| Qwen Code 0.27.2 | Yes, thresholds computed from the model's context window | Only an `agent_message_chunk`: "IMPORTANT: This conversation approached the input token limit for <model>. A compressed context will be sent for future messages …" |
-| Gemini CLI 0.68.0 | Yes, `model.compressionThreshold`, default 0.5 | Nothing. Its ACP session never maps the compression event to an update |
+| Kimi Code 2.0.0 | Yes, when free context falls below `loop_control.reserved_context_size` | `agent_message_chunk` text: "Compacting conversation context", then "Compaction completed." with counts. `usage_update` after each turn with the current fill |
+| Qwen Code 0.27.2 | Yes, thresholds computed from the model's context window | An `agent_message_chunk`: "IMPORTANT: This conversation approached the input token limit for <model>. A compressed context will be sent for future messages …". `usage_update` with the prompt's token count |
+| Gemini CLI 0.68.0 | Yes, `model.compressionThreshold`, default 0.5 | No compaction update. `usage_update` after each model call, with prompt plus output tokens as `used` |
 
-Kimi's and Qwen's rows come from the published packages' ACP code. The Kimi
+Kimi's, Qwen's and Gemini's rows come from their published ACP code. The Kimi
 account used for the capture had no Kimi Code access (403), and Gemini and
 Qwen were not installed. Kimi's compaction keeps user messages verbatim
 while they fit its retention budget, oldest dropped first, and the block is
@@ -144,12 +150,10 @@ Whether a model still follows the block after a real compaction was not
 measured. In a Grok capture, replies ended with a word the block asked for
 before and after a `/compact`, but that compaction shrank nothing (19,202
 tokens before and after). A longer session timed out before it compacted, and
-two of its long replies had already dropped the word. The fix rests on Grok's
-report, not on observed loss.
+two of its long replies had already dropped the word. The resend rests on
+what the agents report, not on observed loss.
 
-For these three agents, PwrAgent still sends the block again only after an
-edit or on a new agent session. Matching their reply text, or a resend
-cadence, is an operator decision; neither is implemented.
+The reply text is not used: it is prose that can change between releases.
 
 ## Agents whose workspace holds the instructions
 
@@ -168,8 +172,8 @@ Agent working in a repository never has files written into that repository.
 Delivery adds no SQLite write per turn. The Codex resolver reads the overlay.
 The ACP client writes the session row once per delivered block: on the first
 prompt of an agent session and on the first prompt after an edit, and clears
-it once per compaction Grok reports (budget
-`acp-compaction-instruction-redelivery`). A manager thread created before
+it once per detected compaction (budget
+`acp-compaction-instruction-redelivery`). The context fill is kept in memory. A manager thread created before
 `instructionsDelivery` existed gets the marker in one write the next time it is
 opened.
 
