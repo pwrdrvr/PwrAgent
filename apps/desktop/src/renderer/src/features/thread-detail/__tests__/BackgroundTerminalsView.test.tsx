@@ -1,11 +1,20 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
+import { copyText } from "../../../lib/copy-text";
 import { agentCommandDirectoryLabel, agentCommandPreview } from "../BackgroundTerminalsView";
 import { ActionRunsPanel } from "../context-panels/ActionRunsPanel";
 
-afterEach(cleanup);
+vi.mock("../../../lib/copy-text", () => ({ copyText: vi.fn(async () => undefined) }));
+
+afterEach(() => {
+  cleanup();
+  vi.mocked(copyText).mockReset();
+  vi.mocked(copyText).mockImplementation(async () => undefined);
+  vi.useRealTimers();
+});
 
 const terminal = {
   itemId: "item-1", processId: "codex-session-1", command: "pnpm dev", cwd: "/fixture/worktree",
@@ -122,4 +131,59 @@ it("labels a sub-agent with its type and progress instead of command output", ()
   expect(within(row).queryByText("No output yet.")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Stop Audit the SDK" }));
   expect(onStop).toHaveBeenCalledWith(agent);
+});
+
+it("copies exactly the command, every line, without opening or closing its row", async () => {
+  // Any command an agent can start: blank lines, CRLF, heredocs, long lines.
+  const line = fc.string({ maxLength: 120 });
+  const command = fc.array(line, { minLength: 1, maxLength: 8 })
+    .chain((lines) => fc.constantFrom("\n", "\r\n").map((eol) => lines.join(eol)))
+    .filter((text) => text.trim().length > 0);
+  await fc.assert(fc.asyncProperty(command, fc.boolean(), async (text, open) => {
+    cleanup();
+    vi.mocked(copyText).mockClear();
+    render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]}
+      terminals={[{ ...terminal, command: text }]} />);
+    const row = screen.getByRole("group") as HTMLDetailsElement;
+    row.open = open;
+    const preview = agentCommandPreview(text).text;
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: `Copy ${preview}` }));
+    });
+    expect(vi.mocked(copyText).mock.calls).toEqual([[text]]);
+    expect(row.open).toBe(open);
+  }), { numRuns: 60 });
+});
+
+it("confirms a copy for a moment and never claims one that failed", async () => {
+  vi.useFakeTimers();
+  const second = { ...terminal, processId: "codex-session-2", command: "pnpm test" };
+  render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]} terminals={[terminal, second]} />);
+  const [first, other] = screen.getAllByRole("group");
+  await act(async () => {
+    fireEvent.click(within(first).getByRole("button", { name: "Copy pnpm dev" }));
+  });
+  expect(within(first).getByRole("button", { name: "Copied" })).toHaveClass("is-copied");
+  // Only the row that was copied confirms.
+  expect(within(other).getByRole("button", { name: "Copy pnpm test" })).not.toHaveClass("is-copied");
+  act(() => {
+    vi.advanceTimersByTime(1400);
+  });
+  expect(within(first).getByRole("button", { name: "Copy pnpm dev" })).not.toHaveClass("is-copied");
+
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  vi.mocked(copyText).mockRejectedValueOnce(new Error("clipboard unavailable"));
+  await act(async () => {
+    fireEvent.click(within(other).getByRole("button", { name: "Copy pnpm test" }));
+  });
+  expect(within(other).queryByRole("button", { name: "Copied" })).toBeNull();
+  expect(error).toHaveBeenCalledWith("Failed to copy agent command", expect.any(Error));
+  error.mockRestore();
+});
+
+it("keeps Copy available while a command is stopping", () => {
+  render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]}
+    terminals={[terminal]} stopping="codex-session-1" onStop={vi.fn(async () => undefined)} />);
+  expect(screen.getByRole("button", { name: "Stop pnpm dev" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Copy pnpm dev" })).toBeEnabled();
 });

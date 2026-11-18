@@ -1,5 +1,7 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { EnvActionControlButton, EnvActionStopIcon } from "./EnvActionRunsView";
+import { CheckIcon, CopyIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { BackgroundTerminalView } from "../../lib/useCodexBackgroundTerminals";
 import { statusPulseRef } from "../../lib/status-pulse";
 
@@ -53,6 +55,44 @@ function breakablePath(path: string): ReactNode {
   ));
 }
 
+/** How long the copy control shows its confirmed state, as the transcript's copy buttons do. */
+const COPIED_RESET_MS = 1400;
+
+/**
+ * Copies the whole command, every line, to the clipboard. It sits in the
+ * summary so it works for a collapsed row and for a short command, whose open
+ * body does not repeat the command; dragging across the summary toggles the
+ * row instead of selecting it.
+ */
+function AgentCommandCopyButton(props: { command: string; noun: string; preview: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(resetTimerRef.current), []);
+  return (
+    <EnvActionControlButton className={`composer__queued-env-action-copy${copied ? " is-copied" : ""}`}
+      ariaLabel={copied ? "Copied" : `Copy ${props.preview}`}
+      tooltip={copied ? "Copied" : `Copy ${props.noun}`}
+      onClick={(event) => {
+        // The button lives in the <summary>; a press must not open or close the row.
+        event.preventDefault();
+        event.stopPropagation();
+        void copyText(props.command)
+          .then(() => {
+            window.clearTimeout(resetTimerRef.current);
+            setCopied(true);
+            resetTimerRef.current = window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
+          })
+          .catch((error: unknown) => {
+            console.error("Failed to copy agent command", error);
+          });
+      }}>
+      {copied
+        ? <CheckIcon className="composer__queued-env-action-icon" size={13} />
+        : <CopyIcon className="composer__queued-env-action-icon" size={13} />}
+    </EnvActionControlButton>
+  );
+}
+
 export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
   const terminals = props.terminals ?? [];
   if (!terminals.length && !props.error) return null;
@@ -94,6 +134,9 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
                   </span>
                 </span>
                 <span className="composer__queued-env-action-actions">
+                  <AgentCommandCopyButton command={terminal.command}
+                    noun={kindLabel ? "task" : "command"}
+                    preview={preview.text} />
                   <EnvActionControlButton className="composer__queued-env-action-stop"
                     disabled={stopping || !props.onStop}
                     ariaLabel={`Stop ${preview.text}`}
