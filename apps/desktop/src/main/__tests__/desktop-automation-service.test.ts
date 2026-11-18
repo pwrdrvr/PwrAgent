@@ -2051,6 +2051,15 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
           errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed.",
         });
       }
+      // The bound conversation's notice reads these; a messaging channel that
+      // starts after this event replays it from the same list.
+      for (const event of runUpdates()) {
+        expect(event.notification.params).toMatchObject({
+          errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed.",
+          failureReason: "interrupted",
+        });
+      }
+      expect(service.listInterruptedRunUpdates()).toEqual(runUpdates());
       expect(store.getRun("run-done")).toEqual(done);
       // Nothing is resumed or replayed.
       expect(registry.submitTurn).not.toHaveBeenCalled();

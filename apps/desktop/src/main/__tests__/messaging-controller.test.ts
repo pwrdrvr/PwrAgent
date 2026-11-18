@@ -12152,6 +12152,56 @@ describe("MessagingController", () => {
     );
   });
 
+  it("posts one line for a failed or interrupted automation run that has no output", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // The shape DesktopAutomationService publishes for a run that failed with
+    // an error and no output, and for a run a restart interrupted. Before
+    // this notice, both reached the conversation as nothing at all.
+    const publish = async (params: Record<string, unknown>) => {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "automation/run/updated",
+          params: {
+            threadId: "thread-1",
+            automationId: "automation-1",
+            automationName: "Check weather",
+            status: "failed",
+            ...params,
+          },
+        },
+      } as AgentEvent);
+    };
+    await publish({ runId: "run-1", errorMessage: "Codex exited\nwith code 1" });
+    await publish({
+      runId: "run-2",
+      failureReason: "interrupted",
+      errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed.",
+    });
+    // Redelivered updates do not post again.
+    await publish({ runId: "run-1", errorMessage: "Codex exited\nwith code 1" });
+    // A run that chose to stay quiet stays quiet even when it failed.
+    await publish({ runId: "run-3", outputDecision: { kind: "quiet" } });
+    // A failed run that produced output posts the output, not the notice.
+    await publish({ runId: "run-4", finalText: "Partial forecast", errorMessage: "boom" });
+    // Automations that deliver through their own messaging actions own
+    // their failure reporting too.
+    await publish({ runId: "run-5", suppressBindingBroadcast: true, errorMessage: "boom" });
+
+    expect(
+      harness.delivered
+        .filter((intent) => intent.kind === "message" && intent.role === "assistant")
+        .map((intent) => intent.kind === "message" ? intent.parts.map((part) => "text" in part ? part.text : "").join("") : ""),
+    ).toEqual([
+      "Automation failed: Check weather · Codex exited with code 1",
+      "Automation interrupted: Check weather · PwrAgent stopped before this automation run finished. The run was not resumed.",
+      "Partial forecast",
+    ]);
+  });
+
   it("does not broadcast run updates when the automation delivers via messaging actions", async () => {
     const harness = await createHarness();
     await bindThread(harness);

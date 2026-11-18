@@ -58,3 +58,22 @@ export function automatedWorkStartedLabel(origin: AppServerThreadMessageOrigin |
   }
   return name ? `Automation started: ${name}` : "Automation started.";
 }
+
+/**
+ * The one line a bound conversation receives when an automation run fails or
+ * a restart interrupts it without producing any output of its own.
+ */
+export function automationRunFailureNotice(params: {
+  automationName?: string;
+  errorMessage?: string;
+  failureReason?: string;
+}): string {
+  const name = params.automationName?.trim();
+  const label = params.failureReason === "interrupted"
+    ? "Automation interrupted"
+    : "Automation failed";
+  const heading = name ? `${label}: ${threadNotificationSnippet(name, 80)}` : label;
+  const error = threadNotificationSnippet(params.errorMessage ?? "");
+  if (error) return `${heading} · ${error}`;
+  return name ? heading : `${label}.`;
+}
