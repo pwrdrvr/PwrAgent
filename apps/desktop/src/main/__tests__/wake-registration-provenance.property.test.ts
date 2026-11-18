@@ -37,6 +37,16 @@ const originArb: fc.Arbitrary<Provenance> = fc.oneof(
   fc.constant({ causalMessagingAmbiguous: true as const }),
 );
 
+type FollowUpHandler = NonNullable<ThreadInspectionToolsHost["agentFollowUpToolHandler"]>;
+
+/**
+ * The calling turn's origin, plus a later turn on the same thread with its
+ * own origin. The wake must take the calling turn's, not the thread's latest.
+ */
+function turnOrigins(turnId: string, origin: Provenance, otherOrigin: Provenance): Map<string, Provenance> {
+  return new Map([[turnId, origin], [`${turnId}-later`, otherOrigin]]);
+}
+
 function harness(origins: Map<string, Provenance>, host: Partial<ThreadInspectionToolsHost>) {
   const readCausalMessagingContext = async (context: { turnId?: string }): Promise<Provenance> =>
     (context.turnId ? origins.get(context.turnId) : undefined) ?? {};
@@ -59,10 +69,11 @@ function harness(origins: Map<string, Provenance>, host: Partial<ThreadInspectio
 
 describe("a registered wake keeps the calling turn's messaging provenance", () => {
   it("schedule_follow_up hands the handler the calling turn's origin", async () => {
-    await fc.assert(fc.asyncProperty(fc.uuid(), originArb, async (turnId, origin) => {
-      const agentFollowUpToolHandler = vi.fn(async (_args: unknown, _thread: unknown, _provenance?: Provenance) =>
-        ({ ok: true as const, data: {} }));
-      const router = harness(new Map([[turnId, origin]]), { agentFollowUpToolHandler } as never);
+    await fc.assert(fc.asyncProperty(fc.uuid(), originArb, originArb, async (turnId, origin, otherOrigin) => {
+      const agentFollowUpToolHandler = vi.fn<FollowUpHandler>(async () => ({ ok: true, data: { followUps: {
+        activeAgentFollowUps: 0, firedInLastDay: 0, limits: { maxActive: 8, minDelayMinutes: 1, maxFiredPerDay: 12 },
+      } } }));
+      const router = harness(turnOrigins(turnId, origin, otherOrigin), { agentFollowUpToolHandler });
       await router.handleMcpToolCall({ backend: "codex", threadId: CALLER, turnId, tool: "schedule_follow_up",
         args: { action: "create", delayMinutes: 5, prompt: "Check the canary and report." } });
       expect(agentFollowUpToolHandler).toHaveBeenCalledTimes(1);
@@ -74,7 +85,7 @@ describe("a registered wake keeps the calling turn's messaging provenance", () =
     const { tempDir, dbPath } = createTempStateDb("wake-provenance-");
     const db = StateDb.open(dbPath);
     try {
-      await fc.assert(fc.asyncProperty(fc.uuid(), originArb, async (turnId, origin) => {
+      await fc.assert(fc.asyncProperty(fc.uuid(), originArb, originArb, async (turnId, origin, otherOrigin) => {
         db.raw.exec("DELETE FROM thread_dependencies");
         const store = new ThreadDependencyStore(db.raw);
         const worker = { activeTurnId: "worker-turn" as string | undefined,
@@ -85,7 +96,7 @@ describe("a registered wake keeps the calling turn's messaging provenance", () =
           store, submit, changed: async () => {}, isConsumerBusy: () => false,
           readThread: async ({ threadId }) => threadId === WORKER ? worker : { turns: [], prs: [] },
         });
-        const router = harness(new Map([[turnId, origin]]), {
+        const router = harness(turnOrigins(turnId, origin, otherOrigin), {
           // As owner-services wires the coordinator to the agent tool.
           threadDependencyToolHandler: async (args, provenance, actor) => ({ ok: true, data: {
             threadDependencies: await coordinator.manage(args as never, provenance, actor),
