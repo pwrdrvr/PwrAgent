@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
-import { act, fireEvent, render } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -8,52 +8,75 @@ import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 
+// The test owner must stop model admission before RTL tears down its roots.
+// Keep the full assertion too: fast-check may still be reporting/shrinking a
+// failure after the currently mounted history has retired.
+const activeSelections = new Set<Promise<void>>();
+function ownSelectionWork(work: Promise<void>): Promise<void> {
+  activeSelections.add(work);
+  return work;
+}
+async function retireSelectionModels(): Promise<void> {
+  while (activeSelections.size) {
+    const work = [...activeSelections];
+    // The test already owns each rejection; teardown only joins its lifetime.
+    await Promise.allSettled(work);
+    for (const admitted of work) activeSelections.delete(admitted);
+  }
+  cleanup();
+}
+afterEach(retireSelectionModels);
+function stableSelectionHistory(...args: Parameters<typeof runSelectionHistory>): Promise<void> {
+  return ownSelectionWork(runSelectionHistory(...args));
+}
+
 // Selecting a loaded sibling changes neither membership nor the owner's saved
 // order. Independently completed exact metadata batches must preserve both in
 // every publication, including the gap while their identity sets turn over.
-it.each([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
-  "keeps child rows stable through selection with $count siblings, reverse=$reverse", async ({ count, reverse }) => {
-    await stableSelectionHistory(count, reverse, [1, 2, 1, 0], reverse);
+it.for([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
+  "keeps child rows stable through selection with $count siblings, reverse=$reverse", async ({ count, reverse }, { signal }) => {
+    await stableSelectionHistory(signal, count, reverse, [1, 2, 1, 0], reverse);
   },
 );
 
 // Partition the same 12 generated histories at pagination boundaries so each
 // mounted model stays within the suite's per-test execution budget.
-it.each([{ min: 3, max: 9 }, { min: 10, max: 11 }, { min: 12, max: 16 }])(
-  "keeps owner order through generated histories with $min–$max children", async (range) => {
-  await fc.assert(fc.asyncProperty(fc.integer(range), fc.array(fc.nat(), { minLength: 3, maxLength: 7 }),
-    fc.boolean(), fc.boolean(), (count, selections, reverse, hover) => stableSelectionHistory(count, reverse, selections, hover)), { numRuns: 4 });
+it.for([{ min: 3, max: 9 }, { min: 10, max: 11 }, { min: 12, max: 16 }])(
+  "keeps owner order through generated histories with $min–$max children", async (range, { signal }) => {
+  await ownSelectionWork(fc.assert(fc.asyncProperty(fc.integer(range), fc.array(fc.nat(), { minLength: 3, maxLength: 7 }),
+    fc.boolean(), fc.boolean(), (count, selections, reverse, hover) => stableSelectionHistory(signal, count, reverse, selections, hover)), { numRuns: 4 }));
 });
 
-it.each([false, true].flatMap((offPage) => [{ min: 3, max: 9 }, { min: 10, max: 16 }].map((range) => ({ offPage, ...range }))))(
-  "preserves generated selection publications, offPage=$offPage children=$min–$max", async ({ offPage, ...range }) => {
-  await fc.assert(fc.asyncProperty(fc.integer(range),
+it.for([false, true].flatMap((offPage) => [{ min: 3, max: 9 }, { min: 10, max: 16 }].map((range) => ({ offPage, ...range }))))(
+  "preserves generated selection publications, offPage=$offPage children=$min–$max", async ({ offPage, ...range }, { signal }) => {
+  await ownSelectionWork(fc.assert(fc.asyncProperty(fc.integer(range),
     fc.array(fc.nat(), { minLength: 3, maxLength: 6 }), fc.boolean(),
-    (count, selections, reverse) => stableSelectionHistory(count, reverse, selections, false,
-      !offPage, false, offPage, !offPage)), { numRuns: 3 });
+    (count, selections, reverse) => stableSelectionHistory(signal, count, reverse, selections, false,
+      !offPage, false, offPage, !offPage)), { numRuns: 3 }));
 });
 
-it("keeps native order when owner-directory ancestry stops before the viewer-mounted parent", async () => {
-  await stableSelectionHistory(6, false, [1, 2, 1], false, true);
+it("keeps native order when owner-directory ancestry stops before the viewer-mounted parent", async ({ signal }) => {
+  await stableSelectionHistory(signal, 6, false, [1, 2, 1], false, true);
 });
 
-it("keeps a legacy cross-provider parent identity across scoped owner exact reads", async () => {
-  await stableSelectionHistory(6, false, [1, 2, 1], false, false, true);
+it("keeps a legacy cross-provider parent identity across scoped owner exact reads", async ({ signal }) => {
+  await stableSelectionHistory(signal, 6, false, [1, 2, 1], false, false, true);
 });
 
-it.each([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
-  "retains off-page parent ancestry during child selection, count=$count reverse=$reverse", async ({ count, reverse }) => {
-    await stableSelectionHistory(count, reverse, [1, 2, 1], false, false, false, true);
+it.for([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
+  "retains off-page parent ancestry during child selection, count=$count reverse=$reverse", async ({ count, reverse }, { signal }) => {
+    await stableSelectionHistory(signal, count, reverse, [1, 2, 1], false, false, false, true);
   },
 );
 
-it.each([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
-  "keeps viewer child demand with split owner directories, count=$count reverse=$reverse", async ({ count, reverse }) => {
-    await stableSelectionHistory(count, reverse, [1, 2, 1], false, true, false, false, true);
+it.for([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
+  "keeps viewer child demand with split owner directories, count=$count reverse=$reverse", async ({ count, reverse }, { signal }) => {
+    await stableSelectionHistory(signal, count, reverse, [1, 2, 1], false, true, false, false, true);
   },
 );
 
-async function stableSelectionHistory(count: number, reverse: boolean, selections: number[], hover: boolean, differentOwnerProjects = false, crossProvider = false, offPage = false, startAtParent = false): Promise<void> {
+async function runSelectionHistory(signal: AbortSignal, count: number, reverse: boolean, selections: number[], hover: boolean, differentOwnerProjects = false, crossProvider = false, offPage = false, startAtParent = false, afterReady?: (container: HTMLElement) => Promise<void>): Promise<void> {
+  signal.throwIfAborted();
   const directory = { key: "directory:/fixture", kind: "directory" as const, path: "/fixture", label: "Project" };
   const thread = (id: string, parent?: string): NavigationThreadSummary => ({ id, source: "codex", title: id,
     titleSource: "explicit", createdAt: 100, updatedAt: 100, inbox: { inInbox: false },
@@ -129,11 +152,13 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
   }
   const mounted = render(<Window />);
   const drain = async () => {
+    signal.throwIfAborted();
     for (let i = 0; i < 100; i++) {
       await act(async () => {
         const scheduled = [...tasks]; tasks.clear(); scheduled.forEach((task) => task());
         (reverse ? replies.pop() : replies.shift())?.();
       });
+      signal.throwIfAborted();
       if ([...navigation.pagedNavigation.resources.values()].every((resource) => !resource.loading) && !replies.length && !tasks.size) return;
     }
     throw new Error("Selection exceeded deterministic response budget");
@@ -155,6 +180,8 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
     const visible = () => [...mounted.container.querySelectorAll("[data-thread-key]")]
       .map((row) => row.getAttribute("data-thread-key")!.split(":").at(-1)!).filter((id) => id.startsWith("child-"));
     expect(visible()).toEqual(expected);
+    if (afterReady) await afterReady(mounted.container);
+    signal.throwIfAborted();
     gated = true;
     const list = mounted.container.querySelector<HTMLElement>(".directory-list")!;
     list.scrollTop = 120;
@@ -217,5 +244,69 @@ async function stableSelectionHistory(count: number, reverse: boolean, selection
     expect(navigation.selectedThread?.id).toBe("child-1");
     expect(navigation.pagedNavigation.resources.get(childResource.id)?.state.page?.entries).toHaveLength(count - 1);
     expect(read).toHaveBeenCalledTimes(count > 11 ? 7 : 6);
-  } finally { mounted.unmount(); replies.splice(0).forEach((reply) => reply()); }
+  } finally { mounted.unmount(); mounted.container.remove(); replies.splice(0).forEach((reply) => reply()); }
 }
+
+function selectionGate() {
+  let release!: () => void;
+  let opened!: () => void;
+  let container!: HTMLElement;
+  let clicks = 0;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  return {
+    ready,
+    release,
+    get container() { return container; },
+    get clicks() { return clicks; },
+    afterReady: async (root: HTMLElement) => {
+      container = root;
+      expect(root.querySelectorAll("[data-thread-key]").length).toBeGreaterThanOrEqual(3);
+      root.addEventListener("click", () => { clicks++; });
+      opened();
+      await hold;
+    },
+  };
+}
+
+it("selection owner abort stops clicks after real child readiness", async () => {
+  const owner = new AbortController();
+  const reason = new Error("retired selection model");
+  const gate = selectionGate();
+  const work = stableSelectionHistory(owner.signal, 3, false, [1], false, false, false, false, false, gate.afterReady)
+    .then(() => undefined, error => error);
+  await gate.ready;
+  try {
+    owner.abort(reason);
+    gate.release();
+    expect([await work, gate.clicks]).toEqual([reason, 0]);
+  } finally {
+    gate.release();
+    await work;
+  }
+});
+
+it("selection owner teardown joins the admitted history before DOM cleanup", async () => {
+  const gate = selectionGate();
+  const work = stableSelectionHistory(new AbortController().signal, 3, false, [1], false, false, false, false, false, gate.afterReady)
+    .then(() => undefined, error => error);
+  await gate.ready;
+  const retiring = retireSelectionModels();
+  const alsoRetiring = retireSelectionModels();
+  try {
+    expect(gate.container.isConnected && Boolean(gate.container.querySelector("[data-thread-key]"))).toBe(true);
+  } finally {
+    gate.release();
+    await work;
+    await Promise.all([retiring, alsoRetiring]);
+  }
+  expect(await work).toBeUndefined();
+});
+
+it("selection owner starts no history after abort", async () => {
+  const reason = new Error("already retired selection model");
+  const opened = vi.fn(async () => undefined);
+  const work = stableSelectionHistory(AbortSignal.abort(reason), 3, false, [1], false, false, false, false, false, opened);
+  await expect(work).rejects.toBe(reason);
+  expect(opened).not.toHaveBeenCalled();
+});

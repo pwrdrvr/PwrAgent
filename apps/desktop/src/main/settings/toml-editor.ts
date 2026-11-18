@@ -46,7 +46,15 @@ export type TomlEditValue =
 
 export type TomlEdit =
   | { op: "set"; path: readonly string[]; value: TomlEditValue }
-  | { op: "delete"; path: readonly string[] }
+  | {
+      op: "delete";
+      path: readonly string[];
+      /**
+       * Also remove the comment lines directly above the key that carry this
+       * marker, so retiring a legacy key leaves no orphaned marker behind.
+       */
+      marker?: string;
+    }
   | {
       op: "ensureCommentBefore";
       path: readonly string[];
@@ -407,9 +415,18 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
       if (!section) continue;
       const key = findKey(section, keyName);
       if (!key) continue;
+      let startLine = key.startLine;
+      while (
+        edit.marker !== undefined
+        && startLine > 0
+        && model.lines[startLine - 1].trim().startsWith("#")
+        && model.lines[startLine - 1].includes(edit.marker)
+      ) {
+        startLine -= 1;
+      }
       lineOps.push({
         kind: "replace",
-        startLine: key.startLine,
+        startLine,
         endLine: key.endLine,
         newLines: [],
       });

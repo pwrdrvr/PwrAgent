@@ -353,10 +353,13 @@ const OPENAI_GPT6_SOL_LUNA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 22);
 // https://developers.openai.com/api/docs/models/gpt-6.1-sol
 const OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION = "2026-09-29";
 const OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 29);
+// https://developers.openai.com/api/docs/changelog (October 26 launch)
+// https://developers.openai.com/api/docs/models/gpt-6.1-terra (30-minute cache writes)
+const OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION = "2026-10-26";
+const OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 9, 26);
 // https://developers.openai.com/api/docs/changelog
 const OPENAI_GPT62_PRICING_CATALOG_VERSION = "2026-11-17";
 const OPENAI_GPT62_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 10, 17);
-const OPENAI_GPT61_TERRA_CODEX_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 9, 26);
 
 // These Ultrafast intervals apply to API token rates and Codex purchased credits / PAYG.
 // Included Codex allowance uses its own multipliers (6x for 6.2, 8x for 6/6.1).
@@ -508,6 +511,19 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
       outputUsdPerMillion: 10,
     },
     ultrafastRates: GPT61_SOL_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildOpenAiBandedPricingEntries({
+    catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    shortRates: {
+      inputUsdPerMillion: 1,
+      cachedInputUsdPerMillion: 0.05,
+      cacheWriteInputUsdPerMillion: 1.25,
+      outputUsdPerMillion: 5,
+    },
+    ultrafastRates: [],
   }),
   ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
@@ -1137,8 +1153,8 @@ const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
     ultrafastRates: GPT61_SOL_ULTRAFAST_RATE_INTERVALS,
   }),
   ...buildCodexCreditsCatalogEntries({
-    catalogVersion: "2026-10-26",
-    effectiveFrom: OPENAI_GPT61_TERRA_CODEX_PRICING_EFFECTIVE_FROM,
+    catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
     model: "gpt-6.1-terra",
     displayModel: "GPT-6.1 Terra",
     fastRateMultiplier: 2,
@@ -1616,6 +1632,9 @@ export function resolveTokenUsagePriceUnavailableReason(params: {
   const entry = matchingEntries.find(
     (candidate) => candidate.serviceTier === serviceTier,
   );
+  if (!entry && provider === "openai" && serviceTier === "ultrafast") {
+    return "unsupported-service-tier";
+  }
   if (
     entry?.requiresRequestInputTokens
     && params.inputTokenScope !== "request"

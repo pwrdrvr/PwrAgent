@@ -168,6 +168,10 @@ export type DesktopSettingsConfig = {
       transcriptTextSize?: DesktopTextSize;
       contextMoon?: DesktopContextMoonStyle;
     };
+    markdown?: {
+      incrementalRendering?: boolean;
+      mathRendering?: boolean;
+    };
     codexProfileModel?: DesktopCodexProfileModel;
     messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
   };
@@ -179,8 +183,6 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
-    markdownMathRendering?: boolean;
-    incrementalMarkdownRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -460,6 +462,24 @@ const LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION = "1.0.0-beta.50";
 const LEGACY_TOKEN_MISER_GENERAL_LAST_VERSION = "1.1.0-alpha.1";
 /** Last version whose hourly sweep archived threads by `[worktrees.archive] enabled`. */
 const LEGACY_AUTOMATIC_ARCHIVE_LAST_VERSION = "1.3.13";
+/** Last version that read Markdown rendering from `[experimental]`. */
+const LEGACY_EXPERIMENTAL_MARKDOWN_LAST_VERSION = "1.4.10";
+
+/**
+ * Legacy keys moved to `[general.markdown]`. Saves keep each one updated while
+ * it exists, so a downgrade reads the operator's choice; a 1.6+ launch copies
+ * it forward and removes it (`LEGACY_SETTINGS_RETIREMENTS`).
+ */
+const LEGACY_EXPERIMENTAL_MARKDOWN_KEYS = {
+  incrementalRendering: {
+    legacy: ["experimental", "incremental_markdown_rendering"],
+    current: ["general", "markdown", "incremental_rendering"],
+  },
+  mathRendering: {
+    legacy: ["experimental", "markdown_math_rendering"],
+    current: ["general", "markdown", "math_rendering"],
+  },
+} as const;
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -595,6 +615,97 @@ export function applyDesktopSettingsPatch(
   fs.writeFileSync(temporaryPath, next, "utf8");
   fs.renameSync(temporaryPath, configPath);
   return { changed: true, text: next };
+}
+
+/**
+ * Legacy keys a later release series removes. Until then, saves keep them
+ * updated beside their replacement so an older build still reads the
+ * operator's choice. From the first version of a series past
+ * `keptThroughSeries`, startup copies a value to its replacement when the
+ * replacement is unset, then deletes the legacy key and its marker comment.
+ *
+ * Register a retirement when a key moves, so the cleanup ships with the move
+ * instead of depending on someone remembering it.
+ */
+export type LegacySettingRetirement = Readonly<{
+  legacy: readonly [table: string, key: string];
+  /** Where the value lives now. Undefined when nothing replaces it. */
+  current?: readonly string[];
+  /** The last `major.minor` series that keeps the legacy key. */
+  keptThroughSeries: string;
+}>;
+
+export const LEGACY_SETTINGS_RETIREMENTS: readonly LegacySettingRetirement[] = [
+  { ...LEGACY_EXPERIMENTAL_MARKDOWN_KEYS.incrementalRendering, keptThroughSeries: "1.5" },
+  { ...LEGACY_EXPERIMENTAL_MARKDOWN_KEYS.mathRendering, keptThroughSeries: "1.5" },
+];
+
+/**
+ * True when `version` belongs to a release series after `series`
+ * (`major.minor`). Every 1.5.x, including prereleases, is not past "1.5";
+ * 1.6.0-alpha.1 and 2.0.0 are. An unparseable version is never past, so a
+ * malformed version string cannot delete settings.
+ */
+export function isPastReleaseSeries(version: string, series: string): boolean {
+  const parse = (text: string) => {
+    const match = /^v?(\d+)\.(\d+)(?:\.|$)/.exec(text.trim());
+    return match ? [Number(match[1]), Number(match[2])] as const : undefined;
+  };
+  const current = parse(version);
+  const kept = parse(series);
+  if (!current || !kept) return false;
+  return current[0] > kept[0] || (current[0] === kept[0] && current[1] > kept[1]);
+}
+
+/** Startup cleanup for `LEGACY_SETTINGS_RETIREMENTS`; see that catalog. */
+export function retireLegacyDesktopSettings(
+  configPath: string,
+  appVersion: string,
+  retirements: readonly LegacySettingRetirement[] = LEGACY_SETTINGS_RETIREMENTS,
+): Readonly<{ changed: boolean; retired: readonly string[] }> {
+  const due = retirements.filter((retirement) =>
+    isPastReleaseSeries(appVersion, retirement.keptThroughSeries));
+  if (due.length === 0 || !fs.existsSync(configPath)) {
+    return { changed: false, retired: [] };
+  }
+  const source = fs.readFileSync(configPath, "utf8");
+  const tables = parseTomlTables(source, configPath);
+  const edits: TomlEdit[] = [];
+  const retired: string[] = [];
+  for (const { legacy, current } of due) {
+    const legacyValue = tables[legacy[0]]?.[legacy[1]];
+    if (legacyValue === undefined) continue;
+    if (current) {
+      const currentValue = tables[current.slice(0, -1).join(".")]?.[current[current.length - 1]];
+      if (
+        currentValue === undefined
+        && (typeof legacyValue === "boolean"
+          || typeof legacyValue === "string"
+          || typeof legacyValue === "number")
+      ) {
+        edits.push({ op: "set", path: current, value: legacyValue });
+      }
+    }
+    // Match this key's own marker, not any legacy marker that happens to sit
+    // above it in a hand-edited file.
+    edits.push({
+      op: "delete",
+      path: legacy,
+      marker: `${LEGACY_SETTINGS_MARKER} key=${legacy[1]} `,
+    });
+    retired.push(legacy.join("."));
+  }
+  if (edits.length === 0) {
+    return { changed: false, retired: [] };
+  }
+  const next = applyTomlEdits(source, edits);
+  if (next === source) {
+    return { changed: false, retired: [] };
+  }
+  const temporaryPath = `${configPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, next, "utf8");
+  fs.renameSync(temporaryPath, configPath);
+  return { changed: true, retired };
 }
 
 export type DesktopSettingsPatchWriteResult = Readonly<{
@@ -768,6 +879,21 @@ export function desktopSettingsPatchToEdits(
       patch.general.interactiveSvgAutoOpen,
     );
   }
+  for (const setting of ["incrementalRendering", "mathRendering"] as const) {
+    const value = patch.general?.markdown?.[setting];
+    if (value === undefined) continue;
+    const { current, legacy } = LEGACY_EXPERIMENTAL_MARKDOWN_KEYS[setting];
+    if (readBoolean(currentTables[legacy[0]]?.[legacy[1]]) !== undefined) {
+      edits.push({
+        op: "ensureCommentBefore",
+        path: legacy,
+        marker: LEGACY_SETTINGS_MARKER,
+        comment: legacyExperimentalMarkdownComment(legacy[1]),
+      });
+      set(legacy, value);
+    }
+    set(current, value);
+  }
   if (patch.general?.htmlPreviewRunScripts !== undefined) {
     set(
       ["general", "html_preview_run_scripts"],
@@ -872,18 +998,6 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "live_transcript_event_filtering"],
       patch.experimental.liveTranscriptEventFiltering,
-    );
-  }
-  if (patch.experimental?.incrementalMarkdownRendering !== undefined) {
-    set(
-      ["experimental", "incremental_markdown_rendering"],
-      patch.experimental.incrementalMarkdownRendering,
-    );
-  }
-  if (patch.experimental?.markdownMathRendering !== undefined) {
-    set(
-      ["experimental", "markdown_math_rendering"],
-      patch.experimental.markdownMathRendering,
     );
   }
   if (patch.experimental?.threadPricingSummary !== undefined) {
@@ -2270,6 +2384,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const general = tables["general"];
   const generalAppearance = tables["general.appearance"];
+  const generalMarkdown = tables["general.markdown"];
   const generalToolOutputAlerts = tables["general.tool_output_alerts"];
   const generalSpendAlerts = tables["general.spend_alerts"];
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
@@ -2400,6 +2515,16 @@ function normalizeDesktopConfig(
         ),
         contextMoon: readContextMoonStyle(generalAppearance?.context_moon),
       },
+      // The current key wins; a profile last saved by an older build still
+      // holds its choice under [experimental].
+      markdown: {
+        incrementalRendering:
+          readBoolean(generalMarkdown?.incremental_rendering)
+          ?? readBoolean(experimental?.incremental_markdown_rendering),
+        mathRendering:
+          readBoolean(generalMarkdown?.math_rendering)
+          ?? readBoolean(experimental?.markdown_math_rendering),
+      },
       codexProfileModel: readCodexProfileModel(general?.codex_profile_model),
       messagingAcknowledgment: readMessagingAcknowledgment(
         generalMessagingAck,
@@ -2418,12 +2543,6 @@ function normalizeDesktopConfig(
       ),
       liveTranscriptEventFiltering: readBoolean(
         experimental?.live_transcript_event_filtering,
-      ),
-      markdownMathRendering: readBoolean(
-        experimental?.markdown_math_rendering,
-      ),
-      incrementalMarkdownRendering: readBoolean(
-        experimental?.incremental_markdown_rendering,
       ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(
@@ -2849,6 +2968,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const spendAlertsDefined = spendAlerts && hasDefinedValue(spendAlerts);
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
+  const markdown = config.general?.markdown;
+  const markdownDefined = markdown && hasDefinedValue(markdown);
   const codexProfileModel = config.general?.codexProfileModel;
   const messagingAcknowledgment = config.general?.messagingAcknowledgment;
   if (
@@ -2872,6 +2993,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     toolOutputAlertsDefined ||
     spendAlertsDefined ||
     appearanceDefined ||
+    markdownDefined ||
     codexProfileModel !== undefined ||
     messagingAcknowledgment !== undefined
   ) {
@@ -2939,6 +3061,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;
+    }
+    if (markdownDefined) {
+      pruned.general.markdown = markdown;
     }
     if (codexProfileModel !== undefined) {
       pruned.general.codexProfileModel = codexProfileModel;
@@ -4235,6 +4360,17 @@ function legacyAutomaticArchiveComment(): string {
     "key=enabled",
     "shape=boolean",
     `used_through=${LEGACY_AUTOMATIC_ARCHIVE_LAST_VERSION}`,
+    "kept_for_older_clients",
+  ].join(" ");
+}
+
+function legacyExperimentalMarkdownComment(key: string): string {
+  return [
+    "#",
+    LEGACY_SETTINGS_MARKER,
+    `key=${key}`,
+    "shape=boolean",
+    `used_through=${LEGACY_EXPERIMENTAL_MARKDOWN_LAST_VERSION}`,
     "kept_for_older_clients",
   ].join(" ");
 }
