@@ -111,3 +111,11 @@ The fitted input and actual collection both reproduce 77/91/104/133 and end at `
 
 Local verification passed the collection oracle, YAML parsing, full `pnpm lint`
 (including typecheck and dependency boundaries), and the workflow policy tests.
+
+After rebasing onto main `2c7328c13`, source `a470e9505` still collects the
+same 405 IDs. [Native CI run 44221702130](https://github.com/pwrdrvr/PwrAgent/actions/runs/44221702130)
+completed macOS lanes 1–4 in 10:46 / 9:52 / 10:55 / 12:33, within the existing
+15-minute deadline. The consolidated report confirms complete first attempts
+of 77 / 91 / 104 / 133 tests with no macOS E2E failures or retries. The overall
+run has separate unit and Windows failures; see the
+[Star Map investigation](desktop-e2e-star-map-opening-2026-11-18.md).
