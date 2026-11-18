@@ -59,8 +59,8 @@ resource disposal and provider reset. Fixture, Git and database admission check
 the owning signal and retirement state. The control oracles have a separate
 outer lifetime so they can request fixture retirement without joining themselves.
 
-All 64 original callback bodies, covering 98 cases, remain byte-identical inside
-the wrapper. All 102 native tests pass, including the four new oracles; timeout,
+The initial ownership change wrapped all 64 original callback bodies, covering
+98 cases, byte-identically. Its 102-test native pass is retained; timeout,
 worker, concurrency, isolation, property bounds and SQLite budgets are unchanged.
 This fixes the demonstrated retirement/admission rules. The initiating full-suite
 deadline remains unattributed; a later focused pass does not erase that failure.
@@ -70,3 +70,21 @@ Byte-identical logs, source hashes, cold Git trace, pre-fix assertions, final
 validation and callback audit are retained under
 `.local/native-suite-cohort/checkout-hibernation-followup/`. Verification uses
 this worktree's own frozen dependencies and the normal native build hook.
+
+
+## Review follow-up: notification cancellation
+
+The whole-test join exposed an unresolved registration-card wait: retirement
+unsubscribed the listener without settling its promise, so disposal could never
+follow the join. Registration-card waits now reject and unsubscribe on either
+the owning signal's abort or fixture retirement. Successful delivery releases
+the listener, cancellation is idempotent, and late notifications cannot resume
+the test body. The caller also observes an early registration failure while
+waiting for the card, including rejection during registry shutdown.
+
+Two controlled real-registry oracles cover abort and retirement. They retain a
+listener callback to rescue the broken pre-fix join, allowing both assertions to
+fail without a timeout or stranded resource. Both pass fixed and verify complete
+fixture disposal. The normal native file passes all 104 tests in 41.21 seconds,
+including the original exact-answer and SQLite-budget assertions. Pre-fix and
+fixed logs are retained in `notification-review/` beside the earlier evidence.

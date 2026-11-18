@@ -83,7 +83,7 @@ const releases: Array<() => void> = [];
 class FixtureOwner {
   readonly work = new Set<Promise<unknown>>();
   private closing = false;
-  constructor(private readonly signal: AbortSignal) {}
+  constructor(readonly signal: AbortSignal) {}
   check(): void {
     this.signal.throwIfAborted();
     if (this.closing) throw new Error("Checkout fixture owner retired");
@@ -263,6 +263,37 @@ function registrationTool(registry: DesktopBackendRegistry) {
   // The operator's confirmation card belongs to the thread inspection tools.
   const approvals = registryModules(registry).threadInspectionTools;
   return { approvals, live, call };
+}
+
+type RegistrationCard = import("@pwragent/shared").AppServerToolRequestUserInputNotification;
+
+function waitForRegistrationCard(registry: DesktopBackendRegistry): Promise<RegistrationCard> {
+  fixtureOwner.check();
+  const signal = fixtureOwner.signal;
+  const card = Promise.withResolvers<RegistrationCard>();
+  let settled = false;
+  let unsubscribe = () => {};
+  const dispose = () => {
+    signal.removeEventListener("abort", abort);
+    unsubscribe();
+  };
+  const cancel = (reason: unknown) => {
+    if (settled) return;
+    settled = true;
+    dispose();
+    card.reject(reason);
+  };
+  const abort = () => cancel(signal.reason);
+  unsubscribe = registry.onEvent((event) => {
+    if (settled || event.notification.method !== "item/tool/requestUserInput") return;
+    settled = true;
+    dispose();
+    card.resolve(event.notification as RegistrationCard);
+  });
+  signal.addEventListener("abort", abort, { once: true });
+  releases.push(() => cancel(new Error("Checkout notification wait retired")));
+  if (signal.aborted) abort();
+  return card.promise;
 }
 
 async function outsideRegistrationFixture() {
@@ -1058,15 +1089,13 @@ describe("Thread maintenance's hibernate step", () => {
     const { registry, store, worktree, call } = await outsideRegistrationFixture();
     await store.setThreadExecutionMode({ backend: "codex", threadId: "registration-agent", executionMode: "full-access" });
     const measured = await measureSqliteWrites(async () => {
-      const card = new Promise<import("@pwragent/shared").AppServerToolRequestUserInputNotification>((resolve) => {
-        releases.push(registry.onEvent((event) => {
-          if (event.notification.method === "item/tool/requestUserInput") {
-            resolve(event.notification as import("@pwragent/shared").AppServerToolRequestUserInputNotification);
-          }
-        }));
-      });
+      const card = waitForRegistrationCard(registry);
       const pending = call(worktree);
-      const notification = await card;
+      // Observe an early producer failure while waiting for its notification;
+      // registry shutdown also rejects an unanswered request after retirement.
+      const notification = await Promise.race([card, pending.then(() => {
+        throw new Error("Registration finished without its confirmation notification");
+      })]);
       expect(notification.params.questions[0]?.question).toContain(worktree);
       expect(notification.params.questions[0]?.question).toContain(THREAD_ID);
       expect(notification.params.questions[0]?.question).toContain("ignored files are deleted without recovery");
@@ -1728,4 +1757,60 @@ it("fixture owner rejects a Git mutation after abort", ownFixtureOracle(async ()
       return "absent";
     });
   expect({ refused: failure === reason, value }).toEqual({ refused: true, value: "absent" });
+}));
+
+
+it.each(["abort", "retire"] as const)("notification waiter settles before owner join on %s", ownFixtureOracle(async (stop) => {
+  const controller = new AbortController();
+  fixtureOwner = new FixtureOwner(controller.signal);
+  const fixture = await createFixture();
+  const { registry } = fixture.open({ ...ON, enabled: false });
+  const listen = registry.onEvent.bind(registry);
+  let listener: Parameters<DesktopBackendRegistry["onEvent"]>[0] | undefined;
+  const unsubscribe = vi.fn<() => void>();
+  const subscription = vi.spyOn(registry, "onEvent").mockImplementation((callback) => {
+    listener = callback;
+    unsubscribe.mockImplementation(listen(callback));
+    return unsubscribe;
+  });
+  const entered = Promise.withResolvers<void>();
+  let settled = false;
+  let continued = false;
+  let failure: unknown;
+  const run = ownFixtureTest(async () => {
+    const card = waitForRegistrationCard(registry);
+    entered.resolve();
+    await card;
+    continued = true;
+  })();
+  const observed = run.then(() => { settled = true; }, (error) => { settled = true; failure = error; });
+  await entered.promise;
+  const reason = new Error("controlled pending notification abort");
+  let retiring: Promise<void> | undefined;
+  let beforeRescue: { settled: boolean; unsubscribed: number; canceled: boolean } | undefined;
+  try {
+    if (stop === "abort") controller.abort(reason);
+    else retiring = cleanupFixtureTest();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    beforeRescue = {
+      settled, unsubscribed: unsubscribe.mock.calls.length,
+      canceled: stop === "abort" ? failure === reason
+        : (failure as Error | undefined)?.message === "Checkout notification wait retired",
+    };
+  } finally {
+    // The retained callback represents a notification already in flight. It
+    // rescues the broken pre-fix join, so the regression never needs a timeout;
+    // after cancellation it must not resume the fixture body.
+    await listener?.({ backend: "codex", notification: {
+      method: "item/tool/requestUserInput",
+      params: { threadId: "registration-agent", requestId: "controlled-card", questions: [] },
+    } });
+    await observed;
+    await (retiring ?? cleanupFixtureTest());
+    subscription.mockRestore();
+  }
+  expect({ ...beforeRescue, continued }).toEqual({ settled: true, unsubscribed: 1, canceled: true, continued: false });
+  expect(await exists(fixture.root)).toBe(false);
+  expect({ registries: registries.length, databases: databases.length, roots: roots.length })
+    .toEqual({ registries: 0, databases: 0, roots: 0 });
 }));
