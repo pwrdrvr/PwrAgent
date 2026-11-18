@@ -35,7 +35,7 @@ import {
 } from "./MessagingSettings";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import { ModelsSettings } from "./ModelsSettings";
-import { modelServiceEntries, PROVIDER_KINDS } from "./provider-kinds";
+import { modelServiceEntries, providerKindLabel } from "./provider-kinds";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
@@ -276,10 +276,6 @@ function groupSettingsNavChildren(
   }
   return groups;
 }
-
-const PROVIDER_KIND_LABELS = new Map(
-  PROVIDER_KINDS.map((entry) => [entry.kind, entry.label] as const),
-);
 
 type ForgeNavStatuses = Partial<Record<ForgeKind, GhStatus>>;
 
@@ -596,7 +592,7 @@ export function SettingsScreen(props: {
       const claude = claudeProviderStatus(
         props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude,
       );
-      const harnesses = PROVIDER_KIND_LABELS.get("harness");
+      const harnesses = providerKindLabel("harness");
       // The providers that run no threads get rows too, under their own
       // kind headings, so the nav says they exist. Before, they were
       // reachable only from the end of the AI Providers page.
@@ -605,9 +601,9 @@ export function SettingsScreen(props: {
             key: entry.focus,
             label: entry.name,
             sub: entry.focus,
-            group: PROVIDER_KIND_LABELS.get(entry.kind),
-            dot: entry.keyReady ? "ok" : "off",
-            ...(entry.keyReady ? {} : { chip: "no key" }),
+            group: providerKindLabel(entry.kind),
+            dot: entry.nav.dot,
+            ...(entry.nav.chip ? { chip: entry.nav.chip } : {}),
           }))
         : [];
       return [

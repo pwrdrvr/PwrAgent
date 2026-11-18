@@ -10539,22 +10539,22 @@ describe("SettingsScreen", () => {
     ).toBe(navGroups.flatMap((group) => group.rows).length);
 
     // Oracle: the AI Providers page's own index, read in document order.
-    const pageGroups: Array<{ kind: string | null; rows: string[] }> = [];
-    for (const element of Array.from(
-      screen.getByLabelText("Provider index").children,
-    )) {
-      if (element.classList.contains("settings-index__kind")) {
-        pageGroups.push({
-          kind: element.querySelector(".settings-index__kind-label")
-            ?.textContent ?? null,
-          rows: [],
-        });
-      } else if (element.classList.contains("settings-index__row")) {
-        pageGroups.at(-1)?.rows.push(
-          element.querySelector(".settings-index__name")?.textContent ?? "",
-        );
-      }
-    }
+    const index = screen.getByLabelText("Provider index");
+    const pageGroups = Array.from(index.children).map((group) => {
+      const heading = group.querySelector(".settings-index__kind");
+      expect(group).toHaveAttribute("role", "group");
+      expect(group.getAttribute("aria-labelledby")).toBe(heading?.id);
+      return {
+        kind: heading?.querySelector(".settings-index__kind-label")
+          ?.textContent,
+        rows: Array.from(
+          group.querySelectorAll(".settings-index__name"),
+        ).map((name) => name.textContent),
+      };
+    });
+    // No page row sits outside a kind group either.
+    expect(index.querySelectorAll(".settings-index__row").length)
+      .toBe(pageGroups.flatMap((group) => group.rows).length);
     expect(navGroups).toEqual(pageGroups);
     expect(navGroups.map((group) => group.kind)).toEqual([
       "Harnesses",
@@ -10586,6 +10586,50 @@ describe("SettingsScreen", () => {
     expect(
       document.querySelector(".settings-titlebar__current")?.textContent,
     ).toBe("OpenAI Decisions");
+  });
+
+  it("marks a keyed direct API provider ready and a refused local endpoint invalid in the nav", () => {
+    const baseSnapshot = createSnapshot();
+    const configuredKey = {
+      configured: true,
+      source: "keychain" as const,
+      writable: true,
+    };
+    const snapshot = createSnapshot({
+      models: {
+        ...baseSnapshot.models,
+        // Hand-edited: the decision client accepts loopback only.
+        decisionModels: { local: { endpoint: "http://10.0.0.5:8787" } },
+        decisionSecrets: {
+          localApiKey: { configured: false, source: "unset", writable: false },
+          jevApiKey: configuredKey,
+        },
+        openaiDecisions: {
+          ...baseSnapshot.models.openaiDecisions,
+          apiKey: configuredKey,
+        },
+      },
+    } as Partial<DesktopSettingsSnapshot>);
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    for (const name of [/TypeSafe Jev/, /OpenAI Decisions/]) {
+      const row = within(nav).getByRole("button", { name });
+      expect(row.querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+      expect(row.querySelector(".settings-nav__subchip")).toBeNull();
+    }
+    const local = within(nav).getByRole("button", {
+      name: /Local decision model/,
+    });
+    expect(local.querySelector(".settings-nav__subdot--bad")).not.toBeNull();
+    expect(local.querySelector(".settings-nav__subchip")?.textContent)
+      .toBe("invalid");
   });
 
   it("updates Claude's nav status from cached installation and authentication without probing", () => {

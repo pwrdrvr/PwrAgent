@@ -1,5 +1,7 @@
 import {
   DECISION_PROVIDER_IDS,
+  decisionLocalEndpointProblem,
+  resolveDecisionModelSettings,
   type DecisionProviderId,
   type DesktopSettingsSnapshot,
 } from "@pwragent/shared";
@@ -21,11 +23,13 @@ import {
  */
 export type ProviderKind = "harness" | "local" | "direct-api";
 
-export const PROVIDER_KINDS: ReadonlyArray<{
+export type ProviderKindEntry = {
   kind: ProviderKind;
   label: string;
   description: string;
-}> = [
+};
+
+export const PROVIDER_KINDS: ReadonlyArray<ProviderKindEntry> = [
   {
     kind: "harness",
     label: "Harnesses",
@@ -42,6 +46,11 @@ export const PROVIDER_KINDS: ReadonlyArray<{
     description: "Hosted APIs called with your key",
   },
 ];
+
+/** A kind's heading, for the nav and the AI Providers page alike. */
+export function providerKindLabel(kind: ProviderKind): string {
+  return PROVIDER_KINDS.find((entry) => entry.kind === kind)?.label ?? kind;
+}
 
 /** The local decision model must listen on loopback (see
  *  `decisionLocalEndpointProblem`); Jev is a hosted API. A new decision
@@ -62,8 +71,21 @@ export type ModelServiceEntry = {
   kind: Exclude<ProviderKind, "harness">;
   /** False only when the provider needs an API key and has none. */
   keyReady: boolean;
+  /** What a nav row shows without opening the screen. The dot is
+   *  `aria-hidden`, so every state but "ok" also carries a chip word. */
+  nav: { dot: "ok" | "off" | "bad"; chip?: string };
   decisionProvider?: DecisionProviderId;
 };
+
+function navState(
+  keyReady: boolean,
+  endpointProblem: string | undefined,
+): ModelServiceEntry["nav"] {
+  if (!keyReady) return { dot: "off", chip: "no key" };
+  // A hand-edited config can hold an address the client refuses.
+  if (endpointProblem) return { dot: "bad", chip: "invalid" };
+  return { dot: "ok" };
+}
 
 /** Every non-harness provider, in display order. The nav and the AI
  *  Providers page both read this list, so one cannot gain a row the other
@@ -71,25 +93,49 @@ export type ModelServiceEntry = {
 export function modelServiceEntries(
   snapshot: DesktopSettingsSnapshot,
 ): ModelServiceEntry[] {
-  const decisions = DECISION_PROVIDER_IDS.map((provider): ModelServiceEntry => ({
-    focus: DECISION_PROVIDER_FOCUS[provider],
-    name: DECISION_PROVIDER_NAMES[provider],
-    kind: DECISION_PROVIDER_KIND[provider],
-    keyReady:
-      provider === "local" || decisionSecrets(snapshot).jevApiKey.configured,
-    decisionProvider: provider,
-  }));
+  const localEndpointProblem = decisionLocalEndpointProblem(
+    resolveDecisionModelSettings(snapshot.models.decisionModels).localEndpoint,
+  );
+  const decisions = DECISION_PROVIDER_IDS.map((provider): ModelServiceEntry => {
+    const keyReady =
+      provider === "local" || decisionSecrets(snapshot).jevApiKey.configured;
+    return {
+      focus: DECISION_PROVIDER_FOCUS[provider],
+      name: DECISION_PROVIDER_NAMES[provider],
+      kind: DECISION_PROVIDER_KIND[provider],
+      keyReady,
+      nav: navState(
+        keyReady,
+        provider === "local" ? localEndpointProblem : undefined,
+      ),
+      decisionProvider: provider,
+    };
+  });
+  const openAIKeyReady = openAIDecisionsKeyState(snapshot).configured;
   const services: ModelServiceEntry[] = [
     ...decisions,
     {
       focus: OPENAI_DECISIONS_FOCUS,
       name: "OpenAI Decisions",
       kind: "direct-api",
-      keyReady: openAIDecisionsKeyState(snapshot).configured,
+      keyReady: openAIKeyReady,
+      nav: navState(openAIKeyReady, undefined),
     },
   ];
   // Stable sort into kind order, so a group's rows stay contiguous.
   const rank = (kind: ProviderKind) =>
     PROVIDER_KINDS.findIndex((entry) => entry.kind === kind);
   return services.sort((a, b) => rank(a.kind) - rank(b.kind));
+}
+
+/** The non-harness kinds that have providers, each with its rows, in
+ *  display order. */
+export function modelServicesByKind(
+  snapshot: DesktopSettingsSnapshot,
+): Array<{ kind: ProviderKindEntry; services: ModelServiceEntry[] }> {
+  const services = modelServiceEntries(snapshot);
+  return PROVIDER_KINDS.map((kind) => ({
+    kind,
+    services: services.filter((service) => service.kind === kind.kind),
+  })).filter((group) => group.services.length > 0);
 }

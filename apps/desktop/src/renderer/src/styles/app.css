@@ -13749,20 +13749,26 @@ a.button {
   gap: 8px;
 }
 
-/* Heading over one kind of row in a hub index (AI Providers → Harnesses,
-   On this computer, Direct API): the nav's kind label, plus a line on what
-   the rows share. The index's 8px row gap sits under it; the extra top
-   margin separates it from the previous kind's last row. */
+/* One kind of row in a hub index (AI Providers → Harnesses, On this
+   computer, Direct API), named for a screen reader by its heading: the
+   nav's kind label, plus a line on what the rows share. Rows keep the
+   index's 8px gap; a later group adds 8px so a break reads as a break. */
+.settings-index__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-index__group + .settings-index__group {
+  margin-top: 8px;
+}
+
 .settings-index__kind {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 10px;
-  margin: 8px 0 0;
-}
-
-.settings-index__kind:first-child {
-  margin-top: 0;
+  margin: 0;
 }
 
 .settings-index__kind-label {
