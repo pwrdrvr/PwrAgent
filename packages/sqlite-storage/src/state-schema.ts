@@ -28,6 +28,21 @@ CREATE TABLE IF NOT EXISTS thread_compaction_recovery_guards (
 );
 `;
 
+/**
+ * One row per thread whose agent follow-ups have fired. The payload holds the
+ * fired action ids and times in the rolling window, never prompt text. A new
+ * table, so an older build that opens the profile ignores it.
+ */
+export const AGENT_FOLLOW_UP_GUARD_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_agent_follow_up_guards (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  suspended_at INTEGER,
+  payload TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id)
+);
+`;
+
 export const PROJECT_HELD_WAKEUP_SCHEMA = `
 CREATE TABLE IF NOT EXISTS project_held_wakeups (
   entry_id TEXT PRIMARY KEY,

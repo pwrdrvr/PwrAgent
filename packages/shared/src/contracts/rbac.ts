@@ -254,7 +254,7 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     id: "thread.control.schedule",
     label: "Schedule messages",
     description:
-      "Queue a message to the bound thread for later, and list or cancel the queue.",
+      "Queue a message to the bound thread for later, list or cancel the queue, and let the agent schedule its own follow-up.",
     group: "control",
   },
   {
@@ -767,6 +767,8 @@ export type MessagingDynamicToolCategory =
  *         status-card buttons (including the Full Access danger gate).
  *       · `attach_thread_pull_request` is a write → `tools.thread_orchestration`.
  *       · `mark_project_read` changes seen state → `thread.control.organize`.
+ *       · `schedule_follow_up` queues a later turn on the calling thread →
+ *         `thread.control.schedule`, as `/schedule` and `/scheduled` do.
  *       · `apply_thread_maintenance` archives threads and removes checkouts →
  *         `thread.control.archive`. `scan_thread_maintenance` reads only, and
  *         `open_thread_maintenance` only shows a dialog on this machine, so
@@ -801,6 +803,10 @@ export function permissionForDynamicTool(
       if (tool === "mutate_thread") {
         // Handled per-field by permissionsForThreadMutation (args-aware).
         return undefined;
+      }
+      if (tool === "schedule_follow_up") {
+        // The agent's own `/schedule`: the same permission as the command.
+        return "thread.control.schedule";
       }
       if (tool === "attach_thread_pull_request") {
         return "tools.thread_orchestration";

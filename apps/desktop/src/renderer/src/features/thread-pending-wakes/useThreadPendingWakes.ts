@@ -37,6 +37,8 @@ export type ThreadPendingWakesController = {
    * list reads again; a peer's hides the row until its owner's next list.
    */
   ended: (key: string) => void;
+  /** Clears the thread's agent follow-up loop guard. Local threads only. */
+  rearmFollowUps: () => Promise<ThreadPendingWakesResponse>;
 };
 
 type PendingWakesApi = Pick<DesktopApi, "manageThreadPendingWakes" | "onAgentEvent">;
@@ -171,6 +173,20 @@ export function useThreadPendingWakes(
     }
   }, [backend, desktopApi, federationTarget, hidePeerWake, threadId]);
 
+  const rearmFollowUps = useCallback(async (): Promise<ThreadPendingWakesResponse> => {
+    if (!backend || !threadId || federationTarget || !desktopApi?.manageThreadPendingWakes) {
+      return { ok: false, error: { code: "failed", message: "Rearm agent follow-ups on the instance that owns the thread." } };
+    }
+    const refresh = refreshRef.current;
+    try {
+      return await desktopApi.manageThreadPendingWakes({ action: "rearm_follow_ups", backend, threadId });
+    } catch (error) {
+      return { ok: false, error: { code: "failed", message: error instanceof Error ? error.message : String(error) } };
+    } finally {
+      void refresh();
+    }
+  }, [backend, desktopApi, federationTarget, threadId]);
+
   const ended = useCallback((key: string) => {
     if (identityRef.current !== identity) return;
     if (federationTarget) hidePeerWake(key);
@@ -189,7 +205,7 @@ export function useThreadPendingWakes(
         peer: true,
       }
     : UNKNOWN, [hidden, peerIncomplete, peerWakes]);
-  return { state: peer ? peerState : local?.identity === identity ? local.state : { status: "loading" }, stop, ended };
+  return { state: peer ? peerState : local?.identity === identity ? local.state : { status: "loading" }, stop, ended, rearmFollowUps };
 }
 
 function readThreadFederationTarget(

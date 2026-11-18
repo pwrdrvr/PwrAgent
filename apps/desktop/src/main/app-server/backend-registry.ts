@@ -1522,6 +1522,7 @@ export class DesktopBackendRegistry {
   private threadDependencyToolHandler:
     | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>)
     | undefined;
+  private agentFollowUpToolHandler: import("./backend-registry-handlers").AgentFollowUpToolHandler | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private readonly pendingThreadGitWorkingStateByPath = new Map<
@@ -1820,6 +1821,7 @@ export class DesktopBackendRegistry {
     this.federatedThreadInspectionHandler = dependencies.handlers.federatedThreadInspectionHandler;
     this.federatedThreadControlHandler = dependencies.handlers.federatedThreadControlHandler;
     this.threadDependencyToolHandler = dependencies.handlers.threadDependencyToolHandler;
+    this.agentFollowUpToolHandler = dependencies.handlers.agentFollowUpToolHandler;
     this.directoryGitStatusWriter = dependencies.handlers.directoryGitStatusWriter;
     this.threadPrAutoDispatchHandler = dependencies.handlers.threadPrAutoDispatchHandler;
     this.threadDependenciesPeerHandler = dependencies.handlers.threadDependenciesPeerHandler;
@@ -2119,6 +2121,8 @@ export class DesktopBackendRegistry {
       get taskMonitorDelegations() { return current().subAgentMonitorService.taskMonitorDelegationRecords; },
       taskMonitorForThread: (...args: Parameters<SubAgentMonitorService["taskMonitorForThread"]>) => this.subAgentMonitorService.taskMonitorForThread(...args),
       get threadDependencyToolHandler() { return current().threadDependencyToolHandler; },
+      get agentFollowUpToolHandler() { return current().agentFollowUpToolHandler; },
+      isResearchWorker: (thread: { backend: AppServerBackendKind; threadId: string }) => current().researchWorkerCheck?.(thread) ?? false,
       get threadHandoffReservations() { return current().threadWorkspaceService.threadHandoffReservationRecords; },
       threadHasActiveCodexReviewTurn: (...args: Parameters<typeof this.threadHasActiveCodexReviewTurn>) => this.threadHasActiveCodexReviewTurn(...args),
       threadHasActiveTurn: (...args: Parameters<typeof this.threadHasActiveTurn>) => this.threadHasActiveTurn(...args),
@@ -3033,6 +3037,11 @@ export class DesktopBackendRegistry {
   // The app-server service needs the registry before it can supply this owner binding.
   setThreadMaintenanceToolHandler(handler: ThreadMaintenanceToolHandler | undefined): void {
     this.threadInspectionTools.setThreadMaintenanceToolHandler(handler);
+  }
+
+  // The scheduled-action service needs the registry before it can supply this.
+  setAgentFollowUpToolHandler(handler: import("./backend-registry-handlers").AgentFollowUpToolHandler | undefined): void {
+    this.agentFollowUpToolHandler = handler;
   }
 
   // The app-server service needs the registry before it can supply this owner binding.

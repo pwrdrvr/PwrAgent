@@ -181,6 +181,36 @@ describe("ThreadInspectionTools", () => {
     expect(threadDependencyToolHandler).not.toHaveBeenCalled();
   });
 
+  it("schedules a follow-up for the calling thread only, and never for a Research worker", async () => {
+    const unavailable = createTools({ host: { isResearchWorker: () => false } });
+    await expect(inspect(unavailable.tools, {
+      operation: "schedule_follow_up", args: { action: "list" },
+    })).resolves.toMatchObject({ ok: false, error: { code: "unsupported_operation" } });
+
+    const agentFollowUpToolHandler = vi.fn(async () => ({ ok: true as const, data: { followUps: {
+      activeAgentFollowUps: 0, firedInLastDay: 0, limits: { maxActive: 8, minDelayMinutes: 1, maxFiredPerDay: 12 },
+    } } }));
+    const provenance = { causalMessagingSource: { bindingId: "binding-1" } as never };
+    const worker = createTools({ host: { agentFollowUpToolHandler, isResearchWorker: () => true } });
+    await expect(inspect(worker.tools, {
+      operation: "schedule_follow_up", args: { action: "create", delayMinutes: 5, prompt: "Check" },
+    })).resolves.toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(agentFollowUpToolHandler).not.toHaveBeenCalled();
+
+    // The coordinating thread is not a worker, so it may.
+    const isResearchWorker = vi.fn(() => false);
+    const coordinator = createTools({ host: {
+      agentFollowUpToolHandler, isResearchWorker, readCausalMessagingContext: async () => provenance,
+    } });
+    const args = { action: "create" as const, delayMinutes: 5, prompt: "Check" };
+    await expect(inspect(coordinator.tools, { operation: "schedule_follow_up", args })).resolves.toMatchObject({ ok: true });
+    expect(isResearchWorker).toHaveBeenCalledWith(expect.objectContaining({ backend: callContext.backend, threadId: callContext.threadId }));
+    // The thread and the contact come from the call's context, not its arguments.
+    expect(agentFollowUpToolHandler).toHaveBeenCalledExactlyOnceWith(
+      args, { backend: callContext.backend, threadId: callContext.threadId }, provenance,
+    );
+  });
+
   it("marks a project read only with an exact projectKey, through the owner's thread actions", async () => {
     const markProjectRead = vi.fn(async () => ({ projectKey: "/repo", markedThreadCount: 2 }));
     const { tools } = createTools({ host: { agentThreadActions: { markProjectRead } as never } });

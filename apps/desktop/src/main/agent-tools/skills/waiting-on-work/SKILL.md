@@ -1,6 +1,6 @@
 ---
 name: waiting-on-work
-description: Use when waiting for CI, another PwrAgent thread, or a long job to finish, including Auto-fix PR coordination.
+description: Use when waiting for CI, another PwrAgent thread, a time, or a long job to finish, including Auto-fix PR coordination.
 ---
 
 # Waiting on work
@@ -14,7 +14,8 @@ input schema for argument details and result semantics.
 | Another local thread's turn, passing CI, or PR merge | `manage_thread_dependencies` (the **Continue After** UI) with `action: "create"`. Use `mode: "all"` for several prerequisites. |
 | Work that finishes only when someone says so, before merging or before the operator acts, including a peer's thread or work outside PwrAgent | `manage_thread_dependencies` with a `marked_done` condition. |
 | A GitHub Actions run or GitLab pipeline with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
-| A long job or repeatable check that neither workflow covers | `create_monitor_delegation`. |
+| A time: "check again in two hours", "look at this tomorrow at 9" | `schedule_follow_up`. Never a polling monitor, a sleep, or a backend `/loop`. |
+| A long job or repeatable check that no workflow above covers | `create_monitor_delegation`. |
 
 ## This thread's PR
 
@@ -164,6 +165,51 @@ Checks run while PR polling is on
 and the waiting thread's project allows PR watches. A run that is deleted, or
 stays unreadable for a day, ends the wait with a failure.
 
+## A time
+
+When only the clock decides when to look again, schedule a follow-up. Do not
+start a Job Monitor to poll until a time, sleep in a shell, or use a backend
+`/loop` or session cron. A monitor spends model turns while it waits and ends
+if PwrAgent quits. A follow-up is stored by PwrAgent, costs nothing while it
+waits, and fires after a restart.
+
+```json
+{
+  "action": "create",
+  "delayMinutes": 120,
+  "prompt": "Check the canary for release v2.4.1: read the error rate on the deploy dashboard at https://example.com/deploys/241. If it is above 2%, tell the operator and stop. Otherwise promote it with scripts/promote.sh v2.4.1 and report the result."
+}
+```
+
+Use `at` with an ISO 8601 time and offset for a clock time. Write `prompt`
+for a reader who has lost this conversation: it may be compacted before the
+follow-up fires. Name the task, the exact check, the paths, PRs or URLs, and
+what to do with each outcome.
+
+A follow-up always wakes the thread that set it, once. To look again after
+that, schedule the next one from the woken turn. A recurring job is an
+automation, which the operator creates. `list` returns everything scheduled
+on this thread, including the operator's own scheduled messages, which you
+cannot cancel. `cancel` takes a `followUpId` you or an earlier turn set.
+
+Limits: 8 follow-ups waiting per thread, at least 1 minute ahead, and 12
+fired per thread in a rolling 24 hours. A further one trips loop protection.
+Every agent follow-up on the thread then waits until the operator rearms
+them in Waiting for. Cancelling, re-creating or rewording a follow-up does
+not reset it, and neither does a restart. When a result says `suspended`,
+tell the operator what you were waiting for and stop. Do not switch to a
+monitor or a sleep to keep the loop going.
+
+A locked thread holds a due follow-up until it is unlocked. If PwrAgent
+stops while a follow-up is being started, it is marked failed and not sent
+again, because the turn may already have begun; check the thread before
+scheduling a replacement. A Research worker cannot schedule a follow-up. Its
+coordinating thread can, and a follow-up never extends the run's deadline.
+
+When an event decides, not the clock, use the event's own wait above: a PR
+watch, a dependency or a `ci_run` condition wakes you when it happens, and a
+follow-up would only guess.
+
 ## Registration lifecycle and delivery review
 
 A wait-barrier registration is one-shot. `mode: "any"` resumes once when any pinned
@@ -191,6 +237,9 @@ is idle and needs no replacement registration. If the idle notification is
 lost, the owner confirms idle from the provider before the next admission.
 
 ## Other long jobs
+
+A monitor is for work that has to be watched, such as a command's output or
+a status that changes. For "look again at 3pm" use a follow-up.
 
 Delegate a monitor with a concrete target, check, interval, success and failure
 conditions, and diagnostic instructions. The monitor must be able to observe
@@ -233,7 +282,7 @@ authorization to register instructions or generate another paragraph.
 For a `marked_done` wait, confirm creation and say what it waits for, whether
 it holds the merge, and what the operator will be reminded to do.
 
-For a watch, dependency, or monitor, confirm creation before relying on it.
+For a watch, dependency, follow-up, or monitor, confirm creation before relying on it.
 A `project_paused` error means the operator paused forge activity or turned off
 PR watches for that project. Do not retry or work around it with another wait
 or message. Stop and tell the operator what you were waiting for. A dependency

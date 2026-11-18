@@ -51,8 +51,9 @@ describe("PwrAgent task monitor agent tools", () => {
     // (explicit merge holds, briefly 92, folded into manage_thread_dependencies),
     // 95 with explicit register_thread_worktree, 100 with the five
     // OpenAI Decisions tools, 102 with original attachment listing and export,
-    // 104 with decisions_batch_results and decisions_batch_cancel.
-    expect(dynamicTools).toHaveLength(104);
+    // 104 with decisions_batch_results and decisions_batch_cancel,
+    // 105 with schedule_follow_up.
+    expect(dynamicTools).toHaveLength(105);
     for (const name of [
       "scan_thread_maintenance",
       "apply_thread_maintenance",

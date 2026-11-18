@@ -31,6 +31,69 @@ export type ScheduledThreadActionStatus =
 
 export type ScheduledThreadActionOrigin = "desktop" | "messaging" | "agent";
 
+/** Agent follow-ups a thread may hold that have not started or ended. */
+export const AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD = 8;
+/** The soonest an agent may ask to be woken. */
+export const AGENT_FOLLOW_UP_MIN_DELAY_MS = 60_000;
+/** The furthest ahead an agent may ask to be woken. */
+export const AGENT_FOLLOW_UP_MAX_DELAY_MS = 366 * 24 * 60 * 60 * 1000;
+/** Agent follow-ups one thread may fire in a rolling window before suspension. */
+export const AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW = 12;
+export const AGENT_FOLLOW_UP_FIRED_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const AGENT_FOLLOW_UP_PROMPT_MAX_CHARS = 8000;
+
+/**
+ * A thread's loop guard for agent follow-ups. A trip stays until the local
+ * operator rearms it; neither the window expiring nor a restart clears it.
+ */
+export type AgentFollowUpProtection = {
+  firedInWindow: number;
+  suspendedAt?: number;
+};
+
+/** `schedule_follow_up` input. The calling thread is never an argument. */
+export type ScheduleFollowUpToolArgs = {
+  action: "create" | "list" | "cancel";
+  /** Create: minutes from now. Give this or `at`. */
+  delayMinutes?: number;
+  /** Create: an ISO 8601 time. */
+  at?: string;
+  /** Create: what the woken turn should do, written to stand alone. */
+  prompt?: string;
+  /** Cancel: an id from create or list. */
+  followUpId?: string;
+};
+
+export type AgentFollowUpSummary = {
+  followUpId: string;
+  kind: ScheduledThreadActionKind;
+  status: ScheduledThreadActionStatus;
+  /** ISO 8601. */
+  scheduledFor: string;
+  /** Who set it. Only `agent` rows can be cancelled with this tool. */
+  setBy: "agent" | "operator" | "messaging";
+  cancellable: boolean;
+  /** Cut to 600 characters. */
+  prompt: string;
+};
+
+export type ScheduleFollowUpToolResult = {
+  /** The follow-up a create or cancel acted on. */
+  followUp?: AgentFollowUpSummary;
+  /** List: every scheduled action waiting on this thread, soonest first. */
+  followUps?: AgentFollowUpSummary[];
+  activeAgentFollowUps: number;
+  limits: {
+    maxActive: number;
+    minDelayMinutes: number;
+    maxFiredPerDay: number;
+  };
+  firedInLastDay: number;
+  /** Loop protection tripped. Nothing fires until the operator rearms it. */
+  suspended?: true;
+  notice?: string;
+};
+
 export type ScheduledThreadTurnPayload = {
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;

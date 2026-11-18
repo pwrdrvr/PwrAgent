@@ -1,4 +1,5 @@
 import type {
+  AgentFollowUpProtection,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   PendingWakeScheduledActions,
@@ -44,6 +45,24 @@ export type ScheduledThreadActionClaim = {
 /** Scheduled-action persistence without host database or payload-file handles. */
 export interface ScheduledThreadActionStorage {
   create(input: CreateScheduledThreadActionRecord): ScheduledThreadAction;
+  /**
+   * Stores an agent follow-up unless the thread already holds `maxActive`
+   * agent follow-ups that have not started or ended. The count and the insert
+   * are one transaction.
+   */
+  createAgentFollowUp(
+    input: CreateScheduledThreadActionRecord,
+    maxActive: number,
+  ): { action: ScheduledThreadAction } | { refused: "active_limit"; active: number };
+  countActiveAgentFollowUps(thread: { backend: string; threadId: string }): number;
+  agentFollowUpProtection(
+    thread: { backend: string; threadId: string },
+    now: number,
+  ): AgentFollowUpProtection;
+  /** Clears the thread's loop guard. Only the local operator's action calls it. */
+  rearmAgentFollowUps(thread: { backend: string; threadId: string }): void;
+  /** Threads a claim suspended since the last call, for publication. */
+  takeSuspendedAgentFollowUpThreads(): Array<{ backend: ScheduledThreadAction["backend"]; threadId: string }>;
   get(id: string): ScheduledThreadAction | undefined;
   getByQueueEntryId(queueEntryId: string): ScheduledThreadAction | undefined;
   list(request?: ListScheduledThreadActionsRequest): ScheduledThreadAction[];
@@ -78,6 +97,16 @@ export interface ScheduledThreadActionStorage {
     errorMessage: string,
     now: number,
     ownerId?: string,
+  ): ScheduledThreadAction | undefined;
+  /**
+   * The queue started an entry it had held, such as one a lock released. The
+   * held action has no claim, so the entry id is what ties the start to it.
+   */
+  markHeldStarted(
+    id: string,
+    queueEntryId: string,
+    turnId: string | undefined,
+    now: number,
   ): ScheduledThreadAction | undefined;
   markFailed(
     id: string,

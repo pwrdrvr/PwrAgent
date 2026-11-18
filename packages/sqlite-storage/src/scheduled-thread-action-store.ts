@@ -1,6 +1,11 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
+import {
+  AGENT_FOLLOW_UP_FIRED_WINDOW_MS,
+  AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW,
+} from "@pwragent/shared";
 import type {
+  AgentFollowUpProtection,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
@@ -47,6 +52,30 @@ const ACTIVE_STATUSES: readonly ScheduledThreadActionStatus[] = [
   "dispatching",
   "queued",
 ];
+/**
+ * The fired agent follow-ups a thread's rolling window still counts. A
+ * reservation is keyed by action id, so claiming the same follow-up again
+ * after a hold reuses its slot.
+ */
+type AgentFollowUpGuard = {
+  fired: Array<{ id: string; at: number }>;
+  /** Never moves back, so a clock rollback cannot age reservations out early. */
+  lastFiredAt?: number;
+  suspendedAt?: number;
+  /** The stored payload could not be read, so the allowance cannot be counted. */
+  unreadable?: true;
+};
+
+/** An agent follow-up on a thread whose loop guard has tripped. */
+const SUSPENDED_AGENT_FOLLOW_UP = `(
+  origin = 'agent' AND EXISTS (
+    SELECT 1 FROM thread_agent_follow_up_guards AS guard
+    WHERE guard.backend = scheduled_thread_actions.backend
+      AND guard.thread_id = scheduled_thread_actions.thread_id
+      AND guard.suspended_at IS NOT NULL
+  )
+)`;
+
 const ROW_COLUMNS = `
   action_id, backend, thread_id, kind, origin, status, scheduled_for,
   queue_entry_id, turn_id, error_message, payload_ref, claim_owner,
@@ -58,6 +87,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   private readonly hasLegacyPayloadColumn: boolean;
   // Payload refs are immutable. Retain only compact text, never execution inputs.
   private readonly wakePreviewCache = new Map<string, string>();
+  private suspendedAgentFollowUpThreads: Array<{ backend: ScheduledThreadAction["backend"]; threadId: string }> = [];
 
   constructor(
     private readonly stateDb: StateDb,
@@ -101,6 +131,120 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     return action;
   }
 
+  createAgentFollowUp(
+    input: CreateScheduledThreadActionRecord,
+    maxActive: number,
+  ): { action: ScheduledThreadAction } | { refused: "active_limit"; active: number } {
+    return this.stateDb.raw.transaction(() => {
+      const active = this.countActiveAgentFollowUps(input);
+      if (active >= maxActive) return { refused: "active_limit" as const, active };
+      return { action: this.create({ ...input, origin: "agent" }) };
+    }).immediate();
+  }
+
+  countActiveAgentFollowUps(thread: { backend: string; threadId: string }): number {
+    return (this.stateDb.raw.prepare(
+      `SELECT COUNT(*) AS active FROM scheduled_thread_actions
+       WHERE backend = ? AND thread_id = ? AND origin = 'agent'
+         AND status IN ('held', 'scheduled', 'dispatching', 'queued')`,
+    ).get(thread.backend, thread.threadId) as { active: number }).active;
+  }
+
+  agentFollowUpProtection(
+    thread: { backend: string; threadId: string },
+    now: number,
+  ): AgentFollowUpProtection {
+    const guard = this.readAgentFollowUpGuard(thread);
+    const effectiveNow = Math.max(now, guard.lastFiredAt ?? now);
+    return {
+      firedInWindow: guard.fired.filter((entry) =>
+        entry.at > effectiveNow - AGENT_FOLLOW_UP_FIRED_WINDOW_MS).length,
+      ...(guard.suspendedAt !== undefined ? { suspendedAt: guard.suspendedAt } : {}),
+    };
+  }
+
+  rearmAgentFollowUps(thread: { backend: string; threadId: string }): void {
+    this.stateDb.raw.prepare(
+      "DELETE FROM thread_agent_follow_up_guards WHERE backend = ? AND thread_id = ?",
+    ).run(thread.backend, thread.threadId);
+  }
+
+  takeSuspendedAgentFollowUpThreads(): Array<{ backend: ScheduledThreadAction["backend"]; threadId: string }> {
+    const threads = this.suspendedAgentFollowUpThreads;
+    this.suspendedAgentFollowUpThreads = [];
+    return threads;
+  }
+
+  private readAgentFollowUpGuard(thread: { backend: string; threadId: string }): AgentFollowUpGuard {
+    const row = this.stateDb.raw.prepare(
+      "SELECT suspended_at, payload FROM thread_agent_follow_up_guards WHERE backend = ? AND thread_id = ?",
+    ).get(thread.backend, thread.threadId) as { suspended_at: number | null; payload: string } | undefined;
+    if (!row) return { fired: [] };
+    // The column is the authority: the due queries read it without the payload.
+    const suspended = row.suspended_at !== null ? { suspendedAt: row.suspended_at } : {};
+    let payload: Partial<AgentFollowUpGuard>;
+    try {
+      payload = JSON.parse(row.payload) as Partial<AgentFollowUpGuard>;
+      if (!payload || typeof payload !== "object") throw new Error("Not a guard payload");
+    } catch {
+      return { fired: [], unreadable: true, ...suspended };
+    }
+    return {
+      fired: Array.isArray(payload.fired) ? payload.fired : [],
+      ...(typeof payload.lastFiredAt === "number" ? { lastFiredAt: payload.lastFiredAt } : {}),
+      ...suspended,
+    };
+  }
+
+  private writeAgentFollowUpGuard(
+    thread: { backend: string; threadId: string },
+    guard: AgentFollowUpGuard,
+  ): void {
+    this.stateDb.raw.prepare(
+      `INSERT INTO thread_agent_follow_up_guards(backend, thread_id, suspended_at, payload)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(backend, thread_id) DO UPDATE SET
+         suspended_at = excluded.suspended_at, payload = excluded.payload`,
+    ).run(
+      thread.backend,
+      thread.threadId,
+      guard.suspendedAt ?? null,
+      JSON.stringify({ fired: guard.fired, lastFiredAt: guard.lastFiredAt }),
+    );
+  }
+
+  /**
+   * The guard's answer for one dispatch claim, read inside the claim's own
+   * immediate transaction. An admitted claim returns the guard to store with
+   * it; a refused one has already recorded the suspension.
+   */
+  private reserveAgentFollowUp(
+    thread: { backend: ScheduledThreadAction["backend"]; threadId: string },
+    actionId: string,
+    now: number,
+  ): AgentFollowUpGuard | "unchanged" | undefined {
+    const guard = this.readAgentFollowUpGuard(thread);
+    if (guard.suspendedAt !== undefined) return undefined;
+    if (guard.unreadable) {
+      // Suspended rather than thrown: a throw here would stop every thread's
+      // scheduled actions, and a fresh allowance would defeat the guard.
+      this.writeAgentFollowUpGuard(thread, { fired: [], suspendedAt: now });
+      this.suspendedAgentFollowUpThreads.push({ backend: thread.backend, threadId: thread.threadId });
+      return undefined;
+    }
+    const effectiveNow = Math.max(now, guard.lastFiredAt ?? now);
+    const fired = guard.fired.filter((entry) =>
+      entry.at > effectiveNow - AGENT_FOLLOW_UP_FIRED_WINDOW_MS);
+    // A held or re-admitted follow-up already spent its slot.
+    if (fired.some((entry) => entry.id === actionId)) return "unchanged";
+    if (fired.length >= AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW) {
+      this.writeAgentFollowUpGuard(thread, { ...guard, fired, suspendedAt: effectiveNow });
+      this.suspendedAgentFollowUpThreads.push({ backend: thread.backend, threadId: thread.threadId });
+      return undefined;
+    }
+    return { fired: [...fired, { id: actionId, at: effectiveNow }], lastFiredAt: effectiveNow };
+  }
+
   get(id: string): ScheduledThreadAction | undefined {
     const row = this.stateDb.raw
       .prepare(
@@ -141,18 +285,21 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
 
   /** Bounded metadata for Waiting for. History is admitted only on panel demand. */
   listPendingWakes(thread: { backend: string; threadId: string; endedLimit: number }): PendingWakeScheduledActions {
+    // The guard is read in this statement, so a suspended follow-up costs
+    // the Waiting for projection no extra query.
     const active = this.stateDb.raw.prepare(
-      `SELECT ` + ROW_COLUMNS + ` FROM scheduled_thread_actions
+      `SELECT ` + ROW_COLUMNS + `, ` + SUSPENDED_AGENT_FOLLOW_UP + ` AS follow_up_suspended
+       FROM scheduled_thread_actions
        WHERE backend = ? AND thread_id = ? AND status IN ('scheduled', 'held')
        ORDER BY CASE WHEN status = 'scheduled' THEN 0 ELSE 1 END, scheduled_for, created_at, action_id LIMIT 101`,
-    ).all(thread.backend, thread.threadId) as ScheduledThreadActionRow[];
+    ).all(thread.backend, thread.threadId) as Array<ScheduledThreadActionRow & { follow_up_suspended?: number }>;
     const ended = thread.endedLimit === 0 ? [] : this.stateDb.raw.prepare(
       `SELECT ` + ROW_COLUMNS + ` FROM scheduled_thread_actions
        WHERE backend = ? AND thread_id = ? AND status IN ('started', 'cancelled', 'failed')
        ORDER BY updated_at DESC, action_id DESC LIMIT ?`,
     ).all(thread.backend, thread.threadId, thread.endedLimit) as ScheduledThreadActionRow[];
     let incomplete = active.length > 100;
-    const actions = [...active.slice(0, 100), ...ended].map((row) => {
+    const actions = [...active.slice(0, 100), ...ended].map((row: ScheduledThreadActionRow & { follow_up_suspended?: number }) => {
       let displayText = "";
       try {
         if (!row.payload_ref) throw new Error("Missing scheduled payload");
@@ -167,7 +314,8 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         incomplete = true;
       }
       return { id: row.action_id, kind: row.kind, origin: row.origin, status: row.status,
-        scheduledFor: row.scheduled_for, queueEntryId: row.queue_entry_id ?? undefined, displayText, createdAt: row.created_at, updatedAt: row.updated_at };
+        scheduledFor: row.scheduled_for, queueEntryId: row.queue_entry_id ?? undefined, displayText, createdAt: row.created_at, updatedAt: row.updated_at,
+        ...(row.follow_up_suspended ? { followUpSuspended: true as const } : {}) };
     });
     return { actions, ...(incomplete ? { incomplete: true as const } : {}) };
   }
@@ -281,7 +429,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       .prepare(
         `SELECT scheduled_for
          FROM scheduled_thread_actions
-         WHERE status = 'scheduled'
+         WHERE status = 'scheduled' AND NOT ` + SUSPENDED_AGENT_FOLLOW_UP + `
          ORDER BY scheduled_for ASC, created_at ASC
          LIMIT 1`,
       )
@@ -339,30 +487,61 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     return this.transition(id, ["failed"], { status: "cancelled" }, now);
   }
 
+  /**
+   * An agent follow-up reserves its slot in the thread's loop guard in this
+   * same immediate transaction, so two owners cannot spend one allowance and
+   * a crash cannot keep a claim without its reservation.
+   */
   claim(id: string, params: ClaimParams): ScheduledThreadAction | undefined {
-    return this.transition(
-      id,
-      ["held", "scheduled"],
-      { status: "dispatching" },
-      params.now,
-      {
-        claimOwner: params.ownerId,
-        claimExpiresAt: params.leaseExpiresAt,
-      },
-    );
+    return this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw.prepare(
+        `SELECT backend, thread_id, origin FROM scheduled_thread_actions
+         WHERE action_id = ? AND status IN ('held', 'scheduled')`,
+      ).get(id) as {
+        backend: ScheduledThreadAction["backend"];
+        thread_id: string;
+        origin: ScheduledThreadActionOrigin;
+      } | undefined;
+      if (!row) return undefined;
+      const thread = { backend: row.backend, threadId: row.thread_id };
+      const reservation = row.origin === "agent"
+        ? this.reserveAgentFollowUp(thread, id, params.now)
+        : "unchanged";
+      if (reservation === undefined) return undefined;
+      const claimed = this.transition(
+        id,
+        ["held", "scheduled"],
+        { status: "dispatching" },
+        params.now,
+        {
+          claimOwner: params.ownerId,
+          claimExpiresAt: params.leaseExpiresAt,
+        },
+      );
+      if (claimed && reservation !== "unchanged") this.writeAgentFollowUpGuard(thread, reservation);
+      return claimed;
+    }).immediate();
   }
 
   claimNextDue(params: ClaimParams): ScheduledThreadAction | undefined {
     return this.stateDb.raw.transaction(() => {
-      const row = this.stateDb.raw.prepare(
-        `SELECT action_id
-         FROM scheduled_thread_actions
-         WHERE status = 'scheduled' AND scheduled_for <= ?
-         ORDER BY scheduled_for ASC, created_at ASC
-         LIMIT 1`,
-      ).get(params.now) as { action_id: string } | undefined;
-      return row ? this.claim(row.action_id, params) : undefined;
-    })();
+      // A claim the guard refuses suspends its thread, which takes that
+      // thread's follow-ups out of the next read. Other due work goes on.
+      for (let attempt = 0; attempt < 64; attempt += 1) {
+        const row = this.stateDb.raw.prepare(
+          `SELECT action_id
+           FROM scheduled_thread_actions
+           WHERE status = 'scheduled' AND scheduled_for <= ?
+             AND NOT ` + SUSPENDED_AGENT_FOLLOW_UP + `
+           ORDER BY scheduled_for ASC, created_at ASC
+           LIMIT 1`,
+        ).get(params.now) as { action_id: string } | undefined;
+        if (!row) return undefined;
+        const claimed = this.claim(row.action_id, params);
+        if (claimed) return claimed;
+      }
+      return undefined;
+    }).immediate();
   }
 
   markQueued(
@@ -414,6 +593,27 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       now,
       { clearClaim: true, expectedOwner: ownerId },
     );
+  }
+
+  markHeldStarted(
+    id: string,
+    queueEntryId: string,
+    turnId: string | undefined,
+    now: number,
+  ): ScheduledThreadAction | undefined {
+    return this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw.prepare(
+        "SELECT queue_entry_id FROM scheduled_thread_actions WHERE action_id = ? AND status = 'held'",
+      ).get(id) as { queue_entry_id: string | null } | undefined;
+      if (row?.queue_entry_id !== queueEntryId) return undefined;
+      return this.transition(
+        id,
+        ["held"],
+        { status: "started", turnId, errorMessage: undefined },
+        now,
+        { clearClaim: true },
+      );
+    }).immediate();
   }
 
   markFailed(
@@ -493,6 +693,21 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
               now,
               { clearClaim: true, requireExpiredAt: now },
             )
+          : current?.origin === "agent" && row.status === "queued"
+            // The in-memory queue may have started this follow-up just before
+            // the owner died. An agent's own wake is never admitted twice.
+            ? this.transition(
+                row.action_id,
+                ["queued"],
+                {
+                  status: "failed",
+                  queueEntryId: undefined,
+                  errorMessage:
+                    "PwrAgent stopped while this follow-up waited behind another turn. It was not sent again, because it may already have started. Check the thread before scheduling it again.",
+                },
+                now,
+                { clearClaim: true, requireExpiredAt: now },
+              )
           : row.status === "dispatching"
             ? this.transition(
                 row.action_id,

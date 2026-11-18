@@ -20,7 +20,7 @@ panel requests up to eight ended rows. Each source reads the selected thread:
 | PR watches | The thread's active watches; ended rows only on panel demand. |
 | Auto-fix | The selected thread's PRs, using existing election indexes. Each election stops at its first eligible owner; later competitors are not read. Candidate eligibility is hydrated once per owner per build. |
 | Dependencies | Active waiting/ready registrations; ended rows ordered by update time only on panel demand. |
-| Scheduled actions | Up to 100 active metadata rows and the requested ended rows. No execution input or attachment leaves the source reader. |
+| Scheduled actions | Up to 100 active metadata rows and the requested ended rows. No execution input or attachment leaves the source reader. An agent follow-up is one of these rows, with origin `agent`. The same statement reads whether the thread's loop guard suspends it, so the flag adds no query. |
 | Monitors | Live delegations from memory; ended monitor summaries from an index ordered by completion time, independently of other sub-agent cards. |
 | Claude tasks | Background tasks from the thread's live session; no provider history read. |
 | Claude wake-ups | `/loop` wake-ups and session crons from the thread's live session, from memory. No stop: only Claude can cancel one. |

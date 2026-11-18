@@ -1,5 +1,6 @@
 import { memo, useState, type ReactNode } from "react";
 import {
+  AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW,
   THREAD_PR_WATCH_CONTROL_CAPABILITY,
   buildPullRequestStatusKey,
   graphemePrefix,
@@ -56,6 +57,9 @@ type Group = { id: string; label: string; aside?: string; wakes: ThreadPendingWa
 export type HeldMessageWake = Extract<ThreadPendingWake, { kind: "held_message" }>;
 
 type BackendWake = Extract<ThreadPendingWake, { kind: "backend_wake" }>;
+
+/** The busy key of the loop-guard rearm, which belongs to no single wake. */
+const REARM_FOLLOW_UPS_KEY = "rearm-follow-ups";
 
 /** Ended rows one list shows. */
 const ENDED_ROWS = 8;
@@ -135,6 +139,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
   const notice = readHoldNotice(props.thread, wakes);
+  const followUpsSuspended = wakes.some((wake) => wake.kind === "scheduled_action" && wake.followUpSuspended);
   // A peer sends a held wake-up only through its project's release.
   const canSendHeld = (wake: ThreadPendingWake): boolean => wake.held?.kind === "project_paused"
     && Boolean(props.onSendHeldNow)
@@ -171,6 +176,31 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
                 }}
               >
                 Unlock
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {followUpsSuspended ? (
+          <div className="waiting-for-panel__hold" role="note">
+            <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
+            <span className="waiting-for-panel__hold-text">
+              <span className="waiting-for-panel__hold-title">Agent follow-ups suspended</span>
+              <span className="pr-watch-list__sub">
+                {`The agent woke this thread ${AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW} times in 24 hours, so loop protection stopped its follow-ups. Check what it is waiting on before you rearm. `}
+                {peer ? `Rearm on ${props.ownerLabel ?? "the thread's own machine"}.` : null}
+              </span>
+            </span>
+            {!peer ? (
+              <button
+                type="button"
+                className="pr-watch-list__action"
+                disabled={busy.has(REARM_FOLLOW_UPS_KEY)}
+                onClick={() => run(REARM_FOLLOW_UPS_KEY, async () => {
+                  const response = await props.controller.rearmFollowUps();
+                  if (!response.ok) throw new Error(response.error.message);
+                })}
+              >
+                Rearm follow-ups
               </button>
             ) : null}
           </div>
@@ -229,7 +259,8 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
                         Send Now
                       </button>
                     ) : null}
-                    {wake.kind === "scheduled_action" && wake.status === "scheduled" && !peer && props.onSendScheduledNow ? (
+                    {/* A suspended follow-up cannot be sent until the guard is rearmed. */}
+                    {wake.kind === "scheduled_action" && wake.status === "scheduled" && !wake.followUpSuspended && !peer && props.onSendScheduledNow ? (
                       <button
                         type="button"
                         className="pr-watch-list__action"
@@ -461,7 +492,8 @@ function describeWake(
       };
     }
     case "scheduled_action": {
-      const noun = wake.actionKind === "review" ? "Review" : "Message";
+      // The agent set this one for itself; the operator's are messages.
+      const noun = wake.actionKind === "review" ? "Review" : wake.createdBy === "agent" ? "Follow-up" : "Message";
       const plainTitle = wake.status === "held"
         ? `${noun} held`
         : wake.wakesAt !== undefined && wake.wakesAt > now
@@ -475,7 +507,9 @@ function describeWake(
         icon: <ClockIcon size={12} />,
         title,
         plainTitle,
-        sub: <>{quote}{wake.status === "held" ? "Waits for you to release it." : `${creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(wake.createdAt ?? now, now)}.`}{transient}</>,
+        sub: <>{quote}{wake.status === "held" ? "Waits for you to release it."
+          : `${wake.createdBy === "agent" ? "Set by the agent" : creatorLabel(wake.createdBy, ownerLabel)}, ${formatWatchTime(wake.createdAt ?? now, now)}.`}
+          {wake.followUpSuspended ? <span className="waiting-for-panel__held">{" Suspended by loop protection."}</span> : null}{transient}</>,
       };
     }
     case "pr_watch": {

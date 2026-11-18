@@ -149,6 +149,9 @@ export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
   readonly federationHandler: RegistryHandlers["federationHandler"];
   readonly federatedThreadInspectionHandler: RegistryHandlers["federatedThreadInspectionHandler"];
   readonly threadDependencyToolHandler: RegistryHandlers["threadDependencyToolHandler"];
+  readonly agentFollowUpToolHandler: RegistryHandlers["agentFollowUpToolHandler"];
+  /** A managed Research worker, which works to its run's deadline and no later. */
+  isResearchWorker(thread: { backend: AppServerBackendKind; threadId: string }): boolean;
   readonly threadPrAutoDispatchHandler: RegistryHandlers["threadPrAutoDispatchHandler"];
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly gitWorkingStateService: GitWorkingStateService;
@@ -558,6 +561,23 @@ export class ThreadInspectionTools {
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
       }, await this.host().readCausalMessagingContext(request.context), `agent:${request.context.backend}:${request.context.threadId}`);
+    }
+
+    if (request.operation === "schedule_follow_up") {
+      const host = this.host();
+      if (!host.agentFollowUpToolHandler) return threadInspectionFailure("unsupported_operation", "Follow-ups are not available.");
+      // As handoff_task: a worker's time and worker limit belong to its run.
+      // A follow-up would wake it past the run's deadline.
+      if (host.isResearchWorker(request.context)) {
+        return threadInspectionFailure("forbidden", "Research workers cannot schedule follow-ups; a run ends at its deadline. Post a finding and let the coordinating thread decide what to check later.");
+      }
+      // The thread is the caller's. Arguments cannot name another thread,
+      // an actor or a role; the turn's stored origin supplies the contact.
+      return await host.agentFollowUpToolHandler(
+        request.args,
+        { backend: request.context.backend, threadId: request.context.threadId },
+        await host.readCausalMessagingContext(request.context),
+      );
     }
 
     if (request.operation === "mark_project_read") {
