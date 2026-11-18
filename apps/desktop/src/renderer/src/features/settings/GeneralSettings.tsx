@@ -263,6 +263,8 @@ export function GeneralSettings(props: {
     interactiveSvgAutoOpen?: boolean;
   }) => Promise<void>;
   onHtmlPreviewRunScriptsChange: (value: boolean) => Promise<void>;
+  onMarkdownMathRenderingChange: (value: boolean) => Promise<void>;
+  onIncrementalMarkdownRenderingChange: (value: boolean) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -292,6 +294,12 @@ export function GeneralSettings(props: {
       ? interactiveSvgSkipNotice
       : interactiveSvgAutoOpen;
   const htmlPreviewRunScripts = props.snapshot.general.htmlPreviewRunScripts;
+  const markdownMathRendering =
+    props.snapshot.general.markdown?.mathRendering
+    ?? { value: true, source: "default" as const };
+  const incrementalMarkdownRendering =
+    props.snapshot.general.markdown?.incrementalRendering
+    ?? { value: true, source: "default" as const };
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const themedDockIcon = props.snapshot.general.appearance.themedDockIcon;
@@ -547,6 +555,29 @@ export function GeneralSettings(props: {
             onChange={(next) => {
               return props.onAutoFixReviewsChange(next);
             }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection eyebrow="General" title="Markdown rendering">
+        <div className="settings-fields">
+          <ToggleField
+            checked={incrementalMarkdownRendering.value}
+            disabled={props.saving}
+            label="Incremental rendering"
+            sub="Reuse finished Markdown blocks while a response streams, instead of parsing the whole message again."
+            help="Off uses the standard renderer, which re-parses the full message on every update."
+            source={sourceBadge(incrementalMarkdownRendering)}
+            onChange={props.onIncrementalMarkdownRenderingChange}
+          />
+          <ToggleField
+            checked={markdownMathRendering.value}
+            disabled={props.saving}
+            label="Math rendering"
+            sub="Typeset \(…\) and \[…\] expressions with KaTeX."
+            help="KaTeX loads only for messages that may contain math. Off shows the Markdown source as written."
+            source={sourceBadge(markdownMathRendering)}
+            onChange={props.onMarkdownMathRenderingChange}
           />
         </div>
       </SettingsSection>

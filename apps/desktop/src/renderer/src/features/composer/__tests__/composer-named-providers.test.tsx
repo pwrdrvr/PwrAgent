@@ -232,7 +232,7 @@ describe("named Codex model providers in the composer", () => {
     });
   });
 
-  it("names the provider of the default model when the launchpad has chosen none", () => {
+  it("keeps an unset OpenAI choice on OpenAI when an endpoint marks its model current", () => {
     const withMathosDefault = {
       ...codex,
       launchpadOptions: {
@@ -249,8 +249,31 @@ describe("named Codex model providers in the composer", () => {
         skills={[]}
       />,
     );
-    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "@mathos/mathos-model-0");
+    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
+    expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("OpenAI");
+  });
+
+  it("restores endpoint defaults and access independently of OpenAI", async () => {
+    const patches = renderLaunchpad({
+      ...codex,
+      modelProviderDefaults: {
+        "codex-provider:mathos": {
+          model: "@mathos/mathos-model-9", reasoningEffortsByModel: {}, executionMode: "auto",
+        },
+      },
+    }, { ...initialLaunchpad, executionMode: "full-access" });
+    fireEvent.click(within(openDropdown("Provider")).getByRole("option", { name: /MathOS/ }));
+    await waitFor(() => expect(patches.at(-1)).toMatchObject({
+      backend: "codex", codexModelProviderId: "mathos", model: "@mathos/mathos-model-9", executionMode: "auto",
+    }));
+    fireEvent.click(within(openDropdown("Provider")).getByRole("option", { name: "OpenAI" }));
+    await waitFor(() => expect(patches.at(-1)).toMatchObject({ model: "gpt-6-sol", executionMode: "full-access" }));
+  });
+
+  it("keeps an endpoint selected after its model default is reset", () => {
+    renderLaunchpad(codex, { ...initialLaunchpad, codexModelProviderId: "mathos", model: undefined });
     expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("MathOS");
+    expect(composerDropdownOptionLabels(openDropdown("Model"))).toEqual(["gpt-oss-120b", ...MATHOS_MODELS]);
   });
 
   it("keeps Refuseless's identical model id apart from MathOS's", async () => {

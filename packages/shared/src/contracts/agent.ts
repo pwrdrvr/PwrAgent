@@ -1113,6 +1113,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "prompt"
       | "editorDocument"
       | "backend"
+      | "codexModelProviderId"
       | "executionMode"
       | "model"
       | "reasoningEffort"
@@ -1547,6 +1548,8 @@ export type AgentEvent = {
    * raw params are expensive for React to parse on every update.
    */
   rendererActivityEntry?: AppServerThreadActivityEntry;
+  /** Owner-selected pricing timestamp for a live token usage notification. */
+  usagePricingAt?: number;
   /** Safe, retained previews resolved by main at an item completion boundary. */
   rendererImageParts?: AppServerThreadImagePart[];
 };

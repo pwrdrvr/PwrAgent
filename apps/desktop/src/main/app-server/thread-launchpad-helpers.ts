@@ -133,6 +133,8 @@ export async function resetLaunchpadAfterMaterialize(params: {
     directoryLabel: launchpad.directoryLabel,
     directoryPath: launchpad.directoryPath,
     backend: defaults.backend,
+    codexModelProviderId: defaults.codexModelProviderId,
+    providerSettings: defaults.providerSettings,
     executionMode: defaults.executionMode,
     model: defaults.model,
     reasoningEffort: defaults.reasoningEffort,

@@ -8,7 +8,8 @@ import {
   codexProviderIdOfModel,
   describeCodexModelProviderEntry,
   parseProviderPickerValue,
-  providerPickerValue,
+  navigationLaunchpadProviderKey,
+  resolveDefaultLaunchpadExecutionMode,
   type BackendModelOption,
 } from "@pwragent/shared";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
@@ -570,6 +571,7 @@ export type ComposerProps = {
         | "prompt"
         | "editorDocument"
         | "backend"
+        | "codexModelProviderId"
         | "executionMode"
         | "model"
         | "reasoningEffort"
@@ -11043,6 +11045,7 @@ function useComposerController(props: ComposerProps) {
       Pick<
         NavigationLaunchpadDraft,
         | "backend"
+        | "codexModelProviderId"
         | "executionMode"
         | "model"
         | "reasoningEffort"
@@ -11577,7 +11580,15 @@ function useComposerController(props: ComposerProps) {
     const prAutoDispatchAllowed = props.prAutoDispatchAllowed ?? true;
     const prAutoDispatchAvailable =
       backgroundPrPollingEnabled && prAutoDispatchAllowed;
-    const modelOptions = backend?.launchpadOptions?.models ?? [];
+    const activeProviderKey = props.launchpad
+      ? navigationLaunchpadProviderKey(props.launchpad)
+      : backend?.kind;
+    const modelOptions = backend?.kind === "codex" && props.launchpad
+      ? buildProviderPickerEntries([backend]).find((entry) => entry.value === activeProviderKey)?.models ?? []
+      : backend?.launchpadOptions?.models ?? [];
+    const modelBackend = backend ? {
+      ...backend, launchpadOptions: { ...backend.launchpadOptions, models: modelOptions },
+    } : undefined;
     // Codex model providers list their models after Codex's own, one titled
     // section each. Codex fixes a thread's provider when it starts, so an
     // existing thread offers only its own provider's models.
@@ -11598,7 +11609,7 @@ function useComposerController(props: ComposerProps) {
       modelOptions.find((option) => option.id === currentSettings?.model) ??
       (currentSettings?.model
         ? { id: currentSettings.model, label: currentSettings.model }
-        : getDefaultModelOption(backend));
+        : getDefaultModelOption(modelBackend));
     // Image attachments are allowed unless the active model explicitly reports
     // no image support (Codex Spark) or the ACP agent advertises
     // `prompt.image: false`. `undefined` on either signal means "assume
@@ -11620,12 +11631,13 @@ function useComposerController(props: ComposerProps) {
       : undefined;
     const profileModelDefaults = backend
       ? filesystemFederationTarget?.scope === "remote"
-        ? backend.modelDefaults
-        : props.providerModelDefaults?.[backend.kind]
+        ? backend.modelProviderDefaults?.[activeProviderKey ?? backend.kind]
+          ?? (activeProviderKey === backend.kind ? backend.modelDefaults : undefined)
+        : props.providerModelDefaults?.[activeProviderKey ?? backend.kind]
       : undefined;
     const profileModelOption =
       modelOptions.find((option) => option.id === profileModelDefaults?.model)
-      ?? getDefaultModelOption(backend);
+      ?? getDefaultModelOption(modelBackend);
     const profileReasoningOptions = getReasoningEffortsForModel(
       backend,
       profileModelOption,
@@ -14686,10 +14698,7 @@ function useComposerController(props: ComposerProps) {
               id="composer-provider"
               ariaLabel="Provider"
               disabled={launchpadSubmitting}
-              value={providerPickerValue(
-                props.launchpad.backend,
-                launchpadModelScope?.model ?? props.launchpad.model,
-              )}
+              value={navigationLaunchpadProviderKey(props.launchpad)}
               options={providerPickerEntries.map((entry) => entry.codexModelProviderId
                 ? {
                     label: entry.label ?? entry.codexModelProviderId,
@@ -14708,7 +14717,7 @@ function useComposerController(props: ComposerProps) {
                 const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
                 const pickedEntry = providerPickerEntries.find((entry) => entry.value === value);
                 const hasRememberedModel = Boolean(
-                  props.launchpad.providerSettings?.[nextBackend]?.model,
+                  props.launchpad.providerSettings?.[value]?.model,
                 );
                 if (nextBackend.startsWith("acp:") && !hasRememberedModel) {
                   pendingProviderSelectionKeyRef.current =
@@ -14727,10 +14736,11 @@ function useComposerController(props: ComposerProps) {
                   );
                 }
                 const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
-                const remembered = props.launchpad.providerSettings?.[nextBackend];
+                const remembered = props.launchpad.providerSettings?.[value];
                 const configuredDefaults = filesystemFederationTarget?.scope === "remote"
-                  ? nextSummary?.modelDefaults
-                  : props.providerModelDefaults?.[nextBackend] ?? nextSummary?.modelDefaults;
+                  ? nextSummary?.modelProviderDefaults?.[value] ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined)
+                  : props.providerModelDefaults?.[value] ?? nextSummary?.modelProviderDefaults?.[value]
+                    ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined);
                 // A Codex entry, OpenAI's own or a model provider's, offers
                 // only that provider's models, so its model is chosen there.
                 const ownerModels = nextBackend === "codex"
@@ -14749,6 +14759,12 @@ function useComposerController(props: ComposerProps) {
                   : undefined;
                 handleLaunchpadPatch({
                   backend: nextBackend,
+                  ...(nextBackend === "codex" ? {
+                    codexModelProviderId: picked.codexModelProviderId,
+                    executionMode: remembered?.executionMode
+                      ?? configuredDefaults?.executionMode
+                      ?? resolveDefaultLaunchpadExecutionMode(value),
+                  } : {}),
                   // A local Codex choice names its provider through the model
                   // id, so moving between Codex entries sets the model. The
                   // remembered effort, Fast mode and tier still restore as
@@ -15107,7 +15123,7 @@ function useComposerController(props: ComposerProps) {
                     ...(filesystemFederationTarget?.scope === "remote" ? {
                       reasoningEffort: nextSupportsReasoning
                         ? getReasoningEffortValue(backend, nextModelOption,
-                            props.launchpad.providerSettings?.[backend.kind]?.reasoningEffortsByModel?.[model]
+                            props.launchpad.providerSettings?.[navigationLaunchpadProviderKey(props.launchpad)]?.reasoningEffortsByModel?.[model]
                               ?? props.launchpad.reasoningEffort)
                         : undefined,
                       serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")

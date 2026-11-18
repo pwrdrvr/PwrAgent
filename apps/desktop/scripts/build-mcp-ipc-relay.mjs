@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCachedNativeHelper } from "./native-helper-cache.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packaged = false, identityTest = false } = {}) {
+function compileMcpIpcRelay({ arch = process.arch, outputRoot = root, packaged = false, identityTest = false } = {}, captureLinkInputs = false) {
   if (!["darwin", "linux", "win32"].includes(process.platform)) {
     throw new Error(`MCP IPC peer verification is unsupported on ${process.platform}.`);
   }
@@ -43,19 +44,41 @@ export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packa
   } else {
     if (process.platform === "linux" && arch !== process.arch) throw new Error("Build the Linux IPC relay on its target architecture.");
     command = "cc";
-    args = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
-      ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0", "-arch", arch === "x64" ? "x86_64" : arch] : []), source, "-o", output];
+    args = posixArguments(arch, source, output);
   }
-  const result = spawnSync(command, args, {
-    stdio: "inherit",
+  const result = spawnSync(command, [...args, ...(captureLinkInputs ? ["-Wl,-t"] : [])], {
+    ...(captureLinkInputs ? { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 } : { stdio: "inherit" }),
     // cmd.exe's quote grammar is different from CommandLineToArgvW. /s
     // removes the outer quote pair; libuv must not backslash-escape it.
     ...(process.platform === "win32" && command !== "cl.exe" ? { windowsVerbatimArguments: true } : {}),
   });
   if (result.error || result.status !== 0) {
+    rmSync(output, { force: true });
+    if (captureLinkInputs) process.stderr.write((result.stderr ?? "").slice(-8192));
     throw new Error(`MCP IPC relay build failed: ${result.error?.message ?? result.status}. Windows builds require a Visual Studio developer environment.`);
   }
-  return output;
+  if (captureLinkInputs && result.stderr) process.stderr.write(result.stderr.slice(-8192));
+  return captureLinkInputs ? { output, trace: result.stdout + "\n" + result.stderr } : output;
+}
+
+function posixArguments(arch, source, output) {
+  return ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
+    ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0", "-arch", arch === "x64" ? "x86_64" : arch] : []), source, "-o", output];
+}
+
+export function buildMcpIpcRelay({ arch = process.arch, outputRoot = root, packaged = false, identityTest = false, reuse = false, destination } = {}) {
+  const options = { arch, outputRoot, packaged, identityTest };
+  if (!["darwin", "linux"].includes(process.platform)) return compileMcpIpcRelay(options);
+  const directory = join(outputRoot, "build", "mcp-ipc-relay", packaged ? "packaged" : `${process.platform}-${arch}`);
+  const output = join(directory, `mcp-ipc-${identityTest ? "identity-test" : "relay"}`);
+  const source = join(root, "native", "mcp-ipc-relay", identityTest ? "identity-test.c" : "main.c");
+  return buildCachedNativeHelper({ output, source, arch, reuse, destination, args: posixArguments(arch, source, output),
+    scripts: [fileURLToPath(import.meta.url), join(root, "scripts/install.mjs"), join(root, "scripts/build.mjs")],
+    build(temporaryRoot, capture) {
+      const result = compileMcpIpcRelay({ ...options, outputRoot: temporaryRoot }, capture);
+      return capture ? result : { output: result, trace: "" };
+    },
+  });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

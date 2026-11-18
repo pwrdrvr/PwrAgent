@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
+import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
   AcpThreadRewindPoint,
@@ -1080,6 +1082,17 @@ export class AcpAgentClient {
     this.rememberSessionIds(metadata);
     // A turn usually follows; keep an idle close from racing it.
     this.touchSession(metadata.sessionId);
+    // The caller may hold metadata from before a prompt recorded what the
+    // session was sent. That record is this client's, so keep the stored one.
+    const { agentInstructionsDigest: _captured, ...captured } = metadata;
+    const storedDigest = this.options.store.getSession(
+      this.options.backendId,
+      metadata.sessionId,
+    )?.agentInstructionsDigest;
+    metadata = {
+      ...captured,
+      ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
+    };
     if (this.idleClosedSessions.has(metadata.sessionId)) {
       this.options.store.upsertSession(metadata);
       await this.reopenIdleClosedSession(metadata.sessionId, {
@@ -1104,6 +1117,12 @@ export class AcpAgentClient {
     promptContent?: AcpPromptContentBlock[];
     parts?: AppServerThreadMessagePart[];
     turnId?: string;
+    /**
+     * The thread's current Agent instructions, or an empty string for none.
+     * Sent ahead of the prompt when this agent session has not been sent this
+     * text. Undefined leaves the prompt alone.
+     */
+    agentInstructions?: string;
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
@@ -1130,6 +1149,7 @@ export class AcpAgentClient {
       prompt: params.promptContent ?? textPrompt(params.prompt),
       sessionId: params.sessionId,
       turnId,
+      agentInstructions: params.agentInstructions?.trim(),
     });
     void promptRequest
       .then((result) => {
@@ -2166,6 +2186,7 @@ export class AcpAgentClient {
     prompt: AcpPromptContentBlock[];
     sessionId: string;
     turnId: string;
+    agentInstructions?: string;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
     const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
@@ -2183,14 +2204,36 @@ export class AcpAgentClient {
         timer.unref?.();
       };
     });
-    const sendPrompt = () => this.options.transport.request(
-      "session/prompt",
-      {
-        sessionId: params.protocolSessionId,
-        prompt: params.prompt,
-      },
-      ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
-    );
+    const sendPrompt = async () => {
+      // The agent keeps the block in the session's history, so a session
+      // loaded again (after an idle close or an app restart) is not sent it
+      // a second time. The stored record says what this agent session holds.
+      const instructions = params.agentInstructions;
+      const digest = instructions === undefined
+        ? undefined
+        : agentInstructionsDigest(params.protocolSessionId, instructions);
+      const sendInstructions = instructions !== undefined
+        && digest !== this.options.store.getSession(
+          this.options.backendId,
+          params.sessionId,
+        )?.agentInstructionsDigest;
+      const result = await this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: params.protocolSessionId,
+          prompt: sendInstructions
+            ? [...textPrompt(buildAcpAgentInstructionBlock(instructions)), ...params.prompt]
+            : params.prompt,
+        },
+        ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
+      );
+      // Recorded once the agent has answered the prompt. A prompt that fails
+      // leaves the session due the instructions again.
+      if (sendInstructions) {
+        this.recordDeliveredAgentInstructions(params.sessionId, digest);
+      }
+      return result;
+    };
     // The turn is already tracked, so no idle close can start now; one that
     // already released the session is undone first. A session whose MCP
     // servers list another agent tool catalog is reloaded the same way.
@@ -2254,6 +2297,22 @@ export class AcpAgentClient {
     throw new Error(
       `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
     );
+  }
+
+  /** One write per delivered block: the first delivery and each edit. */
+  private recordDeliveredAgentInstructions(
+    sessionId: string,
+    digest: string | undefined,
+  ): void {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return;
+    }
+    const { agentInstructionsDigest: _previous, ...rest } = metadata;
+    this.options.store.upsertSession({
+      ...rest,
+      ...(digest ? { agentInstructionsDigest: digest } : {}),
+    });
   }
 
   private recordPromptFailure(
@@ -2780,4 +2839,19 @@ function normalizeRewindTimestamp(value: unknown): number | undefined {
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Identifies the instruction text an agent session was sent. Empty text has
+ * no digest, which is also what a session that was sent nothing records. The
+ * session id is part of it, so a thread bound to a new agent session, which
+ * starts with an empty history, is sent the block again.
+ */
+function agentInstructionsDigest(
+  protocolSessionId: string,
+  instructions: string,
+): string | undefined {
+  return instructions
+    ? createHash("sha256").update(`${protocolSessionId}\0${instructions}`).digest("hex")
+    : undefined;
 }

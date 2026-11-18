@@ -52,6 +52,7 @@ export interface MessagingInboundHost {
   readonly pdfAttachmentStore: Pick<PdfAttachmentStore, "bindTurn">;
   readonly rememberAgentMessagingOrigin: (params: { binding: MessagingBindingRecord; event?: MessagingInboundEvent; navigation: MessagingNavigationContext; origin?: ActiveAgentMessagingOrigin; turnId: string; }) => void;
   readonly setActiveTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
+  readonly acceptStartedTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
   readonly getActiveTurn: (binding: MessagingBindingRecord) => MessagingActiveTurnSummary | undefined;
   readonly signalTurnActivity: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary, options?: { force?: boolean; reason?: string; refreshMs?: number; }) => Promise<void>;
   readonly reconcileActiveTurnFromThreadStatus: (binding: MessagingBindingRecord, reason: string, threadStatus: string | undefined) => Promise<MessagingActiveTurnSummary | undefined>;

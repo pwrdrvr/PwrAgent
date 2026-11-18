@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  buildProviderPickerEntries,
+  providerPickerValue,
   DECISION_PROVIDER_IDS,
   formatFilesystemPath,
   isValidatedDiscoveryCandidate,
@@ -120,6 +122,7 @@ type ThreadMigrationSourceGroup = {
 
 type PendingThreadMigration = {
   backend: BackendSummary;
+  providerKey: string;
   justScheduled?: boolean;
   model: string;
   reasoningEffort?: string;
@@ -1062,25 +1065,35 @@ function ProviderModelDefaultsSettings(props: {
   }>();
   const [applying, setApplying] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
-  const providers = props.backends.filter(
-    (backend) => (backend.launchpadOptions?.models?.length ?? 0) > 0,
-  );
+  const providers = buildProviderPickerEntries(props.backends).flatMap((entry) => {
+    const backend = props.backends.find((candidate) => candidate.kind === entry.backend);
+    if (!backend || (entry.models.length === 0 && !entry.codexModelProviderId)) return [];
+    return [{
+      key: entry.value,
+      backend: {
+        ...backend,
+        label: entry.label ?? backend.label,
+        launchpadOptions: { ...backend.launchpadOptions, models: entry.models },
+      },
+    }];
+  });
 
   const saveProvider = (
-    backend: BackendSummary,
+    providerKey: string,
     next: DesktopProviderModelDefaults | undefined,
   ): void => {
     const updated = { ...props.defaults };
     if (next) {
-      updated[backend.kind] = next;
+      updated[providerKey] = next;
     } else {
-      delete updated[backend.kind];
+      delete updated[providerKey];
     }
     void props.onSave(updated);
   };
 
   const previewThreadMigration = async (
     backend: BackendSummary,
+    providerKey: string,
     model: string,
     reasoningEffort?: string,
   ): Promise<void> => {
@@ -1088,12 +1101,13 @@ function ProviderModelDefaultsSettings(props: {
       setStatus("Thread migration is unavailable in this build.");
       return;
     }
-    const groups = await previews.readModelInventory(backend.kind).catch((error: unknown) => {
+    const inventory = await previews.readModelInventory(backend.kind).catch((error: unknown) => {
       if (isNavigationPreviewCancelled(error)) return undefined;
       setStatus(error instanceof Error ? error.message : String(error));
       return undefined;
     });
-    if (!groups) return;
+    if (!inventory) return;
+    const groups = inventory.filter((group) => providerPickerValue(backend.kind, group.model) === providerKey);
     if (groups.length === 0) {
       setStatus(`No existing ${backend.label} threads need a migration.`);
       return;
@@ -1104,7 +1118,7 @@ function ProviderModelDefaultsSettings(props: {
         option.label ?? option.id,
       ]),
     );
-    const currentMigration = props.migrations[backend.kind];
+    const currentMigration = props.migrations[providerKey];
     const sourceCounts = new Map<string, {
       acknowledgedCurrentRevisionCount: number;
       count: number;
@@ -1152,6 +1166,7 @@ function ProviderModelDefaultsSettings(props: {
     setPendingFastAction(undefined);
     setPendingMigration({
       backend,
+      providerKey,
       model,
       reasoningEffort,
       selectedSourceKeys: currentMigrationTargetsSelection
@@ -1182,7 +1197,7 @@ function ProviderModelDefaultsSettings(props: {
     if (threadCount === 0) return;
     if (
       migrationMatchesSelection(
-        props.migrations[pendingMigration.backend.kind],
+        props.migrations[pendingMigration.providerKey],
         pendingMigration,
       )
     ) {
@@ -1198,7 +1213,7 @@ function ProviderModelDefaultsSettings(props: {
       const createdAt = Date.now();
       const saved = await props.onSaveMigrations({
         ...props.migrations,
-        [pendingMigration.backend.kind]: {
+        [pendingMigration.providerKey]: {
           revision: `${createdAt}-${crypto.randomUUID()}`,
           model: pendingMigration.model,
           ...(pendingMigration.reasoningEffort
@@ -1298,13 +1313,13 @@ function ProviderModelDefaultsSettings(props: {
       description="Changing a model, reasoning, or access updates all launchpads for that provider in this profile. Existing threads keep their settings."
     >
       <div className="settings-fields">
-        {providers.map((backend) => {
+        {providers.map(({ backend, key }) => {
           const providerPendingMigration =
-            pendingMigration?.backend.kind === backend.kind
+            pendingMigration?.providerKey === key
               ? pendingMigration
               : undefined;
           const fastMode =
-            backend.kind === "codex"
+            key === "codex"
               ? {
                   allowed: props.codexFastAllowed,
                   pending: pendingFastAction,
@@ -1331,9 +1346,9 @@ function ProviderModelDefaultsSettings(props: {
               : undefined;
           return (
             <ProviderModelDefaultField
-              key={backend.kind}
+              key={key}
               backend={backend}
-              defaults={props.defaults[backend.kind]}
+              defaults={props.defaults[key]}
               disabled={
                 props.saving
                 || applying
@@ -1342,9 +1357,9 @@ function ProviderModelDefaultsSettings(props: {
               applying={applying}
               fastMode={fastMode}
               onMigrate={(model, reasoningEffort) => {
-                void previewThreadMigration(backend, model, reasoningEffort);
+                void previewThreadMigration(backend, key, model, reasoningEffort);
               }}
-              onChange={(next) => saveProvider(backend, next)}
+              onChange={(next) => saveProvider(key, next)}
             />
           );
         })}
@@ -1380,7 +1395,7 @@ function ProviderModelDefaultsSettings(props: {
       {pendingMigration ? (
         <ThreadMigrationDialog
           applying={applying}
-          currentMigration={props.migrations[pendingMigration.backend.kind]}
+          currentMigration={props.migrations[pendingMigration.providerKey]}
           migration={pendingMigration}
           onCancel={() => setPendingMigration(undefined)}
           onConfirm={() => void createThreadMigration()}

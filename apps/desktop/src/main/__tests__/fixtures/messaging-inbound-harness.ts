@@ -101,7 +101,8 @@ export async function messagingInboundHarness(options: {
     id: `fixture-event-${++sequence}`, kind: "text", actor: { platformUserId: "fixture-actor" }, channel, text, receivedAt: now, botMention: mention,
   });
   return {
-    controller, controllerOptions, backend, store, channel, trace, deliveries, starts, admissions, hooks, event,
+    db, controller, controllerOptions, backend, store, channel, trace, deliveries, starts, admissions, hooks, event,
+    setThreadStatus: (next: "idle" | "active") => { status = next; },
     finish: async (terminal: "completed" | "failed" | "cancelled", turnId = `fixture-turn-${starts.length}`) => {
       status = "idle";
       await controller.handleBackendEvent({ backend: options.backend ?? "codex", notification: terminal === "failed" ? {

@@ -11,18 +11,17 @@ import type { Terminal } from "@xterm/xterm";
 // run the real @xterm/xterm and @xterm/addon-fit and model the browser
 // behavior jsdom lacks:
 //
-// - Text widths. A rendered element measures its text; one under `hidden`
-//   (display:none) measures 0, as in Chromium. xterm's WidthCache keeps only
-//   positive widths, so every cell drawn while hidden is measured again, and
-//   each measurement forces a style and layout flush.
-// - Char size. Chromium measures the cell with an OffscreenCanvas, which
-//   works while hidden, so a hidden terminal still has a valid cell size.
+// - Text widths. xterm's WidthCache measures each glyph with canvas text
+//   metrics on a 1x1 OffscreenCanvas per font variant. Canvas metrics do not
+//   depend on layout, so they are real while the pane is hidden.
+// - Char size. Chromium measures the cell with a 100x100 OffscreenCanvas,
+//   which also works while hidden, so a hidden terminal has a valid cell size.
 // - IntersectionObserver delivery, which pauses xterm's render loop.
 // - The device-pixel-ratio media query.
 //
-// Counters: `widthReads` is one WidthCache measurement (an offsetWidth read
-// after a textContent write). `zeroWidthReads` are the ones that measured a
-// hidden element. `rowRenders` is one rebuilt row element.
+// Counters: `widthReads` is one WidthCache measurement (a measureText call on
+// a 1x1 canvas). `rowRenders` is one rendered row element; emptying the rows
+// in xterm's clear() is not a render.
 
 const SESSION = "session-budget";
 const CHAR_WIDTH = 7;
@@ -42,7 +41,7 @@ const SCREEN = [
   "plain ascii abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ",
 ].join("\r\n");
 
-const xtermState = vi.hoisted(() => ({ instances: [] as Terminal[] }));
+const xtermState = vi.hoisted(() => ({ instances: [] as Terminal[], clearing: false }));
 
 vi.mock("@xterm/xterm", async (importActual) => {
   const actual = await importActual<typeof import("@xterm/xterm")>();
@@ -50,6 +49,20 @@ vi.mock("@xterm/xterm", async (importActual) => {
     constructor(...args: ConstructorParameters<typeof actual.Terminal>) {
       super(...args);
       xtermState.instances.push(this);
+    }
+    override open(parent: HTMLElement) {
+      super.open(parent);
+      // The DOM renderer's clear() empties each row. Mark it so the row
+      // counter can tell it from a render, which empties blank rows too.
+      const renderer = (this as unknown as {
+        _core: { _renderService: { _renderer: { value?: { clear(): void } } } };
+      })._core._renderService._renderer.value;
+      if (!renderer) return;
+      const clear = renderer.clear.bind(renderer);
+      renderer.clear = () => {
+        xtermState.clearing = true;
+        try { clear(); } finally { xtermState.clearing = false; }
+      };
     }
   }
   return { ...actual, Terminal: TrackedTerminal };
@@ -70,7 +83,7 @@ vi.mock("../../../lib/nerd-font-fallback", async (importActual) => {
   };
 });
 
-const counters = { widthReads: 0, zeroWidthReads: 0, rowRenders: 0 };
+const counters = { widthReads: 0, rowRenders: 0 };
 const viewport = { width: 720, height: 300 };
 const dprListeners = new Set<() => void>();
 const intersection = { observers: new Set<FakeIntersectionObserver>() };
@@ -78,7 +91,6 @@ const restorers: Array<() => void> = [];
 
 function resetCounters() {
   counters.widthReads = 0;
-  counters.zeroWidthReads = 0;
   counters.rowRenders = 0;
 }
 
@@ -156,13 +168,8 @@ function defineOn(target: object, key: string, descriptor: PropertyDescriptor) {
 function installBrowserModel() {
   defineOn(HTMLElement.prototype, "offsetWidth", {
     get(this: HTMLElement) {
-      if (!this.classList.contains("xterm-char-measure-element")) return 0;
-      const width = isRendered(this) ? textWidth(this.textContent ?? "") : 0;
-      if (this.parentElement?.classList.contains("xterm-width-cache-measure-container")) {
-        counters.widthReads += 1;
-        if (width === 0) counters.zeroWidthReads += 1;
-      }
-      return width;
+      return this.classList.contains("xterm-char-measure-element") && isRendered(this)
+        ? textWidth(this.textContent ?? "") : 0;
     },
   });
   defineOn(HTMLElement.prototype, "offsetHeight", {
@@ -174,22 +181,30 @@ function installBrowserModel() {
   const replaceChildren = Element.prototype.replaceChildren;
   defineOn(Element.prototype, "replaceChildren", {
     value(this: Element, ...nodes: Array<Node | string>) {
-      if (this.parentElement?.classList.contains("xterm-rows")) counters.rowRenders += 1;
+      if (!xtermState.clearing && this.parentElement?.classList.contains("xterm-rows")) {
+        counters.rowRenders += 1;
+      }
       return replaceChildren.apply(this, nodes);
     },
     writable: true,
   });
-  // Chromium's cell measurement: canvas text metrics, valid while hidden.
+  // Canvas text metrics, valid while hidden. WidthCache draws on 1x1
+  // canvases; the char-size measurement uses a larger one.
   defineOn(globalThis, "OffscreenCanvas", {
     value: class {
+      constructor(readonly width: number, readonly height: number) {}
       getContext() {
+        const isWidthCache = this.width === 1 && this.height === 1;
         return {
           font: "",
-          measureText: (text: string) => ({
-            width: textWidth(text),
-            fontBoundingBoxAscent: 12,
-            fontBoundingBoxDescent: CHAR_HEIGHT - 12,
-          }),
+          measureText: (text: string) => {
+            if (isWidthCache) counters.widthReads += 1;
+            return {
+              width: textWidth(text),
+              fontBoundingBoxAscent: 12,
+              fontBoundingBoxDescent: CHAR_HEIGHT - 12,
+            };
+          },
         };
       }
     },
@@ -363,7 +378,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     terminal.emit("\x1b[?1049h\x1b[Hfull-screen app 漢字\x1b[?1049l\r\nback at the prompt ┌┐\r\n");
     await settle();
 
-    expect(budget()).toEqual({ widthReads: 0, zeroWidthReads: 0, rowRenders: 0 });
+    expect(budget()).toEqual({ widthReads: 0, rowRenders: 0 });
     expect(onHiddenOutput).toHaveBeenCalled();
     expect(lineText(xterm, 0)).toContain("pwragent build ok passed");
     expect(xterm.buffer.active.getLine(xterm.buffer.active.cursorY - 1)?.translateToString(true))
@@ -382,9 +397,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     show({ visible: true });
     await settle();
 
-    const shown = budget();
-    expect(shown.zeroWidthReads).toBe(0);
-    expect(shown.widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
+    expect(budget().widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
     expect(spacingCorrections(container)).toEqual([]);
     expect(container.querySelector(".xterm-rows")).toHaveTextContent("漢字かな wide glyphs 한국어");
     expect(container.querySelector(".xterm-rows")).toHaveTextContent("e\u0301 combining a\u0308 o\u0302");
@@ -416,7 +429,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     act(() => { for (const observer of FakeResizeObserver.instances) observer.callback(); });
     await settle();
 
-    expect(budget()).toEqual({ widthReads: 0, zeroWidthReads: 0, rowRenders: 0 });
+    expect(budget()).toEqual({ widthReads: 0, rowRenders: 0 });
     // A fit re-sends the current grid; main deduplicates it, and re-sends
     // after a refused resize depend on that. It must not be a new grid.
     for (const [request] of terminal.raw.resizeIntegratedTerminal.mock.calls as unknown as Array<[unknown]>) {
@@ -459,9 +472,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     await settle();
     terminal.emit("more output with known glyphs 0123\r\n");
     await settle();
-    const hidden = budget();
-    expect(hidden.zeroWidthReads).toBe(0);
-    expect(hidden.widthReads).toBe(0);
+    expect(budget().widthReads).toBe(0);
 
     resetCounters();
     show({ visible: true });
@@ -480,7 +491,7 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
       for (const listener of [...dprListeners]) listener();
     });
     await settle();
-    expect(budget()).toEqual({ widthReads: 0, zeroWidthReads: 0, rowRenders: 0 });
+    expect(budget()).toEqual({ widthReads: 0, rowRenders: 0 });
     cleanup();
 
     xtermState.instances.length = 0;
@@ -495,7 +506,6 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     });
     await settle();
     const changed = budget();
-    expect(changed.zeroWidthReads).toBe(0);
     expect(changed.widthReads).toBeGreaterThan(0);
     expect(changed.widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
   });
@@ -511,13 +521,37 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     await act(async () => { resolveFont("Symbols Nerd Font Mono"); });
     await settle();
     expect(xterm.options.fontFamily).toContain("Symbols Nerd Font Mono");
-    expect(budget()).toEqual({ widthReads: 0, zeroWidthReads: 0, rowRenders: 0 });
+    expect(budget()).toEqual({ widthReads: 0, rowRenders: 0 });
 
     show({ visible: true });
     await settle();
-    const shown = budget();
-    expect(shown.zeroWidthReads).toBe(0);
-    expect(shown.widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
+    expect(budget().widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
+    expect(spacingCorrections(container)).toEqual([]);
+  });
+
+  it("applies a late Nerd Font to a pane hidden after it was shown, then shows real spacing", async () => {
+    let resolveFont!: (family: string) => void;
+    nerdFontState.lookup = new Promise((resolve) => { resolveFont = resolve; });
+    const terminal = terminalApi();
+    const { container, show } = mount(terminal.api, { visible: true });
+    const xterm = await attached();
+    show({ visible: false });
+    await settle();
+    resetCounters();
+
+    // xterm 6.0 measured the default spacing glyph from the DOM, so a font
+    // change while hidden read 0 and left every span with an inline
+    // letter-spacing correction once the pane was shown again.
+    await act(async () => { resolveFont("Symbols Nerd Font Mono"); });
+    await settle();
+    expect(xterm.options.fontFamily).toContain("Symbols Nerd Font Mono");
+    const hidden = budget();
+    expect(hidden.rowRenders).toBe(0);
+    expect(hidden.widthReads).toBeLessThanOrEqual(1);
+
+    show({ visible: true });
+    await settle();
+    expect(budget().widthReads).toBeLessThanOrEqual(distinctGlyphs(xterm));
     expect(spacingCorrections(container)).toEqual([]);
   });
 
@@ -537,10 +571,9 @@ describe("IntegratedTerminal render budget (real xterm)", () => {
     second.unmount();
     expect(shown.listeners.size).toBe(0);
     expect(document.querySelector(".xterm")).toBeNull();
-    expect(document.querySelector(".xterm-width-cache-measure-container")).toBeNull();
 
     resetCounters();
     await settle();
-    expect(budget()).toEqual({ widthReads: 0, zeroWidthReads: 0, rowRenders: 0 });
+    expect(budget()).toEqual({ widthReads: 0, rowRenders: 0 });
   });
 });

@@ -22,6 +22,33 @@ Read this before changing desktop configuration, profiles, runtime storage, deve
 
 ### Provider context configuration
 
+New-thread defaults use `[[models.model_provider_defaults]]`. `provider` is
+the provider-picker identity: `codex` for OpenAI,
+`codex-provider:<id>` for a registered Codex endpoint, or another backend id.
+Models remain qualified (`@<id>/<model>`) and execution still uses Codex.
+Each row has independent model, per-model reasoning, and access preferences.
+
+Older `[[models.provider_defaults]]` rows are read as a fallback when the
+canonical key is absent or malformed: qualified models and
+their reasoning memories belong to their endpoint; unqualified memories stay
+with OpenAI. Legacy access applies to the represented providers, while explicit
+endpoint rows take precedence. Reading does not rewrite the file. The next
+defaults save writes the separated canonical rows through the path-based
+editor and preserves unrelated keys and comments. If a recognized legacy
+array exists, the writer keeps a backend-only projection with a
+`pwragent-legacy-settings` marker for clients through 1.4.10. Its Codex row
+prefers OpenAI's explicit model, otherwise the previously selected endpoint's
+model; its reasoning map retains the qualified memories. That projection is
+lossy because older clients have only one Codex access/model default. New
+files use only the canonical key. Current clients prefer it over legacy edits.
+
+Launchpad snapshots likewise separate `providerSettings` by picker identity.
+An older `codex` bucket is split by its qualified model ids on read. The
+existing state normalization persists converted sticky defaults once; directory
+drafts persist the projection on their next save. `codexModelProviderId` retains
+the endpoint when its selected model is unset. Existing-thread migrations are
+also keyed by provider identity and only apply within that provider.
+
 Codex model providers use independent App Server processes and private runtime
 catalogs. Runtime preparation uses the same bounded, authenticated `/models`
 discovery as the picker; it does not require a saved connection test. Fresh

@@ -4868,10 +4868,10 @@ function DesktopAppShell(props: {
             ) : ThreadViewComponent ? (
               <MarkdownRenderingOptionsProvider
                 incrementalEnabled={
-                  settings.snapshot?.experimental.incrementalMarkdownRendering?.value ?? false
+                  settings.snapshot?.general.markdown?.incrementalRendering.value ?? true
                 }
                 mathEnabled={
-                  settings.snapshot?.experimental.markdownMathRendering?.value ?? true
+                  settings.snapshot?.general.markdown?.mathRendering.value ?? true
                 }
               >
                 <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
