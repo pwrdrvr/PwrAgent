@@ -1,16 +1,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
+
+const app = vi.hoisted(() => ({ isPackaged: false }));
+vi.mock("electron", () => ({ app }));
 
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  app.isPackaged = false;
   delete process.env[REPLAY_FIXTURE_PATH_ENV];
   delete globalThis.__PWRAGENT_REPLAY_DRIVER__;
+  delete globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__;
+  listingDiagnostics.setEnabled(false);
+  listingDiagnostics.setEnabled(false, "replay");
 
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -18,6 +27,33 @@ afterEach(() => {
 });
 
 describe("replay-runtime", () => {
+  it.each([
+    { replay: true, e2e: true, packaged: false, armed: true },
+    { replay: false, e2e: true, packaged: false, armed: false },
+    { replay: true, e2e: false, packaged: false, armed: false },
+    { replay: true, e2e: true, packaged: true, armed: false },
+  ])("gates listing history on unpackaged E2E replay ($replay, $e2e, $packaged)", async ({ replay, e2e, packaged, armed }) => {
+    app.isPackaged = packaged;
+    vi.stubEnv("PWRAGENT_E2E", e2e ? "1" : undefined);
+    if (replay) vi.stubEnv(REPLAY_FIXTURE_PATH_ENV, writeFixture({
+      metadata: { backend: "codex", scenario: "replay-timing" }, steps: [],
+    }));
+    createReplayClientsFromEnv();
+    expect(listingDiagnostics.snapshot().enabled).toBe(armed);
+    if (!armed) {
+      expect(globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__).toBeUndefined();
+      return;
+    }
+
+    await listingDiagnostics.trace("ipc", { query: "lens", logical: 137 }, async () => undefined);
+    listingDiagnostics.setEnabled(true);
+    listingDiagnostics.setEnabled(false);
+    const snapshot = globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__?.();
+    const start = snapshot?.listings.events.find((entry) => entry.phase === "start");
+    expect(start).toMatchObject({ stage: "ipc", query: "lens", logical: 137 });
+    expect(snapshot?.listings.events.find((entry) => entry.phase === "end")).toMatchObject({ id: start?.id, outcome: "ok" });
+  });
+
   it("routes driver interactions through the single codex replay client (executionMode param accepted but ignored)", async () => {
     const fixturePath = writeFixture({
       metadata: {

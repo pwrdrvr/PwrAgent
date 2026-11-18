@@ -605,7 +605,7 @@ import {
   CodexEnvironmentStartupError,
 } from "./codex-environment-runtime";
 import {
-  replacedAgentMessageOrigin,
+  isSteerableAgentTraffic,
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
@@ -929,6 +929,19 @@ let threadListCacheSequence = 0;
 class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
+
+type IdleSubmission = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  input: AppServerTurnInputItem[];
+  origin?: ThreadTurnQueueOrigin;
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
+/** What `submitTurnIfIdle` returns when a wake may join a running turn. */
+type JoinedSubmissionResult =
+  | ThreadTurnQueueImmediateSubmissionResult
+  | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>;
 
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
@@ -3080,6 +3093,7 @@ export class DesktopBackendRegistry {
   private threadDependenciesPeerHandler?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
 
   // The app-server service needs the registry before it can supply this owner binding.
@@ -3091,9 +3105,10 @@ export class DesktopBackendRegistry {
   async manageThreadDependenciesForPeer(
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
     if (!this.threadDependenciesPeerHandler) throw new Error("Continue After is not available on this instance yet.");
-    return await this.threadDependenciesPeerHandler(request, requesterInstanceId);
+    return await this.threadDependenciesPeerHandler(request, requesterInstanceId, provenance);
   }
 
   // The app-server service needs the registry before it can supply this owner binding.
@@ -9337,7 +9352,11 @@ export class DesktopBackendRegistry {
     ].some((value) => value !== undefined);
     return await this.admitThreadAttachments(entry, (input, onAdmission) => {
       const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
-      return entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings
+      // Agent messages, monitor results and PwrAgent's own wakes join the
+      // running turn, or start one when the thread is idle, and share that
+      // delivery with whatever waits beside them. An operator's or a
+      // messaging app's send keeps its own turn.
+      return isSteerableAgentTraffic(entry.messageOrigin) && delivery !== "new_turn" && !hasTurnSettings
         ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
         : this.threadTurnQueue.submit(prepared, { onAdmission });
     });
@@ -10185,15 +10204,20 @@ export class DesktopBackendRegistry {
     return { results };
   }
 
-  async submitTurnIfIdle(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true }): Promise<JoinedSubmissionResult>;
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
+  async submitTurnIfIdle(params: IdleSubmission & {
+    /**
+     * A PwrAgent wake (Continue After, a PR watch) joins a running turn, or
+     * starts one, and shares its delivery with the agent and system messages
+     * waiting beside it. A running turn no longer reads as busy; a lock, an
+     * archive, a handoff, a workspace move or a checkout restore still does.
+     */
+    joinRunningTurn?: boolean;
+  }): Promise<JoinedSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", ...entry } = params;
+    const { origin = "manual", joinRunningTurn = false, ...entry } = params;
+    const join = joinRunningTurn && isSteerableAgentTraffic(entry.messageOrigin);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
     // The durable archive observation also covers watches restored at startup,
     // before provider listings have populated this process's information store.
@@ -10206,21 +10230,23 @@ export class DesktopBackendRegistry {
       // Retired PR work can still be in flight when archive completes.
       // Discard its admission without resuming the thread or cancelling cleanup.
       || isArchived()
-      || this.threadHasActiveTurn(params.threadId, params.backend)
+      || (!join && this.threadHasActiveTurn(params.threadId, params.backend))
       || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
       || this.threadArchiveCoordinator.checkoutRestoreRecords.has(buildThreadIdentityKey(params.backend, params.threadId))
     ) {
       return { status: "busy" };
     }
     try {
-      return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+      return await this.admitThreadAttachments(entry, (input, onAdmission): Promise<JoinedSubmissionResult> => {
         // Attachment preparation can yield to an archive notification.
         if (isArchived()) return Promise.resolve({ status: "busy" as const });
-        return this.threadTurnQueue.submitIfIdle({
-          ...entry,
-          input,
-          origin,
-        }, { onAdmission });
+        return join
+          ? this.threadTurnQueue.submitSteer({ ...entry, input, origin }, { onAdmission })
+          : this.threadTurnQueue.submitIfIdle({
+            ...entry,
+            input,
+            origin,
+          }, { onAdmission });
       });
     } catch (error) {
       // Turn preparation yields after the queue's idle check. If a backend
@@ -10430,23 +10456,22 @@ export class DesktopBackendRegistry {
     // after earlier FIFO controls settle, then cancels before fresh admission.
     const sender = request.messageOrigin?.sourceThread;
     const entry = this.threadTurnQueue.getQueuedEntries(request)
-      .find((candidate) => candidate.id === request.queueEntryId || (sender && candidate.agentMessages?.some(message => {
-        const source = message.origin?.sourceThread;
-        return message.replacementHandle === request.queueEntryId && source?.backend === sender.backend
-          && source.threadId === sender.threadId && source.instanceId === sender.instanceId;
-      })));
+      .find((candidate) => candidate.id === request.queueEntryId);
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
-    if (entry.agentMessageOrigins && !entry.agentMessages) {
-      throw new Error("The operator edited this batch; sender replacement would overwrite those edits.");
+    // Only an older build's restart save can still hold a batch: one entry
+    // carrying several senders' messages. Its id covers other senders' input.
+    if (entry.agentMessageOrigins) {
+      throw new Error("This message waits in a batch with other senders' messages and cannot be replaced. Send a new message instead.");
     }
-    const owners = entry.agentMessages?.map((message) => message.origin?.sourceThread)
-      ?? [entry.messageOrigin?.sourceThread];
+    const owner = entry.messageOrigin?.sourceThread;
     if (
       entry.messageOrigin?.kind !== "agent"
       || request.messageOrigin?.kind !== "agent"
       || !sender
-      || !owners.some((owner) => owner && owner.backend === sender.backend
-        && owner.threadId === sender.threadId && owner.instanceId === sender.instanceId)
+      || !owner
+      || owner.backend !== sender.backend
+      || owner.threadId !== sender.threadId
+      || owner.instanceId !== sender.instanceId
     ) {
       throw new Error("Only the sending thread can replace its own queued agent message.");
     }
@@ -10456,7 +10481,7 @@ export class DesktopBackendRegistry {
     // The operator approved the text they saw, so its approval stays with it.
     if (
       Boolean(request.messageOrigin.operatorApproved)
-      !== Boolean(replacedAgentMessageOrigin(entry, sender)?.operatorApproved)
+      !== Boolean(entry.messageOrigin.operatorApproved)
     ) {
       throw new Error(
         "A replacement cannot change whether the operator approved the queued message. Send a new message instead.",

@@ -2,6 +2,7 @@ import { createPrWatchOwnerId } from "./pr-watch-owner";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
+  CausalMessagingContext,
   AppServerTurnInputItem,
   PrSummary,
   PullRequestTerminalDetails,
@@ -34,7 +35,8 @@ type PrStatusWatchRegistry = {
     input: AppServerTurnInputItem[];
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started" | "busy"; turnId?: string }>;
+    joinRunningTurn: true;
+  }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }>;
 };
 
 export type PrStatusWatchOutcome = "success" | "failure";
@@ -52,6 +54,16 @@ export function terminalWakeOutcomeOf(pr: PrSummary): PrTerminalWakeOutcome | un
   return pr.mergeQueue?.state === "removed" && pr.mergeQueue.removedAt !== undefined
     ? "dequeued"
     : undefined;
+}
+
+/** The contact whose turn armed the watch, carried onto the turn it starts. */
+function watchCausalContext(
+  watch: ThreadPullRequestWatchSummary,
+): CausalMessagingContext {
+  return {
+    ...(watch.causalMessagingSource ? { causalMessagingSource: watch.causalMessagingSource } : {}),
+    ...(watch.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
+  };
 }
 
 /** Terminal details are immutable once read; keep a few for busy retries. */
@@ -339,6 +351,8 @@ export class PrStatusWatchCoordinator {
             : buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
         }],
         origin: "automation",
+        // The wake joins the thread's running turn instead of waiting for it.
+        joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",
           prAutomation: {
@@ -351,6 +365,7 @@ export class PrStatusWatchCoordinator {
             headSha: details?.headSha ?? pr.headSha ?? claim.watch.headSha,
             outcome,
           },
+          ...watchCausalContext(claim.watch),
         },
       });
       if (submission.status === "busy") {
@@ -415,6 +430,8 @@ export class PrStatusWatchCoordinator {
           }),
         }],
         origin: "automation",
+        // The wake joins the thread's running turn instead of waiting for it.
+        joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",
           prAutomation: {
@@ -427,6 +444,7 @@ export class PrStatusWatchCoordinator {
             headSha: claim.watch.headSha,
             outcome,
           },
+          ...watchCausalContext(claim.watch),
         },
       });
       if (submission.status === "busy") {

@@ -70,7 +70,9 @@ export class ScriptedCodexTransport implements JsonRpcTransport {
     // A task monitor runs on an ephemeral helper thread; its turns are scripted too.
     const known = threadId !== undefined && (OwnerConformanceCodexTransport.threads.has(threadId) || threadId.startsWith("helper-"));
     const scriptedTurn = request.id !== undefined && known
-      && (request.method === "turn/start" || request.method === "review/start" || request.method === "turn/interrupt")
+      && (request.method === "turn/start" || request.method === "review/start" || request.method === "turn/interrupt"
+        // A queued monitor result or agent message joins the scripted turn.
+        || request.method === "turn/steer")
       // The conformance fixture answers a refused submission itself.
       && !(request.method === "turn/start" && OwnerConformanceCodexTransport.refusedStarts > 0);
     const scripted = request.method === "model/list" || request.method === "config/read" || scriptedTurn;
@@ -95,6 +97,11 @@ export class ScriptedCodexTransport implements JsonRpcTransport {
     } else if (request.method === "config/read") {
       // A configured MCP inventory, so a monitor's PwrAgent-only access holds.
       result = { config: { mcp_servers: {} } };
+    }
+    if (request.method === "turn/steer") {
+      // Codex accepts guidance into the turn it names as active; the script
+      // drives that turn's lifecycle itself.
+      result = { turnId: params.expectedTurnId };
     }
     if (request.method === "turn/start" || request.method === "review/start") {
       const turnId = `turn-${++ScriptedCodexTransport.sequence}`;

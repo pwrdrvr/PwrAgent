@@ -179,6 +179,19 @@ retains the public dynamic-tool authorization facade:
   (`checkDynamicToolPermission`), with `mutate_thread` gated per mutated field
   and `send_messaging_file` gated on `message.reply`.
 
+A turn PwrAgent starts later on the agent's behalf (a follow-up, a Continue
+After wait, a PR watch, or a Job Monitor) keeps the contact whose turn
+registered it, so its tool calls are checked against that contact's role.
+The contact comes from the registering turn's stored origin, never from tool
+arguments. When one wake answers several requests (an identical Continue
+After wait registered again, or a second watch on the same PR and head), it
+takes the narrowest authority among them: two different contacts, or a
+contact and the local operator, leave the wake ambiguous, and an ambiguous
+wake is granted no contact's authority. A Continue After wait registered on a
+peer carries the contact there, and the peer sends the contact's tool calls
+back to this machine for authorization. A peer that cannot keep the contact
+is refused the registration instead of running it unattributed.
+
 Render-time filtering shares the same command/action → permission lookup
 tables from the shared contract, so what a user *sees* and what the
 controller *enforces* cannot drift.

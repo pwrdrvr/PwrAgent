@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import { ListingDiagnostics, listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
-import { readRendererListingDiagnostics } from "../diagnostics/renderer-listing-diagnostics";
+import { readRendererListingDiagnostics, setRendererListingDiagnosticsEnabled } from "../diagnostics/renderer-listing-diagnostics";
 import type { HotCpuTarget } from "../shell/diagnostics/hot-cpu-profiler";
+
+beforeEach(() => listingDiagnostics.setEnabled(true));
+afterEach(() => listingDiagnostics.setEnabled(false));
 
 const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
   diagnostic: { origin: "68ca84ce-8d32-4230-a10f-76bc96eb2f33", view: 1, effect: 2, logical: 3, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2, caller: "scheduled/thread-lifecycle" } };
@@ -17,9 +20,19 @@ const eventsSince = (before: number) => {
 };
 
 describe("bounded listing diagnostics", () => {
+  it("clears renderer recording without requiring an attached CDP debugger", async () => {
+    const sendCommand = vi.fn(async () => { throw new Error("detached"); });
+    const executeJavaScript = vi.fn(async () => undefined);
+    const target = { debugger: { sendCommand }, executeJavaScript } as unknown as HotCpuTarget & { executeJavaScript: typeof executeJavaScript };
+    await setRendererListingDiagnosticsEnabled(target, false);
+    expect(sendCommand).not.toHaveBeenCalled();
+    expect(executeJavaScript).toHaveBeenCalledExactlyOnceWith("globalThis.__pwragentSetNavigationListingDiagnosticsEnabled?.(false)");
+  });
+
   it("bounds retention and copies only fixed vocabulary/numeric fields", () => {
     let now = 100;
     const diagnostics = new ListingDiagnostics(() => now);
+    diagnostics.setEnabled(true);
     const secret = "PRIVATE title prompt payload path";
     for (let i = 0; i < 10_000; i++) diagnostics.record("ipc", "start", {
       origin: secret, reason: secret, caller: secret, consumer: secret, query: secret, trigger: secret,
@@ -48,6 +61,7 @@ describe("bounded listing diagnostics", () => {
       fc.string({ maxLength: 100 }),
       (caller, text) => {
         const diagnostics = new ListingDiagnostics();
+    diagnostics.setEnabled(true);
         const next = { ...request, diagnostic: { ...request.diagnostic!, caller } };
         diagnostics.record("ipc", "start", listingRequestFields(next));
         diagnostics.record("provider-rpc", "start", { caller });
@@ -67,6 +81,7 @@ describe("bounded listing diagnostics", () => {
 
   it("keeps async causes isolated and links reused promises without retaining them", async () => {
     const diagnostics = new ListingDiagnostics();
+    diagnostics.setEnabled(true);
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => { finish = resolve; });
     const physical = diagnostics.trace("provider", { caller: "thread-list" }, async () => {

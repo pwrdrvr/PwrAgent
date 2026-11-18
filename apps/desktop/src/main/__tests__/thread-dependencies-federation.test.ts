@@ -1,8 +1,10 @@
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { FederationCapability, FederationRemoteTarget, ThreadDependency } from "@pwragent/shared";
 import {
   PEER_ACTIVE_TIMEOUT_MS, THREAD_DEPENDENCIES_UNSUPPORTED_MESSAGE, appendPeerDependents, collectPeerActiveDependencies,
   manageRemoteThreadDependencies, qualifyPeerDependentOwners, readFederationThreadDependenciesRequest,
+  readFederationThreadDependencyProvenance, THREAD_DEPENDENCY_PROVENANCE_UNSUPPORTED_MESSAGE,
   type ThreadDependenciesFederationRuntime,
 } from "../app-server/thread-dependencies-federation";
 
@@ -33,6 +35,72 @@ function runtime(peers: Array<{ target: FederationRemoteTarget; capabilities: Fe
 }
 
 describe("Continue After across machines", () => {
+  // A peer's create carries the contact whose turn asked for it. Without
+  // one the owner runs the wait as the peer, so the contact can only narrow
+  // it. A contact the owner cannot attribute to its messaging owner must
+  // narrow it all the way, never disappear.
+  it("reads a peer's contact fail-closed: absent, well-formed with its messaging owner, or ambiguous", () => {
+    // Shaped like a source, with each field valid, empty, mistyped or absent.
+    const field = fc.oneof(fc.string({ minLength: 1 }), fc.constant(""), fc.integer(), fc.constant(null), fc.constant(undefined));
+    const sourceLike = fc.record({ ownerId: field, requestId: field, surfaceSelector: field, instanceId: field }, { requiredKeys: [] });
+    const provenanceArb = fc.oneof(fc.anything(), fc.record({
+      causalMessagingSource: fc.oneof(sourceLike, fc.anything()),
+      causalMessagingAmbiguous: fc.oneof(fc.constant(undefined), fc.constant(true), fc.anything()),
+    }, { requiredKeys: [] }));
+    fc.assert(fc.property(provenanceArb, (provenance) => {
+      const read = readFederationThreadDependencyProvenance({ action: "create", provenance });
+      const fields = provenance && typeof provenance === "object"
+        ? provenance as { causalMessagingSource?: unknown; causalMessagingAmbiguous?: unknown } : {};
+      if (fields.causalMessagingSource === undefined && fields.causalMessagingAmbiguous === undefined) {
+        expect(read).toEqual({});
+      } else if (read.causalMessagingSource) {
+        expect(fields.causalMessagingAmbiguous).toBeUndefined();
+        // The owner keeps the source's own fields as sent, and nothing else.
+        const sent = fields.causalMessagingSource as Record<string, unknown>;
+        expect(read.causalMessagingSource).toEqual(Object.fromEntries(["ownerId", "requestId", "surfaceSelector", "instanceId"]
+          .filter((key) => sent[key] !== undefined).map((key) => [key, sent[key]])));
+        expect(read.causalMessagingSource.instanceId).toEqual(expect.stringMatching(/./));
+        expect(typeof read.causalMessagingSource.ownerId).toBe("string");
+        expect(typeof read.causalMessagingSource.requestId).toBe("string");
+      } else {
+        expect(read).toEqual({ causalMessagingAmbiguous: true });
+      }
+    }));
+    const source = { ownerId: "profile", requestId: "request", surfaceSelector: "telegram:alice", instanceId: "mac" };
+    expect(readFederationThreadDependencyProvenance({ provenance: { causalMessagingSource: source } }))
+      .toEqual({ causalMessagingSource: source });
+    // A source that names no messaging owner would read as this owner's own contact.
+    for (const instanceId of [undefined, ""]) {
+      expect(readFederationThreadDependencyProvenance({ provenance: { causalMessagingSource: { ...source, instanceId } } }))
+        .toEqual({ causalMessagingAmbiguous: true });
+    }
+    expect(readFederationThreadDependencyProvenance({ action: "create" })).toEqual({});
+  });
+
+  it("sends a contact's create only to an owner that keeps the contact", async () => {
+    const source = { ownerId: "profile", requestId: "request", instanceId: "mac" };
+    const create = { action: "create" as const, backend: "codex" as const, threadId: "waiting", continuation: "Go on." };
+    const older = runtime([{ target: lab, capabilities: ["thread_dependencies_v1", "turn_control"],
+      answer: async () => ({ dependencies: [] }) }]);
+    for (const provenance of [{ causalMessagingSource: source }, { causalMessagingAmbiguous: true }]) {
+      await expect(manageRemoteThreadDependencies(create, lab, "mac", older.value, provenance))
+        .rejects.toThrow(THREAD_DEPENDENCY_PROVENANCE_UNSUPPORTED_MESSAGE);
+    }
+    expect(older.calls).toEqual([]);
+    // The operator's own create, and every other action, still reach it.
+    await manageRemoteThreadDependencies(create, lab, "mac", older.value, {});
+    await manageRemoteThreadDependencies({ action: "list", backend: "codex", threadId: "waiting" }, lab, "mac", older.value,
+      { causalMessagingSource: source });
+    expect(older.calls.map((call) => call.request)).toEqual([create, { action: "list", backend: "codex", threadId: "waiting" }]);
+
+    const current = runtime([{ target: lab,
+      capabilities: ["thread_dependencies_v1", "thread_dependency_provenance_v1", "turn_control"],
+      answer: async () => ({ dependencies: [] }) }]);
+    await manageRemoteThreadDependencies(create, lab, "mac", current.value, { causalMessagingSource: source });
+    expect(current.calls).toEqual([{ instanceId: "lab", request: { ...create, provenance: { causalMessagingSource: source } } }]);
+    expect(readFederationThreadDependencyProvenance(current.calls[0]!.request)).toEqual({ causalMessagingSource: source });
+  });
+
   it("never forwards the viewer's federation target or unknown fields to the owner", () => {
     expect(readFederationThreadDependenciesRequest({
       action: "mark_done", backend: "codex", threadId: "waiting", dependencyId: "d", note: "done",

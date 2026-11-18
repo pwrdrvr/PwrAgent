@@ -25,7 +25,7 @@ export type {
 } from "@pwragent/owner-core/pr-status-storage";
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
-import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, mergeCausalMessagingContext, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
@@ -8311,6 +8311,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             : {}),
           ...(params.watch.runId !== undefined ? { runId: params.watch.runId } : {}),
           ...(baseline ? { baseline } : {}),
+          // One wake answers every requester, so it may carry no more
+          // authority than the narrowest of them.
+          ...mergeCausalMessagingContext([existing, params.watch]),
         };
         this.stateDb.raw
           .prepare(

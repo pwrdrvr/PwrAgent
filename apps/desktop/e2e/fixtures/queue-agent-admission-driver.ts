@@ -38,13 +38,15 @@ export async function exerciseDesktopAgentAdmission(root: string, grouped: boole
     const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "alice" } };
     if (grouped) await registry.submitHeldTurn({ ...identity, queueEntryId: "group-review", input: [{ type: "text", text: "Explicit review" }], holdReason: "Independent review" });
     const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
-    // Legacy grouped entries still support the completed replacement contract.
-    // Additional production messages below use the actual registry callers.
+    // Alice's and Bob's messages wait as their own entries. Additional
+    // production messages below use the actual registry callers.
     const queued = grouped
-      ? await queue.submitGroupedSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Original Alice input" }], messageOrigin })
+      ? await queue.submitSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Original Alice input" }], messageOrigin })
       : await registry.submitTurn({ ...identity, delivery: "new_turn", input: [{ type: "text", text: "Original Alice input" }], messageOrigin });
-    if (grouped) await queue.submitGroupedSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Unchanged Bob input" }],
-      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
+    const bobQueued = grouped
+      ? await queue.submitSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Unchanged Bob input" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } })
+      : undefined;
     const additional: Array<{ id: string; snapshot: Awaited<ReturnType<typeof registry.readQueuedTurn>> }> = [];
     if (grouped) {
       for (const sender of ["alice", "bob", "alice"]) {
@@ -70,7 +72,7 @@ export async function exerciseDesktopAgentAdmission(root: string, grouped: boole
     if (!grouped) await registry.setQueuedTurnPaused({ queueEntryId: queued.entry.id, paused: true });
     const original = await registry.readQueuedTurn({ ...identity, queueEntryId: queued.entry.id });
     const originalInput = JSON.stringify(original.input);
-    if (grouped && !originalInput.includes("Unchanged Bob input")) throw new Error("Expected one grouped batch before replacement");
+    if (originalInput.includes("Unchanged Bob input")) throw new Error("Bob's message must not share Alice's entry");
     const offset = events.length;
     const replacement = await registry.replaceQueuedAgentMessage({ ...identity, queueEntryId: queued.entry.id,
       input: [{ type: "text", text: "Fresh Alice input" }], messageOrigin });
@@ -85,13 +87,16 @@ export async function exerciseDesktopAgentAdmission(root: string, grouped: boole
       additionalIds: additional.map(entry => entry.id), waiting: waiting.map(entry => entry.id), text: current.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n"),
       paused: row.paused, pauseRevision: row.pauseRevision, held: row.manualReleaseRequired,
       nativeStarts: OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start").length,
-      untouchedSenderText: "", cancelledReceipt: "" };
+      bobId: bobQueued?.entry.id ?? "", bobText: "", untouchedSenderText: "", cancelledReceipt: "" };
     if (JSON.stringify(original.input) !== originalInput) throw new Error("Original accepted input changed");
-    if (grouped) {
-      const bob = await registry.replaceQueuedAgentMessage({ ...identity, queueEntryId: queued.entry.id,
+    if (grouped && bobQueued) {
+      // Bob replaces his own entry; Alice's replacement stays as she left it.
+      const bob = await registry.replaceQueuedAgentMessage({ ...identity, queueEntryId: bobQueued.entry.id,
         input: [{ type: "text", text: "Fresh Bob input" }], messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
-      const currentBob = await registry.readQueuedTurn({ ...identity, queueEntryId: bob.queueEntryId! });
-      result.untouchedSenderText = currentBob.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n");
+      const textOf = (turn: Awaited<ReturnType<typeof registry.readQueuedTurn>>) =>
+        turn.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n");
+      result.bobText = textOf(await registry.readQueuedTurn({ ...identity, queueEntryId: bob.queueEntryId! }));
+      result.untouchedSenderText = textOf(await registry.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! }));
     }
     await registry.interruptTurn(active);
     return result;

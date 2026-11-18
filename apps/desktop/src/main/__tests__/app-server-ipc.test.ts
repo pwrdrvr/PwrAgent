@@ -2126,9 +2126,12 @@ describe("app server ipc", () => {
     const autoDispatch = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
     const cache = vi.spyOn(service, "writePrStatusesToCache").mockResolvedValue(undefined);
     const publish = vi.spyOn(service, "publishPullRequestStatusUpdates").mockResolvedValue(undefined);
-    const submit = vi.fn(async () => ({ status: "started" as const, turnId: "continuation" }));
+    // A busy consumer refuses the wake, as a provider does for a turn the
+    // registry did not start; the refusal holds it until its idle event.
+    const submit = vi.fn(async (): Promise<{ status: "started" | "busy"; turnId?: string }> =>
+      busy ? { status: "busy" } : { status: "started", turnId: "continuation" });
     const agent = new ThreadDependencyCoordinator({
-      store, submit, changed: async () => undefined, now: () => now, isConsumerBusy: () => busy,
+      store, submit, changed: async () => undefined, now: () => now,
       readThread: async (condition) => ({ turns: [], prs: condition.threadId === "prerequisite" ? [...service.prStatusRegistry.values()] : [] }),
     });
     try {
@@ -2142,11 +2145,12 @@ describe("app server ipc", () => {
         now += 61_000; busy = false;
         await agent.handleThreadEvent({ backend: "codex", threadId: "consumer" }, undefined, true);
       }
-      expect(submit).not.toHaveBeenCalled();
+      const refused = scenario === "busy-consumer" ? 1 : 0;
+      expect(submit).toHaveBeenCalledTimes(refused);
       cache.mockClear(); publish.mockClear();
       await expect(service.applyPolledPrStatuses([pr], now)).resolves.toEqual([]);
       expect(store.list("codex", "consumer")[0].evidence[0]).toMatchObject({ state: "satisfied" });
-      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit).toHaveBeenCalledTimes(refused + 1);
       expect(store.list("codex", "consumer")[0]).toMatchObject({ status: "delivered", outcome: "success" });
       expect(cache).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
 
@@ -2163,7 +2167,9 @@ describe("app server ipc", () => {
       expectSqliteWriteBudget({ scenario: "thread-dependencies-unchanged-service-polls", writes,
         note: "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.",
       });
-      expect(submit).toHaveBeenCalledTimes(1);
+      // The busy consumer refused its wake once; its latch holds through
+      // every poll until its idle event.
+      expect(submit).toHaveBeenCalledTimes(refused + 2);
       expect(cache).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
       const refresh = vi.spyOn(agent, "handlePrEvent");
       await service.applyPolledPrStatuses([pr], now - 1);
@@ -5260,22 +5266,25 @@ describe("app server ipc", () => {
     listThreads.mockResolvedValueOnce([]);
     readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [] });
     registerAppServerIpcHandlers();
-    const before = listingDiagnostics.snapshot().recorded;
-    await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90299, once: vi.fn() } }, {
-      protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
-      diagnostic: { view: 44, effect: 2, logical: 6, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 },
-    });
-    const snapshot = listingDiagnostics.snapshot();
-    const events = snapshot.events.slice(-(snapshot.recorded - before));
-    const ipc = events.find((event) => event.stage === "ipc" && event.phase === "start")!;
-    expect(ipc).toMatchObject({ sender: 90299, view: 44, effect: 2, logical: 6, reason: "turn", trigger: "turn/completed" });
-    const navigation = events.find((event) => event.stage === "navigation" && event.phase === "start")!;
-    expect(navigation.parentId).toBe(ipc.id);
-    const owner = events.find((event) => event.stage === "owner-page" && event.phase === "start")!;
-    expect(owner.parentId).toBe(navigation.id);
-    const execution = events.find((event) => event.stage === "owner-read" && event.phase === "start")!;
-    expect(execution.parentId).toBe(owner.id);
-    expect(events.some((event) => event.stage === "index" && (event.parentId === execution.id || event.id === execution.id))).toBe(true);
+    listingDiagnostics.setEnabled(true);
+    try {
+      const before = listingDiagnostics.snapshot().recorded;
+      await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90299, once: vi.fn() } }, {
+        protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
+        diagnostic: { view: 44, effect: 2, logical: 6, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 },
+      });
+      const snapshot = listingDiagnostics.snapshot();
+      const events = snapshot.events.slice(-(snapshot.recorded - before));
+      const ipc = events.find((event) => event.stage === "ipc" && event.phase === "start")!;
+      expect(ipc).toMatchObject({ sender: 90299, view: 44, effect: 2, logical: 6, reason: "turn", trigger: "turn/completed" });
+      const navigation = events.find((event) => event.stage === "navigation" && event.phase === "start")!;
+      expect(navigation.parentId).toBe(ipc.id);
+      const owner = events.find((event) => event.stage === "owner-page" && event.phase === "start")!;
+      expect(owner.parentId).toBe(navigation.id);
+      const execution = events.find((event) => event.stage === "owner-read" && event.phase === "start")!;
+      expect(execution.parentId).toBe(owner.id);
+      expect(events.some((event) => event.stage === "index" && (event.parentId === execution.id || event.id === execution.id))).toBe(true);
+    } finally { listingDiagnostics.setEnabled(false); }
   });
 
   it("reconciles compact saved pins through the owner cache before projecting viewer Attention", async () => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
+import type { HotCpuTarget } from "../diagnostics/hot-cpu-target";
 
 const browserWindowState: {
   options?: BrowserWindowConstructorOptions;
@@ -10,6 +11,7 @@ const browserWindowState: {
   send?: ReturnType<typeof vi.fn>;
   webContentsOn?: ReturnType<typeof vi.fn>;
   webContentsOnce?: ReturnType<typeof vi.fn>;
+  executeJavaScript?: ReturnType<typeof vi.fn>;
   setTitle?: ReturnType<typeof vi.fn>;
   setWindowOpenHandler?: ReturnType<typeof vi.fn>;
   show?: ReturnType<typeof vi.fn>;
@@ -31,6 +33,7 @@ const resolveHotCpuProfileConfigMock = vi.fn(() => ({ enabled: false }));
 const createHotCpuProfileSessionMock = vi.fn();
 const hotRendererStart = vi.fn();
 const hotRendererStop = vi.fn();
+const hotRendererHasActiveProfile = vi.fn(() => false);
 const hotMainStart = vi.fn();
 const hotMainStop = vi.fn();
 const mainHotTarget = {};
@@ -54,10 +57,21 @@ vi.mock("../diagnostics/main-process-hot-cpu-target", () => ({
   createMainProcessHotCpuTarget: () => mainHotTarget,
 }));
 vi.mock("../shell/diagnostics/hot-cpu-profiler", () => ({
-  HotCpuProfiler: vi.fn(function (options: { target: unknown }) {
+  HotCpuProfiler: vi.fn(function (options: { target: HotCpuTarget }) {
     return options.target === mainHotTarget
       ? { start: hotMainStart, stop: hotMainStop }
-      : { start: hotRendererStart, stop: hotRendererStop };
+      : {
+        get hasActiveProfile() { return hotRendererHasActiveProfile(); },
+        start: async () => {
+          await options.target.setListingDiagnosticsEnabled?.(true);
+          await hotRendererStart();
+        },
+        rearmListingDiagnostics: () => options.target.setListingDiagnosticsEnabled?.(true),
+        stop: async (reason: string) => {
+          await hotRendererStop(reason, options.target);
+          await options.target.setListingDiagnosticsEnabled?.(false);
+        },
+      };
   }),
 }));
 const rendererMonitorStartMock = vi.fn();
@@ -161,6 +175,11 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
     emitWindowEvent("show");
   });
   browserWindowState.reload = vi.fn();
+  browserWindowState.executeJavaScript = vi.fn(async () => ({
+    hasPwragnt: true,
+    pwragentKeys: [],
+    locationHref: "http://127.0.0.1:5173",
+  }));
 
   return {
     id: BrowserWindowMock.mock.calls.length,
@@ -179,13 +198,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
       send: browserWindowState.send,
       on: browserWindowState.webContentsOn,
       once: browserWindowState.webContentsOnce,
-      executeJavaScript: vi.fn(() =>
-        Promise.resolve({
-          hasPwragnt: true,
-          pwragentKeys: [],
-          locationHref: "http://127.0.0.1:5173"
-        })
-      ),
+      executeJavaScript: browserWindowState.executeJavaScript,
       replaceMisspelling: replaceMisspellingMock,
       copyImageAt: copyImageAtMock,
       session: {
@@ -302,6 +315,7 @@ describe("createMainWindow", () => {
     for (const mock of [hotMainStart, hotMainStop, hotRendererStart, hotRendererStop]) {
       mock.mockReset().mockResolvedValue(undefined);
     }
+    hotRendererHasActiveProfile.mockReset().mockReturnValue(false);
     rendererMonitorStartMock.mockReset();
     rendererMonitorStopMock.mockReset();
     mainMonitorStartMock.mockReset();
@@ -827,6 +841,85 @@ describe("createMainWindow", () => {
     expect(onShown).toHaveBeenCalledTimes(1);
   });
 
+  it.each([true, false])("only arms loaded documents with a renderer monitor (session created=%s)", async (created) => {
+    resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
+    if (!created) createHotCpuProfileSessionMock.mockResolvedValueOnce({ ok: false, message: "unwritable" });
+    const mainStarted = deferDiagnosticWork(undefined);
+    hotMainStart.mockImplementation(async () => mainStarted.release());
+    const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await loadWindowModule();
+    createMainWindow();
+    const listingControls = () => browserWindowState.executeJavaScript!.mock.calls
+      .map(([expression]) => expression)
+      .filter((expression) => expression.startsWith("globalThis.__pwragentSetNavigationListingDiagnosticsEnabled?.("))
+      .map((expression) => expression.endsWith("(true)"));
+
+    emitWebContentsEvent("did-finish-load");
+    await mainStarted.promise;
+    expect(listingControls()).toEqual(created ? [true] : []);
+
+    emitWebContentsEvent("did-finish-load");
+    // Let the serialized sync queue drain its immediate mock dependencies.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(listingControls()).toEqual(created ? [true, true] : []);
+
+    syncHotCpuProfilersFromSettings("settings-changed");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(listingControls()).toEqual(created ? [true, true] : []);
+    expect(hotRendererStart).toHaveBeenCalledTimes(created ? 1 : 0);
+    expect(hotMainStart).toHaveBeenCalledOnce();
+
+    await stopWindowDiagnostics("app-quit");
+    expect(listingControls()).toEqual(created ? [true, true, false] : []);
+  });
+
+  it.each(["main", "renderer"] as const)("keeps main listing history when %s finishes stopping first", async (first) => {
+    resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
+    hotRendererHasActiveProfile.mockReturnValue(true);
+    const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
+    const mainStarted = deferDiagnosticWork(undefined);
+    const mainCanFinish = deferDiagnosticWork(undefined);
+    const mainFinished = deferDiagnosticWork(undefined);
+    const rendererCanFinish = deferDiagnosticWork(undefined);
+    const rendererFinished = deferDiagnosticWork(undefined);
+    const read = vi.fn();
+    hotMainStart.mockImplementation(async () => {
+      listingDiagnostics.setEnabled(true);
+      listingDiagnostics.record("ipc", "start", { sender: 137, query: "lens" });
+      mainStarted.release();
+    });
+    hotMainStop.mockImplementation(async () => {
+      await mainCanFinish.promise;
+      listingDiagnostics.setEnabled(false);
+      mainFinished.release();
+    });
+    hotRendererStop.mockImplementation(async (_reason: string, target: HotCpuTarget) => {
+      await rendererCanFinish.promise;
+      read(await target.readDiagnostics?.());
+      rendererFinished.release();
+    });
+    const { createMainWindow, stopWindowDiagnostics } = await loadWindowModule();
+    createMainWindow();
+    emitWebContentsEvent("did-finish-load");
+    await mainStarted.promise;
+    const stopped = stopWindowDiagnostics("app-quit");
+    if (first === "main") {
+      mainCanFinish.release();
+      await mainFinished.promise;
+      rendererCanFinish.release();
+    } else {
+      rendererCanFinish.release();
+      await rendererFinished.promise;
+      mainCanFinish.release();
+    }
+    await stopped;
+    expect(read).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      listings: expect.objectContaining({
+        events: [expect.objectContaining({ stage: "ipc", sender: 137, query: "lens" })],
+      }),
+    }));
+    expect(listingDiagnostics.snapshot().events).toEqual([]);
+  });
+
   it("drains renderer and shared main captures, including an already closed window", async () => {
     resolveHotCpuProfileConfigMock.mockReturnValue({ enabled: true });
     const renderersStarted = deferDiagnosticWork(undefined);
@@ -849,10 +942,10 @@ describe("createMainWindow", () => {
     });
     const { createMainWindow, stopWindowDiagnostics, syncHotCpuProfilersFromSettings } = await loadWindowModule();
     createMainWindow();
-    const firstLoad = webContentsOnceHandlers.get("did-finish-load")!;
+    emitWebContentsEvent("did-finish-load");
     const firstClosed = windowEventHandlers.get("closed")!.at(-1)!;
+    webContentsEventHandlers.clear();
     createMainWindow();
-    firstLoad();
     emitWebContentsEvent("did-finish-load");
     await Promise.all([renderersStarted.promise, mainStarted.promise]);
     expect(hotRendererStart).toHaveBeenCalledTimes(2);

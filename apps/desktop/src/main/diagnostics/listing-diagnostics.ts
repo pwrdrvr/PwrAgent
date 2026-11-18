@@ -51,22 +51,42 @@ const NUMBER_FIELDS = ["targetId", "view", "effect", "logical", "attempt", "inva
 
 /** O(1) append, fixed storage, no timers, stack captures, logging or persistence. */
 export class ListingDiagnostics {
-  private readonly ring: Array<Event | undefined> = new Array(CAPACITY);
+  private readonly ring: Array<string | undefined> = new Array(CAPACITY);
   private next = 0;
   private recorded = 0;
   private sequence = 0;
-  private readonly context = new AsyncLocalStorage<number>();
-  private readonly identities = new WeakMap<object, number>();
+  private readonly context = new AsyncLocalStorage<{ id: number; generation: number }>();
+  private identities = new WeakMap<object, number>();
+  private readonly recordingSources = new Set<"cpu-monitor" | "replay">();
+  private enabled = false;
+  private generation = 0;
   private readonly totals: Record<string, number> = {};
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  record(stage: ListingStage, phase: Phase, fields: ListingFields = {}, id = this.context.getStore() ?? ++this.sequence, parentId?: number): number {
+  setEnabled(enabled: boolean, source: "cpu-monitor" | "replay" = "cpu-monitor"): void {
+    if (enabled) this.recordingSources.add(source);
+    else this.recordingSources.delete(source);
+    const recording = this.recordingSources.size > 0;
+    if (this.enabled === recording) return;
+    this.enabled = recording;
+    this.generation++;
+    if (recording) return;
+    this.ring.fill(undefined);
+    this.next = this.recorded = 0;
+    this.identities = new WeakMap();
+    for (const key of Object.keys(this.totals)) delete this.totals[key];
+  }
+
+  record(stage: ListingStage, phase: Phase, fields: ListingFields = {}, id?: number, parentId?: number): number {
+    if (!this.enabled) return 0;
+    const context = this.context.getStore();
+    id ??= context?.generation === this.generation ? context.id : ++this.sequence;
     const event: Event = { id, parentId, at: this.now(), stage, phase };
     // Explicit copy is also the runtime boundary for untrusted IPC metadata.
     for (const key of NUMBER_FIELDS) {
       const value = fields[key];
-      if (typeof value === "number" && Number.isFinite(value) && value >= 0) event[key] = value;
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER) event[key] = value;
     }
     for (const key of ["consumer", "query", "reason"] as const) {
       if (fields[key] !== undefined) event[key] = LABELS.has(fields[key]!) ? fields[key] : "unknown";
@@ -80,7 +100,7 @@ export class ListingDiagnostics {
     if (["ok", "error", "aborted"].includes(fields.outcome ?? "")) event.outcome = fields.outcome;
     if (typeof fields.archived === "boolean") event.archived = fields.archived;
     if (typeof fields.cursor === "boolean") event.cursor = fields.cursor;
-    this.ring[this.next] = event;
+    this.ring[this.next] = JSON.stringify(event);
     this.next = (this.next + 1) % CAPACITY;
     this.recorded += 1;
     const key = `${stage}:${phase}`;
@@ -90,16 +110,22 @@ export class ListingDiagnostics {
 
   /** The returned Promise is the physical identity reused by coalescers. */
   trace<T>(stage: ListingStage, fields: ListingFields, operation: () => Promise<T>): Promise<T> {
+    if (!this.enabled) {
+      // Preserve the existing completion boundary even without accounting.
+      return (async () => await operation())();
+    }
+    const generation = this.generation;
     const id = ++this.sequence;
     const started = this.now();
-    this.record(stage, "start", fields, id, this.context.getStore());
-    const promise = this.context.run(id, async () => {
+    const parent = this.context.getStore();
+    this.record(stage, "start", fields, id, parent?.generation === generation ? parent.id : undefined);
+    const promise = this.context.run({ id, generation }, async () => {
       try {
         const result = await operation();
-        this.record(stage, "end", { durationMs: this.now() - started, outcome: "ok" }, id);
+        if (generation === this.generation) this.record(stage, "end", { durationMs: this.now() - started, outcome: "ok" }, id);
         return result;
       } catch (error) {
-        this.record(stage, "end", { durationMs: this.now() - started, outcome: "error" }, id);
+        if (generation === this.generation) this.record(stage, "end", { durationMs: this.now() - started, outcome: "error" }, id);
         throw error;
       }
     });
@@ -108,10 +134,12 @@ export class ListingDiagnostics {
   }
 
   link(stage: ListingStage, phase: "coalesced" | "cache-hit" | "cancel", object: object, fields: ListingFields = {}): void {
+    if (!this.enabled) return;
     this.record(stage, phase, { ...fields, targetId: this.identities.get(object) });
   }
 
   remember(object: object, promise: object): void {
+    if (!this.enabled) return;
     const id = this.identities.get(promise);
     if (id !== undefined) this.identities.set(object, id);
   }
@@ -121,10 +149,10 @@ export class ListingDiagnostics {
     const events: Event[] = [];
     const size = Math.min(this.recorded, CAPACITY);
     for (let i = 0; i < size; i += 1) {
-      const event = this.ring[(this.next - size + i + CAPACITY) % CAPACITY]!;
+      const event: Event = JSON.parse(this.ring[(this.next - size + i + CAPACITY) % CAPACITY]!);
       if (event.at >= capturedAtMs - RETENTION_MS && event.at <= capturedAtMs) events.push({ ...event });
     }
-    return { schemaVersion: 1, processId: process.pid, capturedAtMs, capacity: CAPACITY,
+    return { schemaVersion: 2, enabled: this.enabled, processId: process.pid, capturedAtMs, capacity: CAPACITY,
       retentionMs: RETENTION_MS, recorded: this.recorded, overwritten: Math.max(0, this.recorded - CAPACITY),
       totals: { ...this.totals }, events };
   }
