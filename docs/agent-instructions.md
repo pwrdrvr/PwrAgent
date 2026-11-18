@@ -102,7 +102,8 @@ digest and is sent the block. A prompt the agent rejects leaves the block due
 again.
 
 ACP agents echo each prompt back as a `user_message_chunk`. The transcript
-filter `stripAcpAgentInstructionBlock` removes the block by its markers, the
+filter (`stripAcpAgentInstructionChunk`, which follows a block across the
+chunks of one echoed message) removes the block by its markers, the
 way `stripManagedReviewContextBlock` removes a review artifact. Change a marker
 in one place and the block renders as something the operator typed.
 

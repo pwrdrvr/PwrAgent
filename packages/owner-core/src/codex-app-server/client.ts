@@ -11140,13 +11140,21 @@ export class CodexAppServerClient {
 
   /** Drop this connection's subscription so the next resume loads the thread again. */
   private async unsubscribeThreadForReload(threadId: string): Promise<void> {
-    if (this.threadUnsubscribeUnsupported) return;
-    try {
-      await this.connection.request("thread/unsubscribe", { threadId },
-        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
-    } catch (error) {
-      if (!isMethodUnavailableError(error, "thread/unsubscribe")) throw error;
-      this.threadUnsubscribeUnsupported = true;
+    if (!this.threadUnsubscribeUnsupported) {
+      try {
+        await this.connection.request("thread/unsubscribe", { threadId },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      } catch (error) {
+        if (!isMethodUnavailableError(error, "thread/unsubscribe")) throw error;
+        this.threadUnsubscribeUnsupported = true;
+      }
+    }
+    if (this.threadUnsubscribeUnsupported) {
+      // The resume that follows rejoins the loaded thread, and Codex ignores
+      // its developer instructions.
+      this.host.logger.warn("thread/unsubscribe is unavailable; changed Agent instructions apply to this Codex thread only until its next compaction or reload", {
+        threadId,
+      });
       return;
     }
     this.subscribedThreads.delete(threadId);
@@ -11356,7 +11364,12 @@ export class CodexAppServerClient {
       // instructions are sent as an empty string.
       reloadDeveloperInstructions =
         (await this.threadDeveloperInstructionsResolver?.(params.threadId))?.trim() ?? "";
-      await this.unsubscribeThreadForReload(params.threadId);
+      try {
+        await this.unsubscribeThreadForReload(params.threadId);
+      } catch (error) {
+        this.staleDeveloperInstructionThreads.add(params.threadId);
+        throw error;
+      }
     }
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
@@ -11391,6 +11404,10 @@ export class CodexAppServerClient {
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }).catch((error: unknown) => {
+        // A reload that did not happen is still owed to the next turn.
+        if (reloadDeveloperInstructions !== undefined) {
+          this.staleDeveloperInstructionThreads.add(params.threadId);
+        }
         // This exact provider refusal proves that no turn was admitted by
         // this start. Keep the stage in a typed error; a turn/start failure
         // or transport timeout must never be mistaken for safe non-admission.

@@ -10,6 +10,8 @@ export class AgentInstructionCodexTransport implements JsonRpcTransport {
   static instances: AgentInstructionCodexTransport[] = [];
   /** Result for `server/capabilities/read`. Undefined answers as stock Codex does. */
   static capabilities: Record<string, unknown> | undefined;
+  /** The next request with this method is answered with an error, once. */
+  static failNext: string | undefined;
   private static nextThread = 0;
   private static nextTurn = 0;
   private handler: (message: string) => void = () => {};
@@ -22,6 +24,7 @@ export class AgentInstructionCodexTransport implements JsonRpcTransport {
     AgentInstructionCodexTransport.requests = [];
     AgentInstructionCodexTransport.instances = [];
     AgentInstructionCodexTransport.capabilities = undefined;
+    AgentInstructionCodexTransport.failNext = undefined;
     AgentInstructionCodexTransport.nextThread = 0;
     AgentInstructionCodexTransport.nextTurn = 0;
   }
@@ -53,6 +56,11 @@ export class AgentInstructionCodexTransport implements JsonRpcTransport {
       id, cwd: String(params.cwd ?? "/fixture"), source: "cli", name: id, createdAt: 1, updatedAt: 2,
       modelProvider: "openai", threadSource: "user", turns: [],
     });
+    if (AgentInstructionCodexTransport.failNext === request.method) {
+      AgentInstructionCodexTransport.failNext = undefined;
+      this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "fixture failure" } }));
+      return;
+    }
     let result: unknown = {};
     if (request.method === "initialize") {
       result = { userAgent: "agent-instruction-fixture/1.0", codexHome: "/fixture", platformFamily: "unix", platformOs: "linux" };

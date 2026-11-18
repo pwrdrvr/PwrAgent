@@ -1082,6 +1082,17 @@ export class AcpAgentClient {
     this.rememberSessionIds(metadata);
     // A turn usually follows; keep an idle close from racing it.
     this.touchSession(metadata.sessionId);
+    // The caller may hold metadata from before a prompt recorded what the
+    // session was sent. That record is this client's, so keep the stored one.
+    const { agentInstructionsDigest: _captured, ...captured } = metadata;
+    const storedDigest = this.options.store.getSession(
+      this.options.backendId,
+      metadata.sessionId,
+    )?.agentInstructionsDigest;
+    metadata = {
+      ...captured,
+      ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
+    };
     if (this.idleClosedSessions.has(metadata.sessionId)) {
       this.options.store.upsertSession(metadata);
       await this.reopenIdleClosedSession(metadata.sessionId, {

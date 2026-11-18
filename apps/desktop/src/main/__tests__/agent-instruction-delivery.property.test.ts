@@ -20,6 +20,7 @@ import {
   ACP_AGENT_INSTRUCTIONS_OPEN_MARKER,
   buildAcpAgentInstructionBlock,
   stripAcpAgentInstructionBlock,
+  stripAcpAgentInstructionChunk,
 } from "../../shared/agent-instruction-delivery";
 import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -239,6 +240,32 @@ describe("a turn on a designated Agent carries its instructions to the provider"
 });
 
 describe("an instruction edit reaches the next turn and not the running one", () => {
+  it("Codex: a reload owed since before the first turn stays owed when its resume fails", async () => {
+    AgentInstructionCodexTransport.capabilities = {
+      codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
+    };
+    const { root, open } = await createFixture();
+    const { registry } = open();
+    const started = await registry.startThread({ backend: "codex", cwd: root, agent: agent(FIRST) });
+    const identity = { backend: "codex" as const, threadId: started.threadId };
+    // Removed before the first turn: the thread has no rollout to reload from.
+    await registry.setThreadAgent({ ...identity, agent: agent("") });
+    const first = await registry.startTurn({ ...identity, input: text("one") });
+    completeCodexTurn(started.threadId, first.turnId);
+
+    AgentInstructionCodexTransport.failNext = "thread/resume";
+    await vi.waitFor(async () => {
+      await expect(registry.startTurn({ ...identity, input: text("two") })).rejects.toThrow();
+      expect(AgentInstructionCodexTransport.failNext).toBeUndefined();
+    });
+    AgentInstructionCodexTransport.requests = [];
+    await vi.waitFor(async () => {
+      await registry.startTurn({ ...identity, input: text("three") });
+    });
+    // An empty override is what makes Codex load the thread without the old text.
+    expect(codexFrames("thread/resume").map((frame) => frame.developerInstructions)).toContain("");
+  });
+
   it("Codex: the change waits for the turn to end, then reloads the thread and tells the model", async () => {
     AgentInstructionCodexTransport.capabilities = {
       codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
@@ -511,5 +538,68 @@ describe("the ACP instruction block", () => {
         expect(stripAcpAgentInstructionBlock(operatorText)).toBe(operatorText);
       },
     ));
+  });
+
+  it("never reaches the transcript when the echo is cut into any number of chunks", () => {
+    // Oracle: whatever the chunking, the displayed text is the operator's.
+    // Cuts fall between the markers, which an agent echoes whole.
+    const instructionLine = fc.string({ unit: fc.constantFrom("§", "¶", " ", "x") });
+    const operator = fc.string({ unit: fc.constantFrom("a", "b", " ") });
+    fc.assert(fc.property(
+      fc.array(instructionLine, { minLength: 1, maxLength: 6 }),
+      operator,
+      fc.array(fc.nat(), { maxLength: 6 }),
+      (lines, operatorText, cuts) => {
+        const block = buildAcpAgentInstructionBlock(lines.join("\n") || "§");
+        const bodyStart = ACP_AGENT_INSTRUCTIONS_OPEN_MARKER.length;
+        const bodyEnd = block.length - ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER.length;
+        const points = [...new Set(cuts.map((cut) => bodyStart + (cut % (bodyEnd - bodyStart + 1))))]
+          .sort((left, right) => left - right);
+        const echoed = `${block}${operatorText}`;
+        const chunks = [0, ...points].map((from, index) => echoed.slice(from, points[index] ?? echoed.length));
+        let insideBlock = false;
+        let shown = "";
+        for (const chunk of chunks) {
+          const stripped = stripAcpAgentInstructionChunk(chunk, insideBlock);
+          insideBlock = stripped.insideBlock;
+          shown += stripped.text;
+        }
+        expect(insideBlock).toBe(false);
+        expect(shown.trim()).toBe(operatorText.trim());
+      },
+    ));
+  });
+
+  it("is not sent again when a caller reloads the session with metadata captured before it was sent", async () => {
+    const db = openInMemoryStateDb();
+    const store = new AcpSessionStore(db);
+    const transport = new FakeAcpAgentTransport({
+      initialize: { protocolVersion: 1, agentCapabilities: {
+        loadSession: true, sessionCapabilities: { close: {} },
+      } },
+    });
+    const client = new AcpAgentClient({ backendId: ACP, store, transport });
+    const prompts = () => transport.requests.filter((request) => request.method === "session/prompt");
+    const turn = async () => {
+      const sent = prompts().length;
+      client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: "alpha" });
+      await vi.waitFor(() => {
+        expect(client.hasActiveTurns()).toBe(false);
+        expect(prompts().length).toBeGreaterThan(sent);
+      });
+      return JSON.stringify(prompts().at(-1)!.params);
+    };
+    await client.initialize();
+    const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    try {
+      const captured = store.getSession(ACP, sessionId)!;
+      expect(await turn()).toContain(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER);
+      await client.closeIdleSessions({ idleMs: 0 });
+      await client.ensureSession(captured);
+      expect(await turn()).not.toContain(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER);
+    } finally {
+      await client.dispose();
+      db.close();
+    }
   });
 });

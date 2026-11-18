@@ -95,3 +95,30 @@ export function stripAcpAgentInstructionBlock(value: string): string {
       : closeAt + ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER.length;
   return `${value.slice(0, start)}${value.slice(end)}`.trim();
 }
+
+/**
+ * `stripAcpAgentInstructionBlock` for one chunk of a streamed message.
+ * `insideBlock` says an earlier chunk opened a block that has not closed yet;
+ * a chunk between the two markers carries neither and is dropped whole. The
+ * caller clears the state when the user message ends, so a block that never
+ * closes cannot swallow later messages.
+ */
+export function stripAcpAgentInstructionChunk(
+  value: string,
+  insideBlock: boolean,
+): { text: string; insideBlock: boolean } {
+  let rest = value;
+  if (insideBlock) {
+    const closeAt = rest.indexOf(ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER);
+    if (closeAt === -1) {
+      return { text: "", insideBlock: true };
+    }
+    rest = rest.slice(closeAt + ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER.length);
+  }
+  const start = rest.indexOf(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER);
+  return {
+    text: stripAcpAgentInstructionBlock(rest),
+    insideBlock: start !== -1
+      && rest.indexOf(ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER, start) === -1,
+  };
+}

@@ -12,7 +12,7 @@ import type {
 } from "@pwragent/shared";
 import { formatWebSearchLabel } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
-import { stripAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
+import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
   type AcpProviderTool,
   isGenericShellToolTitle,
@@ -521,6 +521,7 @@ export class AcpSessionReplayNormalizer {
       kind === "agent_message_chunk" || kind === "agent_thought_chunk";
 
     if (isAssistantTextUpdate) {
+      this.insideAgentInstructionBlock = false;
       // Consecutive ACP text chunks form one live bubble, but text after a tool
       // call should become a new bubble instead of overwriting earlier text.
       const text =
@@ -708,6 +709,9 @@ export class AcpSessionReplayNormalizer {
     });
   }
 
+  /** An echoed Agent instruction block opened in an earlier user chunk. */
+  private insideAgentInstructionBlock = false;
+
   private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
     // PwrAgent prepends the finished managed-review artifact to the next
     // prompt so the agent can reason about it. The transcript already shows
@@ -715,11 +719,14 @@ export class AcpSessionReplayNormalizer {
     // rather than rendering it as something the operator typed.
     // The Agent instruction block PwrAgent puts ahead of a prompt is removed
     // the same way: the operator did not type it.
-    const text = stripAcpAgentInstructionBlock(stripManagedReviewContextBlock(
+    // An agent may echo the block in several chunks.
+    const stripped = stripAcpAgentInstructionChunk(stripManagedReviewContextBlock(
       readContentText(update.update, "content") ??
         readString(update.update, "text") ??
         "",
-    ));
+    ), this.insideAgentInstructionBlock);
+    this.insideAgentInstructionBlock = stripped.insideBlock;
+    const text = stripped.text;
     if (!text) {
       return;
     }
