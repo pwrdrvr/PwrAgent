@@ -1,0 +1,98 @@
+name: E2E timing study 3769
+
+on:
+  push:
+    branches: [codex/e2e-timing-3769-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Timing ${{ matrix.os }} lane ${{ matrix.lane }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-latest]
+        lane: [1, 2, 3, 4]
+    steps:
+      - name: Disable Spotlight before checkout
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        run: |
+          sudo mdutil -a -i off
+          mdutil -a -s
+      - uses: actions/checkout@v7
+        with:
+          ref: 46cc4f617761610ae17219d1358f9e9a9933f505
+          lfs: ${{ runner.os == 'macOS' }}
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+      - name: Record source and full collection
+        shell: bash
+        run: |
+          mkdir -p .local/timing
+          git rev-parse HEAD > .local/timing/source.txt
+          pnpm --filter @pwragent/desktop exec playwright test -c playwright.config.ts --list --reporter=json > .local/timing/collection-full.json
+      - name: Add observation without changing audit or lifecycle behavior
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const replaceOnce = (file, before, after) => {
+            const source = fs.readFileSync(file, "utf8");
+            if (source.split(before).length !== 2) throw new Error(`Expected one instrumentation point in ${file}`);
+            fs.writeFileSync(file, source.replace(before, after));
+          };
+          replaceOnce("apps/desktop/playwright.config.ts", '["list"],', '["list"], ["json", { outputFile: "timing-results.json" }], ["../../.local/timing/phase-reporter.mjs"],');
+          replaceOnce("apps/desktop/e2e/a11y.spec.ts", "const results = await builder.analyze();", 'const results = await test.step("timing: axe analyze", () => builder.analyze());');
+          fs.writeFileSync(".local/timing/phase-reporter.mjs", `import fs from "node:fs";
+          export default class PhaseReporter {
+            onTestEnd(test, result) {
+              const step = (s) => ({title:s.title,category:s.category,duration:s.duration,location:s.location,steps:s.steps.map(step)});
+              const row = {id:test.id,file:test.location.file,title:test.titlePath(),expectedStatus:test.expectedStatus,status:result.status,duration:result.duration,retry:result.retry,steps:result.steps.map(step)};
+              fs.appendFileSync("timing-events.jsonl", JSON.stringify(row)+"\\n");
+              console.log("E2E_TIMING "+JSON.stringify({id:row.id,status:row.status,duration:row.duration}));
+            }
+          }
+          `);
+          NODE
+          git diff --stat > .local/timing/instrumentation.txt
+      - name: Measure the complete diagnostic slice on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          PWRAGENT_E2E_DISABLE_GPU: "1"
+          PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+          PWTEST_SHARD_WEIGHTS: "60:110:110:125"
+        run: |
+          pnpm --filter @pwragent/desktop exec playwright test -c playwright.config.ts --list --shard=${{ matrix.lane }}/4 --reporter=json > .local/timing/collection-slice.json
+          exec bash scripts/ci/macos-e2e-run-lane.sh pnpm --filter @pwragent/desktop test:e2e --shard=${{ matrix.lane }}/4 --retries=0
+      - name: Measure the complete diagnostic slice on Windows
+        if: runner.os == 'Windows'
+        env:
+          PWTEST_SHARD_WEIGHTS: "60:110:110:125"
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          pnpm --filter @pwragent/desktop exec playwright test -c playwright.config.ts --list --shard=${{ matrix.lane }}/4 --reporter=json > .local/timing/collection-slice.json
+          pnpm test:desktop-e2e --shard=${{ matrix.lane }}/4 --retries=0
+      - name: Retain timing and completion evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: timing-${{ matrix.os }}-lane-${{ matrix.lane }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            .local/timing/
+            apps/desktop/timing-results.json
+            apps/desktop/timing-events.jsonl
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
