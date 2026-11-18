@@ -1,166 +1,176 @@
-# Outpost native preparation measurements
+# Outpost native preparation
 
-`packages/pwragent/scripts/build.mjs` copies the native sources and installer
-scripts, then runs `install.mjs`. The installer rebuilds the IPC relay and calls
-`stageRuntime`. An existing Git payload is reused only after the full inventory,
-architecture, signature and executable probes pass. These measurements leave
-that verification intact.
+The Outpost installer now reuses an unchanged, verified IPC relay on macOS and
+Linux. It prepares that helper in a Node worker while the main thread stages
+and verifies Git. Both owners finish before the installer reports success or
+failure. Every existing Git inventory, architecture, signature and executable
+probe still runs; peer verification in the helper is unchanged.
+
+## Reuse rules
+
+Reuse is opt-in for Outpost. Ordinary desktop helper builds still compile.
+Windows retains its existing compiler path; Outpost supports macOS and Linux.
+No dependency or native source changed.
+
+The local reuse key includes preprocessed C and included headers, complete
+compiler arguments and effective compiler/linker commands, build-script bytes,
+platform, requested architecture, kernel identity and the sorted environment.
+Compiler, assembler, linker, plugins, SDK settings, search directories and
+actual linked inputs are recorded. Toolchain and library identity uses resolved
+paths, filesystem device/inode, size, mode, and nanosecond modification/change
+timestamps. Search-directory entries and dynamic loader inputs also invalidate
+reuse. This avoids rereading a large compiler executable on every build.
+
+The emitted helper's SHA-256 and permissions are checked on every hit. Toolchain
+wrappers, uninspectable dependencies and dynamic library injection settings
+fall back to compilation. Compilation records real linker inputs; a changed
+pre/post-build plan refuses publication, and newly changed dependencies do not
+get sealed for reuse on an ambiguous first build. This is a local build cache,
+not an authenticity boundary against the checkout owner or privileged changes
+to filesystem identity. Cache metadata is not shipped in the npm package.
+
+One atomic directory lock owns compilation, invalidation and publication,
+including the installed resource copy. A competing builder fails without
+removing the owner's files. Rebuilds remove the old helper; failed owned builds
+also remove the installed copy. Successful outputs and copies publish through
+renames. An interrupted owner can leave its lock: inspect `owner.json`, verify
+that the process and its compiler are gone, then remove the stale lock manually.
+There is no unsafe PID-only automatic lock reclamation.
+
+## Measurements
+
+Seven alternating before/after pairs ran on macOS arm64, kernel 27.0.0, Node
+24.22.1, with ten available CPUs. Each command used a fresh process. Run 0 was
+retained separately as setup; the table summarizes runs 1–7. No other checks
+ran concurrently with timed commands.
+
+| Operation | State | Before median [min–max] | After median [min–max] |
+| --- | --- | --- | --- |
+| Helper process | cold | 86.8 [82.8–88.9] ms | 306.3 [287.0–319.8] ms |
+| Helper process | warm | 87.3 [83.9–89.5] ms | 74.1 [70.6–78.6] ms |
+| Full portable package build | cold | 1.011 [0.963–1.065] s | 0.983 [0.940–1.011] s |
+| Full portable package build | warm | 1.003 [0.972–1.051] s | 0.958 [0.908–0.978] s |
+| Focused owner command | cold | 6.076 [5.673–6.246] s | 6.041 [5.652–6.202] s |
+| Focused owner command | warm | 6.022 [5.776–6.082] s | 5.963 [5.604–6.284] s |
+
+Warm helper preparation improved in all seven pairs (median paired reduction
+12.9 ms). Warm package builds improved in all seven pairs (52.3 ms; paired
+range 29.2–108.1 ms). Cold package builds also improved in all seven pairs
+(14.5 ms median paired reduction), despite the cold helper's extra toolchain
+inspection costing about 220 ms. Parallel Git verification overlaps that cost.
+
+Owner commands improved in only four of seven pairs in each state. Their warm
+median paired reduction was 52.6 ms, with changes ranging from 171.7 ms faster
+to 352.6 ms slower. These results do **not** establish a repeatable owner-test
+speedup. The measured relay saving is small relative to the remaining roughly
+six-second test command. A separate diagnostic run timed the two checkout
+fixture builds at 229 and 232 ms; concurrency lifecycle cases took 606–718 ms
+each and the boot case took 965 ms, including its build. The diagnostic is not
+a median or an attribution of all wall time. It points toward owner process
+startup/retirement and test bootstrap as the next profiling targets, rather
+than further compiler caching. The temporary timing instrumentation was removed;
+its driver and bounded log are `profile-owner.mjs` and
+`v2-owner-build-profile.log` in the evidence directory. This change does not
+remove other test bootstrap or owner work. The initial 479 ms compiler diagnostic was not a warm median.
+
+Setup run 0 took 441/290 ms for the cold before/after helper, 1.480/0.953 s for
+the cold package, and 6.633/5.605 s for the cold owner command. It is excluded
+from the table. An earlier independent baseline series was slower than the
+matched control, which is why the comparison uses alternating pairs rather
+than subtracting independently collected medians.
 
 ## Reproduction
 
-Use an otherwise idle checkout with its own installed dependencies and an
-already staged Git runtime. Run on the native macOS or Linux host; do not share
-`node_modules` with another worktree. On macOS the normal Git signature checks
-must run outside the restricted Codex sandbox or in native CI.
+Use an otherwise idle native host and this worktree's own installed dependencies.
+On macOS run outside the restricted Codex sandbox or in native CI so the normal
+Git signature verification can succeed. Do not share `node_modules`.
 
 ```sh
-node scripts/benchmark-outpost-native-preparation.mjs --phase before --samples 5
-node scripts/benchmark-outpost-native-preparation.mjs --phase repeat --samples 5 \
-  --compiler "$(xcrun --find clang)"
+node scripts/benchmark-outpost-native-preparation.mjs --phase before --samples 7
+node scripts/benchmark-outpost-native-preparation.mjs --phase after --samples 7 --native-reuse
 ```
 
-`--compiler` is optional and identifies the actual compiler executable to hash
-for the validation-cost probe. The example uses Xcode's compiler rather than
-only hashing Apple's small `/usr/bin/cc` dispatcher. On Linux pass the actual
-compiler executable for that toolchain.
+Run the first command against the original preparation scripts at `d31d8e3e9`,
+and the second against the implementation. The driver itself is present at
+that baseline; `--native-reuse` opts the direct helper measurement into reuse.
+The package and owner commands use their installer normally. These independent
+series reproduce the commands, but alternating pairs better control host drift.
 
-The driver records the commit, Node executable/version, platform, architecture,
-OS kernel and available CPUs in `.local/native-helper-cache/`. Each run starts
-fresh processes and performs full builds. Run 0 is retained separately; the
-summary uses the following five samples. Each cold/warm pair uses these commands:
+The matched driver is retained at `.local/native-helper-cache/paired-v2.mjs`.
+Run `node .local/native-helper-cache/paired-v2.mjs` in this investigation
+workspace. It saves and restores the working copies of exactly three files:
+`apps/desktop/scripts/build-mcp-ipc-relay.mjs`,
+`packages/pwragent/scripts/build.mjs`, and
+`packages/pwragent/scripts/install.mjs`. For each control it installs those
+bytes from `d31d8e3e9`; for each after run it restores the implementation bytes
+measured at `09a4af4a0`. C and runtime sources, dependencies and environment stay
+identical. The script alternates order per pair, makes no preload instrumentation
+or verification omissions, and uses these exact commands:
 
-- Helper: import `buildMcpIpcRelay` from the desktop script and call it with
-  `{ outputRoot: "<checkout>/packages/pwragent", packaged: true }`.
-- Package: `node packages/pwragent/scripts/build.mjs` with normal source maps.
-- Owner: `pnpm test apps/desktop/src/main/__tests__/headless-host.boot.oracle.test.ts apps/desktop/src/main/__tests__/headless-concurrency.oracle.test.ts`.
+```sh
+node --input-type=module -e 'import {buildMcpIpcRelay} from "./apps/desktop/scripts/build-mcp-ipc-relay.mjs"; buildMcpIpcRelay({outputRoot:process.cwd()+"/packages/pwragent",packaged:true,reuse:true});'
+node packages/pwragent/scripts/build.mjs
+pnpm test apps/desktop/src/main/__tests__/headless-host.boot.oracle.test.ts apps/desktop/src/main/__tests__/headless-concurrency.oracle.test.ts
+```
 
-“Cold” removes only `packages/pwragent/build/mcp-ipc-relay/packaged` before the
-command. “Warm” repeats the same command without deleting it. Dependencies,
-Git archives and the staged Git inventory are already present. These are not
-controlled OS cold-cache, fresh-install or download measurements. The owner
-command retains all global setup, including the map-free test package build,
-and includes seven tests plus their startup and preparation costs.
+The direct helper control passes `reuse:false`. Package builds include normal
+source maps. Owner commands retain all global setup, including the existing
+map-free package build, and execute seven tests. “Cold” removes only
+`packages/pwragent/build/mcp-ipc-relay/packaged`; “warm” repeats without deletion.
+Git payload, dependencies and OS caches remain warm. These are neither clean
+installation/download measurements nor incremental JavaScript builds.
 
-Logs are capped at 120,000 characters per command. A benchmark lock prevents
-multiple measurement drivers from deleting the same outputs. If a driver is
-killed, inspect its `benchmark.lock/owner.json`, verify that it and its children
-are gone, and only then remove that lock before repeating the measurements.
+The ignored evidence directory contains `v2-paired-environment.json` (source
+hashes and host), `v2-paired.json` (exact argv, status and timing for all 96
+commands), `v2-paired-summary.json`, and per-command logs bounded to 120,000
+characters. Separate `v2-before-*` files retain the pre-edit baseline. The
+benchmark lock prevents concurrent deletion of shared outputs; an interrupted
+driver requires the same ownership inspection before removing its lock.
 
-## macOS arm64 investigation
+The earlier investigation tried hashing the full compiler executable each time;
+that optimistic design made warm preparation slower and was not shipped. Its
+ignored `paired-reuse.*` evidence remains available, separate from these actual
+implementation measurements.
 
-The initial series used commit `c71b9a793`, macOS arm64 and Node 24.22.1. No
-production builder, installer, C source, native verification or test timeout was
-changed during this investigation. Independent repeat measurements therefore
-serve as a control for timing drift, not as a claimed optimization.
+## Output, runtime and ownership oracles
 
-The initial helper process took 451 ms, the initial package build 1.498 s and
-the initial owner command 8.012 s. Subsequent measurements were substantially
-faster. The earlier diagnostic observation of a 479 ms compiler process is not
-a representative warm median.
+The native build oracle copies the real builder/cache module and C sources into
+owned fixtures. It executes emitted code after source, included-header, build
+flag and real linked-archive changes. Corruption with preserved size/mtime must
+rebuild. Missing compilers and failed rebuilds must remove stale canonical and
+installed helpers. Architecture changes inspect actual native headers; foreign
+slices are not assumed executable. Fail-closed peer behavior remains exercised.
+A positive reuse oracle proves that an unchanged executable was not replaced;
+it fails against the original unconditional builder.
 
-A separate unchanged-build profile took 1.044 s and attributed 105 ms to `cc`,
-97 ms to 12 `lipo` calls, 206 ms to 12 `codesign` calls, 29 ms to four Git probes,
-and 11 ms to source/notice copying. This profile is diagnostic, not a median or
-an assertion that those costs can safely be removed.
+Independent output roots use process groups/Windows Jobs and join owners before
+cleanup. A held same-output lock must preserve the owner's helper and installed
+copy. The installer coordination model runs the real installer and Worker,
+gates both preparations, and proves that a failure in either joins the other
+before exit. It fails against the previous sequential installer. It also covers
+npm-style ESM evaluation and inherited Node memory flags.
 
-The conservative validation-cost probe expands the C source through `cc -E`,
-hashes that expanded input, hashes the actual compiler executable, and hashes
-the helper output. Its warm median was 67.34 ms [66.09–71.69], including a
-46.03 ms compiler hash and 20.61 ms preprocessing. It excludes Node startup,
-full toolchain/linker/SDK identity checks, cache metadata and ownership work.
-This is a lower bound for that particular content-validation design, not a
-proof that every possible cache design has the same cost.
+Native CI must verify Linux/macOS reuse and the unchanged Windows native
+compiler/runtime path. The existing desktop-main lanes include these tests;
+`ci:full` requests macOS as well. Local macOS measurements make no Linux or
+Windows performance claim. Standalone packed-install probes cover the portable
+loader, worker/bridge/hook entries, native modules, PDF/WASM, sandbox, private
+lock, durable acceptance and CLI behavior.
 
-The matched experiment used five alternating control/reuse pairs after a
-separate setup pair. Both modes loaded the same instrumentation; only native
-build commands initialized its probe. It observed 18 cache hits and 18 misses
-including setup, with all commands passing. No concurrent checks ran during
-timed commands.
+## Local verification
 
-| Operation | State | Control median [range] | Optimistic reuse median [range] |
-| --- | --- | --- | --- |
-| Helper process | cold | 90.3 [88.3–115.3] ms | 177.8 [165.4–185.2] ms |
-| Helper process | warm | 92.4 [85.8–108.0] ms | 102.8 [101.7–112.0] ms |
-| Full package build | cold | 1.018 [1.002–1.137] s | 1.165 [1.062–1.243] s |
-| Full package build | warm | 1.010 [0.990–1.071] s | 1.025 [1.002–1.131] s |
-| Focused owner command | cold | 5.916 [5.827–8.298] s | 5.919 [5.882–6.533] s |
-| Focused owner command | warm | 6.146 [5.832–6.503] s | 5.880 [5.819–6.248] s |
+After rebasing onto current main, the native build and installation coordination
+oracles, helper-path and peer suites, owner boot/concurrency/conformance,
+production entry and startup-import selection passed 131 tests. Three existing
+platform/privilege cases in the peer suite were skipped; none of the new
+oracles were skipped. All 42 Outpost package tests passed.
 
-The experiment restores previously compiled bytes only after checking expanded
-C input, compiler bytes, arguments, build-script bytes, platform/architecture,
-the process environment and cached-output integrity. It retains the original
-stale-output removal and all Git verification. It intentionally omits complete
-linker/SDK/toolchain validation and a general concurrent cache publication
-protocol; it is an optimistic performance bound, **not a safe production cache**.
-Cold experiment runs also remove its cached binary.
-
-Warm helper preparation got slower in every paired sample (median paired
-increase 13.94 ms). The full warm package build got slower in four of five
-pairs (median paired increase 12.58 ms). Owner command medians moved faster,
-but their ranges overlap substantially and the change exceeds the entire
-measured relay step. These samples do not establish an owner-test speedup.
-
-No production cache is enabled. The measured design provides no package-build
-saving even before completing its safety checks. The evidence does not rule
-out a different, cheaper toolchain-identity design or a benefit on another
-native platform; it does not justify adding that complexity to this security
-helper on the measured host.
-
-The ignored experiment and its exact commands are retained at
-`.local/native-helper-cache/optimistic-reuse.cjs` and `paired-reuse.mjs`.
-Reproduce the paired experiment with `node .local/native-helper-cache/paired-reuse.mjs`
-in this investigation workspace. The driver sets the same absolute
-`NODE_OPTIONS=--require=<checkout>/.local/native-helper-cache/optimistic-reuse.cjs`
-for each measured command and selects `PWRAGENT_REUSE_EXPERIMENT=control` or
-`reuse`. Results, environment, per-command logs and cache-hit events are in
-`paired-reuse.json`, `paired-summary.json`, `paired-environment.json` and
-`experiment-events.jsonl`. Interrupted samples are retained with an
-`interrupted-` prefix and excluded. The committed benchmark driver reproduces
-the unmodified-build baselines and validation-cost probe without this experiment.
-
-## Safety oracles
-
-`apps/desktop/scripts/build-mcp-ipc-relay.oracle.test.mjs` copies the actual
-builder and native source tree into owned temporary fixtures. A small C wrapper
-preserves the production entry and adds a query identifying the source, included
-header and compiler flag that actually reached the emitted executable.
-
-The tests execute the helper, inspect its native machine header, change source,
-included headers and build-script flags at the same output path, corrupt the
-output, and remove the compiler from the build environment. They check that a
-failed rebuild leaves no old usable helper and that the rebuilt production
-entry rejects an absent peer without writing protocol data. They also exercise
-independent concurrent output roots, joining process groups/Windows Jobs
-before fixture cleanup, and a shared packaged filename across requested
-architectures. Cross-architecture execution is not assumed.
-
-An intentionally invalid candidate that returned an existing helper before
-compiling failed four of the five oracles. The normal builder passed all five.
-The candidate was removed; no cache or alternate production build path ships.
-The separate existing MCP IPC suite supplies real connected-peer, HTTP and
-platform-specific identity tests.
-
-The independent-root test does not establish a same-output concurrent cache
-publication protocol. A future cache would need that ownership protocol as well
-as complete invalidation for source and includes, every relevant build script
-and flag, platform/architecture, toolchain and SDK/linker inputs, environment and
-output bytes. Failed validation/rebuilds must remove stale usable outputs, and
-helper reuse must not replace any Git verification or runtime peer checks.
-
-## Verification
-
-The normal native build/output oracles and existing helper-path/peer-verification
-suites passed on native macOS arm64: 21 passed, with three existing
-platform/privilege-dependent skips in the peer suite. All five new oracles
-passed without skips. After rebasing onto current main, the combined native
-and owner boot/concurrency selection passed 28 tests with the same three
-existing skips. The package suite passed all 42 tests. The normal standalone
-packed installation passed its
-portable loader, workers, bridge/hook, native modules, PDF/WASM, sandbox, lock,
-durable acceptance and CLI probes. Syntax lint, typed lint, native typecheck,
-license checks and dependency boundaries passed.
-
-The new tests belong to the existing `desktop-main` project and run with native
-compilers on Linux, macOS and Windows CI. Request `ci:full` for the macOS PR
-lanes. These tests verify native output and runtime paths; the timings above
-remain macOS measurements, not Linux or Windows performance claims.
+`pnpm --filter pwragent pack:check` installed the actual 154-file tarball away
+from the checkout and passed the native, asset, daemon and loader checks above
+(14 startup chunks, 22 optional chunks). `pnpm lint` passed syntax and typed
+lint, typecheck, license checks and dependency boundaries. Normal Git signature
+verification ran outside the restricted macOS sandbox. Logs are
+`v2-final-focused.log`, `v2-final-package-tests.log`, `v2-final-pack-check.log` and
+`v2-final-lint.log` in the ignored evidence directory. Native CI for the new
+implementation is still required; the earlier green CI covered only the
+investigation tests.
