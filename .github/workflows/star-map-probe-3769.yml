@@ -1,0 +1,68 @@
+name: Star Map opening comparison 3769
+
+on:
+  push:
+    branches: [codex/star-map-probe-3769-20261118]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Star Map opening ${{ matrix.source }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - source: main
+            ref: 2c7328c13b64f943a5a19b73b3bf6939d37be80c
+          - source: pr
+            ref: a470e950588f9d5832b3508beb929fda552177df
+    steps:
+      - name: Disable Spotlight before checkout
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          sudo mdutil -a -i off
+          mdutil -a -s
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.ref }}
+          lfs: true
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .local/star-map-probe-tools
+          sparse-checkout: .github/scripts/star-map-open-probe-3769.mjs
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+      - name: Add click and owner receipts without changing waits
+        run: |
+          mkdir -p .local/star-map-probe
+          git rev-parse HEAD > .local/star-map-probe/source.txt
+          node .local/star-map-probe-tools/.github/scripts/star-map-open-probe-3769.mjs
+          git diff > .local/star-map-probe/instrumentation.patch
+      - name: Observe three independent fixture launches without retry
+        env:
+          PWRAGENT_E2E_DISABLE_GPU: "1"
+          PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+        run: |
+          exec bash scripts/ci/macos-e2e-run-lane.sh pnpm test:desktop-e2e e2e/star-map-project-pagination.spec.ts --repeat-each=3 --retries=0 --workers=1
+      - name: Retain opening receipts and test outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: star-map-opening-${{ matrix.source }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            .local/star-map-probe/
+            apps/desktop/star-map-opening.jsonl
+            apps/desktop/star-map-results.json
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
