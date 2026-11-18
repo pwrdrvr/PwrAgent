@@ -24792,6 +24792,81 @@ script = "echo setup"
     ), { numRuns: 30 });
   });
 
+  describe("Codex model settings on an untracked thread", () => {
+    const source = "gpt-6.1-sol";
+    const destination = "gpt-6.2-sol";
+    const thread = { backend: "codex" as const, threadId: "existing" };
+
+    function fixture(readThreadModelSettings: () => Promise<{ model: string; reasoningEffort: string }>, cachedEffort?: string) {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = Object.assign(new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [source, destination].map((id) => ({
+          id, defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high"],
+          supportsReasoning: true, supportsFast: true,
+        })),
+        threads: cachedEffort ? [{
+          id: thread.threadId, source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [],
+          model: source, reasoningEffort: cachedEffort,
+        }] : [],
+      }), { readThreadModelSettings });
+      const registry = createDesktopBackendRegistry({
+        codexClient, overlayStore,
+        resolveProviderModelDefaults: () => ({ codex: { reasoningEffortsByModel: { [source]: "low" } } }),
+      });
+      return { registry, overlayStore };
+    }
+
+    it.each(["change tier", "switch model"] as const)("preserves live reasoning when asked to %s", async (action) => {
+      await fc.assert(fc.asyncProperty(fc.constantFrom("high", "medium"), async (liveEffort) => {
+        const { registry } = fixture(async () => ({ model: source, reasoningEffort: liveEffort }), "low");
+        try {
+          await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+            expect.objectContaining({ model: source, reasoningEffort: "low" }),
+          ]);
+          const patch = action === "change tier"
+            ? { model: source, fastMode: true }
+            : { model: destination };
+          await expect(registry.setThreadModelSettings({ ...thread, ...patch }))
+            .resolves.toMatchObject({ ...patch, reasoningEffort: liveEffort });
+        } finally {
+          await registry.close();
+        }
+      }), { numRuns: 10 });
+    });
+
+    it("applies newer effort selections after a model switch stalled on the owner read", async () => {
+      await fc.assert(fc.asyncProperty(fc.constantFrom("high", "medium"), async (chosenEffort) => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const { registry, overlayStore } = fixture(async () => {
+          entered.resolve();
+          await release.promise;
+          return { model: source, reasoningEffort: "low" };
+        });
+        try {
+          const switching = registry.setThreadModelSettings({ ...thread, model: destination });
+          await entered.promise;
+          const selecting = registry.setThreadModelSettings({ ...thread, model: destination, reasoningEffort: chosenEffort });
+          // An independent thread can finish while the owner read is pending.
+          // It also gives an unlocked selection on this thread time to overtake.
+          try {
+            await registry.setThreadModelSettings({
+              ...thread, threadId: "independent", model: destination, reasoningEffort: chosenEffort,
+            });
+          } finally {
+            release.resolve();
+            await Promise.all([switching, selecting]);
+          }
+          expect(await overlayStore.getThreadOverlayState(thread))
+            .toMatchObject({ model: destination, reasoningEffort: chosenEffort });
+        } finally {
+          await registry.close();
+        }
+      }), { numRuns: 10 });
+    });
+  });
+
   it("never applies or acknowledges a migration from a different Codex model provider", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("gpt-old", "@mathos/old", "@bonsai/old"),

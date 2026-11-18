@@ -1603,6 +1603,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
   private readonly executionModeSelectionLocks = new PerKeyAsyncLock();
+  private readonly threadModelSettingsLocks = new PerKeyAsyncLock();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
   private readonly turnCausalContextLocks = new PerKeyAsyncLock();
@@ -14440,16 +14441,21 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
-    const observedCodexSettings = await this.assertRequestedThreadModelAvailable(params);
     const modelSettingsManuallyUpdatedAt =
       "model" in params || "reasoningEffort" in params
         ? Date.now()
         : undefined;
-    return await this.setThreadModelSettingsInternal(params, {
-      ...(modelSettingsManuallyUpdatedAt !== undefined
-        ? { modelSettingsManuallyUpdatedAt }
-        : {}),
-    }, observedCodexSettings);
+    return await this.threadModelSettingsLocks.run(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      async () => {
+        const observedCodexSettings = await this.assertRequestedThreadModelAvailable(params);
+        return await this.setThreadModelSettingsInternal(
+          params,
+          modelSettingsManuallyUpdatedAt === undefined ? {} : { modelSettingsManuallyUpdatedAt },
+          observedCodexSettings,
+        );
+      },
+    );
   }
 
   /**
@@ -14606,7 +14612,7 @@ export class DesktopBackendRegistry {
       modelMigrationRevision?: string;
       modelSettingsManuallyUpdatedAt?: number;
     },
-    observedCodexSettings?: { reasoningEffort?: string },
+    observedCodexSettings?: { model?: string; reasoningEffort?: string },
   ): Promise<SetThreadModelSettingsResponse> {
     const identity = {
       backend: params.backend,
@@ -14614,21 +14620,25 @@ export class DesktopBackendRegistry {
     };
     const current = await this.overlayStore.getThreadOverlayState(identity);
     const requestedModel = params.model;
+    const hasExplicitEffort = "reasoningEffort" in params;
+    // Older or externally created threads may lack a PwrAgent model overlay.
+    const needsCodexSettings = params.backend === "codex" && !hasExplicitEffort && (
+      current?.model === undefined
+      || (requestedModel !== undefined && requestedModel !== current.model && current.reasoningEffort === undefined)
+    );
+    const liveSettings = needsCodexSettings
+      ? observedCodexSettings ?? await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId })
+        .catch(() => undefined)
+      : undefined;
+    const cachedSettings = needsCodexSettings ? this.threadInfoStore.getSummary(identity) : undefined;
+    const currentModel = current?.model ?? liveSettings?.model ?? cachedSettings?.model;
+    const currentEffort = current?.reasoningEffort ?? liveSettings?.reasoningEffort ?? cachedSettings?.reasoningEffort;
     const modelChanged =
-      requestedModel !== undefined && requestedModel !== current?.model;
+      requestedModel !== undefined && requestedModel !== currentModel;
     let fallbackReasoningEfforts: ModelSettings["fallbackReasoningEfforts"];
-    if (params.backend === "codex" && modelChanged && !("reasoningEffort" in params)) {
+    if (params.backend === "codex" && modelChanged && !hasExplicitEffort) {
       const providerKey = providerPickerValue(params.backend, requestedModel);
       const configured = this.resolveProviderModelDefaultsFn()[providerKey];
-      // Older or externally created threads can have provider settings without
-      // a PwrAgent model overlay. Read just this thread's settings in that case.
-      const currentEffort = current?.reasoningEffort
-        ?? observedCodexSettings?.reasoningEffort
-        ?? this.threadInfoStore.getSummary(identity)?.reasoningEffort
-        ?? (observedCodexSettings === undefined
-          ? (await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId })
-            .catch(() => undefined))?.reasoningEffort
-          : undefined);
       fallbackReasoningEfforts = [
         configured?.reasoningEffortsByModel[requestedModel],
         currentEffort,
@@ -14637,13 +14647,13 @@ export class DesktopBackendRegistry {
     const modelSettings = await this.resolveModelSettings(
       params.backend,
       {
-        model: "model" in params ? params.model : current?.model,
+        model: "model" in params ? params.model : currentModel,
         reasoningEffort:
-          "reasoningEffort" in params
+          hasExplicitEffort
             ? params.reasoningEffort
             : modelChanged
               ? undefined
-              : current?.reasoningEffort,
+              : currentEffort,
         reasoningEffortsByModel: current?.reasoningEffortsByModel,
         fallbackReasoningEfforts,
         serviceTier:
@@ -15667,13 +15677,13 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     model?: string;
-  }): Promise<{ reasoningEffort?: string } | undefined> {
+  }): Promise<{ model?: string; reasoningEffort?: string } | undefined> {
     if (params.model === undefined) return;
     assertThreadModelSettingsAvailable(params.backend,
       await this.getBackendLaunchpadOptions(params.backend, "model-override-admission"),
       { model: params.model });
     if (params.backend === "codex") {
-      let observedCodexSettings: { reasoningEffort?: string } | undefined;
+      let observedCodexSettings: { model?: string; reasoningEffort?: string } | undefined;
       if (this.resolveCodexModelProvidersFn().length > 0
         && this.codexClient.reportedModelProviderForThread
         && !this.codexClient.reportedModelProviderForThread(params.threadId)) {
