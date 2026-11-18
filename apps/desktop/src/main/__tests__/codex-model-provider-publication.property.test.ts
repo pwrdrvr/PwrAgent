@@ -382,6 +382,24 @@ describe("Codex model provider publication", () => {
     });
   });
 
+  it("re-reads an unchanged provider list saved after its endpoint goes down", async () => {
+    const save: Operation = {
+      kind: "save",
+      providers: [
+        { id: "mathos", models: [], discoverModels: true, port: 18081 },
+        { id: "bonsai", models: [], discoverModels: false, port: 18081 },
+      ],
+      settle: false,
+    };
+    await runScenario({
+      discoverFirst: false,
+      turnActive: false,
+      operations: [save, { kind: "endpoint", up: false }, save, { kind: "retry", endpointUp: true }],
+      // First save and read, second save and read, then the recovery read.
+      scheduler: fc.schedulerFor([1, 2, 3, 4, 5]),
+    });
+  });
+
   it("removes a provider and keeps listed models when its endpoint and Codex's list fail", async () => {
     await runScenario({
       discoverFirst: true,

@@ -576,7 +576,6 @@ import { getMainLogger } from "../log";
 import {
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
-import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
@@ -947,10 +946,7 @@ export class DesktopBackendRegistry {
   private readonly threadDirectoryService: ThreadDirectoryService;
   private readonly codexRuntimeSupervisor: CodexRuntimeSupervisor;
   private readonly codexClient: BackendClient;
-  private readonly configStore?: Pick<
-    DesktopConfigStore,
-    "read" | "subscribe"
-  >;
+  private readonly configStore: RegistryDependencies["configStore"];
   private codexBackendSummary?: BackendSummary;
   private codexBackendGeneration = 0;
   /**
@@ -1645,9 +1641,8 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly codexProviderCatalogRetry: CodexProviderCatalogRetry;
   /**
-   * Bumped on every saved change to the Codex model provider list. A model
-   * read that began before the change describes the old list, so it must
-   * not be published over the newer one.
+   * Bumped on every explicit save or change from disk to the Codex model
+   * provider list. Reads from an earlier revision cannot publish over it.
    */
   private codexModelProviderRevision = 0;
   /** Publications of provider list changes, in the order they were saved. */
