@@ -13,7 +13,7 @@ const result = await buildHeadless({ outputDirectory: path.join(root, "dist"), p
   sourcemap, logLevel: sourcemap === false ? "warning" : "info" });
 await mkdir(path.join(root, "native/mcp-ipc-relay"), { recursive: true });
 await mkdir(path.join(root, "resources"), { recursive: true });
-for (const file of ["stage-runtime.mjs", "build-mcp-ipc-relay.mjs"]) {
+for (const file of ["stage-runtime.mjs", "build-mcp-ipc-relay.mjs", "native-helper-cache.mjs"]) {
   await cp(new URL(`../../../apps/desktop/scripts/${file}`, import.meta.url), path.join(root, "scripts", file));
 }
 await cp(new URL("../../../apps/desktop/native/mcp-ipc-relay/", import.meta.url), path.join(root, "native/mcp-ipc-relay"), { recursive: true });

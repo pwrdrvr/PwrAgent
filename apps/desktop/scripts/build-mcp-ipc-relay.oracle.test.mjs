@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -19,7 +19,7 @@ function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "relay-build-oracle-")));
   fixtures.push(root);
   cpSync(join(desktop, "scripts"), join(root, "scripts"), { recursive: true, filter: (file) =>
-    file === join(desktop, "scripts") || file === join(desktop, "scripts/build-mcp-ipc-relay.mjs") });
+    file === join(desktop, "scripts") || ["build-mcp-ipc-relay.mjs", "native-helper-cache.mjs"].some((name) => file === join(desktop, "scripts", name)) });
   cpSync(join(desktop, "native/mcp-ipc-relay"), join(root, "native/mcp-ipc-relay"), { recursive: true });
   const builder = join(root, "scripts/build-mcp-ipc-relay.mjs");
   const source = join(root, "native/mcp-ipc-relay/main.c");
@@ -45,7 +45,7 @@ int ${entry}(${parameters}) {
 }
 `);
   const program = (options = {}) => `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
-    console.log(JSON.stringify(buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, ...options })})));`;
+    console.log(JSON.stringify(buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, reuse: process.platform !== "win32", ...options })})));`;
   const command = (options) => ["--input-type=module", "-e", program(options)];
   const build = (options, env = process.env) => parseOutput(execFileSync(process.execPath, command(options), { encoding: "utf8", env, stdio: "pipe" }));
   return { root, builder, source, header, build, command };
@@ -98,8 +98,12 @@ it("emitted native code follows source, included headers and compiler flags at t
 it("replaces corrupt output and still fails closed in the real peer verifier", () => {
   const f = fixture();
   const output = f.build({ packaged: true });
-  writeFileSync(output, "untrusted output");
+  const damaged = readFileSync(output);
+  damaged[damaged.length - 1] ^= 1;
+  writeFileSync(output, damaged);
+  utimesSync(output, 1, 1);
   expect(f.build({ packaged: true })).toBe(output);
+  expect(statSync(output).mtimeMs).toBeGreaterThan(1000);
   expect(observe(output)).toBe("source-one header-one flag-1");
   const peer = spawnSync(output, [join(dirname(output), "absent-peer")], { encoding: "utf8" });
   expect(peer.error).toBeUndefined();
@@ -162,4 +166,103 @@ it("a shared packaged filename follows the requested native architecture or fail
   f.build({ packaged: true });
   expect(machine(output)).toBe(process.arch);
   expect(observe(output)).toBe("source-one header-one flag-1");
+});
+
+it("reuses verified unchanged native output instead of recompiling it", () => {
+  const f = fixture();
+  const output = f.build({ reuse: true });
+  const bytes = readFileSync(output);
+  // Timestamp changes do not change executable bytes. A real cache hit must
+  // leave this sentinel intact; the old unconditional compiler replaces it.
+  utimesSync(output, 1, 1);
+  f.build({ reuse: true });
+  if (process.platform === "win32") {
+    expect(statSync(output).mtimeMs).toBeGreaterThan(1000);
+  } else {
+    expect(statSync(output).mtimeMs).toBe(1000);
+    expect(readFileSync(output)).toEqual(bytes);
+  }
+  expect(observe(output)).toBe("source-one header-one flag-1");
+});
+
+
+it("only the active owner can replace or invalidate a shared native output", () => {
+  const f = fixture();
+  const output = f.build({ reuse: true });
+  const original = readFileSync(output);
+  const destination = join(f.root, "installed-helper");
+  copyFileSync(output, destination);
+  const lock = `${output}.build-lock`;
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, owner: "other-builder" }));
+  try {
+    if (process.platform === "win32") {
+      f.build({ reuse: true });
+      expect(existsSync(`${output}.build.json`)).toBe(false);
+      expect(observe(output)).toBe("source-one header-one flag-1");
+    } else {
+      expect(() => f.build({ reuse: true, destination })).toThrow(/Another native helper build owns/);
+      expect(readFileSync(destination)).toEqual(original);
+      expect(readFileSync(output)).toEqual(original);
+      expect(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).owner).toBe("other-builder");
+    }
+  } finally { rmSync(lock, { recursive: true, force: true }); }
+});
+
+it("invalidates linked input identity even when library size and mtime are restored", () => {
+  const f = fixture();
+  if (process.platform === "win32") {
+    const output = f.build({ reuse: true });
+    expect(existsSync(`${output}.build.json`)).toBe(false);
+    expect(observe(output)).toBe("source-one header-one flag-1");
+    return;
+  }
+  const library = join(f.root, "library");
+  mkdirSync(library);
+  const source = join(library, "value.c");
+  const object = join(library, "value.o");
+  const archive = join(library, "libvalue.a");
+  const buildLibrary = (value) => {
+    writeFileSync(source, `const char *oracle_library_value(void) { return "${value}"; }\n`);
+    execFileSync("cc", ["-c", "-O2", source, "-o", object], { stdio: "pipe" });
+    execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
+  };
+  buildLibrary("lib-one");
+  writeFileSync(f.source, "const char *oracle_library_value(void);\n" + readFileSync(f.source, "utf8").replace('puts("source-one ', 'puts(oracle_library_value()); puts("source-one '));
+  writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${archive}`)}, "-o", output`));
+  const output = f.build({ reuse: true });
+  expect(existsSync(`${output}.build.json`)).toBe(true);
+  expect(observe(output)).toBe("lib-one\nsource-one header-one flag-1");
+  const original = statSync(archive);
+  buildLibrary("lib-two");
+  utimesSync(archive, original.atime, original.mtime);
+  expect(statSync(archive).size).toBe(original.size);
+  f.build({ reuse: true });
+  expect(observe(output)).toBe("lib-two\nsource-one header-one flag-1");
+});
+
+it("removes an installed Outpost helper after a failed POSIX rebuild and rejects Windows", () => {
+  const f = fixture();
+  const output = f.build({ packaged: true, reuse: true });
+  for (const [from, to] of [
+    [join(desktop, "../../packages/pwragent/scripts/install.mjs"), join(f.root, "scripts/install.mjs")],
+    [join(desktop, "scripts/stage-runtime.mjs"), join(f.root, "scripts/stage-runtime.mjs")],
+  ]) copyFileSync(from, to);
+  mkdirSync(join(f.root, "dist"));
+  writeFileSync(join(f.root, "dist/runtime.json"), "{}");
+  const resources = join(f.root, "resources/mcp-ipc-relay");
+  mkdirSync(resources, { recursive: true });
+  const installed = join(resources, "mcp-ipc-relay");
+  copyFileSync(output, installed);
+  const run = () => execFileSync(process.execPath, [join(f.root, "scripts/install.mjs")], {
+    env: { ...process.env, PATH: f.root, VCINSTALLDIR: f.root }, stdio: "pipe",
+  });
+  if (process.platform === "win32") {
+    expect(run).toThrow(/Outpost supports Linux and macOS/);
+    expect(existsSync(installed)).toBe(true);
+  } else {
+    expect(run).toThrow();
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(installed)).toBe(false);
+  }
 });

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,7 +13,8 @@ if (!existsSync(path.join(root, "dist/runtime.json"))) throw new Error("The Outp
   const { stageRuntime } = await import("./stage-runtime.mjs");
   const helperDirectory = path.join(root, "resources/mcp-ipc-relay");
   mkdirSync(helperDirectory, { recursive: true });
-  copyFileSync(buildMcpIpcRelay({ outputRoot: root, packaged: true }), path.join(helperDirectory, "mcp-ipc-relay"));
+  buildMcpIpcRelay({ outputRoot: root, packaged: true, reuse: true,
+    destination: path.join(helperDirectory, "mcp-ipc-relay") });
   await stageRuntime({ manifestPath: path.join(root, "resources/custom-git-runtime.json"),
     platform: process.platform, arch: process.arch, output: path.join(root, "resources/git"), cache: process.env.PWRGIT_RUNTIME_CACHE });
 }

@@ -37,6 +37,7 @@
     "scripts/install.mjs",
     "scripts/stage-runtime.mjs",
     "scripts/build-mcp-ipc-relay.mjs",
+    "scripts/native-helper-cache.mjs",
     "resources/custom-git-runtime.json",
     "resources/git-notices"
   ],
