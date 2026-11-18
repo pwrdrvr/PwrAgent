@@ -56,9 +56,10 @@ jobs:
         uses: actions/checkout@v7
         timeout-minutes: 5
         with:
+          # Non-cone patterns match at any depth, so this checks out every
+          # nested AGENTS.md the size guard reads.
           sparse-checkout: |
             AGENTS.md
-            apps/desktop/AGENTS.md
             scripts/check-agent-instructions-size.mjs
           sparse-checkout-cone-mode: false
 

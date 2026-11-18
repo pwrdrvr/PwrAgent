@@ -34,7 +34,7 @@ Render a brand through `BrandLockup`
 - It draws the app-icon mark and the wordmark together.
 - Do not hand-write a `__brand` paragraph. The lockup's test fails when one appears.
 - The macOS title-strip geometry is the Pwr-family spec in
-  [features/chrome/AGENTS.md](../apps/desktop/src/renderer/src/features/chrome/AGENTS.md).
+  [apps/desktop/docs/chrome-title-strip.md](../apps/desktop/docs/chrome-title-strip.md).
 
 `apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx` enforces this token contract.
 

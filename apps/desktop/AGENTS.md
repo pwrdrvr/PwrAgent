@@ -3,19 +3,16 @@
 ## Style Guide
 
 Before renderer UI work, read [../../docs/UI-THEME.md](../../docs/UI-THEME.md),
-the visual theme source of truth (theme thesis, palette and token usage,
-component theme rules, interaction constraints, visual anti-patterns), and
+the visual theme source of truth, and
 [../../docs/design/desktop-style-guide.md](../../docs/design/desktop-style-guide.md)
-for product tone, typography, shell composition, sidebar and thread-row rules,
-component constraints, copy rules, and anti-patterns.
+for layout, product tone, typography, sidebar and thread-row rules, components,
+and copy.
 
 ## Code Formatting & Linting
 
-Run `pnpm lint:oxlint` after edits and `pnpm lint:oxlint:typed` for production
-receiver safety; CI runs both. There is no autoformatter by design: never run
-Prettier on a renderer or main-process file or reformat with linter fixes.
-Match adjacent code by hand, including leading binary operators. The repo-root
-`AGENTS.md` has the full scope, native typecheck command, and formatting policy.
+Follow the repo-root `AGENTS.md`: run `pnpm lint:oxlint` and
+`pnpm lint:oxlint:typed`, never run Prettier or reformat with linter fixes, and
+match adjacent code by hand, including leading binary operators.
 
 ## Non-Negotiables
 
@@ -90,19 +87,11 @@ Match adjacent code by hand, including leading binary operators. The repo-root
 
 ## Codex Data Boundary
 
-Desktop code must not inspect Codex-owned storage directly. Do not open, parse,
-query, or infer behavior from Codex session JSONL files, rollout files, or
-Codex sqlite databases, even when the Codex App Server protocol returns a path
-to one of those files. Use protocol fields from the Codex App Server instead.
-PwrAgent-owned JSONL, sqlite, config, and replay fixture files remain OK when
-the desktop app or test harness owns that data. CI runs
-`pnpm lint:codex-storage` to catch common violations; do not bypass or rename
-around that check. Fix the data flow by using protocol fields or changing the
-protocol. The one PwrDrvr LLC-authorized exception is
-`src/main/codex-app-server/invalid-response-message-id-recovery.ts`: it may
-rewrite only the protocol-identified rollout for the exact Responses API
-invalid message-ID-prefix recovery, after stopping the Codex writer, creating
-a durable backup, and validating the session belongs to the requested thread.
+Never open, parse, query, or infer behavior from Codex-owned session JSONL,
+rollout files, or sqlite databases, even when the protocol returns a path; use
+App Server protocol fields and never bypass `pnpm lint:codex-storage`. Before
+touching a Codex-owned path or the one authorized recovery exception, read
+[docs/codex-data-boundary.md](docs/codex-data-boundary.md#codex-data-boundary).
 
 ## Codex Runtime Safety
 
@@ -113,14 +102,11 @@ a durable backup, and validating the session belongs to the requested thread.
 
 ## Running the App for Development
 
-Choose the checkout and profile first: run the project-local
-[`pwragent-dev-profile` skill](../../.agents/skills/pwragent-dev-profile/SKILL.md)'s
-`status` before any `restart`. Do not override `HOME` or set `NODE_ENV`. Never
-target the generic `Electron` / `com.github.Electron` identity or the installed
-`com.pwrdrvr.pwragent` bundle, never launch bare Electron without the PwrAgent
-app entry, and stop if the target is ambiguous. Before launching, restarting,
-or driving a desktop app window (Computer Use, Playwright, a controller), or
-changing messaging/federation lease startup, read
+Run the [`pwragent-dev-profile` skill](../../.agents/skills/pwragent-dev-profile/SKILL.md)'s
+`status` before any `restart`; do not override `HOME` or set `NODE_ENV`. Never
+target generic `Electron` or the installed bundle, never launch bare Electron,
+and stop if the target is ambiguous. Before launching or driving an app window,
+or changing lease startup, read
 [docs/running-the-app.md](docs/running-the-app.md#running-the-app-for-development).
 
 ## Renderer update diagnostics in release builds
@@ -192,16 +178,11 @@ button, read [docs/settings-forms.md](docs/settings-forms.md#explicit-save-setti
 
 ## Thread History Persistence
 
-Thread transcripts, rollout events, streamed message deltas, prompt text,
-assistant text, and command output history must not be written into the desktop
-sqlite database. Store only desktop metadata there. For the full rule and the
-ACP fallback direction, read
-[../../docs/thread-history-persistence.md](../../docs/thread-history-persistence.md)
-before changing ACP session storage, thread replay restoration, or rollout
-persistence. Its one exception is tracked review findings (`thread_reviews`):
-capped excerpts that only To-dos and the review agent tools read. The
-transcript renders a review from its own entry and reads only status from that
-table.
+Never write transcripts, rollout events, streamed deltas, prompt or assistant
+text, or command output to the desktop sqlite database; store only metadata
+(capped `thread_reviews` excerpts are the one exception). Before changing ACP
+session storage, replay restoration, or rollout persistence, read
+[docs/persistence-rules.md](docs/persistence-rules.md#thread-history-persistence).
 
 ## Pull-Request Status Source of Truth
 
@@ -221,19 +202,11 @@ notification, or execution-mode queue events, read
 
 ## Dependency Boundary Enforcement
 
-**DO NOT, under any circumstances, loosen the dependency boundary rules.**
-
-The desktop app sits at the **top** of the dependency hierarchy and may import any `@pwragent/*` package. However:
-
-- The **renderer** (`src/renderer/`) may only import `@pwragent/shared`. All other package access must go through IPC to the main process.
-- The **main process** may import any package but must not create circular dependencies.
-
-- **DO NOT** add exceptions, allowlists, or `severity: "ignore"` overrides to `.dependency-cruiser.cjs`
-- **DO NOT** import provider SDKs (`grammy`, `discord.js`, `telegraf`) in `src/main/messaging/core/`
-- **DO NOT** introduce circular dependencies between any modules
-- If a rule blocks your change, the change is architecturally wrong — redesign it
-
-Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
+Never loosen `.dependency-cruiser.cjs`. The renderer imports only
+`@pwragent/shared`, provider SDKs stay out of `src/main/messaging/core/`, and
+no module adds a cycle; if a rule blocks a change, redesign the change. Before
+adding a cross-package or cross-layer import, read
+[docs/dependency-boundaries.md](docs/dependency-boundaries.md#dependency-boundary-enforcement).
 
 ## Vitest Guards
 
@@ -252,17 +225,11 @@ a write, changing a budget, or running `pnpm test:sqlite-writes`, read
 
 ## SQLite Query Rules
 
-- Never interpolate user-sourced values into SQL strings. Always use
-  `better-sqlite3` prepared statements with positional or named bindings.
-- Messaging-platform inbound text is the highest-risk SQLite input category:
-  public Telegram, Discord, Mattermost, Slack, Signal, Feishu, and future
-  adapter traffic must be treated as hostile even when the local desktop user
-  trusts the bound thread.
-- Generated SQL fragments are only allowed for non-data structure, such as a
-  generated `?, ?, ?` placeholder list. Hardcoded maintenance table names must
-  stay allowlisted by the SQL-template lint guard.
-- Run `pnpm lint:sql` after changing desktop main-process SQLite code. It flags
-  interpolated SQL template strings in the messaging/state persistence surface.
+Never interpolate user-sourced values into SQL; bind prepared-statement
+parameters and treat inbound messaging text as hostile. Before changing
+main-process SQLite code, read
+[docs/persistence-rules.md](docs/persistence-rules.md#sqlite-query-rules), then
+run `pnpm lint:sql`.
 
 ## Implementation Notes
 
@@ -290,10 +257,10 @@ changing quit, shutdown, or `before-quit` handling, read
 
 ## Worktree Path Computation
 
-- **All worktree paths** must use the shared `computeWorktreePath` from `src/main/app-server/git-directory-service.ts`.
-- There are two code paths that create worktrees: `prepareLaunchpadWorkspace` (in `git-directory-service.ts`) and `handoffLocalToWorktree` / `handoffLocalChangesToDetachedWorktree` (in `git-workspace-handoff-service.ts`). Both must use the same path builder.
-- The naming pattern is `<root>/<hash>/<project-folder-name>` where `<hash>` is `Date.now().toString(36)` and `<project-folder-name>` is `path.basename(repoRoot)` preserving original casing.
-- Do not introduce additional worktree path builders — centralize in `computeWorktreePath`.
+Every worktree path comes from `computeWorktreePath`
+(`src/main/app-server/git-directory-service.ts`); add no other builder. Before
+changing worktree creation or handoff, read
+[docs/worktree-paths.md](docs/worktree-paths.md#worktree-path-computation).
 
 ## Release Notes
 

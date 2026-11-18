@@ -5,20 +5,36 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  AGENT_INSTRUCTION_LIMITS,
   CODEX_PROJECT_DOC_MAX_BYTES,
   DESKTOP_AGENTS_MD_MAX_BYTES,
   ROOT_AGENTS_MD_MAX_BYTES,
+  agentInstructionChain,
+  agentInstructionLimits,
   checkAgentInstructionLimits,
   checkAgentInstructionsSize,
+  listAgentInstructionFiles,
 } from "./check-agent-instructions-size.mjs";
 
 const CODEX_PROJECT_DOC_DEFAULT_MAX_BYTES = 32 * 1024;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+// Deterministic PRNG so a failing sweep reproduces.
+function mulberry32(seed) {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 describe("checkAgentInstructionsSize", () => {
   it("keeps the limit under Codex's default project-doc budget", () => {
     expect(ROOT_AGENTS_MD_MAX_BYTES).toBeLessThan(
+      CODEX_PROJECT_DOC_DEFAULT_MAX_BYTES,
+    );
+    expect(CODEX_PROJECT_DOC_MAX_BYTES).toBe(
       CODEX_PROJECT_DOC_DEFAULT_MAX_BYTES,
     );
   });
@@ -47,56 +63,142 @@ describe("checkAgentInstructionsSize", () => {
   });
 });
 
-describe("checkAgentInstructionLimits", () => {
-  it("guards the desktop file and the root + desktop chain Codex reads", () => {
-    const byLabel = Object.fromEntries(
-      AGENT_INSTRUCTION_LIMITS.map((limit) => [limit.label, limit]),
-    );
-    expect(byLabel["apps/desktop/AGENTS.md"]).toEqual({
-      label: "apps/desktop/AGENTS.md",
-      paths: ["apps/desktop/AGENTS.md"],
-      maxBytes: DESKTOP_AGENTS_MD_MAX_BYTES,
-    });
-    expect(byLabel["AGENTS.md + apps/desktop/AGENTS.md"]).toEqual({
-      label: "AGENTS.md + apps/desktop/AGENTS.md",
-      paths: ["AGENTS.md", "apps/desktop/AGENTS.md"],
-      maxBytes: CODEX_PROJECT_DOC_DEFAULT_MAX_BYTES,
-    });
-    expect(CODEX_PROJECT_DOC_MAX_BYTES).toBe(
-      CODEX_PROJECT_DOC_DEFAULT_MAX_BYTES,
-    );
-  });
+describe("agentInstructionChain", () => {
+  // Oracle: a file is in the chain exactly when its directory is the root or
+  // an ancestor of (or equal to) the nested file's directory, ordered by depth.
+  function oracleChain(file, files) {
+    const dir = file.split("/").slice(0, -1);
+    return files
+      .map((candidate) => candidate.split("/").slice(0, -1))
+      .filter((cdir) => cdir.every((part, index) => dir[index] === part))
+      .filter((cdir) => cdir.length <= dir.length)
+      .sort((a, b) => a.length - b.length)
+      .map((cdir) => [...cdir, "AGENTS.md"].join("/"));
+  }
 
-  // Oracle: a chain passes exactly when every file is within its own limit
-  // and the sum of the chain is within Codex's budget.
-  it("fails exactly when a file or the combined chain is over", () => {
-    const limits = [
-      { label: "root", paths: ["root"], maxBytes: 24 },
-      { label: "desktop", paths: ["desktop"], maxBytes: 16 },
-      { label: "chain", paths: ["root", "desktop"], maxBytes: 32 },
-    ];
-    for (let root = 0; root <= 30; root += 1) {
-      for (let desktop = 0; desktop <= 20; desktop += 1) {
-        const sizes = { root, desktop };
-        const results = checkAgentInstructionLimits(
-          (path) => sizes[path],
-          limits,
+  it("matches the ancestor oracle for random trees", () => {
+    const random = mulberry32(3920);
+    const names = ["apps", "desktop", "src", "a", "ab", "b", "main"];
+    for (let run = 0; run < 300; run += 1) {
+      const files = new Set(["AGENTS.md"]);
+      const count = 1 + Math.floor(random() * 6);
+      for (let index = 0; index < count; index += 1) {
+        const depth = 1 + Math.floor(random() * 4);
+        const parts = Array.from(
+          { length: depth },
+          () => names[Math.floor(random() * names.length)],
         );
-        expect(results.map((result) => result.ok)).toEqual([
-          root <= 24,
-          desktop <= 16,
-          root + desktop <= 32,
-        ]);
+        files.add([...parts, "AGENTS.md"].join("/"));
+      }
+      const list = [...files];
+      for (const file of list) {
+        expect(agentInstructionChain(file, list)).toEqual(
+          oracleChain(file, list),
+        );
       }
     }
   });
 
-  it("fails the chain when each file is under its own limit", () => {
+  it("does not treat a sibling with a shared name prefix as an ancestor", () => {
+    expect(
+      agentInstructionChain("apps/desktop-x/AGENTS.md", [
+        "AGENTS.md",
+        "apps/desktop/AGENTS.md",
+        "apps/desktop-x/AGENTS.md",
+      ]),
+    ).toEqual(["AGENTS.md", "apps/desktop-x/AGENTS.md"]);
+  });
+});
+
+describe("checkAgentInstructionLimits", () => {
+  it("checks the root and desktop files and every nested chain", () => {
+    const limits = agentInstructionLimits([
+      "AGENTS.md",
+      "apps/desktop/AGENTS.md",
+      "apps/desktop/src/main/claude/AGENTS.md",
+      "packages/shared/AGENTS.md",
+    ]);
+    expect(limits).toEqual([
+      {
+        label: "AGENTS.md",
+        paths: ["AGENTS.md"],
+        maxBytes: ROOT_AGENTS_MD_MAX_BYTES,
+      },
+      {
+        label: "apps/desktop/AGENTS.md",
+        paths: ["apps/desktop/AGENTS.md"],
+        maxBytes: DESKTOP_AGENTS_MD_MAX_BYTES,
+      },
+      {
+        label: "AGENTS.md + apps/desktop/AGENTS.md",
+        paths: ["AGENTS.md", "apps/desktop/AGENTS.md"],
+        maxBytes: CODEX_PROJECT_DOC_MAX_BYTES,
+      },
+      {
+        label:
+          "AGENTS.md + apps/desktop/AGENTS.md"
+          + " + apps/desktop/src/main/claude/AGENTS.md",
+        paths: [
+          "AGENTS.md",
+          "apps/desktop/AGENTS.md",
+          "apps/desktop/src/main/claude/AGENTS.md",
+        ],
+        maxBytes: CODEX_PROJECT_DOC_MAX_BYTES,
+      },
+      {
+        label: "AGENTS.md + packages/shared/AGENTS.md",
+        paths: ["AGENTS.md", "packages/shared/AGENTS.md"],
+        maxBytes: CODEX_PROJECT_DOC_MAX_BYTES,
+      },
+    ]);
+  });
+
+  // Oracle: the check fails exactly when the root or desktop file is over its
+  // own limit, or some nested file's chain sums past Codex's budget.
+  it("fails exactly when a file or any chain is over", () => {
+    const random = mulberry32(32768);
+    const files = [
+      "AGENTS.md",
+      "apps/desktop/AGENTS.md",
+      "apps/desktop/src/main/claude/AGENTS.md",
+      "apps/desktop/src/renderer/src/features/update/AGENTS.md",
+      "packages/messaging/AGENTS.md",
+    ];
+    const limits = agentInstructionLimits(files);
+    for (let run = 0; run < 500; run += 1) {
+      const sizes = Object.fromEntries(
+        files.map((file) => [file, Math.floor(random() * 20 * 1024)]),
+      );
+      const results = checkAgentInstructionLimits(
+        (path) => sizes[path],
+        limits,
+      );
+      const root = sizes["AGENTS.md"];
+      const desktop = sizes["apps/desktop/AGENTS.md"];
+      const expected =
+        root <= ROOT_AGENTS_MD_MAX_BYTES
+        && desktop <= DESKTOP_AGENTS_MD_MAX_BYTES
+        && root + desktop <= CODEX_PROJECT_DOC_MAX_BYTES
+        && root + desktop + sizes["apps/desktop/src/main/claude/AGENTS.md"]
+          <= CODEX_PROJECT_DOC_MAX_BYTES
+        && root + desktop
+          + sizes["apps/desktop/src/renderer/src/features/update/AGENTS.md"]
+          <= CODEX_PROJECT_DOC_MAX_BYTES
+        && root + sizes["packages/messaging/AGENTS.md"]
+          <= CODEX_PROJECT_DOC_MAX_BYTES;
+      expect(results.every((result) => result.ok)).toBe(expected);
+    }
+  });
+
+  it("fails a chain when each file is under its own limit", () => {
     const sizes = {
       "AGENTS.md": ROOT_AGENTS_MD_MAX_BYTES,
       "apps/desktop/AGENTS.md": DESKTOP_AGENTS_MD_MAX_BYTES,
     };
-    const results = checkAgentInstructionLimits((path) => sizes[path]);
+    const results = checkAgentInstructionLimits(
+      (path) => sizes[path],
+      agentInstructionLimits(Object.keys(sizes)),
+    );
     expect(results.map((result) => [result.label, result.ok])).toEqual([
       ["AGENTS.md", true],
       ["apps/desktop/AGENTS.md", true],
@@ -109,8 +211,12 @@ describe("checkAgentInstructionLimits", () => {
   });
 
   it("passes for the checked-in instruction files", () => {
+    const files = listAgentInstructionFiles(repoRoot);
+    expect(files).toContain("AGENTS.md");
+    expect(files).toContain("apps/desktop/AGENTS.md");
     const results = checkAgentInstructionLimits(
       (path) => readFileSync(join(repoRoot, path)).byteLength,
+      agentInstructionLimits(files),
     );
     for (const result of results) {
       expect(result.message).toBeUndefined();

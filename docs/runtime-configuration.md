@@ -146,5 +146,5 @@ These variables are for development only.
 - Set `PWRAGENT_DEV_FAKE_UPDATE_STEP_MS=<ms>` to pace the walk. The default is
   300 ms per step. `e2e/update-check.spec.ts` slows it so the mid-download
   Cancel button is a target rather than a race.
-- Read the [update feature guidance](../apps/desktop/src/renderer/src/features/update/AGENTS.md)
+- Read the [update feature guidance](../apps/desktop/docs/app-update-banner.md#the-dev-fake-is-the-only-way-to-see-any-of-this)
   for why the fake is opt-in here and not in PwrGit.

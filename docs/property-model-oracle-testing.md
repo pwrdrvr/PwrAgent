@@ -190,7 +190,7 @@ against the pre-fix code:
 ## The updater is shared with PwrGit
 
 PwrAgent's update feature was ported from PwrGit (see
-[the update feature guide](../apps/desktop/src/renderer/src/features/update/AGENTS.md)).
+[the update feature guide](../apps/desktop/docs/app-update-banner.md)).
 `selectChannelReleases` and `compareSemver` in
 `apps/desktop/src/main/auto-updater.ts` choose a release for each channel,
 and `auto-updater-supersede.test.ts` covers a downloaded update that a newer

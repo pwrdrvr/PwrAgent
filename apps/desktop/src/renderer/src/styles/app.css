@@ -5265,7 +5265,7 @@ textarea,
    icon's glyph in the accent, 8px, then the wordmark. The lockup carries the
    accent so the mark's `currentColor` is `--accent`; the wordmark sets its own
    `--text-primary` stem. The family spec (PwrGit, PwrAgent, PwrSnap) is in
-   `features/chrome/AGENTS.md`. */
+   `apps/desktop/docs/chrome-title-strip.md`. */
 .brand-lockup {
   display: flex;
   flex: 0 0 auto;
