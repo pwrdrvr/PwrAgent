@@ -12,7 +12,11 @@ import {
   localMemberRole,
   recordGatewayAssignedMemberRole,
 } from "../member-containment";
-import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
+import {
+  invalidatePeerActiveDependencies,
+  readFederationThreadDependenciesRequest,
+  readFederationThreadDependencyProvenance,
+} from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
@@ -697,6 +701,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_display_bulk_reads",
   "thread_pr_watch_control_v1",
   "thread_dependencies_v1",
+  "thread_dependency_provenance_v1",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -7879,7 +7884,8 @@ function localBackendOperations(): FederationBackendOperations {
     async manageThreadDependencies(request: unknown, options?: { requesterInstanceId?: string }): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
       const owned = readFederationThreadDependenciesRequest(request);
       if (!owned) throw new Error("Unknown Continue After action.");
-      return await getDesktopBackendRegistry().manageThreadDependenciesForPeer(owned, options?.requesterInstanceId);
+      return await getDesktopBackendRegistry().manageThreadDependenciesForPeer(owned, options?.requesterInstanceId,
+        readFederationThreadDependencyProvenance(request));
     },
     async setThreadLock(
       request: SetThreadLockRequest,

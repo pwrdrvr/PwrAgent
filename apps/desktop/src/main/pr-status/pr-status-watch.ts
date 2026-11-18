@@ -54,6 +54,16 @@ export function terminalWakeOutcomeOf(pr: PrSummary): PrTerminalWakeOutcome | un
     : undefined;
 }
 
+/** The contact whose turn armed the watch, carried onto the turn it starts. */
+function watchCausalContext(
+  watch: ThreadPullRequestWatchSummary,
+): Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous"> {
+  return {
+    ...(watch.causalMessagingSource ? { causalMessagingSource: watch.causalMessagingSource } : {}),
+    ...(watch.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
+  };
+}
+
 /** Terminal details are immutable once read; keep a few for busy retries. */
 const TERMINAL_DETAILS_CACHE_LIMIT = 32;
 
@@ -351,6 +361,7 @@ export class PrStatusWatchCoordinator {
             headSha: details?.headSha ?? pr.headSha ?? claim.watch.headSha,
             outcome,
           },
+          ...watchCausalContext(claim.watch),
         },
       });
       if (submission.status === "busy") {
@@ -427,6 +438,7 @@ export class PrStatusWatchCoordinator {
             headSha: claim.watch.headSha,
             outcome,
           },
+          ...watchCausalContext(claim.watch),
         },
       });
       if (submission.status === "busy") {

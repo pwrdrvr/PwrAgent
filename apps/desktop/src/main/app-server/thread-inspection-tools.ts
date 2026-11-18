@@ -540,7 +540,7 @@ export class ThreadInspectionTools {
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      });
+      }, await this.host().readCausalMessagingContext(request.context));
     }
 
     if (request.operation === "manage_thread_dependencies") {

@@ -534,6 +534,8 @@ export type PullRequestReferenceResolver = (params: {
 
 export type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
+  /** The calling turn's messaging contact, from its stored origin; never from arguments. */
+  provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
 export type DirectoryGitStatusWriter = (params: {

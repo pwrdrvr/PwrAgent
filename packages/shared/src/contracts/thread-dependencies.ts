@@ -121,6 +121,9 @@ export function threadDependencyConditionName(condition: Pick<ThreadDependencyCo
 /** Advertised by owners that serve `backend.manageThreadDependencies` to peers. */
 export const THREAD_DEPENDENCIES_FEDERATION_CAPABILITY = "thread_dependencies_v1" satisfies FederationCapability;
 
+/** Advertised by owners that keep a peer create's messaging contact. */
+export const THREAD_DEPENDENCY_PROVENANCE_FEDERATION_CAPABILITY = "thread_dependency_provenance_v1" satisfies FederationCapability;
+
 /** Reminder steps one registration may carry, and the length of each. */
 export const THREAD_DEPENDENCY_MAX_STEPS = 12;
 export const THREAD_DEPENDENCY_STEP_MAX_LENGTH = 200;

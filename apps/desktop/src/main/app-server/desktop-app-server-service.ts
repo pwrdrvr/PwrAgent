@@ -4746,6 +4746,7 @@ class DesktopAppServerService {
 
   async watchThreadPullRequestForTool(
     args: WatchThreadPullRequestToolArgs,
+    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
   ): Promise<PwrAgentThreadInspectionResponse> {
     const action = args.action ?? "watch";
     if (action === "list" || action === "cancel") {
@@ -4760,7 +4761,7 @@ class DesktopAppServerService {
         },
       };
     }
-    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" });
+    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" }, provenance);
     return armed.ok
       ? { ok: true, data: { pullRequestWatch: armed.result } }
       : { ok: false, error: armed.error };
@@ -4834,6 +4835,7 @@ class DesktopAppServerService {
    */
   private async armThreadPrWatch(
     args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
+    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
   ): Promise<
     | { ok: true; result: WatchThreadPullRequestResult }
     | {
@@ -5067,6 +5069,8 @@ class DesktopAppServerService {
       ...(pr.title ? { prTitle: pr.title } : {}),
       createdAt,
       createdBy: args.createdBy,
+      ...(provenance?.causalMessagingSource ? { causalMessagingSource: provenance.causalMessagingSource } : {}),
+      ...(provenance?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
     };
     let watch: ThreadPullRequestWatchSummary | undefined;
     let watchExisted = false;
@@ -10335,7 +10339,12 @@ class DesktopAppServerService {
     const runtime = getDesktopFederationRuntime();
     const localInstanceId = (await runtime.health().catch(() => undefined))?.instanceId;
     if (federationTarget && isRemoteFederationTarget(federationTarget) && federationTarget.instanceId !== localInstanceId) {
-      return await manageRemoteThreadDependencies(owned, federationTarget, localInstanceId, runtime);
+      // The owner sends the contact's tool calls back here for authorization.
+      const source = provenance?.causalMessagingSource;
+      return await manageRemoteThreadDependencies(owned, federationTarget, localInstanceId, runtime, {
+        ...provenance,
+        ...(source ? { causalMessagingSource: { ...source, instanceId: source.instanceId ?? runtime.messagingSourceInstanceId() } } : {}),
+      });
     }
     const response = await this.manageLocalThreadDependencies(owned, provenance, actor);
     return owned.action === "list" ? await appendPeerDependents(response, owned as { backend: string; threadId: string }, localInstanceId, runtime) : response;
@@ -10346,13 +10355,14 @@ class DesktopAppServerService {
    * already required its turn_control grant, which can read every thread's
    * waits anyway; `active` leaves continuations out, as it does for a window.
    */
-  async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined): Promise<ManageThreadDependenciesResponse> {
+  async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined,
+    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
     const owned = readFederationThreadDependenciesRequest(request);
     if (!owned) throw new Error("Unknown Continue After action.");
     if (owned.action === "active") {
       return getAppStateMode() ? { dependencies: this.getThreadDependencyCoordinator().active() } : { dependencies: [] };
     }
-    const response = await this.manageLocalThreadDependencies(owned, undefined, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
+    const response = await this.manageLocalThreadDependencies(owned, provenance, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
     if (owned.action !== "list") return response;
     // Relay the waits other machines, the requester included, keep on this
     // thread; the requester names its own as local.

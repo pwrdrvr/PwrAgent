@@ -1,15 +1,23 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadMessageOrigin, MessagingCausalSourceRef } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  type AppServerThreadMessageOrigin,
+  type MessagingCausalSourceRef,
+  type PrSummary,
+  type ThreadPullRequestWatchSummary,
+} from "@pwragent/shared";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
 import type { ForgeToolBridge } from "../app-server/forge-tool-bridge";
 import type { RegistryContext } from "../app-server/registry-context";
 import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";
 import { ThreadInspectionTools, type ThreadInspectionToolsHost } from "../app-server/thread-inspection-tools";
+import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 // Rule (docs/messaging-rbac.md, thread.control.schedule): a turn that an
 // agent registers for later keeps the contact that caused the registering
@@ -47,7 +55,8 @@ function turnOrigins(turnId: string, origin: Provenance, otherOrigin: Provenance
   return new Map([[turnId, origin], [`${turnId}-later`, otherOrigin]]);
 }
 
-function harness(origins: Map<string, Provenance>, host: Partial<ThreadInspectionToolsHost>) {
+function harness(origins: Map<string, Provenance>, host: Partial<ThreadInspectionToolsHost>,
+  forgeToolBridge: Partial<ForgeToolBridge> = {}) {
   const readCausalMessagingContext = async (context: { turnId?: string }): Promise<Provenance> =>
     (context.turnId ? origins.get(context.turnId) : undefined) ?? {};
   const fullHost = {
@@ -61,7 +70,7 @@ function harness(origins: Map<string, Provenance>, host: Partial<ThreadInspectio
     emit: async () => {},
   } as unknown as RegistryContext;
   const tools = new ThreadInspectionTools(context, {}, {
-    forgeToolBridge: {} as ForgeToolBridge,
+    forgeToolBridge: forgeToolBridge as ForgeToolBridge,
     threadInspectionSearchService: null,
   }, () => fullHost);
   return buildPwrAgentThreadToolRouter((request) => tools.handleThreadInspectionRequest(request));
@@ -78,6 +87,19 @@ describe("a registered wake keeps the calling turn's messaging provenance", () =
         args: { action: "create", delayMinutes: 5, prompt: "Check the canary and report." } });
       expect(agentFollowUpToolHandler).toHaveBeenCalledTimes(1);
       expect(agentFollowUpToolHandler.mock.calls[0]![2]).toEqual(origin);
+    }));
+  });
+
+  it("watch_thread_pull_request hands the handler the calling turn's origin", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), originArb, originArb, async (turnId, origin, otherOrigin) => {
+      // Only what the handler is given matters here, not what it answers.
+      const pullRequestWatchTool = vi.fn<NonNullable<ForgeToolBridge["pullRequestWatchTool"]>>(async () =>
+        ({ ok: false, error: { code: "not_found", message: "No pull request in this stand-in." } }));
+      const router = harness(turnOrigins(turnId, origin, otherOrigin), {}, { pullRequestWatchTool });
+      await router.handleMcpToolCall({ backend: "codex", threadId: CALLER, turnId, tool: "watch_thread_pull_request",
+        args: { notifyOn: ["success", "failure"] } });
+      expect(pullRequestWatchTool).toHaveBeenCalledTimes(1);
+      expect(pullRequestWatchTool.mock.calls[0]![1]).toEqual(origin);
     }));
   });
 
@@ -127,5 +149,128 @@ describe("a registered wake keeps the calling turn's messaging provenance", () =
       db.close();
       removeTempStateDbDir(tempDir);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Merged registrations. An identical Continue After wait is reused, and a
+// second watch on the same PR and head merges into the first. One wake then
+// answers several requesters, so it may carry no more authority than the
+// narrowest of them: the local operator grants everything, one contact
+// grants that contact's role, and a mix grants no contact's authority.
+//
+// Oracle: that rule, written from the requesters themselves rather than
+// from `mergeCausalMessagingContext`. One profile's contacts share an
+// ownerId and differ by surface.
+// ---------------------------------------------------------------------------
+
+const contactSourceArb: fc.Arbitrary<MessagingCausalSourceRef> = fc.record({
+  ownerId: fc.constantFrom("profile-1", "profile-2"), requestId: fc.uuid(),
+  surfaceSelector: fc.constantFrom("telegram:alice", "slack:bob"),
+});
+const requesterArb: fc.Arbitrary<Provenance> = fc.oneof(
+  fc.constant({}),
+  contactSourceArb.map((causalMessagingSource) => ({ causalMessagingSource })),
+  fc.constant({ causalMessagingAmbiguous: true as const }),
+);
+const requestersArb = fc.array(requesterArb, { minLength: 1, maxLength: 4 });
+
+function expectNoWiderThanEveryRequester(stored: Provenance | undefined, requesters: Provenance[]): void {
+  const sources = requesters.flatMap((requester) => requester.causalMessagingSource ? [requester.causalMessagingSource] : []);
+  if (requesters.every((requester) => !requester.causalMessagingSource && !requester.causalMessagingAmbiguous)) {
+    expect(stored?.causalMessagingSource).toBeUndefined();
+    expect(stored?.causalMessagingAmbiguous ?? false).toBe(false);
+    return;
+  }
+  const contacts = new Set(sources.map((source) => JSON.stringify([source.ownerId, source.surfaceSelector])));
+  if (sources.length === requesters.length && contacts.size === 1) {
+    expect(stored?.causalMessagingAmbiguous ?? false).toBe(false);
+    expect(sources).toContainEqual(stored?.causalMessagingSource);
+    return;
+  }
+  expect(stored?.causalMessagingSource).toBeUndefined();
+  expect(stored?.causalMessagingAmbiguous).toBe(true);
+}
+
+describe("a wake that answers several requesters is no wider than the narrowest", () => {
+  it("an identical Continue After wait narrows to every registrant", async () => {
+    const { tempDir, dbPath } = createTempStateDb("wake-provenance-merge-");
+    const db = StateDb.open(dbPath);
+    try {
+      await fc.assert(fc.asyncProperty(requestersArb, async (requesters) => {
+        db.raw.exec("DELETE FROM thread_dependencies");
+        const store = new ThreadDependencyStore(db.raw);
+        const worker = { activeTurnId: "worker-turn" as string | undefined,
+          turns: [{ id: "worker-turn", status: "in_progress" as "in_progress" | "completed" }], prs: [] };
+        const submit = vi.fn(async (_request: { messageOrigin?: AppServerThreadMessageOrigin }) =>
+          ({ status: "started" as const, turnId: "woken" }));
+        const coordinator = new ThreadDependencyCoordinator({
+          store, submit, changed: async () => {}, isConsumerBusy: () => false,
+          readThread: async ({ threadId }) => threadId === WORKER ? worker : { turns: [], prs: [] },
+        });
+        for (const requester of requesters) {
+          await coordinator.manage({ action: "create", backend: "codex", threadId: CALLER,
+            continuation: "Read the worker's result and summarize it.",
+            conditions: [{ backend: "codex", threadId: WORKER, when: "turn_completed", title: "Worker" }],
+          }, requester, `agent:codex:${CALLER}`);
+        }
+        const stored = store.list("codex", CALLER);
+        expect(stored).toHaveLength(1);
+        expectNoWiderThanEveryRequester(stored[0], requesters);
+
+        worker.activeTurnId = undefined;
+        worker.turns = [{ id: "worker-turn", status: "completed" }];
+        await coordinator.handleThreadEvent({ backend: "codex", threadId: WORKER });
+        expect(submit).toHaveBeenCalledTimes(1);
+        expectNoWiderThanEveryRequester(submit.mock.calls[0]![0].messageOrigin, requesters);
+      }), { numRuns: 40 });
+    } finally {
+      db.close();
+      removeTempStateDbDir(tempDir);
+    }
+  });
+
+  it("merged PR watches narrow to every requester, and so does the turn they start", async () => {
+    const HEAD = "a".repeat(40);
+    const pr = (overrides: Partial<PrSummary> = {}): PrSummary => ({
+      provider: "github.com", number: 1105, org: "pwrdrvr", repo: "PwrAgent", title: "Keep provenance",
+      state: "pending", checkState: "pending", lifecycleState: "open", reviewState: "ready_for_review",
+      mergeState: "mergeable", headSha: HEAD, commitShas: [HEAD],
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1105", ...overrides,
+    });
+    await fc.assert(fc.asyncProperty(requestersArb, fc.constantFrom("checks", "terminal"), async (requesters, kind) => {
+      const db = openInMemoryStateDb();
+      try {
+        const store = new SqliteOverlayStore(db);
+        const now = 1_000;
+        for (const [index, requester] of requesters.entries()) {
+          const watch: ThreadPullRequestWatchSummary = {
+            watchId: `watch-${index}`, backend: "codex", threadId: CALLER,
+            prKey: buildPullRequestStatusKey(pr()), prUrl: pr().url, prNumber: 1105, headSha: HEAD,
+            notifyOn: kind === "checks" ? ["success", "failure"] : ["merged", "closed"],
+            createdAt: now, failureHandledByAutoFix: false, kind, createdBy: "agent",
+            ...(requester.causalMessagingSource ? { causalMessagingSource: requester.causalMessagingSource } : {}),
+            ...(requester.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
+          };
+          await store.registerThreadPrStatusWatch({ watch, now });
+        }
+        const active = await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: CALLER });
+        expect(active).toHaveLength(1);
+        expectNoWiderThanEveryRequester(active[0], requesters);
+
+        const submitTurnIfIdle = vi.fn(async (_request: { messageOrigin: AppServerThreadMessageOrigin }) =>
+          ({ status: "started" as const, turnId: "woken" }));
+        const coordinator = new PrStatusWatchCoordinator({
+          store, registry: { submitTurnIfIdle }, now: () => now, fetchTerminalDetails: async () => undefined,
+        });
+        await coordinator.handleStatusSnapshot(kind === "checks"
+          ? pr({ state: "passing", checkState: "passing" })
+          : pr({ state: "passing", checkState: "passing", lifecycleState: "merged", mergedAt: now }), now);
+        expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+        expectNoWiderThanEveryRequester(submitTurnIfIdle.mock.calls[0]![0].messageOrigin, requesters);
+      } finally {
+        db.close();
+      }
+    }), { numRuns: 40 });
   });
 });

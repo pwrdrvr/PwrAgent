@@ -127,15 +127,16 @@ const PWRAGENT_ONLY_THREAD_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionOpera
 
 /**
  * Operations whose handler reads the calling turn. A wake registered for
- * later (Continue After, follow-ups) takes its messaging contact from that
- * turn's stored origin; without the turn id the woken turn runs unattributed
- * and unchecked against the contact's role.
+ * later (Continue After, follow-ups, PR watches) takes its messaging contact
+ * from that turn's stored origin; without the turn id the woken turn runs
+ * unattributed and unchecked against the contact's role.
  */
 const TURN_SCOPED_THREAD_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionOperationName> = new Set([
   "mutate_thread",
   "apply_thread_maintenance",
   "manage_thread_dependencies",
   "schedule_follow_up",
+  "watch_thread_pull_request",
 ]);
 
 export function buildPwrAgentThreadToolDefinitions(
