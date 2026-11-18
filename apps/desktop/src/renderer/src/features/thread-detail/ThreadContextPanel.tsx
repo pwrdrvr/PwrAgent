@@ -40,6 +40,7 @@ import {
   InfoIcon,
   HistoryIcon,
   HourglassIcon,
+  PauseIcon,
   PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
@@ -71,7 +72,7 @@ import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
-import { useThreadPendingWakes } from "../thread-pending-wakes/useThreadPendingWakes";
+import { readFollowUpsSuspended, useThreadPendingWakes } from "../thread-pending-wakes/useThreadPendingWakes";
 import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 import { WaitingForPanel } from "./context-panels/WaitingForPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
@@ -352,6 +353,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const pendingWakeCount = pendingWakes.state.status === "ready"
     ? pendingWakes.state.wakes.filter(isThreadPendingWakeLive).length
     : 0;
+  // Loop protection's suspension waits on the operator, not on a wake, so it
+  // marks the tab without adding to the count.
+  const followUpsSuspended = readFollowUpsSuspended(pendingWakes.state);
   const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
   const displayResource = useThreadDisplayResource({
     subAgentLens,
@@ -770,7 +774,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
       : undefined;
     const watchCount = tab.id === "prs" ? prWatchCount : tab.id === "waiting" ? pendingWakeCount : 0;
-    const label = commandCount
+    const suspended = tab.id === "waiting" && followUpsSuspended;
+    const baseLabel = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
       : watchCount && tab.id === "waiting"
         ? `${tab.label} · ${watchCount} pending wake${watchCount === 1 ? "" : "s"}`
@@ -781,6 +786,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         : todoBadge
           ? `${tab.label} · ${todoBadge.count} open for this thread`
           : tab.label;
+    const label = suspended ? `${baseLabel} · agent follow-ups suspended` : baseLabel;
     const landing = tab.id === "connections" && connectionsLanding > landedRingPlayed;
     return (
       <button
@@ -811,12 +817,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             {todoBadge.count > 9 ? "9+" : todoBadge.count}
           </span>
         ) : null}
-        {watchCount > 0 ? (
+        {watchCount > 0 || suspended ? (
           <span
-            className="context-rail__activity context-rail__activity--watches"
+            className={`context-rail__activity context-rail__activity--watches${
+              suspended ? " context-rail__activity--suspended" : ""
+            }`}
             aria-hidden="true"
           >
-            {watchCount > 9 ? "9+" : watchCount}
+            {watchCount > 9 ? "9+" : watchCount > 0 ? watchCount : <PauseIcon size={8} />}
           </span>
         ) : null}
       </button>

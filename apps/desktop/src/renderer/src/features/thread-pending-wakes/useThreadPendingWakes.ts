@@ -30,6 +30,16 @@ export type ThreadPendingWakesState =
       peer: boolean;
     };
 
+/**
+ * Whether loop protection has suspended the thread's agent follow-ups. An
+ * owner that predates the list flag still marks its waiting follow-ups.
+ */
+export function readFollowUpsSuspended(state: ThreadPendingWakesState): boolean {
+  return state.status === "ready"
+    && (state.followUpsSuspended === true
+      || state.wakes.some((wake) => wake.kind === "scheduled_action" && wake.followUpSuspended === true));
+}
+
 export type ThreadPendingWakesController = {
   state: ThreadPendingWakesState;
   /** Resolves with the owner's answer; refreshes the list either way. */
