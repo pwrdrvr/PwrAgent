@@ -146,10 +146,17 @@ it("copies exactly the command, every line, without opening or closing its row",
       terminals={[{ ...terminal, command: text }]} />);
     const row = screen.getByRole("group") as HTMLDetailsElement;
     row.open = open;
-    const preview = agentCommandPreview(text).text;
+    // Accessible names flatten runs of whitespace, so find the control by its
+    // leading verb and check the raw label separately.
+    const copy = within(row).getByRole("button", { name: /^Copy / });
+    expect(copy).toHaveAttribute("aria-label", `Copy ${agentCommandPreview(text).text}`);
+    let notCancelled = true;
     await act(async () => {
-      fireEvent.click(within(row).getByRole("button", { name: `Copy ${preview}` }));
+      // jsdom never toggles a <summary> from a click on a button inside it, so
+      // check the press is cancelled: that is what keeps a browser from toggling.
+      notCancelled = fireEvent.click(copy);
     });
+    expect(notCancelled).toBe(false);
     expect(vi.mocked(copyText).mock.calls).toEqual([[text]]);
     expect(row.open).toBe(open);
   }), { numRuns: 60 });
@@ -179,6 +186,21 @@ it("confirms a copy for a moment and never claims one that failed", async () => 
   expect(within(other).queryByRole("button", { name: "Copied" })).toBeNull();
   expect(error).toHaveBeenCalledWith("Failed to copy agent command", expect.any(Error));
   error.mockRestore();
+});
+
+it("does not arm a reset timer when a copy settles after its row is gone", async () => {
+  let settle: () => void = () => undefined;
+  vi.mocked(copyText).mockImplementationOnce(() => new Promise<void>((resolve) => { settle = resolve; }));
+  const timeout = vi.spyOn(window, "setTimeout");
+  const { rerender } = render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]} terminals={[terminal]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Copy pnpm dev" }));
+  rerender(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]} terminals={[]} />);
+  timeout.mockClear();
+  await act(async () => {
+    settle();
+  });
+  expect(timeout.mock.calls.filter(([, delay]) => delay === 1400)).toHaveLength(0);
+  timeout.mockRestore();
 });
 
 it("keeps Copy available while a command is stopping", () => {

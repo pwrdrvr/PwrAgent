@@ -67,7 +67,16 @@ const COPIED_RESET_MS = 1400;
 function AgentCommandCopyButton(props: { command: string; noun: string; preview: string }) {
   const [copied, setCopied] = useState(false);
   const resetTimerRef = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(resetTimerRef.current), []);
+  // A copy can settle after the row unmounts (the command exited meanwhile);
+  // it must not arm a reset timer that nothing clears.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      window.clearTimeout(resetTimerRef.current);
+    };
+  }, []);
   return (
     <EnvActionControlButton className={`composer__queued-env-action-copy${copied ? " is-copied" : ""}`}
       ariaLabel={copied ? "Copied" : `Copy ${props.preview}`}
@@ -78,6 +87,7 @@ function AgentCommandCopyButton(props: { command: string; noun: string; preview:
         event.stopPropagation();
         void copyText(props.command)
           .then(() => {
+            if (!mountedRef.current) return;
             window.clearTimeout(resetTimerRef.current);
             setCopied(true);
             resetTimerRef.current = window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
