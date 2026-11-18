@@ -24853,16 +24853,20 @@ script = "echo setup"
   describe("Codex model settings on an untracked thread", () => {
     const source = "gpt-6.1-sol";
     const destination = "gpt-6.2-sol";
+    const noReasoning = "gpt-no-reasoning";
     const thread = { backend: "codex" as const, threadId: "existing" };
 
-    function fixture(readThreadModelSettings: () => Promise<{ model: string; reasoningEffort: string }>, cachedEffort?: string) {
+    function fixture(readThreadModelSettings: () => Promise<{ model: string; reasoningEffort: string } | undefined>, cachedEffort?: string) {
       const overlayStore = createOverlayStoreMock();
       const codexClient = Object.assign(new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
-        models: [source, destination].map((id) => ({
-          id, defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high"],
-          supportsReasoning: true, supportsFast: true,
-        })),
+        models: [
+          ...[source, destination].map((id) => ({
+            id, defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high"],
+            supportsReasoning: true, supportsFast: true,
+          })),
+          { id: noReasoning, supportsReasoning: false },
+        ],
         threads: cachedEffort ? [{
           id: thread.threadId, source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [],
           model: source, reasoningEffort: cachedEffort,
@@ -24871,9 +24875,62 @@ script = "echo setup"
       const registry = createDesktopBackendRegistry({
         codexClient, overlayStore,
         resolveProviderModelDefaults: () => ({ codex: { reasoningEffortsByModel: { [source]: "low" } } }),
+        resolveProviderThreadModelMigrations: () => ({
+          codex: { revision: "migration", model: destination, reasoningEffort: "high", createdAt: 2 },
+        }),
       });
       return { registry, overlayStore };
     }
+
+    it("takes carryover effort only from observations of the owner's current model", async () => {
+      await fc.assert(fc.asyncProperty(fc.constantFrom("high", "medium"), fc.boolean(), async (effort, live) => {
+        const { registry, overlayStore } = fixture(async () => live ? { model: source, reasoningEffort: effort } : undefined, effort);
+        try {
+          await registry.listThreads({ backend: "codex" });
+          await registry.setThreadModelSettings({ ...thread, model: noReasoning, reasoningEffort: undefined });
+          const ownerModel = await overlayStore.getThreadOverlayState(thread);
+          expect(ownerModel?.model).toBe(noReasoning);
+          expect(ownerModel?.reasoningEffort).toBeUndefined();
+          await expect(registry.setThreadModelSettings({ ...thread, model: destination }))
+            .resolves.toMatchObject({ model: destination, reasoningEffort: "low" });
+        } finally {
+          await registry.close();
+        }
+      }), { numRuns: 10 });
+    });
+
+    it("keeps the migrated model when a speed change overlaps the migration", async () => {
+      await fc.assert(fc.asyncProperty(fc.boolean(), async (fastMode) => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const { registry, overlayStore } = fixture(async () => {
+          entered.resolve();
+          await release.promise;
+          return { model: source, reasoningEffort: "medium" };
+        });
+        const migration = { ...thread, threadModel: source, threadCreatedAt: 1 };
+        try {
+          const speed = registry.setThreadModelSettings({ ...thread, fastMode });
+          await entered.promise;
+          const applying = registry.applyThreadModelMigration(migration);
+          // A different thread's migration can finish while the read is stalled.
+          try {
+            await registry.applyThreadModelMigration({ ...migration, threadId: "independent" });
+          } finally {
+            release.resolve();
+            await Promise.all([speed, applying]);
+          }
+          expect(await applying).toMatchObject({ status: "applied" });
+          expect(await registry.applyThreadModelMigration(migration))
+            .toMatchObject({ status: "already-applied", model: destination, reasoningEffort: "high" });
+          expect(await overlayStore.getThreadOverlayState(thread)).toMatchObject({
+            model: destination, reasoningEffort: "high", modelMigrationRevision: "migration", fastMode,
+          });
+        } finally {
+          await registry.close();
+        }
+      }), { numRuns: 10 });
+    });
 
     it.each(["change tier", "switch model"] as const)("preserves live reasoning when asked to %s", async (action) => {
       await fc.assert(fc.asyncProperty(fc.constantFrom("high", "medium"), async (liveEffort) => {

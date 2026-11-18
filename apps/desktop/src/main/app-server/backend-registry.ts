@@ -14640,16 +14640,21 @@ export class DesktopBackendRegistry {
     const acpModelOption = findAcpModelConfigOption(acpCapabilities);
     const acpEffortOption = findAcpThoughtLevelConfigOption(acpCapabilities);
     const cachedSettings = needsProviderSettings ? this.threadInfoStore.getSummary(identity) : undefined;
+    const acpModel = (acpModelOption && acpRuntime?.configValues?.[acpModelOption.id])
+      ?? acpRuntime?.currentModelId;
     const currentModel = current?.model
       ?? liveCodexSettings?.model
-      ?? (acpModelOption && acpRuntime?.configValues?.[acpModelOption.id])
-      ?? acpRuntime?.currentModelId
+      ?? acpModel
       ?? cachedSettings?.model;
+    // A provider can still report the previous model until the next turn.
+    // Use an observed effort only if its source model matches the current one.
     const currentEffort = current?.reasoningEffort
-      ?? liveCodexSettings?.reasoningEffort
-      ?? (acpEffortOption && acpRuntime?.configValues?.[acpEffortOption.id])
-      ?? acpRuntime?.reasoningEffort
-      ?? cachedSettings?.reasoningEffort;
+      ?? (currentModel === undefined ? undefined
+        : (liveCodexSettings?.model === currentModel ? liveCodexSettings.reasoningEffort : undefined)
+          ?? (acpModel === currentModel
+            ? (acpEffortOption && acpRuntime?.configValues?.[acpEffortOption.id]) ?? acpRuntime?.reasoningEffort
+            : undefined)
+          ?? (cachedSettings?.model === currentModel ? cachedSettings.reasoningEffort : undefined));
     const modelChanged =
       requestedModel !== undefined && requestedModel !== currentModel;
     let fallbackReasoningEfforts: ModelSettings["fallbackReasoningEfforts"];
@@ -14746,6 +14751,17 @@ export class DesktopBackendRegistry {
   }
 
   async applyThreadModelMigration(
+    params: ApplyThreadModelMigrationRequest,
+  ): Promise<ApplyThreadModelMigrationResponse> {
+    // Keep the eligibility check and revision write in the same queue as
+    // manual model settings, including speed changes that read the provider.
+    return await this.threadModelSettingsLocks.run(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      () => this.applyThreadModelMigrationInternal(params),
+    );
+  }
+
+  private async applyThreadModelMigrationInternal(
     params: ApplyThreadModelMigrationRequest,
   ): Promise<ApplyThreadModelMigrationResponse> {
     const current = await this.overlayStore.getThreadOverlayState({
