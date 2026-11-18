@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, sameResearchThread, type ResearchActor, type ResearchEvent,
-  type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
+import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, sameResearchThread, type ResearchActor, type ResearchEvent,
+  type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
 import { normalizeHarnessRecords, object, text } from "./research-harness-records";
@@ -17,6 +17,9 @@ export type ResearchHarnessPorts = Pick<ResearchPorts, "ownerId" | "ownerPid" | 
   probe: (id: string, signal: AbortSignal) => Promise<void>;
 };
 
+/** Pages one reconcile reads before it stops and asks the operator to reconcile again. */
+export const RESEARCH_HARNESS_RECONCILE_PAGES = 20;
+
 /** Optional external execution. Intents precede effects; recovery never replays execute. */
 export class ResearchHarnessService {
   private readonly connections = new Map<string, ResearchHarnessConnection>();
@@ -24,6 +27,7 @@ export class ResearchHarnessService {
   private readonly pending = new Map<string, Promise<ResearchRunHeader>>();
   private readonly stopping = new Set<string>();
   private readonly probes = new Map<string, AbortController>();
+  private readonly reconciling = new Map<string, ResearchHarnessConnection | undefined>();
   private closed = false;
   private readonly cleanup = new Set<Promise<void>>();
   constructor(private readonly storage: ResearchStorage, private readonly ports: ResearchHarnessPorts) {}
@@ -39,14 +43,7 @@ export class ResearchHarnessService {
     }
     if (this.closed) return Promise.reject(new Error("Harness adapter is closed"));
     if (this.ports.enabled?.() === false) return Promise.reject(new Error("Research runs are disabled"));
-    if (request.source !== undefined && !["swarm", "discovery"].includes(request.source)) throw new Error("Unsupported Harness source");
-    if (request.source === "discovery" && request.mode !== "import") throw new Error("Discovery supports read-only observation");
-    for (const v of [request.project, request.swarm, ...(request.source === "discovery" ? [] : [request.session])]) text(v, 64);
-    if (request.problem !== undefined) text(request.problem, 64);
-    text(request.objective, 8000);
-    if (!["import", "execute"].includes(request.mode) || !Number.isInteger(request.workers) || request.workers < 1 || request.workers > 8
-      || !Number.isInteger(request.minutes) || request.minutes < 1 || request.minutes > 120) throw new Error("Choose 1–8 workers and 1–120 minutes");
-    if (request.budgetAcknowledged !== true) throw new Error("Acknowledge unknown token/dollar usage and cancellation billing before continuing");
+    try { this.validate(request); } catch (error) { return Promise.reject(error); }
     const id = randomUUID();
     const actor: ResearchActor = { backend: request.backend, threadId: request.threadId, kind: "operator" };
     const state: ResearchHarnessState = { version: 1, mode: request.mode, project: request.project, session: request.session, swarm: request.swarm,
@@ -64,6 +61,19 @@ export class ResearchHarnessService {
     this.pending.set(id, promise);
     void promise.finally(() => this.pending.delete(id)).catch(() => {});
     return promise;
+  }
+
+  /** Refuses a malformed request before any intent, process or model effect. */
+  private validate(request: ResearchHarnessRequest): void {
+    if (request.source !== undefined && !["swarm", "discovery"].includes(request.source)) throw new Error("Unsupported Harness source");
+    if (request.source === "discovery" && request.mode !== "import") throw new Error("Discovery supports read-only observation");
+    for (const v of [request.project, request.swarm, ...(request.source === "discovery" ? [] : [request.session])]) text(v, 64);
+    if (request.problem !== undefined) text(request.problem, 64);
+    text(request.objective, 8000);
+    if (!["import", "execute"].includes(request.mode) || !Number.isInteger(request.workers) || request.workers < 1 || request.workers > 8
+      || !Number.isInteger(request.minutes) || request.minutes < 1 || request.minutes > 120) throw new Error("Choose 1–8 workers and 1–120 minutes");
+    // Imports and snapshots make no model call; execution spends model budget without a hard cap.
+    if (request.mode === "execute" && request.budgetAcknowledged !== true) throw new Error("Acknowledge unknown token/dollar usage and cancellation billing before continuing");
   }
 
   private async connect(id: string, request: ResearchHarnessRequest): Promise<ResearchRunHeader> {
@@ -118,7 +128,7 @@ export class ResearchHarnessService {
     const actor = this.actor(current);
     const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: current.revision + i + 1,
       commandId: `discovery:${i}`, signature: entry.provenance.digest, at: this.now(), actor }));
-    const data: ResearchEventData[] = [{ type: "harness", state: { ...current.harness!, state: "imported", discovery: normalized.snapshot,
+    const data: ResearchEventData[] = [{ type: "harness", state: { ...current.harness!, state: "imported", discovery: normalized.snapshot, observedAt: this.now(),
       note: "Read-only discovery snapshot. Source verification and spend are observations; source work may continue. No source event cursor is available." } },
     { type: "status", status: "interrupted", reason: "Retained discovery snapshot; no source work was started or stopped." }];
     for (const entry of data) events.push({ seq: current.revision + events.length + 1, commandId: `discovery:${events.length}`, signature: JSON.stringify(entry), at: this.now(), actor, data: entry });
@@ -145,8 +155,9 @@ export class ResearchHarnessService {
         const actor = this.actor(run);
         const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: run.revision + i + 1,
           commandId: `source:${entry.provenance.seq}:${i}`, signature: entry.provenance.digest, at: this.now(), actor }));
-        events.push({ seq: run.revision + events.length + 1, commandId: `cursor:${normalized.state.cursor}`, signature: JSON.stringify(normalized.state),
-          at: this.now(), actor, data: { type: "harness", state: normalized.state } });
+        const state = { ...normalized.state, observedAt: this.now() };
+        events.push({ seq: run.revision + events.length + 1, commandId: `cursor:${state.cursor}`, signature: JSON.stringify(state),
+          at: this.now(), actor, data: { type: "harness", state } });
         this.storage.appendBatch(id, run.revision, events);
         this.changed(id);
       }
@@ -160,7 +171,7 @@ export class ResearchHarnessService {
         this.append(id, [{ type: "status", status, reason: "Harness execution ended. Source verdicts are observations; PwrAgent reviews remain independent." }]);
         this.release(id);
       } else if (before.harness!.mode === "import" && response.next === undefined) {
-        this.append(id, [{ type: "harness", state: { ...this.run(id).harness!, state: "imported", note: "Imported an observed prefix. Source work may continue; this import cannot stop it." } },
+        this.append(id, [{ type: "harness", state: { ...this.run(id).harness!, state: "imported", observedAt: this.now(), note: "Imported an observed prefix. Source work may continue; this import cannot stop it." } },
           { type: "status", status: "interrupted", reason: "Read-only import. Source execution and usage may be incomplete." }]);
         this.release(id);
       } else {
@@ -205,9 +216,112 @@ export class ResearchHarnessService {
     return this.run(id);
   }
 
+  /**
+   * Asks the configured bridge what it supports. `hello` only: no run, no model
+   * call and no write. Starting the bridge is an explicit operator action.
+   */
+  async check(workspace: string): Promise<ResearchHarnessCheck> {
+    if (this.closed) throw new Error("Harness adapter is closed");
+    if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
+    let connection: ResearchHarnessConnection | undefined;
+    try {
+      connection = this.ports.open(workspace, `check:${randomUUID()}`, "import");
+      const hello = object(await connection.request("hello", { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION }));
+      if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
+      return { ok: true, checkedAt: this.now(), capabilities: { import: hello.import === true, execute: hello.execute === true, cancel: hello.cancel === true,
+        discovery: hello.discovery === true, researchFunctions: hello.researchFunctions === true } };
+    } catch (error) {
+      return { ok: false, checkedAt: this.now(), error: boundedMessage(error) };
+    } finally { if (connection) this.closeConnection(connection); }
+  }
+
+  /**
+   * Reads source records after the stored cursor into the same run. Read-only:
+   * it never sends execute or cancel, and it cannot resurrect a run's admission.
+   * Intent commits before the bridge starts; each page commits with its cursor.
+   */
+  async reconcile(id: string, actor: ResearchActor): Promise<ResearchRunHeader> {
+    const run = this.run(id), origin = run.harness!;
+    if (this.closed) throw new Error("Harness adapter is closed");
+    if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
+    if (!sameResearchThread(run.coordinator, actor)) throw new Error("Only the coordinating thread can reconcile this run");
+    if (origin.source === "discovery") throw new Error("A discovery snapshot has no source cursor. Import a new snapshot instead.");
+    if (!RESEARCH_HARNESS_RECONCILABLE.includes(origin.state)) throw new Error("This run has no unresolved source outcome to reconcile");
+    if (this.connections.has(id) || this.pending.has(id) || this.reconciling.has(id)) throw new Error("This run's bridge connection is still open");
+    if (["running", "stopping"].includes(run.status) && run.ownerId !== this.ports.ownerId) throw new Error("Another PwrAgent process owns this run");
+    this.reconciling.set(id, undefined);
+    const prior = origin.state === "reconciling" ? origin.mode === "import" ? "imported" : "unknown" : origin.state;
+    const from = origin.cursor;
+    let connection: ResearchHarnessConnection | undefined;
+    let ended = false, resumed = false, more = false;
+    try {
+      this.append(id, [{ type: "harness", state: { ...origin, state: "reconciling", note: `Reading source records after #${from}, read-only. No execution or cancellation is sent.` } }]);
+      connection = this.ports.open(origin.workspace, id, "import");
+      this.reconciling.set(id, connection);
+      const hello = object(await connection.request("hello", { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION }));
+      if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
+      if (hello.import !== true) throw new Error("Harness bridge does not support import");
+      for (let page = 0; ; page++) {
+        if (page === RESEARCH_HARNESS_RECONCILE_PAGES) { more = true; break; }
+        if (this.closed || this.ports.enabled?.() === false) throw new Error("Reconcile was fenced by shutdown or disablement");
+        const before = this.run(id).harness!;
+        const response = object(await connection.request("records", { project: before.project, session: before.session, swarm: before.swarm, after: before.cursor, limit: 50 }));
+        if (response.swarm !== before.swarm || !Array.isArray(response.records)) throw new Error("Invalid Harness records response");
+        const current = this.run(id);
+        if (current.harness!.state !== "reconciling" || current.harness!.cursor !== before.cursor) throw new Error("This run changed while reconciling");
+        const normalized = normalizeHarnessRecords({ ...current, approaches: this.approaches(id) }, response.records, (seq) => this.storage.harnessRecord(id, seq));
+        if (response.next !== undefined && (response.next !== normalized.state.cursor || normalized.state.cursor <= before.cursor)) throw new Error("Invalid Harness continuation cursor");
+        ended = normalized.ended;
+        resumed ||= ["running", "unknown"].includes(normalized.state.state);
+        if (normalized.events.length) {
+          if (current.revision + normalized.events.length + 3 > RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; the source has more records than this run can retain");
+          const state: ResearchHarnessState = { ...normalized.state, state: "reconciling", observedAt: this.now() };
+          const runActor = this.actor(current);
+          const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: current.revision + i + 1,
+            commandId: `source:${entry.provenance.seq}:${i}`, signature: entry.provenance.digest, at: this.now(), actor: runActor }));
+          events.push({ seq: current.revision + events.length + 1, commandId: `cursor:${state.cursor}`, signature: JSON.stringify(state), at: this.now(), actor: runActor, data: { type: "harness", state } });
+          this.storage.appendBatch(id, current.revision, events);
+          this.changed(id);
+        }
+        if (response.next === undefined) break;
+      }
+      const current = this.run(id), harness = current.harness!;
+      const read = harness.cursor - from;
+      const range = read ? `${read} ${read === 1 ? "record" : "records"} (#${from + 1}–#${harness.cursor})` : `no records after #${from}`;
+      const data: ResearchEventData[] = [];
+      if (ended && !resumed) {
+        const { unresolved: _settled, ...settled } = harness;
+        data.push({ type: "harness", state: { ...settled, state: "ended", observedAt: this.now(), note: `Reconciled ${range}. The source reports this swarm ended. Nothing was resent.` } });
+        // The source's own terminal record settles an unacknowledged stop; a lost reply alone never does.
+        if (current.status === "stopping") {
+          const outcome = current.reason?.startsWith("deadline:") ? "deadline" : current.reason?.startsWith("completed:") ? "completed" : "stopped";
+          data.push({ type: "status", status: outcome, reason: "The source reported this swarm ended while cancellation was unconfirmed." });
+        }
+      } else if (origin.mode === "import") {
+        data.push({ type: "harness", state: { ...harness, state: "imported", observedAt: this.now(), note: `Imported ${range}.${more ? " More records remain; reconcile again." : ""} Source work may continue; this import cannot stop it.` } });
+      } else {
+        data.push({ type: "harness", state: { ...harness, state: "unknown", observedAt: this.now(), note: `Reconciled ${range}.${more ? " More records remain; reconcile again." : ""} The source has not reported an end, so its work may still be running. Nothing was resent.` } });
+      }
+      this.append(id, data);
+    } catch (error) {
+      const current = this.run(id);
+      if (current.harness!.state === "reconciling") {
+        this.append(id, [{ type: "harness", state: { ...current.harness!, state: prior, note: `Reconcile stopped: ${boundedMessage(error)}. Records read before it stopped are kept. Nothing was resent.` } }]);
+      }
+      this.ports.onError(error);
+    } finally {
+      // Shutdown may already have closed it.
+      if (this.reconciling.get(id) === connection && connection) this.closeConnection(connection);
+      this.reconciling.delete(id);
+    }
+    return this.run(id);
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     for (const probe of this.probes.values()) probe.abort();
+    // An in-flight reconcile's pending read fails and restores the prior outcome; nothing is resent.
+    for (const [id, connection] of this.reconciling) if (connection) { this.reconciling.set(id, undefined); this.closeConnection(connection); }
     for (const id of this.connections.keys()) {
       this.unknown(id, new Error("Owner shut down; remote execution outcome is unknown"));
       this.release(id);
@@ -219,7 +333,11 @@ export class ResearchHarnessService {
   private unknown(id: string, error: unknown): void {
     const run = this.run(id);
     if (!["running", "stopping"].includes(run.status)) return;
-    this.append(id, [{ type: "harness", state: { ...run.harness!, state: "unknown", note: "Connection or dispatch outcome is unknown. Reconcile source records; do not replay execution or cancellation." } },
+    const cancel = run.status === "stopping" && run.harness!.mode === "execute";
+    const note = cancel ? "Cancellation was requested, but the bridge did not confirm it. Source work may still be running."
+      : run.harness!.mode === "import" ? "The connection ended before the import was complete."
+      : "The bridge connection ended without a confirmed outcome. Source work may still be running.";
+    this.append(id, [{ type: "harness", state: { ...run.harness!, state: "unknown", note, ...(cancel ? { unresolved: "cancel" as const } : {}) } },
       { type: "status", status: run.status === "stopping" ? "stopping" : "interrupted", reason: "Harness connection ended without a confirmed execution outcome." }]);
     this.release(id);
     this.ports.onError(error);
@@ -241,11 +359,12 @@ export class ResearchHarnessService {
     for (const key of [`${id}:deadline`, `${id}:poll`]) { this.timers.get(key)?.(); this.timers.delete(key); }
     const connection = this.connections.get(id);
     this.connections.delete(id);
-    if (connection) {
-      const cleanup = Promise.resolve(connection.close());
-      this.cleanup.add(cleanup);
-      void cleanup.then(() => this.cleanup.delete(cleanup), (error) => { this.cleanup.delete(cleanup); this.ports.onError(error); });
-    }
+    if (connection) this.closeConnection(connection);
+  }
+  private closeConnection(connection: ResearchHarnessConnection): void {
+    const cleanup = Promise.resolve().then(() => connection.close());
+    this.cleanup.add(cleanup);
+    void cleanup.then(() => this.cleanup.delete(cleanup), (error) => { this.cleanup.delete(cleanup); this.ports.onError(error); });
   }
   private append(id: string, data: ResearchEventData[]): void {
     const run = this.run(id);
@@ -262,4 +381,9 @@ export class ResearchHarnessService {
       .flatMap((item) => item?.type === "approach" ? [item.record] : []);
   }
   private now(): number { return this.ports.now?.() ?? Date.now(); }
+}
+
+function boundedMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Harness bridge failed";
+  return message.length > 300 ? `${message.slice(0, 299)}…` : message;
 }

@@ -3,10 +3,11 @@ import type { ResearchFinding, ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";
+import { ResearchSourceTag } from "./ResearchSourceTag";
 import { RESEARCH_FINDINGS_PAGE, useResearchFindings } from "./useResearchFindings";
 import {
   approachTitle, excerpt, formatClock, plural, RESEARCH_FOCUSED_CHILD_PREFIX, researchActivityRows, researchApproachOverlap, researchApproachStateLabel, researchFindingMatches, researchFindingRelation,
-  researchLabel, researchMapBranches, researchMapLeafLabel, researchMapMatches, researchMapMoreLabel, researchSourceLabel, type ResearchMapBranch, type ResearchRunView,
+  researchLabel, researchMapBranches, researchMapLeafLabel, researchMapMatches, researchMapMoreLabel, type ResearchMapBranch, type ResearchRunView,
 } from "./research-view-model";
 
 type Open = (itemId: string) => void;
@@ -37,7 +38,8 @@ function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = fals
       <span className="research-chip">{researchApproachStateLabel(approach)}</span>
       {approach.worker && <ResearchThreadButton thread={approach.worker} title="Open worker" label={`Open worker thread: ${approach.title}`} />}
     </div>
-    <p className="research-muted research-clamp">{approach.task}</p>
+    {/* A source direction's title is its text; do not print it twice. */}
+    {approach.task !== approach.title && <p className="research-muted research-clamp">{approach.task}</p>}
     {approach.note && <p className="research-muted">{approach.note}</p>}
     {overlap && <p className="research-muted">{overlap}</p>}
     {(branch.leaves.length > 0 || branch.assignments.length > 0) && <div className="research-map__children">
@@ -115,7 +117,7 @@ function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEviden
   return <article className="research-entry" aria-label={`${researchLabel(finding.kind)} from ${approachTitle(run, finding.approachId)}`}>
     <div className="research-entry__meta"><span className="research-chip">{researchLabel(finding.kind)}</span><span>{approachTitle(run, finding.approachId)}</span></div>
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(finding.id)}>{finding.text}</button>
-    {run.harness && <p className="research-muted">{researchSourceLabel(run, finding.id)}</p>}
+    {run.harness && <ResearchSourceTag run={run} itemId={finding.id} />}
     {relation && <button type="button" className="research-link" onClick={() => onOpenItem(finding.relatesTo!)}>{relation}</button>}
     {finding.paths.length > 0 && <EvidenceList paths={finding.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(finding.id, index)} />}
     {finding.author && <ResearchThreadButton thread={finding.author} title="Open source thread" label={`Open source thread: ${approachTitle(run, finding.approachId)}`} />}

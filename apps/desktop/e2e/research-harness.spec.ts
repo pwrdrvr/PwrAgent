@@ -16,12 +16,18 @@ test("Discovery status, problems and bounded ancestry retain source authority", 
     const panel = app.window.getByRole("region", { name: "Research", exact: true });
     await expect(panel.getByLabel("Discovery observation")).toBeVisible();
     await expect(panel.getByText(/PwrAgent has not independently verified/)).toBeVisible();
-    await expect(panel.getByLabel("Recorded candidate ancestry").getByRole("listitem")).toHaveCount(20);
+    // A complete snapshot is not a failure, and it has no deadline of its own.
+    await expect(panel.getByText("Snapshot", { exact: true })).toBeVisible();
+    await expect(panel.getByText(/^Observed /)).toBeVisible();
+    await expect(panel.getByRole("table", { name: "Recorded problems" })).toBeVisible();
+    await expect(panel.getByLabel("Recorded candidate ancestry").getByRole("listitem")).toHaveCount(25);
     await panel.getByLabel("Filter discovery nodes").fill("candidate 30");
-    await expect(panel.getByText(/Node 30 · parent 14/)).toBeVisible();
-    await expect(panel.getByText(/passed \(source report\)/)).toBeVisible();
-    await panel.getByRole("button", { name: "Ancestry graph", exact: true }).click();
-    await expect(panel.locator('[data-node-id="30"][data-parent-id="14"]')).toBeVisible();
+    await expect(panel.getByLabel("Recorded candidate ancestry").getByText(/parent #14 · round/)).toBeVisible();
+    await expect(panel.getByText("passed (source report)")).toBeVisible();
+    // The plot and the outline share the recorded node and parent identities.
+    await expect(panel.locator('svg [data-node-id="30"][data-parent-id="14"]')).toBeVisible();
+    await panel.locator('svg [data-node-id="30"]').click();
+    await expect(panel.getByRole("region", { name: "Discovery node 30" })).toBeVisible();
     await testInfo.attach("discovery-ancestry", { body: await app.window.screenshot(), contentType: "image/png" });
   } finally { await app.close(); }
 });
@@ -35,13 +41,20 @@ for (const theme of ["dark", "light"] as const) {
       await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
       await app.window.getByRole("tab", { name: "Research", exact: true }).click();
       const panel = app.window.getByRole("region", { name: "Research", exact: true });
-      await expect(panel.getByLabel("Harness provenance")).toBeVisible();
-      await expect(panel.getByText(/source cursor 10/)).toBeVisible();
-      await expect(panel.getByText(/token and dollar usage unknown/)).toBeVisible();
-      await expect(panel.getByText(/Cancellation acknowledgement was lost/)).toBeVisible();
+      const outcome = panel.getByRole("group", { name: "Unresolved source outcome" });
+      await expect(outcome).toContainText("The bridge did not confirm the stop.");
+      await expect(outcome).toContainText("Cancellation was requested, but the bridge did not confirm it.");
+      await expect(panel.getByText("Outcome unknown", { exact: true })).toBeVisible();
+      await panel.getByText("Source details", { exact: true }).click();
+      await expect(panel.getByLabel("Harness provenance")).toContainText("10 records, through #10");
+      await expect(panel.getByLabel("Harness provenance")).toContainText("tokens and dollars unknown · no hard spend cap");
       await expect(panel.getByRole("button", { name: /Open worker/ })).toHaveCount(0);
+      await testInfo.attach(`harness-outcome-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
+      // With no bridge configured, reconciling reports why and restores the unknown outcome; nothing is resent.
+      await outcome.getByRole("button", { name: "Reconcile from source" }).click();
+      await expect(outcome).toContainText("Reconcile stopped: Configure research.harness");
       await panel.getByRole("tab", { name: "Findings", exact: true }).click();
-      await expect(panel.getByText(/Source m1 · record 4 · SHA-256/)).toBeVisible();
+      await expect(panel.getByText(/^From m1 · #4/)).toBeVisible();
       await expect(panel.getByText("evidence/queue.txt", { exact: true })).toBeVisible();
       await testInfo.attach(`harness-board-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
       await panel.getByRole("tab", { name: /^Review/ }).click();

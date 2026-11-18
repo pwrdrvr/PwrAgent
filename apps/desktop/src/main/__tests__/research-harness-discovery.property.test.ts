@@ -88,9 +88,9 @@ it("does not revive an observation cancelled while the tree response is outstand
   expect(store.get(run.id)?.harness?.discovery).toBeUndefined();
 });
 
-it("refuses discovery execution before creating an intent or opening a process", () => {
+it("refuses discovery execution before creating an intent or opening a process", async () => {
   const { store, connection } = setup();
-  expect(() => service.start({ ...request(), mode: "execute" }, fixture.tempDir)).toThrow("read-only");
+  await expect(service.start({ ...request(), mode: "execute" }, fixture.tempDir)).rejects.toThrow("read-only");
   expect(store.activeRuns(actor)).toHaveLength(0);
   expect(connection.request).not.toHaveBeenCalled();
 });

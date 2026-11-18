@@ -140,7 +140,12 @@ export type ResearchRun = {
 /** The operator's bound request, waiting for this thread to call research_start. Owner memory only. */
 export type ResearchPendingRequest = Omit<PrepareResearchRequest, "backend" | "threadId"> & { preparedAt: number; expiresAt: number };
 /** A run header with the review counts the run list needs to name its phase. */
-export type ResearchRunSummary = Omit<ResearchRunHeader, "harness"> & { unreviewed: number; accepted: number };
+export type ResearchRunSummary = Omit<ResearchRunHeader, "harness"> & { unreviewed: number; accepted: number; harness?: ResearchHarnessPhase };
+/** Just enough of a Harness run's state to name its phase in a run list; notes, IDs and snapshots stay with the run. */
+export type ResearchHarnessPhase = Pick<ResearchHarnessState, "state" | "mode" | "source">;
+export function researchHarnessPhase(harness: ResearchHarnessState): ResearchHarnessPhase {
+  return { state: harness.state, mode: harness.mode, ...(harness.source ? { source: harness.source } : {}) };
+}
 /** The thread's run summaries. Each run's items are read separately, by delta (`ResearchChangesRequest`). */
 export type ResearchSnapshot = { runs: ResearchRunSummary[]; writableRunIds: string[]; pending?: ResearchPendingRequest };
 /** With `runId`, `runs` holds only that run's summary, or nothing when the thread cannot see it. */
@@ -528,7 +533,8 @@ export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
     ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, deadlineAt: run.deadlineAt, workspaceMode: run.workspaceMode, status: run.status,
     ...(run.reason !== undefined ? { reason: run.reason } : {}), workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
-    unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length };
+    unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
+    ...(run.harness ? { harness: researchHarnessPhase(run.harness) } : {}) };
 }
 
 export function sameResearchThread(a: ResearchThread, b: ResearchThread): boolean {

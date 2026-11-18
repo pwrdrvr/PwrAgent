@@ -14,6 +14,51 @@ cancellation disposition. External members are source identities, never invented
 PwrAgent worker threads. Native assignments and revision delivery are disabled
 for source observations. Local acceptance/rejection remains available.
 
+## Research panel
+
+**New run** opens one form. When the adapter is available, a switch chooses
+PwrAgent workers or Open Math Harness. The Harness form starts with a **Bridge**
+block from the owner's status read: the bridge executable's file name, the
+execution model and endpoint origin, the model-credential variable's name and
+whether it is set, and a reminder that MathOS Platform sign-in belongs to the
+bridge. Credential values never reach the window. With no bridge configured it
+shows an example `[research.harness]` table and **Show config.toml**, which
+reveals the profile's own file; the window supplies no path. A config error is
+shown as text.
+
+**Check bridge** is an explicit owner request: it starts the configured bridge,
+sends `hello`, closes it, and reports the advertised capabilities. It makes no
+model call, creates no run and writes nothing. A thread without a directory is
+checked from the temporary directory, because a check binds no evidence.
+
+The operator picks one of three operations: **Import swarm records** and
+**Snapshot a discovery run** are read-only and need only source IDs and an
+optional title; **Run a new swarm** adds the objective, member limit, deadline
+and an itemized model-budget acknowledgement. An operation the checked bridge
+cannot perform, or execution without a model, endpoint or set credential,
+explains why on its own card. The form names the canonical workspace that will
+bind evidence and blocks early when the thread has none. A request ID is derived
+from the request content: an unchanged retry reuses it, and any edit takes a new
+one. Errors show the owner's own message.
+
+A Harness run's chip follows the Harness state, not the native status the owner
+uses to retire it: *Observing*, *Imported*, *Snapshot*, *Starting*, *Running*,
+*Stopping*, *Stop unconfirmed*, *Stopped*, *Source ended*, *Reconciling* and
+*Outcome unknown*. Run summaries carry only that `{state, mode, source}` phase,
+selected in SQL so a discovery snapshot is never read for a list. Imports show
+when they were observed instead of a deadline. An unknown outcome is one callout
+with **Reconcile from source**; an imported swarm offers **Import newer records**.
+**Source details** holds the IDs, record cursor, model, reported usage, evidence
+root and protocol revision. Items show a compact `From m1 · #4` source tag whose
+tooltip and accessible text carry the full receipt and digest.
+
+The discovery view shows the reported state, solved count and usage, a problems
+table, a score-by-round plot and an indented ancestry outline. The plot and the
+outline use the same recorded node and parent IDs; selecting a point opens the
+node's detail. The outline is the keyboard and screen-reader path, pages 25 rows
+at a time, and places every recorded node once: a node whose parent is missing
+starts its own branch and says so, and a recorded parent loop cannot recurse.
+
 Version 1 covers swarm records and read-only discovery status, problems and a
 selected problem's bounded tree. Running Lean verification remains the next
 milestone. A source `solved` outcome, verification report or accepted verdict never
@@ -27,6 +72,8 @@ Configuration comes from the owner's watched config-store research domain and is
 captured per connection. Invalid profile edits block new adapter use, including
 when the store retains a last-known-good snapshot. A malformed argument list fails closed.
 Neither model text nor IPC selects an executable, endpoint, model or workspace.
+Execution requires the budget acknowledgement; imports and snapshots make no
+model call and do not ask for it.
 The form discloses the configured execution model and endpoint origin; the owner
 retains that selection before paid probing, separately from any source model name.
 Import never initializes or validates the model transport.
@@ -112,9 +159,25 @@ project mounted at that workspace.
 
 Intent is durable before launching or dispatching. A timeout, lost execution
 response, unknown cancellation, malformed page or owner loss retains an unknown
-outcome. No execution or cancellation is blindly retried. Reopening never starts
-the bridge or a model request. A fresh explicit read-only import can reconcile
-the source without replaying work. A late page cannot resurrect a stopped run.
+outcome. An unacknowledged cancellation is recorded as `unresolved: "cancel"` in
+the Harness state, so it survives the owner rewriting the run's status on
+restart. No execution or cancellation is blindly retried. Reopening never starts
+the bridge or a model request. A late page cannot resurrect a stopped run.
+
+**Reconcile** is an explicit, read-only import into the same run from its stored
+cursor. It applies to `unknown`, `stopping`, `imported` and stale `reconciling`
+swarm runs; a discovery snapshot has no cursor and takes a new snapshot instead.
+It is refused for a non-coordinator, while this process still holds the run's
+connection, and for a running or stopping run another live process owns. The
+`reconciling` intent commits before the bridge starts. The bridge must advertise
+`import`; the owner sends only `hello` and `records`, never `execute` or
+`cancel`. Each page commits with its cursor under the same validation as a live
+page, at most twenty pages per reconcile. Only the source's own `ended` record
+settles the outcome: it sets `ended`, clears `unresolved`, and turns a
+still-`stopping` run into its requested terminal status. Otherwise an execution
+stays `unknown` and an import returns to `imported`, with a note giving the
+records read. A bridge failure or shutdown restores the prior outcome and keeps
+the records already committed.
 Shutdown aborts model calls, drains pending requests and awaits bounded termination
 of the owned bridge process tree. This says nothing about remote work stopping.
 
@@ -169,6 +232,8 @@ The checked-in SQLite budgets measure the feature after database setup:
 | One thousand adapter configuration reads | 0 | 0 |
 | Discovery status/problems/three-node tree import | 3 | 131,872 |
 | Repeated discovery request identity | 0 | 0 |
+| Reconcile: intent, one seven-record page with cursor, settled outcome | 3 | 131,840 |
+| Bridge capability check (`hello` only) | 0 | 0 |
 
 At one six-record page per minute across the owner, the measured rate is
 `(1/60 commits/s) × 70,040 bytes/commit × 86,400 s = 100.86 MB/day`,
@@ -185,6 +250,12 @@ commit size adds approximately 0.10 MB/day through the existing config snapshot.
 Four explicit discovery imports/hour at the measured three-node fixture size add
 approximately 12.66 MB/day; there is no background discovery polling or per-node
 commit. Larger bounded snapshots cost more WAL bytes in the same three commits.
+Reconcile is an operator action, not a timer: four per hour at the measured size
+add `4 × 24 × 131,840 bytes ≈ 12.66 MB/day`, and each additional page adds one
+commit. Bridge checks and status reads add zero. The `observedAt` and
+`unresolved` fields ride in Harness state events that were already committed, so
+no existing budget's commits, statements or rows changed. Run-list summaries read
+the Harness phase through the existing indexed state subquery and write nothing.
 
 ## Milestone acceptance
 

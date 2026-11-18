@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,
@@ -9,9 +9,11 @@ import { researchApproachOccupiesSlot, researchRunStoreSynced, sameResearchThrea
 export type ResearchRunView = ResearchRunHeader & ResearchRunState & Pick<ResearchRunStore, "items" | "approaches" | "submissions" | "leaves">;
 
 /** The view of a run whose store has finished a sync, or undefined while its first sync is in flight. */
-export function researchRunView(header: ResearchRunHeader, store: ResearchRunStore): ResearchRunView | undefined {
+export function researchRunView(header: Omit<ResearchRunHeader, "harness"> & { harness?: unknown }, store: ResearchRunStore): ResearchRunView | undefined {
   if (store.runId !== header.id || !store.state || !researchRunStoreSynced(store)) return undefined;
-  return { ...header, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves };
+  // A summary names only the Harness phase; the run's full source state arrives with its store.
+  const { harness: _phase, ...run } = header;
+  return { ...run, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves };
 }
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";
@@ -34,7 +36,9 @@ export function unreviewedCandidates(run: Pick<ResearchRun, "submissions">): Res
 }
 
 /** What names a run's phase. A summary and a run view both carry it. */
-export type ResearchPhaseInput = Pick<ResearchRunSummary, "status" | "activeWorkers" | "unreviewed" | "accepted">;
+export type ResearchPhaseInput = Pick<ResearchRunSummary, "status" | "activeWorkers" | "unreviewed" | "accepted"> & {
+  harness?: Pick<ResearchHarnessState, "state" | "mode" | "source">;
+};
 
 /**
  * The operator-facing phase. A running run with no worker holding a slot is
@@ -43,6 +47,7 @@ export type ResearchPhaseInput = Pick<ResearchRunSummary, "status" | "activeWork
  * An approach with an unresolved revision delivery still holds its slot.
  */
 export function researchRunPhase(run: ResearchPhaseInput): ResearchPhase {
+  if (run.harness) return researchHarnessPhase(run, run.harness);
   if (run.status === "running") {
     if (run.activeWorkers > 0) return { label: "Running", tone: "live" };
     if (run.unreviewed) return { label: "Awaiting review", tone: "attention" };
@@ -57,6 +62,49 @@ export function researchRunPhase(run: ResearchPhaseInput): ResearchPhase {
     case "exhausted": return { label: "No candidates", tone: "neutral" };
     case "interrupted": return { label: "Interrupted", tone: "problem" };
   }
+}
+
+/**
+ * A Harness run's chip follows the owner's Harness state. The native status the
+ * owner stores to retire a run (interrupted, stopping) does not say what the
+ * source did: a complete import is not a failure, an unacknowledged stop is
+ * not a stop, and an unknown outcome stays visible until reconciled.
+ */
+function researchHarnessPhase(run: Omit<ResearchPhaseInput, "harness">, harness: NonNullable<ResearchPhaseInput["harness"]>): ResearchPhase {
+  if (run.status === "completed") return { label: "Completed", tone: "done" };
+  switch (harness.state) {
+    case "unknown": return { label: "Outcome unknown", tone: "attention" };
+    case "reconciling": return { label: "Reconciling", tone: "live" };
+    case "stopping": return run.status === "stopping" ? { label: "Stopping", tone: "live" } : { label: "Stop unconfirmed", tone: "attention" };
+    case "imported": return { label: harness.source === "discovery" ? "Snapshot" : "Imported", tone: "neutral" };
+    case "stopped": return { label: "Stopped", tone: "neutral" };
+    case "ended": return run.unreviewed ? { label: "Awaiting review", tone: "attention" } : { label: "Source ended", tone: "neutral" };
+    case "pending": return { label: "Starting", tone: "live" };
+    case "running":
+      if (harness.mode === "import") return { label: "Observing", tone: "live" };
+      return run.unreviewed ? { label: "Awaiting review", tone: "attention" } : { label: "Running", tone: "live" };
+  }
+}
+
+/** When a Harness run was observed or started; an import or snapshot has no deadline of its own. */
+export function researchHarnessTime(run: Pick<ResearchRunView, "status" | "deadlineAt" | "createdAt" | "harness">, now: number): string {
+  const harness = run.harness!;
+  if (harness.mode === "import") return harness.observedAt ? `Observed ${formatClock(harness.observedAt)}` : `Requested ${formatClock(run.createdAt)}`;
+  if (isResearchRunLive(run) && harness.state !== "unknown") return researchTimeLeft(run, now);
+  return `Started ${formatClock(run.createdAt)} · ${Math.round((run.deadlineAt - run.createdAt) / 60_000)} min limit`;
+}
+
+/** The unresolved-outcome callout for a Harness run, or undefined when its source outcome is settled. */
+export function researchHarnessOutcome(run: Pick<ResearchRunView, "status" | "harness">): { title: string; body: string } | undefined {
+  const harness = run.harness;
+  if (!harness || run.status === "completed") return undefined;
+  const unresolvedStop = harness.state === "stopping" && run.status !== "stopping";
+  if (harness.state !== "unknown" && !unresolvedStop) return undefined;
+  // Stopping an import sends no cancellation, so only an execution can have an unconfirmed stop.
+  const title = harness.mode === "import" ? "This import ended before it was complete."
+    : unresolvedStop || harness.unresolved === "cancel" || run.status === "stopping" ? "The bridge did not confirm the stop." : "This run's outcome is unknown.";
+  const tail = harness.mode === "import" ? "Source work was never owned by this import." : "PwrAgent will not resend the start or the stop.";
+  return { title, body: `${harness.note} ${tail}` };
 }
 
 /** Remaining time for a live run, or when its deadline fell for a finished one. */
@@ -108,7 +156,13 @@ export function approachTitle(run: Pick<ResearchRunView, "items">, id: string): 
 
 export function researchSourceLabel(run: Pick<ResearchRunView, "items">, itemId: string): string {
   const source = run.items.get(itemId)?.provenance;
-  return source ? `Source ${source.member ?? "service"} · record ${source.seq} · SHA-256 ${source.digest.slice(0, 12)}` : "Source provenance unavailable";
+  return source ? `${source.member ?? "Source"} · #${source.seq}` : "Source provenance unavailable";
+}
+
+/** The full provenance a compact source label stands for, for its tooltip and accessible description. */
+export function researchSourceDetail(run: Pick<ResearchRunView, "items">, itemId: string): string {
+  const source = run.items.get(itemId)?.provenance;
+  return source ? `Source member ${source.member ?? "service"}, record ${source.seq}, recorded ${formatClock(source.at)}. SHA-256 ${source.digest}` : "Source provenance unavailable";
 }
 
 /**

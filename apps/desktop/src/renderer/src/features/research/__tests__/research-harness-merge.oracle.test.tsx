@@ -17,6 +17,7 @@ function show(run: ResearchRun) {
     readResearchItem: vi.fn<NonNullable<DesktopApi["readResearchItem"]>>(async (request) => ({ run, item: run.items.find((item) => item.id === request.itemId)! })),
     updateResearch: vi.fn<NonNullable<DesktopApi["updateResearch"]>>(async () => ({ runId: run.id, revision: run.revision, status: run.status })),
     updateResearchItem: vi.fn(), submitThreadReply: vi.fn(),
+    reconcileResearchHarness: vi.fn<NonNullable<DesktopApi["reconcileResearchHarness"]>>(async () => ({ runId: run.id, revision: run.revision, status: run.status })),
   } satisfies Partial<DesktopApi>;
   render(<ResearchPanel desktopApi={api as DesktopApi} thread={{ id: "parent", source: "codex" } as NavigationThreadSummary} />);
   return api;
@@ -25,10 +26,17 @@ function show(run: ResearchRun) {
 it("preserves source provenance, unknown cancellation and source verdicts across the extracted views", async () => {
   const run = harnessRun("unknown");
   const api = show(run);
-  expect(await screen.findByLabelText("Harness provenance")).toHaveTextContent(run.harness!.note);
-  expect(screen.getByLabelText("Harness provenance")).toHaveTextContent("token and dollar usage unknown");
+  const outcome = await screen.findByRole("group", { name: "Unresolved source outcome" });
+  expect(outcome).toHaveTextContent("The bridge did not confirm the stop.");
+  expect(outcome).toHaveTextContent(run.harness!.note);
+  expect(outcome).toHaveTextContent("PwrAgent will not resend the start or the stop.");
+  expect(screen.getByText("Outcome unknown")).toBeInTheDocument();
+  expect(screen.getByLabelText("Harness provenance")).toHaveTextContent("tokens and dollars unknown · no hard spend cap");
+  fireEvent.click(within(outcome).getByRole("button", { name: "Reconcile from source" }));
+  await waitFor(() => expect(api.reconcileResearchHarness).toHaveBeenCalledWith({ backend: "codex", threadId: "parent", runId: run.id }));
+  expect(api.updateResearch).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
-  expect(await screen.findByText(/Source m1 · record 1 · SHA-256 aaaaaaaaaaaa/)).toBeInTheDocument();
+  expect(await screen.findByText(/^From m1 · #1/)).toHaveTextContent(`SHA-256 ${"a".repeat(64)}`);
   fireEvent.click(screen.getByRole("tab", { name: /Review/ }));
   const candidate = screen.getByRole("article", { name: "Candidate from Source direction" });
   expect(within(candidate).getByText("Awaiting review")).toBeInTheDocument();
@@ -49,7 +57,7 @@ it("keeps imported items readable without offering native progress or child disp
   await screen.findByRole("heading", { name: "Note from Source direction" });
   expect(screen.queryByLabelText("Progress note")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Task for a focused child")).not.toBeInTheDocument();
-  expect(screen.getByText(/Source m1 · record 1 · SHA-256/)).toBeInTheDocument();
+  expect(screen.getByText(/^From m1 · #1/)).toBeInTheDocument();
   expect(api.updateResearchItem).not.toHaveBeenCalled();
   expect(api.submitThreadReply).not.toHaveBeenCalled();
 });

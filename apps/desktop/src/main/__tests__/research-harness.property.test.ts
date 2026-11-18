@@ -52,7 +52,8 @@ describe("Harness lifecycle and real SQLite oracle", () => {
       changed: () => {}, schedule: () => () => {}, onError: () => {} });
     try {
       const measured = await measureSqliteWrites(() => ({ summary: native.snapshot(actor), changes: native.changes(receipt.id, 0, undefined, actor) }));
-      expect(measured.result.summary.runs.every((summary) => !Object.hasOwn(summary, "harness"))).toBe(true);
+      // A summary names only the Harness phase; notes, IDs, workspace and snapshots travel with the selected run.
+      expect(measured.result.summary.runs.map((summary) => summary.harness)).toEqual([{ state: "ended", mode: "import" }]);
       expect(measured.result.changes.state.harness).toEqual(receipt.harness);
       expect(measured.result.changes.items.find((item) => item.id === "h:4")?.provenance).toMatchObject({ seq: 4, member: "m1" });
       expect(measured.result.changes).not.toHaveProperty("events");

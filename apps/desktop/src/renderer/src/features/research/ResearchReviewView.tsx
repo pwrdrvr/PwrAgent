@@ -2,7 +2,8 @@ import { useId, useState } from "react";
 import type { ResearchSubmission } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
-import { approachTitle, researchReviewStatusLabel, researchRevisionBlocker, researchSourceLabel, type ResearchRunView } from "./research-view-model";
+import { approachTitle, researchReviewStatusLabel, researchRevisionBlocker, type ResearchRunView } from "./research-view-model";
+import { ResearchSourceTag } from "./ResearchSourceTag";
 
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
@@ -44,7 +45,7 @@ function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailab
       <span className={`research-chip${submission.review ? submission.review.decision === "accepted" ? " research-chip--done" : "" : " research-chip--attention"}`}>{researchReviewStatusLabel(submission.review?.decision)}</span>
     </div>
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(submission.id)}>{submission.text}</button>
-    {run.harness && <p className="research-muted">{researchSourceLabel(run, submission.id)}</p>}
+    {run.harness && <ResearchSourceTag run={run} itemId={submission.id} />}
     {submission.paths.length > 0 && <EvidenceList paths={submission.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(submission.id, index)} />}
     {submission.author && <ResearchThreadButton thread={submission.author} title="Open source thread" label={`Open source thread: ${title}`} />}
     {submission.review && <p className="research-review-note"><strong>{submission.review.actor.kind === "operator" ? "You" : "Coordinator"}:</strong> {submission.review.reason}</p>}

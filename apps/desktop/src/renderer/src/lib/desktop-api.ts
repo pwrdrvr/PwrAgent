@@ -1,5 +1,5 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import type { ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
+import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
 import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
@@ -1062,7 +1062,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   researchChanges?: (request: ResearchChangesRequest) => Promise<ResearchChanges>;
   /** One page of a run's journal, newest first. */
   readResearchEvents?: (request: ResearchEventsRequest) => Promise<ResearchEventPage>;
-  researchHarnessStatus?: () => Promise<ResearchHarnessStatus>;
+  researchHarnessStatus?: (request: ResearchThread) => Promise<ResearchHarnessStatus>;
+  checkResearchHarness?: (request: ResearchThread) => Promise<ResearchHarnessCheck>;
+  reconcileResearchHarness?: (request: ResearchHarnessReconcileRequest) => Promise<ResearchUpdateReceipt>;
+  revealResearchHarnessConfig?: () => Promise<void>;
   startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchUpdateReceipt>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
   withdrawResearch?: (thread: ResearchThread) => Promise<void>;

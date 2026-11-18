@@ -2,9 +2,11 @@ import { applyResearchChanges, emptyResearchRunStore, researchChangePage, summar
 
 export function harnessRun(state: ResearchHarnessState["state"] = "running", accepted = false) {
   const actor = { backend: "codex", threadId: "parent", kind: "agent" } as const;
-  const harness: ResearchHarnessState = { version: 1, mode: "import", project: "fixture-project", session: "fixture-session", swarm: "fixture-swarm",
+  // A lost cancellation acknowledgement only exists for execution; stopping an import sends no cancel.
+  const harness: ResearchHarnessState = { version: 1, mode: state === "unknown" ? "execute" : "import", project: "fixture-project", session: "fixture-session", swarm: "fixture-swarm",
     workspace: "/fixture/workspace", upstreamRevision: RESEARCH_HARNESS_REVISION, state, cursor: 4, members: ["m1"], cancelSupported: false,
-    note: state === "unknown" ? "Cancellation acknowledgement was lost. Reconcile source records." : "Retained source observations." };
+    ...(state === "unknown" ? { unresolved: "cancel" as const } : {}),
+    note: state === "unknown" ? "Cancellation was requested, but the bridge did not confirm it. Source work may still be running." : "Retained source observations." };
   const events: ResearchEvent[] = [];
   const add = (data: ResearchEvent["data"], source = false) => events.push({ seq: events.length + 1, at: 1000 + events.length, commandId: `fixture:${events.length}`, signature: "fixture", actor, data,
     ...(source ? { provenance: { adapter: "open-math-harness" as const, version: 1 as const, upstreamRevision: RESEARCH_HARNESS_REVISION,
@@ -26,6 +28,7 @@ export function harnessRun(state: ResearchHarnessState["state"] = "running", acc
 
 export function harnessRunView(run: ResearchRun) {
   const store = applyResearchChanges(emptyResearchRunStore(run.id), { ...researchChangePage(run), writable: true });
-  return { ...summarizeResearchRun(run), ...store.state!, items: store.items, approaches: store.approaches,
+  const { harness: _phase, ...summary } = summarizeResearchRun(run);
+  return { ...summary, ...store.state!, items: store.items, approaches: store.approaches,
     submissions: store.submissions, leaves: store.leaves };
 }

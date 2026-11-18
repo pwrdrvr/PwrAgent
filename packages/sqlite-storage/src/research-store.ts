@@ -4,7 +4,7 @@ import { applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResear
   type ResearchEvent, type ResearchRun, type ResearchThread, type ResearchRunHeader, type ResearchItem, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchRunSummary, type ResearchEventRange, type ResearchEventPage, type ResearchApproach, type ResearchDelivery, type ResearchSubmission,
   type ResearchBoardRange, type ResearchBoardPage, type ResearchChangesCursor, type ResearchChangePage, type ResearchRunState, type ResearchApproachLeaves,
-  type ResearchFinding,
+  type ResearchFinding, type ResearchHarnessPhase,
 } from "@pwragent/shared/research";
 import type { StateDb } from "./state-db";
 
@@ -111,10 +111,13 @@ const SUMMARY_COLUMNS = HEADER_COLUMNS + `,
   (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'accepted') AS accepted`;
 const HEADER_FROM = "FROM research_runs r JOIN research_events e ON e.run_id = r.run_id AND e.seq = 1";
 const SELECT_HEADERS = "SELECT " + HEADER_COLUMNS + ", " + HARNESS_STATE + " AS harness " + HEADER_FROM;
-const SELECT_SUMMARIES = "SELECT " + SUMMARY_COLUMNS + " " + HEADER_FROM;
+/** A run list names a Harness run's phase only; its notes, IDs and discovery snapshot stay with the selected run. */
+const HARNESS_PHASE = "(SELECT json_object('state', json_extract(h, '$.state'), 'mode', json_extract(h, '$.mode'), 'source', json_extract(h, '$.source'))"
+  + " FROM (SELECT " + HARNESS_STATE + " AS h) WHERE h IS NOT NULL)";
+const SELECT_SUMMARIES = "SELECT " + SUMMARY_COLUMNS + ", " + HARNESS_PHASE + " AS harness_phase " + HEADER_FROM;
 
 type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; revision: number; active_workers: number; harness?: string | null };
-type SummaryRow = HeaderRow & { unreviewed: number; accepted: number };
+type SummaryRow = HeaderRow & { unreviewed: number; accepted: number; harness_phase: string | null };
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
 /** One commit per structured operation; no streamed tokens, polling writes, or copied transcripts. */
@@ -157,7 +160,7 @@ export class ResearchStore implements ResearchStorage {
       WHERE i.worker_backend = ? AND i.worker_thread_id = ? AND r.status IN ('running', 'stopping') LIMIT 1`).get(thread.backend, thread.threadId));
   }
   summaries(thread: ResearchThread): ResearchRunHeader[] {
-    return this.runSummaries(thread, 20).map(({ unreviewed: _unreviewed, accepted: _accepted, ...header }) => header);
+    return this.runSummaries(thread, 20).map(({ unreviewed: _unreviewed, accepted: _accepted, harness: _harness, ...header }) => header);
   }
   /** One statement for the whole list. */
   runSummaries(thread: ResearchThread, limit: number, runId?: string): ResearchRunSummary[] {
@@ -170,8 +173,10 @@ export class ResearchStore implements ResearchStorage {
             (SELECT 1 FROM research_workers WHERE run_id = r.run_id AND backend = ? AND thread_id = ?))
           LIMIT ?`).all(runId, thread.backend, thread.threadId, thread.backend, thread.threadId, limit);
     return (rows as SummaryRow[]).map((row) => {
-      const { harness: _harness, ...summary } = headerFromRow(row);
-      return { ...summary, unreviewed: row.unreviewed, accepted: row.accepted };
+      const summary = headerFromRow(row);
+      const phase = row.harness_phase ? JSON.parse(row.harness_phase) as { state: ResearchHarnessPhase["state"]; mode: ResearchHarnessPhase["mode"]; source: ResearchHarnessPhase["source"] | null } : undefined;
+      return { ...summary, unreviewed: row.unreviewed, accepted: row.accepted,
+        ...(phase ? { harness: { state: phase.state, mode: phase.mode, ...(phase.source ? { source: phase.source } : {}) } } : {}) };
     });
   }
   events(id: string, range: ResearchEventRange): ResearchEventPage {

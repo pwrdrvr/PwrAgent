@@ -6,6 +6,8 @@ import { harnessRecords } from "../../src/main/__tests__/fixtures/research-harne
 import { discoveryRecords } from "../../src/main/__tests__/fixtures/research-discovery-records";
 import { normalizeHarnessDiscovery } from "@pwragent/owner-core/research-harness-discovery";
 
+const OBSERVED_AT = Date.UTC(2026, 10, 1, 14, 4);
+
 export function seedDiscoveryResearchState(stateDbPath: string): void {
   const db = StateDb.open(stateDbPath);
   const store = new ResearchStore(db);
@@ -13,16 +15,16 @@ export function seedDiscoveryResearchState(stateDbPath: string): void {
   const state = { version: 1, source: "discovery", mode: "import", project: "fixture-project", session: "", swarm: "fixture-run", problem: "fixture_problem",
     workspace: "/fixture/research", upstreamRevision: RESEARCH_HARNESS_REVISION, state: "pending", cursor: 0, members: [], cancelSupported: false, note: "Contrived discovery observation." } as const;
   try {
-    store.create("discovery-fixture", "discovery-fixture", { seq: 1, commandId: "start", signature: "fixture", at: 1000, actor, data: {
-      type: "created", objective: "Inspect invented discovery ancestry", coordinator: actor, ownerId: "fixture-owner", ownerPid: 1, deadlineAt: 10_000,
+    store.create("discovery-fixture", "discovery-fixture", { seq: 1, commandId: "start", signature: "fixture", at: OBSERVED_AT, actor, data: {
+      type: "created", objective: "Inspect invented discovery ancestry", coordinator: actor, ownerId: "fixture-owner", ownerPid: 1, deadlineAt: OBSERVED_AT + 7_200_000,
       workspaceMode: "none", harness: { ...state, members: [] }, approaches: [{ id: "a1", title: "Source observation", task: "Observe recorded ancestry", state: "stopped" }],
     } });
-    const normalized = normalizeHarnessDiscovery(store.get("discovery-fixture")!, discoveryRecords(31), 1000);
-    const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: i + 2, commandId: `discovery:${i}`, signature: entry.provenance.digest, at: 1000, actor }));
-    events.push({ seq: events.length + 2, commandId: "snapshot", signature: "fixture", at: 1000, actor, data: { type: "harness", state: {
-      ...state, members: [], state: "imported", discovery: normalized.snapshot,
+    const normalized = normalizeHarnessDiscovery(store.get("discovery-fixture")!, discoveryRecords(31), OBSERVED_AT);
+    const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: i + 2, commandId: `discovery:${i}`, signature: entry.provenance.digest, at: OBSERVED_AT, actor }));
+    events.push({ seq: events.length + 2, commandId: "snapshot", signature: "fixture", at: OBSERVED_AT, actor, data: { type: "harness", state: {
+      ...state, members: [], state: "imported", discovery: normalized.snapshot, observedAt: OBSERVED_AT,
     } } });
-    events.push({ seq: events.length + 2, commandId: "retained", signature: "fixture", at: 1000, actor, data: { type: "status", status: "interrupted", reason: "Retained read-only discovery snapshot." } });
+    events.push({ seq: events.length + 2, commandId: "retained", signature: "fixture", at: OBSERVED_AT, actor, data: { type: "status", status: "interrupted", reason: "Retained read-only discovery snapshot." } });
     store.appendBatch("discovery-fixture", 1, events);
   } finally { db.close(); }
 }
@@ -45,7 +47,7 @@ export function seedHarnessResearchState(stateDbPath: string): void {
     const normalized = normalizeHarnessRecords(run, harnessRecords().slice(0, 10));
     const events: ResearchEvent[] = normalized.events.map((entry, i) => ({ ...entry, seq: i + 2, commandId: `source-${i}`, signature: entry.provenance.digest, at: entry.provenance.at, actor }));
     events.push({ seq: events.length + 2, commandId: "unknown", signature: "unknown", at: 2000, actor, data: { type: "harness", state: {
-      ...normalized.state, state: "unknown", note: "Cancellation acknowledgement was lost. Source execution may still be running. Reconcile records before starting new work.",
+      ...normalized.state, state: "unknown", unresolved: "cancel", note: "Cancellation was requested, but the bridge did not confirm it. Source work may still be running.",
     } } });
     events.push({ seq: events.length + 2, commandId: "stopping", signature: "stopping", at: 2001, actor,
       data: { type: "status", status: "stopping", reason: "Remote stop is unconfirmed. Evidence and source verdicts are retained." } });

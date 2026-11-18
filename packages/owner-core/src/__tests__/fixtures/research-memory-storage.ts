@@ -46,7 +46,7 @@ export class MemoryResearchStorage implements ResearchStorage {
   header(id: string): ResearchRunHeader | undefined {
     const run = this.get(id);
     if (!run) return undefined;
-    const { unreviewed: _unreviewed, accepted: _accepted, ...header } = summarizeResearchRun(run);
+    const { unreviewed: _unreviewed, accepted: _accepted, harness: _harness, ...header } = summarizeResearchRun(run);
     return { ...header, ...(run.harness ? { harness: run.harness } : {}) };
   }
   activeRuns(thread?: ResearchThread) {

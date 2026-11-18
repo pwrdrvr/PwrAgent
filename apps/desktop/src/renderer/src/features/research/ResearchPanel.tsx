@@ -46,7 +46,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
-  const [harnessForm, setHarnessForm] = useState(false);
+  const [source, setSource] = useState<"native" | "harness">("native");
   const [openItemId, setOpenItemId] = useState<string>();
   const [returnFocusId, setReturnFocusId] = useState<string>();
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
@@ -101,6 +101,16 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     }
     finally { setBusy(false); }
   }
+  async function reconcile() {
+    if (!run || !identity || !api?.reconcileResearchHarness) return;
+    setBusy(true); setError(""); setNotice("");
+    try { await api.reconcileResearchHarness({ ...identity, runId: run.id }); }
+    catch (failure) { setError(message(failure)); }
+    finally { setBusy(false); }
+  }
+  function harnessStarted(runId: string) {
+    setCreating(false); setSource("native"); selectRun(runId);
+  }
   async function withdraw() {
     if (!identity || !api?.withdrawResearch) return;
     setBusy(true); setError(""); setNotice("");
@@ -145,15 +155,20 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
 
   const firstRun = Boolean(runs && runs.length === 0 && !pending);
   const showForm = Boolean(runs) && (creating || firstRun);
+  const harnessAvailable = Boolean(api.startResearchHarness);
+  const formSource = harnessAvailable ? source : "native";
   const reviewCount = run?.unreviewed ?? 0;
   return <section className="context-panel__section research-panel" aria-label="Research">
     <div className="research-heading">
       <h3>Research</h3>
-      {api.startResearchHarness && <button type="button" className="research-button" onClick={() => setHarnessForm(!harnessForm)} aria-expanded={harnessForm}>Harness…</button>}
       {!firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
     </div>
-    {harnessForm && <ResearchHarnessForm api={api} thread={identity} onStarted={() => setHarnessForm(false)} />}
-    {showForm && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
+    {showForm && harnessAvailable && <div className="research-switch" role="group" aria-label="Run source">
+      <button type="button" aria-pressed={formSource === "native"} onClick={() => setSource("native")}>PwrAgent workers</button>
+      <button type="button" aria-pressed={formSource === "harness"} onClick={() => setSource("harness")}>Open Math Harness</button>
+    </div>}
+    {showForm && formSource === "harness" && <ResearchHarnessForm api={api} thread={identity} onStarted={harnessStarted} onCancel={firstRun ? undefined : () => setCreating(false)} />}
+    {showForm && formSource === "native" && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
       onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
     {notice && <p role="status" className="research-notice">{notice}</p>}
@@ -167,7 +182,8 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     {run && <>
       <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
-        onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }} />
+        onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
+        onReconcile={api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
       <div className="research-tabs" role="tablist" aria-label="Research views" onKeyDown={onTabKeyDown}>
         {views.map((entry) => <button type="button" role="tab" key={entry.id} id={`${tabsId}-${entry.id}`} aria-selected={currentView === entry.id}
           aria-controls={`${tabsId}-panel`} tabIndex={currentView === entry.id ? 0 : -1} onClick={() => chooseView(entry.id)}>
