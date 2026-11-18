@@ -934,6 +934,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-binding-helpers.ts` | Targeted thread projection, conversation labels and workspace handoff context |
 | `apps/desktop/src/main/messaging/core/messaging-inbound-turns.ts` | Text/media routing, default-Agent admission, input preparation, turn startup, pending prompt buffers and admission timing |
 | `apps/desktop/src/main/messaging/core/messaging-inbound-context.ts` | Lazy store, backend, adapter, configuration and exact workflow ports for inbound effects |
+| `apps/desktop/src/main/messaging/core/messaging-turn-state.ts` | Pure turn/drain reducer, bus lifecycle projection, start-acceptance reconciliation and receipt-owned drain timers/settlement |
 | `apps/desktop/src/main/messaging/core/messaging-inbound-helpers.ts` | Command parsing, private-response request recognition, turn settings and launchpad/environment projections |
 | `apps/desktop/src/main/messaging/core/messaging-access-control.ts` | Actor admission, capability and federation gates, retained-source authorization, dynamic-tool attribution, and Full Access policy/warnings |
 | `apps/desktop/src/main/messaging/core/messaging-access-context.ts` | Lazy access-policy, store and adapter collaborators, plus exact delivery, pending-intent and origin-reading ports |

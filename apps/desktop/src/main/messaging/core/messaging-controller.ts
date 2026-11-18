@@ -1,3 +1,4 @@
+import { MessagingTurns } from "./messaging-turn-state";
 import { MessagingAccessControl } from "./messaging-access-control";
 import type { MessagingAccessHost } from "./messaging-access-context";
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
@@ -380,9 +381,8 @@ export class MessagingController {
   private readonly pendingIntentTtlMs: number;
   private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly queuedTurnActions = new Set<Promise<void>>();
-  private readonly queuedTurnDrainRequests = new Set<string>();
   private readonly interactionMapper: MessagingInteractionMapper;
-  private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
+  private readonly turns: MessagingTurns;
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly preparingTurnActivity = new Map<string, {
@@ -415,11 +415,6 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly queuedTurnDrainTimers = new Map<string, {
-    timer: ReturnType<typeof setTimeout>;
-    settle: () => void;
-  }>();
-  private readonly queuedTurnDrains = new Map<string, Promise<void>>();
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
   private readonly monitorTimersByBindingId = new Map<
@@ -475,6 +470,14 @@ export class MessagingController {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
     const readLogger = () => this.logger;
+    const readTurnAdmission = () => this.turnAdmission;
+    this.turns = new MessagingTurns({
+      get logger() { return readLogger(); },
+      host: () => ({
+        get turnAdmission() { return readTurnAdmission(); },
+        startNextQueuedTurn: (...args) => this.startNextQueuedTurn(...args),
+      }),
+    });
     this.backendEventRouter = new MessagingBackendEventRouter({
       get store() { return readStore(); },
       get now() { return readNow(); },
@@ -931,6 +934,7 @@ export class MessagingController {
       get pdfAttachmentStore() { return readController().pdfAttachmentStore; },
       rememberAgentMessagingOrigin: (...args) => this.rememberAgentMessagingOrigin(...args),
       setActiveTurn: (...args) => this.setActiveTurn(...args),
+      acceptStartedTurn: (...args) => this.turns.accept(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       reconcileActiveTurnFromThreadStatus: (...args) => this.reconcileActiveTurnFromThreadStatus(...args),
@@ -1160,6 +1164,7 @@ export class MessagingController {
       handleAutomationTurnStarted: (...args) => this.handleAutomationTurnStarted(...args),
       handleAutomationTurnTerminal: (...args) => this.handleAutomationTurnTerminal(...args),
       isAutomationTurnEvent: (...args) => this.isAutomationTurnEvent(...args),
+      observeBackendTurn: (...args) => this.turns.observeBackend(...args),
       setActiveTurn: (...args) => this.setActiveTurn(...args),
       logBindingTurnStateChange: (...args) => this.logBindingTurnStateChange(...args),
       deliverToolActivityForBackendEvent: (...args) => this.deliverToolActivityForBackendEvent(...args),
@@ -2077,7 +2082,7 @@ export class MessagingController {
       }
       // Turn completion can arrive before the steer acknowledgement. Its
       // drain stopped at this claim, so recheck the owning backend now.
-      if (this.queuedTurnDrainRequests.delete(entry.threadKey) && !this.disposed) {
+      if (this.turns.takeDrainRequest(entry.threadKey) && !this.disposed) {
         await this.startNextQueuedTurn(entry.binding);
       }
     }
@@ -2151,31 +2156,7 @@ export class MessagingController {
   }
 
   private scheduleNextQueuedTurn(binding: MessagingBindingRecord): void {
-    const key = this.threadKeyForBinding(binding);
-    const entry = this.turnAdmission.peekNextQueued(key);
-    if (!entry && this.turnAdmission.hasDispatchingEntry(key)) this.queuedTurnDrainRequests.add(key);
-    if (this.disposed || this.queuedTurnDrainTimers.has(key)
-      || this.queuedTurnDrains.has(key) || !entry || entry.manualRetryRequired) return;
-    // A start emits ordered lifecycle events. It cannot acknowledge while
-    // the event that released it is still awaiting this listener. Leave the
-    // delivery stack before draining, and coalesce terminal + idle releases.
-    const { promise: drain, resolve: settle } = Promise.withResolvers<void>();
-    this.queuedTurnDrains.set(key, drain);
-    void drain.finally(() => this.queuedTurnDrains.delete(key));
-    const timer = setTimeout(() => {
-      this.queuedTurnDrainTimers.delete(key);
-      if (this.disposed) {
-        settle();
-        return;
-      }
-      void this.startNextQueuedTurn(binding).catch((error) => {
-        this.logger.warn?.("messaging queued turn dispatch failed", {
-          threadId: binding.threadId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }).finally(settle);
-    }, 0);
-    this.queuedTurnDrainTimers.set(key, { timer, settle });
+    this.turns.schedule(binding);
   }
 
   private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
@@ -2191,7 +2172,7 @@ export class MessagingController {
 
     const entry = this.turnAdmission.peekNextQueued(threadKey);
     if (!entry || entry.manualRetryRequired) {
-      if (this.turnAdmission.hasDispatchingEntry(threadKey)) this.queuedTurnDrainRequests.add(threadKey);
+      if (this.turnAdmission.hasDispatchingEntry(threadKey)) this.turns.requestDrain(threadKey);
       return;
     }
 
@@ -2226,7 +2207,7 @@ export class MessagingController {
       submitted,
       "Queued message sent as the next turn.",
     );
-    if (this.queuedTurnDrainRequests.delete(threadKey) && !this.disposed) {
+    if (this.turns.takeDrainRequest(threadKey) && !this.disposed) {
       await this.startNextQueuedTurn(binding);
     }
   }
@@ -4759,14 +4740,9 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
-    for (const { timer, settle } of this.queuedTurnDrainTimers.values()) {
-      clearTimeout(timer);
-      settle();
-    }
-    this.queuedTurnDrainTimers.clear();
+    this.turns.dispose();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
-    this.queuedTurnDrainRequests.clear();
     this.inboundTurns.clearAdmissionTiming();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
@@ -4816,7 +4792,7 @@ export class MessagingController {
    * it retires. dispose() cancels and settles drains that have not yet begun.
    */
   async whenQueuedTurnDrainsSettled(): Promise<void> {
-    await Promise.allSettled([...this.queuedTurnDrains.values()]);
+    await this.turns.whenDrainsSettled();
   }
 
   async whenQueuedTurnActionsSettled(): Promise<void> {
@@ -9172,7 +9148,7 @@ export class MessagingController {
     monitor?: MessagingMonitorState,
     countsAsActivity = true,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
-    const activeTurns = new Map(this.activeTurnsByThreadKey);
+    const activeTurns = new Map(this.turns.snapshot());
     if (!this.options.backend.readThreadStatus) {
       return activeTurns;
     }
@@ -9456,14 +9432,14 @@ export class MessagingController {
   private getActiveTurn(
     binding: MessagingBindingRecord,
   ): MessagingActiveTurnSummary | undefined {
-    return this.activeTurnsByThreadKey.get(this.threadKeyForBinding(binding));
+    return this.turns.get(binding);
   }
 
   private setActiveTurn(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
   ): void {
-    this.activeTurnsByThreadKey.set(this.threadKeyForBinding(binding), activeTurn);
+    this.turns.observe(binding, activeTurn);
   }
 
   private threadKeyForBinding(binding: MessagingBindingRecord): string {

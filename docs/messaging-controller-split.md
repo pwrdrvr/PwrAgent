@@ -529,9 +529,69 @@ pinned current main. Additional writes are zero, or **0 MB/day**.
 The full suite passes 2,127 files and 29,434 tests, with nine files and 108
 tests skipped, in 231.53 seconds. It reports no failed tests or unhandled errors.
 
+## Explicit messaging turn and drain state
+
+The baseline for this step is current main
+`a473f7b70baf2ae2e7bcbecb4a27be5b9e7852b9`, after access-control PR #3880.
+`MessagingTurns` owns one value per owner/thread identity instead of the active
+turn map, drain-request set, timer map and drain-promise map. Its pure
+`transitionMessagingTurn` handles bus lifecycle/idle evidence, accepted starts,
+deferred drain requests, coalescing, timer dispatch, settlement and disposal.
+The router still awaits terminal cleanup before activity, status and drain
+effects. Notifications remain concurrent.
+
+Drains move through idle, arming, scheduled, running and settling states.
+Scheduled/running states carry the timer and settlement receipt, and a callback
+can retire only its own receipt. Dispatch remains on the next macrotask.
+Shutdown cancels and settles armed work, while settlement waits for an already
+issued start and notice retirement. Status snapshots retain the last terminal
+turn for monitor/status readers and expose no mutable collection view. Host
+and logger ports remain lazy; the owner makes no direct store, backend or
+adapter calls and imports no facade.
+
+The independent observable oracle drives the real controller, SQLite store,
+provider deliveries and backend acceptance seam. Valid command sequences cover
+FIFO sends, repeated terminal releases, completion/failure/cancellation,
+provider/backend differences, acceptance/rejection, held acknowledgements and
+shutdown. The pure command model checks drain ownership and deferred requests;
+the lifecycle model checks provider order, repeated evidence, automation
+isolation and acknowledgements at different boundaries. Owner tests cover lazy
+ports, dispatch failures, remote identity and snapshots.
+
+A separate regression proves a current-production race: terminal evidence can
+arrive while `startTurn` awaits its acknowledgement, after which the old inbound
+path replaces the terminal turn with working and re-arms typing. The reducer's
+accepted-start event preserves terminal evidence for that turn. Acceptance is
+still reported after the backend accepts input. This counterexample is kept
+separate from the behavior-preservation oracle.
+
+`node scripts/inventory-messaging-turn-state.mjs --verify` records checker-resolved
+callers, effects, reads inside error boundaries and test seams, and checks the
+unchanged facade/inbound bodies and routing around the extracted lifecycle
+branch. The broader controller audit retains constructor and alias/cast details.
+`node scripts/mutate-messaging-turn-state.mjs --baseline` passes the observable
+protocol on pinned original production and requires the separate regression to
+fail with an assertion. The default mutation run checks transitions, effect
+order, ports and callers. Import/build errors, missing-owner errors and timeouts
+cannot count as proof. Both scripts keep evidence under
+`.local/pwr-149-turn-state/`; mutation runs restore sources and verify protected
+fixture hashes in `finally`.
+
+The pinned-original observable replay passes 12 tests. All 20 deliberate
+turn-state mutations fail assertions. Final protected verification passes
+189 files and 5,629 tests, including all 102 current SQLite-budget caller files;
+both protected fixtures remain byte-identical. Typecheck, syntax/typed lint,
+dependency boundaries, Codex-storage lint and the main bytecode budget pass.
+The full run passes 2,135 files and 29,501 tests with one existing 5-second
+Windows held-updater property timeout (nine files and 108 tests skipped).
+That file passes all 11 tests in isolation. Follow-up card
+`917841f1-88e5-4e2c-b955-cf00ee95b532` carries the exact commands, logs and hashes
+to the existing native-suite investigation owner. No timeout, worker or retry
+configuration was changed, and the full suite was not rerun to get green.
+
 ## Remaining state-machine work
 
-The turn/drain machine, canonical queue retirement,
+Canonical queue retirement,
 controller size reduction and the parent's registry/test size
 criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is
