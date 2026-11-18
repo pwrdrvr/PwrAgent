@@ -1,7 +1,7 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadSubAgentSummary, ThreadUsageLineRecord } from "@pwragent/shared";
 import type { RegistryContext } from "../app-server/registry-context";
 import { ThreadUsageLedger, type ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
@@ -45,7 +45,9 @@ function line(index: number, overrides: Partial<ThreadUsageLineRecord> = {}): Th
   };
 }
 
-function fixture(db = openInMemoryStateDb()) {
+function fixture(database?: StateDb) {
+  ledgerOwner.check();
+  const db = database ?? openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);
   const ledger = new ThreadUsageLedger({
     ...registryContextStandIn(),
@@ -68,7 +70,41 @@ function fixture(db = openInMemoryStateDb()) {
   return { db, store, ledger, internals };
 }
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+class LedgerModelOwner {
+  readonly work = new Set<Promise<void>>();
+  private closing = false;
+  constructor(private readonly signal: AbortSignal) {}
+  check(): void {
+    this.signal.throwIfAborted();
+    if (this.closing) throw new Error("Ledger model owner retired");
+  }
+  async close(): Promise<void> {
+    this.closing = true;
+    while (this.work.size) {
+      const pending = [...this.work];
+      // The test owns failures; teardown joins work before restoring its spies.
+      await Promise.allSettled(pending);
+      for (const admitted of pending) this.work.delete(admitted);
+    }
+  }
+}
+let ledgerOwner: LedgerModelOwner;
+beforeEach(({ signal }) => { ledgerOwner = new LedgerModelOwner(signal); });
+function ownLedgerTest<Args extends unknown[]>(run: (...args: Args) => Promise<void>): (...args: Args) => Promise<void> {
+  return (...args) => {
+    const owner = ledgerOwner;
+    owner.check();
+    const work = run(...args);
+    owner.work.add(work);
+    return work;
+  };
+}
+async function cleanupLedgerTests(): Promise<void> {
+  await ledgerOwner.close();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+}
+afterEach(cleanupLedgerTests);
 
 async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: boolean) {
   const { db, store, ledger, internals } = fixture();
@@ -109,17 +145,17 @@ async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: b
 }
 
 describe("Token Miser persistence work budgets", () => {
-  it("cannot overwrite one later retrieval with an overlapping older flush", async () => {
+  it("cannot overwrite one later retrieval with an overlapping older flush", ownLedgerTest(async () => {
     await checkOverlappingFlushes(400, false);
-  });
+  }));
 
-  it("orders overlapping flushes and isolates an earlier write failure", async () => {
+  it("orders overlapping flushes and isolates an earlier write failure", ownLedgerTest(async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 10 }), fc.boolean(), async (chunks, failFirst) => {
       await checkOverlappingFlushes(chunks * 400, failFirst);
-    }), { numRuns: 15 });
-  });
+    }).beforeEach(() => ledgerOwner.check()), { numRuns: 15 });
+  }));
 
-  it("retains a newer pending/live gate arriving while a bulk flush yields", async () => {
+  it("retains a newer pending/live gate arriving while a bulk flush yields", ownLedgerTest(async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 65, max: 130 }), async (count) => {
       const { db, ledger, internals } = fixture();
       try {
@@ -139,8 +175,8 @@ describe("Token Miser persistence work budgets", () => {
         expect(internals.pendingTokenMiserInterceptions.size).toBe(0);
         expect(internals.liveTokenMiserSubAgents.size).toBe(0);
       } finally { vi.restoreAllMocks(); db.close(); }
-    }), { numRuns: 8 });
-  });
+    }).beforeEach(() => ledgerOwner.check()), { numRuns: 8 });
+  }));
 
   it.each([128, 256])("clears %i live entries in one line pass", (count) => {
     const { db, internals } = fixture();
@@ -156,7 +192,7 @@ describe("Token Miser persistence work budgets", () => {
     } finally { db.close(); }
   });
 
-  it.each([2, 128, 256])("paces %i gates in batches of at most 64 and rebuilds none on an identical flush", async (count) => {
+  it.each([2, 128, 256])("paces %i gates in batches of at most 64 and rebuilds none on an identical flush", ownLedgerTest(async (count) => {
     const { db, store, internals } = fixture();
     let done = false;
     const builds = vi.spyOn(internals, "buildTokenMiserLedgerArtifact");
@@ -180,11 +216,11 @@ describe("Token Miser persistence work budgets", () => {
       await internals.persistTokenMiserLedgerEntries(entries);
       expect(builds).toHaveBeenCalledTimes(0);
     } finally { done = true; await observing; db.close(); }
-  });
+  }));
 
   // The database owns the persisted comparison. Repeated input must do no
   // display work, and a sparse change must rebuild only the affected cards.
-  it("rebuilds only changed cards and uses one keyed batch read, for every batch size", async () => {
+  it("rebuilds only changed cards and uses one keyed batch read, for every batch size", ownLedgerTest(async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 36 }), async (count) => {
       const { db, store, internals } = fixture();
       try {
@@ -211,10 +247,10 @@ describe("Token Miser persistence work budgets", () => {
         expect(single).toHaveBeenCalledTimes(0);
         expect(batch).toHaveBeenCalledTimes(2);
       } finally { vi.restoreAllMocks(); db.close(); }
-    }), { numRuns: 15 });
-  });
+    }).beforeEach(() => ledgerOwner.check()), { numRuns: 15 });
+  }));
 
-  it("follows database edits and metadata transitions instead of caching a previous flush", async () => {
+  it("follows database edits and metadata transitions instead of caching a previous flush", ownLedgerTest(async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), fc.array(fc.constantFrom("retrieve", "replay", "stop", "delete", "reparent"), {
       minLength: 5, maxLength: 20, size: "max",
     }), async (legacy, operations) => {
@@ -257,12 +293,12 @@ describe("Token Miser persistence work budgets", () => {
           expect(actual?.tokenMiserAccounting).toEqual(expected.tokenMiserAccounting);
         }
       } finally { vi.restoreAllMocks(); db.close(); }
-    }), { numRuns: 15 });
-  });
+    }).beforeEach(() => ledgerOwner.check()), { numRuns: 15 });
+  }));
 });
 
 describe("Token Miser pricing projection", () => {
-  it.each([20, 40])("materializes %i repair candidates in groups of at most ten", async (count) => {
+  it.each([20, 40])("materializes %i repair candidates in groups of at most ten", ownLedgerTest(async (count) => {
     const { db, store } = fixture();
     try {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: count }, (_, index) => line(index, { model: "unknown-fixture" })) });
@@ -275,10 +311,10 @@ describe("Token Miser pricing projection", () => {
       expect(Math.max(...sizes)).toBeLessThanOrEqual(10);
       expect(sizes.reduce((total, size) => total + size, 0)).toBe(count + 1);
     } finally { db.close(); }
-  });
+  }));
 
   it.each([128, 256].flatMap((count) => [false, true].map((unpriced) => ({ count, unpriced }))))(
-    "bounds pricing and turn rows for $count history rows, unpriced=$unpriced", async ({ count, unpriced }) => {
+    "bounds pricing and turn rows for $count history rows, unpriced=$unpriced", ownLedgerTest(async ({ count, unpriced }) => {
     const { db, store } = fixture();
     try {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: count }, (_, index) => line(index, {
@@ -315,9 +351,9 @@ describe("Token Miser pricing projection", () => {
       expect(returned.lines).toBe(unpriced ? 12 : 1);
       expect(returned.turns).toBe(unpriced ? 11 : 1);
     } finally { vi.restoreAllMocks(); db.close(); }
-  });
+  }));
 
-  it.each(["local", "rollback", "peer"] as const)("restarts a yielded repair pass after a %s edit", async (writer) => {
+  it.each(["local", "rollback", "peer"] as const)("restarts a yielded repair pass after a %s edit", ownLedgerTest(async (writer) => {
     vi.spyOn(Date, "now").mockReturnValue(AT + 1_000);
     const temp = createTempStateDb("pwragent-gate-repricing-");
     const { db, store } = fixture(StateDb.open(temp.dbPath));
@@ -341,9 +377,9 @@ describe("Token Miser pricing projection", () => {
       const oracle = await store.readThreadPricing({ backend: "codex", threadId: THREAD });
       expect(actual).toEqual(oracle.lines.filter((row) => row.turnId === "turn-23"));
     } finally { peer?.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
-  });
+  }));
 
-  it("keeps a caller's transaction synchronous and never retains rolled-back repairs", async () => {
+  it("keeps a caller's transaction synchronous and never retains rolled-back repairs", ownLedgerTest(async () => {
     const { db, store } = fixture();
     try {
       await store.upsertThreadUsageLines({ lines: Array.from({ length: 24 }, (_, index) => line(index, { model: "unknown-fixture" })) });
@@ -361,48 +397,18 @@ describe("Token Miser pricing projection", () => {
         .toEqual({ price_status: "unpriced" });
       await observing;
     } finally { if (db.raw.inTransaction) db.raw.exec("ROLLBACK"); db.close(); }
-  });
+  }));
 
   // Keep the old whole-ledger implementation as the differential oracle:
   // repairing just the requested gate can jump past a ten-row no-progress
   // barrier, and stopping after one repair pass can miss regrouped rows.
-  it("matches the whole-ledger repricing fixed point across generated repair barriers", async () => {
+  it("matches the whole-ledger repricing fixed point across generated repair barriers", ownLedgerTest(async () => {
     await fc.assert(fc.asyncProperty(fc.oneof(
       fc.array(fc.boolean(), { minLength: 12, maxLength: 38, size: "max" }),
       fc.constant([...Array<boolean>(20).fill(true), ...Array<boolean>(10).fill(false)]),
       fc.constant(Array<boolean>(32).fill(true)),
-    ), async (repairable) => {
-      vi.spyOn(Date, "now").mockReturnValue(AT + 1_000);
-      const target = fixture();
-      const oracle = fixture();
-      try {
-        const lines = repairable.map((_, index) => line(index, {
-          createdAt: AT + Math.floor(index / 3),
-          model: "unknown-fixture", parentThreadId: index % 3 ? undefined : THREAD,
-          threadId: index % 3 ? THREAD : `child-${index}`,
-          scope: index % 3 ? "turn" : "monitor", sourceItemId: `gate-${index}`,
-          inputTokens: index % 2 ? 350_000 : 1_000,
-          uncachedInputTokens: index % 2 ? 350_000 : 1_000,
-          totalTokens: index % 2 ? 350_100 : 1_100,
-        }));
-        for (const { db, store } of [target, oracle]) {
-          await store.upsertThreadUsageLines({ lines });
-          db.raw.prepare("UPDATE thread_usage_turns SET model_context_window = 1000000, started_at = ?, completed_at = ?")
-            .run(AT, AT + 500);
-          for (let index = 0; index < repairable.length; index += 1) {
-            if (repairable[index]) db.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5' WHERE usage_line_id = ?").run(`line-${index}`);
-          }
-        }
-        const actual = await target.store.readTokenMiserGatePricingLines({
-          backend: "codex", threadId: THREAD, sourceItemIds: ["gate-0"], turnIds: ["turn-1"],
-        });
-        const expected = await oracle.store.readThreadPricing({ backend: "codex", threadId: THREAD });
-        expect(actual).toEqual(expected.lines.filter((row) => row.sourceItemId === "gate-0" || row.threadId === THREAD && row.turnId === "turn-1"));
-        expect(await target.store.readThreadPricingSummaries([{ backend: "codex", threadId: THREAD }]))
-          .toEqual(expected.summaries);
-      } finally { vi.restoreAllMocks(); target.db.close(); oracle.db.close(); }
-    }), { numRuns: 25 });
-  });
+    ), async (repairable) => { await runRepricingCase(repairable); }).beforeEach(() => ledgerOwner.check()), { numRuns: 25 });
+  }));
 });
 
 describe("Token Miser display formatting", () => {
@@ -415,7 +421,7 @@ describe("Token Miser display formatting", () => {
 });
 
 describe("Token Miser ledger SQLite commit budgets", () => {
-  it("keeps terminal writes batched and identical/idle flushes at zero commits", async () => {
+  it("keeps terminal writes batched and identical/idle flushes at zero commits", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-gate-commits-");
     const { db, internals } = fixture(StateDb.open(temp.dbPath));
@@ -432,9 +438,9 @@ describe("Token Miser ledger SQLite commit budgets", () => {
         });
       }
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
-  });
+  }));
 
-  it("retains one repair commit per repricing pass and zero on a repeated read", async () => {
+  it("retains one repair commit per repricing pass and zero on a repeated read", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-gate-repair-commits-");
     const { db, store } = fixture(StateDb.open(temp.dbPath));
@@ -453,5 +459,103 @@ describe("Token Miser ledger SQLite commit budgets", () => {
         });
       }
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
-  });
+  }));
+});
+
+async function runRepricingCase(repairable: readonly boolean[], afterRead?: (target: ReturnType<typeof fixture>) => Promise<void>): Promise<void> {
+  vi.spyOn(Date, "now").mockReturnValue(AT + 1_000);
+  const target = fixture();
+  const oracle = fixture();
+  try {
+    const lines = repairable.map((_, index) => line(index, {
+      createdAt: AT + Math.floor(index / 3),
+      model: "unknown-fixture", parentThreadId: index % 3 ? undefined : THREAD,
+      threadId: index % 3 ? THREAD : `child-${index}`,
+      scope: index % 3 ? "turn" : "monitor", sourceItemId: `gate-${index}`,
+      inputTokens: index % 2 ? 350_000 : 1_000,
+      uncachedInputTokens: index % 2 ? 350_000 : 1_000,
+      totalTokens: index % 2 ? 350_100 : 1_100,
+    }));
+    for (const { db, store } of [target, oracle]) {
+      await store.upsertThreadUsageLines({ lines });
+      db.raw.prepare("UPDATE thread_usage_turns SET model_context_window = 1000000, started_at = ?, completed_at = ?")
+        .run(AT, AT + 500);
+      for (let index = 0; index < repairable.length; index += 1) {
+        if (repairable[index]) db.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5' WHERE usage_line_id = ?").run(`line-${index}`);
+      }
+    }
+    const actual = await target.store.readTokenMiserGatePricingLines({
+      backend: "codex", threadId: THREAD, sourceItemIds: ["gate-0"], turnIds: ["turn-1"],
+    });
+    if (afterRead) await afterRead(target);
+    const expected = await oracle.store.readThreadPricing({ backend: "codex", threadId: THREAD });
+    expect(actual).toEqual(expected.lines.filter((row) => row.sourceItemId === "gate-0" || row.threadId === THREAD && row.turnId === "turn-1"));
+    expect(await target.store.readThreadPricingSummaries([{ backend: "codex", threadId: THREAD }]))
+      .toEqual(expected.summaries);
+  } finally { vi.restoreAllMocks(); target.db.close(); oracle.db.close(); }
+}
+
+function repricingGate() {
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  return {
+    ready,
+    release,
+    afterRead: async (target: ReturnType<typeof fixture>) => {
+      expect(target.db.raw.prepare("SELECT count(*) AS count FROM thread_usage_lines").get()).toEqual({ count: 12 });
+      entered();
+      await hold;
+    },
+  };
+}
+
+it("ledger owner teardown joins real repricing before restoring its clock", async () => {
+  const gate = repricingGate();
+  const work = ownLedgerTest(() => runRepricingCase(Array<boolean>(12).fill(true), gate.afterRead))()
+    .then(() => undefined, error => error);
+  await gate.ready;
+  let retired = false;
+  const first = cleanupLedgerTests().then(() => { retired = true; });
+  const second = cleanupLedgerTests();
+  try {
+    await yieldToEventLoop();
+    expect({ clockOwned: vi.isMockFunction(Date.now), retired }).toEqual({ clockOwned: true, retired: false });
+  } finally {
+    gate.release();
+    await work;
+    await Promise.all([first, second]);
+  }
+  expect(await work).toBeUndefined();
+});
+
+it.each(["abort", "retire"] as const)("ledger owner %s admits no further real database cases", async (stop) => {
+  const controller = new AbortController();
+  ledgerOwner = new LedgerModelOwner(controller.signal);
+  const gate = repricingGate();
+  let admitted = 0;
+  const work = ownLedgerTest(async () => {
+    await fc.assert(fc.asyncProperty(fc.constant(Array<boolean>(12).fill(true)), async repairable => {
+      admitted++;
+      await runRepricingCase(repairable, admitted === 1 ? gate.afterRead : undefined);
+    }).beforeEach(() => ledgerOwner.check()), { numRuns: 2 });
+  })().then(() => undefined, error => error);
+  await gate.ready;
+  let retiring: Promise<void> | undefined;
+  try {
+    if (stop === "abort") controller.abort(new Error("controlled repricing abort"));
+    else retiring = ledgerOwner.close();
+    gate.release();
+    const error = await work;
+    expect({ admitted, rejected: error !== undefined }).toEqual({ admitted: 1, rejected: true });
+  } finally { gate.release(); await work; await retiring; }
+});
+
+it("ledger owner rejects work before opening a database after abort", async () => {
+  const reason = new Error("already retired ledger model");
+  ledgerOwner = new LedgerModelOwner(AbortSignal.abort(reason));
+  const run = vi.fn(async () => { const { db } = fixture(); db.close(); });
+  expect(() => ownLedgerTest(run)()).toThrow(reason);
+  expect(run).not.toHaveBeenCalled();
 });
