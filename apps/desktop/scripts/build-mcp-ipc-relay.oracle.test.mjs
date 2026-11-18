@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { runNativeFixtureCommand } from "../src/test-setup/native-helper-fixture";
+import { appendNativeOracleTiming } from "./native-relay-oracle-profile.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const fixtures = [];
@@ -44,10 +45,22 @@ int ${entry}(${parameters}) {
   return original_entry(argc, argv);
 }
 `);
-  const program = (options = {}) => `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
-    console.log(JSON.stringify(buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, reuse: process.platform !== "win32", ...options })})));`;
+  let attempt = 0;
+  const program = (options = {}) => {
+    const label = { root, attempt: ++attempt };
+    const build = `buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, reuse: process.platform !== "win32", ...options })})`;
+    const profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE;
+    return `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
+      ${profile ? `import { profileNativeBuild } from ${JSON.stringify(new URL("./native-relay-oracle-profile.mjs", import.meta.url).href)};` : ""}
+      console.log(JSON.stringify(${profile ? `profileNativeBuild(${JSON.stringify(label)}, () => ${build})` : build}));`;
+  };
   const command = (options) => ["--input-type=module", "-e", program(options)];
-  const build = (options, env = process.env) => parseOutput(execFileSync(process.execPath, command(options), { encoding: "utf8", env, stdio: "pipe" }));
+  const build = (options, env = process.env) => {
+    const args = command(options);
+    const started = performance.now();
+    try { return parseOutput(execFileSync(process.execPath, args, { encoding: "utf8", env, stdio: "pipe" })); }
+    finally { appendNativeOracleTiming({ kind: "build-process", label: { root, attempt }, ms: performance.now() - started }); }
+  };
   return { root, builder, source, header, build, command };
 }
 
@@ -57,7 +70,9 @@ function parseOutput(stdout) {
 }
 
 function observe(output) {
-  return execFileSync(output, ["--build-oracle"], { encoding: "utf8" }).trim();
+  const started = performance.now();
+  try { return execFileSync(output, ["--build-oracle"], { encoding: "utf8" }).trim(); }
+  finally { appendNativeOracleTiming({ kind: "run-helper", output, ms: performance.now() - started }); }
 }
 
 function machine(output) {

@@ -976,6 +976,8 @@ jobs:
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRAGENT_REQUIRE_ACTOOL: "1"
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/unit-first.json
+          # Test-only phase evidence for the v1.4.12 native relay timeout.
+          PWRAGENT_NATIVE_ORACLE_PROFILE: ${{ github.workspace }}/.local/ci/native-relay-profile.jsonl
         run: pnpm test --shard=${{ matrix.lane }}/4 --reporter=default --reporter=json --reporter=./scripts/ci/vitest-ci-reporter.mjs --outputFile=.local/ci/macos-unit-results.json
 
       - name: Verify the unit slice completed
@@ -1011,6 +1013,7 @@ jobs:
           name: macos-unit-timings-lane-${{ matrix.lane }}
           path: |
             .local/ci/macos-unit-results.json
+            .local/ci/native-relay-profile.jsonl
             .local/ci/retry/
           include-hidden-files: true
           if-no-files-found: ignore
