@@ -93,7 +93,6 @@ export * from "./thread-pins";
 export * from "./thread-execution-mode";
 export * from "./git-object-id";
 export * from "./linear-paste";
-export * from "./thread-execution-mode";
 export * from "./mcp-elicitation-purpose";
 export * from "./secret-field-names";
 export * from "./thread-lock";

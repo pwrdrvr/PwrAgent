@@ -28,6 +28,6 @@ function formatAccess(mode: ThreadExecutionMode): string {
   return mode === "full-access"
     ? "Full Access"
     : mode === "auto"
-      ? "Auto access"
+      ? "Auto"
       : "Default Access";
 }

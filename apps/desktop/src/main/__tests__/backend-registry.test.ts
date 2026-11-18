@@ -53668,9 +53668,11 @@ script = "printf setup"
       senderMode: "default" | "auto" | "full-access";
       targetMode: "default" | "auto" | "full-access";
       block?: boolean;
+      startTurnDelay?: Promise<unknown>;
     }) {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
+        ...(params.startTurnDelay ? { startTurnDelay: params.startTurnDelay } : {}),
         threads: [{
           source: "codex",
           id: "target-thread",
@@ -53874,6 +53876,34 @@ script = "printf setup"
 
       expect(codexClient.startTurnCallCount).toBe(1);
 
+      await registry.close();
+    });
+
+    it("counts a target turn that is still starting as running", async () => {
+      const startTurnDelay = createDeferred<void>();
+      const { codexClient, registry } = await createAccessRegistry({
+        senderMode: "default",
+        targetMode: "auto",
+        block: true,
+        startTurnDelay: startTurnDelay.promise,
+      });
+      // The operator's own turn is starting; the agent's message would join it.
+      const operatorTurn = registry.submitTurn({
+        backend: "codex",
+        threadId: "target-thread",
+        input: [{ type: "text", text: "Operator's turn." }],
+        origin: "manual",
+      });
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+
+      const response = await sendToTarget(registry, { executionMode: "default" });
+
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: { code: "forbidden" },
+      });
+      startTurnDelay.resolve();
+      await operatorTurn;
       await registry.close();
     });
 

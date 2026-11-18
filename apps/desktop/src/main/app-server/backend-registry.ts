@@ -2860,9 +2860,10 @@ export class DesktopBackendRegistry {
    * on, a target above the sender is refused: its agent would act on the
    * sender's text with access the sender does not have. That access is the
    * mode the message names when it starts a new turn, since the agent access
-   * ceiling holds a named mode at or below both threads. A running turn keeps
-   * its own mode, so a message steered into one, or one naming no mode, is
-   * acted on at the target's own (live turn first). A raw approval or sandbox
+   * ceiling holds a named mode at or below both threads. A running turn, or
+   * one still starting, keeps its own mode, so a message steered into one, or
+   * one naming no mode, is acted on at the target's own (live turn first). A
+   * raw approval or sandbox
    * override counts too. An older peer sends no mode and counts as Default
    * Access. Only agent tool calls come here; operator-typed text never does.
    */
@@ -2877,12 +2878,13 @@ export class DesktopBackendRegistry {
     if (!this.resolveBlockAgentMessagesToHigherAccessFn()) return undefined;
     const target = { backend: params.backend, threadId: params.threadId };
     const senderExecutionMode = params.senderExecutionMode ?? "default";
-    const activeTurnId = this.getActiveTurnForThread(target)?.turnId;
-    let targetExecutionMode = params.requestedExecutionMode && !activeTurnId
+    // The same occupancy the turn queue steers on: a start in flight counts.
+    const turnRunning = this.threadHasActiveTurn(params.threadId, params.backend);
+    let targetExecutionMode = params.requestedExecutionMode && !turnRunning
       ? params.requestedExecutionMode
       : await this.resolveHandoffSourceExecutionMode({
           ...target,
-          turnId: activeTurnId,
+          turnId: this.getActiveTurnForThread(target)?.turnId,
           overlay: await this.overlayStore.getThreadOverlayState(target),
         });
     const rawExecutionMode = threadExecutionModeForRawPermissions(params);

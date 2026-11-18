@@ -1875,7 +1875,7 @@ function AgentMessageAccessSettings(props: {
           sub="Every provider in this profile."
           help={
             props.block.value
-              ? "An agent cannot send or steer a message into a thread that runs with more access than its own, such as Default Access to Full Access. It is told to raise a to-do card instead. Messages you type are never blocked."
+              ? "An agent cannot get a thread with more access than its own, such as Default Access to Full Access, to act on its message. It can still start a new turn there at its own access or lower. Otherwise it is told to raise a to-do card instead. Messages you type are never blocked."
               : "Agents can message any thread. The receiving thread acts on the message with its own access, even when that is more than the sender has."
           }
           source={sourceBadge(props.block)}

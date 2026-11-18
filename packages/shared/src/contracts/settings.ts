@@ -896,10 +896,11 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   passSetupVariablesToAgents: DesktopSettingsValue<boolean>;
   /**
-   * Refuse an agent's send_message_to_thread when the target thread runs
-   * with more access than the sender, so a Default Access thread cannot get
-   * Full Access work done through a message. Operator-typed messages are
-   * never affected.
+   * Refuse an agent's send_message_to_thread or steer_thread when the target
+   * would act on it with more access than the sender has, so a Default Access
+   * thread cannot get Full Access work done through a message. A new turn
+   * that names a mode at or below the sender's still runs. Operator-typed
+   * messages and to-do cards the operator approves are never affected.
    */
   blockAgentMessagesToHigherAccess: DesktopSettingsValue<boolean>;
   /**
