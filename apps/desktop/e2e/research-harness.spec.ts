@@ -1,5 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
@@ -7,6 +9,12 @@ import { seedDiscoveryResearchState, seedHarnessResearchState } from "./fixtures
 import { enableResearchFixture } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+/** WCAG AA on the Research panel only; a11y.spec.ts gates the rest of the window in every theme. */
+async function expectAccessiblePanel(window: Page, surface: string) {
+  const { violations } = await new AxeBuilder({ page: window }).setLegacyMode(true)
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).include("section.research-panel").analyze();
+  expect(violations.map((v) => `${surface}: ${v.id} ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+}
 test("Discovery status, problems and bounded ancestry retain source authority", async ({ playwright: _playwright }, testInfo) => {
   const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
     preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot)); } });
@@ -28,6 +36,11 @@ test("Discovery status, problems and bounded ancestry retain source authority", 
     await expect(panel.locator('svg [data-node-id="30"][data-parent-id="14"]')).toBeVisible();
     await panel.locator('svg [data-node-id="30"]').click();
     await expect(panel.getByRole("region", { name: "Discovery node 30" })).toBeVisible();
+    await expectAccessiblePanel(app.window, "discovery");
+    await panel.getByRole("button", { name: "New run", exact: true }).click();
+    await panel.getByRole("button", { name: "Open Math Harness", exact: true }).click();
+    await expect(panel.getByText(/No Harness bridge is configured/)).toBeVisible();
+    await expectAccessiblePanel(app.window, "harness setup");
     await testInfo.attach("discovery-ancestry", { body: await app.window.screenshot(), contentType: "image/png" });
   } finally { await app.close(); }
 });
@@ -50,11 +63,13 @@ for (const theme of ["dark", "light"] as const) {
       await expect(panel.getByLabel("Harness provenance")).toContainText("tokens and dollars unknown · no hard spend cap");
       await expect(panel.getByRole("button", { name: /Open worker/ })).toHaveCount(0);
       await testInfo.attach(`harness-outcome-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
+      await expectAccessiblePanel(app.window, `harness outcome ${theme}`);
       // With no bridge configured, reconciling reports why and restores the unknown outcome; nothing is resent.
       await outcome.getByRole("button", { name: "Reconcile from source" }).click();
       await expect(outcome).toContainText("Reconcile stopped: Configure research.harness");
       await panel.getByRole("tab", { name: "Findings", exact: true }).click();
       await expect(panel.getByText(/^From m1 · #4/)).toBeVisible();
+      await expectAccessiblePanel(app.window, `harness findings ${theme}`);
       await expect(panel.getByText("evidence/queue.txt", { exact: true })).toBeVisible();
       await testInfo.attach(`harness-board-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
       await panel.getByRole("tab", { name: /^Review/ }).click();
