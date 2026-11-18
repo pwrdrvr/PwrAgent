@@ -29,15 +29,16 @@ test("desktop recovers portable scheduled claims and hands payload edits and can
       try {
         const store = new ScheduledThreadActionStore(db);
         const now = Date.now();
-        for (const id of ["portable-edit", "portable-cancel", "portable-dispatch", "portable-held"]) store.create({
+        for (const id of ["portable-edit", "portable-cancel", "portable-dispatch", "portable-held", "portable-released"]) store.create({
           id, backend: "codex", threadId: "thread-smoke", kind: "turn", origin: "desktop", scheduledFor,
           displayText: `Invented portable wake ${id}`, turn: { input: [{ type: "text", text: `Invented input ${id}` }] },
-          manualReleaseRequired: id === "portable-held", now,
+          manualReleaseRequired: id === "portable-held" || id === "portable-released", now,
         });
-        for (const id of ["portable-dispatch", "portable-held"]) store.claim(id, {
+        for (const id of ["portable-dispatch", "portable-held", "portable-released"]) store.claim(id, {
           ownerId: "scheduler:99999999:retired-portable-fixture", now, leaseExpiresAt: now - 1,
         });
-        store.markQueued("portable-held", "portable-queue", now, "scheduler:99999999:retired-portable-fixture");
+        // Queued for its release, which may have started the turn.
+        store.markQueued("portable-released", "portable-queue", now, "scheduler:99999999:retired-portable-fixture");
       } finally { db.close(); }
     },
   });
@@ -55,12 +56,14 @@ test("desktop recovers portable scheduled claims and hands payload edits and can
       return { before, updated, cancelled, created };
     }, scheduledFor);
     expect(result.before.projectionProtocol).toBe(2);
-    expect(result.before.actions).toHaveLength(4);
+    expect(result.before.actions).toHaveLength(5);
     expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-edit", status: "scheduled",
       turn: { input: [{ type: "text", text: "Invented input portable-edit" }] } }));
     expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-dispatch", status: "failed",
       errorMessage: "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again." }));
     expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-held", status: "held", manualReleaseRequired: true }));
+    expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-released", status: "failed",
+      errorMessage: "PwrAgent stopped while this held action was being released. It was not sent again, because it may already have started. Check the thread before scheduling it again." }));
     expect(result.cancelled.action.status).toBe("cancelled");
     expect(result.updated.action).toMatchObject({ displayText: "Invented desktop edited wake", scheduledFor: scheduledFor + 1_000 });
     await app.closeApplication();
@@ -72,6 +75,7 @@ test("desktop recovers portable scheduled claims and hands payload edits and can
       expect(store.get(result.created.action.id)).toEqual(result.created.action);
       expect(store.get("portable-dispatch")?.status).toBe("failed");
       expect(store.get("portable-held")).toMatchObject({ status: "held", manualReleaseRequired: true, queueEntryId: undefined });
+      expect(store.get("portable-released")).toMatchObject({ status: "failed", queueEntryId: undefined });
       expect(JSON.stringify(db.raw.prepare("SELECT * FROM scheduled_thread_actions").all())).not.toContain("Invented");
     } finally { db.close(); }
   } finally { await app.close(); }

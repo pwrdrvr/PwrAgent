@@ -5,6 +5,7 @@ import type {
   CodexModelProviderCatalogState,
 } from "./contracts/backend";
 import type { AppServerBackendKind } from "./contracts/normalized-app-server";
+import type { DesktopProviderModelDefaults } from "./contracts/settings";
 
 /**
  * The Provider picker: one entry per backend, and one more per Codex model
@@ -61,6 +62,50 @@ export function parseProviderPickerValue(value: string): {
   return value.startsWith(CODEX_MODEL_PROVIDER_VALUE_PREFIX)
     ? { backend: "codex", codexModelProviderId: value.slice(CODEX_MODEL_PROVIDER_VALUE_PREFIX.length) }
     : { backend: value as AppServerBackendKind };
+}
+
+/**
+ * Read older backend-wide Codex defaults without assigning an endpoint's
+ * model to OpenAI. Explicit provider entries win; conversion is persisted
+ * only when the operator next saves defaults through the config writer.
+ */
+export function normalizeModelProviderDefaults(
+  defaults: Record<string, DesktopProviderModelDefaults>,
+): Record<string, DesktopProviderModelDefaults> {
+  const result: Record<string, DesktopProviderModelDefaults> = {};
+  const legacy = defaults.codex;
+  if (legacy) {
+    const keys = new Set(["codex", providerPickerValue("codex", legacy.model),
+      ...Object.keys(legacy.reasoningEffortsByModel).map((model) => providerPickerValue("codex", model))]);
+    for (const key of keys) {
+      const model = legacy.model && providerPickerValue("codex", legacy.model) === key ? legacy.model : undefined;
+      const reasoningEffortsByModel = Object.fromEntries(Object.entries(legacy.reasoningEffortsByModel)
+        .filter(([id]) => providerPickerValue("codex", id) === key));
+      if (model || Object.keys(reasoningEffortsByModel).length > 0 || legacy.executionMode) {
+        result[key] = {
+          ...(model ? { model } : {}), reasoningEffortsByModel,
+          ...(legacy.executionMode ? { executionMode: legacy.executionMode } : {}),
+        };
+      }
+    }
+  }
+  for (const [key, preference] of Object.entries(defaults)) {
+    if (key === "codex") continue;
+    const { backend } = parseProviderPickerValue(key);
+    const model = preference.model && providerPickerValue(backend, preference.model) === key
+      ? preference.model : undefined;
+    const { model: _model, ...rest } = preference;
+    result[key] = {
+      ...rest,
+      ...(model ? { model } : {}),
+      reasoningEffortsByModel: {
+        ...result[key]?.reasoningEffortsByModel,
+        ...Object.fromEntries(Object.entries(preference.reasoningEffortsByModel)
+          .filter(([id]) => providerPickerValue(backend, id) === key)),
+      },
+    };
+  }
+  return result;
 }
 
 /**

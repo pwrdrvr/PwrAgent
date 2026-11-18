@@ -167,6 +167,49 @@ describe("CodexModelProviderCatalog catalogs", () => {
     expect(catalog.catalogStates()[0]).toMatchObject({ status: "ready", discoveredCount: 2 });
   });
 
+  it("keeps an invalidated read waiting for keys out of the current catalog", async () => {
+    const oldKeys = Promise.withResolvers<{ mathos: string }>();
+    const endpoint = { baseUrl: mathos.baseUrl, models: ["current"], key: "new-key" };
+    const { fetch } = fakeFetch([endpoint]);
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [mathos],
+      resolveKeys: vi.fn(async () => ({ mathos: endpoint.key })).mockReturnValueOnce(oldKeys.promise),
+      fetch,
+    });
+
+    const oldRead = catalog.listModelOptions();
+    catalog.invalidate();
+    oldKeys.resolve({ mathos: "old-key" });
+    await oldRead;
+
+    expect((await catalog.listModelOptions()).map(({ id }) => id)).toEqual(["@mathos/current"]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a provider reply that arrives after its read was invalidated", async () => {
+    const oldReply = Promise.withResolvers<Response>();
+    const oldRequestStarted = Promise.withResolvers<void>();
+    const fetch = vi.fn(async () => new Response("{}", { status: 503 }))
+      .mockImplementationOnce(() => {
+        oldRequestStarted.resolve();
+        return oldReply.promise;
+      });
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [mathos],
+      resolveKeys: async () => ({}),
+      fetch,
+    });
+
+    const oldRead = catalog.listModelOptions();
+    await oldRequestStarted.promise;
+    catalog.invalidate();
+    expect(await catalog.listModelOptions()).toEqual([]);
+    oldReply.resolve(new Response(JSON.stringify({ data: [{ id: "old" }] })));
+
+    expect(await oldRead).toEqual([]);
+    expect(catalog.knownCatalog()).toMatchObject({ models: [], states: [{ status: "unavailable" }] });
+  });
+
   it("reports a provider as pending before its first read", () => {
     const catalog = new CodexModelProviderCatalog({
       resolveProviders: () => [mathos],

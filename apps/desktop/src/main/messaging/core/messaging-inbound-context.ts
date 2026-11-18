@@ -1,3 +1,4 @@
+import type { MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import type { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import type { NewThreadOptionsSummary, FullAccessEscalationContext, MessagingFullAccessControls } from "./messaging-callback-helpers";
 import type { MessagingCommandHandlers } from "./messaging-command-handlers";
@@ -16,7 +17,7 @@ import type { MessagingNavigationContext } from "./messaging-thread-state.js";
 import type { MessagingAttachmentPolicy } from "./messaging-attachment-processor.js";
 import type { MessagingOriginalAttachmentStore } from "./messaging-original-attachment-store.js";
 import type { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
-import type { MessagingTurnAdmission, MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import type { MessagingTurnAdmission } from "./messaging-turn-admission.js";
 import type { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingFullAccessControlsResolver, FullAccessRiskPresentationMode } from "./messaging-inbound-helpers";
 
@@ -37,7 +38,7 @@ export interface MessagingInboundHost {
   readonly defaultAgentRouteBinding: (event: MessagingInboundEvent, target: { backend: AppServerBackendKind; threadId: ThreadIdentifier; toolUpdateMode?: MessagingToolUpdateMode; }) => MessagingBindingRecord;
   readonly privateReplyClaims: Pick<MessagingPrivateReplyClaims, "claim" | "complete" | "release">;
   readonly rememberHumanMessagingSource: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => MessagingRequestSource | undefined;
-  readonly turnAdmission: Pick<MessagingTurnAdmission, "append" | "markStarting" | "clearStarting" | "isStarting" | "enqueue">;
+  readonly turnAdmission: Pick<MessagingTurnAdmission, "append" | "markStarting" | "clearStarting" | "isStarting">;
   readonly completePrivateReplyContinuation: (bindingId: string) => Promise<void>;
   readonly clearPendingSkillSelection: (binding: MessagingBindingRecord) => Promise<MessagingBindingRecord>;
   readonly filterBindingsForChannel: (bindings: MessagingBindingRecord[]) => MessagingBindingRecord[];
@@ -52,6 +53,7 @@ export interface MessagingInboundHost {
   readonly pdfAttachmentStore: Pick<PdfAttachmentStore, "bindTurn">;
   readonly rememberAgentMessagingOrigin: (params: { binding: MessagingBindingRecord; event?: MessagingInboundEvent; navigation: MessagingNavigationContext; origin?: ActiveAgentMessagingOrigin; turnId: string; }) => void;
   readonly setActiveTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
+  readonly acceptStartedTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
   readonly getActiveTurn: (binding: MessagingBindingRecord) => MessagingActiveTurnSummary | undefined;
   readonly signalTurnActivity: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary, options?: { force?: boolean; reason?: string; refreshMs?: number; }) => Promise<void>;
   readonly reconcileActiveTurnFromThreadStatus: (binding: MessagingBindingRecord, reason: string, threadStatus: string | undefined) => Promise<MessagingActiveTurnSummary | undefined>;
@@ -82,7 +84,7 @@ export interface MessagingInboundConfiguration {
 
 export interface MessagingInboundContext {
   readonly store: Pick<MessagingStoreLike, "findActivePendingIntentForChannel" | "getBinding" | "deletePendingIntent" | "findActiveBindingForChannel" | "findActiveDefaultAgentAssignmentsForChannel" | "revokeDefaultAgentAssignment" | "revokeDefaultAgentAssignmentsForTarget" | "findActiveBrowseSessionForChannel" | "revokeBinding" | "findActiveBindings" | "deleteBrowseSession" | "upsertBinding">;
-  readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "ownsTurnQueue" | "supportsMessagingPdfTools" | "startTurn" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listBackends">;
+  readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "supportsMessagingPdfTools" | "startTurn" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listBackends">;
   readonly adapter: Pick<MessagingAdapter, "capabilityProfile" | "deliver" | "downloadAttachment">;
   readonly capabilityProfile: MessagingCapabilityProfile;
   readonly now: () => number;

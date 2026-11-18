@@ -50,6 +50,7 @@ export function createMainProcessHotCpuTarget(): HotCpuTarget {
       off: () => {},
     },
     getOSProcessId: () => process.pid,
+    setListingDiagnosticsEnabled: (enabled) => listingDiagnostics.setEnabled(enabled),
     readDiagnostics: () => ({ directoryEnrichment: directoryEnrichmentDiagnostics.snapshot(), listings: listingDiagnostics.snapshot(), gitSubprocesses: gitSubprocessDiagnostics.snapshot() }),
     readHeapUsage: () => {
       const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();

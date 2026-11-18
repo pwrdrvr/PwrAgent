@@ -8,13 +8,19 @@ import {
 import { MemoryScheduledThreadActionPayloadStore } from "@pwragent/sqlite-storage/scheduled-thread-action-payload-store";
 import type { DesktopBackendRegistry } from "../../app-server/backend-registry";
 import { buildAgentFollowUpToolHandler } from "../../scheduled-actions/agent-follow-up-tool";
-import { ScheduledThreadActionService } from "../../scheduled-actions/scheduled-thread-action-service";
+import {
+  SCHEDULER_OWNER_CONFIRMATION_GRACE_MS,
+  ScheduledThreadActionService,
+  schedulerOwnerId,
+} from "../../scheduled-actions/scheduled-thread-action-service";
 import type { StateDb } from "../../state/state-db";
 import { ScheduledThreadActionStore } from "../../storage/scheduled-thread-action-store";
 
 export const FOLLOW_UP_THREAD = { backend: "codex" as const, threadId: "thread-follow-up" };
 const LOCK_REFUSAL = "This thread is locked. Unlock it to send.";
 const LEASE_MS = 30_000;
+/** Above every platform's process ID range, so never this test's own. */
+const FIRST_PROCESS_ID = 9_000_000;
 
 /**
  * Where the owning process dies during one dispatch:
@@ -27,6 +33,10 @@ const LEASE_MS = 30_000;
 export type CrashPoint = "before_admit" | "after_admit" | "after_queue_start";
 
 type QueueEntry = { id: string; actionId: string; held: boolean };
+type ProcessWork = {
+  evaluations: Promise<void>[];
+  stopped: PromiseWithResolvers<void>;
+};
 
 /**
  * The real scheduled-action service and store over a real database, with a
@@ -50,6 +60,12 @@ export class AgentFollowUpWorld {
    * statement would be counted against them.
    */
   heartbeatOnTick = true;
+  /**
+   * Every launch gets the process ID the dead one had, as an operating system
+   * may hand out. Only the runtime marker tells the two apart, and the new
+   * process trusts that only after the confirmation grace.
+   */
+  reuseProcessId = false;
   readonly admissions: Array<{ actionId: string; trueTime: number }> = [];
   service!: ScheduledThreadActionService;
   store!: ScheduledThreadActionStore;
@@ -58,13 +74,15 @@ export class AgentFollowUpWorld {
   private gateListeners = new Set<(closed: boolean) => void>();
   private heartbeat: (() => void) | undefined;
   private generation = 0;
+  private work: ProcessWork | undefined;
   private readonly payloads = new MemoryScheduledThreadActionPayloadStore();
   private tool!: ReturnType<typeof buildAgentFollowUpToolHandler>;
   /** Runs when the provider accepts a follow-up's turn: the woken agent. */
   onWake: ((actionId: string) => Promise<void>) | undefined;
+  onPublish: (() => Promise<void>) | undefined;
   private wakes: string[] = [];
 
-  constructor(private readonly db: StateDb) {}
+  constructor(readonly db: StateDb) {}
 
   admittedCount(actionId: string): number {
     return this.admissions.filter((admission) => admission.actionId === actionId).length;
@@ -73,7 +91,11 @@ export class AgentFollowUpWorld {
   /** A new process on the same profile. Clears nothing durable. */
   async start(): Promise<void> {
     const generation = ++this.generation;
-    const ownerId = `scheduler:test:${generation}`;
+    const processId = this.reuseProcessId ? FIRST_PROCESS_ID : FIRST_PROCESS_ID + generation;
+    const instanceId = `runtime-v2-world-${generation}`;
+    const live = (): boolean => this.alive && this.generation === generation;
+    const work: ProcessWork = { evaluations: [], stopped: Promise.withResolvers<void>() };
+    this.work = work;
     this.queue = [];
     this.listeners = new Set();
     this.gateListeners = new Set();
@@ -82,8 +104,12 @@ export class AgentFollowUpWorld {
       registry: this.registry(generation),
       store: this.store,
       now: () => this.clock,
-      ownerId,
-      isOwnerAlive: (candidate) => candidate === ownerId && this.generation === generation,
+      ownerId: schedulerOwnerId({ processId, instanceId, startedAt: this.clock }),
+      // Only this launch's process runs. Its marker carries only its identity.
+      ownerProbes: {
+        isProcessAlive: (candidate) => live() && candidate === processId,
+        isRuntimeIdentityLive: (identity) => live() && identity.instanceId === instanceId,
+      },
       setTimer: () => ({}) as ReturnType<typeof setTimeout>,
       clearTimer: () => undefined,
       setLeaseTimer: (callback) => {
@@ -92,20 +118,36 @@ export class AgentFollowUpWorld {
       },
       clearLeaseTimer: () => undefined,
     });
+    // Startup, the lease heartbeat and gate reopening all launch evaluations
+    // internally. Track their real completion as well as evaluations from tick().
+    const evaluate = this.service.evaluateDueActions.bind(this.service);
+    this.service.evaluateDueActions = () => {
+      const pending = evaluate();
+      work.evaluations.push(pending);
+      return pending;
+    };
     this.tool = buildAgentFollowUpToolHandler(this.service, () => this.clock);
     this.alive = true;
     this.service.start();
     await this.settle();
   }
 
-  /** The process dies where it stands: no shutdown code runs. */
+  /** Discard the dead process's in-memory work, leaving its durable claims intact. */
   crash(): void {
+    this.dispose();
     this.generation += 1;
-    this.alive = false;
     this.armedCrash = undefined;
     this.queue = [];
     this.listeners = new Set();
     this.heartbeat = undefined;
+  }
+
+  dispose(): void {
+    if (!this.alive) return;
+    this.alive = false;
+    this.service.dispose();
+    this.work?.stopped.resolve();
+    this.work = undefined;
   }
 
   /** The next launch, after the dead owner's lease has run out. */
@@ -113,6 +155,9 @@ export class AgentFollowUpWorld {
     if (this.alive) this.crash();
     this.advanceClock(LEASE_MS + 1);
     await this.start();
+    // A reused process ID keeps the dead owner unconfirmed, not dead, until
+    // the grace runs out; the scheduler's next passes then act on it.
+    if (this.reuseProcessId) await this.tick(SCHEDULER_OWNER_CONFIRMATION_GRACE_MS);
   }
 
   advanceClock(ms: number): void {
@@ -160,10 +205,15 @@ export class AgentFollowUpWorld {
     return this.store.list({ ...FOLLOW_UP_THREAD, includeTerminal: true });
   }
 
-  /** Lets every promise the fakes resolved run, and any woken agent act. */
+  /** Join this process's evaluations and let any woken agent act. */
   async settle(): Promise<void> {
     for (let round = 0; round < 50; round += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      const work = this.work;
+      while (work && this.work === work && work.evaluations.length > 0) {
+        // A fake provider call at the crash point never returns, just as the
+        // dead process would never get to confirm its admission in SQLite.
+        await Promise.race([Promise.all(work.evaluations.splice(0)), work.stopped.promise]);
+      }
       const actionId = this.wakes.shift();
       if (actionId === undefined) return;
       await this.onWake?.(actionId);
@@ -180,9 +230,16 @@ export class AgentFollowUpWorld {
   /** The queue starts what it can once the thread is free and unlocked. */
   private async drain(): Promise<void> {
     while (this.alive && !this.busy && !this.locked && this.queue.length > 0) {
+      const head = this.queue[0]!;
+      if (head.held) {
+        // The real queue announces a released hold as queued, while the entry
+        // is still in it, before it starts it.
+        head.held = false;
+        await this.emit(head.id, "queued");
+        if (!this.alive) return;
+        continue;
+      }
       const entry = this.queue.shift()!;
-      // The real queue announces a released hold as queued before it starts it.
-      if (entry.held) await this.emit(entry.id, "queued");
       this.admit(entry.actionId);
       if (this.armedCrash === "after_queue_start") {
         this.crash();
@@ -226,7 +283,7 @@ export class AgentFollowUpWorld {
         return () => this.gateListeners.delete(listener);
       },
       isRestartGateClosed: () => this.gateClosed,
-      publishLocalEvent: async () => undefined,
+      publishLocalEvent: async () => { await this.onPublish?.(); },
       markScheduledThreadBorn: async () => undefined,
       markScheduledThreadStartTerminal: async () => undefined,
       cancelQueuedTurn: (queueEntryId: string) => {

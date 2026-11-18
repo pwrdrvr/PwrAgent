@@ -272,7 +272,7 @@ export type MessagingBackendBridge = {
   startTurn(
     request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<StartTurnResponse>;
-  /** The owner admits busy-thread input to the same FIFO desktop viewers read. */
+  /** @deprecated All bridges admit input to the owner FIFO; this flag no longer switches admission. */
   ownsTurnQueue?: boolean;
   readQueuedTurn?(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse>;
   cancelQueuedTurn?(request: CancelQueuedTurnRequest): Promise<CancelQueuedTurnResponse>;

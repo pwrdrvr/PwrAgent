@@ -3,7 +3,7 @@ import type { CompactionRecoveryProtection, ThreadDependency } from "@pwragent/s
 import {
   buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey,
   COMPACTION_RECOVERY_COOLDOWN_MS, COMPACTION_RECOVERY_WINDOW_MS, COMPACTION_RECOVERY_MAX_ATTEMPTS,
-  COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN,
+  COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN, mergeCausalMessagingContext,
 } from "@pwragent/shared";
 
 export { THREAD_DEPENDENCY_SCHEMA } from "./state-schema";
@@ -86,10 +86,19 @@ export class ThreadDependencyStore {
     return row ? JSON.parse(row.payload) as ThreadDependency : undefined;
   }
 
+  /**
+   * A persisted message origin names this delivery: on its own, or as one
+   * member of a combined delivery (`deliveredMessages`).
+   */
   hasDeliveryReceipt(item: ThreadDependency): boolean {
+    const key = threadDependencyDeliveryKey(item);
     return Boolean(this.db.prepare(
-      "SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND json_extract(payload, '$.dependencyId') = ? LIMIT 1",
-    ).get(item.backend, item.threadId, threadDependencyDeliveryKey(item)));
+      `SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND (
+         json_extract(payload, '$.dependencyId') = ?
+         OR EXISTS (SELECT 1 FROM json_each(payload, '$.deliveredMessages') AS member
+           WHERE json_extract(member.value, '$.origin.dependencyId') = ?)
+       ) LIMIT 1`,
+    ).get(item.backend, item.threadId, key, key));
   }
 
   private recoveryGuard(target: Pick<ThreadDependency, "backend" | "threadId">): RecoveryGuard {
@@ -198,7 +207,16 @@ export class ThreadDependencyStore {
         throw new Error(`Continuation delivery needs review (${unresolved.id}). List this thread's dependencies and ask the operator to inspect the delivery before creating another agent continuation. Dismiss only after operator review; dismissal does not cancel a turn.`);
       }
       const duplicate = current.find((item) => signature(item) === signature(candidate));
-      if (duplicate) return { dependency: duplicate, superseded: [] };
+      if (duplicate) {
+        // One wake answers both requests, so it carries no more authority
+        // than the narrower one. A claim in flight already has its origin.
+        const merged = { ...duplicate, ...mergeCausalMessagingContext([duplicate, candidate]) };
+        if ((duplicate.status !== "waiting" && duplicate.status !== "ready")
+          || JSON.stringify(merged) === JSON.stringify(duplicate)) return { dependency: duplicate, superseded: [] };
+        const narrowed = { ...merged, updatedAt: candidate.createdAt };
+        if (!this.replace(duplicate, narrowed)) throw new Error("Dependency changed while registering its duplicate. Try again.");
+        return { dependency: narrowed, superseded: [] };
+      }
       const superseded = current.filter((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
         && (item.status === "waiting" || item.status === "ready") && supersedes(item))
         .map((item) => ({ ...item, status: "cancelled" as const, supersededBy: candidate.id, updatedAt: candidate.createdAt }));

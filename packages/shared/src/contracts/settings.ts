@@ -608,7 +608,7 @@ export type PrAutoDispatchBudgetStatus = {
 };
 
 /**
- * Explicit launchpad baseline for one backend in the active PwrAgent profile.
+ * Explicit launchpad baseline for one provider-picker identity in the active profile.
  * Reasoning is remembered per model so switching models never overwrites the
  * operator's preference for another model.
  */
@@ -873,6 +873,16 @@ export type DesktopAppearanceSnapshot = {
   contextMoon?: DesktopSettingsValue<DesktopContextMoonStyle>;
 };
 
+export type DesktopMarkdownRenderingPreferences = {
+  incrementalRendering: boolean;
+  mathRendering: boolean;
+};
+
+export const DESKTOP_MARKDOWN_RENDERING_DEFAULTS: Readonly<DesktopMarkdownRenderingPreferences> = {
+  incrementalRendering: true,
+  mathRendering: true,
+};
+
 export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
   /**
@@ -952,6 +962,17 @@ export type DesktopGeneralSettingsSnapshot = {
     threadSpendThresholdUsd: DesktopSettingsValue<number>;
   };
   appearance: DesktopAppearanceSnapshot;
+  /**
+   * How transcripts render Markdown, both on by default. Stored in
+   * `[general.markdown]`; builds through 1.4.10 used `[experimental]`, which
+   * is still read as a fallback and retired after the 1.5 series.
+   */
+  markdown?: {
+    /** Reuse finished blocks while a response streams. */
+    incrementalRendering: DesktopSettingsValue<boolean>;
+    /** Typeset LaTeX delimiters with KaTeX, loaded only for likely math. */
+    mathRendering: DesktopSettingsValue<boolean>;
+  };
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
   messagingAcknowledgment: DesktopSettingsValue<DesktopMessagingAcknowledgment | null>;
 };
@@ -1421,14 +1442,6 @@ export type DesktopSettingsSnapshot = {
      */
     liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
-     * Renders LaTeX delimiters in thread Markdown with KaTeX. Disabled by
-     * default so the renderer does not load the math runtime until an operator
-     * explicitly opts into the experiment.
-     */
-    markdownMathRendering?: DesktopSettingsValue<boolean>;
-    /** Opt-in incremental Markdown parser and block reuse. Defaults to off. */
-    incrementalMarkdownRendering?: DesktopSettingsValue<boolean>;
-    /**
      * Controls whether the released thread context-rail Pricing tab is visible.
      * The pricing ledger continues collecting usage while the tab is hidden.
      */
@@ -1821,6 +1834,10 @@ export type DesktopSettingsConfigPatch = {
       transcriptTextSize?: DesktopTextSize;
       contextMoon?: DesktopContextMoonStyle;
     };
+    markdown?: {
+      incrementalRendering?: boolean;
+      mathRendering?: boolean;
+    };
     codexProfileModel?: DesktopCodexProfileModel;
     /** `null` clears the persisted acknowledgement. */
     messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
@@ -1832,8 +1849,6 @@ export type DesktopSettingsConfigPatch = {
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
-    markdownMathRendering?: boolean;
-    incrementalMarkdownRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -2152,6 +2167,8 @@ export type DesktopConfigBootstrapSnapshot = {
   logs: DesktopLogsViewerPreferences;
   /** `general.html_preview_run_scripts`, for windows without the full snapshot. */
   htmlPreviewRunScripts: boolean;
+  /** Resolved `[general.markdown]` preferences for use before the full snapshot. */
+  markdown?: DesktopMarkdownRenderingPreferences;
 };
 
 export type ReadDesktopConfigBootstrapResponse = {

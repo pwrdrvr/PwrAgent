@@ -6183,6 +6183,9 @@ function isSparkModelId(id: string): boolean {
 }
 
 function formatCodexModelLabel(id: string, displayName?: string): string {
+  if (id.toLowerCase() === "gpt-daybreak-blue-latest") {
+    return "Daybreak Blue Latest";
+  }
   const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
   if (!match) {
     return displayName?.trim() || id;
@@ -6887,6 +6890,7 @@ function buildThreadStartPayload(params: {
   runtimeWorkspaceRoots?: string[];
   environments?: CodexThreadStartParams["environments"];
   baseInstructions?: CodexThreadStartParams["baseInstructions"];
+  developerInstructions?: string;
   model?: string;
   approvalPolicy?: string;
   approvalsReviewer?: ApprovalsReviewer;
@@ -6921,6 +6925,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.baseInstructions !== undefined) {
     base.baseInstructions = params.baseInstructions;
+  }
+  if (params.developerInstructions?.trim()) {
+    base.developerInstructions = params.developerInstructions.trim();
   }
   if (params.model?.trim()) {
     base.model = params.model.trim();
@@ -7149,6 +7156,13 @@ function buildThreadResumePayloads(params: {
   buildShellEnvironment?: CodexClientHost["buildShellEnvironment"];
   dynamicTools?: CodexDynamicToolSpec[];
   pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+  /**
+   * The thread's Agent instructions. Codex keeps them for the life of a
+   * loaded session and applies this field only when the resume loads the
+   * thread. An empty string clears them on such a load. Left undefined, the
+   * client's resolver supplies the thread's current instructions.
+   */
+  developerInstructions?: string;
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
@@ -7205,6 +7219,9 @@ function buildThreadResumePayloads(params: {
   }
   if (params.pwrdrvrTokenMiser !== undefined) {
     base.pwrdrvrTokenMiser = params.pwrdrvrTokenMiser;
+  }
+  if (params.developerInstructions !== undefined) {
+    base.developerInstructions = params.developerInstructions.trim();
   }
 
   return [base];
@@ -7978,6 +7995,14 @@ export class CodexAppServerClient {
   // thread/start has no persisted history until its first turn. Forks can
   // already have history, so pending-first-turn resume state is not enough.
   private readonly threadsAwaitingFirstTurn = new Set<string>();
+  private threadDeveloperInstructionsResolver:
+    | ((threadId: string) => Promise<string | undefined>)
+    | undefined;
+  /**
+   * Threads whose loaded session still holds replaced developer instructions
+   * because they had no rollout to reload from when the change arrived.
+   */
+  private readonly staleDeveloperInstructionThreads = new Set<string>();
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
   private readonly helperThreadIds = new Set<string>();
@@ -11060,6 +11085,85 @@ export class CodexAppServerClient {
     }
   }
 
+  /**
+   * Replace an idle thread's Agent instructions so the next turn uses them.
+   *
+   * Codex 0.164 keeps developer instructions for the life of a loaded session
+   * and shows them to the model only when it builds a full context: on the
+   * first turn and after each compaction. A changed text therefore needs two
+   * things. The session must be loaded again with the new text, or the next
+   * compaction would restore the old one. Codex reloads an idle thread on
+   * resume only when nobody is subscribed and the resume carries an override,
+   * so this unsubscribes first. The model must also be told now, because a
+   * reload does not rebuild the context: `updateMessage` is appended to the
+   * thread's history as a developer message.
+   *
+   * A thread that has not run its first turn has no rollout to reload from.
+   * It gets the message now and the reload before its next resumed turn.
+   */
+  async replaceThreadDeveloperInstructions(params: Parameters<typeof buildThreadResumePayloads>[0] & {
+    /** The new instructions. An empty string means the thread has none now. */
+    developerInstructions: string;
+    updateMessage: string;
+  }): Promise<void> {
+    await this.ensureInitialized();
+    const { updateMessage, ...resume } = params;
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const current = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/read"],
+      payloads: [buildThreadReadPayload({ threadId: params.threadId })],
+      timeoutMs,
+    });
+    if (readThreadStatus(current) === "active") {
+      throw new Error("Wait for the current turn to finish or stop it, then change Agent thread status.");
+    }
+    const awaitingFirstTurn = this.pendingFirstTurnThreadResults.has(params.threadId);
+    if (awaitingFirstTurn) {
+      this.staleDeveloperInstructionThreads.add(params.threadId);
+    } else {
+      await this.unsubscribeThreadForReload(params.threadId);
+    }
+    // Before its first turn only the dynamic-tools resume extension can
+    // resume a thread, and the registry supplies tools only after negotiating it.
+    if (!awaitingFirstTurn || resume.dynamicTools !== undefined) {
+      await this.prepareIdleNativeVoiceThread(resume);
+    }
+    await this.injectThreadItems({
+      threadId: params.threadId,
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: updateMessage }],
+        },
+      ],
+    });
+  }
+
+  /** Drop this connection's subscription so the next resume loads the thread again. */
+  private async unsubscribeThreadForReload(threadId: string): Promise<void> {
+    if (!this.threadUnsubscribeUnsupported) {
+      try {
+        await this.connection.request("thread/unsubscribe", { threadId },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      } catch (error) {
+        if (!isMethodUnavailableError(error, "thread/unsubscribe")) throw error;
+        this.threadUnsubscribeUnsupported = true;
+      }
+    }
+    if (this.threadUnsubscribeUnsupported) {
+      // The resume that follows rejoins the loaded thread, and Codex ignores
+      // its developer instructions.
+      this.host.logger.warn("thread/unsubscribe is unavailable; changed Agent instructions apply to this Codex thread only until its next compaction or reload", {
+        threadId,
+      });
+      return;
+    }
+    this.subscribedThreads.delete(threadId);
+    this.noteThreadUnloaded(threadId);
+  }
+
   async injectThreadItems(params: {
     threadId: string;
     items: CodexThreadInjectItemsParams["items"];
@@ -11095,6 +11199,8 @@ export class CodexAppServerClient {
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadStartParams["threadSource"];
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
+    /** The thread's Agent instructions, sent as Codex developer instructions. */
+    developerInstructions?: string;
   }): Promise<{ threadId: string }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
@@ -11253,6 +11359,21 @@ export class CodexAppServerClient {
         });
       }
     }
+    let reloadDeveloperInstructions: string | undefined;
+    if (!pendingFirstTurnResult && this.staleDeveloperInstructionThreads.delete(params.threadId)) {
+      // The instructions changed before this thread had a rollout. It has one
+      // now, so load it again with the current text before this turn. Codex
+      // reloads only for a resume that carries an override, so removed
+      // instructions are sent as an empty string.
+      reloadDeveloperInstructions =
+        (await this.threadDeveloperInstructionsResolver?.(params.threadId))?.trim() ?? "";
+      try {
+        await this.unsubscribeThreadForReload(params.threadId);
+      } catch (error) {
+        this.staleDeveloperInstructionThreads.add(params.threadId);
+        throw error;
+      }
+    }
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
       // Resume can replace the catalog or environment even if input
@@ -11280,11 +11401,16 @@ export class CodexAppServerClient {
             buildShellEnvironment: this.host.buildShellEnvironment,
             dynamicTools: params.dynamicTools,
             pwrdrvrTokenMiser: params.pwrdrvrTokenMiser,
+            developerInstructions: reloadDeveloperInstructions,
           },
           this.getProtocolCompatibility(),
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }).catch((error: unknown) => {
+        // A reload that did not happen is still owed to the next turn.
+        if (reloadDeveloperInstructions !== undefined) {
+          this.staleDeveloperInstructionThreads.add(params.threadId);
+        }
         // This exact provider refusal proves that no turn was admitted by
         // this start. Keep the stage in a typed error; a turn/start failure
         // or transport timeout must never be mistaken for safe non-admission.
@@ -12301,7 +12427,59 @@ export class CodexAppServerClient {
   private requestWhenAvailable(
     ...args: Parameters<JsonRpcConnection["request"]>
   ): Promise<unknown> {
-    return this.runAdmittedRequest(() => this.rawConnection.request(...args));
+    if (args[0] !== "thread/resume") {
+      return this.runAdmittedRequest(() => this.rawConnection.request(...args));
+    }
+    return this.runAdmittedRequest(async () => {
+      const closeGeneration = this.closeGeneration;
+      const resume = await this.withThreadDeveloperInstructions(args);
+      if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
+        throw new Error("codex app server client closed");
+      }
+      return await this.rawConnection.request(...resume);
+    });
+  }
+
+  /**
+   * Supply the thread's current Agent instructions on every `thread/resume`.
+   *
+   * Codex reads `developerInstructions` when a resume loads the thread and
+   * keeps that text for the loaded session, which is what it re-sends to the
+   * model after compaction. Any resume can be the one that loads a thread: a
+   * compaction, a rewind or a steer after the app restarts, as well as a turn.
+   * One sent without the instructions would leave the session with none.
+   * Codex ignores the field on a resume that rejoins a loaded thread.
+   */
+  private async withThreadDeveloperInstructions(
+    args: Parameters<JsonRpcConnection["request"]>,
+  ): Promise<Parameters<JsonRpcConnection["request"]>> {
+    const resolver = this.threadDeveloperInstructionsResolver;
+    const params = asRecord(args[1]);
+    if (args[0] !== "thread/resume" || !resolver || !params
+      || params.developerInstructions !== undefined) {
+      return args;
+    }
+    const threadId = pickString(params, ["threadId"]);
+    const instructions = threadId ? (await resolver(threadId))?.trim() : undefined;
+    if (!instructions) return args;
+    const [method, , ...rest] = args;
+    return [method, { ...params, developerInstructions: instructions }, ...rest];
+  }
+
+  /**
+   * The registry supplies each thread's current Agent instructions. Returns a
+   * function that withdraws the resolver, like a subscription, so a client
+   * that routes to several runtimes can give it to each one it starts.
+   */
+  provideThreadDeveloperInstructions(
+    resolver: (threadId: string) => Promise<string | undefined>,
+  ): () => void {
+    this.threadDeveloperInstructionsResolver = resolver;
+    return () => {
+      if (this.threadDeveloperInstructionsResolver === resolver) {
+        this.threadDeveloperInstructionsResolver = undefined;
+      }
+    };
   }
 
   private createThreadOperationConnection(
@@ -12316,14 +12494,17 @@ export class CodexAppServerClient {
     return {
       request: (...args) => this.runAdmittedRequest(async () => {
         const closeGeneration = this.closeGeneration;
-        const request = (...requestArgs: Parameters<JsonRpcConnection["request"]>) => {
+        const request = async (...requestArgs: Parameters<JsonRpcConnection["request"]>) => {
+          const sendArgs = requestArgs[0] === "thread/resume"
+            ? await this.withThreadDeveloperInstructions(requestArgs)
+            : requestArgs;
           const submit = () => {
             if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
               throw new Error("codex app server client closed");
             }
-            return this.rawConnection.request(...requestArgs);
+            return this.rawConnection.request(...sendArgs);
           };
-          return admit ? admit(requestArgs[0], submit) : submit();
+          return await (admit ? admit(requestArgs[0], submit) : submit());
         };
         // Resume and settings belong to a process and to a loaded thread.
         // Reapply successful setup after recovery or after the thread

@@ -822,6 +822,52 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("updates only the selected Codex endpoint's launchpads in one transaction", async () => {
+    await store.setLaunchpadDefaults({ backend: "codex", model: "@mathos/old", executionMode: "auto" });
+    for (let index = 0; index < 100; index += 1) {
+      await store.upsertDirectoryLaunchpad({
+        directoryKey: `directory:/endpoint-${index}`, directoryKind: "directory", directoryLabel: "Fixture",
+        backend: "codex", model: index < 40 ? "@mathos/old" : index < 80 ? "gpt-old" : "@bonsai/old",
+        executionMode: "auto", prompt: "unsent", workMode: "local", createdAt: 1, updatedAt: 1,
+      });
+    }
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(store.applyProviderModelDefaults({
+        "codex-provider:mathos": { model: "@mathos/old", reasoningEffortsByModel: {} },
+      }, {
+        "codex-provider:mathos": { model: "@mathos/new", reasoningEffortsByModel: { "@mathos/new": "high" } },
+      })).toBe(40);
+    });
+    expectSqliteWriteBudget({
+      scenario: "model-provider-default-launchpads",
+      note: "One explicit endpoint-default Save updates 40 MathOS drafts and learned defaults in one commit; 60 OpenAI/Bonsai drafts and idle time add no writes. Ten Saves/day remain under 1 MB/day.",
+      writes,
+    });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/endpoint-40" })).toMatchObject({ model: "gpt-old", updatedAt: 1 });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/endpoint-80" })).toMatchObject({ model: "@bonsai/old", updatedAt: 1 });
+  });
+
+  it("converts legacy endpoint sticky defaults once without idle or repeated-read writes", async () => {
+    const legacy = {
+      backend: "codex", executionMode: "default", model: "@mathos/one",
+      providerSettings: { codex: { model: "@mathos/one", executionMode: "default", reasoningEffortsByModel: { "@mathos/one": "high" } } },
+    };
+    const insert = stateDb.raw.prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)");
+    for (const [key, value] of Object.entries(legacy)) insert.run(key, JSON.stringify(value));
+    const { writes } = await measureSqliteWrites(async () => {
+      const converted = await store.getLaunchpadDefaults();
+      expect(converted.codexModelProviderId).toBe("mathos");
+      expect(converted.providerSettings?.["codex-provider:mathos"]?.model).toBe("@mathos/one");
+      await store.getLaunchpadDefaults();
+      await store.getLaunchpadDefaults();
+    });
+    expectSqliteWriteBudget({
+      scenario: "model-provider-legacy-sticky-defaults",
+      note: "One legacy sticky-default conversion per profile, persisted in one commit; repeated reads and idle time add no writes (well under 0.1 MB once, not per day).",
+      writes,
+    });
+  });
+
   it("budgets paged Star Map bootstrap and identical reconnects", async () => {
     const entries = Array.from({ length: 1001 }, (_, index) => ({
       instanceId: "owner_one",

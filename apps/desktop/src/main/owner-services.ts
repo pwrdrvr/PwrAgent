@@ -389,7 +389,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       if (!result.acquired) throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost.`);
     }
   }
-  const config = initializeDesktopConfigStore();
+  const config = initializeDesktopConfigStore({ appVersion: host.application.getVersion() });
   if (host.runtimePolicy?.exclusiveProfileOwner && host.runtimePolicy.codexCommand) {
     await config.write({ onboarding: { completed: true }, models: { codex: { path: host.runtimePolicy.codexCommand } } }, ["onboarding", "models"]);
   }
@@ -1022,8 +1022,8 @@ export function wireAppServerOwnerServices(): void {
       return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
     }
   });
-  getDesktopBackendRegistry().setThreadDependenciesPeerHandler(async (request, requesterInstanceId) =>
-    await appServerService.manageThreadDependenciesForPeer(request, requesterInstanceId));
+  getDesktopBackendRegistry().setThreadDependenciesPeerHandler(async (request, requesterInstanceId, provenance) =>
+    await appServerService.manageThreadDependenciesForPeer(request, requesterInstanceId, provenance));
   setNavigationDetailPendingWakesProjector(async (thread, activePrWatches) =>
     await appServerService.listThreadPendingWakes(thread, 0, activePrWatches));
   getDesktopBackendRegistry().setThreadPrWatchesPeerHandler(async (request) => {
@@ -1038,7 +1038,7 @@ export function wireAppServerOwnerServices(): void {
     return await appServerService.manageThreadPrWatches(owned);
   });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
-    async (args) => await appServerService.watchThreadPullRequestForTool(args),
+    async (args, provenance) => await appServerService.watchThreadPullRequestForTool(args, provenance),
   );
   getDesktopBackendRegistry().setDirectoryGitStatusWriter(
     async (params) => await appServerService.writeDirectoryGitStatusEntry(params),

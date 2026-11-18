@@ -32,7 +32,6 @@ import {
   reviewStartOutcomeForBackendEvent,
   automationRunUpdateForBackendEvent,
   planEntryForBackendEvent,
-  isSameActiveTurnState,
   isThreadStatusIdleEvent,
   assistantDeltaForBackendEvent,
   isUnphasedAssistantMessageEvent,
@@ -559,36 +558,23 @@ export class MessagingBackendEventRouter {
         binding,
         eventTurnId ?? lifecycle?.turnId ?? activeTurn?.turnId,
       );
-      if (lifecycle && !automationTurnEvent) {
-        const previousTurn = activeTurn;
-        activeTurn = lifecycle;
-        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
-        if (turnStateChanged) {
-          this.context.host().setActiveTurn(binding, activeTurn);
-          this.context.host().logBindingTurnStateChange(
-            binding,
-            previousTurn,
-            activeTurn,
-            event.notification.method,
-          );
-        }
-      } else if (isThreadStatusIdleEvent(event) && activeTurn) {
-        const previousTurn = activeTurn;
-        activeTurn = {
-          ...activeTurn,
-          status: "completed",
-          updatedAt: this.context.now(),
-        };
-        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
-        if (turnStateChanged) {
-          this.context.host().setActiveTurn(binding, activeTurn);
-          this.context.host().logBindingTurnStateChange(
-            binding,
-            previousTurn,
-            activeTurn,
-            event.notification.method,
-          );
-        }
+      const observation = this.context.host().observeBackendTurn(binding, {
+        type: "backend",
+        lifecycle,
+        automation: automationTurnEvent,
+        idle: isThreadStatusIdleEvent(event),
+        now: isThreadStatusIdleEvent(event) && activeTurn && (!lifecycle || automationTurnEvent)
+          ? this.context.now() : 0,
+      });
+      activeTurn = observation.activeTurn;
+      turnStateChanged = observation.changed;
+      if (turnStateChanged) {
+        this.context.host().logBindingTurnStateChange(
+          binding,
+          observation.previous,
+          activeTurn,
+          event.notification.method,
+        );
       }
 
       const terminalPrivateResponse = this.context.host().isTerminalPrivateResponseTurn(
@@ -930,7 +916,6 @@ export class MessagingBackendEventRouter {
         if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
           await this.context.host().renderAutomaticBindingStatus(binding);
         }
-        this.context.host().scheduleNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
         const previousTurn = activeTurn;
         activeTurn = {

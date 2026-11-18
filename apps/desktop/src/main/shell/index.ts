@@ -204,6 +204,7 @@ import {
   type ApplicationMenuFederationPeer,
 } from "./menu";
 import { selectWindowForProfileFocus } from "./window-profile-focus";
+import { createActivationWindowRestorer } from "./window-activation-restore";
 import { wireAppMenuBridge } from "./app-menu-bridge";
 import { wireWindowControlsBridge } from "./window-controls-bridge";
 import { installWindowFrameSync } from "./window-frame-sync";
@@ -825,8 +826,15 @@ function installDevelopmentDockIcon(): void {
 
 let lastFocusedWindow: BrowserWindow | undefined;
 let applicationMenu: Electron.Menu | undefined;
-// On macOS isVisible() also becomes false when another app covers a window.
+// Windows that are on screen, even if covered. On macOS "hide" also fires
+// when another window covers one, while isVisible() still reports true.
 const shownWindows = new WeakSet<BrowserWindow>();
+// A Dock click raises the window that was on top when the app lost focus.
+const activationWindowRestorer = createActivationWindowRestorer<BrowserWindow>({
+  getWindows: () => BrowserWindow.getAllWindows(),
+  getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
+  isShown: (window) => shownWindows.has(window),
+});
 
 function focusPwrAgentWindows(): void {
   if (isWindowCreationBlocked()) {
@@ -1072,6 +1080,12 @@ function installWindowMenuRefreshHandlers(): void {
       shownWindows.add(window);
     });
     window.on("hide", () => {
+      // macOS also emits "hide" when another window covers this one (an
+      // occlusion change); the window still reports visible. Only an
+      // ordered-out window stops counting as shown.
+      if (isMac && window.isVisible()) {
+        return;
+      }
       shownWindows.delete(window);
       if (lastFocusedWindow === window) {
         lastFocusedWindow = undefined;
@@ -1081,9 +1095,16 @@ function installWindowMenuRefreshHandlers(): void {
       if (lastFocusedWindow === window) {
         lastFocusedWindow = undefined;
       }
+      activationWindowRestorer.forget(window);
       refresh();
     });
     window.on("page-title-updated", refresh);
+  });
+  app.on("did-resign-active", () => {
+    activationWindowRestorer.resignActive(lastFocusedWindow);
+  });
+  app.on("did-become-active", () => {
+    activationWindowRestorer.becomeActive();
   });
   // Profiles → Remote Instances and remote window titles both draw peer
   // labels, which change with connectivity (a reconnect, or a sibling
@@ -1459,7 +1480,9 @@ export function bootstrapApp(): void {
             startupCpuProfiler,
           }),
         );
+        return;
       }
+      activationWindowRestorer.activate();
     });
   }).catch((error: unknown) => {
     // A throw anywhere in the startup chain above rejects this promise. Without

@@ -429,14 +429,14 @@ window that ran it: a thread started on a peer is mounted into this machine's
 main window, unless a remote viewer window already shows that peer's threads.
 
 Prefer `steer_thread` for cross-thread guidance. Both it and the default
-`send_message_to_thread` delivery group pending guidance at the recipient into
-one queued steer, preserving each sender, receipt time, and complete input.
-The recipient steers an active turn when supported; otherwise the batch waits
-for one follow-up turn. Once backend dispatch claims a batch, it is immutable
-and subsequent messages accumulate in the next queued steer. Group edits hold
+`send_message_to_thread` delivery admit each message as its own queue entry at
+the recipient. Messages from agents, monitors and PwrAgent that wait together
+go out as one delivery, each under a line naming its sender and receipt time:
+one steer into an active turn when supported, otherwise one follow-up turn.
+Messages admitted after a delivery is claimed go out in a later one. Edits hold
 the entire recipient FIFO until the replacement and queue notifications finish.
-Sender replacement changes only that sender's contribution and preserves the
-other messages and queue position. Use `delivery: "new_turn"` for a distinct
+Sender replacement changes only that sender's entry and preserves the other
+messages and queue position. Use `delivery: "new_turn"` for a distinct
 follow-up. Explicit model or execution overrides also retain separate turns.
 
 `mark_project_read` accepts the exact `projectKey` from `list_instance_projects`

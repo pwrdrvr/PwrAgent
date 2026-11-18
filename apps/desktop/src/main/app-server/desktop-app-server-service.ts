@@ -4746,6 +4746,7 @@ class DesktopAppServerService {
 
   async watchThreadPullRequestForTool(
     args: WatchThreadPullRequestToolArgs,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<PwrAgentThreadInspectionResponse> {
     const action = args.action ?? "watch";
     if (action === "list" || action === "cancel") {
@@ -4760,7 +4761,7 @@ class DesktopAppServerService {
         },
       };
     }
-    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" });
+    const armed = await this.armThreadPrWatch({ ...args, createdBy: "agent" }, provenance);
     return armed.ok
       ? { ok: true, data: { pullRequestWatch: armed.result } }
       : { ok: false, error: armed.error };
@@ -4834,6 +4835,7 @@ class DesktopAppServerService {
    */
   private async armThreadPrWatch(
     args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<
     | { ok: true; result: WatchThreadPullRequestResult }
     | {
@@ -5067,6 +5069,8 @@ class DesktopAppServerService {
       ...(pr.title ? { prTitle: pr.title } : {}),
       createdAt,
       createdBy: args.createdBy,
+      ...(provenance?.causalMessagingSource ? { causalMessagingSource: provenance.causalMessagingSource } : {}),
+      ...(provenance?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),
     };
     let watch: ThreadPullRequestWatchSummary | undefined;
     let watchExisted = false;
@@ -10152,7 +10156,6 @@ class DesktopAppServerService {
             causalMessagingSource: dependency.causalMessagingSource, causalMessagingAmbiguous: dependency.causalMessagingAmbiguous },
           () => canSubmit() && !this.resolveThreadForgeProject(dependency)?.automation.paused, admit);
         },
-        isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
         confirmConsumerIdle: async (target) => await this.confirmDependencyConsumerIdle(target),
         // PR conditions also wait while the consumer's project holds PR
         // watches. A paused project's turn-only wake is held or discarded
@@ -10226,13 +10229,16 @@ class DesktopAppServerService {
     input: { type: "text"; text: string }[];
     origin: "automation";
     messageOrigin: import("@pwragent/shared").AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started" | "busy" | "held" | "discarded"; turnId?: string }> {
+  }): Promise<{ status: "started" | "queued" | "busy" | "held" | "discarded"; turnId?: string }> {
     const registry = getDesktopBackendRegistry();
     const project = this.resolveThreadForgeProject(request);
     // A lock already holds every source, so it wins: the dependency waits
     // for unlock exactly as it does in an active project.
     if (!project?.automation.paused || await registry.isThreadLocked(request)) {
-      return await registry.submitTurnIfIdle(request);
+      // The wake joins a running turn, or starts one, and shares that
+      // delivery with the agent and system messages waiting beside it.
+      const submitted = await registry.submitTurnIfIdle({ ...request, joinRunningTurn: true });
+      return submitted.status === "started" ? { status: "started", turnId: submitted.turnId } : { status: submitted.status };
     }
     // The prompt's first evidence line names the prerequisite that fired.
     const evidence = (request.input[0]?.text ?? "").split("\n")
@@ -10335,7 +10341,12 @@ class DesktopAppServerService {
     const runtime = getDesktopFederationRuntime();
     const localInstanceId = (await runtime.health().catch(() => undefined))?.instanceId;
     if (federationTarget && isRemoteFederationTarget(federationTarget) && federationTarget.instanceId !== localInstanceId) {
-      return await manageRemoteThreadDependencies(owned, federationTarget, localInstanceId, runtime);
+      // The owner sends the contact's tool calls back here for authorization.
+      const source = provenance?.causalMessagingSource;
+      return await manageRemoteThreadDependencies(owned, federationTarget, localInstanceId, runtime, {
+        ...provenance,
+        ...(source ? { causalMessagingSource: { ...source, instanceId: source.instanceId ?? runtime.messagingSourceInstanceId() } } : {}),
+      });
     }
     const response = await this.manageLocalThreadDependencies(owned, provenance, actor);
     return owned.action === "list" ? await appendPeerDependents(response, owned as { backend: string; threadId: string }, localInstanceId, runtime) : response;
@@ -10346,13 +10357,14 @@ class DesktopAppServerService {
    * already required its turn_control grant, which can read every thread's
    * waits anyway; `active` leaves continuations out, as it does for a window.
    */
-  async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined): Promise<ManageThreadDependenciesResponse> {
+  async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined,
+    provenance?: import("@pwragent/shared").CausalMessagingContext): Promise<ManageThreadDependenciesResponse> {
     const owned = readFederationThreadDependenciesRequest(request);
     if (!owned) throw new Error("Unknown Continue After action.");
     if (owned.action === "active") {
       return getAppStateMode() ? { dependencies: this.getThreadDependencyCoordinator().active() } : { dependencies: [] };
     }
-    const response = await this.manageLocalThreadDependencies(owned, undefined, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
+    const response = await this.manageLocalThreadDependencies(owned, provenance, requesterInstanceId ? `peer:${requesterInstanceId}` : "peer");
     if (owned.action !== "list") return response;
     // Relay the waits other machines, the requester included, keep on this
     // thread; the requester names its own as local.
@@ -10555,8 +10567,17 @@ class DesktopAppServerService {
         task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
       }
     } else if (notification.method === "thread/turnQueue/updated" && typeof notification.params.status === "string"
-      && ["cancelled", "terminal"].includes(notification.params.status)) {
-      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+      && ["started", "cancelled", "terminal"].includes(notification.params.status)) {
+      const coordinator = this.getThreadDependencyCoordinator();
+      const { status, threadId, turnId } = notification.params;
+      const dependencyId = (notification.params.messageOrigin as import("@pwragent/shared").AppServerThreadMessageOrigin | undefined)?.dependencyId;
+      // A continuation that waited in the queue is delivered by its own event.
+      const progress = dependencyId && (status === "started" || status === "cancelled")
+        ? coordinator.handleDeliveryProgress({ backend: event.backend, threadId, dependencyId, status,
+          ...(typeof turnId === "string" ? { turnId } : {}) })
+        : Promise.resolve();
+      task = status === "started" ? progress
+        : progress.then(async () => await coordinator.handleThreadEvent({ backend: event.backend, threadId }, undefined, true));
     } else if (notification.method === "pullRequest/status/updated") {
       const pr = notification.params.pr;
       if (pr && typeof pr === "object" && "url" in pr && typeof pr.url === "string") {

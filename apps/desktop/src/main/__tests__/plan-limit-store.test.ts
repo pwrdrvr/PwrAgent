@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendRateLimitSummary } from "@pwragent/shared";
@@ -107,6 +108,71 @@ describe("PlanLimitStore", () => {
       // A higher reading of the same window moves it forward.
       claude(store, [{ ...older, usedPercent: 51.2 }], true);
       expect(store.limits("claude")?.[0].usedPercent).toBe(51.2);
+    });
+
+    it("lets a probe lower a window after a reset credit while other CLIs stream", () => {
+      // The oracle: after a Fable reset credit the account's usage is the
+      // probe's value. Stream readings that arrive while the probe is in
+      // flight report the same post-credit account, so they never exceed it.
+      // The shown value must be the probe's, however many streams overtook it.
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const reset = Date.parse("2026-11-24T11:00:00Z");
+      const fable = (usedPercent: number, resetAt = reset) => ({ name: "Weekly Fable limit",
+        limitId: "seven_day_overage_included", usedPercent, resetAt, windowMinutes: 10_080 });
+      fc.assert(fc.property(
+        fc.integer({ min: 1, max: 100 }),
+        fc.integer({ min: 0, max: 99 }),
+        fc.array(fc.integer({ min: 0, max: 100 }), { maxLength: 6 }),
+        (before, probeRaw, streamRaw) => {
+          const probed = Math.min(probeRaw, before - 1);
+          const { store } = storeAt(now);
+          claude(store, [fable(before, reset - 76)], true);
+          const since = store.mark("claude");
+          // Stream readings carry the hour-rounded reset; the probe's is exact.
+          for (const used of streamRaw) claude(store, [fable(Math.min(used, probed))]);
+          store.record("claude", { limits: [fable(probed, reset - 76)].map(canonicalClaudeRateLimit),
+            precise: true, since, dated: true, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS });
+          expect(store.limits("claude")?.[0].usedPercent).toBe(probed);
+        },
+      ));
+    });
+
+    it("still lets another CLI's probe overtake one in flight", () => {
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const fable = { name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 100,
+        resetAt: Date.parse("2026-11-24T11:00:00Z"), windowMinutes: 10_080 };
+      const { store } = storeAt(now);
+      claude(store, [fable], true);
+      const since = store.mark("claude");
+      claude(store, [{ ...fable, usedPercent: 100 }], true);
+      store.record("claude", { limits: [{ ...fable, usedPercent: 80 }], precise: true, since,
+        dated: true, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS });
+      expect(store.limits("claude")?.[0].usedPercent).toBe(100);
+    });
+
+    it("never lets a probe from the last window replace one a stream started meanwhile", () => {
+      // The oracle: once any reading names a later window, the earlier one is
+      // gone, however the readings interleave with a probe in flight.
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const reset = Date.parse("2026-11-24T11:00:00Z");
+      const nextReset = reset + 7 * 24 * hour;
+      const weekly = (usedPercent: number, resetAt: number) => ({ name: "Weekly limit", limitId: "seven_day",
+        usedPercent, resetAt, windowMinutes: 10_080 });
+      fc.assert(fc.property(
+        fc.integer({ min: 0, max: 100 }),
+        fc.integer({ min: 0, max: 100 }),
+        fc.integer({ min: 0, max: 100 }),
+        (before, fresh, probed) => {
+          const { store } = storeAt(now);
+          claude(store, [weekly(before, reset)], true);
+          const since = store.mark("claude");
+          // A weekly reset credit starts the next window while the probe is out.
+          claude(store, [weekly(fresh, nextReset)]);
+          store.record("claude", { limits: [weekly(probed, reset)], precise: true, since,
+            dated: true, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS });
+          expect(store.limits("claude")).toEqual([weekly(fresh, nextReset)]);
+        },
+      ));
     });
 
     it("lets a precise reading refine a stream window's reset but not the reverse", () => {

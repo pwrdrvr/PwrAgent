@@ -19,6 +19,7 @@ import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
 import {
+  DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
   FORGE_PRODUCTS,
   type ForgeKind,
@@ -585,6 +586,7 @@ function extractMarkedEnv(output: string): NodeJS.ProcessEnv | undefined {
 
 async function resolveInteractiveLoginShellEnvAsync(
   env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
 ): Promise<NodeJS.ProcessEnv | undefined> {
   if (process.platform === "win32") {
     return undefined;
@@ -598,9 +600,13 @@ async function resolveInteractiveLoginShellEnvAsync(
   const failures: Array<{ error: string; shell: string }> = [];
 
   for (const shell of defaultLoginShellCandidates(env)) {
+    if (signal.aborted) return undefined;
     try {
-      const output = await new Promise<string>((resolve, reject) => {
-        execFile(
+      let retired!: Promise<void>;
+      const result = await new Promise<{ error: Error | null; stdout: string }>((resolve) => {
+        // Admission is cancellable; an admitted shell keeps its normal timeout
+        // and retires gracefully. An AbortSignal callback can precede close.
+        const child = execFile(
           shell,
           ["-ilc", command],
           {
@@ -610,15 +616,15 @@ async function resolveInteractiveLoginShellEnvAsync(
             timeout: LOGIN_SHELL_ENV_TIMEOUT_MS,
           },
           (error, stdout) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve(stdout);
+            resolve({ error, stdout });
           },
         );
+        retired = new Promise<void>((resolve) => { child.once("close", () => resolve()); });
       });
-      const shellEnv = extractMarkedEnv(output);
+      // Even an error callback must join the actual process and stdio lifetime.
+      await retired;
+      if (result.error) throw result.error;
+      const shellEnv = extractMarkedEnv(result.stdout);
       if (shellEnv) {
         return buildPwrAgentChildProcessEnv(shellEnv);
       }
@@ -631,6 +637,7 @@ async function resolveInteractiveLoginShellEnvAsync(
     }
   }
 
+  if (signal.aborted) return undefined;
   getMainLogger("pwragent:shell-environment").warn("login-shell-env-failed", {
     failures,
   });
@@ -1073,6 +1080,16 @@ export class DesktopSettingsService {
           config.general?.htmlPreviewRunScripts,
           false,
         ),
+        markdown: {
+          incrementalRendering: this.resolveConfigBoolean(
+            config.general?.markdown?.incrementalRendering,
+            DESKTOP_MARKDOWN_RENDERING_DEFAULTS.incrementalRendering,
+          ),
+          mathRendering: this.resolveConfigBoolean(
+            config.general?.markdown?.mathRendering,
+            DESKTOP_MARKDOWN_RENDERING_DEFAULTS.mathRendering,
+          ),
+        },
         // Default on: the gateway only does work for connections the
         // operator explicitly added and authorized, so an empty registry
         // costs nothing. The switch exists to revoke thread access
@@ -1222,14 +1239,6 @@ export class DesktopSettingsService {
         ),
         liveTranscriptEventFiltering: this.resolveConfigBoolean(
           config.experimental?.liveTranscriptEventFiltering,
-          false,
-        ),
-        markdownMathRendering: this.resolveConfigBoolean(
-          config.experimental?.markdownMathRendering,
-          true,
-        ),
-        incrementalMarkdownRendering: this.resolveConfigBoolean(
-          config.experimental?.incrementalMarkdownRendering,
           false,
         ),
         threadPricingSummary: this.resolveConfigBoolean(
@@ -3600,6 +3609,14 @@ export class DesktopSettingsService {
     ).value;
   }
 
+  /** Registry construction needs the cached env, not an interactive shell.
+   * Actual provider launches await resolveCodexSpawnEnvAsync before spawning. */
+  readCodexSpawnEnvSnapshot(): NodeJS.ProcessEnv {
+    return this.options.resolveCodexShellEnv
+      ? this.resolveCodexSpawnEnv()
+      : this.ensureBaseCodexSpawnEnv();
+  }
+
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
     if (this.options.resolveCodexShellEnv) {
       return this.withStartupCodexHome(
@@ -3639,38 +3656,41 @@ export class DesktopSettingsService {
       return targetEnv;
     }
 
-    const hydrationPromise = resolveInteractiveLoginShellEnvAsync(this.env)
-      .then((shellEnv) => {
-        const logger = getMainLogger("pwragent:shell-environment");
-        if (!shellEnv || Object.keys(shellEnv).length === 0) {
-          this.codexSpawnEnvHydratedAt = this.now();
-          this.codexSpawnEnvHydrationSucceeded = false;
-          logger.warn("login-shell-env-merge-empty", {
-            parentPathLength: this.env.PATH?.length ?? 0,
-            parentShell: this.env.SHELL,
-            shellCandidates: defaultLoginShellCandidates(this.env),
-          });
-          return targetEnv;
-        }
+    const hydrationPromise = this.commandDiscoveryLifetime.run(
+      () => resolveInteractiveLoginShellEnvAsync(this.env, this.commandDiscoveryLifetime.signal)
+        .then((shellEnv) => {
+          const logger = getMainLogger("pwragent:shell-environment");
+          if (!shellEnv || Object.keys(shellEnv).length === 0) {
+            this.codexSpawnEnvHydratedAt = this.now();
+            this.codexSpawnEnvHydrationSucceeded = false;
+            logger.warn("login-shell-env-merge-empty", {
+              parentPathLength: this.env.PATH?.length ?? 0,
+              parentShell: this.env.SHELL,
+              shellCandidates: defaultLoginShellCandidates(this.env),
+            });
+            return targetEnv;
+          }
 
-        logger.info("login-shell-env-merged", {
-          keys: Object.keys(shellEnv).length,
-          parentPathLength: this.env.PATH?.length ?? 0,
-          hydratedPathLength: shellEnv.PATH?.length ?? 0,
-          hadNvmDir: Boolean(shellEnv.NVM_DIR),
-          hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
-        });
-        mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
-        const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
-        for (const key of Object.keys(targetEnv)) delete targetEnv[key];
-        Object.assign(targetEnv, bundledEnv);
-        if (this.startupCodexHome) {
-          targetEnv.CODEX_HOME = this.startupCodexHome;
-        }
-        this.codexSpawnEnvHydratedAt = this.now();
-        this.codexSpawnEnvHydrationSucceeded = true;
-        return targetEnv;
-      });
+          logger.info("login-shell-env-merged", {
+            keys: Object.keys(shellEnv).length,
+            parentPathLength: this.env.PATH?.length ?? 0,
+            hydratedPathLength: shellEnv.PATH?.length ?? 0,
+            hadNvmDir: Boolean(shellEnv.NVM_DIR),
+            hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+          });
+          mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+          const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
+          for (const key of Object.keys(targetEnv)) delete targetEnv[key];
+          Object.assign(targetEnv, bundledEnv);
+          if (this.startupCodexHome) {
+            targetEnv.CODEX_HOME = this.startupCodexHome;
+          }
+          this.codexSpawnEnvHydratedAt = this.now();
+          this.codexSpawnEnvHydrationSucceeded = true;
+          return targetEnv;
+        }),
+      targetEnv,
+    );
     this.codexSpawnEnvHydrationPromise = hydrationPromise;
     try {
       return await hydrationPromise;
@@ -3698,35 +3718,39 @@ export class DesktopSettingsService {
     }
 
     const targetEnv = this.ensureBaseTerminalSpawnEnv();
-    this.terminalSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(
-      this.env,
-    ).then((shellEnv) => {
-      const logger = getMainLogger("pwragent:shell-environment");
-      if (!shellEnv || Object.keys(shellEnv).length === 0) {
-        logger.warn("terminal-login-shell-env-merge-empty", {
-          parentPathLength: this.env.PATH?.length ?? 0,
-          parentShell: this.env.SHELL,
-          shellCandidates: defaultLoginShellCandidates(this.env),
-        });
-        return targetEnv;
-      }
+    this.terminalSpawnEnvHydrationPromise = this.commandDiscoveryLifetime.run(
+      () => resolveInteractiveLoginShellEnvAsync(
+        this.env,
+        this.commandDiscoveryLifetime.signal,
+      ).then((shellEnv) => {
+        const logger = getMainLogger("pwragent:shell-environment");
+        if (!shellEnv || Object.keys(shellEnv).length === 0) {
+          logger.warn("terminal-login-shell-env-merge-empty", {
+            parentPathLength: this.env.PATH?.length ?? 0,
+            parentShell: this.env.SHELL,
+            shellCandidates: defaultLoginShellCandidates(this.env),
+          });
+          return targetEnv;
+        }
 
-      logger.info("terminal-login-shell-env-merged", {
-        keys: Object.keys(shellEnv).length,
-        parentPathLength: this.env.PATH?.length ?? 0,
-        hydratedPathLength: shellEnv.PATH?.length ?? 0,
-        hadNvmDir: Boolean(shellEnv.NVM_DIR),
-        hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
-      });
-      mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
-      const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
-      for (const key of Object.keys(targetEnv)) delete targetEnv[key];
-      Object.assign(targetEnv, bundledEnv);
-      if (this.startupCodexHome) {
-        targetEnv.CODEX_HOME = this.startupCodexHome;
-      }
-      return targetEnv;
-    });
+        logger.info("terminal-login-shell-env-merged", {
+          keys: Object.keys(shellEnv).length,
+          parentPathLength: this.env.PATH?.length ?? 0,
+          hydratedPathLength: shellEnv.PATH?.length ?? 0,
+          hadNvmDir: Boolean(shellEnv.NVM_DIR),
+          hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+        });
+        mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+        const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
+        for (const key of Object.keys(targetEnv)) delete targetEnv[key];
+        Object.assign(targetEnv, bundledEnv);
+        if (this.startupCodexHome) {
+          targetEnv.CODEX_HOME = this.startupCodexHome;
+        }
+        return targetEnv;
+      }),
+      targetEnv,
+    );
 
     return this.applyGitRuntime(await this.terminalSpawnEnvHydrationPromise);
   }

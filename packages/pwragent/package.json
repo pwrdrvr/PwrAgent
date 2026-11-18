@@ -1,6 +1,6 @@
 {
   "name": "pwragent",
-  "version": "1.4.10",
+  "version": "1.4.12",
   "private": false,
   "type": "module",
   "description": "PwrAgent owner services under Node, with a foreground Outpost daemon and local CLI.",
@@ -37,6 +37,7 @@
     "scripts/install.mjs",
     "scripts/stage-runtime.mjs",
     "scripts/build-mcp-ipc-relay.mjs",
+    "scripts/native-helper-cache.mjs",
     "resources/custom-git-runtime.json",
     "resources/git-notices"
   ],

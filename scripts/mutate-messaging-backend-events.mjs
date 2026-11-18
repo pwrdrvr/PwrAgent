@@ -35,7 +35,7 @@ function run(name, selectedTests, shouldPass) {
 }
 const mutations = [
   ["facade-routing", facade, "return this.backendEventRouter.handleBackendEvent(event);", "return Promise.resolve();"],
-  ["host-turn-state", facade, "setActiveTurn: (...args) => this.setActiveTurn(...args),", "setActiveTurn: () => undefined,"],
+  ["host-turn-state", facade, "observeBackendTurn: (...args) => this.turns.observeBackend(...args),", "observeBackendTurn: () => ({ changed: false }),"],
   ["queue-outcome-await", router, "await this.context.host().applySharedQueueNoticeEvent(key, {", "void this.context.host().applySharedQueueNoticeEvent(key, {"],
   ["queue-origin-effect", router, "await this.context.host().reconcileQueuedAgentMessagingOrigin({", "false && await this.context.host().reconcileQueuedAgentMessagingOrigin({"],
   ["terminal-flush-await", router, "await this.context.host().flushToolUpdatesForBinding(binding, {", "void this.context.host().flushToolUpdatesForBinding(binding, {"],

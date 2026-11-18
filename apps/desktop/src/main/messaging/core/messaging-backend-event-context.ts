@@ -1,3 +1,4 @@
+import type { MessagingTurns } from "./messaging-turn-state";
 import { type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { readProviderResponseBlockNotification, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
 import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationRunOutputDecision, AppServerThreadMessageOrigin, FederationTarget, MessagingBindingTargetKind, MessagingToolUpdateMode, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
@@ -7,7 +8,7 @@ import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliv
 import { type MessagingArtifact } from "./messaging-artifact-renderer.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
-import { type MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import { type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantStreamBuffer, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 
 export interface MessagingBackendEventHost {
@@ -39,6 +40,7 @@ export interface MessagingBackendEventHost {
   readonly handleAutomationTurnStarted: (params: { messageOrigin?: AppServerThreadMessageOrigin; automationName?: string; automationRunId?: string; backend: AppServerBackendKind; bindings: MessagingBindingRecord[]; threadId: ThreadIdentifier; turnId: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly handleAutomationTurnTerminal: (params: { automationRunId?: string; backend: AppServerBackendKind; bindings: MessagingBindingRecord[]; event: AgentEvent; finalText?: string; threadId: ThreadIdentifier; turnId: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly isAutomationTurnEvent: (event: AgentEvent, binding: MessagingBindingRecord, fallbackTurnId?: string) => boolean;
+  readonly observeBackendTurn: MessagingTurns["observeBackend"];
   readonly setActiveTurn: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary) => void;
   readonly logBindingTurnStateChange: (binding: MessagingBindingRecord, previousTurn: MessagingActiveTurnSummary | undefined, nextTurn: MessagingActiveTurnSummary | undefined, reason: string) => void;
   readonly deliverToolActivityForBackendEvent: (event: AgentEvent, binding: MessagingBindingRecord, activeTurnId?: string) => Promise<void>;
@@ -73,7 +75,6 @@ export interface MessagingBackendEventHost {
   readonly renderAutomaticBindingStatus: (binding: MessagingBindingRecord, event?: MessagingInboundEvent, navigation?: MessagingNavigationContext) => Promise<MessagingBindingRecord>;
   readonly threadContextWithNameFromEvent: (binding: MessagingBindingRecord, event: AgentEvent) => Promise<MessagingThreadContext>;
   readonly signalTurnActivity: (binding: MessagingBindingRecord, activeTurn: MessagingActiveTurnSummary, options?: { force?: boolean; reason?: string; refreshMs?: number; }) => Promise<void>;
-  readonly scheduleNextQueuedTurn: (binding: MessagingBindingRecord) => void;
   readonly activeAgentMessagingOriginsByTurnKey: Map<string, ActiveAgentMessagingOrigin>;
   readonly completePrivateReplyContinuation: (bindingId: string) => Promise<void>;
   readonly forgetAutomationTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string) => void;

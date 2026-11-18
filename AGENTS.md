@@ -13,6 +13,7 @@ Read the task-specific references below before doing the work they cover. They c
 - Default `rg` searches exclude those records through [`.rgignore`](.rgignore). Use `rg --no-ignore` or `rg -u` only when you need them.
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches; search it only for captured E2E protocol work.
 - Put a `CLAUDE.md` symlink next to every `AGENTS.md`, pointing to its sibling `AGENTS.md`, so Codex and Claude receive the same guidance.
+- Keep this file under 24 KiB (`pnpm lint:agent-instructions`, also checked by CI's classifier). Codex silently drops AGENTS.md text past 32 KiB. Put details in a linked document and leave a line here saying when to read it.
 
 ## Deferred Work and Reviews
 
@@ -79,6 +80,7 @@ Read the task-specific references below before doing the work they cover. They c
 - Use existing theme tokens before local CSS. Prefer thread-first information hierarchy. Do not put scaffold narration or placeholder implementation text in the UI.
 - Before changing window chrome, title strips, brand marks, breadcrumbs, eyebrows, or path/application rows, read [docs/desktop-chrome-tokens.md](docs/desktop-chrome-tokens.md). Reuse canonical token references and `BrandLockup`; keep brand presentation identical across windows and change contract tests with intentional token changes.
 - Before changing lenses, Attention membership/order, unread state, drafts, pins, drag/grouping, reply acceptance, queued sends, or owner/federation behavior affecting them, read [docs/thread-navigation-rules.md](docs/thread-navigation-rules.md).
+- Before changing how an Agent's instructions reach a backend, or adding a backend, read [docs/agent-instructions.md](docs/agent-instructions.md). Each backend delivers them once; an Agent in a repository never has an instruction file written there.
 - Threads are first-class and can exist without a directory or link to multiple Git directories. Keep unsent drafts local to the viewer's machine; never federate draft text. Report replies only after backend acceptance, including queued sends; failed sends keep the thread in Attention.
 
 ## Pull Requests, Releases, and Licenses

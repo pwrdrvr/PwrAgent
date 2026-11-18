@@ -751,7 +751,7 @@ describe("ThreadTurnQueue model", () => {
         // The provider owns this turn. Steer acknowledgements confirm
         // delivery into it; only its terminal event says it has ended.
         for (let index = 0; index < deliveries; index += 1) {
-          await queue.submitGroupedSteer({
+          await queue.submitSteer({
             ...THREAD, id: `steer-${index}`, origin: "manual",
             input: [{ type: "text", text: `guidance-${index}` }],
           });

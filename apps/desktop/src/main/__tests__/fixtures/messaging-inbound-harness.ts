@@ -10,7 +10,7 @@ import { openInMemoryStateDb } from "../sqlite-test-utils";
 export async function messagingInboundHarness(options: {
   channel?: "telegram" | "discord";
   backend?: "codex" | "claude";
-  route?: "binding" | "default-agent";
+  route?: "binding" | "default-agent" | "unbound";
   shared?: boolean;
   reportsMention?: boolean;
   responseMode?: "every_message" | "mention_only";
@@ -18,6 +18,7 @@ export async function messagingInboundHarness(options: {
   allowResume?: boolean;
   ownsQueue?: boolean;
   clock?: () => number;
+  maxActions?: number;
 } = {}) {
   const db = openInMemoryStateDb();
   const store = new SqliteMessagingStore(db);
@@ -65,6 +66,7 @@ export async function messagingInboundHarness(options: {
       };
     },
   } satisfies MessagingBackendBridge;
+  const actionCapabilities = PERMISSIVE_CAPABILITY_PROFILE.actions;
   const controllerOptions: MessagingControllerOptions = {
     store, backend, channel: channel.channel, authorizedActorIds: ["fixture-actor"], now: options.clock ?? (() => ++now), inputDebounceMs: 0,
     responseModeForConversation: () => options.responseMode ?? "every_message",
@@ -76,7 +78,8 @@ export async function messagingInboundHarness(options: {
     adapter: {
       capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, conversationInput: {
         ...PERMISSIVE_CAPABILITY_PROFILE.conversationInput, reportsBotMention: options.reportsMention ?? false,
-      } },
+      }, ...(options.maxActions === undefined || !actionCapabilities
+        ? {} : { actions: { ...actionCapabilities, maxActions: options.maxActions } }) },
       deliver: async intent => {
         trace.push(`deliver:${intent.kind}`);
         if (hooks.postStartFailure && intent.kind === "status") throw new Error("Fixture post-acceptance failure");
@@ -92,7 +95,7 @@ export async function messagingInboundHarness(options: {
     await store.upsertDefaultAgentAssignment({ id: "fixture-default", scope: { kind: "conversation", channel },
       target: { kind: "agent", backend: "codex", threadId: "fixture-thread" }, createdAt: now, updatedAt: now,
     });
-  } else {
+  } else if (options.route !== "unbound") {
     await store.upsertBinding({ id: "fixture-binding", backend: options.backend ?? "codex", threadId: "fixture-thread", channel,
       authorizedActorIds: ["fixture-actor"], createdAt: now, updatedAt: now,
     });
@@ -101,7 +104,8 @@ export async function messagingInboundHarness(options: {
     id: `fixture-event-${++sequence}`, kind: "text", actor: { platformUserId: "fixture-actor" }, channel, text, receivedAt: now, botMention: mention,
   });
   return {
-    controller, controllerOptions, backend, store, channel, trace, deliveries, starts, admissions, hooks, event,
+    db, controller, controllerOptions, backend, store, channel, trace, deliveries, starts, admissions, hooks, event,
+    setThreadStatus: (next: "idle" | "active") => { status = next; },
     finish: async (terminal: "completed" | "failed" | "cancelled", turnId = `fixture-turn-${starts.length}`) => {
       status = "idle";
       await controller.handleBackendEvent({ backend: options.backend ?? "codex", notification: terminal === "failed" ? {

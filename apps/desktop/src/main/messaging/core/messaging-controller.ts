@@ -1,7 +1,15 @@
+import { MessagingNewThreadWorkflow } from "./messaging-new-thread-workflow";
+import type { MessagingNewThreadHost } from "./messaging-new-thread-context";
+import { MessagingReviewWorkflow } from "./messaging-review-workflow";
+import type { MessagingReviewHost } from "./messaging-review-context";
+import { MessagingQueueRecoveries, type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
+import { MessagingTurns } from "./messaging-turn-state";
+import { MessagingAccessControl } from "./messaging-access-control";
+import type { MessagingAccessHost } from "./messaging-access-context";
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
-import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
+import { readThreadExecutionModeValue, readAcpRuntimeOptionSource, PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, branchPageIndexFromValue, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, readMessagingToolUpdateModeValue, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
 import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
@@ -12,23 +20,22 @@ import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
 import { threadIdForBackendEvent, asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, isTerminalTurnLifecycle, assistantStreamKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type AssistantStreamDelta, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantStreamBuffer, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { containedMessagingBindingMatches } from "@pwragent/shared";
 import { automatedWorkStartedLabel, incomingWorkText } from "./messaging-thread-notifications";
-import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
-import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
-import { buildMessagingModelMenuActions } from "./messaging-model-menu";
+import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
+
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
-import { readMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
+import { readMessagingLaunchpadContext, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildReviewBranchOptions, buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, readProviderResponseBlockNotification, describeProviderResponseBlock, permissionForDynamicTool, permissionsForThreadMutation, toolArgsTargetRemoteInstance, resolveNewThreadBackend, selectableNewThreadBackends, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
-import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendSummary, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingPermissionId, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationDirectorySummary, NavigationSelectedDetailRequest, NavigationThreadSummary, RbacResolution, ThreadExecutionMode, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, readProviderResponseBlockNotification, describeProviderResponseBlock, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
+import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingPrivateConversationResolveResult, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingReviewIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
-import { applyActionCapabilityLimits, capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingPrivateConversationResolveResult, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
+import { capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
 import { buildMonitorStatusIntent, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT, MESSAGING_MONITOR_INTERVAL_MS, nextMonitorIntervalMs, nextMonitorThreadLimit, normalizeMonitorIntervalMs, normalizeMonitorThreadLimit, selectMonitorThreads, type MessagingMonitorNavigation, type MessagingMonitorRows } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { resolveMessagingOutboundFile, resolveMessagingOutboundBytes, validateMessagingFileMetadata, type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
@@ -38,17 +45,17 @@ import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply, MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { MessagingFederatedThreadTargetError } from "./messaging-adapter.js";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
-import { buildActivityIntent, buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent, buildReviewStartConfirmationIntent, messagingReviewStartTarget, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
+import { buildActivityIntent, buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
 import { buildArtifactDeliveryIntent, buildArtifactInlineFallbackIntent, type MessagingArtifact, type MessagingArtifactMessageIntent } from "./messaging-artifact-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
-import { buildBoundedResumeIntent, isNewAgentThreadLaunchAction, isNewThreadLaunchAction, parseResumeCommandArgs, resumeBrowserPageSize, selectProjectFromValue } from "./messaging-resume-browser.js";
-import { buildNewThreadEnvironmentPickerIntent, buildStatusAcpRuntimeModePickerIntent, buildBranchPickerPage, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, handoffRequestFromValue, messagingStreamingResponsesEnabled, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, shouldShowStreamingControl, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
-import { acpBackendDeclaresExecutionMode, acpBackendUsesExecutionModePermissions, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
+import { buildBoundedResumeIntent, isNewThreadLaunchAction, parseResumeCommandArgs, resumeBrowserPageSize } from "./messaging-resume-browser.js";
+import { buildStatusAcpRuntimeModePickerIntent, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, handoffRequestFromValue, messagingStreamingResponsesEnabled, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
+import { acpBackendDeclaresExecutionMode, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
 import { buildSkillRemovedIntent, buildSkillSelectedIntent, buildSkillsBrowserIntent, buildSkillsSearchPromptIntent, flattenSkillEntries, isSkillsWorkflowIntent, skillSelectionFromValue } from "./messaging-skills-browser.js";
-import { resolveMessagingThreadState, isMessagingThreadContext, type MessagingNavigationContext, type MessagingThreadContext, type MessagingResolvedThreadState } from "./messaging-thread-state.js";
+import { resolveMessagingThreadState, type MessagingNavigationContext, type MessagingThreadContext, type MessagingResolvedThreadState } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
 import type { MessagingToolActivity } from "./messaging-tool-activity.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
@@ -58,18 +65,17 @@ import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import { type MessagingAttachmentPolicy } from "./messaging-attachment-processor.js";
 import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
 import { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
-import { MessagingTurnAdmission, threadKeyForBinding, type MessagingQueuedTurnEntry } from "./messaging-turn-admission.js";
+import { MessagingTurnAdmission, threadKeyForBinding } from "./messaging-turn-admission.js";
 import { renderAutomationDecisionForMessaging, renderAutomationOutputForMessaging } from "../../automations/automation-output-decision.js";
 import { registerAutomationSourceMessageDeliveryHandler, registerAutomationTargetMessageDeliveryHandler } from "../../automations/automation-action-executor.js";
 import { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingBindingHost } from "./messaging-binding-context";
 import { threadContextForAdmissionState, normalizeConversationTitle, isDefaultAgentRouteBinding, handoffContextForBinding, type MessagingToolUpdateDefaultModeResolver } from "./messaging-binding-helpers";
-import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, originalAttachmentActorKey, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, turnSettingsForThread, isPromiseLike, DEFAULT_MESSAGING_AGENT_NAME, truncateText, type MessagingFullAccessControlsResolver, type FullAccessRiskPresentationMode } from "./messaging-inbound-helpers";
+import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, originalAttachmentActorKey, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, truncateText, type MessagingFullAccessControlsResolver } from "./messaging-inbound-helpers";
 import { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingInboundHost } from "./messaging-inbound-context";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
-const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 
 type MessagingTurnProseState = {
@@ -145,24 +151,6 @@ function executionModeForBinding(
   return resolveExecutionModeForBinding(binding, navigation).mode;
 }
 
-function turnSettingsForBinding(
-  binding: MessagingBindingRecord,
-  navigation?: MessagingNavigationContext,
-): {
-  executionMode?: ThreadExecutionMode;
-  fastMode?: boolean;
-  model?: string;
-  reasoningEffort?: string;
-  serviceTier?: string;
-} {
-  const thread = findThreadForBinding(navigation, binding);
-  return turnSettingsForThread(
-    binding,
-    thread,
-    resolveExecutionModeForThread(binding, thread),
-  );
-}
-
 function federationTargetForThread(
   thread: NavigationThreadSummary,
 ): FederationTarget | undefined {
@@ -213,24 +201,6 @@ function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok
     },
   };
 }
-
-function normalizeMessagingFullAccessControls(
-  resolved: MessagingFullAccessControls | undefined,
-): MessagingFullAccessControls {
-  return {
-    allowEscalation: resolved?.allowEscalation ?? true,
-    allowThreadResume: resolved?.allowThreadResume ?? true,
-    warningPolicy: resolved?.warningPolicy ?? "dismissable",
-    authorizedUsers: resolved?.authorizedUsers ?? {},
-    dismissWarning: resolved?.dismissWarning,
-    canDismissWarning: resolved?.canDismissWarning,
-  };
-}
-
-type FullAccessRiskPresentation = {
-  binding?: MessagingBindingRecord;
-  surface?: MessagingSurfaceRef;
-};
 
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
@@ -342,7 +312,7 @@ export type MessagingControllerOptions = {
 
 export class MessagingController {
   private readonly backendEventRouter: MessagingBackendEventRouter;
-  private readonly authorizedActorIds: Set<string>;
+  private readonly accessControl: MessagingAccessControl;
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   /** Turns whose final assistant item already resolved its images, per binding. */
@@ -396,9 +366,8 @@ export class MessagingController {
   private readonly pendingIntentTtlMs: number;
   private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly queuedTurnActions = new Set<Promise<void>>();
-  private readonly queuedTurnDrainRequests = new Set<string>();
   private readonly interactionMapper: MessagingInteractionMapper;
-  private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
+  private readonly turns: MessagingTurns;
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly preparingTurnActivity = new Map<string, {
@@ -431,11 +400,7 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly queuedTurnDrainTimers = new Map<string, {
-    timer: ReturnType<typeof setTimeout>;
-    settle: () => void;
-  }>();
-  private readonly queuedTurnDrains = new Map<string, Promise<void>>();
+  private readonly queueRecoveries: MessagingQueueRecoveries;
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
   private readonly monitorTimersByBindingId = new Map<
@@ -487,10 +452,17 @@ export class MessagingController {
   private readonly callbackHandlers: MessagingCallbackHandlers;
   private callbackHostPorts?: MessagingCallbackHost;
 
+  private readonly newThreadWorkflow: MessagingNewThreadWorkflow;
+  private newThreadHostPorts?: MessagingNewThreadHost;
+  private readonly reviewWorkflow: MessagingReviewWorkflow;
+  private reviewHostPorts?: MessagingReviewHost;
+
   constructor(private readonly options: MessagingControllerOptions) {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
     const readLogger = () => this.logger;
+    this.turns = new MessagingTurns();
+    this.queueRecoveries = new MessagingQueueRecoveries({ get now() { return readNow(); } });
     this.backendEventRouter = new MessagingBackendEventRouter({
       get store() { return readStore(); },
       get now() { return readNow(); },
@@ -499,6 +471,26 @@ export class MessagingController {
     });
     const readBackend = () => this.options.backend;
     const readCapabilityProfile = () => this.capabilityProfile;
+    const readPendingIntentTtl = () => this.pendingIntentTtlMs;
+    const readStreamingDefault = () => this.streamingResponsesDefault;
+    this.newThreadWorkflow = new MessagingNewThreadWorkflow({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get pendingIntentTtlMs() { return readPendingIntentTtl(); },
+      get streamingResponsesDefault() { return readStreamingDefault(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.newThreadHost(),
+    });
+    this.reviewWorkflow = new MessagingReviewWorkflow({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.reviewHost(),
+    });
     this.commandHandlers = new MessagingCommandHandlers({
       get store() { return readStore(); },
       get backend() { return readBackend(); },
@@ -538,7 +530,16 @@ export class MessagingController {
       get config() { return readInboundConfig(); },
       host: () => this.inboundHost(),
     });
-    this.authorizedActorIds = new Set(options.authorizedActorIds);
+    const readAccessConfig = () => this.options;
+    this.accessControl = new MessagingAccessControl({
+      get store() { return readStore(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      get config() { return readAccessConfig(); },
+      host: () => this.accessHost(),
+    }, options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
     this.now = options.now ?? Date.now;
     this.pendingIntentTtlMs =
@@ -550,7 +551,6 @@ export class MessagingController {
     this.showStreamingOptionConfig = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
-      now: this.now,
       onBundleReady: async (bundle) => {
         await this.inboundTurns.handleAdmittedTurnBundle(bundle);
       },
@@ -643,12 +643,24 @@ export class MessagingController {
     }
   }
 
+  private accessHost(): MessagingAccessHost {
+    const readController = () => this;
+    return {
+      desktopActivityLog: (...args) => this.desktopActivityLog(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
+    };
+  }
+
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
-    if (!this.authorizeInboundAdmission(event)) {
+    if (!this.accessControl.authorizeInboundAdmission(event)) {
       // In enforcing mode this fires for actors with no permission-granting
       // role (default-deny); record it so operators can see who was inert.
       if (this.options.rbacPolicy?.isEnforcing()) {
-        this.recordCapabilityDenied(event, "(admission)", [], "admission");
+        this.accessControl.recordCapabilityDenied(event, "(admission)", [], "admission");
       }
       await this.deliver(
         buildErrorIntent({
@@ -899,14 +911,14 @@ export class MessagingController {
       get interactionMapper() { return readController().interactionMapper; },
       get callbackHandlers() { return readController().callbackHandlers; },
       presentSkillsBrowser: (...args) => this.presentSkillsBrowser(...args),
-      handleReviewTextAnswer: (...args) => this.handleReviewTextAnswer(...args),
+      handleReviewTextAnswer: (...args) => this.reviewWorkflow.handleReviewTextAnswer(...args),
       handleQuestionnaireTextAnswer: (...args) => this.handleQuestionnaireTextAnswer(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
       cycleToolUpdateMode: (...args) => this.cycleToolUpdateMode(...args),
       cycleStreamingResponseMode: (...args) => this.cycleStreamingResponseMode(...args),
-      requirePermission: (...args) => this.requirePermission(...args),
-      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       get bindingService() { return readController().bindingService; },
       defaultAgentRouteBinding: (...args) => this.defaultAgentRouteBinding(...args),
       get privateReplyClaims() { return readController().privateReplyClaims; },
@@ -917,8 +929,8 @@ export class MessagingController {
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       buildAgentMessagingOrigin: (...args) => this.buildAgentMessagingOrigin(...args),
       get startingAgentMessagingOriginsByThreadKey() { return readController().startingAgentMessagingOriginsByThreadKey; },
-      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
-      deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
+      deliverFullAccessPolicyError: (...args) => this.accessControl.deliverFullAccessPolicyError(...args),
       beginTurnPreparationActivity: (...args) => this.beginTurnPreparationActivity(...args),
       rememberQueuedAgentMessagingOrigin: (...args) => this.rememberQueuedAgentMessagingOrigin(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
@@ -926,27 +938,55 @@ export class MessagingController {
       get pdfAttachmentStore() { return readController().pdfAttachmentStore; },
       rememberAgentMessagingOrigin: (...args) => this.rememberAgentMessagingOrigin(...args),
       setActiveTurn: (...args) => this.setActiveTurn(...args),
+      acceptStartedTurn: (...args) => this.turns.accept(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       reconcileActiveTurnFromThreadStatus: (...args) => this.reconcileActiveTurnFromThreadStatus(...args),
       get backendEventRouter() { return readController().backendEventRouter; },
       observeManagedTopicFromInbound: (...args) => this.observeManagedTopicFromInbound(...args),
-      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
-      loadNewThreadBackendChoices: (...args) => this.loadNewThreadBackendChoices(...args),
-      deliverSelectedNewThreadBackendUnavailable: (...args) => this.deliverSelectedNewThreadBackendUnavailable(...args),
-      resolveNewThreadBackendForSession: (...args) => this.resolveNewThreadBackendForSession(...args),
-      ensureNewThreadProjectLaunchpad: (...args) => this.ensureNewThreadProjectLaunchpad(...args),
-      resolveNewThreadToolUpdateMode: (...args) => this.resolveNewThreadToolUpdateMode(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
+      loadNewThreadBackendChoices: (...args) => this.newThreadWorkflow.loadNewThreadBackendChoices(...args),
+      deliverSelectedNewThreadBackendUnavailable: (...args) => this.newThreadWorkflow.deliverSelectedNewThreadBackendUnavailable(...args),
+      resolveNewThreadBackendForSession: (...args) => this.newThreadWorkflow.resolveNewThreadBackendForSession(...args),
+      ensureNewThreadProjectLaunchpad: (...args) => this.newThreadWorkflow.ensureNewThreadProjectLaunchpad(...args),
+      resolveNewThreadToolUpdateMode: (...args) => this.newThreadWorkflow.resolveNewThreadToolUpdateMode(...args),
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
-      resolveFullAccessRiskForSession: (...args) => this.resolveFullAccessRiskForSession(...args),
-      presentFullAccessRiskWarning: (...args) => this.presentFullAccessRiskWarning(...args),
+      resolveFullAccessRiskForSession: (...args) => this.accessControl.resolveFullAccessRiskForSession(...args),
+      presentFullAccessRiskWarning: (...args) => this.accessControl.presentFullAccessRiskWarning(...args),
+    };
+  }
+
+  private newThreadHost(): MessagingNewThreadHost {
+    return this.newThreadHostPorts ??= {
+      resolveToolUpdateDefaultMode: (...args) => this.bindingService.resolveToolUpdateDefaultMode(...args),
+      resolveShowStreamingOption: (...args) => this.bindingService.resolveShowStreamingOption(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
+      ensureFullAccessEscalationAllowed: (...args) => this.accessControl.ensureFullAccessEscalationAllowed(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      deliverInvalidBrowseSelection: (...args) => this.deliverInvalidBrowseSelection(...args),
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      getBackendSummary: (...args) => this.getBackendSummary(...args),
+      ensureAcpRuntimeModeAllowed: (...args) => this.ensureAcpRuntimeModeAllowed(...args),
+    };
+  }
+
+  private reviewHost(): MessagingReviewHost {
+    return this.reviewHostPorts ??= {
+      readBoundWorkspaceContext: (...args) => this.readBoundWorkspaceContext(...args),
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      getBackendSummary: (...args) => this.getBackendSummary(...args),
+      readBoundThreadConfiguration: (...args) => this.readBoundThreadConfiguration(...args),
     };
   }
 
   private commandHost(): MessagingCommandHost {
     return this.commandHostPorts ??= {
-      requirePermission: (...args) => this.requirePermission(...args),
-      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       handleStatusCallback: (...args) => this.callbackHandlers.handleStatusCallback(...args),
       presentStatus: (...args) => this.presentStatus(...args),
       detachBinding: (...args) => this.bindingService.detachBinding(...args),
@@ -957,10 +997,10 @@ export class MessagingController {
       newIntentId: (...args) => this.newIntentId(...args),
       shouldHandleAmbientSharedMessage: (...args) => this.inboundTurns.shouldHandleAmbientSharedMessage(...args),
       admitTurnInput: (...args) => this.inboundTurns.admitTurnInput(...args),
-      reviewSupportedForBinding: (...args) => this.reviewSupportedForBinding(...args),
-      deliverReviewUnsupported: (...args) => this.deliverReviewUnsupported(...args),
-      submitMessagingReview: (...args) => this.submitMessagingReview(...args),
-      presentReviewPicker: (...args) => this.presentReviewPicker(...args),
+      reviewSupportedForBinding: (...args) => this.reviewWorkflow.reviewSupportedForBinding(...args),
+      deliverReviewUnsupported: (...args) => this.reviewWorkflow.deliverReviewUnsupported(...args),
+      submitMessagingReview: (...args) => this.reviewWorkflow.submitMessagingReview(...args),
+      presentReviewPicker: (...args) => this.reviewWorkflow.presentReviewPicker(...args),
       deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
       presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
@@ -994,9 +1034,9 @@ export class MessagingController {
       responseModeForConversation: (...args) => this.inboundTurns.responseModeForConversation(...args),
       reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
       getBackendSummary: (...args) => this.getBackendSummary(...args),
-      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
-      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       desktopActivityLog: (...args) => this.desktopActivityLog(...args),
     };
   }
@@ -1007,13 +1047,13 @@ export class MessagingController {
       get commandHandlers() { return readController().commandHandlers; },
       presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
-      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
-      requirePermission: (...args) => this.requirePermission(...args),
-      canResumeFullAccessThreads: (...args) => this.canResumeFullAccessThreads(...args),
-      deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      canResumeFullAccessThreads: (...args) => this.accessControl.canResumeFullAccessThreads(...args),
+      deliverFullAccessPolicyError: (...args) => this.accessControl.deliverFullAccessPolicyError(...args),
       bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
@@ -1021,44 +1061,45 @@ export class MessagingController {
       retireApprovalIntent: (...args) => this.retireApprovalIntent(...args),
       resumeBindingForPendingIntent: (...args) => this.resumeBindingForPendingIntent(...args),
       handleQuestionnaireAction: (...args) => this.handleQuestionnaireAction(...args),
-      handleReviewAction: (...args) => this.handleReviewAction(...args),
+      handleReviewAction: (...args) => this.reviewWorkflow.handleReviewAction(...args),
       get turnAdmission() { return readController().turnAdmission; },
+      isDisposed: () => this.disposed,
+      get queueRecoveries() { return readController().queueRecoveries; },
       get sharedQueueNotices() { return readController().sharedQueueNotices; },
-      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       startPreparedInput: (...args) => this.inboundTurns.startPreparedInput(...args),
       retireQueuedTurnNotice: (...args) => this.retireQueuedTurnNotice(...args),
       trackQueuedTurnAction: (...args) => this.trackQueuedTurnAction(...args),
-      steerQueuedTurn: (...args) => this.steerQueuedTurn(...args),
       resolveSteerableActiveTurn: (...args) => this.resolveSteerableActiveTurn(...args),
       deliverQueuedTurnNotice: (...args) => this.deliverQueuedTurnNotice(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
       renderResumeBrowser: (...args) => this.renderResumeBrowser(...args),
-      resolveNewThreadBackendForSession: (...args) => this.resolveNewThreadBackendForSession(...args),
+      resolveNewThreadBackendForSession: (...args) => this.newThreadWorkflow.resolveNewThreadBackendForSession(...args),
       retireBrowseSession: (...args) => this.retireBrowseSession(...args),
       deliverInvalidBrowseSelection: (...args) => this.deliverInvalidBrowseSelection(...args),
-      startNewThreadFromProject: (...args) => this.startNewThreadFromProject(...args),
-      updateNewThreadStickySettings: (...args) => this.updateNewThreadStickySettings(...args),
-      presentNewThreadPromptGate: (...args) => this.presentNewThreadPromptGate(...args),
-      presentNewThreadBranchPicker: (...args) => this.presentNewThreadBranchPicker(...args),
+      startNewThreadFromProject: (...args) => this.newThreadWorkflow.startNewThreadFromProject(...args),
+      updateNewThreadStickySettings: (...args) => this.newThreadWorkflow.updateNewThreadStickySettings(...args),
+      presentNewThreadPromptGate: (...args) => this.newThreadWorkflow.presentNewThreadPromptGate(...args),
+      presentNewThreadBranchPicker: (...args) => this.newThreadWorkflow.presentNewThreadBranchPicker(...args),
       getBackendSummary: (...args) => this.getBackendSummary(...args),
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
-      presentNewThreadAcpRuntimeModePicker: (...args) => this.presentNewThreadAcpRuntimeModePicker(...args),
-      presentNewThreadPermissionsPicker: (...args) => this.presentNewThreadPermissionsPicker(...args),
-      setNewThreadPermissions: (...args) => this.setNewThreadPermissions(...args),
-      presentNewThreadEnvironmentPicker: (...args) => this.presentNewThreadEnvironmentPicker(...args),
-      setNewThreadEnvironment: (...args) => this.setNewThreadEnvironment(...args),
-      setNewThreadAcpRuntimeMode: (...args) => this.setNewThreadAcpRuntimeMode(...args),
-      ensureNewThreadProjectLaunchpad: (...args) => this.ensureNewThreadProjectLaunchpad(...args),
-      resolveNewThreadToolUpdateMode: (...args) => this.resolveNewThreadToolUpdateMode(...args),
-      presentNewThreadWorkingUpdatesPicker: (...args) => this.presentNewThreadWorkingUpdatesPicker(...args),
-      presentNewThreadBackendPicker: (...args) => this.presentNewThreadBackendPicker(...args),
-      presentNewThreadModelPicker: (...args) => this.presentNewThreadModelPicker(...args),
-      presentNewThreadReasoningPicker: (...args) => this.presentNewThreadReasoningPicker(...args),
+      presentNewThreadAcpRuntimeModePicker: (...args) => this.newThreadWorkflow.presentNewThreadAcpRuntimeModePicker(...args),
+      presentNewThreadPermissionsPicker: (...args) => this.newThreadWorkflow.presentNewThreadPermissionsPicker(...args),
+      setNewThreadPermissions: (...args) => this.newThreadWorkflow.setNewThreadPermissions(...args),
+      presentNewThreadEnvironmentPicker: (...args) => this.newThreadWorkflow.presentNewThreadEnvironmentPicker(...args),
+      setNewThreadEnvironment: (...args) => this.newThreadWorkflow.setNewThreadEnvironment(...args),
+      setNewThreadAcpRuntimeMode: (...args) => this.newThreadWorkflow.setNewThreadAcpRuntimeMode(...args),
+      ensureNewThreadProjectLaunchpad: (...args) => this.newThreadWorkflow.ensureNewThreadProjectLaunchpad(...args),
+      resolveNewThreadToolUpdateMode: (...args) => this.newThreadWorkflow.resolveNewThreadToolUpdateMode(...args),
+      presentNewThreadWorkingUpdatesPicker: (...args) => this.newThreadWorkflow.presentNewThreadWorkingUpdatesPicker(...args),
+      presentNewThreadBackendPicker: (...args) => this.newThreadWorkflow.presentNewThreadBackendPicker(...args),
+      presentNewThreadModelPicker: (...args) => this.newThreadWorkflow.presentNewThreadModelPicker(...args),
+      presentNewThreadReasoningPicker: (...args) => this.newThreadWorkflow.presentNewThreadReasoningPicker(...args),
       deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args),
       loadDefaultAgentBackendSummaries: (...args) => this.inboundTurns.loadDefaultAgentBackendSummaries(...args),
       notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
-      ensureFullAccessEscalationAllowed: (...args) => this.ensureFullAccessEscalationAllowed(...args),
+      ensureFullAccessEscalationAllowed: (...args) => this.accessControl.ensureFullAccessEscalationAllowed(...args),
       updateBindingPreferences: (...args) => this.bindingService.updateBindingPreferences(...args),
       stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
       enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
@@ -1101,21 +1142,20 @@ export class MessagingController {
       deliverInvalidStatusSelection: (...args) => this.deliverInvalidStatusSelection(...args),
       deliverStaleFullAccessWarning: (...args) => this.deliverStaleFullAccessWarning(...args),
       get pendingFullAccessNewThreadPrompts() { return readController().inboundTurns.pendingFullAccessNewThreadPrompts; },
-      withNewThreadPromptCaptureExpiry: (...args) => this.withNewThreadPromptCaptureExpiry(...args),
-      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
-      resolveFullAccessWarning: (...args) => this.resolveFullAccessWarning(...args),
+      withNewThreadPromptCaptureExpiry: (...args) => this.newThreadWorkflow.withNewThreadPromptCaptureExpiry(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
+      resolveFullAccessWarning: (...args) => this.accessControl.resolveFullAccessWarning(...args),
       deliverMissingFullAccessPrompt: (...args) => this.deliverMissingFullAccessPrompt(...args),
       createNewThreadFromPromptBundle: (...args) => this.inboundTurns.createNewThreadFromPromptBundle(...args),
       deliverNewThreadPromptFailure: (...args) => this.inboundTurns.deliverNewThreadPromptFailure(...args),
-      applyNewThreadAcpRuntimeMode: (...args) => this.applyNewThreadAcpRuntimeMode(...args),
+      applyNewThreadAcpRuntimeMode: (...args) => this.newThreadWorkflow.applyNewThreadAcpRuntimeMode(...args),
       applyBindingAcpRuntimeMode: (...args) => this.applyBindingAcpRuntimeMode(...args),
-      recordFullAccessPolicyViolation: (...args) => this.recordFullAccessPolicyViolation(...args),
+      recordFullAccessPolicyViolation: (...args) => this.accessControl.recordFullAccessPolicyViolation(...args),
       queueAuditKey: (...args) => this.queueAuditKey(...args),
       get pendingQueueAuditMessages() { return readController().pendingQueueAuditMessages; },
       agentMessagingOriginForPendingIntent: (...args) => this.agentMessagingOriginForPendingIntent(...args),
       readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
       reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
-      startNextQueuedTurn: (...args) => this.startNextQueuedTurn(...args),
       get privateReplyClaims() { return readController().privateReplyClaims; },
       deliverPrivateReplyButtonState: (...args) => this.deliverPrivateReplyButtonState(...args),
       completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
@@ -1155,6 +1195,7 @@ export class MessagingController {
       handleAutomationTurnStarted: (...args) => this.handleAutomationTurnStarted(...args),
       handleAutomationTurnTerminal: (...args) => this.handleAutomationTurnTerminal(...args),
       isAutomationTurnEvent: (...args) => this.isAutomationTurnEvent(...args),
+      observeBackendTurn: (...args) => this.turns.observeBackend(...args),
       setActiveTurn: (...args) => this.setActiveTurn(...args),
       logBindingTurnStateChange: (...args) => this.logBindingTurnStateChange(...args),
       deliverToolActivityForBackendEvent: (...args) => this.deliverToolActivityForBackendEvent(...args),
@@ -1189,7 +1230,6 @@ export class MessagingController {
       renderAutomaticBindingStatus: (...args) => this.bindingService.renderAutomaticBindingStatus(...args),
       threadContextWithNameFromEvent: (...args) => this.bindingService.threadContextWithNameFromEvent(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
-      scheduleNextQueuedTurn: (...args) => this.scheduleNextQueuedTurn(...args),
       get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
       completePrivateReplyContinuation: (...args) => this.completePrivateReplyContinuation(...args),
       forgetAutomationTurn: (...args) => this.forgetAutomationTurn(...args),
@@ -1331,7 +1371,7 @@ export class MessagingController {
       if (request.params.turnId) {
         const threadStatus = await this.readBackendThreadStatus(binding);
         if (threadStatus === "idle") {
-          await this.reconcileIdleTurnAndStartNext(binding, "pending_request");
+          await this.reconcileIdleTurn(binding, "pending_request");
           continue;
         }
       }
@@ -1356,13 +1396,12 @@ export class MessagingController {
         );
         if (isTerminalTurnLifecycle(reconciledTurn)) {
           await this.retireStalePendingIntent(deliveredPendingIntent);
-          await this.startNextQueuedTurn(binding);
           continue;
         }
         const threadStatus = await this.readBackendThreadStatus(binding);
         if (threadStatus === "idle") {
           await this.retireStalePendingIntent(deliveredPendingIntent);
-          await this.reconcileIdleTurnAndStartNext(binding, "pending_request");
+          await this.reconcileIdleTurn(binding, "pending_request");
           continue;
         }
         const activeTurn: MessagingActiveTurnSummary = {
@@ -1377,553 +1416,6 @@ export class MessagingController {
         await this.bindingService.renderAutomaticBindingStatus(binding);
       }
     }
-  }
-
-  private async presentReviewPicker(
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    // findPreferredReviewWorkspaceCwd and buildReviewBranchOptions below read
-    // thread.gitWorkingState to choose a workspace and infer a base branch, so
-    // this picker cannot race the background refresh.
-    const navigation = await this.readBoundWorkspaceContext(binding);
-    const thread = findThreadForBinding(navigation, binding);
-    const workspaces = (thread?.linkedDirectories ?? [])
-      .map((directory) => ({
-        cwd: directory.worktreePath ?? directory.path,
-        label: directory.label,
-        repositoryPath: directory.path,
-      }))
-      .filter(
-        (workspace): workspace is {
-          cwd: string;
-          label: string;
-          repositoryPath: string;
-        } =>
-          Boolean(workspace.cwd),
-      );
-    const preferredWorkspaceCwd = findPreferredReviewWorkspaceCwd(thread);
-    const selectedWorkspace = workspaces.find(
-      (workspace) => workspace.cwd.trim() === preferredWorkspaceCwd,
-    ) ?? (workspaces.length === 1 ? workspaces[0] : undefined);
-    const defaultRepositoryPath =
-      selectedWorkspace?.repositoryPath
-      ?? workspaces[0]?.repositoryPath;
-    const directory = (navigation.workspaceDirectories ?? []).find((candidate) =>
-      reviewWorkspaceMatches(candidate.path, defaultRepositoryPath),
-    );
-    const workspaceThread = reviewThreadForWorkspace(
-      thread,
-      selectedWorkspace?.cwd,
-    );
-    const target: AppServerReviewTarget = {
-      type: "baseBranch",
-      branch:
-        buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
-        ?? "main",
-    };
-    const intent = this.buildReviewIntent({
-      binding,
-      navigation,
-      phase: "summary",
-      target,
-      reviewerBackends: await this.listReviewerBackends(),
-      ...(selectedWorkspace
-        ? {
-            cwd: selectedWorkspace.cwd,
-            repositoryPath: selectedWorkspace.repositoryPath,
-          }
-        : {}),
-    });
-    const pending = await this.storePendingIntent(intent, binding, event);
-    const result = await this.deliver(intent, binding, event);
-    await this.options.store.upsertPendingIntent({
-      ...pending,
-      surface: result.surface ?? pending.surface,
-    });
-  }
-
-  private buildReviewIntent(params: {
-    binding: MessagingBindingRecord;
-    navigation: MessagingNavigationContext;
-    phase: MessagingReviewIntent["review"]["phase"];
-    runMode?: ReviewRunMode;
-    afterReview?: ReviewAfterAction;
-    cwd?: string;
-    repositoryPath?: string;
-    workspacePageIndex?: number;
-    target?: AppServerReviewTarget;
-    reviewer?: ModelSettingsRecent;
-    reviewerBackends?: MessagingReviewIntent["review"]["reviewerBackends"];
-    modelMenuValue?: MessagingJsonValue;
-    id?: string;
-    createdAt?: number;
-    targetSurface?: MessagingSurfaceRef;
-  }): MessagingReviewIntent {
-    const thread = findThreadForBinding(params.navigation, params.binding);
-    const linkedWorkspaces = (thread?.linkedDirectories ?? []).flatMap((directory) => {
-      const cwd = directory.worktreePath ?? directory.path;
-      return cwd
-        ? [{
-            cwd,
-            label: directory.label,
-            repositoryPath: directory.path,
-          }]
-        : [];
-    });
-    const directory = (isMessagingThreadContext(params.navigation) ? params.navigation.workspaceDirectories ?? [] : params.navigation.directories).find((candidate) =>
-      reviewWorkspaceMatches(
-        candidate.path,
-        params.repositoryPath
-        ?? params.cwd
-        ?? linkedWorkspaces[0]?.repositoryPath,
-      ),
-    );
-    const selectedWorkspace = linkedWorkspaces.find(
-      (workspace) => workspace.cwd === params.cwd,
-    );
-    const workspaceThread = reviewThreadForWorkspace(thread, params.cwd);
-    const defaultBaseBranch =
-      buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
-      ?? "main";
-    const target =
-      params.target
-      ?? {
-        type: "baseBranch" as const,
-        branch: defaultBaseBranch,
-      };
-    const reviewerBackends = params.reviewerBackends ?? [];
-    // No advertised review runners means this instance predates reviewer
-    // overrides; the Reviewer button stays off rather than offering a choice
-    // that cannot land.
-    const reviewerOverridesSupported = reviewerBackends.some((entry) => entry.capabilities?.reviewRunner === true);
-    const reviewerBackendKind = params.reviewer?.backend ?? params.binding.backend;
-    const reviewerEntry = reviewerBackends.find(
-      (entry) => entry.backend === reviewerBackendKind,
-    );
-    // The inherited case must report the same settings the non-override
-    // submit path resolves, which falls back to the binding's own preferences
-    // when the thread carries none — reading `thread` alone would show
-    // "provider default" and then run with the binding's model.
-    const inheritedSettings = params.reviewer
-      ? undefined
-      : turnSettingsForBinding(params.binding, params.navigation);
-    // An un-picked model/effort stays blank rather than guessing the
-    // provider's first entry — the review resolves those against the picked
-    // provider's own defaults.
-    const reviewerModelId = params.reviewer?.model ?? inheritedSettings?.model;
-    const reviewerEffort =
-      params.reviewer?.reasoningEffort ?? inheritedSettings?.reasoningEffort;
-    const reviewerModelEntry = reviewerEntry?.models.find(
-      (model) => model.id === reviewerModelId,
-    );
-    const reviewerSummaryLabel = [
-      reviewerEntry?.label ?? reviewerBackendKind,
-      reviewerModelId ?? "provider default",
-      reviewerEffort,
-    ]
-      .filter((part): part is string => Boolean(part))
-      .join(" · ");
-
-    const owner = reviewerBackends.find((entry) => entry.backend === params.binding.backend);
-    const modeSupported = owner?.capabilities?.reviewRunMode === true;
-    const autoFixSupported = owner?.capabilities?.reviewAutoFix === true;
-    const afterReview = params.afterReview ?? (autoFixSupported ? "auto-fix" : undefined);
-    const autoFixUnavailable = !autoFixSupported && afterReview === "auto-fix"
-      ? "This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review."
-      : undefined;
-    const primaryCwd = thread ? findPrimaryReviewWorkspaceCwd(thread) : undefined;
-    const managedReason = reviewerBackendKind !== params.binding.backend
-      ? "PwrAgent Sub Agent is required for a different review provider."
-      : params.binding.backend.startsWith("acp:")
-        ? "PwrAgent Sub Agent is required for ACP reviews."
-        : params.cwd && primaryCwd && !reviewWorkspaceMatches(params.cwd, primaryCwd)
-          ? "PwrAgent Sub Agent is required for a secondary workspace."
-          : undefined;
-    const runMode = !modeSupported
-      ? params.runMode
-      : managedReason ? "pwragent-sub-agent" : params.runMode ?? "codex-sub-agent";
-    const modeUnavailable = !modeSupported && runMode !== undefined
-      ? "This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review."
-      : undefined;
-    const modeOptions: { label: string; value: ReviewRunMode; supported: boolean }[] = [
-      { label: "Codex Sub Agent", value: "codex-sub-agent", supported: owner?.capabilities?.reviewCodexSubAgent === true && !managedReason },
-      { label: "PwrAgent Sub Agent", value: "pwragent-sub-agent", supported: reviewerEntry?.capabilities?.reviewRunner === true },
-    ];
-    const modeLabel = modeOptions.find((option) => option.value === runMode)?.label ?? "Owner default";
-
-    let title = "Review";
-    let body: string;
-    let allowFreeform = false;
-    let actions: MessagingSurfaceAction[] = [];
-    const backAction: MessagingSurfaceAction = {
-      id: "review:back",
-      label: "Back",
-      fallbackText: "back",
-      priority: 1,
-    };
-    const cancelAction: MessagingSurfaceAction = {
-      id: "review:cancel",
-      label: "Cancel",
-      style: "danger",
-      fallbackText: "cancel",
-      priority: 2,
-    };
-
-    if (params.phase === "summary") {
-      const projectLabel =
-        selectedWorkspace?.label
-        ?? (
-          linkedWorkspaces.length > 1
-            ? "[needs selection]"
-            : linkedWorkspaces[0]?.label ?? "Thread workspace"
-        );
-      const summaryLines = [
-        `Project: ${projectLabel}`,
-        `Review: ${formatMessagingReviewScope(target)}`,
-      ];
-      if (target.type === "baseBranch") {
-        summaryLines.push(`Base Branch: ${target.branch}`);
-      } else if (target.type === "commit") {
-        summaryLines.push(
-          `Commit: ${target.title?.trim() || target.sha || "[needs selection]"}`,
-        );
-      } else if (target.type === "custom") {
-        summaryLines.push(`Instructions: ${target.instructions}`);
-      }
-      if (reviewerOverridesSupported) {
-        summaryLines.push(
-          `Reviewer: ${reviewerSummaryLabel}${params.reviewer ? "" : " (thread default)"}`,
-        );
-      }
-      if (runMode) summaryLines.push(`Mode: ${modeLabel}`);
-      if (modeUnavailable) summaryLines.push(modeUnavailable);
-      if (modeSupported && managedReason) summaryLines.push(managedReason);
-      if (autoFixSupported) summaryLines.push(`Auto-fix findings: ${afterReview === "auto-fix" ? "On" : "Off"}`);
-      if (autoFixUnavailable) summaryLines.push(autoFixUnavailable);
-      body = summaryLines.join("\n");
-      actions = [
-        ...(linkedWorkspaces.length > 1
-          ? [{
-              id: "review:summary:workspace",
-              label: "Project",
-              fallbackText: "project",
-              priority: 10,
-            }]
-          : []),
-        {
-          id: "review:summary:target",
-          label: "Review Scope",
-          fallbackText: "review scope",
-          priority: 11,
-        },
-        ...(target.type === "baseBranch"
-          ? [{
-              id: "review:summary:base-branch",
-              label: "Base Branch",
-              fallbackText: "base branch",
-              priority: 12,
-            }]
-          : target.type === "commit"
-            ? [{
-                id: "review:summary:commit",
-                label: "Commit",
-                fallbackText: "commit",
-                priority: 12,
-              }]
-            : target.type === "custom"
-              ? [{
-                  id: "review:summary:custom",
-                  label: "Instructions",
-                  fallbackText: "instructions",
-                  priority: 12,
-                }]
-              : []),
-        ...(reviewerOverridesSupported
-          ? [{
-              id: "review:summary:reviewer",
-              label: "Reviewer",
-              fallbackText: "reviewer",
-              priority: 13,
-            }]
-          : []),
-        ...(modeSupported ? [{
-          id: "review:summary:mode", label: "Review Mode", fallbackText: "review mode", priority: 3,
-        }] : []),
-        ...(autoFixSupported ? [{
-          id: "review:summary:auto-fix",
-          label: `Auto-fix findings: ${afterReview === "auto-fix" ? "On" : "Off"}`,
-          fallbackText: "auto-fix findings",
-          priority: 4,
-        }] : []),
-        {
-          id: "review:summary:start",
-          label: "Start Review",
-          style: "primary",
-          fallbackText: "start review",
-          priority: 0,
-        },
-        cancelAction,
-      ];
-    } else if (params.phase === "run_mode") {
-      title = "Review mode";
-      body = modeUnavailable ?? managedReason ?? "Choose how to run this review.";
-      actions = [
-        ...modeOptions.filter((option) => modeSupported && option.supported).map((option) => ({
-          id: `review:mode:${option.value}`,
-          label: option.label,
-          fallbackText: option.label,
-          value: { runMode: option.value },
-          priority: 0,
-        })),
-        backAction,
-        cancelAction,
-      ];
-    } else if (params.phase === "workspace") {
-      const page = paginateReviewWorkspaces({
-        itemCount: linkedWorkspaces.length,
-        maxActions: this.capabilityProfile.actions?.maxActions,
-        pageIndex: params.workspacePageIndex,
-      });
-      title = "Review project";
-      body = [
-        "Choose the linked project to review.",
-        page.totalPages > 1
-          ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
-          : undefined,
-      ]
-        .filter((line): line is string => Boolean(line))
-        .join("\n");
-      actions = [
-        ...linkedWorkspaces
-          .slice(page.startIndex, page.endIndex)
-          .map((workspace, index) => ({
-            id: `review:workspace:${page.startIndex + index}`,
-            label: workspace.label,
-            fallbackText: workspace.cwd,
-            priority: 10 + index,
-            value: {
-              cwd: workspace.cwd,
-              repositoryPath: workspace.repositoryPath,
-            },
-          })),
-        ...(page.pageIndex > 0
-          ? [{
-              id: "review:workspace:previous",
-              label: "Previous",
-              fallbackText: "previous",
-              priority: 3,
-              value: { pageIndex: page.pageIndex - 1 },
-            }]
-          : []),
-        ...(page.pageIndex < page.totalPages - 1
-          ? [{
-              id: "review:workspace:next",
-              label: "Next",
-              fallbackText: "next",
-              priority: 4,
-              value: { pageIndex: page.pageIndex + 1 },
-            }]
-          : []),
-        backAction,
-        cancelAction,
-      ];
-    } else if (params.phase === "target") {
-      title = "Review scope";
-      body = "Choose what PwrAgent should review.";
-      actions = [
-        {
-          id: "review:target:base-branch",
-          label: "Base branch",
-          description: "Compare this branch with a base branch",
-          fallbackText: "base branch",
-          value: { targetType: "baseBranch" },
-        },
-        {
-          id: "review:target:current-changes",
-          label: "Current changes",
-          description: "Review staged, unstaged, and untracked files",
-          fallbackText: "current changes",
-          value: { targetType: "uncommittedChanges" },
-        },
-        {
-          id: "review:target:commit",
-          label: "Commit",
-          description: "Review one commit by SHA",
-          fallbackText: "commit",
-          value: { targetType: "commit" },
-        },
-        {
-          id: "review:target:custom",
-          label: "Custom",
-          description: "Review using custom instructions",
-          fallbackText: "custom",
-          value: { targetType: "custom" },
-        },
-        backAction,
-        cancelAction,
-      ];
-    } else if (params.phase === "base_branch") {
-      title = "Base branch";
-      body = "Choose a suggested base branch or reply with any branch name.";
-      allowFreeform = true;
-      actions = [
-        ...messagingReviewBranchOptions({
-          directory,
-          thread: workspaceThread,
-        }).map((branch, index) => ({
-          id: `review:base-branch:${index}`,
-          label: branch,
-          fallbackText: branch,
-          priority: 10 + index,
-          value: { branch },
-        })),
-        backAction,
-        cancelAction,
-      ];
-    } else if (params.phase === "commit") {
-      title = "Commit";
-      body = "Choose a recent commit or reply with a commit SHA.";
-      allowFreeform = true;
-      actions = [
-        ...(directory?.gitStatus?.recentCommits ?? []).map((commit, index) => ({
-          id: `review:commit:${index}`,
-          label: `${commit.shortSha} ${commit.subject}`,
-          fallbackText: commit.sha,
-          priority: 10 + index,
-          value: {
-            sha: commit.sha,
-            title: commit.subject,
-          },
-        })),
-        backAction,
-        cancelAction,
-      ];
-    } else if (params.phase === "custom") {
-      title = "Custom review";
-      body = "Reply with the review instructions.";
-      allowFreeform = true;
-      actions = [backAction, cancelAction];
-    } else if (params.phase === "reviewer_provider") {
-      title = "Review provider";
-      body = [
-        "Choose the provider that runs this review.",
-        "It applies to this review only — the thread keeps its own settings.",
-      ].join("\n");
-      actions = [
-        ...reviewerBackends.flatMap((entry, index) => entry.capabilities?.reviewRunner !== true ? [] : [{
-          id: `review:reviewer:provider:${index}`,
-          label: entry.label,
-          fallbackText: entry.backend,
-          priority: 10 + index,
-          value: { backend: entry.backend },
-        }]),
-        // Priority sits with Back/Cancel, not with the options: truncation
-        // drops the highest priority number first, and the escape hatch is
-        // the last thing that should go when a profile caps actions.
-        ...(params.reviewer
-          ? [{
-              id: "review:reviewer:inherit",
-              label: "Use Thread Default",
-              fallbackText: "use thread default",
-              priority: 3,
-            }]
-          : []),
-        backAction,
-        cancelAction,
-      ];
-    } else if (params.phase === "reviewer_model") {
-      const models = reviewerEntry?.models ?? [];
-      title = "Review model";
-      body = `Choose the model ${reviewerEntry?.label ?? reviewerBackendKind} should review with.`;
-      actions = buildMessagingModelMenuActions({
-        kind: reviewerBackendKind,
-        models,
-        currentModelId: reviewerModelId,
-        menuValue: params.modelMenuValue,
-        menuActionId: "review:reviewer:models",
-        selectActionId: (model) => `review:reviewer:model:${models.findIndex((candidate) => candidate.id === model.id)}`,
-        capabilityProfile: this.capabilityProfile,
-        backAction,
-        footerActions: [
-          {
-            id: "review:reviewer:model:default",
-            label: "Provider Default",
-            fallbackText: "provider default",
-            priority: 3,
-          },
-          cancelAction,
-        ],
-      });
-    } else if (params.phase === "reviewer_effort") {
-      const efforts = reviewerModelEntry?.reasoningEfforts ?? [];
-      title = "Review reasoning";
-      body = `Choose the reasoning effort for ${reviewerModelEntry?.label ?? reviewerModelId ?? "this model"}.`;
-      actions = [
-        ...efforts.map((effort, index) => ({
-          id: `review:reviewer:effort:${index}`,
-          label: effort,
-          fallbackText: effort,
-          priority: 10 + index,
-          value: { reasoningEffort: effort },
-        })),
-        {
-          id: "review:reviewer:effort:default",
-          label: "Provider Default",
-          fallbackText: "provider default",
-          priority: 3,
-        },
-        backAction,
-        cancelAction,
-      ];
-    } else {
-      title = "Review submitted";
-      body = "The review request was submitted.";
-    }
-
-    actions = applyActionCapabilityLimits(actions, this.capabilityProfile);
-    return {
-      id: params.id ?? this.newIntentId("review"),
-      kind: "review",
-      bindingId: params.binding.id,
-      createdAt: params.createdAt ?? this.now(),
-      title,
-      body,
-      actions,
-      allowFreeform,
-      fallbackText: allowFreeform
-        ? `${body} Reply with text or tap an option.`
-        : body,
-      review: {
-        backend: params.binding.backend,
-        threadId: params.binding.threadId,
-        phase: params.phase,
-        ...(runMode ? { runMode } : {}),
-        ...(afterReview ? { afterReview } : {}),
-        ...(params.reviewer ? { reviewer: params.reviewer } : {}),
-        ...(reviewerBackends.length > 0 ? { reviewerBackends } : {}),
-        ...(params.cwd ? { cwd: params.cwd } : {}),
-        ...(params.repositoryPath
-          ? { repositoryPath: params.repositoryPath }
-          : {}),
-        workspaceSelectionRequired: linkedWorkspaces.length > 1,
-        ...(params.workspacePageIndex !== undefined
-          ? { workspacePageIndex: params.workspacePageIndex }
-          : {}),
-        targetType: target.type,
-        target,
-      },
-      ...(params.targetSurface
-        ? {
-            targetSurface: params.targetSurface,
-            delivery: {
-              mode: "update",
-              replaceMarkup: true,
-              fallback: "present_new",
-            },
-          }
-        : {}),
-    };
   }
 
   private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
@@ -1960,9 +1452,7 @@ export class MessagingController {
     const result = await this.deliver(intent, entry.binding);
     if (result.surface) {
       if (entry.ownerQueueEntryId) entry.surface = result.surface;
-      this.turnAdmission.updateQueuedEntry(entry, {
-        surface: result.surface,
-      });
+      this.queueRecoveries.surface(entry.id, result.surface);
     }
   }
 
@@ -1983,7 +1473,7 @@ export class MessagingController {
     body: string,
     event?: MessagingInboundCallbackEvent,
   ): Promise<void> {
-    const targetSurface = entry.surface ?? event?.interaction;
+    const targetSurface = entry.surface ?? event?.sourceSurface ?? event?.interaction;
     if (!targetSurface) {
       return;
     }
@@ -2059,173 +1549,6 @@ export class MessagingController {
     this.queuedTurnActions.add(task);
   }
 
-  private async steerQueuedTurn(
-    entry: MessagingQueuedTurnEntry,
-    event: MessagingInboundCallbackEvent,
-  ): Promise<void> {
-    try {
-      await this.submitQueuedTurnSteer(entry, event);
-    } finally {
-      // A failed status lookup or delivery must also release the claim.
-      if (this.turnAdmission.findQueuedEntry(entry.id)?.status === "steering") {
-        this.turnAdmission.updateQueuedEntry(entry, { status: "queued" });
-      }
-      // Turn completion can arrive before the steer acknowledgement. Its
-      // drain stopped at this claim, so recheck the owning backend now.
-      if (this.queuedTurnDrainRequests.delete(entry.threadKey) && !this.disposed) {
-        await this.startNextQueuedTurn(entry.binding);
-      }
-    }
-  }
-
-  private async submitQueuedTurnSteer(
-    entry: MessagingQueuedTurnEntry,
-    event: MessagingInboundCallbackEvent,
-  ): Promise<void> {
-    const activeTurn = await this.resolveSteerableActiveTurn(
-      entry.binding,
-      "queued_turn_steer",
-    );
-    if (this.disposed) return;
-    if (
-      entry.pdfAttachments?.length ||
-      !this.options.backend.steerTurn ||
-      !activeTurn ||
-      !["working", "waiting"].includes(activeTurn.status)
-    ) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("queued-turn-steer-unavailable"),
-          createdAt: this.now(),
-          title: "Steer unavailable",
-          body: "There is no active turn available to steer. The message is still queued.",
-          recoverable: true,
-        }),
-        entry.binding,
-        event,
-      );
-      return;
-    }
-
-    try {
-      await this.options.backend.steerTurn({
-        backend: entry.binding.backend,
-        federationTarget: federationTargetForBinding(entry.binding),
-        threadId: entry.binding.threadId,
-        expectedTurnId: activeTurn.turnId,
-        input: entry.input,
-        requestId: entry.id,
-        messageOrigin: messageOriginForInboundEvent(entry.event, entry.event ? this.rememberHumanMessagingSource(entry.binding, entry.event)?.ref : undefined),
-      });
-    } catch (error) {
-      if (this.disposed) return;
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("queued-turn-steer-failed"),
-          createdAt: this.now(),
-          title: "Steer failed",
-          body: `${
-            error instanceof Error ? error.message : String(error)
-          }\n\nThe message is still queued.`,
-          recoverable: true,
-        }),
-        entry.binding,
-        event,
-      );
-      return;
-    }
-    if (this.disposed) return;
-    const steered = this.turnAdmission.updateQueuedEntry(entry, {
-      status: "steered",
-    });
-    await this.retireQueuedTurnNotice(
-      steered,
-      "Queued message was sent as a steering message.",
-      event,
-    );
-  }
-
-  private scheduleNextQueuedTurn(binding: MessagingBindingRecord): void {
-    const key = this.threadKeyForBinding(binding);
-    const entry = this.turnAdmission.peekNextQueued(key);
-    if (!entry && this.turnAdmission.hasDispatchingEntry(key)) this.queuedTurnDrainRequests.add(key);
-    if (this.disposed || this.queuedTurnDrainTimers.has(key)
-      || this.queuedTurnDrains.has(key) || !entry || entry.manualRetryRequired) return;
-    // A start emits ordered lifecycle events. It cannot acknowledge while
-    // the event that released it is still awaiting this listener. Leave the
-    // delivery stack before draining, and coalesce terminal + idle releases.
-    const { promise: drain, resolve: settle } = Promise.withResolvers<void>();
-    this.queuedTurnDrains.set(key, drain);
-    void drain.finally(() => this.queuedTurnDrains.delete(key));
-    const timer = setTimeout(() => {
-      this.queuedTurnDrainTimers.delete(key);
-      if (this.disposed) {
-        settle();
-        return;
-      }
-      void this.startNextQueuedTurn(binding).catch((error) => {
-        this.logger.warn?.("messaging queued turn dispatch failed", {
-          threadId: binding.threadId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }).finally(settle);
-    }, 0);
-    this.queuedTurnDrainTimers.set(key, { timer, settle });
-  }
-
-  private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
-    const threadKey = this.threadKeyForBinding(binding);
-    const admissionState = await this.options.backend.getThreadAdmissionState({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: binding.threadId,
-    });
-    if (await this.inboundTurns.isTurnOccupied(binding, threadKey, admissionState)) {
-      return;
-    }
-
-    const entry = this.turnAdmission.peekNextQueued(threadKey);
-    if (!entry || entry.manualRetryRequired) {
-      if (this.turnAdmission.hasDispatchingEntry(threadKey)) this.queuedTurnDrainRequests.add(threadKey);
-      return;
-    }
-
-    this.turnAdmission.updateQueuedEntry(entry, { status: "submitting" });
-    let startResult: "started" | "queued" | "failed";
-    try {
-      startResult = await this.inboundTurns.startPreparedInput({
-        binding: entry.binding,
-        event: entry.event,
-        input: entry.input,
-        pdfAttachments: entry.pdfAttachments,
-        privateResponseRequested: entry.privateResponseRequested,
-        preview: entry.preview,
-        queueOnConcurrentStart: false,
-        threadKey,
-        admissionState,
-      });
-    } finally {
-      if (this.turnAdmission.findQueuedEntry(entry.id)?.status === "submitting") {
-        this.turnAdmission.updateQueuedEntry(entry, { status: "queued" });
-      }
-    }
-    if (startResult !== "started") {
-      return;
-    }
-
-    const submitted = this.turnAdmission.updateQueuedEntry(entry, {
-      status: "submitted",
-    });
-    this.turnAdmission.removeQueuedEntry(submitted);
-    await this.retireQueuedTurnNotice(
-      submitted,
-      "Queued message sent as the next turn.",
-    );
-    if (this.queuedTurnDrainRequests.delete(threadKey) && !this.disposed) {
-      await this.startNextQueuedTurn(binding);
-    }
-  }
-
   private async handleQuestionnaireTextAnswer(
     pendingIntent: MessagingPendingIntentRecord,
     event: MessagingInboundTextEvent,
@@ -2252,615 +1575,6 @@ export class MessagingController {
 
     await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
     return true;
-  }
-
-  private async handleReviewTextAnswer(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundTextEvent,
-  ): Promise<boolean> {
-    if (pendingIntent.intent.kind !== "review") {
-      return false;
-    }
-
-    const value = event.text.trim();
-    if (!pendingIntent.intent.allowFreeform || !value) {
-      return false;
-    }
-
-    let target: AppServerReviewTarget | undefined;
-    if (pendingIntent.intent.review.phase === "base_branch") {
-      target = { type: "baseBranch", branch: value };
-    } else if (pendingIntent.intent.review.phase === "commit") {
-      const [sha, ...titleParts] = value.split(/\s+/);
-      if (sha) {
-        target = {
-          type: "commit",
-          sha,
-          title: titleParts.length > 0 ? titleParts.join(" ") : null,
-        };
-      }
-    } else if (pendingIntent.intent.review.phase === "custom") {
-      target = { type: "custom", instructions: value };
-    }
-
-    if (!target) {
-      return false;
-    }
-
-    await this.updateReviewPendingIntent(pendingIntent, event, {
-      phase: "summary",
-      target,
-    });
-    return true;
-  }
-
-  private async handleReviewAction(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent,
-    action: MessagingSurfaceAction,
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "review") {
-      return;
-    }
-
-    const value = asPlainRecord(action.value);
-    const phase = pendingIntent.intent.review.phase;
-    if (action.id === "review:cancel") {
-      await this.cancelReviewPendingIntent(pendingIntent, event);
-      return;
-    }
-    if (action.id === "review:back") {
-      await this.updateReviewPendingIntent(pendingIntent, event, {
-        phase: "summary",
-      });
-      return;
-    }
-
-    if (phase === "summary") {
-      if (action.id === "review:summary:workspace") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "workspace",
-          workspacePageIndex: 0,
-        });
-      } else if (action.id === "review:summary:target") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "target",
-        });
-      } else if (action.id === "review:summary:base-branch") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "base_branch",
-        });
-      } else if (action.id === "review:summary:commit") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "commit",
-        });
-      } else if (action.id === "review:summary:custom") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "custom",
-        });
-      } else if (action.id === "review:summary:mode") {
-        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "run_mode" });
-      } else if (action.id === "review:summary:auto-fix") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          afterReview: pendingIntent.intent.review.afterReview === "auto-fix" ? "wait" : "auto-fix",
-        });
-      } else if (action.id === "review:summary:reviewer") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "reviewer_provider",
-        });
-      } else if (action.id === "review:summary:start") {
-        if (
-          pendingIntent.intent.review.workspaceSelectionRequired
-          && !pendingIntent.intent.review.cwd
-        ) {
-          await this.updateReviewPendingIntent(pendingIntent, event, {
-            phase: "workspace",
-            workspacePageIndex: 0,
-          });
-          return;
-        }
-        const target = pendingIntent.intent.review.target;
-        if (!target) {
-          await this.updateReviewPendingIntent(pendingIntent, event, {
-            phase: "target",
-          });
-          return;
-        }
-        await this.submitMessagingReviewFromPending(
-          pendingIntent,
-          event,
-          target,
-        );
-      }
-      return;
-    }
-
-    if (phase === "run_mode") {
-      const runMode = value?.runMode;
-      if (runMode === "codex-sub-agent" || runMode === "pwragent-sub-agent") {
-        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "summary", runMode });
-      }
-      return;
-    }
-
-    if (
-      phase === "reviewer_provider"
-      || phase === "reviewer_model"
-      || phase === "reviewer_effort"
-    ) {
-      const current = pendingIntent.intent.review.reviewer;
-      if (action.id === "review:reviewer:inherit") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          clearReviewer: true,
-        });
-        return;
-      }
-      if (phase === "reviewer_provider") {
-        const backend = typeof value?.backend === "string"
-          ? (value.backend as AppServerBackendKind)
-          : undefined;
-        if (!backend) {
-          return;
-        }
-        // Switching provider drops the model and effort: they belong to the
-        // previous provider's catalog and cannot carry across.
-        const entry = pendingIntent.intent.review.reviewerBackends?.find(
-          (candidate) => candidate.backend === backend,
-        );
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: entry?.models.length ? "reviewer_model" : "summary",
-          reviewer: { backend },
-        });
-        return;
-      }
-      if (!current) {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "reviewer_provider",
-        });
-        return;
-      }
-      if (phase === "reviewer_model") {
-        if (action.id.startsWith("review:reviewer:models:")) {
-          await this.updateReviewPendingIntent(pendingIntent, event, {
-            phase: "reviewer_model",
-            modelMenuValue: action.value,
-          });
-          return;
-        }
-        const model = typeof value?.model === "string" ? value.model : undefined;
-        const next: ModelSettingsRecent = {
-          backend: current.backend,
-          ...(model ? { model } : {}),
-        };
-        const entry = pendingIntent.intent.review.reviewerBackends?.find(
-          (candidate) => candidate.backend === current.backend,
-        );
-        const efforts = model
-          ? entry?.models.find((candidate) => candidate.id === model)
-              ?.reasoningEfforts ?? []
-          : [];
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: efforts.length > 0 ? "reviewer_effort" : "summary",
-          reviewer: next,
-        });
-        return;
-      }
-      const reasoningEffort =
-        typeof value?.reasoningEffort === "string"
-          ? value.reasoningEffort
-          : undefined;
-      await this.updateReviewPendingIntent(pendingIntent, event, {
-        phase: "summary",
-        reviewer: {
-          ...current,
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-        },
-      });
-      return;
-    }
-
-    if (phase === "workspace") {
-      const workspacePageIndex =
-        typeof value?.pageIndex === "number" && Number.isFinite(value.pageIndex)
-          ? Math.max(0, Math.trunc(value.pageIndex))
-          : undefined;
-      if (
-        (
-          action.id === "review:workspace:previous"
-          || action.id === "review:workspace:next"
-        )
-        && workspacePageIndex !== undefined
-      ) {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "workspace",
-          workspacePageIndex,
-        });
-        return;
-      }
-      const cwd = typeof value?.cwd === "string" ? value.cwd.trim() : "";
-      const repositoryPath =
-        typeof value?.repositoryPath === "string"
-          ? value.repositoryPath.trim()
-          : "";
-      if (cwd) {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          cwd,
-          ...(repositoryPath ? { repositoryPath } : {}),
-          resetRepositoryTarget: true,
-          resetBaseBranch: true,
-        });
-      }
-      return;
-    }
-
-    if (phase === "target") {
-      const targetType =
-        typeof value?.targetType === "string" ? value.targetType : undefined;
-      if (targetType === "uncommittedChanges") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          target: { type: "uncommittedChanges" },
-        });
-      } else if (targetType === "baseBranch") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          forceBaseBranch: true,
-          resetBaseBranch: true,
-        });
-      } else if (targetType === "commit") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "commit",
-        });
-      } else if (targetType === "custom") {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "custom",
-        });
-      }
-      return;
-    }
-
-    if (phase === "base_branch") {
-      const branch = typeof value?.branch === "string" ? value.branch.trim() : "";
-      if (branch) {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          target: { type: "baseBranch", branch },
-        });
-      }
-      return;
-    }
-
-    if (phase === "commit") {
-      const sha = typeof value?.sha === "string" ? value.sha.trim() : "";
-      const title = typeof value?.title === "string" ? value.title : null;
-      if (sha) {
-        await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "summary",
-          target: { type: "commit", sha, title },
-        });
-      }
-    }
-  }
-
-  private async updateReviewPendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-    review: {
-      phase: MessagingReviewIntent["review"]["phase"];
-      runMode?: ReviewRunMode;
-      afterReview?: ReviewAfterAction;
-      cwd?: string;
-      repositoryPath?: string;
-      workspacePageIndex?: number;
-      target?: AppServerReviewTarget;
-      reviewer?: ModelSettingsRecent;
-      modelMenuValue?: MessagingJsonValue;
-      clearReviewer?: boolean;
-      forceBaseBranch?: boolean;
-      resetRepositoryTarget?: boolean;
-      resetBaseBranch?: boolean;
-    },
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "review") {
-      return;
-    }
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    if (!binding || binding.revokedAt) {
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      return;
-    }
-
-    // buildReviewBranchOptions below infers the base branch from
-    // thread.gitWorkingState, so this callback awaits working state for the
-    // same reason presentReviewPicker does.
-    const navigation = await this.readBoundWorkspaceContext(binding);
-    const targetSurface = pendingIntent.surface ?? (
-      event.kind === "callback" ? event.interaction : undefined
-    );
-    const cwd = review.cwd ?? pendingIntent.intent.review.cwd;
-    const repositoryPath =
-      review.repositoryPath
-      ?? pendingIntent.intent.review.repositoryPath;
-    let target = review.target ?? pendingIntent.intent.review.target;
-    if (review.resetRepositoryTarget && target?.type === "commit") {
-      target = undefined;
-    }
-    if (
-      review.resetBaseBranch
-      && (
-        review.forceBaseBranch
-        || !target
-        || target.type === "baseBranch"
-      )
-    ) {
-      const thread = findThreadForBinding(navigation, binding);
-      const workspaceThread = reviewThreadForWorkspace(thread, cwd);
-      const directory = (navigation.workspaceDirectories ?? []).find((candidate) =>
-        reviewWorkspaceMatches(
-          candidate.path,
-          repositoryPath ?? cwd,
-        ),
-      );
-      target = {
-        type: "baseBranch",
-        branch:
-          buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
-          ?? "main",
-      };
-    }
-    const intent = this.buildReviewIntent({
-      binding,
-      navigation,
-      phase: review.phase,
-      runMode: review.runMode ?? pendingIntent.intent.review.runMode,
-      afterReview: review.afterReview ?? pendingIntent.intent.review.afterReview,
-      cwd,
-      repositoryPath,
-      workspacePageIndex: review.workspacePageIndex,
-      target,
-      ...(review.clearReviewer
-        ? {}
-        : {
-            reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
-          }),
-      reviewerBackends: await this.listReviewerBackends(),
-      modelMenuValue: review.modelMenuValue,
-      id: pendingIntent.intent.id,
-      createdAt: pendingIntent.intent.createdAt,
-      targetSurface,
-    });
-    const result = await this.deliver(intent, binding, event);
-    await this.options.store.upsertPendingIntent({
-      ...pendingIntent,
-      intent,
-      surface: result.surface ?? pendingIntent.surface,
-    });
-  }
-
-  private async cancelReviewPendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent,
-  ): Promise<void> {
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("review-cancelled"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Review cancelled",
-        body: "No review was started.",
-        targetSurface: pendingIntent.surface ?? event.interaction,
-        delivery: {
-          mode: "update",
-          replaceMarkup: true,
-          fallback: "present_new",
-        },
-      }),
-      binding && !binding.revokedAt ? binding : undefined,
-      event,
-    );
-  }
-
-  private async submitMessagingReviewFromPending(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-    target: AppServerReviewTarget,
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "review") {
-      return;
-    }
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    if (!binding || binding.revokedAt) {
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      return;
-    }
-
-    const reviewer = pendingIntent.intent.review.reviewer;
-    const reviewerBackends = pendingIntent.intent.review.reviewerBackends;
-    const reviewerBackend = reviewer?.backend ?? binding.backend;
-    await this.submitMessagingReview({
-      binding,
-      event,
-      target,
-      cwd: pendingIntent.intent.review.cwd,
-      runMode: pendingIntent.intent.review.runMode,
-      afterReview: pendingIntent.intent.review.afterReview,
-      reviewerLabel: reviewerBackends?.find(
-        (candidate) => candidate.backend === reviewerBackend,
-      )?.label,
-      ...(reviewer
-        ? {
-            reviewBackend: reviewer.backend,
-            ...(reviewer.model ? { model: reviewer.model } : {}),
-            ...(reviewer.reasoningEffort
-              ? { reasoningEffort: reviewer.reasoningEffort }
-              : {}),
-          }
-        : {}),
-      targetSurface: pendingIntent.surface,
-      pendingIntentId: pendingIntent.id,
-    });
-  }
-
-  private async submitMessagingReview(params: {
-    binding: MessagingBindingRecord;
-    event: MessagingInboundEvent;
-    target: AppServerReviewTarget;
-    cwd?: string;
-    runMode?: ReviewRunMode;
-    afterReview?: ReviewAfterAction;
-    /** Reviewer override typed on the command; absent means inherit. */
-    reviewBackend?: AppServerBackendKind;
-    /** Human-facing reviewer label resolved by the picker, when known. */
-    reviewerLabel?: string;
-    model?: string;
-    reasoningEffort?: string;
-    targetSurface?: MessagingSurfaceRef;
-    pendingIntentId?: string;
-  }): Promise<void> {
-    const submitReview = this.options.backend.submitReview?.bind(
-      this.options.backend,
-    );
-    if (!submitReview || !await this.reviewSupportedForBinding(params.binding)) {
-      await this.deliverReviewUnsupported(params.binding, params.event);
-      return;
-    }
-
-    try {
-      const owner = await this.getBackendSummary(params.binding.backend);
-      if (params.runMode !== undefined) {
-        if (owner?.capabilities.reviewRunMode !== true) {
-          throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
-        }
-      }
-      const afterReview = params.afterReview ?? (owner?.capabilities.reviewAutoFix === true ? "auto-fix" : undefined);
-      if (afterReview === "auto-fix" && owner?.capabilities.reviewAutoFix !== true) {
-        throw new Error("This owner no longer supports review Auto-fix. Update that PwrAgent instance before starting this review.");
-      }
-      const navigation = await this.readBoundThreadConfiguration(params.binding);
-      const settings = turnSettingsForBinding(params.binding, navigation);
-      const reviewer = {
-        backend: params.reviewBackend ?? params.binding.backend,
-        ...(params.reviewerLabel ? { label: params.reviewerLabel } : {}),
-        ...(params.reviewBackend
-          ? {
-              ...(params.model ? { model: params.model } : {}),
-              ...(params.reasoningEffort
-                ? { reasoningEffort: params.reasoningEffort }
-                : {}),
-              source: "override" as const,
-            }
-          : {
-              ...(settings.model ? { model: settings.model } : {}),
-              ...(settings.reasoningEffort
-                ? { reasoningEffort: settings.reasoningEffort }
-                : {}),
-              source: "thread_default" as const,
-            }),
-      };
-      const result = await submitReview({
-        backend: params.binding.backend,
-        threadId: params.binding.threadId,
-        target: params.target,
-        delivery: "inline",
-        ...(params.runMode ? { runMode: params.runMode } : {}),
-        ...(afterReview ? { afterReview } : {}),
-        ...(params.cwd ? { cwd: params.cwd } : {}),
-        // An explicit reviewer replaces the binding's inherited settings
-        // wholesale — its model belongs to a different catalog.
-        ...(params.reviewBackend
-          ? {
-              reviewBackend: params.reviewBackend,
-              ...(params.model ? { model: params.model } : {}),
-              ...(params.reasoningEffort
-                ? { reasoningEffort: params.reasoningEffort }
-                : {}),
-            }
-          : {
-              ...(settings.model ? { model: settings.model } : {}),
-              ...(settings.reasoningEffort
-                ? { reasoningEffort: settings.reasoningEffort }
-                : {}),
-              ...(settings.serviceTier
-                ? { serviceTier: settings.serviceTier }
-                : {}),
-              ...(settings.fastMode !== undefined
-                ? { fastMode: settings.fastMode }
-                : {}),
-            }),
-      });
-      if (params.pendingIntentId) {
-        await this.options.store.deletePendingIntent(params.pendingIntentId);
-      }
-      await this.deliver(
-        buildReviewStartConfirmationIntent({
-          id: this.newIntentId("review-submitted"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          notification: {
-            status: result.status,
-            target: messagingReviewStartTarget(params.target),
-            reviewer,
-          },
-          ...(params.targetSurface
-            ? {
-                targetSurface: params.targetSurface,
-                delivery: {
-                  mode: "update" as const,
-                  replaceMarkup: true,
-                  fallback: "present_new" as const,
-                },
-              }
-            : {}),
-        }),
-        params.binding,
-        params.event,
-      );
-    } catch (error) {
-      this.logger.warn?.("messaging review submission failed", {
-        backend: params.binding.backend,
-        threadId: params.binding.threadId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("review-submit-failed"),
-          createdAt: this.now(),
-          title: "Review could not start",
-          body: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        }),
-        params.binding,
-        params.event,
-      );
-    }
-  }
-
-  private async deliverReviewUnsupported(
-    binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("review-unsupported"),
-        createdAt: this.now(),
-        title: "Review unavailable",
-        body: "This thread backend does not support code review.",
-        recoverable: false,
-      }),
-      binding,
-      event,
-    );
   }
 
   private async handleQuestionnaireAction(
@@ -3178,12 +1892,12 @@ export class MessagingController {
       return;
     }
     if (
-      !(await this.requirePermission(
+      !(await this.accessControl.requirePermission(
         event,
         "message.reply",
         "questionnaire:async-reply",
       ))
-      || !(await this.requireRemoteScopeForBinding(
+      || !(await this.accessControl.requireRemoteScopeForBinding(
         event,
         binding,
         "questionnaire:async-reply:remote-instance",
@@ -3273,16 +1987,6 @@ export class MessagingController {
           });
         }
       }
-      // The queued notice offers Steer, and the queue starts the reply
-      // after the turn ends.
-      await this.inboundTurns.queuePreparedInput({
-        binding,
-        event,
-        input,
-        preview: params.preview,
-        threadKey,
-      });
-      return true;
     }
 
     const started = await this.inboundTurns.startPreparedInput({
@@ -4742,11 +3446,8 @@ export class MessagingController {
     return true;
   }
 
-  updateAuthorizedActorIds(actorIds: readonly string[]): void {
-    this.authorizedActorIds.clear();
-    for (const actorId of actorIds) {
-      this.authorizedActorIds.add(actorId);
-    }
+  updateAuthorizedActorIds(actorIds: readonly string[]): void{
+    this.accessControl.updateAuthorizedActorIds(actorIds);
   }
 
   dispose(): void {
@@ -4757,14 +3458,10 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
-    for (const { timer, settle } of this.queuedTurnDrainTimers.values()) {
-      clearTimeout(timer);
-      settle();
-    }
-    this.queuedTurnDrainTimers.clear();
+    this.queueRecoveries.dispose();
+    this.turns.dispose();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
-    this.queuedTurnDrainRequests.clear();
     this.inboundTurns.clearAdmissionTiming();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
@@ -4797,26 +3494,12 @@ export class MessagingController {
     this.queuedAgentMessagingOriginsByQueueKey.clear();
   }
 
-  /**
-   * Resolves once the tool-update batches that a flush timer already started
-   * have finished delivering, including their store writes, and then once
-   * every scheduled or running queued-turn drain has finished. dispose() is
-   * synchronous and only stops new batches.
-   */
+  /** Resolves after already-started tool-update batches finish their writes. */
   async whenToolUpdatesSettled(): Promise<void> {
     await this.toolUpdatePolicy.whenIdle();
-    await this.whenQueuedTurnDrainsSettled();
   }
 
-  /**
-   * Resolves once every queued-turn drain scheduled or running at the time of
-   * the call has finished, including the start it submits and the queued notice
-   * it retires. dispose() cancels and settles drains that have not yet begun.
-   */
-  async whenQueuedTurnDrainsSettled(): Promise<void> {
-    await Promise.allSettled([...this.queuedTurnDrains.values()]);
-  }
-
+  /** Resolves after detached queued-message actions finish. */
   async whenQueuedTurnActionsSettled(): Promise<void> {
     await Promise.all(this.queuedTurnActions);
   }
@@ -4850,7 +3533,7 @@ export class MessagingController {
     }, async (navigation, current) => {
       const selectedBackend =
         isNewThreadLaunchAction(parsed.launchAction)
-          ? await this.resolveNewThreadBackendForSession(
+          ? await this.newThreadWorkflow.resolveNewThreadBackendForSession(
               {
                 launchpadBackend: navigation.launchpadDefaults.backend,
               },
@@ -4936,7 +3619,7 @@ export class MessagingController {
     }, async (navigation, current) => {
       const selectedBackend =
         parsed.launchAction === "start_new_thread"
-          ? await this.resolveNewThreadBackendForSession(
+          ? await this.newThreadWorkflow.resolveNewThreadBackendForSession(
               {
                 launchpadBackend: navigation.launchpadDefaults.backend,
               },
@@ -5160,137 +3843,6 @@ export class MessagingController {
     }
   }
 
-  private async updateNewThreadStickySettings(
-    session: MessagingBrowseSessionRecord,
-    patch: UpdateDirectoryLaunchpadRequest["patch"],
-    stickySettingsChanged = true,
-  ): Promise<void> {
-    // Remote launch choices remain in this viewer's browse session; the final
-    // materialization carries them to the explicit owner.
-    if (session.selectedProject?.federationTarget?.scope === "remote") return;
-    const directoryKey = session.selectedProject?.directoryKey;
-    if (!directoryKey || !this.options.backend.updateDirectoryLaunchpad) {
-      return;
-    }
-
-    try {
-      await this.options.backend.updateDirectoryLaunchpad({
-        directoryKey,
-        patch,
-        stickySettingsChanged,
-      });
-    } catch (error) {
-      this.logger.debug?.("messaging new-thread sticky launchpad update failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private async resolveNewThreadToolUpdateMode(
-    session: MessagingBrowseSessionRecord,
-    directory?: MessagingLaunchpadDirectory,
-  ): Promise<MessagingToolUpdateMode> {
-    if (session.preferences?.toolUpdateMode) {
-      return session.preferences.toolUpdateMode;
-    }
-    if (isNewAgentThreadLaunchAction(session.launchAction)) {
-      return await this.bindingService.resolveToolUpdateDefaultMode("agent_thread");
-    }
-    return (
-      directory?.launchpad?.messagingToolUpdateMode
-      ?? await this.bindingService.resolveToolUpdateDefaultMode("thread")
-    );
-  }
-
-  private async loadNewThreadBackendChoices(
-    event: MessagingInboundEvent,
-  ): Promise<{ backends: BackendSummary[]; selectable: BackendSummary[] } | undefined> {
-    try {
-      const response = await this.options.backend.listBackends?.({
-        includeUnavailable: true,
-      });
-      if (!response) {
-        throw new Error("backend discovery is unavailable");
-      }
-      const selectable = selectableNewThreadBackends(response.backends);
-      if (selectable.length === 0) {
-        await this.deliver(
-          buildErrorIntent({
-            id: this.newIntentId("new-thread-no-backends"),
-            createdAt: this.now(),
-            title: "No backends available",
-            body: "No backends are available to create a thread right now.",
-            recoverable: true,
-          }),
-          undefined,
-          event,
-        );
-        return undefined;
-      }
-      return {
-        backends: response.backends,
-        selectable,
-      };
-    } catch (error) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-backends-unavailable"),
-          createdAt: this.now(),
-          title: "Backends unavailable",
-          body: "Backend choices are unavailable right now. Try /new again in a moment.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      this.logger.debug?.("messaging new-thread backend discovery failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    }
-  }
-
-  private async resolveNewThreadBackendForSession(
-    params: {
-      launchpadBackend: AppServerBackendKind;
-      preferredBackend?: string;
-      requirePreferred?: boolean;
-      session?: MessagingBrowseSessionRecord;
-    },
-    event: MessagingInboundEvent,
-  ): Promise<BackendSummary | undefined> {
-    const choices = await this.loadNewThreadBackendChoices(event);
-    if (!choices) {
-      return undefined;
-    }
-
-    if (params.requirePreferred) {
-      const selected = choices.selectable.find(
-        (backend) => backend.kind === params.preferredBackend,
-      );
-      if (!selected) {
-        await this.deliverInvalidBrowseSelection(event);
-        return undefined;
-      }
-      return selected;
-    }
-
-    return resolveNewThreadBackend(
-      choices.backends,
-      params.session?.backend ?? params.launchpadBackend,
-    );
-  }
-
-  private async ensureNewThreadProjectLaunchpad(
-    session: MessagingBrowseSessionRecord,
-    _navigation: MessagingNewThreadNavigation,
-    preferredBackend?: AppServerBackendKind,
-  ): Promise<{ directory?: MessagingLaunchpadDirectory; navigation: MessagingLaunchpadContext }> {
-    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
-      project: session.selectedProject, ensureBackend: preferredBackend ?? session.backend });
-    return { directory: navigation.directory, navigation };
-  }
-
   private async renderResumeBrowser(
     session: MessagingBrowseSessionRecord,
     _navigation: MessagingNewThreadNavigation,
@@ -5303,7 +3855,7 @@ export class MessagingController {
     this.browseRenderGenerations.set(session.id, token);
     stillCurrent = () => parentCurrent() && this.browseRenderGenerations.get(session.id) === token;
     const inventory = await this.options.backend.listNavigationOwners?.() ?? { owners: [{ label: "This instance" }], omitted: 0 };
-    const canReadRemote = this.actorHasPermission(event, "federation.remote_control");
+    const canReadRemote = this.accessControl.actorHasPermission(event, "federation.remote_control");
     let owners = inventory.owners.filter((owner) => !owner.target || (canReadRemote && session.launchAction !== "assign_default_agent"));
     if (!session.directorySelector && session.selectedProject && session.mode !== "projects" && session.mode !== "new_project") {
       const target = session.selectedProject.federationTarget;
@@ -5318,7 +3870,7 @@ export class MessagingController {
       ...(session.launchAction === "assign_default_agent" ? { allowedBackends: ["codex" as const,
         ...(backendSummaries ?? []).filter((backend) => backend.kind !== "codex" && defaultAgentBackendSupport(backend.kind, backendSummaries) === "supported")
           .map((backend) => backend.kind)] } : {}),
-      excludeFullAccess: session.launchAction === "resume_thread" && !await this.canResumeFullAccessThreads(),
+      excludeFullAccess: session.launchAction === "resume_thread" && !await this.accessControl.canResumeFullAccessThreads(),
     };
     const query: NavigationQuery = session.mode === "projects" || session.mode === "new_project"
       ? { kind: "messaging-projects", ...eligibility, scratchpadFirst: isNewThreadLaunchAction(session.launchAction) }
@@ -5356,1113 +3908,6 @@ export class MessagingController {
       if (stillCurrent()) throw error;
     } finally {
       if (this.browseRenderGenerations.get(session.id) === token) this.browseRenderGenerations.delete(session.id);
-    }
-  }
-
-  private async startNewThreadFromProject(
-    event: MessagingInboundCallbackEvent,
-    session: MessagingBrowseSessionRecord,
-    navigation: MessagingNewThreadNavigation,
-    project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
-  ): Promise<void> {
-    if (!await this.requireRemoteScope(event, project.federationTarget, "messaging-project-create")) return;
-    if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-unavailable"),
-          createdAt: this.now(),
-          title: "New thread unavailable",
-          body: "This backend does not support starting a thread from messaging yet.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project });
-    project = { ...project, directoryKey: navigation.directory?.key ?? project.directoryKey };
-    const directory = directoryForProjectSelection(navigation, project);
-    const selectedBackend = await this.resolveNewThreadBackendForSession(
-      {
-        launchpadBackend: navigation.launchpadDefaults.backend,
-        session,
-      },
-      event,
-    );
-    if (!selectedBackend) {
-      return;
-    }
-    const workMode = resolveNewThreadWorkMode({
-      requestedWorkMode:
-        session.workMode ??
-        directory?.launchpad?.workMode ??
-        navigation.launchpadDefaults.workMode ??
-        "local",
-      directory,
-    });
-    await this.presentNewThreadPromptGate(
-      normalizeNewThreadSessionForBackend(
-        this.withNewThreadPromptCaptureExpiry({
-          ...session,
-          backend: selectedBackend.kind,
-          mode: "new_thread_options",
-          pageIndex: 0,
-          workMode,
-          branchName: workMode === "worktree" ? session.branchName : undefined,
-          selectedProject: { ...project, directoryKey: directory?.key ?? project.directoryKey },
-          updatedAt: this.now(),
-          expiresAt: this.now() + this.pendingIntentTtlMs,
-        }),
-        selectedBackend,
-        this.now(),
-        navigation,
-      ),
-      event,
-      navigation,
-    );
-  }
-
-  private withNewThreadPromptCaptureExpiry(
-    session: MessagingBrowseSessionRecord,
-  ): MessagingBrowseSessionRecord {
-    if (
-      !isNewThreadLaunchAction(session.launchAction) ||
-      session.mode !== "new_thread_options" ||
-      !session.selectedProject
-    ) {
-      return session;
-    }
-
-    const expiresAt = this.now() + NEW_THREAD_PROMPT_CAPTURE_TTL_MS;
-    return {
-      ...session,
-      expiresAt: Math.max(session.expiresAt, expiresAt),
-      textInputExpiresAt: Math.max(
-        session.textInputExpiresAt ?? session.expiresAt,
-        expiresAt,
-      ),
-    };
-  }
-
-  private async presentNewThreadPromptGate(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    _navigation?: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    let snapshot: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
-      backend: this.options.backend, project: session.selectedProject,
-    });
-    const backendChoices = await this.loadNewThreadBackendChoices(event);
-    if (!backendChoices) {
-      return;
-    }
-    const selectedBackend = session.backend
-      ? backendChoices.selectable.find((backend) => backend.kind === session.backend)
-      : resolveNewThreadBackend(
-          backendChoices.backends,
-          snapshot.launchpadDefaults.backend,
-    );
-    if (!selectedBackend) {
-      await this.deliverSelectedNewThreadBackendUnavailable(event);
-      return;
-    }
-    const effectiveSession = normalizeNewThreadSessionForBackend(
-      {
-        ...session,
-        backend: selectedBackend.kind,
-      },
-      selectedBackend,
-      this.now(),
-      snapshot,
-    );
-    const ensured = await this.ensureNewThreadProjectLaunchpad(
-      effectiveSession,
-      snapshot,
-      selectedBackend.kind,
-    );
-    snapshot = ensured.navigation;
-    const directory = ensured.directory ?? (effectiveSession.selectedProject
-      ? directoryForProjectSelection(snapshot, effectiveSession.selectedProject)
-      : undefined);
-    const options = newThreadOptionsForSession(
-      effectiveSession,
-      snapshot,
-      directory,
-      this.streamingResponsesDefault,
-      selectedBackend,
-    );
-    const canCreateWorktree = canCreateNewThreadWorktree(directory);
-    const fullAccessControls = await this.resolveFullAccessControls();
-    const hasMultipleBackends = backendChoices.selectable.length > 1;
-    const supportsModel = (selectedBackend.launchpadOptions?.models?.length ?? 0) > 0;
-    const supportsReasoning =
-      (selectedBackend.launchpadOptions?.reasoningEfforts?.length ?? 0) > 0 ||
-      Boolean(
-        selectedBackend.launchpadOptions?.models?.some(
-          (model) => model.supportsReasoning,
-        ),
-      );
-    const acpExecutionModePermissions =
-      acpBackendUsesExecutionModePermissions(selectedBackend);
-    const supportsPermissionsControls =
-      !isAcpBackendId(selectedBackend.kind) ||
-      acpExecutionModePermissions ||
-      options.executionMode === "full-access";
-    const acpRuntimeMode = isAcpBackendId(selectedBackend.kind)
-      && !acpExecutionModePermissions
-      ? buildMessagingAcpRuntimeModeSummary({
-          backend: selectedBackend,
-          runtime: options.acpRuntime,
-        })
-      : undefined;
-    const permissionsLabel = formatPermissionsActionDisplayLabel({
-      acpRuntimeLabel: acpRuntimeMode?.currentLabel,
-      current: options.executionMode,
-    });
-    const environmentLabel = formatNewThreadEnvironmentLabel(options);
-    const supportsEnvironment =
-      options.codexEnvironmentOptions.length > 0 ||
-      Boolean(options.codexEnvironmentId);
-    const toolUpdateMode = await this.resolveNewThreadToolUpdateMode(
-      effectiveSession,
-      directory,
-    );
-    const showStreaming = shouldShowStreamingControl(
-      effectiveSession.preferences?.streamingResponses ?? "inherit",
-      await this.bindingService.resolveShowStreamingOption(),
-      effectiveSession.preferences?.streamingControlRevealed,
-    );
-    await this.options.store.upsertBrowseSession(effectiveSession);
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-ready"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: effectiveSession.id,
-      createdAt: this.now(),
-      delivery: effectiveSession.surface
-        ? {
-            mode: "update",
-            replaceMarkup: true,
-          }
-        : undefined,
-      title: "Ready to start",
-      body: newThreadPromptGateBody(
-        effectiveSession,
-        options,
-        selectedBackend,
-        toolUpdateMode,
-        showStreaming,
-      ),
-      fallbackText: "Send your first instruction, or use the option buttons before sending it.",
-      targetSurface: effectiveSession.surface,
-      actions: [
-        ...(hasMultipleBackends
-          ? [
-              {
-                id: "browse:new:backend",
-                label: `Provider: ${selectedBackend.label}`,
-                style: "secondary" as const,
-                fallbackText: "provider",
-              },
-            ]
-          : []),
-        ...(canCreateWorktree
-          ? [
-              {
-                id: "browse:new:workspace:toggle",
-                label: `Start In: ${
-                  options.workMode === "worktree" ? "New Worktree" : "Local"
-                }`,
-                style: "secondary" as const,
-                fallbackText: "start in",
-              },
-            ]
-          : []),
-        ...(options.workMode === "worktree"
-          ? [
-              {
-                id: "browse:new:base-branch",
-                label: `Base: ${options.branchName}`,
-                style: "secondary" as const,
-                fallbackText: "base",
-              },
-            ]
-          : []),
-        ...(((supportsPermissionsControls &&
-          (options.executionMode === "full-access" ||
-            fullAccessControls.allowEscalation)) ||
-          (acpRuntimeMode && acpRuntimeMode.choices.length > 0))
-          ? [
-              {
-                id: "browse:new:permissions",
-                label: `Permissions: ${permissionsLabel}`,
-                style: "secondary" as const,
-                fallbackText: "permissions",
-              },
-            ]
-          : []),
-        ...(supportsEnvironment
-          ? [
-              {
-                id: "browse:new:environment",
-                label: `Environment: ${environmentLabel}`,
-                style: "secondary" as const,
-                fallbackText: "environment",
-              },
-            ]
-          : []),
-        ...(options.supportsFast || options.supportsUltrafast
-          ? [
-              {
-                id: "browse:new:fast",
-                label: options.supportsUltrafast
-                  ? `Speed: ${selectedCodexSpeed(options)}`
-                  : options.fastMode ? "Fast: on" : "Fast: off",
-                style: "secondary" as const,
-                fallbackText: "fast",
-              },
-            ]
-          : []),
-        {
-          id: "browse:new:working-updates",
-          label: `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-          style: "secondary",
-          fallbackText: "working updates",
-        },
-        ...(showStreaming
-          ? [
-              {
-                id: "browse:new:streaming",
-                label: options.streamingResponses ? "Stream: on" : "Stream: off",
-                style: "secondary" as const,
-                fallbackText: "stream",
-              },
-            ]
-          : []),
-        ...(supportsModel
-          ? [
-              {
-                id: "browse:new:model",
-                label: "Model",
-                style: "secondary" as const,
-                fallbackText: "model",
-              },
-            ]
-          : []),
-        ...(supportsReasoning && options.reasoningEffort
-          ? [
-              {
-                id: "browse:new:reasoning",
-                label: `Reasoning: ${options.reasoningEffort}`,
-                style: "secondary" as const,
-                fallbackText: "reasoning",
-              },
-            ]
-          : []),
-        {
-          id: "browse:mode:new",
-          label: "Back",
-          style: "navigation",
-          fallbackText: "back",
-        },
-        {
-          id: "browse:cancel",
-          label: "Cancel",
-          style: "secondary",
-          fallbackText: "cancel",
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (!result.surface) {
-      return;
-    }
-
-    const updatedSession = {
-      ...effectiveSession,
-      workMode: options.workMode,
-      branchName: options.workMode === "worktree" ? options.branchName : undefined,
-      surface: result.surface,
-      updatedAt: this.now(),
-    };
-    await this.options.store.upsertBrowseSession(updatedSession);
-    await this.options.store.upsertPendingIntent({
-      id: intent.id,
-      channel: event.channel,
-      intent,
-      allowedActorIds: [event.actor.platformUserId],
-      createdAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      surface: result.surface,
-    });
-  }
-
-  private async presentNewThreadBackendPicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const choices = await this.loadNewThreadBackendChoices(event);
-    if (!choices) {
-      return;
-    }
-    const selectedBackend =
-      choices.selectable.find((backend) => backend.kind === session.backend) ??
-      resolveNewThreadBackend(choices.backends, navigation.launchpadDefaults.backend);
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-backend"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? { mode: "update", replaceMarkup: true }
-        : undefined,
-      title: "Select provider",
-      body: "Choose the provider for the new thread.",
-      fallbackText: "Choose a provider, or reply back.",
-      targetSurface: session.surface,
-      actions: [
-        ...choices.selectable.map((backend, index) => ({
-          id: "browse:new:set-backend",
-          label: `${backend.label}${backend.kind === selectedBackend?.kind ? " ✓" : ""}`,
-          style: backend.kind === selectedBackend?.kind
-            ? "primary" as const
-            : "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { backend: backend.kind },
-        })),
-        {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async deliverSelectedNewThreadBackendUnavailable(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("new-thread-selected-backend-unavailable"),
-        createdAt: this.now(),
-        title: "Backend unavailable",
-        body: "The selected backend is no longer available to create a thread. Use /new to start again.",
-        recoverable: true,
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async presentNewThreadBranchPicker(
-    session: MessagingBrowseSessionRecord,
-    navigation: MessagingNewThreadNavigation,
-    event: MessagingInboundEvent,
-    pageIndex = 0,
-  ): Promise<void> {
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    const branches = newThreadBranchChoices(session, navigation, directory);
-    const page = buildBranchPickerPage({
-      branches,
-      branchActionId: "browse:new:set-base-branch",
-      branchValue: (branchName) => ({ branchName }),
-      capabilityProfile: this.capabilityProfile,
-      navActionCountBase: 2,
-      navActionCountMultipage: 4,
-      nextActionId: "browse:new:branches:next",
-      pageIndex,
-      previousActionId: "browse:new:branches:previous",
-    });
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-branch"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? {
-            mode: "update",
-            replaceMarkup: true,
-          }
-        : undefined,
-      title: "Pick base branch",
-      body: [
-        `New worktree base for ${session.selectedProject?.label ?? "this project"}.`,
-        page.totalPages > 1
-          ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
-          : undefined,
-      ]
-        .filter((line): line is string => Boolean(line))
-        .join("\n"),
-      fallbackText: [
-        "Choose a branch, or reply back.",
-        ...page.branchChoices.map((choice) => choice.label),
-      ].join("\n"),
-      targetSurface: session.surface,
-      actions: [
-        ...page.branchChoices,
-        ...page.pageActions,
-        {
-          id: "browse:new:workspace:worktree",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-        {
-          id: "browse:cancel",
-          label: "Cancel",
-          style: "secondary" as const,
-          fallbackText: "cancel",
-          priority: 2,
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async presentNewThreadModelPicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    backend: AppServerBackendKind,
-  ): Promise<void> {
-    const summary = await this.getBackendSummary(backend);
-    const models = summary?.launchpadOptions?.models ?? [];
-    if (models.length === 0) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-models-unavailable"),
-          createdAt: this.now(),
-          title: "Models unavailable",
-          body: "This backend did not report model choices.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-model"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? { mode: "update", replaceMarkup: true }
-        : undefined,
-      title: "Select model",
-      body: "Choose the model for the new thread.",
-      fallbackText: "Choose a model, or reply back.",
-      targetSurface: session.surface,
-      actions: buildMessagingModelMenuActions({
-        kind: backend,
-        models,
-        menuValue: event.kind === "callback" ? event.value : undefined,
-        menuActionId: "browse:new:model",
-        selectActionId: "browse:new:set-model",
-        capabilityProfile: this.capabilityProfile,
-        backAction: {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-      }),
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async presentNewThreadAcpRuntimeModePicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    backend: AppServerBackendKind,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const summary = await this.getBackendSummary(backend);
-    if (!summary) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-runtime-unavailable"),
-          createdAt: this.now(),
-          title: "Permissions unavailable",
-          body: "This ACP backend did not report permissions choices.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    const options = newThreadOptionsForSession(
-      session,
-      navigation,
-      directory,
-      this.streamingResponsesDefault,
-      summary,
-    );
-    const runtimeMode = buildMessagingAcpRuntimeModeSummary({
-      backend: summary,
-      runtime: options.acpRuntime,
-    });
-    if (runtimeMode.choices.length === 0) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-runtime-unavailable"),
-          createdAt: this.now(),
-          title: "Permissions unavailable",
-          body: "This ACP backend did not report permissions choices.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-runtime"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? { mode: "update", replaceMarkup: true }
-        : undefined,
-      title: "Select permissions",
-      body: "Choose the permissions mode for the new thread.",
-      fallbackText: "Choose a permissions option, or reply back.",
-      targetSurface: session.surface,
-      actions: [
-        ...runtimeMode.choices.map((choice, index) => ({
-          id: "browse:new:set-runtime-mode",
-          label: `${choice.label}${choice.selected ? " (current)" : ""}`,
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: {
-            optionId: choice.optionId,
-            source: choice.source,
-            value: choice.value,
-          },
-        })),
-        {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async presentNewThreadPermissionsPicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    const backend = await this.resolveNewThreadBackendForSession(
-      {
-        launchpadBackend: navigation.launchpadDefaults.backend,
-        preferredBackend: session.backend,
-        session,
-      },
-      event,
-    );
-    const currentMode = backend
-      ? newThreadOptionsForSession(
-          session,
-          navigation,
-          directory,
-          this.streamingResponsesDefault,
-          backend,
-        ).executionMode
-      : session.preferences?.executionMode ?? "default";
-    const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
-      { label: "Default", mode: "default" },
-      { label: "Full Access", mode: "full-access" },
-    ];
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-permissions"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? { mode: "update", replaceMarkup: true }
-        : undefined,
-      title: "Select permissions",
-      body: "Choose the permissions mode for the new thread.",
-      fallbackText: "Choose a permissions option, or reply back.",
-      targetSurface: session.surface,
-      actions: [
-        ...choices.map((choice, index) => ({
-          id: "browse:new:set-permissions",
-          label: `${choice.label}${choice.mode === currentMode ? " (current)" : ""}`,
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { executionMode: choice.mode },
-        })),
-        {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async setNewThreadPermissions(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundCallbackEvent,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const executionMode = readThreadExecutionModeValue(event.value);
-    if (!executionMode) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    const currentMode =
-      session.preferences?.executionMode ??
-      directory?.launchpad?.executionMode ??
-      navigation.launchpadDefaults.executionMode;
-    if (executionMode === currentMode) {
-      await this.presentNewThreadPromptGate(session, event, navigation);
-      return;
-    }
-    const backendKind = session.backend ?? navigation.launchpadDefaults.backend;
-    if (
-      isAcpBackendId(backendKind)
-      && executionMode !== "default"
-      && !acpBackendDeclaresExecutionMode(
-        await this.getBackendSummary(backendKind),
-        executionMode,
-      )
-    ) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-    if (executionMode === "full-access") {
-      const allowed = await this.ensureFullAccessEscalationAllowed(
-        { kind: "new-thread", session },
-        event,
-      );
-      if (!allowed) {
-        return;
-      }
-    }
-    await this.updateNewThreadStickySettings(session, {
-      executionMode,
-    });
-    await this.presentNewThreadPromptGate(
-      {
-        ...session,
-        preferences: {
-          ...session.preferences,
-          executionMode,
-          permissionsMode: executionMode,
-          updatedAt: this.now(),
-        },
-      },
-      event,
-      navigation,
-    );
-  }
-
-  private async presentNewThreadEnvironmentPicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const ensured = await this.ensureNewThreadProjectLaunchpad(
-      session,
-      navigation,
-      session.backend ?? navigation.launchpadDefaults.backend,
-    );
-    const directory = ensured.directory ?? (session.selectedProject
-      ? directoryForProjectSelection(ensured.navigation, session.selectedProject)
-      : undefined);
-    const options = directory?.launchpad?.codexEnvironmentOptions ?? [];
-    const currentEnvironmentId = resolveNewThreadCodexEnvironmentId(
-      session,
-      directory?.launchpad,
-    );
-    if (options.length === 0 && !currentEnvironmentId) {
-      await this.presentNewThreadPromptGate(session, event, navigation);
-      return;
-    }
-    const intent = buildNewThreadEnvironmentPickerIntent({
-      id: this.newIntentId("new-thread-environment"),
-      browseSessionId: session.id,
-      capabilityProfile: this.capabilityProfile,
-      createdAt: this.now(),
-      currentEnvironmentId,
-      options,
-      targetSurface: session.surface,
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async setNewThreadEnvironment(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundCallbackEvent,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const ensured = await this.ensureNewThreadProjectLaunchpad(
-      session,
-      navigation,
-      session.backend ?? navigation.launchpadDefaults.backend,
-    );
-    const directory = ensured.directory ?? (session.selectedProject
-      ? directoryForProjectSelection(ensured.navigation, session.selectedProject)
-      : undefined);
-    const environmentId = readNullableStringValue(event.value, "environmentId");
-    if (environmentId === undefined) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-    const environment = environmentId === null
-      ? undefined
-      : directory?.launchpad?.codexEnvironmentOptions?.find(
-          (candidate) => candidate.id === environmentId,
-        );
-    if (environmentId !== null && !environment) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-    const codexEnvironmentActionId =
-      environment && directory?.launchpad?.codexEnvironmentId === environment.id
-        ? directory.launchpad.codexEnvironmentActionId
-        : undefined;
-    await this.updateNewThreadStickySettings(session, {
-      codexEnvironmentId: environment?.id,
-      codexEnvironmentExecutionTarget: environment ? "local" : undefined,
-      codexEnvironmentActionId,
-    });
-    await this.presentNewThreadPromptGate(
-      {
-        ...session,
-        preferences: {
-          ...session.preferences,
-          codexEnvironmentId: environment?.id ?? null,
-          codexEnvironmentExecutionTarget: environment ? "local" : undefined,
-          codexEnvironmentActionId: codexEnvironmentActionId ?? null,
-          updatedAt: this.now(),
-        },
-      },
-      event,
-      ensured.navigation,
-    );
-  }
-
-  private async setNewThreadAcpRuntimeMode(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundCallbackEvent,
-    navigation: MessagingNewThreadNavigation,
-  ): Promise<void> {
-    const source = readAcpRuntimeOptionSource(event.value);
-    const optionId = readStringValue(event.value, "optionId");
-    const value = readStringValue(event.value, "value");
-    if (!source || !optionId || !value) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-
-    const backend = session.backend ?? navigation.launchpadDefaults.backend;
-    const summary = await this.getBackendSummary(backend);
-    if (!summary) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    const options = newThreadOptionsForSession(
-      session,
-      navigation,
-      directory,
-      this.streamingResponsesDefault,
-      summary,
-    );
-    const currentRuntime = options.acpRuntime;
-    const currentRuntimeMode = buildMessagingAcpRuntimeModeSummary({
-      backend: summary,
-      runtime: currentRuntime,
-    });
-    const choice = currentRuntimeMode.choices.find(
-      (candidate) =>
-        candidate.source === source &&
-        candidate.optionId === optionId &&
-        candidate.value === value,
-    );
-    if (!choice) {
-      await this.deliverInvalidBrowseSelection(event);
-      return;
-    }
-
-    const riskContext: AcpRuntimeRiskWarningContext = {
-      kind: "new-thread",
-      label: choice.label,
-      optionId,
-      sessionId: session.id,
-      source,
-      value,
-    };
-    if (
-      choice.privileged &&
-      !messagingAcpRuntimeValueLooksPrivileged(currentRuntimeMode.currentValue)
-    ) {
-      const allowed = await this.ensureAcpRuntimeModeAllowed(
-        riskContext,
-        event,
-      );
-      if (!allowed) {
-        return;
-      }
-    }
-
-    await this.applyNewThreadAcpRuntimeMode(session, event, navigation, riskContext);
-  }
-
-  private async applyNewThreadAcpRuntimeMode(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    navigation: MessagingNewThreadNavigation,
-    selection: AcpRuntimeRiskWarningContext & { kind: "new-thread" },
-  ): Promise<void> {
-    const backend = session.backend ?? navigation.launchpadDefaults.backend;
-    const summary = await this.getBackendSummary(backend);
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    const currentRuntime = summary
-      ? newThreadOptionsForSession(
-          session,
-          navigation,
-          directory,
-          this.streamingResponsesDefault,
-          summary,
-        ).acpRuntime
-      : session.preferences?.acpRuntime;
-    const acpRuntime: BackendAcpSessionRuntimeState = {
-      ...currentRuntime,
-      configValues:
-        selection.source === "configOption"
-          ? {
-              ...(currentRuntime?.configValues ?? {}),
-              [selection.optionId]: selection.value,
-            }
-          : currentRuntime?.configValues,
-      currentModeId: selection.source === "mode" || selection.source === "configOption"
-        ? selection.value
-        : currentRuntime?.currentModeId,
-      updatedAt: this.now(),
-    };
-    const executionMode = messagingAcpRuntimeValueLooksPrivileged(selection.value)
-      ? "full-access"
-      : "default";
-    await this.updateNewThreadStickySettings(session, {
-      acpRuntime,
-      executionMode,
-    });
-    await this.presentNewThreadPromptGate(
-      {
-        ...session,
-        preferences: {
-          ...session.preferences,
-          acpRuntime,
-          executionMode,
-          permissionsMode: executionMode,
-          updatedAt: this.now(),
-        },
-      },
-      event,
-      navigation,
-    );
-  }
-
-  private async presentNewThreadReasoningPicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    backend: AppServerBackendKind,
-  ): Promise<void> {
-    const summary = await this.getBackendSummary(backend);
-    const models = summary?.launchpadOptions?.models ?? [];
-    const modelOption =
-      models.find((model) => model.id === session.preferences?.model) ??
-      defaultBackendModel(models);
-    const efforts = reasoningEffortsForModel(summary, modelOption);
-    const fallbackEfforts = efforts.length > 0 ? efforts : ["low", "medium", "high"];
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-reasoning"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? { mode: "update", replaceMarkup: true }
-        : undefined,
-      title: "Select reasoning",
-      body: "Choose the reasoning effort for the new thread.",
-      fallbackText: "Choose a reasoning option, or reply back.",
-      targetSurface: session.surface,
-      actions: [
-        ...fallbackEfforts.map((effort, index) => ({
-          id: "browse:new:set-reasoning",
-          label: effort,
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { reasoningEffort: effort },
-        })),
-        {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
-    }
-  }
-
-  private async presentNewThreadWorkingUpdatesPicker(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    currentMode: MessagingToolUpdateMode,
-  ): Promise<void> {
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("new-thread-working-updates"),
-      capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
-      createdAt: this.now(),
-      delivery: session.surface
-        ? { mode: "update", replaceMarkup: true }
-        : undefined,
-      title: "Working Updates",
-      body:
-        "How much of the agent's in-progress work is bridged to this chat.\n\n"
-        + "None: only final answers and questions.\n"
-        + "Less / Some / More: coalesced batches that respect platform rate limits.\n"
-        + "All: the most (the rate budget may still hold some back).",
-      fallbackText: "Choose a Working Updates option, or reply back.",
-      targetSurface: session.surface,
-      actions: [
-        ...messagingToolUpdateModeChoices(currentMode).map((choice, index) => ({
-          id: "browse:new:set-working-updates",
-          label: `${choice.label}${choice.current ? " (current)" : ""}`,
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { toolUpdateMode: choice.mode },
-        })),
-        {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
-          label: "Back",
-          style: "secondary" as const,
-          fallbackText: "back",
-          priority: 1,
-        },
-      ],
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (result.surface) {
-      await this.options.store.upsertBrowseSession({
-        ...session,
-        surface: result.surface,
-        updatedAt: this.now(),
-      });
     }
   }
 
@@ -6575,7 +4020,7 @@ export class MessagingController {
 
     return await this.options.store.upsertManagedTopic(
       managedTopicRecordFromConversation({
-        actorIds: this.monitorAuthorizedActorIds(event),
+        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
         channel: event.channel.channel,
         conversation: result.conversation,
         now: this.now(),
@@ -6704,7 +4149,7 @@ export class MessagingController {
       });
     const proposal: MessagingTopicCleanupProposalRecord = {
       id: `topic-cleanup:${controlTopic.supergroupId}:${now}`,
-      authorizedActorIds: this.monitorAuthorizedActorIds(event),
+      authorizedActorIds: this.accessControl.monitorAuthorizedActorIds(event),
       channel: event.channel.channel,
       controlTopicRecordId: controlTopic.id,
       createdAt: now,
@@ -6795,7 +4240,7 @@ export class MessagingController {
       }
       const topic = await this.options.store.upsertManagedTopic(
         managedTopicRecordFromConversation({
-          actorIds: this.monitorAuthorizedActorIds(event),
+          actorIds: this.accessControl.monitorAuthorizedActorIds(event),
           channel: event.channel.channel,
           conversation: result.conversation,
           now: this.now(),
@@ -6928,7 +4373,7 @@ export class MessagingController {
     const observedAt = event.receivedAt;
     await this.options.store.mergeManagedTopicObservation({
       ...managedTopicRecordFromConversation({
-        actorIds: this.monitorAuthorizedActorIds(event),
+        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
         channel: event.channel.channel,
         conversation: event.channel.conversation,
         now: observedAt,
@@ -6956,7 +4401,7 @@ export class MessagingController {
     });
     return await this.options.store.upsertManagedTopic({
       ...managedTopicRecordFromConversation({
-        actorIds: this.monitorAuthorizedActorIds(event),
+        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
         channel: event.channel.channel,
         conversation: event.channel.conversation,
         now,
@@ -6966,7 +4411,7 @@ export class MessagingController {
       ...existing,
       authorizedActorIds: existing?.authorizedActorIds.length
         ? existing.authorizedActorIds
-        : this.monitorAuthorizedActorIds(event),
+        : this.accessControl.monitorAuthorizedActorIds(event),
       lastObservedAt: now,
       lifecycle: options.lifecycle,
       recommendation: options.recommendation ?? existing?.recommendation,
@@ -6991,7 +4436,7 @@ export class MessagingController {
       channel: event.channel,
       authorizedActorIds: existing?.authorizedActorIds.length
         ? existing.authorizedActorIds
-        : this.monitorAuthorizedActorIds(event),
+        : this.accessControl.monitorAuthorizedActorIds(event),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       monitor: {
@@ -7104,12 +4549,6 @@ export class MessagingController {
       monitorSurface: undefined,
       updatedAt: now,
     });
-  }
-
-  private monitorAuthorizedActorIds(event: MessagingInboundEvent): string[] {
-    return this.authorizedActorIds.size > 0
-      ? [...this.authorizedActorIds]
-      : [event.actor.platformUserId];
   }
 
   private async enableAndRenderMonitor(
@@ -8314,7 +5753,7 @@ export class MessagingController {
     const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
     if (executionMode === "full-access") {
-      const allowed = await this.ensureFullAccessEscalationAllowed(
+      const allowed = await this.accessControl.ensureFullAccessEscalationAllowed(
         {
           backend: binding.backend,
           binding,
@@ -8385,7 +5824,7 @@ export class MessagingController {
       return;
     }
     if (executionMode === "full-access") {
-      const allowed = await this.ensureFullAccessEscalationAllowed(
+      const allowed = await this.accessControl.ensureFullAccessEscalationAllowed(
         {
           backend: binding.backend,
           binding,
@@ -8418,7 +5857,7 @@ export class MessagingController {
     // RBAC double-gate: a privileged (full-access-equivalent) ACP runtime needs
     // the dedicated danger permission on top of the global Full Access toggle.
     if (
-      !(await this.requirePermission(
+      !(await this.accessControl.requirePermission(
         event,
         "thread.execution.full_access",
         "execution:acp-privileged",
@@ -8426,9 +5865,9 @@ export class MessagingController {
     ) {
       return false;
     }
-    const controls = await this.resolveFullAccessControls();
+    const controls = await this.accessControl.resolveFullAccessControls();
     if (!controls.allowEscalation) {
-      await this.deliverFullAccessPolicyError(
+      await this.accessControl.deliverFullAccessPolicyError(
         context.kind === "thread"
           ? await this.options.store.getBinding(context.bindingId)
           : undefined,
@@ -8438,7 +5877,7 @@ export class MessagingController {
       return false;
     }
 
-    const warning = await this.resolveFullAccessWarning(controls, event);
+    const warning = await this.accessControl.resolveFullAccessWarning(controls, event);
     if (!warning.shouldWarn) {
       return true;
     }
@@ -8451,8 +5890,8 @@ export class MessagingController {
     context: AcpRuntimeRiskWarningContext,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const controls = await this.resolveFullAccessControls();
-    const warning = await this.resolveFullAccessWarning(controls, event);
+    const controls = await this.accessControl.resolveFullAccessControls();
+    const warning = await this.accessControl.resolveFullAccessWarning(controls, event);
     const binding =
       context.kind === "thread"
         ? await this.options.store.getBinding(context.bindingId)
@@ -8539,287 +5978,6 @@ export class MessagingController {
       await this.options.store.upsertPendingIntent({
         ...pending,
         surface: result.surface,
-      });
-    }
-  }
-
-  private async ensureFullAccessEscalationAllowed(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-  ): Promise<boolean> {
-    // RBAC double-gate: escalating a thread to Codex Full Access requires the
-    // dedicated danger permission IN ADDITION to the global Full Access
-    // settings toggle below — the permission is never a bypass of the toggle.
-    if (
-      !(await this.requirePermission(
-        event,
-        "thread.execution.full_access",
-        "execution:full-access",
-      ))
-    ) {
-      return false;
-    }
-    const controls = await this.resolveFullAccessControls();
-    if (!controls.allowEscalation) {
-      await this.recordFullAccessPolicyViolation(context, event);
-      await this.deliverFullAccessPolicyError(
-        context.kind === "thread" ? context.binding : undefined,
-        event,
-        "Escalating to Full Access from messaging is disabled in Settings.",
-      );
-      return false;
-    }
-
-    const warning = await this.resolveFullAccessWarning(controls, event);
-    if (!warning.shouldWarn) {
-      return true;
-    }
-
-    await this.presentFullAccessRiskWarning(context, event);
-    return false;
-  }
-
-  private async presentFullAccessRiskWarning(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-    options: { presentationMode?: FullAccessRiskPresentationMode } = {},
-  ): Promise<void> {
-    const controls = await this.resolveFullAccessControls();
-    const warning = await this.resolveFullAccessWarning(controls, event);
-    const actionContext: FullAccessRiskWarningContext =
-      context.kind === "thread"
-        ? {
-            kind: "thread",
-            bindingId: context.binding?.id ?? "",
-            threadId: context.threadId,
-          }
-        : context.kind === "new-thread"
-          ? {
-            kind: "new-thread",
-            ...(options.presentationMode === "message"
-              ? { pendingPrompt: true }
-              : {}),
-            sessionId: context.session.id,
-          }
-          : {
-              backend: context.backend,
-              ...(context.federatedThread?.target.scope === "remote"
-                ? {
-                    federationInstanceId:
-                      context.federatedThread.target.instanceId,
-                  }
-                : {}),
-              kind: "resume-thread",
-              sessionId: context.session.id,
-              threadId: context.threadId,
-          };
-    const presentation = fullAccessRiskPresentationForContext(
-      context,
-      options.presentationMode ?? "surface",
-    );
-    const actions: MessagingConfirmationIntent["actions"] = [
-      {
-        id: `${FULL_ACCESS_RISK_ACTION_PREFIX}accept`,
-        label: "Yes",
-        style: "primary",
-        fallbackText: "yes",
-        value: actionContext,
-      },
-      ...(warning.canDismiss
-        ? [
-            {
-              id: `${FULL_ACCESS_RISK_ACTION_PREFIX}dismiss`,
-              label: "Yes - and stop warning me",
-              style: "primary" as const,
-              fallbackText: "yes and stop warning me",
-              value: actionContext,
-            },
-          ]
-        : []),
-      {
-        id: `${FULL_ACCESS_RISK_ACTION_PREFIX}cancel`,
-        label: "Cancel",
-        style: "secondary",
-        fallbackText: "cancel",
-        value: actionContext,
-      },
-    ];
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("full-access-risk"),
-      capabilityProfile: this.capabilityProfile,
-      createdAt: this.now(),
-      delivery: presentation.surface
-        ? {
-            mode: "update",
-            replaceMarkup: true,
-          }
-        : undefined,
-      title: "Enable Full Access?",
-      body: [
-        "Full Access allows network access and read/write access to almost all files on this machine.",
-        "That means data can be exfiltrated unintentionally, or by malicious code the agent downloads and executes through a supply chain attack on npm, PyPI, Rust crates, Go modules, or a similar dependency source.",
-      ].join("\n\n"),
-      fallbackText: warning.canDismiss
-        ? "Reply Yes, Yes - and stop warning me, or Cancel."
-        : "Reply Yes or Cancel.",
-      actions,
-      targetSurface: presentation.surface,
-    });
-    const expiresAt =
-      context.kind === "new-thread" || context.kind === "resume-thread"
-        ? this.now() + MESSAGING_CALLBACK_HANDLE_TTL_MS
-        : undefined;
-    if (
-      expiresAt !== undefined &&
-      (context.kind === "new-thread" || context.kind === "resume-thread")
-    ) {
-      await this.options.store.upsertBrowseSession({
-        ...context.session,
-        expiresAt: Math.max(context.session.expiresAt, expiresAt),
-        textInputExpiresAt:
-          options.presentationMode === "message"
-            ? this.now()
-            : context.session.textInputExpiresAt ?? context.session.expiresAt,
-        updatedAt: this.now(),
-      });
-    }
-    const pending = await this.storePendingIntent(
-      intent,
-      presentation.binding,
-      event,
-      expiresAt === undefined ? undefined : { expiresAt },
-    );
-    const result = await this.deliver(intent, presentation.binding, event);
-    if (result.surface) {
-      await this.options.store.upsertPendingIntent({
-        ...pending,
-        surface: result.surface,
-      });
-    }
-  }
-
-  private async canResumeFullAccessThreads(): Promise<boolean> {
-    return (await this.resolveFullAccessControls()).allowThreadResume;
-  }
-
-  private async resolveFullAccessRiskForSession(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    options: NewThreadOptionsSummary,
-  ): Promise<"accepted" | "blocked" | "warning"> {
-    if (session.fullAccessRiskAcceptedAt) {
-      return "accepted";
-    }
-    const controls = await this.resolveFullAccessControls();
-    if (!controls.allowEscalation) {
-      await this.recordFullAccessPolicyViolation(
-        { kind: "new-thread", session },
-        event,
-      );
-      await this.deliverFullAccessPolicyError(
-        undefined,
-        event,
-        "Starting a Full Access thread from messaging is disabled in Settings.",
-      );
-      return "blocked";
-    }
-    const warning = await this.resolveFullAccessWarning(controls, event);
-    if (
-      warning.policy === "dismissable" &&
-      options.executionModeSource !== "session"
-    ) {
-      return "accepted";
-    }
-    return warning.shouldWarn ? "warning" : "accepted";
-  }
-
-  private resolveFullAccessControls():
-    | MessagingFullAccessControls
-    | Promise<MessagingFullAccessControls> {
-    const controls = this.options.fullAccessControls;
-    const resolved =
-      typeof controls === "function" ? controls() : controls;
-    return isPromiseLike(resolved)
-      ? Promise.resolve(resolved).then(normalizeMessagingFullAccessControls)
-      : normalizeMessagingFullAccessControls(resolved);
-  }
-
-  private async resolveFullAccessWarning(
-    controls: MessagingFullAccessControls,
-    event: MessagingInboundEvent,
-  ): Promise<FullAccessWarningResolution> {
-    const contact = controls.authorizedUsers?.[event.channel.channel]?.find(
-      (candidate) => candidate.id === event.actor.platformUserId,
-    );
-    const policy = contact?.fullAccessWarningOverride ?? "default";
-    const effectivePolicy =
-      policy === "default" ? controls.warningPolicy : policy;
-    if (effectivePolicy === "never") {
-      return { canDismiss: false, policy: effectivePolicy, shouldWarn: false };
-    }
-    if (effectivePolicy === "always") {
-      return { canDismiss: false, policy: effectivePolicy, shouldWarn: true };
-    }
-    const canPersistDismissal =
-      controls.canDismissWarning
-        ? await controls.canDismissWarning({
-            actorId: event.actor.platformUserId,
-            channel: event.channel.channel,
-          })
-        : Boolean(controls.dismissWarning);
-    return {
-      canDismiss: Boolean(controls.dismissWarning) && canPersistDismissal,
-      policy: effectivePolicy,
-      shouldWarn: contact?.fullAccessWarningDismissed !== true,
-    };
-  }
-
-  private async deliverFullAccessPolicyError(
-    binding: MessagingBindingRecord | undefined,
-    event: MessagingInboundEvent | undefined,
-    body: string,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("full-access-policy"),
-        createdAt: this.now(),
-        title: "Full Access blocked",
-        body,
-        recoverable: true,
-      }),
-      binding,
-      event,
-    );
-  }
-
-  private async recordFullAccessPolicyViolation(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    try {
-      await this.options.onFullAccessPolicyViolation?.({
-        actorId: event.actor.platformUserId,
-        actorDisplayName: event.actor.displayName,
-        backend:
-          context.kind === "thread" || context.kind === "resume-thread"
-            ? context.backend
-            : undefined,
-        bindingId: context.kind === "thread" ? context.binding?.id : undefined,
-        channel: event.channel,
-        requestedAction:
-          context.kind === "thread"
-            ? "messaging.full_access.escalate_thread"
-            : context.kind === "resume-thread"
-              ? "messaging.full_access.resume_with_escalation"
-              : "messaging.full_access.start_new_thread",
-        threadId:
-          context.kind === "thread" || context.kind === "resume-thread"
-            ? context.threadId
-            : undefined,
-      });
-    } catch (error) {
-      this.logger.debug?.("messaging full-access policy log failed", {
-        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -9056,68 +6214,6 @@ export class MessagingController {
       federationTarget,
     });
     return response?.backends.find((candidate) => candidate.kind === backend);
-  }
-
-  /**
-   * Providers on this instance that can run a review, with the models and
-   * reasoning levels each offers. Drives the configurator's Provider / Model /
-   * Effort buttons. Returns an empty list — which hides those buttons — when
-   * nothing advertises `reviewRunner`, so an instance that predates reviewer
-   * overrides never offers a choice it cannot honor.
-   */
-  private async listReviewerBackends(): Promise<
-    NonNullable<MessagingReviewIntent["review"]["reviewerBackends"]>
-  > {
-    try {
-      const response = await this.options.backend.listBackends?.({
-        includeUnavailable: false,
-      });
-      return (response?.backends ?? [])
-        .filter((candidate) =>
-          candidate.capabilities.reviewRunner === true
-          || candidate.capabilities.reviewRunMode === true
-          || candidate.capabilities.reviewAutoFix === true,
-        )
-        .map((candidate) => ({
-          backend: candidate.kind,
-          label: candidate.label,
-          capabilities: candidate.capabilities,
-          models: (candidate.launchpadOptions?.models ?? []).map((model) => ({
-            id: model.id,
-            label: model.label ?? model.id,
-            other: model.other,
-            providerId: model.providerId,
-            providerLabel: model.providerLabel,
-            reasoningEfforts:
-              model.reasoningEfforts
-              ?? candidate.launchpadOptions?.reasoningEfforts
-              ?? [],
-          })),
-        }));
-    } catch (error) {
-      this.logger.debug?.("messaging reviewer backend lookup failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    }
-  }
-
-  private async reviewSupportedForBinding(
-    binding: MessagingBindingRecord,
-  ): Promise<boolean> {
-    if (!this.options.backend.submitReview) {
-      return false;
-    }
-    try {
-      const summary = await this.getBackendSummary(binding.backend);
-      return Boolean(summary?.available && summary.capabilities.startReview);
-    } catch (error) {
-      this.logger.debug?.("messaging review capability lookup failed", {
-        backend: binding.backend,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
   }
 
   private rememberContextUsageSummary(event: AgentEvent): void {
@@ -9457,7 +6553,7 @@ export class MessagingController {
     monitor?: MessagingMonitorState,
     countsAsActivity = true,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
-    const activeTurns = new Map(this.activeTurnsByThreadKey);
+    const activeTurns = new Map(this.turns.snapshot());
     if (!this.options.backend.readThreadStatus) {
       return activeTurns;
     }
@@ -9713,12 +6809,11 @@ export class MessagingController {
     }
   }
 
-  private async reconcileIdleTurnAndStartNext(
+  private async reconcileIdleTurn(
     binding: MessagingBindingRecord,
     reason: string,
   ): Promise<void> {
     await this.reconcileActiveTurnFromBackendStatus(binding, reason);
-    await this.startNextQueuedTurn(binding);
   }
 
   private async retireStalePendingIntent(
@@ -9741,14 +6836,14 @@ export class MessagingController {
   private getActiveTurn(
     binding: MessagingBindingRecord,
   ): MessagingActiveTurnSummary | undefined {
-    return this.activeTurnsByThreadKey.get(this.threadKeyForBinding(binding));
+    return this.turns.get(binding);
   }
 
   private setActiveTurn(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
   ): void {
-    this.activeTurnsByThreadKey.set(this.threadKeyForBinding(binding), activeTurn);
+    this.turns.observe(binding, activeTurn);
   }
 
   private threadKeyForBinding(binding: MessagingBindingRecord): string {
@@ -11576,46 +8671,6 @@ export class MessagingController {
     );
   }
 
-  private retainedRequestSource(context: PwrAgentMessagingRequest["context"]): MessagingRequestSource | undefined {
-    if (context.causalMessagingAmbiguous) return undefined;
-    if (context.causalMessagingSource) return this.options.requestStore?.get(context.causalMessagingSource);
-    if (!context.turnId) return undefined;
-    return this.activeAgentMessagingOriginsByTurnKey.get(
-      agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
-    )?.source;
-  }
-
-  private retainedRequestCanCrossInstance(context: PwrAgentMessagingRequest["context"], source: MessagingRequestSource): boolean {
-    return !context.requestingInstanceId || this.actorHasPermission(source.event, "federation.remote_control");
-  }
-
-  private async retainedSourceIsAuthorized(source: MessagingRequestSource, verifyAccess = true): Promise<boolean | undefined> {
-    if (!this.isChannelInScope(source.event.channel)
-      || !source.connectionId || source.connectionId !== this.adapter.retainedSourceConnectionId?.()
-      || !this.adapter.authorizeRetainedSource) return false;
-    const providerAdmission = await this.adapter.authorizeRetainedSource(source.event, verifyAccess);
-    if (providerAdmission !== true) return providerAdmission;
-    if (source.bindingId) {
-      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
-      if (!binding || binding.revokedAt || binding.backend !== source.agent.backend
-        || binding.id !== source.bindingId || binding.threadId !== source.agent.threadId) return false;
-    } else {
-      if (await this.options.store.findActiveBindingForChannel(source.event.channel)) return false;
-      // The effective default route, not any older broader matching assignment,
-      // must still name the Agent that admitted this human request.
-      const assignment = await this.options.store.findActiveDefaultAgentAssignmentForChannel(source.event.channel);
-      if (!assignment || assignment.target.backend !== source.agent.backend
-        || assignment.target.threadId !== source.agent.threadId) return false;
-    }
-    return true;
-  }
-
-  private retainedSourceHasPermissions(source: MessagingRequestSource): boolean {
-    const permissions = this.resolveActorPermissions(source.event);
-    return permissions === null || (["thread.resume", "tools.thread_inspection"] as const)
-      .every((permission) => permissions.permissions.has(permission));
-  }
-
   private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"], code: "forbidden" | "not_found" = "forbidden"): Extract<PwrAgentMessagingResponse, { ok: false }> {
     return { ok: false, error: {
       code: context.causalMessagingAmbiguous ? "ambiguous_location" : code,
@@ -11628,15 +8683,15 @@ export class MessagingController {
   private async listRetainedMessagingSurfaces(
     request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_surfaces" }>,
   ): Promise<PwrAgentMessagingResponse> {
-    const source = this.retainedRequestSource(request.context);
+    const source = this.accessControl.retainedRequestSource(request.context);
     if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
-    if (!this.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.retainedSourceHasPermissions(source)
-      || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
+    if (!this.accessControl.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.accessControl.retainedSourceHasPermissions(source)
+      || !await this.accessControl.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
     if (!isAppServerBackendKind(request.args.backend) || !request.args.threadId?.trim()
       || (request.args.limit !== undefined && (!Number.isInteger(request.args.limit) || request.args.limit < 1 || request.args.limit > 25))) {
       return { ok: false, error: { code: "invalid_arguments", message: "Provide a target backend/threadId and a limit between 1 and 25." } };
     }
-    const canUseRemote = this.actorHasPermission(source.event, "federation.remote_control");
+    const canUseRemote = this.accessControl.actorHasPermission(source.event, "federation.remote_control");
     if (request.args.instanceId && !canUseRemote) return this.retainedSourceUnavailable(request.context);
     const target = await this.resolveAttachTarget({ ...request.args, includeRemote: canUseRemote && request.args.includeRemote !== false });
     if (!target.ok) return target;
@@ -11659,8 +8714,8 @@ export class MessagingController {
       selectionReason: "unavailable",
     };
     for (const candidate of page) {
-      if (!this.retainedSourceHasPermissions(candidate)) continue;
-      const authorized = await this.retainedSourceIsAuthorized(candidate);
+      if (!this.accessControl.retainedSourceHasPermissions(candidate)) continue;
+      const authorized = await this.accessControl.retainedSourceIsAuthorized(candidate);
       if (authorized === undefined) result.countIsComplete = false;
       if (!authorized) continue;
       // Use the immutable request's reply anchor for its causal destination,
@@ -11705,11 +8760,11 @@ export class MessagingController {
   private async attachThreadToRetainedSurface(
     request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_to_surface" }>,
   ): Promise<PwrAgentMessagingResponse> {
-    const source = this.retainedRequestSource(request.context);
+    const source = this.accessControl.retainedRequestSource(request.context);
     if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
-    if (!this.retainedRequestCanCrossInstance(request.context, source) || !this.retainedSourceHasPermissions(source)
-      || !await this.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
-    if (request.args.instanceId && !this.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
+    if (!this.accessControl.retainedRequestCanCrossInstance(request.context, source) || !this.accessControl.retainedSourceHasPermissions(source)
+      || !await this.accessControl.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
+    if (request.args.instanceId && !this.accessControl.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
     let selector = request.args.surfaceSelector;
     if (request.args.selection !== undefined && !["causal", "sole_eligible"].includes(request.args.selection)) {
       return { ok: false, error: { code: "invalid_arguments", message: "selection must be causal or sole_eligible." } };
@@ -11726,8 +8781,8 @@ export class MessagingController {
     }
     const selected = !selector || selector === source.selector ? source
       : this.options.requestStore?.destination(source, selector);
-    if (!selected || !this.retainedSourceHasPermissions(selected)
-      || !await this.retainedSourceIsAuthorized(selected, false)) return this.retainedSourceUnavailable(request.context);
+    if (!selected || !this.accessControl.retainedSourceHasPermissions(selected)
+      || !await this.accessControl.retainedSourceIsAuthorized(selected, false)) return this.retainedSourceUnavailable(request.context);
     if (request.args.expectedRevision && request.args.expectedRevision !== selected.ref.requestId) {
       return { ok: false, error: { code: "forbidden", message: "The selected destination's human reply anchor changed. Inspect its current revision before attaching." } };
     }
@@ -11741,7 +8796,7 @@ export class MessagingController {
       request.args.idempotencyKey ?? null]);
     if (!claim) return this.retainedSourceUnavailable(request.context);
     if (!claim.claimed) {
-      if (!await this.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
+      if (!await this.accessControl.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
       if (claim.result?.ok && "binding" in claim.result.data) {
         const binding = await this.options.store.getBinding(claim.result.data.binding.id);
         if (!binding || binding.revokedAt) return this.retainedSourceUnavailable(request.context);
@@ -11751,7 +8806,7 @@ export class MessagingController {
     }
     const result = await this.attachThreadHereFromAgentMessagingOrigin({
       operation: "attach_thread_here", context: request.context,
-      args: { ...request.args, includeRemote: this.actorHasPermission(source.event, "federation.remote_control") && request.args.includeRemote !== false },
+      args: { ...request.args, includeRemote: this.accessControl.actorHasPermission(source.event, "federation.remote_control") && request.args.includeRemote !== false },
     }, await this.originForRetainedSource(selected));
     this.options.requestStore!.finishAttachment(claim.id, result);
     return result;
@@ -11760,18 +8815,8 @@ export class MessagingController {
   async authorizeRetainedTool(
     context: PwrAgentMessagingRequest["context"],
     check: Parameters<MessagingController["checkDynamicToolPermission"]>[0],
-  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }> {
-    const source = this.retainedRequestSource(context);
-    if (!source || !this.isChannelInScope(source.event.channel)) return { owns: false, allowed: false };
-    if (context.containedPeer) {
-      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
-      if (!source.bindingId || binding?.id !== source.bindingId || !containedMessagingBindingMatches(context, binding)) {
-        return { owns: true, allowed: false, permission: "federation.remote_control" };
-      }
-    }
-    if (!this.retainedRequestCanCrossInstance(context, source)) return { owns: true, allowed: false, permission: "federation.remote_control" };
-    if (!await this.retainedSourceIsAuthorized(source, false)) return { owns: true, allowed: false, permission: "message.reply" };
-    return this.checkDynamicToolPermission(check, source);
+  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }>{
+    return this.accessControl.authorizeRetainedTool(context, check);
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
@@ -11853,7 +8898,7 @@ export class MessagingController {
       return target;
     }
 
-    if (!await this.requireRemoteScope(origin.origin.event, target.federatedThread?.target, "agent-attach:remote-instance", { notify: false })) {
+    if (!await this.accessControl.requireRemoteScope(origin.origin.event, target.federatedThread?.target, "agent-attach:remote-instance", { notify: false })) {
       return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot attach a thread from this instance." } };
     }
 
@@ -11871,8 +8916,8 @@ export class MessagingController {
 
     let attachEvent = origin.origin.event;
     let createdConversation: MessagingChannelRef["conversation"] | undefined;
-    if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
-      || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
+    if (retainedOrigin?.source && (!this.accessControl.retainedSourceHasPermissions(retainedOrigin.source)
+      || !await this.accessControl.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     if (resolvedPlacement.placement === "new_child") {
       if (!this.adapter.createManagedConversation) {
         return {
@@ -11919,8 +8964,8 @@ export class MessagingController {
       };
     }
 
-    if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
-      || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
+    if (retainedOrigin?.source && (!this.accessControl.retainedSourceHasPermissions(retainedOrigin.source)
+      || !await this.accessControl.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     const binding = await this.bindingService.bindChannelToThread(attachEvent, {
       backend: args.backend,
       federatedThread: target.federatedThread,
@@ -12463,7 +9508,7 @@ export class MessagingController {
         },
       };
     }
-    const permission = this.checkDynamicToolPermission({
+    const permission = this.accessControl.checkDynamicToolPermission({
       backend: request.context.backend,
       threadId: request.context.threadId,
       turnId: request.context.turnId,
@@ -12581,7 +9626,7 @@ export class MessagingController {
     }
 
     if (request.context.requestingInstanceId) {
-      const permission = await this.authorizeRetainedTool(request.context, {
+      const permission = await this.accessControl.authorizeRetainedTool(request.context, {
         ...request.context, category: "messaging_context", tool: "send_messaging_file", arguments: request.args,
       });
       if (!permission.allowed || !(await this.resolveAgentMessagingOrigin(request.context)).ok) {
@@ -12790,7 +9835,7 @@ export class MessagingController {
     const active = request.context.turnId ? this.activeAgentMessagingOriginsByTurnKey.get(
       agentMessagingTurnKey(request.context.backend, request.context.threadId, request.context.turnId),
     ) : undefined;
-    const source = this.retainedRequestSource(request.context);
+    const source = this.accessControl.retainedRequestSource(request.context);
     const event = source?.event ?? active?.event;
     // The request store is shared by every provider. An unrelated controller
     // must yield before actor authorization, so the owner can decide access.
@@ -12803,12 +9848,12 @@ export class MessagingController {
     const remoteAuthorized = async (verifyAccess = true): Promise<boolean> => {
       if (!remote || !source || !source.bindingId || source.agent.backend !== request.context.backend
         || source.agent.threadId !== request.context.threadId) return false;
-      if (!await this.retainedSourceIsAuthorized(source, verifyAccess)) return false;
+      if (!await this.accessControl.retainedSourceIsAuthorized(source, verifyAccess)) return false;
       const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
       return binding?.id === source.bindingId && binding.backend === request.context.backend
         && binding.threadId === request.context.threadId && containedMessagingBindingMatches(request.context, binding)
-        && this.retainedRequestCanCrossInstance(request.context, source)
-        && this.checkDynamicToolPermission({ ...request.context, category: "messaging_context",
+        && this.accessControl.retainedRequestCanCrossInstance(request.context, source)
+        && this.accessControl.checkDynamicToolPermission({ ...request.context, category: "messaging_context",
           tool: request.operation, arguments: request.args }, source).allowed;
     };
     if (remote && !await remoteAuthorized()) return this.retainedSourceUnavailable(request.context);
@@ -12816,10 +9861,10 @@ export class MessagingController {
       return { ok: false, error: { code: "not_found", message:
         "This messaging turn's actor cannot be reauthorized after restart. Send a new message in the original conversation, or request the save in a local desktop turn on this thread." } };
     }
-    if (!remote && !active && request.context.causalMessagingSource && (!source || !await this.retainedSourceIsAuthorized(source))) {
+    if (!remote && !active && request.context.causalMessagingSource && (!source || !await this.accessControl.retainedSourceIsAuthorized(source))) {
       return this.retainedSourceUnavailable(request.context);
     }
-    const permission = this.checkDynamicToolPermission({ ...request.context,
+    const permission = this.accessControl.checkDynamicToolPermission({ ...request.context,
       category: "messaging_context", tool: request.operation, arguments: request.args,
     }, source);
     if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot access received attachments." } };
@@ -13121,10 +10166,10 @@ export class MessagingController {
     context: PwrAgentMessagingRequest["context"],
   ): Promise<AgentMessagingOriginResolution> {
     if (context.requestingInstanceId && context.causalMessagingSource) {
-      const source = this.retainedRequestSource(context);
+      const source = this.accessControl.retainedRequestSource(context);
       if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(context, "not_found");
-      if (!this.retainedRequestCanCrossInstance(context, source) || !this.retainedSourceHasPermissions(source)
-        || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(context);
+      if (!this.accessControl.retainedRequestCanCrossInstance(context, source) || !this.accessControl.retainedSourceHasPermissions(source)
+        || !await this.accessControl.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(context);
       return { ok: true, origin: await this.originForRetainedSource(source) };
     }
     if (context.turnId) {
@@ -13222,7 +10267,7 @@ export class MessagingController {
   private summarizeConversationCapabilities(
     origin: ActiveAgentMessagingOrigin,
   ): PwrAgentMessagingConversationCapabilitiesSummary {
-    const permissions = this.resolveActorPermissions(origin.event);
+    const permissions = this.accessControl.resolveActorPermissions(origin.event);
     return {
       rename: {
         allowed:
@@ -13452,159 +10497,6 @@ export class MessagingController {
     };
   }
 
-  private isAuthorized(platformUserId: string): boolean {
-    return this.authorizedActorIds.has(platformUserId);
-  }
-
-  // -------------------------------------------------------------------------
-  // RBAC — capability layer (issue #260). Composes with, never replaces, the
-  // provider admission gate. In legacy-compatible mode (no policy provider, or
-  // enforcement disabled) every method here is a no-op so behavior is identical
-  // to pre-RBAC PwrAgent.
-  // -------------------------------------------------------------------------
-
-  /**
-   * Resolve the triggering actor's effective permissions, or `null` in
-   * legacy-compatible mode (caller should treat null as "allow, Admin-implied").
-   *
-   * The admission-path inference: a caller in `authorizedActorIds` is a *named*
-   * actor (only their named attachments apply); anyone else was admitted by the
-   * provider through a bucket access mode (DM workspace bucket for direct
-   * messages, channel bucket otherwise), so the matching bucket attachment
-   * applies. See #260 §3.
-   */
-  private resolveActorPermissions(
-    event: MessagingInboundEvent,
-  ): RbacResolution | null {
-    const provider = this.options.rbacPolicy;
-    if (!provider) {
-      return null;
-    }
-    const actorId = event.actor.platformUserId;
-    const named = this.authorizedActorIds.has(actorId);
-    const admittedVia = named
-      ? {}
-      : event.channel.conversation.kind === "dm"
-        ? { dmBucket: true }
-        : { channelBucket: true };
-    const input = {
-      actorId,
-      conversationId: event.channel.conversation.id,
-      admittedVia,
-    };
-    // One policy read when the provider supports it — a gated action asks both
-    // "are we enforcing?" and "what may they do?", and each ask re-reads.
-    if (provider.resolveIfEnforcing) {
-      return provider.resolveIfEnforcing(input);
-    }
-    return provider.isEnforcing() ? provider.resolve(input) : null;
-  }
-
-  /**
-   * Admission gate replacement. Legacy mode preserves the exact
-   * `authorizedActorIds` membership check. Enforcing mode admits any actor that
-   * resolves to at least one permission-granting role (named or bucket) and
-   * default-denies the rest.
-   */
-  private authorizeInboundAdmission(event: MessagingInboundEvent): boolean {
-    const resolution = this.resolveActorPermissions(event);
-    if (resolution === null) {
-      return this.isAuthorized(event.actor.platformUserId);
-    }
-    return !resolution.rejected;
-  }
-
-  /**
-   * Gate a single action. Returns true (proceed) in legacy mode or when the
-   * actor holds `permission`; otherwise records an audit row, optionally
-   * notifies the user, and returns false. `notify: false` silently drops (used
-   * for the plain-reply floor to avoid spamming a channel).
-   */
-  private async requirePermission(
-    event: MessagingInboundEvent,
-    permission: MessagingPermissionId,
-    auditAction: string,
-    opts?: { notify?: boolean },
-  ): Promise<boolean> {
-    const resolution = this.resolveActorPermissions(event);
-    if (resolution === null) {
-      return true;
-    }
-    if (resolution.permissions.has(permission)) {
-      return true;
-    }
-    this.recordCapabilityDenied(event, permission, resolution.roleIds, auditAction);
-    if (opts?.notify !== false) {
-      await this.deliverCapabilityDenied(event);
-    }
-    return false;
-  }
-
-  /**
-   * Federation SCOPE gate. Every other permission answers "what may this actor
-   * do"; this one answers "where". Required IN ADDITION to the action's own
-   * permission whenever the thread being acted on lives on another instance —
-   * the same double-gate shape as `thread.execution.full_access`, and for the
-   * same reason: `thread.resume` on a peer's thread is a materially bigger
-   * grant than on a local one, and `thread.execution.full_access` on a peer's
-   * thread is full access on ANOTHER MACHINE.
-   *
-   * Local targets short-circuit to `true`, so this costs nothing for the
-   * single-instance case. Legacy (unenforced) mode is allow-all as always.
-   */
-  private async requireRemoteScope(
-    event: MessagingInboundEvent,
-    target: FederationTarget | undefined,
-    auditAction: string,
-    opts?: { notify?: boolean },
-  ): Promise<boolean> {
-    if (!target || target.scope !== "remote") {
-      return true;
-    }
-    return await this.requirePermission(
-      event,
-      "federation.remote_control",
-      auditAction,
-      opts,
-    );
-  }
-
-  /**
-   * Non-auditing permission probe for render-time filtering. `requirePermission`
-   * records a denial and messages the user, which is right when they ASKED to do
-   * something and wrong when we're deciding what to put on a menu.
-   */
-  private actorHasPermission(
-    event: MessagingInboundEvent,
-    permission: MessagingPermissionId,
-  ): boolean {
-    const resolution = this.resolveActorPermissions(event);
-    return resolution === null || resolution.permissions.has(permission);
-  }
-
-  /**
-   * Strip peers' threads from a snapshot before it reaches a picker. Enforcement
-   * alone would still leak: the resume browser lists thread titles and projects,
-   * so an actor without remote scope would read a peer's work before being told
-   * they can't touch it. Filtering here keeps the menu honest — every row it
-   * shows is a row the actor may actually bind.
-   */
-  /** `requireRemoteScope` for an already-resolved binding. */
-  private async requireRemoteScopeForBinding(
-    event: MessagingInboundEvent,
-    binding: MessagingBindingRecord | undefined,
-    auditAction: string,
-    opts?: { notify?: boolean },
-  ): Promise<boolean> {
-    if (!binding) return true;
-    return await this.requireRemoteScope(
-      event,
-      federationTargetForBinding(binding),
-      auditAction,
-      opts,
-    );
-  }
-
   /**
    * `send_messaging_file` reads a workspace file and pushes its bytes to an
    * external platform. That is the one outbound delivery an operator needs to
@@ -13660,55 +10552,6 @@ export class MessagingController {
     }
   }
 
-  private recordCapabilityDenied(
-    event: MessagingInboundEvent,
-    permission: MessagingPermissionId | "(admission)",
-    roleIds: readonly string[],
-    auditAction: string,
-  ): void {
-    try {
-      const log = this.desktopActivityLog();
-      if (!log) return;
-      const conversation = event.channel.conversation;
-      const who = event.actor.displayName ?? event.actor.platformUserId;
-      log.record({
-        platform: event.channel.channel,
-        kind: "inbound-rejected",
-        conversationId: conversation.id,
-        conversationTitle: conversation.title,
-        actorId: event.actor.platformUserId,
-        actorDisplayName: event.actor.displayName,
-        summary: `Denied ${auditAction}: ${who} lacks ${permission}`,
-        createdAt: this.now(),
-        payload: {
-          reason: "unauthorized-capability",
-          permission,
-          roleIds: [...roleIds],
-          auditAction,
-          conversationKind: conversation.kind,
-        },
-      });
-    } catch {
-      // Activity log is best-effort observability.
-    }
-  }
-
-  private async deliverCapabilityDenied(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("capability-denied"),
-        createdAt: this.now(),
-        title: "Not permitted",
-        body: "You don't have permission to do that.",
-        recoverable: false,
-      }),
-      undefined,
-      event,
-    );
-  }
-
   /**
    * Authorize an agent dynamic-tool call against the RBAC actor who started the
    * turn. `owns: false` means this controller has no record of the turn (a
@@ -13733,61 +10576,8 @@ export class MessagingController {
     category: MessagingDynamicToolCategory;
     tool: string;
     arguments?: Record<string, unknown> | null;
-  }, source?: MessagingRequestSource): { owns: boolean; allowed: boolean; permission?: string } {
-    if (!params.turnId && !source) {
-      return { owns: false, allowed: true };
-    }
-    const origin = source ? { event: source.event } : this.activeAgentMessagingOriginsByTurnKey.get(
-      agentMessagingTurnKey(params.backend, params.threadId, params.turnId!),
-    );
-    if (!origin) {
-      return { owns: false, allowed: true };
-    }
-    const resolution = this.resolveActorPermissions(origin.event);
-    if (resolution === null) {
-      if (params.tool === "manage_pwragent") {
-        // Lifecycle control requires an explicit current grant, including in legacy mode.
-        return { owns: true, allowed: false, permission: "tools.instance_lifecycle" };
-      }
-      // Legacy-compatible mode: full capability, exactly as before RBAC.
-      return { owns: true, allowed: true };
-    }
-    // `mutate_thread` is gated PER FIELD (model/reasoning/fast/rename/execution
-    // mode) at parity with the status buttons, including the Full Access danger
-    // gate; every other tool needs a single category permission.
-    const required =
-      params.category === "thread_inspection" && params.tool === "mutate_thread"
-        ? permissionsForThreadMutation(params.arguments)
-        : ((): MessagingPermissionId[] => {
-            const permission = permissionForDynamicTool(params.category, params.tool);
-            return permission ? [permission] : [];
-          })();
-    // Scope: the thread tools accept `instanceId` / `includeRemote`, so the
-    // agent can aim them at a peer. Reaching another instance needs the scope
-    // permission on top of the tool's own — and it applies even to otherwise
-    // ungated tools, because "benign here" is not benign on someone else's
-    // machine.
-    if (toolArgsTargetRemoteInstance(params.arguments)) {
-      required.push("federation.remote_control");
-    }
-    if (params.tool === "manage_pwragent") required.push("tools.instance_lifecycle");
-    if (required.length === 0) {
-      // Benign tool (e.g. get_current_messaging_surface, or a no-op mutation).
-      return { owns: true, allowed: true };
-    }
-    const missing = required.find(
-      (permission) => !resolution.permissions.has(permission),
-    );
-    if (!missing) {
-      return { owns: true, allowed: true };
-    }
-    this.recordCapabilityDenied(
-      origin.event,
-      missing,
-      resolution.roleIds,
-      `tool:${params.category}:${params.tool}`,
-    );
-    return { owns: true, allowed: false, permission: missing };
+  }, source?: MessagingRequestSource): { owns: boolean; allowed: boolean; permission?: string }{
+    return this.accessControl.checkDynamicToolPermission(params, source);
   }
 
   private newIntentId(prefix: string): string {
@@ -14007,171 +10797,6 @@ function formatTopicCleanupProposalBody(
   ].join("\n");
 }
 
-function fullAccessRiskPresentationForContext(
-  context: FullAccessEscalationContext,
-  presentationMode: FullAccessRiskPresentationMode,
-): FullAccessRiskPresentation {
-  if (presentationMode === "message") {
-    return {};
-  }
-  if (context.kind === "thread") {
-    return {
-      binding: context.binding,
-      surface: context.binding?.statusSurface ?? context.binding?.pinnedStatusSurface,
-    };
-  }
-  return { surface: context.session.surface };
-}
-
-function reviewWorkspaceMatches(
-  directoryPath: string | undefined,
-  cwd: string | undefined,
-): boolean {
-  if (!directoryPath || !cwd) {
-    return false;
-  }
-  const normalize = (value: string) => value.replace(/\/+$/, "");
-  return normalize(directoryPath) === normalize(cwd);
-}
-
-function reviewWorkspaceContains(
-  workspacePath: string | undefined,
-  cwd: string | undefined,
-): boolean {
-  if (!workspacePath || !cwd) {
-    return false;
-  }
-  const relative = path.relative(
-    path.resolve(workspacePath),
-    path.resolve(cwd),
-  );
-  return (
-    relative === ""
-    || (!relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
-function reviewThreadForWorkspace(
-  thread: NavigationThreadSummary | undefined,
-  cwd: string | undefined,
-): NavigationThreadSummary | undefined {
-  if (!thread || thread.linkedDirectories.length <= 1) {
-    return thread;
-  }
-  return reviewWorkspaceContains(cwd, thread.projectKey)
-    ? thread
-    : undefined;
-}
-
-function paginateReviewWorkspaces(params: {
-  itemCount: number;
-  maxActions: number | undefined;
-  pageIndex: number | undefined;
-}): {
-  endIndex: number;
-  pageIndex: number;
-  startIndex: number;
-  totalPages: number;
-} {
-  const maxActions =
-    params.maxActions === undefined
-      ? Number.MAX_SAFE_INTEGER
-      : Math.max(1, Math.trunc(params.maxActions));
-  const singlePageSize = Math.max(1, maxActions - 2);
-  const pageSize =
-    params.itemCount > singlePageSize
-      ? Math.max(1, maxActions - 4)
-      : singlePageSize;
-  const totalPages = Math.max(1, Math.ceil(params.itemCount / pageSize));
-  const requestedPage = Math.max(0, Math.trunc(params.pageIndex ?? 0));
-  const pageIndex = Math.min(requestedPage, totalPages - 1);
-  const startIndex = pageIndex * pageSize;
-  return {
-    endIndex: Math.min(params.itemCount, startIndex + pageSize),
-    pageIndex,
-    startIndex,
-    totalPages,
-  };
-}
-
-function messagingReviewBranchOptions(params: {
-  directory: Pick<NavigationDirectorySummary, "gitStatus"> | undefined;
-  thread: NavigationThreadSummary | undefined;
-}): string[] {
-  const options = buildReviewBranchOptions(params);
-  const primaryBranch = options[0]?.trim();
-  const localBranchNames = new Set(
-    [
-      ...(params.directory?.gitStatus?.branches ?? []),
-      params.directory?.gitStatus?.defaultBranch,
-    ]
-      .map((branch) => branch?.trim())
-      .filter((branch): branch is string => Boolean(branch)),
-  );
-  const baseBranchNames = new Set(
-    (params.directory?.gitStatus?.baseBranches ?? [])
-      .map((branch) => branch.trim())
-      .filter(Boolean),
-  );
-  const knownBranchNames = new Set(
-    [...localBranchNames, ...baseBranchNames],
-  );
-  const conventionalBaseBranches = new Set([
-    "main",
-    "master",
-    "develop",
-    "trunk",
-  ]);
-  const conventionalName = (branch: string): string | undefined => {
-    const value = branch.trim();
-    if (conventionalBaseBranches.has(value)) {
-      return value;
-    }
-    if (!baseBranchNames.has(value) || localBranchNames.has(value)) {
-      return undefined;
-    }
-    const remoteSeparator = value.indexOf("/");
-    const remoteBranch =
-      remoteSeparator >= 0 ? value.slice(remoteSeparator + 1) : "";
-    return conventionalBaseBranches.has(remoteBranch)
-      ? remoteBranch
-      : undefined;
-  };
-  const knownConventionalOptions = options.filter(
-    (branch) =>
-      knownBranchNames.has(branch.trim())
-      && Boolean(conventionalName(branch)),
-  );
-  const keepPrimary =
-    primaryBranch !== undefined
-    && (
-      knownBranchNames.has(primaryBranch)
-      || primaryBranch !== "main"
-      || knownConventionalOptions.length === 0
-    );
-  return [
-    ...(keepPrimary && primaryBranch ? [primaryBranch] : []),
-    ...knownConventionalOptions,
-  ]
-    .filter((branch, index, branches) => branches.indexOf(branch) === index)
-    .slice(0, 8);
-}
-
-function formatMessagingReviewScope(target: AppServerReviewTarget): string {
-  switch (target.type) {
-    case "pullRequest":
-      return "Attached Pull Request";
-    case "uncommittedChanges":
-      return "Current Changes";
-    case "baseBranch":
-      return "Base Branch";
-    case "commit":
-      return "Commit";
-    case "custom":
-      return "Custom";
-  }
-}
-
 function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,
   context: MessagingWorkspaceHandoffContext,
@@ -14256,94 +10881,6 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
-}
-
-function newThreadPromptGateBody(
-  session: MessagingBrowseSessionRecord,
-  options: NewThreadOptionsSummary,
-  backend: BackendSummary,
-  toolUpdateMode: MessagingToolUpdateMode,
-  showStreaming: boolean,
-): string {
-  const acpExecutionModePermissions =
-    acpBackendUsesExecutionModePermissions(backend);
-  const acpRuntimeMode = isAcpBackendId(options.backend)
-    && !acpExecutionModePermissions
-    ? buildMessagingAcpRuntimeModeSummary({
-        backend,
-        runtime: options.acpRuntime,
-      })
-    : undefined;
-  const permissionsLabel = formatPermissionsLineDisplayLabel({
-    acpRuntimeLabel: acpRuntimeMode?.currentLabel,
-    current: options.executionMode,
-  });
-  return [
-    `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
-    "The thread will be created when that message arrives.",
-    isNewAgentThreadLaunchAction(session.launchAction)
-      ? `Agent: ${DEFAULT_MESSAGING_AGENT_NAME}`
-      : undefined,
-    `Provider: ${backend.label}`,
-    `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
-    options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
-    acpRuntimeMode
-      || !isAcpBackendId(options.backend)
-      || acpExecutionModePermissions
-      || options.executionMode === "full-access"
-      ? `Permissions: ${permissionsLabel}`
-      : undefined,
-    options.codexEnvironmentOptions.length > 0 || options.codexEnvironmentId
-      ? `Environment: ${formatNewThreadEnvironmentLabel(options)}`
-      : undefined,
-    options.supportsModel ? `Model: ${options.model}` : undefined,
-    options.supportsReasoning && options.reasoningEffort
-      ? `Reasoning: ${options.reasoningEffort}`
-      : undefined,
-    options.supportsUltrafast
-      ? `Speed: ${selectedCodexSpeed(options)}`
-      : options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
-    `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-    showStreaming
-      ? `Streaming: ${options.streamingResponses ? "on" : "off"}`
-      : undefined,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
-
-function formatNewThreadEnvironmentLabel(
-  options: Pick<
-    NewThreadOptionsSummary,
-    "codexEnvironmentId" | "codexEnvironmentOptions"
-  >,
-): string {
-  if (!options.codexEnvironmentId) {
-    return "None";
-  }
-  return (
-    options.codexEnvironmentOptions.find(
-      (environment) => environment.id === options.codexEnvironmentId,
-    )?.name ?? options.codexEnvironmentId
-  );
-}
-
-function newThreadBranchChoices(
-  session: MessagingBrowseSessionRecord,
-  navigation: MessagingNewThreadNavigation,
-  directory: MessagingLaunchpadDirectory | undefined,
-): string[] {
-  const defaultBranch = resolveNewThreadBaseBranch(session, navigation, directory);
-  const branches = [
-    defaultBranch,
-    ...(directory?.gitStatus?.baseBranches ?? []),
-    ...(directory?.gitStatus?.branches ?? []),
-    directory?.gitStatus?.currentBranch,
-  ].flatMap((branch) => {
-    const sanitized = sanitizeBranchLabel(branch);
-    return sanitized ? [sanitized] : [];
-  });
-  return branches.filter((branch, index) => branches.indexOf(branch) === index);
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
@@ -15262,37 +11799,4 @@ function questionnaireAnswerValue(
 ): string[] {
   const value = answer?.value.trim();
   return value ? [value] : [];
-}
-
-function readNullableStringValue(
-  value: MessagingJsonValue | undefined,
-  key: string,
-): string | null | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const result = value[key];
-  if (result === null) {
-    return null;
-  }
-  return typeof result === "string" ? result : undefined;
-}
-
-function readThreadExecutionModeValue(
-  value: MessagingJsonValue | undefined,
-): ThreadExecutionMode | undefined {
-  const executionMode = readStringValue(value, "executionMode");
-  return executionMode === "default" || executionMode === "auto" || executionMode === "full-access"
-    ? executionMode
-    : undefined;
-}
-
-function readAcpRuntimeOptionSource(
-  value: MessagingJsonValue | undefined,
-): BackendAcpRuntimeOptionSource | undefined {
-  const source = readStringValue(value, "source");
-  return source === "mode" || source === "configOption" || source === "model"
-    ? source
-    : undefined;
 }

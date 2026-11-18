@@ -35,6 +35,7 @@ import {
 } from "./MessagingSettings";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import { ModelsSettings } from "./ModelsSettings";
+import { modelServiceEntries, providerKindLabel } from "./provider-kinds";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
@@ -249,7 +250,32 @@ type SettingsNavChild = {
   dot?: "ok" | "off" | "warn" | "bad";
   /** Tiny trailing chip, e.g. "off" on a disabled provider. */
   chip?: string;
+  /** Heading of the run of children this one belongs to (AI Providers →
+   *  Harnesses / On this computer / Direct API). Consecutive children with
+   *  the same heading render as one labelled group. */
+  group?: string;
 };
+
+type SettingsNavChildGroup = {
+  label?: string;
+  children: SettingsNavChild[];
+};
+
+/** Splits a sublist into runs of children that share a `group` heading. */
+function groupSettingsNavChildren(
+  children: readonly SettingsNavChild[],
+): SettingsNavChildGroup[] {
+  const groups: SettingsNavChildGroup[] = [];
+  for (const child of children) {
+    const last = groups.at(-1);
+    if (last && last.label === child.group) {
+      last.children.push(child);
+    } else {
+      groups.push({ label: child.group, children: [child] });
+    }
+  }
+  return groups;
+}
 
 type ForgeNavStatuses = Partial<Record<ForgeKind, GhStatus>>;
 
@@ -566,17 +592,33 @@ export function SettingsScreen(props: {
       const claude = claudeProviderStatus(
         props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude,
       );
+      const harnesses = providerKindLabel("harness");
+      // The providers that run no threads get rows too, under their own
+      // kind headings, so the nav says they exist. Before, they were
+      // reachable only from the end of the AI Providers page.
+      const services = snapshot
+        ? modelServiceEntries(snapshot).map((entry): SettingsNavChild => ({
+            key: entry.focus,
+            label: entry.name,
+            sub: entry.focus,
+            group: providerKindLabel(entry.kind),
+            dot: entry.nav.dot,
+            ...(entry.nav.chip ? { chip: entry.nav.chip } : {}),
+          }))
+        : [];
       return [
         {
           key: "codex",
           label: "Codex",
           sub: "codex",
+          group: harnesses,
           dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
         },
         {
           key: "claude",
           label: "Claude",
           sub: "claude",
+          group: harnesses,
           dot: claude.dot,
           ...(claude.navChip ? { chip: claude.navChip } : {}),
         },
@@ -586,10 +628,12 @@ export function SettingsScreen(props: {
             key: entry.registryId,
             label: entry.name,
             sub: entry.registryId,
+            group: harnesses,
             dot: (enabled && entry.installed ? "ok" : "off") as "ok" | "off",
             ...(enabled ? {} : { chip: "off" }),
           };
         }),
+        ...services,
       ];
     }
     if (target === "git") {
@@ -758,33 +802,57 @@ export function SettingsScreen(props: {
                         inert={open ? undefined : true}
                       >
                         <div className="settings-nav__sublist-clip">
-                          {children.map((child) => {
-                            const childActive = childHoldsRoute(child);
-                            return (
-                              <button
-                                key={child.key}
-                                aria-current={childActive ? "page" : undefined}
-                                className={`settings-nav__subbutton${
-                                  childActive ? " is-active" : ""
-                                }`}
-                                type="button"
-                                onClick={() => openRoute(item.id, child.sub)}
-                              >
-                                {child.dot ? (
-                                  <span
-                                    aria-hidden="true"
-                                    className={`settings-nav__subdot settings-nav__subdot--${child.dot}`}
-                                  />
-                                ) : null}
-                                <span className="settings-nav__sublabel">
-                                  {child.label}
-                                </span>
-                                {child.chip ? (
-                                  <span className="settings-nav__subchip">
-                                    {child.chip}
+                          {groupSettingsNavChildren(children).map((group, groupIndex) => {
+                            const rows = group.children.map((child) => {
+                              const childActive = childHoldsRoute(child);
+                              return (
+                                <button
+                                  key={child.key}
+                                  aria-current={childActive ? "page" : undefined}
+                                  className={`settings-nav__subbutton${
+                                    childActive ? " is-active" : ""
+                                  }`}
+                                  type="button"
+                                  onClick={() => openRoute(item.id, child.sub)}
+                                >
+                                  {child.dot ? (
+                                    <span
+                                      aria-hidden="true"
+                                      className={`settings-nav__subdot settings-nav__subdot--${child.dot}`}
+                                    />
+                                  ) : null}
+                                  <span className="settings-nav__sublabel">
+                                    {child.label}
                                   </span>
-                                ) : null}
-                              </button>
+                                  {child.chip ? (
+                                    <span className="settings-nav__subchip">
+                                      {child.chip}
+                                    </span>
+                                  ) : null}
+                                </button>
+                              );
+                            });
+                            const headingId = `${sublistId}-group-${groupIndex}`;
+                            if (group.label === undefined) {
+                              return <Fragment key={headingId}>{rows}</Fragment>;
+                            }
+                            // Plain text, like the category headings: not a
+                            // Tab stop, and it names its rows as a group.
+                            return (
+                              <div
+                                key={headingId}
+                                aria-labelledby={headingId}
+                                className="settings-nav__subgroup"
+                                role="group"
+                              >
+                                <p
+                                  className="settings-nav__subgroup-label"
+                                  id={headingId}
+                                >
+                                  {group.label}
+                                </p>
+                                {rows}
+                              </div>
                             );
                           })}
                         </div>
@@ -1004,6 +1072,16 @@ function SettingsSectionBody(props: {
         onInteractiveSvgChange={async (patch) => {
           await props.settings.writeConfig({ general: patch });
         }}
+        onMarkdownMathRenderingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            general: { markdown: { mathRendering: enabled } },
+          });
+        }}
+        onIncrementalMarkdownRenderingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            general: { markdown: { incrementalRendering: enabled } },
+          });
+        }}
         onHtmlPreviewRunScriptsChange={async (htmlPreviewRunScripts) => {
           await props.settings.writeConfig({
             general: { htmlPreviewRunScripts },
@@ -1151,16 +1229,6 @@ function SettingsSectionBody(props: {
         onLiveTranscriptEventFilteringChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { liveTranscriptEventFiltering: enabled },
-          });
-        }}
-        onMarkdownMathRenderingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { markdownMathRendering: enabled },
-          });
-        }}
-        onIncrementalMarkdownRenderingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { incrementalMarkdownRendering: enabled },
           });
         }}
         onThreadToolAccountingChange={async (enabled: boolean) => {

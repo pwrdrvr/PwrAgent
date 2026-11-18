@@ -232,8 +232,11 @@ or dismiss it yourself to free capacity. List the dependencies and tell the
 operator which delivery needs review. After the operator inspects the thread,
 `dismiss` retires that claim without cancelling any turn. `cancel` stops a
 `waiting` or `ready` wait when the operator stops waiting; it cannot undo an
-admitted continuation. A confirmed busy refusal stays pending until the thread
-is idle and needs no replacement registration. If the idle notification is
+admitted continuation. A ready agent wait does not wait for the thread's turn
+to end: it joins the running turn, or starts one when the thread is idle, and
+shares that delivery with other waits and messages waiting beside it. It is
+`delivered` once that turn takes it. A confirmed busy refusal stays pending
+until the thread is idle and needs no replacement registration. If the idle notification is
 lost, the owner confirms idle from the provider before the next admission.
 
 ## Other long jobs

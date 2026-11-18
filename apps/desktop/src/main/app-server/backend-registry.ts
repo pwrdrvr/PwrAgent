@@ -1,4 +1,5 @@
 import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
+import { providerPickerValue } from "@pwragent/shared";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryContext } from "./registry-context";
 import type { CodexStartDeliveryReceipt } from "./registry-turn-state";
@@ -171,10 +172,15 @@ import {
 import {
   buildManagedReviewContextInput,
 } from "./managed-review";
+import {
+  buildCodexAgentInstructionUpdate,
+  providerDeliveredAgentInstructions,
+} from "../../shared/agent-instruction-delivery";
 import { usageActivityScope } from "./overlay-transcript-entries";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
+  type NavigationLaunchpadAgent,
   type PreviewThreadRewindRequest,
   type PreviewThreadRewindResponse,
   type RewindThreadRequest,
@@ -570,7 +576,6 @@ import { getMainLogger } from "../log";
 import {
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
-import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
@@ -599,7 +604,7 @@ import {
   CodexEnvironmentStartupError,
 } from "./codex-environment-runtime";
 import {
-  replacedAgentMessageOrigin,
+  isSteerableAgentTraffic,
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
@@ -924,6 +929,19 @@ class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
 
+type IdleSubmission = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  input: AppServerTurnInputItem[];
+  origin?: ThreadTurnQueueOrigin;
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
+/** What `submitTurnIfIdle` returns when a wake may join a running turn. */
+type JoinedSubmissionResult =
+  | ThreadTurnQueueImmediateSubmissionResult
+  | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>;
+
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
   /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
@@ -941,10 +959,7 @@ export class DesktopBackendRegistry {
   private readonly threadDirectoryService: ThreadDirectoryService;
   private readonly codexRuntimeSupervisor: CodexRuntimeSupervisor;
   private readonly codexClient: BackendClient;
-  private readonly configStore?: Pick<
-    DesktopConfigStore,
-    "read" | "subscribe"
-  >;
+  private readonly configStore: RegistryDependencies["configStore"];
   private codexBackendSummary?: BackendSummary;
   private codexBackendGeneration = 0;
   /**
@@ -1639,11 +1654,12 @@ export class DesktopBackendRegistry {
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly codexProviderCatalogRetry: CodexProviderCatalogRetry;
   /**
-   * Bumped on every saved change to the Codex model provider list. A model
-   * read that began before the change describes the old list, so it must
-   * not be published over the newer one.
+   * Bumped on every explicit save or change from disk to the Codex model
+   * provider list. Reads from an earlier revision cannot publish over it.
    */
   private codexModelProviderRevision = 0;
+  /** Orders catalog refreshes that share one saved provider list. */
+  private codexModelProviderRefreshRevision = 0;
   /** Publications of provider list changes, in the order they were saved. */
   private codexModelProviderPublication: Promise<void> = Promise.resolve();
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
@@ -1839,6 +1855,12 @@ export class DesktopBackendRegistry {
     this.taskMonitorWatchdogTimer.unref?.();
 
     this.subscribeClient("codex", this.codexClient);
+    // Every thread/resume the client sends carries the thread's current Agent
+    // instructions, whichever operation happens to load the thread.
+    this.codexClient.provideThreadDeveloperInstructions?.(async (threadId) =>
+      providerDeliveredAgentInstructions(
+        (await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId }))?.agent,
+      ));
 
     this.subAgentStartupReconciliation =
       this.subAgentMonitorService.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
@@ -3068,6 +3090,7 @@ export class DesktopBackendRegistry {
   private threadDependenciesPeerHandler?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
 
   // The app-server service needs the registry before it can supply this owner binding.
@@ -3079,9 +3102,10 @@ export class DesktopBackendRegistry {
   async manageThreadDependenciesForPeer(
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
     if (!this.threadDependenciesPeerHandler) throw new Error("Continue After is not available on this instance yet.");
-    return await this.threadDependenciesPeerHandler(request, requesterInstanceId);
+    return await this.threadDependenciesPeerHandler(request, requesterInstanceId, provenance);
   }
 
   // The app-server service needs the registry before it can supply this owner binding.
@@ -4170,7 +4194,7 @@ export class DesktopBackendRegistry {
   async setThreadAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    agent: { name: string; instructions?: string } | null;
+    agent: NavigationLaunchpadAgent | null;
   }): Promise<ThreadOverlayState> {
     this.assertNotBootstrap("setThreadAgent");
     if (params.backend !== "codex") {
@@ -4232,7 +4256,7 @@ export class DesktopBackendRegistry {
   private async applyThreadAgentChange(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    agent: { name: string; instructions?: string } | null;
+    agent: NavigationLaunchpadAgent | null;
   }, ownsStartReservation = false): Promise<ThreadOverlayState> {
     const codex = params.backend === "codex";
     let agentReservation: object | undefined;
@@ -4246,7 +4270,20 @@ export class DesktopBackendRegistry {
         await this.withCodexThreadClient(params.threadId, async (client) => {
           const overlay = await this.overlayStore.getThreadOverlayState(params);
           const dynamicTools = await this.requireCodexAgentRefreshTools(client, params.threadId, overlay);
-          await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
+          const instructions = providerDeliveredAgentInstructions(params.agent) ?? "";
+          if (client.replaceThreadDeveloperInstructions
+            && instructions !== (providerDeliveredAgentInstructions(overlay?.agent) ?? "")) {
+            // This runs between turns, so the next turn is the first to use
+            // the new text and a running turn keeps the text it started with.
+            await client.replaceThreadDeveloperInstructions({
+              threadId: params.threadId,
+              dynamicTools,
+              developerInstructions: instructions,
+              updateMessage: buildCodexAgentInstructionUpdate(instructions),
+            });
+          } else {
+            await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
+          }
         });
       }
       // Clearing the request and changing authority share one overlay commit.
@@ -4306,9 +4343,12 @@ export class DesktopBackendRegistry {
 
   readBackendComposerSettings(
     backend: AppServerBackendKind,
-  ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "codexFastAllowed"> {
+  ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "modelProviderDefaults" | "codexFastAllowed"> {
+    const defaults = this.resolveProviderModelDefaultsFn();
     return {
-      modelDefaults: this.resolveProviderModelDefaultsFn()[backend],
+      modelDefaults: defaults[backend],
+      modelProviderDefaults: Object.fromEntries(Object.entries(defaults)
+        .filter(([key]) => key === backend || (backend === "codex" && key.startsWith("codex-provider:")))),
       ...(backend === "codex" ? {
         tokenMiser: {
           enabled: this.resolveTokenMiserEnabledFn(),
@@ -5839,6 +5879,9 @@ export class DesktopBackendRegistry {
         promptContent: promptPayload.promptContent,
         parts: promptPayload.parts,
         turnId: syntheticStartedTurnId,
+        // ACP has no instruction field. The client sends these ahead of the
+        // prompt when the agent session has not been sent this text.
+        agentInstructions: providerDeliveredAgentInstructions(overlay?.agent) ?? "",
       });
       this.invalidateThreadListCache(params.backend);
       return {
@@ -8700,6 +8743,7 @@ export class DesktopBackendRegistry {
               ? {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
+                  developerInstructions: providerDeliveredAgentInstructions(request.agent),
                   threadSource: "user" as CodexThreadSource,
                   ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
                   ...(pwrdrvrTokenMiser
@@ -8770,7 +8814,7 @@ export class DesktopBackendRegistry {
       },
       persistEnvironment: async (identity) => await this.overlayStore.setThreadCodexEnvironmentRuntime?.({ ...identity, codexEnvironmentRuntime: codexEnvironmentRuntime! }),
       readModelMigration: () => {
-        currentMigration = this.resolveProviderThreadModelMigrationsFn()[backend];
+        currentMigration = this.resolveProviderThreadModelMigrationsFn()[providerPickerValue(backend, modelSettings.model)];
         return currentMigration !== undefined;
       },
       persistModel: async (identity) => await this.overlayStore.setThreadModelSettings({
@@ -9149,7 +9193,7 @@ export class DesktopBackendRegistry {
         });
       }
       const currentMigration =
-        this.resolveProviderThreadModelMigrationsFn()[backend];
+        this.resolveProviderThreadModelMigrationsFn()[providerPickerValue(backend, modelSettings.model)];
       if (
         modelSettings.model !== undefined ||
         modelSettings.reasoningEffort !== undefined ||
@@ -9305,7 +9349,11 @@ export class DesktopBackendRegistry {
     ].some((value) => value !== undefined);
     return await this.admitThreadAttachments(entry, (input, onAdmission) => {
       const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
-      return entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings
+      // Agent messages, monitor results and PwrAgent's own wakes join the
+      // running turn, or start one when the thread is idle, and share that
+      // delivery with whatever waits beside them. An operator's or a
+      // messaging app's send keeps its own turn.
+      return isSteerableAgentTraffic(entry.messageOrigin) && delivery !== "new_turn" && !hasTurnSettings
         ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
         : this.threadTurnQueue.submit(prepared, { onAdmission });
     });
@@ -10153,15 +10201,20 @@ export class DesktopBackendRegistry {
     return { results };
   }
 
-  async submitTurnIfIdle(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true }): Promise<JoinedSubmissionResult>;
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
+  async submitTurnIfIdle(params: IdleSubmission & {
+    /**
+     * A PwrAgent wake (Continue After, a PR watch) joins a running turn, or
+     * starts one, and shares its delivery with the agent and system messages
+     * waiting beside it. A running turn no longer reads as busy; a lock, an
+     * archive, a handoff, a workspace move or a checkout restore still does.
+     */
+    joinRunningTurn?: boolean;
+  }): Promise<JoinedSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", ...entry } = params;
+    const { origin = "manual", joinRunningTurn = false, ...entry } = params;
+    const join = joinRunningTurn && isSteerableAgentTraffic(entry.messageOrigin);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
     // The durable archive observation also covers watches restored at startup,
     // before provider listings have populated this process's information store.
@@ -10174,21 +10227,23 @@ export class DesktopBackendRegistry {
       // Retired PR work can still be in flight when archive completes.
       // Discard its admission without resuming the thread or cancelling cleanup.
       || isArchived()
-      || this.threadHasActiveTurn(params.threadId, params.backend)
+      || (!join && this.threadHasActiveTurn(params.threadId, params.backend))
       || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
       || this.threadArchiveCoordinator.checkoutRestoreRecords.has(buildThreadIdentityKey(params.backend, params.threadId))
     ) {
       return { status: "busy" };
     }
     try {
-      return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+      return await this.admitThreadAttachments(entry, (input, onAdmission): Promise<JoinedSubmissionResult> => {
         // Attachment preparation can yield to an archive notification.
         if (isArchived()) return Promise.resolve({ status: "busy" as const });
-        return this.threadTurnQueue.submitIfIdle({
-          ...entry,
-          input,
-          origin,
-        }, { onAdmission });
+        return join
+          ? this.threadTurnQueue.submitSteer({ ...entry, input, origin }, { onAdmission })
+          : this.threadTurnQueue.submitIfIdle({
+            ...entry,
+            input,
+            origin,
+          }, { onAdmission });
       });
     } catch (error) {
       // Turn preparation yields after the queue's idle check. If a backend
@@ -10398,23 +10453,22 @@ export class DesktopBackendRegistry {
     // after earlier FIFO controls settle, then cancels before fresh admission.
     const sender = request.messageOrigin?.sourceThread;
     const entry = this.threadTurnQueue.getQueuedEntries(request)
-      .find((candidate) => candidate.id === request.queueEntryId || (sender && candidate.agentMessages?.some(message => {
-        const source = message.origin?.sourceThread;
-        return message.replacementHandle === request.queueEntryId && source?.backend === sender.backend
-          && source.threadId === sender.threadId && source.instanceId === sender.instanceId;
-      })));
+      .find((candidate) => candidate.id === request.queueEntryId);
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
-    if (entry.agentMessageOrigins && !entry.agentMessages) {
-      throw new Error("The operator edited this batch; sender replacement would overwrite those edits.");
+    // Only an older build's restart save can still hold a batch: one entry
+    // carrying several senders' messages. Its id covers other senders' input.
+    if (entry.agentMessageOrigins) {
+      throw new Error("This message waits in a batch with other senders' messages and cannot be replaced. Send a new message instead.");
     }
-    const owners = entry.agentMessages?.map((message) => message.origin?.sourceThread)
-      ?? [entry.messageOrigin?.sourceThread];
+    const owner = entry.messageOrigin?.sourceThread;
     if (
       entry.messageOrigin?.kind !== "agent"
       || request.messageOrigin?.kind !== "agent"
       || !sender
-      || !owners.some((owner) => owner && owner.backend === sender.backend
-        && owner.threadId === sender.threadId && owner.instanceId === sender.instanceId)
+      || !owner
+      || owner.backend !== sender.backend
+      || owner.threadId !== sender.threadId
+      || owner.instanceId !== sender.instanceId
     ) {
       throw new Error("Only the sending thread can replace its own queued agent message.");
     }
@@ -10424,7 +10478,7 @@ export class DesktopBackendRegistry {
     // The operator approved the text they saw, so its approval stays with it.
     if (
       Boolean(request.messageOrigin.operatorApproved)
-      !== Boolean(replacedAgentMessageOrigin(entry, sender)?.operatorApproved)
+      !== Boolean(entry.messageOrigin.operatorApproved)
     ) {
       throw new Error(
         "A replacement cannot change whether the operator approved the queued message. Send a new message instead.",
@@ -11179,7 +11233,7 @@ export class DesktopBackendRegistry {
           const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
             ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
             : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
-          const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
+          const instructions = providerDeliveredAgentInstructions(await this.getThreadAgentMetadata(params));
           const messageOrigin = resolveThreadMessageOrigin(params);
           prepared = {
             ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
@@ -14646,9 +14700,20 @@ export class DesktopBackendRegistry {
   async applyThreadModelMigration(
     params: ApplyThreadModelMigrationRequest,
   ): Promise<ApplyThreadModelMigrationResponse> {
-    const migration =
-      this.resolveProviderThreadModelMigrationsFn()[params.backend];
-    if (!migration) {
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const migrations = this.resolveProviderThreadModelMigrationsFn();
+    const providerSummary = params.backend === "codex"
+      && !current?.model && !params.threadModel && Object.keys(migrations).length > 0
+      ? await this.findThreadForWorkspaceHandoff({
+          backend: params.backend, threadId: params.threadId, callerReason: "thread-model-migration",
+        })
+      : undefined;
+    const providerKey = providerPickerValue(params.backend, current?.model ?? params.threadModel ?? providerSummary?.model);
+    const migration = migrations[providerKey];
+    if (!migration || providerPickerValue(params.backend, migration.model) !== providerKey) {
       return {
         backend: params.backend,
         threadId: params.threadId,
@@ -14656,10 +14721,6 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const current = await this.overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
     if (current?.modelMigrationRevision === migration.revision) {
       return {
         backend: params.backend,
@@ -14706,13 +14767,13 @@ export class DesktopBackendRegistry {
         && current?.model === undefined
         && params.threadModel === undefined
       );
-    const threadSummary = needsThreadSummary
+    const threadSummary = providerSummary ?? (needsThreadSummary
       ? await this.findThreadForWorkspaceHandoff({
           backend: params.backend,
           callerReason: "thread-model-migration",
           threadId: params.threadId,
         })
-      : undefined;
+      : undefined);
     const threadCreatedAt =
       params.threadCreatedAt ?? threadSummary?.createdAt;
     if (threadCreatedAt === undefined) {
@@ -16205,14 +16266,15 @@ export class DesktopBackendRegistry {
 
   /**
    * `refreshCodexProviderCatalogs`, also saying whether the read reached the
-   * cached summary. It does not when the summary was dropped or replaced
-   * during the read, or a newer provider list was saved.
+   * cached summary. A newer refresh, provider save, or runtime change can
+   * supersede it while it reads.
    */
   private async refreshAndPublishCodexProviderCatalogs(
     options: { rereadProviders?: true | readonly string[] } = {},
   ): Promise<{ states: readonly CodexModelProviderCatalogState[]; published: boolean }> {
     const generation = this.codexBackendGeneration;
     const providerRevision = this.codexModelProviderRevision;
+    const refreshRevision = ++this.codexModelProviderRefreshRevision;
     const reread = options.rereadProviders;
     if (reread === true) {
       this.codexModelProviderCatalog?.invalidate();
@@ -16220,19 +16282,24 @@ export class DesktopBackendRegistry {
       for (const providerId of reread ?? []) this.codexModelProviderCatalog?.invalidateProvider(providerId);
     }
     this.modelCatalog.invalidate("codex");
-    const models = await this.modelCatalog.readModels("codex", reread ? "settings-refresh" : "provider-catalog-retry");
+    const result = await this.modelCatalog.readModels("codex", reread ? "settings-refresh" : "provider-catalog-retry").then(
+      (models) => ({ models }),
+      (error: unknown) => ({ error }),
+    );
     const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
+    if (
+      this.closed
+      || generation !== this.codexBackendGeneration
+      || providerRevision !== this.codexModelProviderRevision
+      || refreshRevision !== this.codexModelProviderRefreshRevision
+    ) return { states, published: false };
+    if ("error" in result) throw result.error;
     // A refresh from Settings that finds a provider down arms the automatic
     // retry. The retry's own refresh is ignored here; it observes on return.
     this.codexProviderCatalogRetry.observe(states);
-    // A provider list saved during the read publishes its own refresh.
-    if (
-      generation !== this.codexBackendGeneration
-      || providerRevision !== this.codexModelProviderRevision
-      || !this.codexBackendSummary
-    ) return { states, published: false };
+    if (!this.codexBackendSummary) return { states, published: false };
     const { codexModelProviders: previousStates, ...summary } = this.codexBackendSummary;
-    const launchpadOptions = buildLaunchpadOptions("codex", models);
+    const launchpadOptions = buildLaunchpadOptions("codex", result.models);
     const changed = JSON.stringify([summary.launchpadOptions, previousStates ?? []])
       !== JSON.stringify([launchpadOptions, states]);
     this.codexBackendSummary = {
@@ -16343,9 +16410,14 @@ export class DesktopBackendRegistry {
    * leaves; a newer save publishes its own list instead.
    */
   private async publishKnownCodexProviderModels(revision: number): Promise<void> {
+    const refreshRevision = this.codexModelProviderRefreshRevision;
     await this.codexModelProviderCatalog?.listModelOptions().catch(() => []);
     const summary = this.codexBackendSummary;
-    if (!summary || this.closed || revision !== this.codexModelProviderRevision) return;
+    if (
+      !summary || this.closed
+      || revision !== this.codexModelProviderRevision
+      || refreshRevision !== this.codexModelProviderRefreshRevision
+    ) return;
     const { codexModelProviders: _previousStates, ...rest } = summary;
     const ownModels = (summary.launchpadOptions?.models ?? []).filter((model) => !model.providerId);
     const known = this.codexModelProviderCatalog?.knownCatalog() ?? { models: [], states: [] };
@@ -16454,9 +16526,6 @@ export class DesktopBackendRegistry {
             }
           }
           const archiveWorkspaceChanged = this.threadArchiveCoordinator.invalidateArchiveCleanupForNotification(backend, notification, "provider");
-          if (notification.method === "thread/unarchived" || notification.method === "thread/deleted") {
-            this.threadArchiveCoordinator.cancelArchiveCleanups(buildThreadIdentityKey(backend, notification.params.threadId));
-          }
           const archiveReferences = this.threadArchiveCoordinator.prepareArchiveReferenceChanges(backend, notification);
           if (archiveWorkspaceChanged && this.threadArchiveCoordinator.archiveWorktreeRemovalAdmissionRecords.size) await this.threadArchiveCoordinator.prepareArchiveWorkspaceChanges(backend, notification, archiveWorkspaceChanged);
           if (archiveReferences) await archiveReferences;
@@ -21342,9 +21411,6 @@ export class DesktopBackendRegistry {
       }
       this.navigationDirectoryScope.invalidate(event);
       const archiveWorkspaceChanged = this.threadArchiveCoordinator.invalidateArchiveCleanupForNotification(event.backend, event.notification);
-      if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
-        this.threadArchiveCoordinator.cancelArchiveCleanups(buildThreadIdentityKey(event.backend, event.notification.params.threadId));
-      }
       const archiveReferences = this.threadArchiveCoordinator.prepareArchiveReferenceChanges(event.backend, event.notification);
       if (archiveWorkspaceChanged && this.threadArchiveCoordinator.archiveWorktreeRemovalAdmissionRecords.size) await this.threadArchiveCoordinator.prepareArchiveWorkspaceChanges(event.backend, event.notification, archiveWorkspaceChanged);
       if (archiveReferences) await archiveReferences;

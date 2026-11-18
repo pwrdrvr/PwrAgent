@@ -14455,6 +14455,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
+      listingDiagnostics.setEnabled(true);
       const before = listingDiagnostics.snapshot().recorded;
       await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
       await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
@@ -14463,7 +14464,7 @@ describe("DesktopBackendRegistry", () => {
       const physical = events.find((event) => event.stage === "registry" && event.phase === "start")!;
       expect(physical).toMatchObject({ caller: "renderer-navigation-query", provider: "codex" });
       expect(events).toContainEqual(expect.objectContaining({ stage: "registry", phase: "cache-hit", targetId: physical.id }));
-    } finally { await registry.close(); }
+    } finally { listingDiagnostics.setEnabled(false); await registry.close(); }
   });
 
   it("propagates an authoritative refresh through the combined provider listing", async () => {
@@ -15167,6 +15168,8 @@ describe("DesktopBackendRegistry", () => {
         promptContent: [{ type: "text", text: "hello ACP" }],
         parts: [{ type: "text", text: "hello ACP" }],
         turnId: startedTurn.turnId,
+        // No Agent, so no instructions for the client to send.
+        agentInstructions: "",
       },
       {
         sessionId: "session-1",
@@ -15180,6 +15183,7 @@ describe("DesktopBackendRegistry", () => {
           { type: "image", url: imageUrl },
         ],
         turnId: imageTurn.turnId,
+        agentInstructions: "",
       },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);
@@ -24321,6 +24325,26 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("refuses to start an endpoint with no model instead of falling back to OpenAI", async () => {
+    const client = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] }, models: [{ id: "gpt-test" }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.materializeDirectoryLaunchpad({
+        directoryKey: "directory:/fixture",
+        launchpad: {
+          directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+          backend: "codex", codexModelProviderId: "mathos", executionMode: "auto",
+          prompt: "fixture", workMode: "local", createdAt: 1, updatedAt: 1,
+        },
+      })).rejects.toThrow("No model is available for mathos");
+      expect(client.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("keeps learned provider choices ahead of the profile baseline", async () => {
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
@@ -24688,6 +24712,35 @@ script = "echo setup"
     });
 
     await registry.close();
+  });
+
+  it("never applies or acknowledges a migration from a different Codex model provider", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("gpt-old", "@mathos/old", "@bonsai/old"),
+      fc.constantFrom("codex", "codex-provider:mathos", "codex-provider:bonsai"),
+      async (source, targetKey) => {
+        const sourceKey = source.startsWith("@mathos/") ? "codex-provider:mathos"
+          : source.startsWith("@bonsai/") ? "codex-provider:bonsai" : "codex";
+        fc.pre(sourceKey !== targetKey);
+        const target = targetKey === "codex" ? "gpt-new" : `@${targetKey.slice("codex-provider:".length)}/new`;
+        const overlayStore = createOverlayStoreMock();
+        const registry = createDesktopBackendRegistry({
+          codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
+          overlayStore,
+          resolveProviderThreadModelMigrations: () => ({
+            [targetKey]: { revision: "isolated", model: target, createdAt: 100 },
+          }),
+        });
+        try {
+          await expect(registry.applyThreadModelMigration({
+            backend: "codex", threadId: "fixture", threadModel: source, threadCreatedAt: 1,
+          })).resolves.toMatchObject({ status: "none" });
+          expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "fixture" })).toBeUndefined();
+        } finally {
+          await registry.close();
+        }
+      },
+    ), { numRuns: 25 });
   });
 
   it("applies each provider thread migration once and lets a later revision supersede it", async () => {
@@ -42369,7 +42422,7 @@ command = "pnpm dev"
   );
 
   it.each(["thread-parent", "thread-review"])(
-    "delivers independent agent guidance after a native review without holding the queue (%s)",
+    "delivers waiting agent guidance as one turn after a native review without holding the queue (%s)",
     async (reviewThreadId) => {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start", "turn/steer", "review/start"] },
@@ -42406,11 +42459,13 @@ command = "pnpm dev"
         threadId: reviewThreadId, turnId: "review-turn", turn: { id: "review-turn", status: "completed", output: [] },
       } });
       await waitForCondition(() => codexClient.startTurnCallCount === 1);
+      // Both independent acceptances wait together, so they start one turn.
       const delivered = codexClient.lastStartTurnParams?.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
       expect(delivered).toContain("Alice evidence");
-      expect(delivered).not.toContain("Bob evidence");
-      await waitForCondition(() => steer.mock.calls.length === 1);
-      expect(steer.mock.calls[0]?.[0].input).toEqual([{ type: "text", text: "Bob evidence" }]);
+      expect(delivered).toContain("Bob evidence");
+      expect(delivered!.indexOf("Alice evidence")).toBeLessThan(delivered!.indexOf("Bob evidence"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(steer).not.toHaveBeenCalled();
       await codexClient.emit({ method: "turn/completed", params: {
         threadId: "thread-parent", turnId: "guidance-1", turn: { id: "guidance-1", status: "completed", output: [] },
       } });
@@ -50352,7 +50407,97 @@ script = "printf setup"
     expect(JSON.stringify(notice).length).toBeLessThan(1000);
   });
 
-  it("keeps cross-thread send and steer admissions immutable while a previous steer is dispatching", async () => {
+  // PwrApps shipping thread, 2026-11-18: a monitor result started turn 1 and
+  // three lane reports steered into it. A second monitor result 32 s later
+  // waited for turn 1 to end and started turn 2, holding four more reports
+  // behind it. Nine messages, two wakeups. They should have cost one.
+  it("delivers monitor results and the agent reports around them in one turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] },
+      startTurnResults: [{ threadId: "parent", turnId: "turn-1" }, { threadId: "parent", turnId: "turn-2" }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) =>
+      ({ threadId: params.threadId, turnId: params.expectedTurnId }));
+    const textOf = (input: AppServerTurnInputItem[]) => input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    const monitor = (task: string) => registry.submitTurn({ backend: "codex", threadId: "parent", origin: "manual",
+      input: [{ type: "text", text: `Monitor finished: ${task}` }], messageOrigin: { kind: "sub-agent" } });
+    const lane = (name: string) => registry.submitTurn({ backend: "codex", threadId: "parent",
+      input: [{ type: "text", text: `${name} report` }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: name, title: name } } });
+    const settle = async () => { for (let index = 0; index < 6; index++) await new Promise<void>((resolve) => setImmediate(resolve)); };
+
+    const first = await monitor("Deploy production");
+    expect(first.status).toBe("started");
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "parent", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    await Promise.all(["Lane D", "Lane A", "Lane C"].map(lane));
+    await settle();
+    // Later, while turn 1 still runs.
+    await Promise.all([monitor("PR #109 checks"), ...["Lane A", "Lane B", "Lane C", "Lane D"].map(lane)]);
+    await settle();
+
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "parent")]).toBeUndefined();
+    expect(steers.mock.calls.map(([request]) => request.expectedTurnId)).toEqual(["turn-1", "turn-1"]);
+    const [joined, second] = steers.mock.calls.map(([request]) => textOf(request.input));
+    for (const report of ["Lane D report", "Lane A report", "Lane C report"]) expect(joined).toContain(report);
+    expect(second).toContain("Monitor finished: PR #109 checks");
+    for (const report of ["Lane A report", "Lane B report", "Lane C report", "Lane D report"]) expect(second).toContain(report);
+    expect(second!.indexOf("Monitor finished: PR #109 checks")).toBeLessThan(second!.indexOf("Lane A report"));
+
+    await codexClient.emit({ method: "turn/completed", params: {
+      threadId: "parent", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+    } });
+    await settle();
+    expect(codexClient.startTurnCallCount).toBe(1);
+  });
+
+  it.each(["running", "idle"] as const)("lets Continue After and PR watch wakes share one delivery when the thread is %s", async (state) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] },
+      startTurnResults: [{ threadId: "parent", turnId: "wake-turn" }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const steers = vi.spyOn(codexClient, "steerTurn").mockImplementation(async (params) =>
+      ({ threadId: params.threadId, turnId: params.expectedTurnId }));
+    if (state === "running") {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "parent", turnId: "running-turn", turn: { id: "running-turn" } },
+      } });
+    }
+    const wake = (text: string, messageOrigin: AppServerThreadMessageOrigin) => registry.submitTurnIfIdle({
+      backend: "codex", threadId: "parent", origin: "automation", joinRunningTurn: true,
+      input: [{ type: "text", text }], messageOrigin,
+    });
+    const results = await Promise.all([
+      wake("Worker A finished", { kind: "pwragent", dependencyId: "dependency-a" }),
+      wake("Worker B finished", { kind: "pwragent", dependencyId: "dependency-b" }),
+      wake("Worker C finished", { kind: "pwragent", dependencyId: "dependency-c" }),
+      wake("PR #12 checks passed", { kind: "pwragent", prAutomation: { kind: "watch", prKey: "github.com/o/r#12", prNumber: 12, headSha: "abc" } }),
+    ]);
+    for (let index = 0; index < 6; index++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(results.every((result) => result.status !== "busy")).toBe(true);
+    const delivered = [
+      ...(state === "idle" ? [codexClient.lastStartTurnParams?.input ?? []] : []),
+      ...steers.mock.calls.map(([request]) => request.input),
+    ].map((input) => input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n")).join("\n");
+    for (const text of ["Worker A finished", "Worker B finished", "Worker C finished", "PR #12 checks passed"]) {
+      expect(delivered).toContain(text);
+    }
+    // One wakeup: the running turn takes them all, or an idle thread starts
+    // exactly one turn and the rest join it.
+    expect(codexClient.startTurnCallCount).toBe(state === "idle" ? 1 : 0);
+    expect(steers.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "parent")]).toBeUndefined();
+  });
+
+  it("keeps cross-thread admissions immutable while a previous steer dispatches, then steers them together", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
     const correspondenceStore = new ThreadCorrespondenceStore();
     const registry = createDesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
@@ -50398,7 +50543,9 @@ script = "printf setup"
     });
     expect(steers.mock.calls[0]![0].input).toEqual([{ type: "text", text: "Already dispatching" }]);
     release();
-    await waitForCondition(() => steers.mock.calls.length === 21);
+    // The twenty messages that waited behind the dispatching steer go out as
+    // one steer. Each kept its own queue identity until then.
+    await waitForCondition(() => steers.mock.calls.length === 2);
     await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] === undefined);
     expect(codexClient.startTurnCallCount).toBe(0);
     const replacementStart = events.find((event) => event.notification.method === "thread/turnQueue/updated"
@@ -50412,8 +50559,17 @@ script = "printf setup"
     expect(summary?.omittedMessageCount).toBe(0);
     expect(summary?.messages[0]?.origin.sourceThread.threadId).toBe("sender-7");
     expect(summary?.messages[0]?.preview).toBe("Sender 7 consolidated evidence");
-    expect(steers.mock.calls.slice(1).map(([request]) => request.input)).toEqual(waiting.map(entry =>
-      entry.messageOrigin?.sourceThread?.threadId === "sender-7" ? [{ type: "text", text: "Sender 7 consolidated evidence" }] : entry.input));
+    const combined = steers.mock.calls[1]![0].input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    let cursor = -1;
+    for (const entry of waiting) {
+      const text = entry.messageOrigin?.sourceThread?.threadId === "sender-7"
+        ? "Sender 7 consolidated evidence"
+        : entry.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+      const at = combined.indexOf(text, cursor + 1);
+      expect(at).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+    expect(combined).not.toContain("Evidence 7");
     for (let index = 0; index < 20; index += 1) {
       expect(correspondenceStore.message({ backend: "codex", threadId: `sender-${index}` }, `message-${index}`)?.text)
         .toContain(index === 7 ? "Cancelled" : "Receiving thread started work");
@@ -50423,7 +50579,7 @@ script = "printf setup"
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(steers).toHaveBeenCalledTimes(21);
+    expect(steers).toHaveBeenCalledTimes(2);
     expect((await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn" })).input)
       .toEqual([{ type: "text", text: "Start separate work" }]);
     await codexClient.emit({
@@ -56849,11 +57005,12 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
+    // A turn the local operator started carries no messaging contact.
     expect(handler).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "agent-thread",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
-    });
+    }, {});
     expect(response).toMatchObject({ success: true });
 
     await registry.close();

@@ -814,6 +814,17 @@ export type AppServerThreadMessageOrigin = {
    * Display text only: the review's id and title as the owner recorded them.
    */
   reviewAutoFix?: { reviewId: string; title?: string; findingCount: number };
+  /**
+   * Several waiting messages that reached the thread as this one input (a
+   * combined delivery), in delivery order: each one's own origin, when it
+   * arrived, and how many input items it took after the line naming its
+   * sender. Display only, and never any of their text.
+   */
+  deliveredMessages?: Array<{
+    origin: AppServerThreadMessageOrigin;
+    receivedAt: number;
+    inputItemCount: number;
+  }>;
   prAutomation?: {
     kind: "auto-fix" | "watch";
     prKey: string;

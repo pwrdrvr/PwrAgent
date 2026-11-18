@@ -218,30 +218,34 @@ describe("ThreadTurnQueue", () => {
     expect(queue.setQueuedEntryTitle("missing", "Nothing")).toBeUndefined();
   });
 
-  it("drops a grouped steer's title when another message joins the batch", async () => {
+  it("keeps each waiting message's title and sends a combined delivery untitled", async () => {
+    const steered: ThreadTurnQueueEntry[] = [];
+    let open = false;
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true,
-      startTurn: async (entry) => ({
-        backend: entry.backend,
-        threadId: entry.threadId,
-        turnId: `turn-${entry.id}`,
-      }),
+      canSteerThread: () => open,
+      steerTurn: async (entry) => {
+        steered.push(entry);
+        return { backend: entry.backend, threadId: entry.threadId, turnId: "active" };
+      },
+      startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
     });
-    const first = await queue.submitGroupedSteer(buildEntry({ id: "group" }));
-    expect(first.status).toBe("queued");
-    queue.setQueuedEntryTitle("group", "First report");
-
-    await queue.submitGroupedSteer({
-      ...buildEntry({ id: "second" }),
-      input: [{ type: "text", text: "second report" }],
-    });
-
-    const entries = queue.getAllQueuedEntries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).not.toHaveProperty("title");
+    const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender" } };
+    await queue.submitSteer(buildEntry({ id: "first", messageOrigin: origin }));
+    await queue.submitSteer({ ...buildEntry({ id: "second", messageOrigin: origin }), input: [{ type: "text", text: "second report" }] });
+    queue.setQueuedEntryTitle("first", "First report");
+    // Each message is its own entry, so a neighbor never clears its title.
+    expect(queue.getAllQueuedEntries().map((entry) => entry.title)).toEqual(["First report", undefined]);
+    open = true;
+    queue.scheduleThreadDrain({ backend: "codex", threadId: "thread-1" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(steered).toHaveLength(1);
+    expect(steered[0]?.deliveredEntryIds).toEqual(["first", "second"]);
+    expect(steered[0]).not.toHaveProperty("title");
   });
 
-  it("keeps a to-do marker on one grouped message and drops it from a mixed batch", async () => {
+  it("keeps a to-do marker on its own message and off a combined delivery", async () => {
     const todoOrigin = {
       kind: "agent" as const,
       sourceThread: { backend: "codex" as const, threadId: "raiser" },
@@ -252,30 +256,33 @@ describe("ThreadTurnQueue", () => {
       sourceThread: { backend: "codex" as const, threadId: "sender" },
     };
     for (const order of [[todoOrigin, agentOrigin], [agentOrigin, todoOrigin]]) {
+      const steered: ThreadTurnQueueEntry[] = [];
+      let open = false;
       const queue = new ThreadTurnQueue({
         isThreadActive: () => true,
-        startTurn: async (entry) => ({
-          backend: entry.backend,
-          threadId: entry.threadId,
-          turnId: `turn-${entry.id}`,
-        }),
+        canSteerThread: () => open,
+        steerTurn: async (entry) => {
+          steered.push(entry);
+          return { backend: entry.backend, threadId: entry.threadId, turnId: "active" };
+        },
+        startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
       });
       const [first, second] = order;
-      await queue.submitGroupedSteer(buildEntry({ id: "group", messageOrigin: first }));
-      const alone = queue.getAllQueuedEntries()[0]!;
-      if (first === todoOrigin) expect(alone.messageOrigin?.threadTodo).toEqual(todoOrigin.threadTodo);
-      else expect(alone.messageOrigin).not.toHaveProperty("threadTodo");
-
-      await queue.submitGroupedSteer({
+      await queue.submitSteer(buildEntry({ id: "first", messageOrigin: first }));
+      await queue.submitSteer({
         ...buildEntry({ id: "second", messageOrigin: second }),
         input: [{ type: "text", text: "second report" }],
       });
-
-      const batch = queue.getAllQueuedEntries()[0]!;
-      // The batch is no one card's prompt; each message keeps its own origin.
-      expect(batch.messageOrigin).not.toHaveProperty("threadTodo");
-      expect(batch.agentMessages?.map((message) => message.origin)).toEqual(order);
-      expect(batch.agentMessageOrigins).toEqual(order);
+      expect(queue.getAllQueuedEntries().map((entry) => entry.messageOrigin)).toEqual(order);
+      open = true;
+      queue.scheduleThreadDrain({ backend: "codex", threadId: "thread-1" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const delivery = steered[0]!;
+      // The delivery is no one card's prompt; each message keeps its own origin.
+      expect(delivery.messageOrigin).not.toHaveProperty("threadTodo");
+      expect(delivery.agentMessages?.map((message) => message.origin)).toEqual(order);
+      expect(delivery.agentMessageOrigins).toEqual(order);
     }
   });
 
@@ -1223,7 +1230,7 @@ describe("grouped queued steering", () => {
     return { promise, release };
   };
 
-  it("groups 20 senders and five later arrivals into one steer at the original position", async () => {
+  it("admits 25 senders as their own entries and steers them as two deliveries at the cap", async () => {
     const edit = barrier();
     const entered = barrier();
     const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
@@ -1237,28 +1244,25 @@ describe("grouped queued steering", () => {
       await edit.promise;
     });
     await entered.promise;
-    const sends = Array.from({ length: 20 }, (_, index) => queue.submitGroupedSteer(senderEntry(`sender-${index}`)));
+    const sends = Array.from({ length: 20 }, (_, index) => queue.submitSteer(senderEntry(`sender-${index}`)));
     edit.release();
     await suspension;
     const submissions = await Promise.all(sends);
-    const id = submissions[0]!.entry.id;
-    expect(new Set(submissions.map((item) => item.entry.id))).toEqual(new Set([id]));
-    await Promise.all(Array.from({ length: 5 }, (_, index) => queue.submitGroupedSteer(senderEntry(`late-${index}`))));
-    const [batch] = queue.getQueuedEntries(target);
-    expect(batch?.id).toBe(id);
-    expect(batch?.createdAt).toBe(1_000);
-    expect(batch?.agentMessages).toHaveLength(25);
-    const text = batch!.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    const late = await Promise.all(Array.from({ length: 5 }, (_, index) => queue.submitSteer(senderEntry(`late-${index}`))));
+    const ids = [...submissions, ...late].map((item) => item.entry.id);
+    // Every sender keeps its own immutable identity until dispatch.
+    expect(new Set(ids).size).toBe(25);
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(2));
+    expect(steer.mock.calls.map(([entry]) => entry.deliveredEntryIds)).toEqual([ids.slice(0, 20), ids.slice(20)]);
+    const text = steer.mock.calls.flatMap(([entry]) => entry.input.flatMap((item) => item.type === "text" ? [item.text] : [])).join("\n");
     expect(text).toContain("Title sender-0");
     expect(text).toContain("Machine late-4");
     expect(text).toContain("1970-01-01T00:00:01.000Z");
-    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
-    expect(steer.mock.calls[0]![0].agentMessages).toHaveLength(25);
     expect(start).not.toHaveBeenCalled();
     queue.close();
   });
 
-  it("freezes the batch claimed by the backend and groups arrivals in a second steer", async () => {
+  it("leaves the delivery the backend claimed alone and steers later arrivals as a second delivery", async () => {
     const dispatch = barrier();
     const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => {
       if (steer.mock.calls.length === 1) await dispatch.promise;
@@ -1267,17 +1271,18 @@ describe("grouped queued steering", () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true, canSteerThread: () => true, startTurn: async (entry) => result(entry), steerTurn: steer,
     });
-    await queue.submitGroupedSteer(senderEntry("first"));
+    await queue.submitSteer(senderEntry("first"));
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
     const frozen = steer.mock.calls[0]![0];
-    await Promise.all(Array.from({ length: 7 }, (_, index) => queue.submitGroupedSteer(senderEntry(`next-${index}`))));
-    expect(frozen.agentMessages).toHaveLength(1);
-    expect(queue.getQueuedEntries(target)[0]?.agentMessages).toHaveLength(7);
+    await Promise.all(Array.from({ length: 7 }, (_, index) => queue.submitSteer(senderEntry(`next-${index}`))));
+    expect(frozen.deliveredEntryIds).toBeUndefined();
+    const waiting = queue.getQueuedEntries(target).map((entry) => entry.id);
+    expect(waiting).toHaveLength(7);
     expect(queue.updateQueuedEntryInput(frozen.id, [])).toBeUndefined();
     expect(queue.cancelEntryWithDisposition(frozen.id).disposition).toBe("already_admitted");
     dispatch.release();
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(2));
-    expect(steer.mock.calls[1]![0].agentMessages).toHaveLength(7);
+    expect(steer.mock.calls[1]![0].deliveredEntryIds).toEqual(waiting);
     queue.close();
   });
 
@@ -1329,21 +1334,21 @@ describe("grouped queued steering", () => {
     queue.close();
   });
 
-  it("replaces only the sender's contributions and preserves the other sender", async () => {
+  it("replaces only the sender's own entry and leaves every other message untouched", async () => {
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
-    const first = await queue.submitGroupedSteer(senderEntry("alice", "old"));
-    await queue.submitGroupedSteer(senderEntry("bob", "bob evidence"));
-    await queue.submitGroupedSteer(senderEntry("alice", "overlapping update"));
+    const first = await queue.submitSteer(senderEntry("alice", "old"));
+    await queue.submitSteer(senderEntry("bob", "bob evidence"));
+    await queue.submitSteer({ ...senderEntry("alice", "overlapping update"), id: "alice-2" });
+    const before = queue.getQueuedEntries(target).slice(1);
     const updated = await queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "consolidated" }], senderEntry("alice").messageOrigin.sourceThread);
-    expect(updated?.agentMessages?.map((message) => message.input)).toEqual([
-      [{ type: "text", text: "consolidated" }], [{ type: "text", text: "bob evidence" }],
-    ]);
+    expect(updated?.input).toEqual([{ type: "text", text: "consolidated" }]);
     expect(updated?.id).not.toBe(first.entry.id);
+    expect(queue.getQueuedEntries(target)).toEqual([updated, ...before]);
     expect(await queue.replaceQueuedAgentInput(updated!.id, [], { backend: "codex", threadId: "intruder" })).toBeUndefined();
     queue.close();
   });
 
-  it.each(["source", "ambiguous"] as const)("clears stale %s provenance when replacement removes the last attributed contribution", async (kind) => {
+  it.each(["source", "ambiguous"] as const)("clears stale %s provenance when the sender replaces its message", async (kind) => {
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
     const sender = senderEntry("alice");
     const attributed = { ...sender, messageOrigin: { ...sender.messageOrigin,
@@ -1351,43 +1356,26 @@ describe("grouped queued steering", () => {
         ? { causalMessagingSource: { ownerId: "profile", requestId: "old-request", surfaceSelector: "old-topic" } }
         : { causalMessagingAmbiguous: true }),
     } };
-    const first = await queue.submitGroupedSteer(attributed);
+    const first = await queue.submitSteer(attributed);
     const updated = await queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "unrelated replacement" }],
       sender.messageOrigin.sourceThread, sender.messageOrigin);
-    expect(updated?.agentMessages?.[0]?.origin).toEqual(sender.messageOrigin);
+    expect(updated?.messageOrigin).toEqual(sender.messageOrigin);
     expect(updated?.messageOrigin?.causalMessagingSource).toBeUndefined();
     expect(updated?.messageOrigin?.causalMessagingAmbiguous).toBeUndefined();
     expect(queue.getQueuedEntries(target)[0]?.messageOrigin).toEqual(updated?.messageOrigin);
     queue.close();
   });
 
-  it("recomputes a replaced batch from the remaining sender's provenance", async () => {
+  it("keeps an operator edit on its own entry when another sender arrives", async () => {
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
-    const alice = senderEntry("alice");
-    const bob = senderEntry("bob");
-    const source = { ownerId: "profile", requestId: "bob-request", surfaceSelector: "bob-topic" };
-    const first = await queue.submitGroupedSteer({ ...alice, messageOrigin: { ...alice.messageOrigin,
-      causalMessagingSource: { ...source, requestId: "alice-request", surfaceSelector: "alice-topic" } } });
-    await queue.submitGroupedSteer({ ...bob, messageOrigin: { ...bob.messageOrigin, causalMessagingSource: source } });
-    expect(queue.getQueuedEntries(target)[0]?.messageOrigin?.causalMessagingAmbiguous).toBe(true);
-    const updated = await queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "same request as Bob" }],
-      alice.messageOrigin.sourceThread, { ...alice.messageOrigin, causalMessagingSource: source });
-    expect(updated?.messageOrigin?.causalMessagingSource).toEqual(source);
-    expect(updated?.messageOrigin?.causalMessagingAmbiguous).toBeUndefined();
-    queue.close();
-  });
-
-  it("preserves an operator-edited steer when a new sender arrives", async () => {
-    const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
-    const first = await queue.submitGroupedSteer(senderEntry("alice"));
+    const first = await queue.submitSteer(senderEntry("alice"));
     const edited = [{ type: "text" as const, text: "Operator revision" }];
     queue.updateQueuedEntryInput(first.entry.id, edited);
-    await queue.submitGroupedSteer(senderEntry("bob"));
+    await queue.submitSteer(senderEntry("bob"));
     const entries = queue.getQueuedEntries(target);
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ id: first.entry.id, delivery: "queued-steer", input: edited });
-    expect(entries[1]?.agentMessages).toHaveLength(1);
-    expect(await queue.replaceQueuedAgentInput(first.entry.id, [], senderEntry("alice").messageOrigin.sourceThread)).toBeUndefined();
+    expect(entries[1]).toMatchObject({ id: "bob", input: [{ type: "text", text: "bob" }] });
     queue.close();
   });
 
@@ -1398,7 +1386,7 @@ describe("grouped queued steering", () => {
     });
     const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, canSteerThread: () => true, startTurn: start, steerTurn: steer });
-    await queue.submitGroupedSteer(senderEntry("alice"));
+    await queue.submitSteer(senderEntry("alice"));
     await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(2));
     expect(steer.mock.calls[1]![0].id).toBe(steer.mock.calls[0]![0].id);
     expect(steer.mock.calls[1]![0].input).toEqual(steer.mock.calls[0]![0].input);
@@ -1407,10 +1395,10 @@ describe("grouped queued steering", () => {
     queue.close();
   });
 
-  it("starts one grouped follow-up when the target is idle", async () => {
+  it("starts one combined follow-up when the target is idle", async () => {
     const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
     const queue = new ThreadTurnQueue({ startTurn: start });
-    await Promise.all([queue.submitGroupedSteer(senderEntry("alice")), queue.submitGroupedSteer(senderEntry("bob"))]);
+    await Promise.all([queue.submitSteer(senderEntry("alice")), queue.submitSteer(senderEntry("bob"))]);
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     expect(start.mock.calls[0]![0].agentMessages).toHaveLength(2);
     queue.close();
@@ -1422,7 +1410,7 @@ describe("grouped queued steering", () => {
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, canSteerThread: () => true, startTurn: start, steerTurn: steer });
     try {
       await queue.submit(buildEntry({ id: "operator" }));
-      const guidance = await queue.submitGroupedSteer(senderEntry("alice"));
+      const guidance = await queue.submitSteer(senderEntry("alice"));
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(steer).not.toHaveBeenCalled();
       if (suspended) {
@@ -1454,7 +1442,7 @@ describe("grouped queued steering", () => {
     const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
     const queue = new ThreadTurnQueue({ isThreadActive: () => active, canSteerThread: () => true, startTurn: start, steerTurn: steer });
     await queue.submit(buildEntry({ id: "operator" }));
-    await queue.submitGroupedSteer(senderEntry("alice"));
+    await queue.submitSteer(senderEntry("alice"));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(steer).not.toHaveBeenCalled();
     active = false;
@@ -1463,10 +1451,10 @@ describe("grouped queued steering", () => {
     active = true;
     await queue.releaseThread({ ...target, turnId: "turn-operator" });
     await vi.waitFor(() => expect(queue.getQueuedEntries(target)[0]?.holdReason).toBe("backend disconnected"));
-    await queue.submitGroupedSteer(senderEntry("bob"));
+    await queue.submitSteer(senderEntry("bob"));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(steer).toHaveBeenCalledTimes(1);
-    expect(queue.getQueuedEntries(target)[0]?.agentMessages).toHaveLength(2);
+    expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["alice", "bob"]);
     queue.close();
   });
 });
@@ -1524,12 +1512,12 @@ describe("operator reply steering", () => {
     queue.close();
   });
 
-  it("is never absorbed into an Agent message batch", async () => {
+  it("is never combined with an Agent message", async () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true, startTurn: async (entry) => result(entry),
     });
     await queue.submitSteer(reply());
-    await queue.submitGroupedSteer({
+    await queue.submitSteer({
       ...buildEntry({ id: "agent" }),
       input: [{ type: "text", text: "agent report" }],
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "source" } },
@@ -1891,18 +1879,18 @@ describe("ThreadTurnQueue.setEntryPaused", () => {
     queue.close();
   });
 
-  it("starts a new grouped steer beside a paused batch instead of joining it", async () => {
+  it("admits a message beside a paused one as its own entry", async () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true,
       startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
     });
-    await queue.submitGroupedSteer(buildEntry({ id: "first" }));
+    await queue.submitSteer(buildEntry({ id: "first" }));
     await queue.setEntryPaused("first", true);
 
-    await queue.submitGroupedSteer(buildEntry({ id: "second" }));
+    await queue.submitSteer(buildEntry({ id: "second" }));
 
     expect(ids(queue)).toEqual(["first", "second"]);
-    expect(queue.getQueuedEntries(thread)[0]?.agentMessages).toHaveLength(1);
+    expect(queue.getQueuedEntries(thread)[0]).not.toHaveProperty("agentMessages");
   });
 });
 

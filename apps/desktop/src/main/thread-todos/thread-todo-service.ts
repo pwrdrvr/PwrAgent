@@ -73,6 +73,7 @@ export type ThreadTodoActionRunners = {
     sourceBackend: AppServerBackendKind;
     sourceThreadId: string;
     cwd?: string;
+    project?: ThreadTodoProject;
     crossProject: boolean;
     action: StartThreadAction;
     todo: ThreadTodoDispatchCard;
@@ -808,6 +809,7 @@ export class ThreadTodoService {
             sourceBackend: todo.backend,
             sourceThreadId: todo.threadId,
             cwd,
+            project,
             crossProject,
             action,
             todo: dispatchCard,

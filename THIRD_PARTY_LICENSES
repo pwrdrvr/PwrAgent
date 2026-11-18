@@ -1128,7 +1128,7 @@ MIT
 - @floating-ui/utils@0.2.12 | https://github.com/floating-ui/floating-ui
 - @gar/promise-retry@1.0.3 | https://github.com/wraithgar/node-promise-retry
 - @grammyjs/types@5.0.0 | https://github.com/grammyjs/types
-- @hono/node-server@2.1.3 | https://github.com/honojs/node-server
+- @hono/node-server@2.1.7 | https://github.com/honojs/node-server
 - @iconify/types@2.0.0 | https://github.com/iconify/iconify
 - @iconify/utils@3.1.7 | https://github.com/iconify/iconify
 - @larksuiteoapi/node-sdk@1.76.0 | https://github.com/larksuite/node-sdk
@@ -1269,10 +1269,10 @@ MIT
 - @types/ws@8.18.2 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @upsetjs/venn.js@2.0.0 | https://github.com/upsetjs/venn.js
 - @vladfrangu/async_event_emitter@2.4.7 | https://github.com/vladfrangu/async_event_emitter
-- @xterm/addon-fit@0.11.0 | https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit
-- @xterm/addon-serialize@0.14.0 | https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize
-- @xterm/headless@6.0.0 | https://github.com/xtermjs/xterm.js
-- @xterm/xterm@6.0.0 | https://github.com/xtermjs/xterm.js
+- @xterm/addon-fit@0.12.0-beta.333 | https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit
+- @xterm/addon-serialize@0.15.0-beta.331 | https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize
+- @xterm/headless@6.1.0-beta.335 | https://github.com/xtermjs/xterm.js
+- @xterm/xterm@6.1.0-beta.337 | https://github.com/xtermjs/xterm.js
 - abort-controller@3.0.0 | https://github.com/mysticatea/abort-controller
 - accepts@2.0.0 | jshttp/accepts
 - agent-base@6.0.2 | https://github.com/TooTallNate/node-agent-base
@@ -1396,7 +1396,7 @@ MIT
 - hast-util-to-text@4.0.2 | syntax-tree/hast-util-to-text
 - hast-util-whitespace@3.0.0 | syntax-tree/hast-util-whitespace
 - hastscript@9.0.1 | syntax-tree/hastscript
-- hono@4.13.11 | https://github.com/honojs/hono
+- hono@4.13.18 | https://github.com/honojs/hono
 - html-url-attributes@3.0.1 | https://github.com/rehypejs/rehype-minify/tree/main/packages/html-url-attributes
 - html-void-elements@3.0.0 | wooorm/html-void-elements
 - http-errors@2.0.1 | jshttp/http-errors
@@ -3877,13 +3877,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@hono/node-server@2.1.3 (MIT)
+@hono/node-server@2.1.7 (MIT)
 -----------------------------
 
 Applies to:
-- @hono/node-server@2.1.3 (MIT)
+- @hono/node-server@2.1.7 (MIT)
 
-Representative file: @hono/node-server@2.1.3/LICENSE
+Representative file: @hono/node-server@2.1.7/LICENSE
 
 MIT License
 
@@ -5597,13 +5597,13 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
-@xterm/addon-fit@0.11.0 (MIT)
------------------------------
+@xterm/addon-fit@0.12.0-beta.333 (MIT)
+--------------------------------------
 
 Applies to:
-- @xterm/addon-fit@0.11.0 (MIT)
+- @xterm/addon-fit@0.12.0-beta.333 (MIT)
 
-Representative file: @xterm/addon-fit@0.11.0/LICENSE
+Representative file: @xterm/addon-fit@0.12.0-beta.333/LICENSE
 
 Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 
@@ -5625,13 +5625,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-@xterm/addon-serialize@0.14.0 (MIT)
------------------------------------
+@xterm/addon-serialize@0.15.0-beta.331 (MIT)
+--------------------------------------------
 
 Applies to:
-- @xterm/addon-serialize@0.14.0 (MIT)
+- @xterm/addon-serialize@0.15.0-beta.331 (MIT)
 
-Representative file: @xterm/addon-serialize@0.14.0/package metadata
+Representative file: @xterm/addon-serialize@0.15.0-beta.331/package metadata
 
 The installed package does not include a separate license file. Its package metadata declares MIT.
 
@@ -5657,13 +5657,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@xterm/headless@6.0.0 (MIT)
----------------------------
+@xterm/headless@6.1.0-beta.335 (MIT)
+------------------------------------
 
 Applies to:
-- @xterm/headless@6.0.0 (MIT)
+- @xterm/headless@6.1.0-beta.335 (MIT)
 
-Representative file: @xterm/headless@6.0.0/package metadata
+Representative file: @xterm/headless@6.1.0-beta.335/package metadata
 
 The installed package does not include a separate license file. Its package metadata declares MIT.
 
@@ -5689,13 +5689,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@xterm/xterm@6.0.0 (MIT)
-------------------------
+@xterm/xterm@6.1.0-beta.337 (MIT)
+---------------------------------
 
 Applies to:
-- @xterm/xterm@6.0.0 (MIT)
+- @xterm/xterm@6.1.0-beta.337 (MIT)
 
-Representative file: @xterm/xterm@6.0.0/LICENSE
+Representative file: @xterm/xterm@6.1.0-beta.337/LICENSE
 
 Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
@@ -9400,13 +9400,13 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-hono@4.13.11 (MIT)
+hono@4.13.18 (MIT)
 ------------------
 
 Applies to:
-- hono@4.13.11 (MIT)
+- hono@4.13.18 (MIT)
 
-Representative file: hono@4.13.11/LICENSE
+Representative file: hono@4.13.18/LICENSE
 
 MIT License
 

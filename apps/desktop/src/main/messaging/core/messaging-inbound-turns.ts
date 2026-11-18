@@ -1,3 +1,4 @@
+import type { MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import { buildQueuedInputPreview, directoryForProjectSelection, newThreadOptionsForSession, normalizeNewThreadSessionForBackend, findThreadForBinding, type PreparedInputStartResult, type PendingNewThreadPromptWindow, type PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
 import { messageOriginForInboundEvent } from "./messaging-command-helpers";
 import { federationTargetForBinding, isTerminalTurnLifecycle, type ActiveAgentMessagingOrigin } from "./messaging-backend-event-helpers";
@@ -17,7 +18,7 @@ import { type MessagingNavigationContext, type MessagingThreadContext } from "./
 import { DEFAULT_MESSAGING_ATTACHMENT_POLICY, formatOriginalAttachmentGuidance, processMessagingAttachments, type MessagingAttachmentRejection } from "./messaging-attachment-processor.js";
 import { type OriginalAttachmentInput } from "./messaging-original-attachment-store.js";
 import { type PendingPdfAttachment } from "../../pdf/pdf-attachment-store.js";
-import { type MessagingQueuedTurnEntry, type MessagingTurnAdmissionBundle, type MessagingTurnInputEvent } from "./messaging-turn-admission.js";
+import { type MessagingTurnAdmissionBundle, type MessagingTurnInputEvent } from "./messaging-turn-admission.js";
 import { threadContextForAdmissionState, isDefaultAgentRouteBinding } from "./messaging-binding-helpers";
 import { parseTextCommand, parseTextCommandArgs, parseMentionCommand, bindingWithInboundRoutingState, isToolsFallbackText, isStreamFallbackText, type MessagingHandledToRoutedSubspan, type MessagingAdmissionTimingRecord, type MessagingAdmissionStage, type MessagingInputPreparationSpan, ADMISSION_STAGE_MARK_LIMIT, bindingWithoutPendingSkillSelection, DEFAULT_INPUT_DEBOUNCE_MS, PRIVATE_REPLY_COMPLETION_INSTRUCTION, requestsExplicitPrivateResponse, PRIVATE_RESPONSE_FALLBACK_INSTRUCTION, originalAttachmentActorKey, formatAttachmentRejections, agentMessagingThreadKey, resolveExecutionModeForThread, turnSettingsForThread, isPromiseLike, isTurnInProgressStartError, isMissingTurnTargetStartError, buildMessagingStartedThreadContext, agentForNewThreadSession, launchpadForMessagingProject, messagingLaunchpadMaterializationKey, buildMessagingEnvironmentSetupProgressBody, isTerminalCodexEnvironmentSetupProgress, MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS, buildMessagingEnvironmentSetupFailureBody, buildMessagingEnvironmentSetupSuccessBody } from "./messaging-inbound-helpers";
 import type { MessagingInboundContext, MessagingInboundHost } from "./messaging-inbound-context";
@@ -932,31 +933,6 @@ export class MessagingInboundTurns {
       return;
     }
 
-    if (
-      !isDefaultAgentRouteBinding(currentBinding)
-      && !this.context.backend.ownsTurnQueue
-      && await this.isTurnOccupied(
-        currentBinding,
-        bundle.threadKey,
-        admissionState,
-      )
-    ) {
-      this.markAdmissionStage(bundle.events[0], "queued");
-      await this.queuePreparedInput({
-        binding: consumedSkillBinding,
-        event: bundle.events[0],
-        input: preparedWithSkill.input,
-        pdfAttachments: preparedWithSkill.pdfAttachments,
-        privateResponseRequested: preparedWithSkill.privateResponseRequested,
-        preview: preparedWithSkill.preview,
-        threadKey: bundle.threadKey,
-      });
-      if (currentBinding.pendingSkillSelection) {
-        await this.context.host().clearPendingSkillSelection(currentBinding);
-      }
-      return;
-    }
-
     this.markAdmissionStage(bundle.events[0], "occupancyResolved");
     const startResult = await this.startPreparedInput({
       binding: consumedSkillBinding,
@@ -1429,7 +1405,7 @@ export class MessagingInboundTurns {
     pdfAttachments?: PendingPdfAttachment[];
     privateResponseRequested?: boolean;
     preview: string;
-    queueOnConcurrentStart?: boolean;
+    reportBusyRefusal?: boolean;
     threadKey: string;
   }): Promise<PreparedInputStartResult> {
     this.context.host().turnAdmission.markStarting(params.threadKey);
@@ -1632,26 +1608,24 @@ export class MessagingInboundTurns {
           requestedExecutionMode: turnSettings.executionMode ?? "unset",
           ...acceptanceTiming,
         });
-        if (this.context.backend.ownsTurnQueue) {
-          const ownerQueueEntryId = started.queueEntryId ?? started.turnId;
-          const entry: MessagingQueuedTurnEntry = {
-            ...params, id: ownerQueueEntryId, ownerQueueEntryId, status: "queued",
-            createdAt: this.context.now(), updatedAt: this.context.now(),
-            pdfSourceRequest: startingOrigin?.source?.ref,
-          };
-          const key = `${params.threadKey}:${ownerQueueEntryId}`;
-          await this.context.host().applySharedQueueNoticeEvent(key, { type: "accepted", entry });
-          try {
-            await this.context.host().deliverQueuedTurnNotice(entry);
-          } catch (error) {
-            // A provider notice cannot undo the owner's accepted input.
-            this.context.logger.warn?.("messaging shared queue notice failed", {
-              queueEntryId: ownerQueueEntryId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          } finally {
-            await this.context.host().applySharedQueueNoticeEvent(key, { type: "noticeReady" });
-          }
+        const ownerQueueEntryId = started.queueEntryId ?? started.turnId;
+        const entry: MessagingQueuedTurnEntry = {
+          ...params, id: ownerQueueEntryId, ownerQueueEntryId, status: "queued",
+          createdAt: this.context.now(), updatedAt: this.context.now(),
+          pdfSourceRequest: startingOrigin?.source?.ref,
+        };
+        const key = `${params.threadKey}:${ownerQueueEntryId}`;
+        await this.context.host().applySharedQueueNoticeEvent(key, { type: "accepted", entry });
+        try {
+          await this.context.host().deliverQueuedTurnNotice(entry);
+        } catch (error) {
+          // A provider notice cannot undo the owner's accepted input.
+          this.context.logger.warn?.("messaging shared queue notice failed", {
+            queueEntryId: ownerQueueEntryId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          await this.context.host().applySharedQueueNoticeEvent(key, { type: "noticeReady" });
         }
         return "queued";
       }
@@ -1690,7 +1664,7 @@ export class MessagingInboundTurns {
       const deliveryBinding = startingOrigin?.deliveryBinding
         ?? startingOrigin?.binding
         ?? params.binding;
-      this.context.host().setActiveTurn(deliveryBinding, activeTurn);
+      this.context.host().acceptStartedTurn(deliveryBinding, activeTurn);
       // Preserve the accepted turn's normal signal (including a retry after a
       // failed preparation request). This wait is after backend acceptance.
       await preparingActivity?.settled;
@@ -1716,21 +1690,9 @@ export class MessagingInboundTurns {
         });
         return "started";
       }
-      if (isTurnInProgressStartError(error)) {
-        if (params.queueOnConcurrentStart !== false) {
-          await this.queuePreparedInput({
-            binding: params.binding,
-            event: params.event,
-            input: params.input,
-            pdfAttachments: params.pdfAttachments,
-            privateResponseRequested: params.privateResponseRequested,
-            preview: params.preview,
-            threadKey: params.threadKey,
-          });
-          return "queued";
-        }
-        return "failed";
-      }
+      // Recovery previously kept busy refusals silent. Preserve that error
+      // boundary and write cost while retaining its input for explicit Retry.
+      if (params.reportBusyRefusal === false && isTurnInProgressStartError(error)) return "failed";
       // The durable overlay outlives its provider thread, so a targeted
       // missing-thread response is the one reliable signal that a Default
       // Agent assignment is dead. Other start failures are recoverable: a
@@ -1840,19 +1802,6 @@ export class MessagingInboundTurns {
       undefined,
       params.navigation,
     );
-  }
-
-  async queuePreparedInput(params: {
-    binding: MessagingBindingRecord;
-    event?: MessagingInboundEvent;
-    input: AppServerTurnInputItem[];
-    pdfAttachments?: PendingPdfAttachment[];
-    privateResponseRequested?: boolean;
-    preview: string;
-    threadKey: string;
-  }): Promise<void> {
-    const queued = this.context.host().turnAdmission.enqueue(params);
-    await this.context.host().deliverQueuedTurnNotice(queued);
   }
 
   async createNewThreadFromPromptBundle(

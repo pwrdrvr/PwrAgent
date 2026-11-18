@@ -1004,3 +1004,36 @@ export function readMessagingToolUpdateModeValue(
     ? toolUpdateMode
     : undefined;
 }
+
+export function readNullableStringValue(
+  value: MessagingJsonValue | undefined,
+  key: string,
+): string | null | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const result = value[key];
+  if (result === null) {
+    return null;
+  }
+  return typeof result === "string" ? result : undefined;
+}
+
+export function readThreadExecutionModeValue(
+  value: MessagingJsonValue | undefined,
+): ThreadExecutionMode | undefined {
+  const executionMode = readStringValue(value, "executionMode");
+  return executionMode === "default" || executionMode === "auto" || executionMode === "full-access"
+    ? executionMode
+    : undefined;
+}
+
+export function readAcpRuntimeOptionSource(
+  value: MessagingJsonValue | undefined,
+): BackendAcpRuntimeOptionSource | undefined {
+  const source = readStringValue(value, "source");
+  return source === "mode" || source === "configOption" || source === "model"
+    ? source
+    : undefined;
+}

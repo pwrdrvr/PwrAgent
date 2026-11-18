@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
@@ -12,7 +11,7 @@ import {
 } from "../../../../../packages/shared/src/__tests__/research-journal-arbitraries";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import { createTempStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 /**
  * The oracle is the journal. `MemoryResearchStorage` answers every read by
@@ -20,16 +19,18 @@ import { createTempStateDb } from "./sqlite-test-utils";
  * the projections it wrote in each append's commit. They must agree after
  * every step, and so must a renderer store fed only the store's deltas.
  */
-let db: StateDb;
-let fixture: ReturnType<typeof createTempStateDb>;
-
 beforeEach(() => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  fixture = createTempStateDb("pwragent-research-projections-");
-  db = StateDb.open(fixture.dbPath);
   resetSqliteWriteMetrics();
 });
-afterEach(() => { db.close(); rmSync(fixture.tempDir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
+afterEach(() => vi.unstubAllEnvs());
+
+const projectionTest = it.extend("db", ({ signal }, { onCleanup }) => {
+  signal.throwIfAborted();
+  const db = openInMemoryStateDb();
+  onCleanup(() => db.close());
+  return db;
+});
 
 /** Replays a journal once per revision. The comparisons below read each run hundreds of times a step and never mutate it. */
 class ReplayOracle extends MemoryResearchStorage {
@@ -71,7 +72,7 @@ const opArb = fc.record({
 });
 type Op = typeof opArb extends fc.Arbitrary<infer T> ? T : never;
 
-function clear() {
+function clear(db: StateDb) {
   db.raw.exec("DELETE FROM research_deliveries; DELETE FROM research_items; DELETE FROM research_workers; DELETE FROM research_events; DELETE FROM research_runs;");
 }
 
@@ -117,7 +118,9 @@ async function apply(store: ResearchStore, oracle: ReplayOracle, op: Op) {
   const measured = await measureSqliteWrites(() => outcome(store));
   expect(measured.result).toEqual(expected);
   // One structured operation is one commit, and an ignored or refused one is none.
-  expect(measured.writes.commits).toBe("appended" in expected && expected.appended ? 1 : 0);
+  const changed = "appended" in expected && expected.appended;
+  expect(measured.writes.commits).toBe(changed ? 1 : 0);
+  return changed;
 }
 
 /**
@@ -136,8 +139,10 @@ async function expectAgreement(store: ResearchStore, oracle: ReplayOracle, op?: 
     expect(store.activeRuns()).toEqual(oracle.activeRuns());
     for (const thread of scope.threads) {
       expect(store.activeRuns(thread)).toEqual(oracle.activeRuns(thread));
-      expect(store.runSummaries(thread, 50)).toEqual(oracle.runSummaries(thread, 50));
-      expect(store.runSummaries(thread, 1)).toEqual(oracle.runSummaries(thread, 1));
+      const limits = op ? [op.limit % 2 ? 1 : 50] : [1, 50];
+      for (const limit of limits) {
+        expect(store.runSummaries(thread, limit)).toEqual(oracle.runSummaries(thread, limit));
+      }
       expect(store.summaries(thread)).toEqual(oracle.summaries(thread));
       expect(store.isActiveWorker(thread)).toBe(oracle.isActiveWorker(thread));
     }
@@ -167,11 +172,15 @@ async function expectAgreement(store: ResearchStore, oracle: ReplayOracle, op?: 
       expect(store.events(id, { limit: 4 })).toEqual(oracle.events(id, { limit: 4 }));
       expect(store.search(id, { type: "finding", limit: 5 })).toEqual(oracle.search(id, { type: "finding", limit: 5 }));
       // Search reads the columns an update rewrites, so ask for the items changed last by what they now say and by what they said before.
+      const searched = new Set<string>();
       for (const item of run.items.filter((entry) => entry.version > run.revision - 2)) {
         const earlier = item.version > 1 ? projectResearchRun(id, run.events.slice(0, item.version - 1)).items.find((entry) => entry.id === item.id) : undefined;
         for (const state of [item, earlier]) {
           if (!state) continue;
           for (const query of [{ state: state.work.state }, ...(state.work.note ? [{ query: state.work.note }] : []), ...(state.work.assignee ? [{ assignee: state.work.assignee }] : [])]) {
+            const searchKey = JSON.stringify(query);
+            if (searched.has(searchKey)) continue;
+            searched.add(searchKey);
             expect(store.search(id, { ...query, limit: 5 })).toEqual(oracle.search(id, { ...query, limit: 5 }));
           }
         }
@@ -233,15 +242,16 @@ function expectStoreHoldsRun(held: ResearchRunStore, run: ResearchRun) {
 }
 
 describe("research projections", () => {
-  it("every stored read agrees with replaying the journal after every step, and no read writes", async () => {
+  projectionTest("stored reads agree with journal replay after every append, and no read writes", async ({ db }) => {
     await fc.assert(fc.asyncProperty(fc.array(opArb, { size: "max", minLength: 10, maxLength: 24 }), fc.boolean(), async (ops, sameInstant) => {
-      clear();
+      clear(db);
       const store = new ResearchStore(db);
       const oracle = new ReplayOracle();
       createRuns(store, oracle, sameInstant);
       for (const op of ops) {
-        await apply(store, oracle, op);
-        await expectAgreement(store, oracle, op, stepScope(op));
+        // A refused or repeated command is already checked for zero commits.
+        // Read the projections again when the journal and the expected state advance.
+        if (await apply(store, oracle, op)) await expectAgreement(store, oracle, op, stepScope(op));
       }
       await expectAgreement(store, oracle);
       // The journal itself is what both sides were given.
@@ -249,19 +259,22 @@ describe("research projections", () => {
     }), { numRuns: 25 });
   });
 
-  it("the change stream, applied to an empty renderer store or to one a few steps behind, gives the replayed run after every step", async () => {
+  projectionTest("the change stream gives the replayed run to empty and lagging renderer stores", async ({ db }) => {
     await fc.assert(fc.asyncProperty(fc.array(opArb, { size: "max", minLength: 10, maxLength: 40 }), async (ops) => {
-      clear();
+      clear(db);
       const store = new ResearchStore(db);
       const oracle = new ReplayOracle();
       createRuns(store, oracle, false);
       const held = new Map(RUNS.map((id) => [id, emptyResearchRunStore(id)]));
       for (const op of ops) {
-        await apply(store, oracle, op);
+        const changed = await apply(store, oracle, op);
+        // Even after a no-op a lagging renderer can catch up. An empty reader
+        // and the delta pages are already checked at every new revision.
+        if (!changed && !op.sync) continue;
         // After a step, the run it changed. The other run is read at the end, by then many steps behind.
         const id = RUNS[op.run]!;
         const run = oracle.get(id)!;
-        await expectChangesAgree(store, oracle, op.limit, [id], false);
+        if (changed) await expectChangesAgree(store, oracle, op.limit, [id], false);
         // An empty store reads the whole run. The held one syncs after some steps and not others, so its delta spans one change or many.
         if (!op.sync) { expectStoreHoldsRun(sync(store, emptyResearchRunStore(id), op.limit), run); continue; }
         held.set(id, sync(store, held.get(id)!, op.limit));
@@ -278,29 +291,37 @@ describe("research projections", () => {
   });
 
   it("a database from before the projections is backfilled once, to what replay gives, and later opens write nothing", async () => {
-    await fc.assert(fc.asyncProperty(fc.array(opArb, { size: "max", minLength: 10, maxLength: 40 }), async (ops) => {
-      clear();
-      const oracle = new ReplayOracle();
-      createRuns(new ResearchStore(db), oracle, false);
-      for (const op of ops) await apply(new ResearchStore(db), oracle, op);
-      // The schema this change found: no reason, version, slot or worker columns, and no deliveries table.
-      db.raw.exec(`DROP INDEX idx_research_items_version; DROP INDEX idx_research_items_slot; DROP INDEX idx_research_items_worker;
-        ALTER TABLE research_items DROP COLUMN version; ALTER TABLE research_items DROP COLUMN occupies_slot;
-        ALTER TABLE research_items DROP COLUMN worker_backend; ALTER TABLE research_items DROP COLUMN worker_thread_id;
-        ALTER TABLE research_runs DROP COLUMN reason; DROP TABLE research_deliveries; DROP INDEX idx_research_events_delivery_failed;`);
+    const fixture = createTempStateDb("pwragent-research-projections-");
+    let db = StateDb.open(fixture.dbPath);
+    try {
+      await fc.assert(fc.asyncProperty(fc.array(opArb, { size: "max", minLength: 10, maxLength: 40 }), async (ops) => {
+        clear(db);
+        const store = new ResearchStore(db);
+        const oracle = new ReplayOracle();
+        createRuns(store, oracle, false);
+        for (const op of ops) await apply(store, oracle, op);
+        // The schema this change found: no reason, version, slot or worker columns, and no deliveries table.
+        db.raw.exec(`DROP INDEX idx_research_items_version; DROP INDEX idx_research_items_slot; DROP INDEX idx_research_items_worker;
+          ALTER TABLE research_items DROP COLUMN version; ALTER TABLE research_items DROP COLUMN occupies_slot;
+          ALTER TABLE research_items DROP COLUMN worker_backend; ALTER TABLE research_items DROP COLUMN worker_thread_id;
+          ALTER TABLE research_runs DROP COLUMN reason; DROP TABLE research_deliveries; DROP INDEX idx_research_events_delivery_failed;`);
+        db.close();
+        db = StateDb.open(fixture.dbPath);
+        await expectAgreement(new ResearchStore(db), oracle);
+        await expectChangesAgree(new ResearchStore(db), oracle, 3);
+        db.close();
+        const reopened = await measureSqliteWrites(() => StateDb.open(fixture.dbPath));
+        db = reopened.result;
+        expect(reopened.writes.commits).toBe(0);
+        await expectAgreement(new ResearchStore(db), oracle);
+      }), { numRuns: 8 });
+    } finally {
       db.close();
-      db = StateDb.open(fixture.dbPath);
-      await expectAgreement(new ResearchStore(db), oracle);
-      await expectChangesAgree(new ResearchStore(db), oracle, 3);
-      db.close();
-      const reopened = await measureSqliteWrites(() => StateDb.open(fixture.dbPath));
-      db = reopened.result;
-      expect(reopened.writes.commits).toBe(0);
-      await expectAgreement(new ResearchStore(db), oracle);
-    }), { numRuns: 8 });
+      removeTempStateDbDir(fixture.tempDir);
+    }
   });
 
-  it("reads the newest delivery failures through their index, not a scan of the journal", () => {
+  projectionTest("reads the newest delivery failures through their index, not a scan of the journal", ({ db }) => {
     const plan = db.raw.prepare(`EXPLAIN QUERY PLAN SELECT payload FROM research_events WHERE run_id = ? AND json_extract(payload, '$.data.type') = 'delivery_failed'
       ORDER BY seq DESC LIMIT ?`).all("run", 3) as { detail: string }[];
     expect(plan.map((row) => row.detail).join("\n")).toContain("idx_research_events_delivery_failed");

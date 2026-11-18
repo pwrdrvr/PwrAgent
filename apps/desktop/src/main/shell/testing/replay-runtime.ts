@@ -208,8 +208,9 @@ export function createReplayClientsFromEnv():
   const fixture = loadReplayFixture(fixturePath);
   const clients = createReplayClients(fixture);
 
-  // Read the existing bounded rings only; never install this bridge in a package.
+  // The isolated fixture owns listing history even when CPU profiling is off.
   if (process.env.PWRAGENT_E2E === "1" && app?.isPackaged === false) {
+    listingDiagnostics.setEnabled(true, "replay");
     globalThis.__PWRAGENT_E2E_MAIN_PROCESS_TIMING__ = () => ({
       listings: listingDiagnostics.snapshot(),
       git: gitSubprocessDiagnostics.snapshot(),

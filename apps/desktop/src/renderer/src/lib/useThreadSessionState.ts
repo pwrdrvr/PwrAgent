@@ -3223,6 +3223,7 @@ function buildPendingTurnUsage(params: {
   existing?: TurnUsageAccumulator;
   fastMode?: boolean;
   model?: string;
+  pricingAt: number;
   serviceTier?: string;
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
@@ -3270,6 +3271,7 @@ function buildPendingTurnUsage(params: {
         fastMode: params.fastMode,
         id: `live-turn-usage-${turnId}`,
         model: params.model,
+        pricingAt: params.pricingAt,
         serviceTier: params.serviceTier,
         summaryPrefix: "Turn usage",
         tokenUsage: tokenUsagePayloadFromBreakdown(turnUsage),
@@ -3456,6 +3458,7 @@ function findKnownTurnUsageMetadata(
 ): {
   createdAt?: number;
   isTurnUsage?: boolean;
+  pricingAt?: number;
   turn?: AppServerThreadTurnMetadata;
 } {
   if (!turnId) {
@@ -3489,7 +3492,7 @@ function findKnownTurnUsageMetadata(
   const createdAt = entry?.turn?.completedAt ?? entry?.createdAt;
   return {
     ...(typeof createdAt === "number" ? { createdAt } : {}),
-    ...(entryIsTurnUsage ? { isTurnUsage: true } : {}),
+    ...(entryIsTurnUsage ? { isTurnUsage: true, pricingAt: createdAt } : {}),
     ...(turn ? { turn } : {}),
   };
 }
@@ -4829,6 +4832,7 @@ function threadMessageOriginFromUnknown(
     record.kind === "pwragent"
       ? threadMessageReviewAutoFixOriginFromUnknown(record.reviewAutoFix)
       : undefined;
+  const deliveredMessages = threadMessageDeliveredMessagesFromUnknown(record.deliveredMessages);
   const source = record.sourceThread;
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
@@ -4839,6 +4843,7 @@ function threadMessageOriginFromUnknown(
       ...(subAgent ? { subAgent } : {}),
       ...(prAutomation ? { prAutomation } : {}),
       ...(reviewAutoFix ? { reviewAutoFix } : {}),
+      ...(deliveredMessages ? { deliveredMessages } : {}),
     };
   }
   const sourceRecord = source as Record<string, unknown>;
@@ -4853,6 +4858,7 @@ function threadMessageOriginFromUnknown(
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
       ...(reviewAutoFix ? { reviewAutoFix } : {}),
+      ...(deliveredMessages ? { deliveredMessages } : {}),
     };
   }
   // A to-do marker names the thread that raised the card, so it needs one.
@@ -4888,7 +4894,37 @@ function threadMessageOriginFromUnknown(
     ...(subAgent ? { subAgent } : {}),
     ...(prAutomation ? { prAutomation } : {}),
     ...(reviewAutoFix ? { reviewAutoFix } : {}),
+    ...(deliveredMessages ? { deliveredMessages } : {}),
   };
+}
+
+/**
+ * The senders of a combined delivery. Every member must read as a valid
+ * origin, or the message shows as one; a member never carries its own list.
+ */
+function threadMessageDeliveredMessagesFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin["deliveredMessages"] | undefined {
+  if (!Array.isArray(value) || value.length < 2) return undefined;
+  const members: NonNullable<AppServerThreadMessageOrigin["deliveredMessages"]> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+    const record = item as Record<string, unknown>;
+    const origin = threadMessageOriginFromUnknown(record.origin);
+    if (
+      !origin
+      || typeof record.receivedAt !== "number"
+      || !Number.isFinite(record.receivedAt)
+      || typeof record.inputItemCount !== "number"
+      || !Number.isInteger(record.inputItemCount)
+      || record.inputItemCount < 0
+    ) {
+      return undefined;
+    }
+    const { deliveredMessages: _nested, ...memberOrigin } = origin;
+    members.push({ origin: memberOrigin, receivedAt: record.receivedAt, inputItemCount: record.inputItemCount });
+  }
+  return members;
 }
 
 function threadMessageReviewAutoFixOriginFromUnknown(
@@ -7974,10 +8010,16 @@ export function useThreadSessionState(params: {
           const usageEntryId = knownCompletedTurnUsage
             ? `live-turn-usage-${turn?.id ?? notificationThreadId}`
             : `live-token-usage-${turn?.id ?? notificationThreadId}`;
+          const pricingAt = event.usagePricingAt
+            ?? knownTurnUsage.pricingAt
+            ?? recentlyCompletedTurnUsage?.turn.completedAt
+            ?? Date.now();
           let usageEntry = buildTokenUsageActivityEntry({
+            createdAt: knownTurnUsage.createdAt,
             fastMode,
             id: usageEntryId,
             model,
+            pricingAt,
             serviceTier,
             ...(knownCompletedTurnUsage ? { summaryPrefix: "Turn usage" } : {}),
             tokenUsage: event.notification.params.tokenUsage,
@@ -7986,12 +8028,6 @@ export function useThreadSessionState(params: {
               turn,
             }),
           });
-          if (usageEntry && typeof knownTurnUsage.createdAt === "number") {
-            usageEntry = {
-              ...usageEntry,
-              createdAt: knownTurnUsage.createdAt,
-            };
-          }
           let pendingTurnUsage = current.pendingTurnUsage;
           const activeTurnUsage = Boolean(
             usageEntry &&
@@ -8005,6 +8041,7 @@ export function useThreadSessionState(params: {
               existing: current.pendingTurnUsage,
               fastMode,
               model,
+              pricingAt,
               serviceTier,
               tokenUsage: event.notification.params.tokenUsage,
               turn,
@@ -8023,6 +8060,7 @@ export function useThreadSessionState(params: {
               existing: recentlyCompletedTurnUsage.accumulator,
               fastMode,
               model,
+              pricingAt,
               serviceTier,
               tokenUsage: event.notification.params.tokenUsage,
               turn,

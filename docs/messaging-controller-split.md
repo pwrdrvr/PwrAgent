@@ -39,7 +39,8 @@ patches, plain-object stand-ins and reads inside catchable regions.
 | Bindings | `MessagingBindingService` owns creation, metadata, preferences, status surfaces, the render lock, name sync, audits and the single `runDetachPipeline`. The facade keeps the public boolean revoke entry point. |
 | Commands | `MessagingCommandHandlers` owns dispatch, schedule management, help, review entry and command routing for monitors, default Agents and Claude continuation. It delegates existing workflows through `MessagingCommandHost`. |
 | Callbacks | `MessagingCallbackHandlers` owns callback dispatch and its entry methods. `MessagingCallbackHost` delegates retained workflows and reads existing queue/private-response owners lazily. |
-| Inbound input and access | These remain controller-owned until their focused PWR-149 PRs. |
+| Inbound input | `MessagingInboundTurns` owns text/media admission, preparation, startup, prompt buffers and timing, through lazy ports. |
+| Access control | `MessagingAccessControl` owns the actor-ID set, admission, capability and federation gates, retained-source/tool authorization, and Full Access policy/warnings. Public authorization methods remain facade delegates. |
 
 The event router receives only the collaborators it uses: a narrow store port,
 clock, logger and lazy typed host. It never imports its facade. The facade
@@ -462,9 +463,135 @@ owner. `.local/pwr-149-inbound/full-timeouts.json` records the cases and raw
 log hashes. The full run is not reported as passing, and no timeout, worker,
 retry, concurrency or property-bound setting is changed.
 
+## Access-control extraction
+
+The access-control baseline is current main
+`709b770acae5cc800b78074f41b5180e3219bfa0`, after inbound PR #3865.
+`node scripts/inventory-messaging-access.mjs --verify` inventories 25 moved
+methods, the actor-ID set, three shared declarations, six host ports, four
+store members and two optional adapter methods. Its checker resolves callers
+and records branches, awaits, returns, mutations, exception boundaries and test
+seams. The broader `inventory-messaging-controller.mjs` audit retains complete
+read, construction and cast records. Both leave full evidence under
+`.local/pwr-149-access/`.
+
+`MessagingAccessControl` owns admission, additive RBAC resolution, silent reply
+floors, federation scope, retained-source authorization, dynamic-tool checks,
+and Full Access policy/warnings. The facade keeps its three public delegate
+signatures. The host exposes only delivery, pending-intent creation, intent IDs,
+activity logging, channel scope and read-only origin lookup. Store, adapter,
+configuration, logger, capability profile and host are read at call time. Actor
+IDs are copied at the original constructor position. The owner does not import
+the facade or read live collaborators during construction; it has no backend
+port because these operations make no backend calls.
+
+The audit reverses only the explicit port substitutions and checks every moved
+signature/body and helper, every retained caller, state ownership, public
+wrappers, construction order and native clock/host ports. The old contained-peer
+test's prototype patch is replaced with a real controller, SQLite binding,
+persisted human request and provider/policy collaborators. Remaining similarly
+named gateway/runtime mocks target their public service boundaries, not moved
+controller members.
+
+The independent observable projection covers valid admission/policy commands,
+reply acceptance, atomic policy reads, silent denials and auditing, tool fields,
+explicit peer scope, lifecycle grants, retained provider approval interleaved
+with revocation/rebinding, provider isolation, ambiguous attribution and a real
+Default Agent turn. Its expected results come from declared permission grants,
+provider outcomes and current binding identity rather than access-owner state.
+Owner tests cover lazy replacement across awaits, error/getter boundaries,
+remote render probes, Full Access double gates and effect order, warning expiry,
+and native callback/clock/delivery receivers. Pure helper properties cover
+explicit false controls and presentation precedence.
+
+`node scripts/mutate-messaging-access.mjs --baseline` replays observable tests
+against the pinned original controller, including the inbound protocol and
+contained-peer model. The default mutation run checks transitions, ordering,
+store/host capture, facade ports and callers. A timeout, import error or missing
+owner cannot count as a detected mutation. Sources are restored in `finally`,
+and both protected fixture hashes are checked. No production bug is inferred
+from a brief hypothesis in this move-only extraction.
+
+The final observable replay passes 16 tests against original production; the
+focused extracted-owner run passes 17. All 27 deliberate mutations fail
+assertions, with no invalid proof from a timeout or missing owner. The remote
+tool-scope property includes inspection-granted cases so it reaches the extra
+scope gate. Held provider callbacks record observations and settle before the
+test asserts them, so a broken argument cannot strand a fixture waiter.
+
+The controller falls from 15,298 to 14,692 lines. The access owner, helpers and
+context are 654, 37 and 35 lines. Typecheck, both Oxlint passes, boundaries,
+Codex-storage lint and the main bytecode check pass. The largest production
+function is 23,834 bytes against the 25,600-byte budget. Protected verification
+passes 184 files and 5,597 tests, with two skipped, including all 101 current
+SQLite-budget callers. Both protected fixtures are byte-identical to the
+pinned current main. Additional writes are zero, or **0 MB/day**.
+The full suite passes 2,127 files and 29,434 tests, with nine files and 108
+tests skipped, in 231.53 seconds. It reports no failed tests or unhandled errors.
+
+## Explicit messaging turn and drain state
+
+The baseline for this step is current main
+`a473f7b70baf2ae2e7bcbecb4a27be5b9e7852b9`, after access-control PR #3880.
+`MessagingTurns` owns one value per owner/thread identity instead of the active
+turn map, drain-request set, timer map and drain-promise map. Its pure
+`transitionMessagingTurn` handles bus lifecycle/idle evidence, accepted starts,
+deferred drain requests, coalescing, timer dispatch, settlement and disposal.
+The router still awaits terminal cleanup before activity, status and drain
+effects. Notifications remain concurrent.
+
+Drains move through idle, arming, scheduled, running and settling states.
+Scheduled/running states carry the timer and settlement receipt, and a callback
+can retire only its own receipt. Dispatch remains on the next macrotask.
+Shutdown cancels and settles armed work, while settlement waits for an already
+issued start and notice retirement. Status snapshots retain the last terminal
+turn for monitor/status readers and expose no mutable collection view. Host
+and logger ports remain lazy; the owner makes no direct store, backend or
+adapter calls and imports no facade.
+
+The independent observable oracle drives the real controller, SQLite store,
+provider deliveries and backend acceptance seam. Valid command sequences cover
+FIFO sends, repeated terminal releases, completion/failure/cancellation,
+provider/backend differences, acceptance/rejection, held acknowledgements and
+shutdown. The pure command model checks drain ownership and deferred requests;
+the lifecycle model checks provider order, repeated evidence, automation
+isolation and acknowledgements at different boundaries. Owner tests cover lazy
+ports, dispatch failures, remote identity and snapshots.
+
+A separate regression proves a current-production race: terminal evidence can
+arrive while `startTurn` awaits its acknowledgement, after which the old inbound
+path replaces the terminal turn with working and re-arms typing. The reducer's
+accepted-start event preserves terminal evidence for that turn. Acceptance is
+still reported after the backend accepts input. This counterexample is kept
+separate from the behavior-preservation oracle.
+
+`node scripts/inventory-messaging-turn-state.mjs --verify` records checker-resolved
+callers, effects, reads inside error boundaries and test seams, and checks the
+unchanged facade/inbound bodies and routing around the extracted lifecycle
+branch. The broader controller audit retains constructor and alias/cast details.
+`node scripts/mutate-messaging-turn-state.mjs --baseline` passes the observable
+protocol on pinned original production and requires the separate regression to
+fail with an assertion. The default mutation run checks transitions, effect
+order, ports and callers. Import/build errors, missing-owner errors and timeouts
+cannot count as proof. Both scripts keep evidence under
+`.local/pwr-149-turn-state/`; mutation runs restore sources and verify protected
+fixture hashes in `finally`.
+
+The pinned-original observable replay passes 12 tests. All 20 deliberate
+turn-state mutations fail assertions. Final protected verification passes
+189 files and 5,629 tests, including all 102 current SQLite-budget caller files;
+both protected fixtures remain byte-identical. Typecheck, syntax/typed lint,
+dependency boundaries, Codex-storage lint and the main bytecode budget pass.
+The full run passes 2,135 files and 29,501 tests with one existing 5-second
+Windows held-updater property timeout (nine files and 108 tests skipped).
+That file passes all 11 tests in isolation. Follow-up card
+`917841f1-88e5-4e2c-b955-cf00ee95b532` carries the exact commands, logs and hashes
+to the existing native-suite investigation owner. No timeout, worker or retry
+configuration was changed, and the full suite was not rerun to get green.
+
 ## Remaining state-machine work
 
-The turn/drain machine, canonical queue retirement, access-control extraction,
+Canonical queue retirement,
 controller size reduction and the parent's registry/test size
 criteria remain tracked work. These focused PRs do not claim PWR-149 or PWR-142
 complete. No registry activity/receipt ownership or notification concurrency is

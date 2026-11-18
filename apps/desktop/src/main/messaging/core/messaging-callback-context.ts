@@ -1,3 +1,4 @@
+import type { MessagingQueuedTurnEntry, MessagingQueueRecoveries } from "./messaging-queue-recoveries";
 import type { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MonitorCommandAction } from "./messaging-command-helpers";
 import type { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
@@ -13,7 +14,7 @@ import type { MessagingAdapter, MessagingBackendBridge, MessagingThreadAdmission
 import type { selectProjectFromValue } from "./messaging-resume-browser.js";
 import type { MessagingNavigationContext } from "./messaging-thread-state.js";
 import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store.js";
-import type { MessagingTurnAdmission, MessagingQueuedTurnEntry, MessagingTurnInputEvent } from "./messaging-turn-admission.js";
+import type { MessagingTurnAdmission, MessagingTurnInputEvent } from "./messaging-turn-admission.js";
 import type { AcpRuntimeRiskWarningContext, FullAccessEscalationContext, PreparedInputStartResult, MessagingFullAccessControls, FullAccessWarningResolution, PendingQueueAuditMessage, PendingNewThreadPromptWindow, PendingNewThreadPromptBundle } from "./messaging-callback-helpers";
 
 export interface MessagingCallbackHost {
@@ -35,13 +36,14 @@ export interface MessagingCallbackHost {
   readonly resumeBindingForPendingIntent: (pendingIntent: MessagingPendingIntentRecord, reason: string) => Promise<MessagingBindingRecord | undefined>;
   readonly handleQuestionnaireAction: (pendingIntent: MessagingPendingIntentRecord, event: MessagingInboundCallbackEvent, action: MessagingSurfaceAction) => Promise<void>;
   readonly handleReviewAction: (pendingIntent: MessagingPendingIntentRecord, event: MessagingInboundCallbackEvent, action: MessagingSurfaceAction) => Promise<void>;
-  readonly turnAdmission: Pick<MessagingTurnAdmission, "findQueuedEntry" | "isStarting" | "removeQueuedEntry" | "updateQueuedEntry" | "enqueue">;
+  readonly turnAdmission: Pick<MessagingTurnAdmission, "isStarting">;
+  readonly isDisposed: () => boolean;
+  readonly queueRecoveries: Pick<MessagingQueueRecoveries, "get" | "hold" | "claim" | "settle" | "cancel">;
   readonly sharedQueueNotices: Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>;
   readonly requireRemoteScopeForBinding: (event: MessagingInboundEvent, binding: MessagingBindingRecord | undefined, auditAction: string, opts?: { notify?: boolean; }) => Promise<boolean>;
-  readonly startPreparedInput: (params: { admissionState?: MessagingThreadAdmissionState; binding: MessagingBindingRecord; event?: MessagingInboundEvent; input: AppServerTurnInputItem[]; navigation?: MessagingNavigationContext; pdfAttachments?: PendingPdfAttachment[]; privateResponseRequested?: boolean; preview: string; queueOnConcurrentStart?: boolean; threadKey: string; }) => Promise<PreparedInputStartResult>;
+  readonly startPreparedInput: (params: { admissionState?: MessagingThreadAdmissionState; binding: MessagingBindingRecord; event?: MessagingInboundEvent; input: AppServerTurnInputItem[]; navigation?: MessagingNavigationContext; pdfAttachments?: PendingPdfAttachment[]; privateResponseRequested?: boolean; preview: string; reportBusyRefusal?: boolean; threadKey: string; }) => Promise<PreparedInputStartResult>;
   readonly retireQueuedTurnNotice: (entry: MessagingQueuedTurnEntry, body: string, event?: MessagingInboundCallbackEvent) => Promise<void>;
   readonly trackQueuedTurnAction: (entry: MessagingQueuedTurnEntry, action: Promise<void>) => void;
-  readonly steerQueuedTurn: (entry: MessagingQueuedTurnEntry, event: MessagingInboundCallbackEvent) => Promise<void>;
   readonly resolveSteerableActiveTurn: (binding: MessagingBindingRecord, reason: string) => Promise<MessagingActiveTurnSummary | undefined>;
   readonly deliverQueuedTurnNotice: (entry: MessagingQueuedTurnEntry) => Promise<void>;
   readonly applySharedQueueNoticeEvent: (key: string, event: QueueNoticeEvent<MessagingQueuedTurnEntry>) => Promise<void>;
@@ -128,7 +130,6 @@ export interface MessagingCallbackHost {
   readonly agentMessagingOriginForPendingIntent: (pendingIntent: MessagingPendingIntentRecord) => ActiveAgentMessagingOrigin | undefined;
   readonly readBackendThreadStatus: (binding: MessagingBindingRecord) => Promise<string | undefined>;
   readonly reconcileActiveTurnFromBackendStatus: (binding: MessagingBindingRecord, reason: string) => Promise<MessagingActiveTurnSummary | undefined>;
-  readonly startNextQueuedTurn: (binding: MessagingBindingRecord) => Promise<void>;
   readonly privateReplyClaims: Pick<MessagingPrivateReplyClaims, "has" | "claim" | "complete" | "release">;
   readonly deliverPrivateReplyButtonState: (event: MessagingInboundCallbackEvent, body: string) => Promise<void>;
   readonly completePrivateReplyContinuation: (bindingId: string) => Promise<void>;

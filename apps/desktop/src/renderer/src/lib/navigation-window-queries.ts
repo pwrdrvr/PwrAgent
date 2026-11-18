@@ -39,6 +39,9 @@ export type NavigationWindowQueriesState = {
   admissionError?: string;
 };
 type Resource = {
+  diagnosticResource: number;
+  diagnosticBatch?: number;
+  diagnosticRefreshBatch?: number;
   diagnosticLogical?: number;
   diagnosticTrigger?: string;
   diagnosticCaller?: string;
@@ -122,6 +125,8 @@ export class NavigationWindowQueries {
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
   private nextLogical = 0;
+  private nextDiagnosticBatch = 0;
+  private nextDiagnosticRead = 0;
   constructor(private readonly api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery">,
     private readonly diagnostic = { view: createNavigationDiagnosticView(), effect: 1 },
     private readonly resume: {
@@ -295,7 +300,7 @@ export class NavigationWindowQueries {
       const retained = this.retained.get(retainedKey);
       this.retained.delete(retainedKey);
       const resource: Resource = {
-        requestKey, token: `${this.prefix}:${++this.nextResource}`,
+        requestKey, diagnosticResource: ++this.nextResource, token: `${this.prefix}:${this.nextResource}`,
         value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
           loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
@@ -347,9 +352,13 @@ export class NavigationWindowQueries {
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
     // Keep the caller separate from the event that fenced each page: a queued
     // action can consume a seen/status invalidation without becoming its cause.
-    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", caller: safeNavigationDiagnosticTrigger(trigger) });
-    return Promise.all(resources.filter((resource) => (!invalidatedOnly || resource.invalidated || (includeDirectoryIndex && resource.value.id === "directory-index"))
-      && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
+    const batch = ++this.nextDiagnosticBatch;
+    const selected = resources.filter((resource) => (!invalidatedOnly || resource.invalidated || (includeDirectoryIndex && resource.value.id === "directory-index"))
+      && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))));
+    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
+      caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
+    return Promise.all(selected.map(async (resource) => {
+      resource.diagnosticRefreshBatch = batch;
       if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
       resource.diagnosticTrigger ??= trigger;
       resource.diagnosticCaller ??= safeNavigationDiagnosticTrigger(trigger);
@@ -368,11 +377,15 @@ export class NavigationWindowQueries {
   /** Invalidate transport baselines before canonical owner events can race a late page. */
   invalidate(id?: string, owners?: readonly FederationTarget[], event?: AgentEvent): void {
     let changed = false;
+    let count = 0;
+    const batch = ++this.nextDiagnosticBatch;
     const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
       if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
+      count++;
+      resource.diagnosticBatch = batch;
       const method = event?.notification.method === "navigation/invalidated"
         ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
       const pinParams = event?.notification.params as { threadId?: unknown; rowChanges?: unknown } | undefined;
@@ -406,10 +419,10 @@ export class NavigationWindowQueries {
       resource.value = { ...resource.value, state: { ...resource.value.state,
         pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
-    if (changed) {
-      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "invalidate", cause: navigationDiagnosticCause(event) });
-      this.publish();
-    }
+    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "invalidate", batch, count,
+      cause: navigationDiagnosticCause(event), trigger: navigationDiagnosticTrigger(event),
+      source: event ? event.federationTarget?.scope === "remote" ? "remote" : "local" : undefined });
+    if (changed) this.publish();
   }
 
   private movePinAnchor(resource: Resource, event: AgentEvent): boolean {
@@ -649,6 +662,13 @@ export class NavigationWindowQueries {
     if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
     let cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
+    const read = ++this.nextDiagnosticRead;
+    const queuedAt = Date.now();
+    const fields = { ...this.diagnostic, read, resource: resource.diagnosticResource,
+      query: resource.value.state.request.query.kind,
+      source: resource.value.state.request.federationTarget?.scope === "remote" ? "remote" as const : "local" as const,
+      inventory: resource.value.state.request.inventory ?? "owner" as const };
+    navigationListingDiagnostics.record({ ...fields, phase: "queued", cause: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : resource.diagnosticCause ?? reason });
     const resuming = resource.resumeExpansion === true;
     const budget = resuming ? resource.resumeBudget : undefined;
     if (budget) budget.until ??= Date.now() + MAX_LOAD_MORE_MS;
@@ -660,6 +680,7 @@ export class NavigationWindowQueries {
       try {
         acquired = await this.acquireReadSlot(resource);
         if (!acquired) return;
+        const waitMs = Math.max(0, Date.now() - queuedAt);
         // A queued read has made no observation yet. Consume invalidations at
         // dispatch; only events after this point require a replacement read.
         if (resource.invalidated) {
@@ -679,6 +700,10 @@ export class NavigationWindowQueries {
         const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
           cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
           invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger, caller: resource.diagnosticCaller };
+        const batch = resource.diagnosticBatch;
+        const refreshBatch = resource.diagnosticRefreshBatch;
+        resource.diagnosticBatch = undefined;
+        resource.diagnosticRefreshBatch = undefined;
         resource.diagnosticLogical = diagnostic.logical;
         resource.diagnosticTrigger = undefined;
         resource.diagnosticCaller = undefined;
@@ -705,11 +730,23 @@ export class NavigationWindowQueries {
               budget.reads -= 1;
             }
             diagnostic.attempt += 1;
-            navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispatch", logical: diagnostic.logical, attempt: diagnostic.attempt, cause: diagnostic.cause, caller: diagnostic.caller });
-            const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
-              ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
-              readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
-            }, resource.token);
+            const sentAt = Date.now();
+            const attemptFields = { ...fields, batch, refreshBatch, logical: diagnostic.logical, attempt: diagnostic.attempt,
+              cause: diagnostic.cause, caller: diagnostic.caller, trigger: diagnostic.trigger, invalidations: diagnostic.invalidations,
+              cursor: Boolean(request.cursor), rows, waitMs };
+            const generation = navigationListingDiagnostics.recordingGeneration;
+            navigationListingDiagnostics.record({ ...attemptFields, phase: "dispatch" });
+            let page: NavigationQueryPage;
+            try {
+              page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
+                ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
+                readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
+              }, resource.token);
+              navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "ok", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
+            } catch (error) {
+              navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "error", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
+              throw error;
+            }
             if (this.pageBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
             // One row over the budget is the owner's own error to raise.
             if (rows <= 1) throw new Error("Navigation page exceeds the bounded response size.");

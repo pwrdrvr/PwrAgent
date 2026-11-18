@@ -2001,15 +2001,19 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
     const { registerWindowChannels, WINDOW_KIND_MAIN } = await import("../shell/window-channels");
     const { WINDOW_OPEN_SETTINGS_CHANNEL } = await import("../../shared/ipc");
-    const windows = [0, 1].map(() => Object.assign(new EventEmitter(), {
-      webContents: { isDestroyed: () => false },
-      getChildWindows: () => [],
-      isDestroyed: () => false,
-      isVisible: () => true,
-      isMinimized: () => false,
-      show: vi.fn(),
-      focus: vi.fn(),
-    }));
+    const windows = [0, 1].map(() => {
+      const window = Object.assign(new EventEmitter(), {
+        visible: true,
+        webContents: { isDestroyed: () => false },
+        getChildWindows: () => [],
+        isDestroyed: () => false,
+        isVisible: () => window.visible,
+        isMinimized: () => false,
+        show: vi.fn(),
+        focus: vi.fn(),
+      });
+      return window;
+    });
     for (const window of windows) {
       registerWindowChannels(window as unknown as BrowserWindow, WINDOW_KIND_MAIN, [WINDOW_OPEN_SETTINGS_CHANNEL]);
       appEventHandlers.get("browser-window-created")?.({}, window);
@@ -2026,6 +2030,7 @@ describe("bootstrapApp", () => {
     expect(windows[1 - selected]!.focus).not.toHaveBeenCalled();
     expect(windows[1 - selected]!.show).not.toHaveBeenCalled();
     if (selected === 1) {
+      windows[1]!.visible = false;
       windows[1]!.emit("hide");
       for (const window of windows) {
         window.focus.mockClear();
@@ -2037,6 +2042,94 @@ describe("bootstrapApp", () => {
     }
     getAllWindowsMock.mockReturnValue([]);
     for (const window of windows) window.emit("closed");
+  });
+
+  describe("Dock activation with windows open", () => {
+    // Dock activation and did-resign-active are macOS events; off macOS a
+    // focus also rebuilds the painted menu, which these fakes do not model.
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    async function bootWithWindows() {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
+      startupProfilerInstance.start.mockResolvedValue();
+      await import("../shell/index");
+      await flushMicrotasks();
+      const electron = await import("electron");
+      const windows = ["main", "logs"].map((name) => {
+        const window = Object.assign(new EventEmitter(), {
+          name,
+          visible: true,
+          webContents: { isDestroyed: () => false },
+          getChildWindows: () => [],
+          isDestroyed: () => false,
+          isModal: () => false,
+          isVisible: () => window.visible,
+          isMinimized: () => false,
+          restore: vi.fn(),
+          show: vi.fn(),
+          focus: vi.fn(),
+        });
+        appEventHandlers.get("browser-window-created")?.({}, window);
+        window.emit("show");
+        window.emit("focus");
+        return window;
+      });
+      getAllWindowsMock.mockReturnValue(windows);
+      const focusedMock = vi.mocked(electron.BrowserWindow.getFocusedWindow);
+      onTestFinished(() => {
+        focusedMock.mockReturnValue(null);
+      });
+      return { windows, focusedMock };
+    }
+
+    it("raises the window that was on top when the app resigned active, not AppKit's pick", async () => {
+      const { windows: [main, logs], focusedMock } = await bootWithWindows();
+      // The older window is brought back on top, then the operator switches apps.
+      main!.emit("focus");
+      appEventHandlers.get("did-resign-active")?.();
+      // AppKit already made the newest window key when activate fires.
+      focusedMock.mockReturnValue(logs as unknown as BrowserWindow);
+      main!.focus.mockClear();
+      logs!.focus.mockClear();
+
+      appEventHandlers.get("activate")?.();
+      appEventHandlers.get("did-become-active")?.();
+
+      expect(main!.focus).toHaveBeenCalledOnce();
+      expect(logs!.focus).not.toHaveBeenCalled();
+      expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the top window when another window covers it", async () => {
+      const { windows: [main, logs] } = await bootWithWindows();
+      main!.emit("focus");
+      // macOS emits "hide" on occlusion while the window is still visible.
+      main!.emit("hide");
+      appEventHandlers.get("did-resign-active")?.();
+      main!.focus.mockClear();
+
+      appEventHandlers.get("activate")?.();
+
+      expect(main!.focus).toHaveBeenCalledOnce();
+      expect(logs!.focus).not.toHaveBeenCalled();
+    });
+
+    it("changes nothing on a Dock click while the app is already active", async () => {
+      const { windows: [main, logs] } = await bootWithWindows();
+      main!.emit("focus");
+      appEventHandlers.get("did-resign-active")?.();
+      appEventHandlers.get("did-become-active")?.();
+      logs!.emit("focus");
+      main!.focus.mockClear();
+      logs!.focus.mockClear();
+
+      appEventHandlers.get("activate")?.();
+
+      expect(main!.focus).not.toHaveBeenCalled();
+      expect(logs!.focus).not.toHaveBeenCalled();
+    });
   });
 
   it("prewarms the initial thread list after starting the first window", async () => {

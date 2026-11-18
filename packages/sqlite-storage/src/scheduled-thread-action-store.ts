@@ -10,6 +10,7 @@ import type {
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
   ScheduledThreadActionKind,
+  ScheduledThreadActionHoldCause,
   ScheduledThreadActionOrigin,
   ScheduledThreadActionStatus,
   PendingWakeScheduledActions,
@@ -17,6 +18,7 @@ import type {
 import type {
   CreateScheduledThreadActionRecord,
   ScheduledThreadActionClaim as ClaimParams,
+  ScheduledThreadActionHold,
   ScheduledThreadActionStorage,
   UpdateScheduledThreadActionRecord,
 } from "@pwragent/owner-core/scheduled-thread-action-storage";
@@ -493,6 +495,60 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
    * a crash cannot keep a claim without its reservation.
    */
   claim(id: string, params: ClaimParams): ScheduledThreadAction | undefined {
+    return this.claimWith(id, params, {});
+  }
+
+  /**
+   * Claims a held action only while `holderId` still holds it, so two owners
+   * that both found its holder dead cannot both take it. The dead holder's
+   * queue entry is gone, so the claim forgets it. `readmit` also drops the
+   * manual release: the action is dispatched again as when it came due.
+   */
+  claimHeld(
+    id: string,
+    holderId: string | undefined,
+    params: ClaimParams,
+    options: { readmit: boolean },
+  ): ScheduledThreadAction | undefined {
+    return this.stateDb.raw.transaction(() => {
+      const held = this.stateDb.raw.prepare(
+        "SELECT 1 FROM scheduled_thread_actions WHERE action_id = ? AND status = 'held' AND claim_owner IS ?",
+      ).get(id, holderId ?? null);
+      if (!held) return undefined;
+      return this.claimWith(id, params, {
+        queueEntryId: undefined,
+        ...(options.readmit ? { manualReleaseRequired: false, holdCause: undefined } : {}),
+      });
+    }).immediate();
+  }
+
+  listHeldHolds(id?: string): ScheduledThreadActionHold[] {
+    // A suspended thread's follow-ups cannot be claimed, so listing them
+    // would only make every scheduler pass try and fail.
+    const rows = this.stateDb.raw.prepare(
+      `SELECT action_id, claim_owner, error_message, updated_at FROM scheduled_thread_actions
+       WHERE status = 'held' AND (? IS NULL OR action_id = ?)
+         AND NOT ` + SUSPENDED_AGENT_FOLLOW_UP + `
+       ORDER BY scheduled_for ASC, created_at ASC`,
+    ).all(id ?? null, id ?? null) as Array<{
+      action_id: string;
+      claim_owner: string | null;
+      error_message: string | null;
+      updated_at: number;
+    }>;
+    return rows.map((row) => ({
+      id: row.action_id,
+      updatedAt: row.updated_at,
+      ...(row.claim_owner ? { holderId: row.claim_owner } : {}),
+      ...(row.error_message ? { errorMessage: row.error_message } : {}),
+    }));
+  }
+
+  private claimWith(
+    id: string,
+    params: ClaimParams,
+    patch: Pick<Partial<ScheduledThreadAction>, "holdCause" | "manualReleaseRequired" | "queueEntryId">,
+  ): ScheduledThreadAction | undefined {
     return this.stateDb.raw.transaction(() => {
       const row = this.stateDb.raw.prepare(
         `SELECT backend, thread_id, origin FROM scheduled_thread_actions
@@ -511,7 +567,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       const claimed = this.transition(
         id,
         ["held", "scheduled"],
-        { status: "dispatching" },
+        { ...patch, status: "dispatching" },
         params.now,
         {
           claimOwner: params.ownerId,
@@ -580,6 +636,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     errorMessage: string,
     now: number,
     ownerId?: string,
+    hold?: { holderId?: string; cause?: ScheduledThreadActionHoldCause },
   ): ScheduledThreadAction | undefined {
     return this.transition(
       id,
@@ -589,10 +646,33 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         queueEntryId,
         errorMessage,
         manualReleaseRequired: true,
+        holdCause: hold?.cause,
       },
       now,
-      { clearClaim: true, expectedOwner: ownerId },
+      // The holder's in-memory queue keeps the entry. Holding is no lease:
+      // nothing renews it, and only the holder's death ends it.
+      { clearClaim: true, expectedOwner: ownerId, holder: hold?.holderId },
     );
+  }
+
+  markHeldQueued(
+    id: string,
+    queueEntryId: string,
+    params: ClaimParams,
+  ): ScheduledThreadAction | undefined {
+    return this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw.prepare(
+        "SELECT queue_entry_id FROM scheduled_thread_actions WHERE action_id = ? AND status = 'held'",
+      ).get(id) as { queue_entry_id: string | null } | undefined;
+      if (row?.queue_entry_id !== queueEntryId) return undefined;
+      return this.transition(
+        id,
+        ["held"],
+        { status: "queued", errorMessage: undefined },
+        params.now,
+        { claimOwner: params.ownerId, claimExpiresAt: params.leaseExpiresAt },
+      );
+    }).immediate();
   }
 
   markHeldStarted(
@@ -685,7 +765,22 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
           && protectedOwnerIds.has(row.claim_owner)
         ) return [];
         const current = this.get(row.action_id);
-        const updated = current?.manualReleaseRequired
+        const updated = current?.manualReleaseRequired && row.status === "queued"
+          // A queued release is announced just before the queue starts it,
+          // so the turn may have begun. Sending it again could run it twice.
+          ? this.transition(
+              row.action_id,
+              ["queued"],
+              {
+                status: "failed",
+                queueEntryId: undefined,
+                errorMessage:
+                  "PwrAgent stopped while this held action was being released. It was not sent again, because it may already have started. Check the thread before scheduling it again.",
+              },
+              now,
+              { clearClaim: true, requireExpiredAt: now },
+            )
+          : current?.manualReleaseRequired
           ? this.transition(
               row.action_id,
               ["dispatching", "queued"],
@@ -760,6 +855,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     patch: Partial<Pick<
       ScheduledThreadAction,
       | "errorMessage"
+      | "holdCause"
       | "manualReleaseRequired"
       | "queueEntryId"
       | "status"
@@ -770,6 +866,8 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       claimOwner?: string;
       claimExpiresAt?: number;
       clearClaim?: boolean;
+      /** With `clearClaim`: the owner whose queue holds a held action. */
+      holder?: string;
       expectedOwner?: string;
       requireExpiredAt?: number;
     },
@@ -801,7 +899,9 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         updated.turnId ?? null,
         updated.errorMessage ?? null,
         nextPayloadRef ?? null,
-        claim?.clearClaim ? null : claim?.claimOwner ?? this.readClaimOwner(id),
+        claim?.clearClaim
+          ? claim.holder ?? null
+          : claim?.claimOwner ?? this.readClaimOwner(id),
         claim?.clearClaim
           ? null
           : claim?.claimExpiresAt ?? this.readClaimExpiresAt(id),
@@ -952,6 +1052,7 @@ function payloadFromAction(
     imageAttachments: action.imageAttachments,
     fileAttachments: action.fileAttachments,
     manualReleaseRequired: action.manualReleaseRequired,
+    holdCause: action.holdCause,
     turn: action.turn,
     review: action.review,
   };

@@ -17,6 +17,63 @@ describe("audio transcription preference", () => {
 });
 
 describe("desktop config provider model defaults", () => {
+  it("reads legacy endpoint defaults without treating them as OpenAI and converts only on save", () => {
+    const source = [
+      "# operator comment", "[models]", 'unrelated = "keep"',
+      "[[models.provider_defaults]]", 'provider = "codex"', 'model = "@mathos/old"',
+      `reasoning_efforts = '{"gpt-test":"high","@mathos/old":"low"}'`,
+      'execution_mode = "default"', "",
+    ].join("\n");
+    const defaults = parseDesktopSettingsToml(source, "test.toml").models!.providerDefaults!;
+    expect(defaults).toEqual({
+      codex: { reasoningEffortsByModel: { "gpt-test": "high" }, executionMode: "default" },
+      "codex-provider:mathos": {
+        model: "@mathos/old", reasoningEffortsByModel: { "@mathos/old": "low" }, executionMode: "default",
+      },
+    });
+    const saved = applyTomlEdits(source, desktopSettingsPatchToEdits({
+      models: { providerDefaults: defaults },
+    }, parseTomlTables(source, "test.toml")));
+    expect(saved).toContain("# operator comment");
+    expect(saved).toContain('unrelated = "keep"');
+    expect(saved).toContain('provider = "codex-provider:mathos"');
+    expect(saved.match(/# pwragent-legacy-settings key=provider_defaults/g)).toHaveLength(1);
+    expect(parseTomlTables(saved, "test.toml").models.provider_defaults).toEqual([{
+      provider: "codex", model: "@mathos/old",
+      reasoning_efforts: JSON.stringify({ "gpt-test": "high", "@mathos/old": "low" }), execution_mode: "default",
+    }]);
+    expect(parseDesktopSettingsToml(saved, "test.toml").models!.providerDefaults).toEqual(defaults);
+    expect(applyTomlEdits(saved, desktopSettingsPatchToEdits({
+      models: { providerDefaults: defaults },
+    }, parseTomlTables(saved, "test.toml")))).toBe(saved);
+  });
+
+  it.each(['"malformed"', '["wrong shape"]', '[{ model = "missing provider" }]'])("falls back from a malformed canonical defaults value: %s", (value) => {
+    const source = `[models]\nmodel_provider_defaults = ${value}\n[[models.provider_defaults]]\nprovider = "codex"\nmodel = "gpt-old"\n`;
+    expect(parseDesktopSettingsToml(source, "test.toml").models?.providerDefaults?.codex?.model).toBe("gpt-old");
+  });
+
+  it("prefers canonical defaults, including an explicit empty array, to legacy rows", () => {
+    const legacy = '[[models.provider_defaults]]\nprovider = "codex"\nmodel = "gpt-old"\n';
+    expect(parseDesktopSettingsToml('[models]\nmodel_provider_defaults = []\n' + legacy, "test.toml").models?.providerDefaults).toBeUndefined();
+    const source = legacy + '[[models.model_provider_defaults]]\nprovider = "codex"\nmodel = "gpt-new"\n';
+    expect(parseDesktopSettingsToml(source, "test.toml").models?.providerDefaults?.codex?.model).toBe("gpt-new");
+  });
+
+  it("writes independent endpoint preferences to the canonical key in a new config", () => {
+    const defaults = {
+      codex: { model: "gpt-test", reasoningEffortsByModel: { "gpt-test": "high" }, executionMode: "auto" as const },
+      "codex-provider:mathos": {
+        model: "@mathos/model", reasoningEffortsByModel: { "@mathos/model": "low" }, executionMode: "default" as const,
+      },
+      "codex-provider:bonsai": { reasoningEffortsByModel: {}, executionMode: "full-access" as const },
+    };
+    const saved = applyTomlEdits("", desktopSettingsPatchToEdits({ models: { providerDefaults: defaults } }));
+    expect(parseDesktopSettingsToml(saved, "test.toml").models?.providerDefaults).toEqual(defaults);
+    expect(saved).toContain("[[models.model_provider_defaults]]");
+    expect(saved).not.toContain("[[models.provider_defaults]]");
+  });
+
   it("round-trips provider models and per-model reasoning", () => {
     const edits = desktopSettingsPatchToEdits({
       models: {
@@ -39,7 +96,7 @@ describe("desktop config provider model defaults", () => {
     });
     const written = applyTomlEdits("", edits);
 
-    expect(written).toContain("[[models.provider_defaults]]");
+    expect(written).toContain("[[models.model_provider_defaults]]");
     expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
       providerDefaults: {
         codex: {

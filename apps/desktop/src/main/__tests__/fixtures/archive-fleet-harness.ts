@@ -1,7 +1,7 @@
 import { createDesktopBackendRegistry, registryModules } from "../../app-server/backend-registry-wiring";
 import { vi } from "vitest";
 import { realpath } from "node:fs/promises";
-import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState, WorktreeSnapshotSummary } from "@pwragent/shared";
+import type { AppServerNotification, AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../../app-server/archive-cleanup-queue";
 import { ClaudeSessionStore } from "../../claude/claude-session-store";
 import { DesktopBackendRegistry } from "../../app-server/backend-registry";
@@ -147,6 +147,7 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
     const threads = await enrich(page.map((row) => ({ ...row.thread, updatedAt: row.updatedAt })), params);
     return { threads, nextCursor: offset + page.length < all.length ? String(offset + page.length) : undefined };
   };
+  let notify: ((notification: AppServerNotification) => void | Promise<void>) | undefined;
   const client = {
     archiveThread: vi.fn(async ({ threadId }: { threadId: string }) => {
       const row = fleet.rows.get(threadId)!;
@@ -168,7 +169,10 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
       directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
       directoryObservations?: Map<string, Promise<unknown>>;
     }) => await enrich(threads, params)),
-    onNotification: () => () => {},
+    onNotification: (listener: NonNullable<typeof notify>) => {
+      notify = listener;
+      return () => { notify = undefined; };
+    },
     onPendingRequest: () => () => {},
     close: async () => {},
     getInitializeResult: async () => ({ methods: ["thread/list"] }),
@@ -182,6 +186,7 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
     counts.overlayWrites += 1;
     void name; void args;
   });
+  const setThreadArchiveTombstone = vi.fn(async () => {});
   const store = new Proxy({
     // No other process writes this fixture's overlay store.
     readArchiveCleanupChangeToken: () => options.overlayToken ? options.overlayToken() : "single-writer",
@@ -202,6 +207,7 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
       options.onSnapshot?.(params.threadId, { ...params.snapshot, worktreePath: toModelPath(params.snapshot.worktreePath) });
     }),
     observeArchivedThreads: write("observeArchivedThreads"),
+    setThreadArchiveTombstone,
     setThreadParent: write("setThreadParent"),
   }, { get(object, key) {
     if (key === "then") return undefined;
@@ -254,6 +260,10 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
     claudeBackendOptions: { store: claudeStore }, archiveCleanupCheckpointStore: checkpoint,
     runtimeInstanceId: options.instanceId ?? "scaling-fixture", resolveLiveProfileRuntimeInstanceIds: () => [options.instanceId ?? "scaling-fixture"],
     worktreeArchiveService: { archive } as never, threadTitleGenerationService: null });
-  return { registry, counts, client, archive, claudeStore };
+  const receiveProviderNotification = async (notification: AppServerNotification) => {
+    if (!notify) throw new Error("Registry is not subscribed to the provider.");
+    await notify(notification);
+  };
+  return { registry, counts, client, archive, claudeStore, receiveProviderNotification, setThreadArchiveTombstone };
 }
 

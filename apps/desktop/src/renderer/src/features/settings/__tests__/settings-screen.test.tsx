@@ -29,7 +29,7 @@ import type {
   SetMcpConnectionEnabledRequest,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
-import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
+import { buildProviderPickerEntries, GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
@@ -213,10 +213,6 @@ function createSnapshot(
       },
       liveTranscriptEventFiltering: {
         value: false,
-        source: "default",
-      },
-      markdownMathRendering: {
-        value: true,
         source: "default",
       },
       threadPricingSummary: {
@@ -1032,7 +1028,22 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
   });
 
-  it("lists default models the way the composer does: current first, superseded under Other models", async () => {
+  it.each([
+    {
+      models: codexCatalogModels(),
+      sections: [
+        { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
+        { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
+      ],
+      count: 8,
+    },
+    {
+      // The property's smallest counterexample: one model per provider.
+      models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }, PROVIDER_MODEL],
+      sections: [{ labels: ["Provider advertised default", "GPT-6.1-Sol"] }],
+      count: 1,
+    },
+  ])("keeps OpenAI defaults scoped like the launchpad provider picker ($count models)", async ({ models, sections, count }) => {
     const cachedBackends = [{
       kind: "codex",
       label: "OpenAI",
@@ -1040,7 +1051,7 @@ describe("SettingsScreen", () => {
       methods: [],
       capabilities: { createThread: true },
       executionModes: [],
-      launchpadOptions: { models: codexCatalogModels() },
+      launchpadOptions: { models },
     }] as unknown as BackendSummary[];
     const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
       async () => ({ fetchedAt: 1, entries: [] }),
@@ -1058,17 +1069,15 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual([
-      { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
-      { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
-      { group: PROVIDER_MODEL.providerLabel, labels: [PROVIDER_MODEL.label] },
-    ]);
+    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual(sections);
+    const field = screen.getByLabelText("OpenAI default model").closest(".settings-field") as HTMLElement;
+    expect(within(field).getByText(`${count} discovered model${count === 1 ? "" : "s"}`)).toBeInTheDocument();
     // Let the mount's agent read land inside act.
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
   });
 
-  it("lists any Codex catalog as a default model by the shared model menu rule", async () => {
+  it("offers exactly the launchpad's OpenAI models as defaults for any Codex catalog", async () => {
     await fc.assert(fc.asyncProperty(codexCatalogArbitrary, async (models) => {
       const cachedBackends = [{
         kind: "codex",
@@ -1099,7 +1108,8 @@ describe("SettingsScreen", () => {
           selectSections(screen.getByLabelText("OpenAI default model")),
         ).toEqual(expectedModelSelectSections({
           kind: "codex",
-          models,
+          models: buildProviderPickerEntries(cachedBackends)
+            .find((entry) => entry.value === "codex")!.models,
           leading: ["Provider advertised default"],
         }));
         await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
@@ -1158,6 +1168,54 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
+  });
+
+  it("saves an endpoint's model, reasoning, and access under its own provider identity", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: { model: "gpt-test", reasoningEffortsByModel: { "gpt-test": "high" }, executionMode: "full-access" },
+      "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "low" } },
+    };
+    const settings = createSettingsState(snapshot);
+    const cachedBackends = [{
+      kind: "codex", label: "OpenAI", available: true, methods: [], capabilities: { createThread: true },
+      executionModes: (["auto", "default", "full-access"] as const).map((mode) => ({ mode, label: mode, available: true })),
+      launchpadOptions: { models: [
+        { id: "gpt-test", label: "GPT test" },
+        { id: "@mathos/one", label: "Math one", providerId: "mathos", providerLabel: "MathOS", reasoningEfforts: ["low", "high"] },
+        { id: "@mathos/two", label: "Math two", providerId: "mathos", providerLabel: "MathOS", defaultReasoningEffort: "high" },
+      ] },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn(async () => ({ fetchedAt: 1, entries: [] }));
+    render(<SettingsScreen
+      cachedBackends={cachedBackends}
+      desktopApi={{ listAcpAgents, listBackends: async () => await new Promise<never>(() => undefined) }}
+      initialSection="models" settings={settings} onClose={() => undefined}
+    />);
+    expect(selectOptionLabels(screen.getByLabelText("MathOS default model"))).toEqual([
+      "Provider advertised default", "Math one", "Math two",
+    ]);
+    chooseSelectOption(screen.getByLabelText("MathOS default model"), "Math two");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": {
+        model: "@mathos/two", reasoningEffortsByModel: { "@mathos/one": "low", "@mathos/two": "high" },
+      },
+    } } }));
+    chooseSelectOption(screen.getByLabelText("MathOS default reasoning"), "high");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "high" } },
+    } } }));
+    chooseSelectOption(screen.getByLabelText("MathOS access for new threads"), "Default Access");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": {
+        model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "low" }, executionMode: "default",
+      },
+    } } }));
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
   });
@@ -3241,8 +3299,6 @@ describe("SettingsScreen", () => {
     >;
     delete experimental.liveTranscriptEventFiltering;
     delete experimental.codexDefaultModeRequestUserInput;
-    delete experimental.markdownMathRendering;
-    delete experimental.incrementalMarkdownRendering;
     const settings = createSettingsState(snapshot);
 
     render(
@@ -3259,17 +3315,9 @@ describe("SettingsScreen", () => {
     const questionsSwitch = screen.getByRole("switch", {
       name: "Enable Codex skill questions",
     });
-    const mathSwitch = screen.getByRole("switch", {
-      name: "Enable Markdown math rendering",
-    });
-    const incrementalSwitch = screen.getByRole("switch", {
-      name: "Enable incremental Markdown rendering",
-    });
 
     expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
-    expect(mathSwitch).toHaveAttribute("aria-checked", "true");
-    expect(incrementalSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(filteringSwitch);
     await waitFor(() => {
@@ -3284,19 +3332,47 @@ describe("SettingsScreen", () => {
         experimental: { codexDefaultModeRequestUserInput: true },
       });
     });
+  });
 
-    fireEvent.click(mathSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { markdownMathRendering: false },
-      });
+  it("shows Markdown rendering under General, on by default, and writes [general.markdown]", async () => {
+    const snapshot = createSnapshot();
+    delete snapshot.general.markdown;
+    const settings = createSettingsState(snapshot);
+
+    const { unmount } = render(
+      <SettingsScreen initialSection="general" settings={settings} />,
+    );
+
+    const section = screen.getByRole("region", { name: "Markdown rendering" });
+    const incrementalSwitch = within(section).getByRole("switch", {
+      name: "Incremental rendering",
     });
+    const mathSwitch = within(section).getByRole("switch", {
+      name: "Math rendering",
+    });
+    expect(incrementalSwitch).toHaveAttribute("aria-checked", "true");
+    expect(mathSwitch).toHaveAttribute("aria-checked", "true");
+    // JSX attribute strings keep backslashes literally; the delimiters are
+    // single-backslash LaTeX.
+    expect(section).toHaveTextContent("Typeset \\(…\\) and \\[…\\] expressions");
+
     fireEvent.click(incrementalSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { incrementalMarkdownRendering: true },
+        general: { markdown: { incrementalRendering: false } },
       });
     });
+    fireEvent.click(mathSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { markdown: { mathRendering: false } },
+      });
+    });
+
+    unmount();
+    render(<SettingsScreen initialSection="experimental" settings={settings} />);
+    expect(screen.queryByText(/Markdown rendering/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Markdown math/i)).not.toBeInTheDocument();
   });
 
   it("offers research as a default-off experiment and writes only its feature flag", async () => {
@@ -10412,7 +10488,16 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
     ).map((label) => label.textContent);
     // Providers only: the Helper model row lives on the AI Providers page.
-    expect(subLabels).toEqual(["Codex", "Claude", "Grok", "Gemini CLI"]);
+    expect(subLabels).toEqual([
+      "Codex",
+      "Claude",
+      "Grok",
+      "Gemini CLI",
+      "Local decision model",
+      "TypeSafe Jev",
+      "OpenAI Decisions",
+      "Audio transcription",
+    ]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
     });
@@ -10422,6 +10507,135 @@ describe("SettingsScreen", () => {
     expect(
       geminiButton.querySelector(".settings-nav__subdot--off"),
     ).not.toBeNull();
+  });
+
+  it("lists every AI provider in the nav under the same kind headings as the AI Providers page", () => {
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const sublist = nav.querySelector("#settings-nav-sublist-models");
+    const navGroups = Array.from(
+      sublist?.querySelectorAll<HTMLElement>(".settings-nav__subgroup") ?? [],
+    ).map((group) => {
+      // Each kind heading names its rows for a screen reader.
+      const heading = group.querySelector(".settings-nav__subgroup-label");
+      expect(group).toHaveAttribute("role", "group");
+      expect(group.getAttribute("aria-labelledby")).toBe(heading?.id);
+      return {
+        kind: heading?.textContent,
+        rows: Array.from(
+          group.querySelectorAll(".settings-nav__sublabel"),
+        ).map((label) => label.textContent),
+      };
+    });
+    // No row sits outside a kind group.
+    expect(
+      sublist?.querySelectorAll(".settings-nav__subbutton").length,
+    ).toBe(navGroups.flatMap((group) => group.rows).length);
+
+    // Oracle: the AI Providers page's own index, read in document order.
+    const index = screen.getByLabelText("Provider index");
+    const pageGroups = Array.from(index.children).map((group) => {
+      const heading = group.querySelector(".settings-index__kind");
+      expect(group).toHaveAttribute("role", "group");
+      expect(group.getAttribute("aria-labelledby")).toBe(heading?.id);
+      return {
+        kind: heading?.querySelector(".settings-index__kind-label")
+          ?.textContent,
+        rows: Array.from(
+          group.querySelectorAll(".settings-index__name"),
+        ).map((name) => name.textContent),
+      };
+    });
+    // No page row sits outside a kind group either.
+    expect(index.querySelectorAll(".settings-index__row").length)
+      .toBe(pageGroups.flatMap((group) => group.rows).length);
+    expect(navGroups).toEqual(pageGroups);
+    expect(navGroups.map((group) => group.kind)).toEqual([
+      "Harnesses",
+      "On this computer",
+      "Direct API",
+    ]);
+
+    // A provider that needs a key says so without colour.
+    const jev = within(nav).getByRole("button", { name: /TypeSafe Jev/ });
+    expect(jev.querySelector(".settings-nav__subchip")?.textContent)
+      .toBe("no key");
+    expect(jev.querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    const local = within(nav).getByRole("button", {
+      name: /Local decision model/,
+    });
+    expect(local.querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+    expect(local.querySelector(".settings-nav__subchip")).toBeNull();
+
+    // A kind row opens that provider's screen, as its Configure row does.
+    fireEvent.click(jev);
+    expect(within(nav).getByRole("button", { name: /TypeSafe Jev/ }))
+      .toHaveAttribute("aria-current", "page");
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("TypeSafe Jev");
+    fireEvent.click(
+      within(nav).getByRole("button", { name: /OpenAI Decisions/ }),
+    );
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("OpenAI Decisions");
+    const transcription = within(nav).getByRole("button", { name: /Audio transcription/ });
+    expect(transcription).toHaveTextContent("no key");
+    fireEvent.click(transcription);
+    expect(transcription).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("region", { name: "Audio transcription settings" })).toBeInTheDocument();
+  });
+
+  it("marks a keyed direct API provider ready and a refused local endpoint invalid in the nav", () => {
+    const baseSnapshot = createSnapshot();
+    const configuredKey = {
+      configured: true,
+      source: "keychain" as const,
+      writable: true,
+    };
+    const snapshot = createSnapshot({
+      models: {
+        ...baseSnapshot.models,
+        // Hand-edited: the decision client accepts loopback only.
+        decisionModels: { local: { endpoint: "http://10.0.0.5:8787" } },
+        decisionSecrets: {
+          localApiKey: { configured: false, source: "unset", writable: false },
+          jevApiKey: configuredKey,
+        },
+        openaiDecisions: {
+          ...baseSnapshot.models.openaiDecisions,
+          apiKey: configuredKey,
+        },
+      },
+    } as Partial<DesktopSettingsSnapshot>);
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    for (const name of [/TypeSafe Jev/, /OpenAI Decisions/]) {
+      const row = within(nav).getByRole("button", { name });
+      expect(row.querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+      expect(row.querySelector(".settings-nav__subchip")).toBeNull();
+    }
+    const local = within(nav).getByRole("button", {
+      name: /Local decision model/,
+    });
+    expect(local.querySelector(".settings-nav__subdot--bad")).not.toBeNull();
+    expect(local.querySelector(".settings-nav__subchip")?.textContent)
+      .toBe("invalid");
   });
 
   it("updates Claude's nav status from cached installation and authentication without probing", () => {

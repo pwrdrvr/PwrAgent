@@ -1,4 +1,5 @@
 import type {
+  CausalMessagingContext,
   FederationCapability,
   FederationRemoteTarget,
   FederationTarget,
@@ -6,7 +7,14 @@ import type {
   ManageThreadDependenciesResponse,
   ThreadDependency,
 } from "@pwragent/shared";
-import { THREAD_DEPENDENCIES_FEDERATION_CAPABILITY } from "@pwragent/shared";
+import {
+  THREAD_DEPENDENCIES_FEDERATION_CAPABILITY,
+  THREAD_DEPENDENCY_PROVENANCE_FEDERATION_CAPABILITY,
+} from "@pwragent/shared";
+
+/** What a viewer hears when a contact's create would reach an owner that drops the contact. */
+export const THREAD_DEPENDENCY_PROVENANCE_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to register a wait there from a messaging contact's turn.";
 
 /** What a viewer hears when the owning instance cannot manage Continue After for it. */
 export const THREAD_DEPENDENCIES_UNSUPPORTED_MESSAGE =
@@ -17,7 +25,7 @@ export type ThreadDependenciesFederationRuntime = {
   connectedPeerTargets(): Array<{ target: FederationRemoteTarget; capabilities: FederationCapability[] }>;
   remoteTargetSupportsCapability(target: FederationRemoteTarget, capability: FederationCapability): boolean;
   remoteBackend(target: FederationRemoteTarget): {
-    manageThreadDependencies?(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse>;
+    manageThreadDependencies?(request: ManageThreadDependenciesRequest & { provenance?: CausalMessagingContext }): Promise<ManageThreadDependenciesResponse>;
   };
 };
 
@@ -25,6 +33,25 @@ const FIELDS = [
   "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
   "steps", "holdMerge", "dependencyId", "dependencyIds", "conditionIndex", "note", "pullRequest", "repeat",
 ] as const;
+
+/**
+ * The messaging contact a peer's create carries. It can only narrow the
+ * wait: without it the owner would run the wait as the peer. A source must
+ * name its messaging owner, which authorizes the contact's tool calls; a
+ * malformed one is ambiguous, never dropped.
+ */
+export function readFederationThreadDependencyProvenance(value: unknown): CausalMessagingContext {
+  const provenance = value && typeof value === "object" ? (value as { provenance?: unknown }).provenance : undefined;
+  if (provenance === undefined) return {};
+  const { causalMessagingSource: source, causalMessagingAmbiguous: ambiguous } = provenance && typeof provenance === "object"
+    ? provenance as Record<string, unknown> : {};
+  if (ambiguous === undefined && source === undefined) return {};
+  if (ambiguous !== undefined || !source || typeof source !== "object") return { causalMessagingAmbiguous: true };
+  const { ownerId, requestId, surfaceSelector, instanceId } = source as Record<string, unknown>;
+  if (typeof ownerId !== "string" || typeof requestId !== "string" || typeof instanceId !== "string" || !instanceId
+    || (surfaceSelector !== undefined && typeof surfaceSelector !== "string")) return { causalMessagingAmbiguous: true };
+  return { causalMessagingSource: { ownerId, requestId, instanceId, ...(surfaceSelector !== undefined ? { surfaceSelector } : {}) } };
+}
 
 /**
  * The owner's copy of a peer's request. Only the named fields cross; the
@@ -54,12 +81,20 @@ export async function manageRemoteThreadDependencies(
   target: FederationRemoteTarget,
   viewerInstanceId: string | undefined,
   runtime: ThreadDependenciesFederationRuntime,
+  provenance: CausalMessagingContext = {},
 ): Promise<ManageThreadDependenciesResponse> {
   const remote = runtime.remoteBackend(target);
   if (!supports(runtime, target) || !remote.manageThreadDependencies) throw new Error(THREAD_DEPENDENCIES_UNSUPPORTED_MESSAGE);
   const owned = readFederationThreadDependenciesRequest(request);
   if (!owned) throw new Error("Unknown Continue After action.");
-  return qualifyPeerDependentOwners(await remote.manageThreadDependencies(owned), target, viewerInstanceId);
+  // Only a create stores its requester; an older owner would drop the
+  // contact and run the wait as this peer.
+  const causal = owned.action === "create" && Boolean(provenance.causalMessagingSource || provenance.causalMessagingAmbiguous);
+  if (causal && !runtime.remoteTargetSupportsCapability(target, THREAD_DEPENDENCY_PROVENANCE_FEDERATION_CAPABILITY)) {
+    throw new Error(THREAD_DEPENDENCY_PROVENANCE_UNSUPPORTED_MESSAGE);
+  }
+  return qualifyPeerDependentOwners(
+    await remote.manageThreadDependencies(causal ? { ...owned, provenance } : owned), target, viewerInstanceId);
 }
 
 /**
