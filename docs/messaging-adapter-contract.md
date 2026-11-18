@@ -45,9 +45,10 @@ checks pass.
 
 Adapters emit inbound text and media immediately. They must not debounce,
 merge, queue, steer, or start turns themselves. Desktop messaging core owns the
-turn admission policy that coalesces split input, prevents overlapping
-`turn/start` calls, queues follow-ups during active turns, and maps queued
-input to `turn/steer` or a later `turn/start`.
+turn admission policy that coalesces split input and submits it to the owning
+backend's canonical `ThreadTurnQueue`. That owner prevents overlapping native
+starts and holds follow-ups during active turns. Messaging maps queue controls
+to owner reads, cancellation and steering; it owns no second admission FIFO.
 
 Every inbound event carries two deliberately distinct time concepts:
 

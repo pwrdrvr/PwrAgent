@@ -19,7 +19,6 @@ describe("MessagingTurnAdmission", () => {
     const onBundleReady = vi.fn();
     const admission = new MessagingTurnAdmission({
       debounceMs: 500,
-      now: () => 1000,
       onBundleReady,
     });
 
@@ -50,7 +49,6 @@ describe("MessagingTurnAdmission", () => {
     const onBundleReady = vi.fn();
     const admission = new MessagingTurnAdmission({
       debounceMs: 500,
-      now: () => 1000,
       onBundleReady,
     });
 
@@ -86,60 +84,6 @@ describe("MessagingTurnAdmission", () => {
       }),
     ]);
     admission.dispose();
-  });
-
-  it("tracks queued entries and skips cancelled entries when flushing", () => {
-    const binding = buildBinding();
-    const admission = new MessagingTurnAdmission({
-      debounceMs: 0,
-      now: () => 1000,
-      onBundleReady: vi.fn(),
-    });
-    const threadKey = threadKeyForBinding(binding);
-    const cancelled = admission.enqueue({
-      binding,
-      input: [{ type: "text", text: "cancel me" }],
-      preview: "cancel me",
-      threadKey,
-    });
-    const next = admission.enqueue({
-      binding,
-      input: [{ type: "text", text: "send me" }],
-      preview: "send me",
-      threadKey,
-    });
-
-    admission.updateQueuedEntry(cancelled, { status: "cancelled" });
-
-    expect(admission.shiftNextQueued(threadKey)).toMatchObject({
-      id: next.id,
-      input: [{ type: "text", text: "send me" }],
-      status: "queued",
-    });
-    expect(admission.shiftNextQueued(threadKey)).toBeUndefined();
-  });
-
-  it("assigns queued IDs uniquely across independent admissions", () => {
-    const binding = buildBinding();
-    const buildAdmission = () => new MessagingTurnAdmission({
-      debounceMs: 0,
-      now: () => 1000,
-      onBundleReady: vi.fn(),
-    });
-    const firstAdmission = buildAdmission();
-    const secondAdmission = buildAdmission();
-    const enqueue = (admission: MessagingTurnAdmission, text: string) =>
-      admission.enqueue({
-        binding,
-        input: [{ type: "text", text }],
-        preview: text,
-        threadKey: threadKeyForBinding(binding),
-      });
-
-    const first = enqueue(firstAdmission, "from telegram");
-    const second = enqueue(secondAdmission, "from discord");
-
-    expect(first.id).not.toBe(second.id);
   });
 
   it("separates identical thread ids owned by different instances", () => {

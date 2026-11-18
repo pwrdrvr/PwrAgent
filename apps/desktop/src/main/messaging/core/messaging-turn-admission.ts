@@ -1,21 +1,13 @@
-import { randomUUID } from "node:crypto";
-import type {
-  AppServerTurnInputItem,
-  MessagingCausalSourceRef,
-} from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
-  MessagingInboundEvent,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
-  MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   isRemoteFederationTarget,
 } from "@pwragent/shared";
-import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
 
 export type MessagingTurnInputEvent =
   | MessagingInboundTextEvent
@@ -28,24 +20,6 @@ export type MessagingTurnAdmissionBundle = {
   threadKey: string;
 };
 
-export type MessagingQueuedTurnEntry = {
-  binding: MessagingBindingRecord;
-  createdAt: number;
-  event?: MessagingInboundEvent;
-  id: string;
-  input: AppServerTurnInputItem[];
-  ownerQueueEntryId?: string;
-  manualRetryRequired?: boolean;
-  pdfAttachments?: PendingPdfAttachment[];
-  pdfSourceRequest?: MessagingCausalSourceRef;
-  privateResponseRequested?: boolean;
-  preview: string;
-  status: "queued" | "steering" | "submitting" | "steered" | "cancelled" | "submitted" | "failed";
-  surface?: MessagingSurfaceRef;
-  threadKey: string;
-  updatedAt: number;
-};
-
 type PendingWindow = {
   binding: MessagingBindingRecord;
   events: MessagingTurnInputEvent[];
@@ -55,14 +29,12 @@ type PendingWindow = {
 
 export class MessagingTurnAdmission {
   private readonly pendingByThreadActorKey = new Map<string, PendingWindow>();
-  private readonly queuedByThreadKey = new Map<string, MessagingQueuedTurnEntry[]>();
   private readonly startingThreadKeys = new Set<string>();
   private sequence = 0;
 
   constructor(
     private readonly options: {
       debounceMs: number;
-      now: () => number;
       onBundleReady: (bundle: MessagingTurnAdmissionBundle) => void | Promise<void>;
     },
   ) {}
@@ -120,116 +92,6 @@ export class MessagingTurnAdmission {
 
   clearStarting(threadKey: string): void {
     this.startingThreadKeys.delete(threadKey);
-  }
-
-  enqueue(
-    entry: Omit<MessagingQueuedTurnEntry, "createdAt" | "id" | "status" | "updatedAt">,
-  ): MessagingQueuedTurnEntry {
-    const now = this.options.now();
-    const queued: MessagingQueuedTurnEntry = {
-      ...entry,
-      createdAt: now,
-      id: `queued:${randomUUID()}`,
-      status: "queued",
-      updatedAt: now,
-    };
-    const queue = this.queuedByThreadKey.get(queued.threadKey) ?? [];
-    queue.push(queued);
-    this.queuedByThreadKey.set(queued.threadKey, queue);
-    return queued;
-  }
-
-  updateQueuedEntry(
-    entry: MessagingQueuedTurnEntry,
-    patch: Partial<MessagingQueuedTurnEntry>,
-  ): MessagingQueuedTurnEntry {
-    const queue = this.queuedByThreadKey.get(entry.threadKey) ?? [];
-    const index = queue.findIndex((candidate) => candidate.id === entry.id);
-    const updated = {
-      ...(index >= 0 ? queue[index] : entry),
-      ...patch,
-      updatedAt: this.options.now(),
-    };
-    if (index >= 0) {
-      queue[index] = updated;
-      this.queuedByThreadKey.set(entry.threadKey, queue);
-    }
-    return updated;
-  }
-
-  findQueuedEntry(id: string): MessagingQueuedTurnEntry | undefined {
-    for (const queue of this.queuedByThreadKey.values()) {
-      const entry = queue.find((candidate) => candidate.id === id);
-      if (entry) {
-        return entry;
-      }
-    }
-    return undefined;
-  }
-
-  hasDispatchingEntry(threadKey: string): boolean {
-    return this.queuedByThreadKey.get(threadKey)?.some((entry) =>
-      entry.status === "steering" || entry.status === "submitting") ?? false;
-  }
-
-  peekNextQueued(threadKey: string): MessagingQueuedTurnEntry | undefined {
-    const queue = this.queuedByThreadKey.get(threadKey);
-    if (!queue) {
-      return undefined;
-    }
-
-    while (queue.length > 0) {
-      const entry = queue[0];
-      if (entry?.status === "queued") {
-        return entry;
-      }
-      if (entry?.status === "steering" || entry?.status === "submitting") {
-        return undefined;
-      }
-      queue.shift();
-    }
-
-    this.queuedByThreadKey.delete(threadKey);
-    return undefined;
-  }
-
-  removeQueuedEntry(entry: MessagingQueuedTurnEntry): void {
-    const queue = this.queuedByThreadKey.get(entry.threadKey);
-    if (!queue) {
-      return;
-    }
-
-    const index = queue.findIndex((candidate) => candidate.id === entry.id);
-    if (index >= 0) {
-      queue.splice(index, 1);
-    }
-
-    if (queue.length === 0) {
-      this.queuedByThreadKey.delete(entry.threadKey);
-    }
-  }
-
-  shiftNextQueued(threadKey: string): MessagingQueuedTurnEntry | undefined {
-    const queue = this.queuedByThreadKey.get(threadKey);
-    if (!queue) {
-      return undefined;
-    }
-
-    while (queue.length > 0) {
-      if (queue[0]?.status === "steering" || queue[0]?.status === "submitting") {
-        return undefined;
-      }
-      const entry = queue.shift();
-      if (entry?.status === "queued") {
-        if (queue.length === 0) {
-          this.queuedByThreadKey.delete(threadKey);
-        }
-        return entry;
-      }
-    }
-
-    this.queuedByThreadKey.delete(threadKey);
-    return undefined;
   }
 
   private schedule(pendingKey: string): ReturnType<typeof setTimeout> {

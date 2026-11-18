@@ -1,3 +1,4 @@
+import { messagingOwnerQueue } from "./fixtures/messaging-owner-queue";
 import { messagingModules } from "./fixtures/messaging-controller-modules";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
@@ -191,6 +192,8 @@ function createDeferred<T>(): {
   return { promise, resolve };
 }
 
+const harnessOwners = new WeakMap<MessagingController, ReturnType<typeof messagingOwnerQueue>>();
+
 /**
  * A flush timer can start a delivery that no test step awaits, and that
  * delivery writes the store after the test body returns. Stop each
@@ -202,8 +205,10 @@ async function settleHarnessWork(): Promise<void> {
   vi.useRealTimers();
   for (const controller of harnessControllers.splice(0)) {
     controller.dispose();
+    harnessOwners.get(controller)?.close();
     await controller.whenToolUpdatesSettled();
     await controller.whenQueuedTurnActionsSettled();
+    await harnessOwners.get(controller)?.settled();
   }
   await Promise.all(tempStores.splice(0).map((store) => store.whenIdle()));
 }
@@ -222,9 +227,10 @@ async function settleHarness(
   const controllerIndex = harnessControllers.indexOf(harness.controller);
   if (controllerIndex >= 0) harnessControllers.splice(controllerIndex, 1);
   harness.controller.dispose();
+  harnessOwners.get(harness.controller)?.close();
   await harness.controller.whenToolUpdatesSettled();
   await harness.controller.whenQueuedTurnActionsSettled();
-  await harness.controller.whenQueuedTurnDrainsSettled();
+  await harnessOwners.get(harness.controller)?.settled();
   if (harness.store instanceof MessagingStore) {
     const storeIndex = tempStores.indexOf(harness.store);
     if (storeIndex >= 0) tempStores.splice(storeIndex, 1);
@@ -6810,7 +6816,7 @@ describe("MessagingController", () => {
   });
 
   it("preserves the messaging location for queued Agent-thread turns", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {
       const turnId = harness.startTurn.mock.calls.length === 1 ? "turn-1" : "turn-2";
       return {
@@ -6842,7 +6848,7 @@ describe("MessagingController", () => {
       }),
     );
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -6859,7 +6865,7 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     // The drain records turn-2 as active only after its start resolves.
-    await harness.controller.whenQueuedTurnDrainsSettled();
+    await harness.whenOwnerSettled();
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
@@ -9639,7 +9645,7 @@ describe("MessagingController", () => {
           executionMode: request.launchpad?.executionMode ?? "default",
           workMode: request.launchpad?.workMode ?? "local",
         });
-        await harness.controller.handleBackendEvent({
+        await harness.emitBackendEvent({
           backend: "codex",
           notification: {
             method: "turn/started",
@@ -9664,7 +9670,7 @@ describe("MessagingController", () => {
         };
       },
     );
-    const harness = await createHarness({ materializeDirectoryLaunchpad });
+    const harness = await createHarness({ canonicalQueue: true, materializeDirectoryLaunchpad });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -17983,7 +17989,7 @@ describe("MessagingController", () => {
     // turn's ordered start can acknowledge. Awaiting that start from inside
     // the event listener creates a cycle, even for a text-only final message.
     await fc.assert(fc.asyncProperty(fc.boolean(), propertyExample(signal, async (idleFirst) => {
-      const harness = await createHarness();
+      const harness = await createHarness({ canonicalQueue: true });
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("first"));
       await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
@@ -18005,7 +18011,7 @@ describe("MessagingController", () => {
       let delivered = false;
       const delivery = (async () => {
         for (const event of idleFirst ? [idle, terminal] : [terminal, idle]) {
-          await harness.controller.handleBackendEvent(event);
+          await harness.emitBackendEvent(event);
         }
         delivered = true;
       })();
@@ -18017,76 +18023,13 @@ describe("MessagingController", () => {
       } finally {
         acknowledge();
         await delivery;
-        await harness.controller.whenQueuedTurnDrainsSettled();
+        await harness.whenOwnerSettled();
       }
     })), { numRuns: 4 });
   });
 
-  it("settles armed queued-turn drains only after dispatch finishes or disposal cancels them", async ({ signal }) => {
-    // Oracle: a released entry must start before the settle hook resolves,
-    // and the hook must include acknowledgement and notice retirement.
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("completed", "idle", "both"),
-      fc.constantFrom("accepted", "rejected", "disposed"),
-      propertyExample(signal, async (release, outcome) => {
-        const harness = await createHarness();
-        const entered = createDeferred<void>();
-        const acknowledgement = createDeferred<void>();
-        try {
-          await bindThread(harness);
-          await harness.controller.handleInboundEvent(buildTextEvent("first"));
-          await harness.controller.handleInboundEvent(buildTextEvent("follow-up"));
-          harness.startTurn.mockImplementationOnce(async (request) => {
-            entered.resolve();
-            await acknowledgement.promise;
-            if (outcome === "rejected") throw new Error("fixture dispatch failed");
-            return { backend: request.backend, threadId: request.threadId, turnId: "turn-2" };
-          });
-          if (release !== "idle") await harness.controller.handleBackendEvent({ backend: "codex", notification: {
-            method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1",
-              turn: { id: "turn-1", status: "completed", output: [] } },
-          } });
-          if (release === "both" && outcome === "disposed") await entered.promise;
-          if (release !== "completed") await harness.controller.handleBackendEvent({ backend: "codex", notification: {
-            method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
-          } });
-          const settled = harness.controller.whenQueuedTurnDrainsSettled();
-          if (outcome === "disposed") {
-            // With two releases, dispatch may already be awaiting its
-            // acknowledgement. Disposal cancels only work still armed.
-            const startsBeforeDisposal = harness.startTurn.mock.calls.length;
-            harness.controller.dispose();
-            acknowledgement.resolve();
-            await settled;
-            expect(harness.startTurn).toHaveBeenCalledTimes(startsBeforeDisposal);
-            return;
-          }
-          expect(await Promise.race([
-            settled.then(() => "settled"), entered.promise.then(() => "started"),
-          ])).toBe("started");
-          // Register after observing start, so this also checks the running
-          // drain rather than only the promise captured while it was armed.
-          const running = harness.controller.whenQueuedTurnDrainsSettled();
-          expect(harness.delivered).not.toContainEqual(expect.objectContaining({
-            body: "Queued message sent as the next turn.",
-          }));
-          acknowledgement.resolve();
-          await Promise.all([settled, running]);
-          expect(harness.startTurn).toHaveBeenCalledTimes(2);
-          expect(harness.delivered).toContainEqual(expect.objectContaining(outcome === "accepted"
-            ? { kind: "confirmation", body: "Queued message sent as the next turn." }
-            : { kind: "error", title: "Turn could not start", body: "fixture dispatch failed" }));
-        } finally {
-          acknowledgement.resolve();
-          harness.controller.dispose();
-          await harness.controller.whenQueuedTurnDrainsSettled();
-        }
-      }),
-    ), { numRuns: 9, examples: [["completed", "accepted"], ["idle", "rejected"], ["completed", "disposed"], ["both", "disposed"]] });
-  });
-
   it("queues follow-up text while a turn is active and starts it after completion", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("make me a dinner reservation"));
@@ -18124,7 +18067,7 @@ describe("MessagingController", () => {
       };
     });
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -18140,7 +18083,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    const drain = harness.controller.whenQueuedTurnDrainsSettled();
+    const drain = harness.whenOwnerSettled();
     await queuedStartEntered.promise;
     queuedStartAccepted.resolve();
     await drain;
@@ -18171,8 +18114,8 @@ describe("MessagingController", () => {
     });
   });
 
-  it("starts a new turn when targeted admission reports idle after a missed completion", async () => {
-    const harness = await createHarness();
+  it("leaves admission to the owner when a targeted viewer read reports stale idle", async () => {
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
@@ -18184,13 +18127,9 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("next turn"));
 
-    expect(harness.startTurn).toHaveBeenCalledTimes(2);
-    expect(harness.startTurn).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        input: [{ type: "text", text: "next turn" }],
-      }),
-    );
-    expect(harness.delivered).not.toContainEqual(
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.queue!.owner.getAllQueuedEntries().map(entry => entry.input)).toEqual([[{ type: "text", text: "next turn" }]]);
+    expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         kind: "confirmation",
         title: "Message queued",
@@ -18199,7 +18138,7 @@ describe("MessagingController", () => {
   });
 
   it("queues a second surface message on the same Agent thread without creating a shadow thread", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     const telegramChannel = buildTextEvent("ignored").channel;
     const discordChannel: MessagingInboundTextEvent["channel"] = {
       channel: "discord",
@@ -18259,7 +18198,7 @@ describe("MessagingController", () => {
       body: expect.stringContaining("> follow up from discord"),
     });
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -18275,7 +18214,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    await harness.controller.whenQueuedTurnDrainsSettled();
+    await harness.whenOwnerSettled();
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -18292,7 +18231,7 @@ describe("MessagingController", () => {
   });
 
   it("retains queued follow-up input when promotion fails", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
@@ -18321,7 +18260,7 @@ describe("MessagingController", () => {
       throw new Error("provider unavailable");
     });
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -18337,18 +18276,12 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    const drain = harness.controller.whenQueuedTurnDrainsSettled();
+    const drain = harness.whenOwnerSettled();
     await queuedStartEntered.promise;
     queuedStartRejected.resolve();
     await drain;
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
-    expect(harness.delivered).toContainEqual(
-      expect.objectContaining({
-        kind: "error",
-        title: "Turn could not start",
-        body: "provider unavailable",
-      }),
-    );
+    expect(harness.queue!.owner.getAllQueuedEntries()).toEqual([expect.objectContaining({ manualReleaseRequired: true, holdReason: "provider unavailable" })]);
     expect(harness.delivered).not.toContainEqual(
       expect.objectContaining({
         kind: "confirmation",
@@ -18372,8 +18305,8 @@ describe("MessagingController", () => {
     });
   });
 
-  it("queues input when backend admission rejects a concurrent turn start", async () => {
-    const harness = await createHarness();
+  it("reports an owner refusal without claiming the input was queued", async () => {
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
     harness.startTurn.mockRejectedValueOnce(
       new Error("thread already has an active turn in progress"),
@@ -18383,14 +18316,15 @@ describe("MessagingController", () => {
 
     expect(harness.startTurn).toHaveBeenCalledTimes(1);
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "confirmation",
-      title: "Message queued",
-      body: expect.stringContaining("> second turn"),
+      kind: "error",
+      title: "Turn could not start",
+      body: "thread already has an active turn in progress",
     });
   });
 
   it("offers Steer on queued input when the registry still knows the active turn", async () => {
     const harness = await createHarness({
+      canonicalQueue: true,
       readActiveTurn: async () => ({
         backend: "codex",
         threadId: "thread-1",
@@ -18398,9 +18332,7 @@ describe("MessagingController", () => {
       }),
     });
     await bindThread(harness);
-    harness.startTurn.mockRejectedValueOnce(
-      new Error("thread already has an active turn in progress"),
-    );
+    harness.queue!.markActive("codex", "thread-1");
 
     await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
 
@@ -18457,8 +18389,8 @@ describe("MessagingController", () => {
     });
   });
 
-  it("clears a staged skill when backend concurrent-start rejection queues the prefixed request", async () => {
-    const harness = await createHarness();
+  it("clears a staged skill after the owner accepts the prefixed request into its queue", async () => {
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -18471,9 +18403,7 @@ describe("MessagingController", () => {
         value: planChoice.value,
       }),
     );
-    harness.startTurn.mockRejectedValueOnce(
-      new Error("thread already has an active turn in progress"),
-    );
+    harness.queue!.markActive("codex", "thread-1");
 
     await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
 
@@ -18493,7 +18423,7 @@ describe("MessagingController", () => {
   });
 
   it("does not restore a consumed skill when a queued turn starts later", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
@@ -18515,7 +18445,7 @@ describe("MessagingController", () => {
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
     ).resolves.not.toHaveProperty("pendingSkillSelection");
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -18532,7 +18462,7 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     // The drain renders the post-start status only after its start resolves.
-    await harness.controller.whenQueuedTurnDrainsSettled();
+    await harness.whenOwnerSettled();
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -18558,7 +18488,7 @@ describe("MessagingController", () => {
   });
 
   it("clears starting state when admission-state lookup fails before retrying", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
     harness.getThreadAdmissionState.mockRejectedValueOnce(
       new Error("admission state unavailable"),
@@ -18589,7 +18519,7 @@ describe("MessagingController", () => {
   });
 
   it("steers queued follow-ups into the active turn and removes queued actions", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
@@ -18650,7 +18580,7 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -18671,7 +18601,7 @@ describe("MessagingController", () => {
 
   it.for((["mcp", "command"] as const).flatMap((kind) =>
     (["accept", "decline", "cancel"] as const).flatMap((decision) =>
-      [false, true].map((ownsTurnQueue) => ({ kind, decision, ownsTurnQueue }))),
+      [true].map((ownsTurnQueue) => ({ kind, decision, ownsTurnQueue }))),
   ))("keeps messaging $kind $decision escalation and queued cancellation live while a steer awaits approval (owner FIFO: $ownsTurnQueue)", async ({ kind, decision, ownsTurnQueue }) => {
     // Model: ingress is sequential, as in Telegram polling. A provider's
     // pending steer must not own ingress needed to answer its escalation.
@@ -18794,7 +18724,7 @@ describe("MessagingController", () => {
           } });
           expect(owner.getAllQueuedEntries()).toHaveLength(0);
         } else {
-          await harness.controller.whenQueuedTurnDrainsSettled();
+          await harness.whenOwnerSettled();
           expect(harness.startTurn).toHaveBeenCalledTimes(2);
           expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
             input: [{ type: "text", text: "keep this queued message" }],
@@ -18871,9 +18801,9 @@ describe("MessagingController", () => {
     });
   });
 
-  it("releases the remaining queue when completion overtakes a steer acknowledgement", async ({ signal }) => {
+  it("lets the owner release remaining input while a cancelled steer awaits acknowledgement", async ({ signal }) => {
     await fc.assert(fc.asyncProperty(fc.boolean(), propertyExample(signal, async (reject) => {
-      const harness = await createHarness();
+      const harness = await createHarness({ canonicalQueue: true });
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
       const queued: MessagingSurfaceAction[][] = [];
@@ -18900,18 +18830,20 @@ describe("MessagingController", () => {
         await harness.controller.handleInboundEvent(callback(0, "steer"));
         await harness.controller.handleInboundEvent(callback(1, "cancel"));
         harness.readThreadStatus.mockResolvedValue("idle");
-        await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        await harness.emitBackendEvent({ backend: "codex", notification: {
           method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1",
             turn: { id: "turn-1", status: "completed", output: [] } },
         } });
-        expect(harness.startTurn).toHaveBeenCalledTimes(1);
+        await harness.whenOwnerSettled();
+        expect(harness.startTurn).toHaveBeenCalledTimes(2);
         expect(harness.steerTurn).toHaveBeenCalledTimes(1);
         acknowledgement.resolve();
         await harness.controller.whenQueuedTurnActionsSettled();
         expect(harness.startTurn).toHaveBeenCalledTimes(2);
         expect(harness.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({
-          input: [{ type: "text", text: reject ? "steer this message" : "keep this message" }],
+          input: [{ type: "text", text: "keep this message" }],
         }));
+        expect(harness.queue!.owner.getAllQueuedEntries().map(entry => entry.input)).toEqual(reject ? [[{ type: "text", text: "steer this message" }]] : []);
       } finally {
         acknowledgement.resolve();
         await harness.controller.whenQueuedTurnActionsSettled();
@@ -18920,7 +18852,7 @@ describe("MessagingController", () => {
   });
 
   it("keeps queued follow-ups available when backend steering is rejected", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
@@ -18954,15 +18886,13 @@ describe("MessagingController", () => {
     await harness.controller.whenQueuedTurnActionsSettled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
-      title: "Steer failed",
-      body: expect.stringContaining("The message is still queued."),
+      title: "Queued message could not be updated",
+      body: "no active turn to steer",
     });
 
-    await harness.controller.handleInboundEvent(
-      buildCallbackEvent({
-        actionId: cancelAction!.id,
-      }),
-    );
+    const restored = harness.queue!.owner.getAllQueuedEntries();
+    expect(restored.map(entry => entry.input)).toEqual([[{ type: "text", text: "also check the logs" }]]);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: `queued-turn:cancel:${restored[0]!.id}` }));
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
@@ -18975,7 +18905,7 @@ describe("MessagingController", () => {
   });
 
   it("does not steer a queued follow-up into a waiting turn after the backend is idle", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
@@ -19016,13 +18946,13 @@ describe("MessagingController", () => {
     expect(harness.steerTurn).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
-      title: "Steer unavailable",
+      title: "Queued message could not be updated",
       body: expect.stringContaining("There is no active turn available to steer"),
     });
   });
 
   it("routes completed assistant output to active thread bindings", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ canonicalQueue: true });
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "bind:codex:thread-1",
@@ -19033,7 +18963,7 @@ describe("MessagingController", () => {
       }),
     );
 
-    await harness.controller.handleBackendEvent({
+    await harness.emitBackendEvent({
       backend: "codex",
       notification: {
         method: "turn/completed",
@@ -24189,8 +24119,8 @@ describe("MessagingController", () => {
     );
   });
 
-  it("starts queued follow-ups when a delayed approval first observes the backend is idle", async () => {
-    const harness = await createHarness();
+  it("reconciles a delayed approval without draining the owner queue", async () => {
+    const harness = await createHarness({ canonicalQueue: true });
     harness.startTurn
       .mockResolvedValueOnce({
         backend: "codex",
@@ -24227,6 +24157,9 @@ describe("MessagingController", () => {
       },
     });
 
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    await harness.emitBackendEvent({ backend: "codex", notification: { method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } } });
+    await harness.whenOwnerSettled();
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -29708,8 +29641,12 @@ async function createHarness<
     | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
   showStreamingOption?: boolean;
   store?: Store;
+  canonicalQueue?: boolean;
 }): Promise<{
   controller: MessagingController;
+  queue: ReturnType<typeof messagingOwnerQueue> | undefined;
+  emitBackendEvent: (event: AgentEvent) => Promise<void>;
+  whenOwnerSettled: () => Promise<void>;
   compactThread: ReturnType<typeof vi.fn>;
   continueClaudeThreadInNewSession: ReturnType<typeof vi.fn>;
   setThreadLock: ReturnType<typeof vi.fn>;
@@ -30283,6 +30220,11 @@ async function createHarness<
     ...options?.backendOverrides,
   };
 
+  const queue = options?.canonicalQueue ? messagingOwnerQueue({ startTurn,
+    emit: event => controllerRef.current!.handleBackendEvent(event),
+  }) : undefined;
+  if (queue) Object.assign(backend, queue.ports);
+
   const onBindingChanged = vi.fn();
   const controller = new MessagingController({
     requestStore: options?.requestStore,
@@ -30324,11 +30266,15 @@ async function createHarness<
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef.current = controller;
+  if (queue) harnessOwners.set(controller, queue);
   harnessControllers.push(controller);
   example?.harnesses.push({ controller, store });
 
   return {
     controller,
+    queue,
+    emitBackendEvent: queue ? event => queue.emit(event) : event => controller.handleBackendEvent(event),
+    whenOwnerSettled: async () => { await queue?.settled(); },
     compactThread,
     continueClaudeThreadInNewSession,
     setThreadLock,
