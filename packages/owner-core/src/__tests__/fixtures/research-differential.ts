@@ -174,7 +174,6 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
       let outcome: unknown;
       try { outcome = { ok: summary(await action(world)) }; }
       catch (error) { outcome = { refused: error instanceof Error ? error.message : String(error) }; }
-      await flush();
       outcomes.push({ outcome, calls: world.calls });
     }
     const context = `step ${index} ${step.kind}`;
@@ -301,12 +300,14 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
         const status = (["started", "terminal", "terminal", "cancelled", "queued"] as const)[step.variant % 5]!;
         return async (world) => await world.service.observeQueue({ backend: thread.backend, threadId: thread.threadId }, queueEntryId, status, step.flag ? `revision-turn-${step.other % 3}` : undefined);
       }
-      case "advance": return (world) => {
+      case "advance": return async (world) => {
         // Mostly a short wait; sometimes long enough to pass a deadline.
         world.now += step.other % 8 === 7 ? (1 + step.variant % 25) * 60_000 : 30_000;
         const due = world.timers.filter((timer) => !timer.cancelled && timer.at <= world.now);
         world.timers = world.timers.filter((timer) => !due.includes(timer));
         for (const timer of due) timer.run();
+        // Deadline callbacks start asynchronous stops without returning their promises.
+        if (due.length) await flush();
       };
       case "toggle": return async (world) => {
         world.enabled = false;
