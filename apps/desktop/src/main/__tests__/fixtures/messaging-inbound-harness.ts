@@ -10,7 +10,7 @@ import { openInMemoryStateDb } from "../sqlite-test-utils";
 export async function messagingInboundHarness(options: {
   channel?: "telegram" | "discord";
   backend?: "codex" | "claude";
-  route?: "binding" | "default-agent";
+  route?: "binding" | "default-agent" | "unbound";
   shared?: boolean;
   reportsMention?: boolean;
   responseMode?: "every_message" | "mention_only";
@@ -95,7 +95,7 @@ export async function messagingInboundHarness(options: {
     await store.upsertDefaultAgentAssignment({ id: "fixture-default", scope: { kind: "conversation", channel },
       target: { kind: "agent", backend: "codex", threadId: "fixture-thread" }, createdAt: now, updatedAt: now,
     });
-  } else {
+  } else if (options.route !== "unbound") {
     await store.upsertBinding({ id: "fixture-binding", backend: options.backend ?? "codex", threadId: "fixture-thread", channel,
       authorizedActorIds: ["fixture-actor"], createdAt: now, updatedAt: now,
     });
