@@ -2,6 +2,7 @@ import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchS
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
+import { TRANSCRIBE_AUDIO_FILE_CHANNEL, type AudioTranscriptionResult } from "../shared/audio-transcription";
 import {
   HTML_PREVIEW_NAVIGATION_CHANNEL,
   type HtmlPreviewNavigationEvent,
@@ -1309,6 +1310,8 @@ let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
+  transcribeAudioFile: (): Promise<AudioTranscriptionResult> =>
+    ipcRenderer.invoke(TRANSCRIBE_AUDIO_FILE_CHANNEL),
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
     await ipcRenderer.invoke("thread:dependencies", request),
   manageThreadPrWatches: async (request: import("@pwragent/shared").ThreadPrWatchesRequest): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> =>

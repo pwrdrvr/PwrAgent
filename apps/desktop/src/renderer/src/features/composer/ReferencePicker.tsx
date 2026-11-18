@@ -61,6 +61,7 @@ export type ReferencePickerProps = {
   /** Separate OS dialogs for platforms without a combined dialog. */
   onPickDirectoryFromDisk?: () => void;
   onPickFileFromDisk?: () => void;
+  onTranscribeAudio?: () => void;
   /** Disable controller-local native pickers in a remote viewer. */
   nativePickingDisabled?: boolean;
   /**
@@ -408,6 +409,15 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
               ) : null}
             </>
           )}
+          {props.onTranscribeAudio ? (
+            <button
+              type="button"
+              className="reference-picker__row reference-picker__row--action"
+              onClick={props.onTranscribeAudio}
+            >
+              <span className="reference-picker__row-name">Transcribe audio…</span>
+            </button>
+          ) : null}
         </div>
       ) : null}
     </span>

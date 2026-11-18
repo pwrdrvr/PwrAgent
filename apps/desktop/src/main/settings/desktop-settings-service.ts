@@ -891,6 +891,11 @@ export class DesktopSettingsService {
       OPENAI_DECISIONS_API_KEY_ENV,
       secretStorage.available,
     );
+    const audioTranscriptionApiKey = await this.readSecretState(
+      "openaiTranscriptionApiKey",
+      undefined,
+      secretStorage.available,
+    );
     const codexModelProviderKeyIds = secretStorage.available && config.models?.codex?.providers?.length
       ? await this.readCodexModelProviderKeyIds()
       : new Set<string>();
@@ -1705,6 +1710,7 @@ export class DesktopSettingsService {
           ...(config.models?.openaiDecisions ?? {}),
           apiKey: openaiDecisionsApiKey,
         },
+        audioTranscriptionApiKey,
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -3432,6 +3438,10 @@ export class DesktopSettingsService {
       ?? await this.options.secretStore.getSecret("openaiDecisionsApiKey");
   }
 
+  async resolveOpenAITranscriptionApiKey(): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret("openaiTranscriptionApiKey");
+  }
+
   /** Whether an OpenAI Decisions key is set, from env or the store. Never decrypts. */
   async hasOpenAIDecisionsApiKey(): Promise<boolean> {
     return Boolean(readEnvString(this.env, OPENAI_DECISIONS_API_KEY_ENV))
@@ -5041,6 +5051,7 @@ function secretEnvironmentKey(
     case "mcpStdioConnectionSecrets":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
+    case "openaiTranscriptionApiKey":
     case "codexModelProviderKeys":
       return undefined;
     case "openaiDecisionsApiKey":

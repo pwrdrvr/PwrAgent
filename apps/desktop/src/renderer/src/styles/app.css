@@ -20879,6 +20879,18 @@ a.button {
   margin-top: 16px;
 }
 
+.audio-transcription-dialog .audio-transcription-dialog__preview {
+  max-height: min(35vh, 280px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .settings-thread-migration-dialog {
   width: min(620px, calc(100vw - 48px));
 }

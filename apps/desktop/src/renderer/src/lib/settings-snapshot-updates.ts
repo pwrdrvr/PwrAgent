@@ -139,6 +139,8 @@ function secretSnapshotPath(
       return ["models", "decisionSecrets", "jevApiKey"];
     case "openaiDecisionsApiKey":
       return ["models", "openaiDecisions", "apiKey"];
+    case "openaiTranscriptionApiKey":
+      return ["models", "audioTranscriptionApiKey"];
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
     case "mcpStdioConnectionSecrets":

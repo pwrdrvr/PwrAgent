@@ -363,6 +363,7 @@ import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
 import { PendingSpinner } from "../../components/PendingSpinner";
+import { AudioTranscriptionDialog } from "./AudioTranscriptionDialog";
 
 export type ComposerProps = {
   activeTurnId?: string;
@@ -6249,6 +6250,15 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
+  const referenceTriggerRef = useRef<HTMLButtonElement>(null);
+  const [transcriptionScope, setTranscriptionScope] = useState<string>();
+  const transcribeAudio = !filesystemFederationTarget && !isReviewComposerOpen
+    ? props.desktopApi?.transcribeAudioFile
+    : undefined;
+
+  useEffect(() => {
+    setTranscriptionScope(undefined);
+  }, [composerScopeKey, transcribeAudio]);
 
   useEffect(() => {
     if (!isReviewComposerOpen) {
@@ -15351,8 +15361,13 @@ function useComposerController(props: ComposerProps) {
                     }
                   : undefined
               }
+              onTranscribeAudio={transcribeAudio ? () => {
+                setAddReferenceMenuOpen(false);
+                setTranscriptionScope(composerScopeKey);
+              } : undefined}
             >
               <button
+                ref={referenceTriggerRef}
                 type="button"
                 className="composer__toggle tooltip-target"
                 aria-label="Add reference"
@@ -16489,6 +16504,15 @@ function useComposerController(props: ComposerProps) {
         </fieldset>
         {renderComposerFooter()}
         </form>
+        {transcribeAudio && transcriptionScope === composerScopeKey ? (
+          <AudioTranscriptionDialog
+            transcribe={transcribeAudio}
+            onInsert={(text) => activeComposerScopeKeyRef.current === composerScopeKey
+              && Boolean(inputRef.current?.appendPlainText(text))}
+            onClose={() => setTranscriptionScope(undefined)}
+            returnFocus={referenceTriggerRef}
+          />
+        ) : null}
         {fullAccessRiskDialog}
         {renderComposerImageLightbox()}
       </>
