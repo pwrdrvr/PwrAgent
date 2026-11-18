@@ -870,6 +870,16 @@ export type DesktopAppearanceSnapshot = {
   contextMoon?: DesktopSettingsValue<DesktopContextMoonStyle>;
 };
 
+export type DesktopMarkdownRenderingPreferences = {
+  incrementalRendering: boolean;
+  mathRendering: boolean;
+};
+
+export const DESKTOP_MARKDOWN_RENDERING_DEFAULTS: Readonly<DesktopMarkdownRenderingPreferences> = {
+  incrementalRendering: true,
+  mathRendering: true,
+};
+
 export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
   /**
@@ -2150,6 +2160,8 @@ export type DesktopConfigBootstrapSnapshot = {
   logs: DesktopLogsViewerPreferences;
   /** `general.html_preview_run_scripts`, for windows without the full snapshot. */
   htmlPreviewRunScripts: boolean;
+  /** Resolved `[general.markdown]` preferences for use before the full snapshot. */
+  markdown?: DesktopMarkdownRenderingPreferences;
 };
 
 export type ReadDesktopConfigBootstrapResponse = {

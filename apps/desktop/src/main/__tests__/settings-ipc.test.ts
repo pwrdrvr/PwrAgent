@@ -47,7 +47,7 @@ const desktopConfigStoreMock = vi.hoisted(() => ({
             sidebarTextSize: "md",
             transcriptTextSize: "md",
           },
-          settings: { htmlPreviewRunScripts: true },
+          settings: { htmlPreviewRunScripts: true, markdown: { mathRendering: false } },
         }
       : {
           completed: true,
@@ -441,6 +441,7 @@ describe("settings ipc", () => {
         configRevision: "config-revision",
         onboarding: { completed: true },
         htmlPreviewRunScripts: true,
+        markdown: { incrementalRendering: true, mathRendering: false },
       },
     });
     expect(readSettings).not.toHaveBeenCalled();

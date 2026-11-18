@@ -1,7 +1,6 @@
 import { memo, StrictMode } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComponentProps } from "react";
 import type { MarkdownMathRuntime } from "../markdown-math-runtime";
 
 // Reset only the options module between tests; keep React's identity stable.
@@ -10,45 +9,6 @@ afterEach(() => {
   vi.doUnmock("../markdown-math-runtime");
   vi.doUnmock("../../features/thread-detail/IncrementalMarkdown");
   vi.restoreAllMocks();
-});
-
-it("waits for startup preferences before loading optional Markdown renderers", async () => {
-  vi.resetModules();
-  const incremental = vi.fn(() => ({ IncrementalMarkdown: () => [] }));
-  const math = vi.fn(() => ({
-    markdownMathRuntime: { normalize: (text: string) => text, remarkPlugins: [], rehypePlugins: [] },
-  }));
-  vi.doMock("../../features/thread-detail/IncrementalMarkdown", incremental);
-  vi.doMock("../markdown-math-runtime", math);
-  const { MarkdownRenderingSettingsProvider, useIncrementalMarkdownRenderer, useMarkdownMathRuntime } =
-    await import("../markdown-rendering-options");
-
-  function Message() {
-    const renderer = useIncrementalMarkdownRenderer();
-    const runtime = useMarkdownMathRuntime("$$x$$");
-    return `${renderer ? "incremental" : "standard"} ${runtime ? "math" : "plain"}`;
-  }
-
-  const disabled = { value: false, source: "config" } as const;
-  type GeneralSettings = ComponentProps<typeof MarkdownRenderingSettingsProvider>["generalSettings"];
-  const renderMessage = (generalSettings?: GeneralSettings) => (
-    <MarkdownRenderingSettingsProvider generalSettings={generalSettings}>
-      <Message />
-    </MarkdownRenderingSettingsProvider>
-  );
-  const view = render(renderMessage());
-  await act(async () => { await vi.dynamicImportSettled(); });
-  view.rerender(renderMessage({ markdown: { incrementalRendering: disabled, mathRendering: disabled } }));
-  await act(async () => { await vi.dynamicImportSettled(); });
-  expect(incremental).not.toHaveBeenCalled();
-  expect(math).not.toHaveBeenCalled();
-  expect(view.container.textContent).toBe("standard plain");
-
-  view.rerender(renderMessage({}));
-  await act(async () => { await vi.dynamicImportSettled(); });
-  expect(incremental).toHaveBeenCalledTimes(1);
-  expect(math).toHaveBeenCalledTimes(1);
-  expect(view.container.textContent).toBe("incremental math");
 });
 
 async function setupIncremental() {

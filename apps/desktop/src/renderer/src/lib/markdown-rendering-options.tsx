@@ -6,7 +6,6 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import type { DesktopGeneralSettingsSnapshot } from "@pwragent/shared";
 import type { MarkdownMathRuntime } from "./markdown-math-runtime";
 import { hasPotentialMarkdownMath } from "./markdown-math-detection";
 
@@ -55,23 +54,6 @@ function loadMarkdownMathRuntime(): Promise<MarkdownMathRuntime | undefined> {
       });
   }
   return markdownMathRuntimePromise;
-}
-
-export function MarkdownRenderingSettingsProvider({ children, generalSettings }: {
-  children: ReactNode;
-  generalSettings?: Pick<DesktopGeneralSettingsSnapshot, "markdown">;
-}) {
-  const markdown = generalSettings?.markdown;
-  // Default-on applies once the owning settings snapshot has arrived.
-  const ready = generalSettings !== undefined;
-  return (
-    <MarkdownRenderingOptionsProvider
-      incrementalEnabled={ready && (markdown?.incrementalRendering.value ?? true)}
-      mathEnabled={ready && (markdown?.mathRendering.value ?? true)}
-    >
-      {children}
-    </MarkdownRenderingOptionsProvider>
-  );
 }
 
 export function MarkdownRenderingOptionsProvider(props: {

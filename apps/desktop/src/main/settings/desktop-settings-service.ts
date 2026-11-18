@@ -19,6 +19,7 @@ import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
 import {
+  DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
   FORGE_PRODUCTS,
   type ForgeKind,
@@ -1071,11 +1072,11 @@ export class DesktopSettingsService {
         markdown: {
           incrementalRendering: this.resolveConfigBoolean(
             config.general?.markdown?.incrementalRendering,
-            true,
+            DESKTOP_MARKDOWN_RENDERING_DEFAULTS.incrementalRendering,
           ),
           mathRendering: this.resolveConfigBoolean(
             config.general?.markdown?.mathRendering,
-            true,
+            DESKTOP_MARKDOWN_RENDERING_DEFAULTS.mathRendering,
           ),
         },
         // Default on: the gateway only does work for connections the

@@ -39,6 +39,7 @@ import {
   federatedThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   resolveNewThreadBackend,
@@ -189,7 +190,7 @@ import {
   type NavigationHistoryLocation,
 } from "./lib/useNavigationHistory";
 import { TranscriptLinkProvider } from "./lib/transcript-links";
-import { MarkdownRenderingSettingsProvider } from "./lib/markdown-rendering-options";
+import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-options";
 import {
   InteractiveSvgPreferencesProvider,
   type InteractiveSvgPreferences,
@@ -1662,6 +1663,10 @@ function DesktopAppShell(props: {
     [],
   );
   const settings = props.settings;
+  const markdown = settings.snapshot?.general.markdown;
+  // The bootstrap projection can authorize imports while discovery is pending.
+  const startupMarkdown = props.bootstrapConfig.snapshot?.markdown
+    ?? (settings.snapshot ? DESKTOP_MARKDOWN_RENDERING_DEFAULTS : undefined);
 
   // Persisted layout setters — update local state immediately and write the
   // new value to config.toml's [ui] section so it survives a relaunch. The
@@ -4866,7 +4871,12 @@ function DesktopAppShell(props: {
                 />
               </section>
             ) : ThreadViewComponent ? (
-              <MarkdownRenderingSettingsProvider generalSettings={settings.snapshot?.general}>
+              <MarkdownRenderingOptionsProvider
+                incrementalEnabled={
+                  markdown?.incrementalRendering.value ?? startupMarkdown?.incrementalRendering ?? false
+                }
+                mathEnabled={markdown?.mathRendering.value ?? startupMarkdown?.mathRendering ?? false}
+              >
                 <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
                   <HtmlPreviewPreferencesProvider
                     runScripts={
@@ -4890,7 +4900,7 @@ function DesktopAppShell(props: {
                     </TerminalPreferencesProvider>
                   </HtmlPreviewPreferencesProvider>
                 </InteractiveSvgPreferencesProvider>
-              </MarkdownRenderingSettingsProvider>
+              </MarkdownRenderingOptionsProvider>
             ) : null}
           </main>
 
