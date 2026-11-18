@@ -310,3 +310,35 @@ it("removes an installed Outpost helper after a failed POSIX rebuild and rejects
     expect(existsSync(installed)).toBe(false);
   }
 });
+
+it("tracks a real rpath dylib through cache reuse and restored-size/mtime invalidation", () => {
+  if (process.platform !== "darwin") {
+    expect(process.platform === "linux" || process.platform === "win32").toBe(true);
+    return;
+  }
+  const f = fixture();
+  const library = join(f.root, "libvalue.dylib");
+  const source = join(f.root, "value.c");
+  const buildLibrary = (value) => {
+    writeFileSync(source, `const char *oracle_library_value(void) { return "${value}"; }\n`);
+    execFileSync("cc", ["-dynamiclib", "-O2", "-mmacosx-version-min=12.0", source, "-Wl,-install_name,@rpath/libvalue.dylib", "-o", library], { stdio: "pipe" });
+  };
+  buildLibrary("lib-one");
+  writeFileSync(f.source, "const char *oracle_library_value(void);\n" + readFileSync(f.source, "utf8").replace('puts("source-one ', 'puts(oracle_library_value()); puts("source-one '));
+  writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${library}`)}, ${JSON.stringify(`-Wl,-rpath,${f.root}`)}, "-o", output`));
+  const output = f.build({ reuse: true });
+  expect(observe(output)).toBe("lib-one\nsource-one header-one flag-1");
+  expect(existsSync(`${output}.build.json`)).toBe(true);
+  const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
+  expect(inputs.some((input) => input.path === library)).toBe(true);
+  utimesSync(output, 1, 1);
+  f.build({ reuse: true });
+  expect(statSync(output).mtimeMs).toBe(1000);
+  const before = statSync(library);
+  buildLibrary("lib-two");
+  utimesSync(library, before.atime, before.mtime);
+  expect(statSync(library).size).toBe(before.size);
+  f.build({ reuse: true });
+  expect(statSync(output).mtimeMs).toBeGreaterThan(1000);
+  expect(observe(output)).toBe("lib-two\nsource-one header-one flag-1");
+});
