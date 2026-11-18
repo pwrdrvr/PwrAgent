@@ -84,7 +84,7 @@ export interface RegistryHandlers {
   threadDependenciesPeerHandler?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
   threadPrWatchesPeerHandler?: ThreadPrWatchesPeerHandler;
   projectForgeAutomationHandler?: ProjectForgeAutomationHandler;

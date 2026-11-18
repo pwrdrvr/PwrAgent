@@ -2,6 +2,7 @@ import { createPrWatchOwnerId } from "./pr-watch-owner";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
+  CausalMessagingContext,
   AppServerTurnInputItem,
   PrSummary,
   PullRequestTerminalDetails,
@@ -57,7 +58,7 @@ export function terminalWakeOutcomeOf(pr: PrSummary): PrTerminalWakeOutcome | un
 /** The contact whose turn armed the watch, carried onto the turn it starts. */
 function watchCausalContext(
   watch: ThreadPullRequestWatchSummary,
-): Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous"> {
+): CausalMessagingContext {
   return {
     ...(watch.causalMessagingSource ? { causalMessagingSource: watch.causalMessagingSource } : {}),
     ...(watch.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}),

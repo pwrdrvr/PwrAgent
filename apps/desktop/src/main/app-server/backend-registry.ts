@@ -3068,7 +3068,7 @@ export class DesktopBackendRegistry {
   private threadDependenciesPeerHandler?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
 
   // The app-server service needs the registry before it can supply this owner binding.
@@ -3080,7 +3080,7 @@ export class DesktopBackendRegistry {
   async manageThreadDependenciesForPeer(
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
     if (!this.threadDependenciesPeerHandler) throw new Error("Continue After is not available on this instance yet.");
     return await this.threadDependenciesPeerHandler(request, requesterInstanceId, provenance);

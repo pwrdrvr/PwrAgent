@@ -1,6 +1,7 @@
 import type { AppServerThreadMessageOrigin } from "./contracts/normalized-app-server";
 
-type CausalMessagingContext = Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
+/** The messaging contact behind a turn, or the mark that it had more than one. */
+export type CausalMessagingContext = Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
 
 /**
  * The contact behind work that several requests caused. One contact keeps

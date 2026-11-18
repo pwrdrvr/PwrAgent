@@ -4746,7 +4746,7 @@ class DesktopAppServerService {
 
   async watchThreadPullRequestForTool(
     args: WatchThreadPullRequestToolArgs,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<PwrAgentThreadInspectionResponse> {
     const action = args.action ?? "watch";
     if (action === "list" || action === "cancel") {
@@ -4835,7 +4835,7 @@ class DesktopAppServerService {
    */
   private async armThreadPrWatch(
     args: WatchThreadPullRequestToolArgs & { createdBy: "agent" | "operator" },
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
+    provenance?: import("@pwragent/shared").CausalMessagingContext,
   ): Promise<
     | { ok: true; result: WatchThreadPullRequestResult }
     | {
@@ -10356,7 +10356,7 @@ class DesktopAppServerService {
    * waits anyway; `active` leaves continuations out, as it does for a window.
    */
   async manageThreadDependenciesForPeer(request: unknown, requesterInstanceId: string | undefined,
-    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
+    provenance?: import("@pwragent/shared").CausalMessagingContext): Promise<ManageThreadDependenciesResponse> {
     const owned = readFederationThreadDependenciesRequest(request);
     if (!owned) throw new Error("Unknown Continue After action.");
     if (owned.action === "active") {

@@ -536,11 +536,15 @@ export class ThreadInspectionTools {
           },
         };
       }
+      // Only arming a watch stores its requester; list and cancel do not.
+      const provenance = (request.args.action ?? "watch") === "watch"
+        ? await this.host().readCausalMessagingContext(request.context)
+        : undefined;
       return await this.forgeToolBridge.pullRequestWatchTool({
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      }, await this.host().readCausalMessagingContext(request.context));
+      }, provenance);
     }
 
     if (request.operation === "manage_thread_dependencies") {

@@ -1,11 +1,12 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
   type AppServerThreadMessageOrigin,
   type MessagingCausalSourceRef,
   type PrSummary,
+  type ThreadDependency,
   type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
@@ -15,9 +16,13 @@ import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coo
 import { ThreadInspectionTools, type ThreadInspectionToolsHost } from "../app-server/thread-inspection-tools";
 import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+
+afterEach(() => vi.unstubAllEnvs());
 
 // Rule (docs/messaging-rbac.md, thread.control.schedule): a turn that an
 // agent registers for later keeps the contact that caused the registering
@@ -272,5 +277,39 @@ describe("a wake that answers several requesters is no wider than the narrowest"
         db.close();
       }
     }), { numRuns: 40 });
+  });
+});
+
+describe("narrowing a reused wait", () => {
+  it("costs one commit when a new requester narrows it, and none when it is already that narrow", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { tempDir, dbPath } = createTempStateDb("wake-provenance-budget-");
+    const db = StateDb.open(dbPath);
+    try {
+      const store = new ThreadDependencyStore(db.raw);
+      const wait = (id: string, provenance: Provenance): ThreadDependency => ({
+        id, backend: "codex", threadId: CALLER, mode: "all", onFailure: "notify",
+        conditions: [{ backend: "codex", threadId: WORKER, when: "turn_completed", turnId: "worker-turn" }],
+        continuation: "Read the worker's result and summarize it.", status: "waiting", evidence: [],
+        createdAt: 1, updatedAt: 1, ...provenance,
+      });
+      store.register(wait("operator", {}));
+      const contact = { causalMessagingSource: { ownerId: "profile-1", requestId: "request-1", surfaceSelector: "telegram:alice" } };
+      const narrowed = await measureSqliteWrites(() => store.register(wait("contact", contact)));
+      expect(narrowed.result).toMatchObject({ id: "operator", causalMessagingAmbiguous: true });
+      expectSqliteWriteBudget({
+        scenario: "thread-dependencies-duplicate-narrowing", writes: narrowed.writes,
+        note: "A different requester re-registers an identical Continue After wait: one commit per such create, and 0 MB/day at any realistic rate.",
+      });
+      const unchanged = await measureSqliteWrites(() => store.register(wait("again", { causalMessagingAmbiguous: true })));
+      expect(unchanged.result.id).toBe("operator");
+      expectSqliteWriteBudget({
+        scenario: "thread-dependencies-duplicate-reuse", writes: unchanged.writes,
+        note: "An identical Continue After wait whose requester changes nothing is reused without a write.",
+      });
+    } finally {
+      db.close();
+      removeTempStateDbDir(tempDir);
+    }
   });
 });

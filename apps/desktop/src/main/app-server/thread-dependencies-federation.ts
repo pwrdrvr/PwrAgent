@@ -1,5 +1,5 @@
 import type {
-  AppServerThreadMessageOrigin,
+  CausalMessagingContext,
   FederationCapability,
   FederationRemoteTarget,
   FederationTarget,
@@ -11,8 +11,6 @@ import {
   THREAD_DEPENDENCIES_FEDERATION_CAPABILITY,
   THREAD_DEPENDENCY_PROVENANCE_FEDERATION_CAPABILITY,
 } from "@pwragent/shared";
-
-type CausalProvenance = Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
 
 /** What a viewer hears when a contact's create would reach an owner that drops the contact. */
 export const THREAD_DEPENDENCY_PROVENANCE_UNSUPPORTED_MESSAGE =
@@ -27,7 +25,7 @@ export type ThreadDependenciesFederationRuntime = {
   connectedPeerTargets(): Array<{ target: FederationRemoteTarget; capabilities: FederationCapability[] }>;
   remoteTargetSupportsCapability(target: FederationRemoteTarget, capability: FederationCapability): boolean;
   remoteBackend(target: FederationRemoteTarget): {
-    manageThreadDependencies?(request: ManageThreadDependenciesRequest & { provenance?: CausalProvenance }): Promise<ManageThreadDependenciesResponse>;
+    manageThreadDependencies?(request: ManageThreadDependenciesRequest & { provenance?: CausalMessagingContext }): Promise<ManageThreadDependenciesResponse>;
   };
 };
 
@@ -42,7 +40,7 @@ const FIELDS = [
  * name its messaging owner, which authorizes the contact's tool calls; a
  * malformed one is ambiguous, never dropped.
  */
-export function readFederationThreadDependencyProvenance(value: unknown): CausalProvenance {
+export function readFederationThreadDependencyProvenance(value: unknown): CausalMessagingContext {
   const provenance = value && typeof value === "object" ? (value as { provenance?: unknown }).provenance : undefined;
   if (provenance === undefined) return {};
   const { causalMessagingSource: source, causalMessagingAmbiguous: ambiguous } = provenance && typeof provenance === "object"
@@ -83,7 +81,7 @@ export async function manageRemoteThreadDependencies(
   target: FederationRemoteTarget,
   viewerInstanceId: string | undefined,
   runtime: ThreadDependenciesFederationRuntime,
-  provenance: CausalProvenance = {},
+  provenance: CausalMessagingContext = {},
 ): Promise<ManageThreadDependenciesResponse> {
   const remote = runtime.remoteBackend(target);
   if (!supports(runtime, target) || !remote.manageThreadDependencies) throw new Error(THREAD_DEPENDENCIES_UNSUPPORTED_MESSAGE);
