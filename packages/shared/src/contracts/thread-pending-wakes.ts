@@ -28,7 +28,12 @@ export type PendingWakeScheduledAction = Pick<ScheduledThreadAction,
   /** An agent follow-up the thread's loop guard keeps from firing. */
   followUpSuspended?: true;
 };
-export type PendingWakeScheduledActions = { actions: PendingWakeScheduledAction[]; incomplete?: true };
+export type PendingWakeScheduledActions = {
+  actions: PendingWakeScheduledAction[];
+  /** The thread's agent follow-up loop guard is tripped, whether or not a follow-up waits. */
+  followUpsSuspended?: true;
+  incomplete?: true;
+};
 
 export const THREAD_PENDING_WAKE_SOURCE_METHODS: ReadonlySet<string> = new Set([
   "thread/prAutoDispatch/updated", "thread/prWatches/updated", "thread/dependencies/updated",
@@ -175,6 +180,12 @@ export type ThreadPendingWakesList = {
   wakes: ThreadPendingWake[];
   /** Newest first. */
   ended: ThreadPendingWakeEnded[];
+  /**
+   * Loop protection stopped the thread's agent follow-ups until the local
+   * operator rearms them. Set even when no follow-up waits: cancelling the
+   * last one does not rearm the thread.
+   */
+  followUpsSuspended?: true;
   /** A source could not be read, or projection bounds omitted rows or text. */
   incomplete?: true;
 };

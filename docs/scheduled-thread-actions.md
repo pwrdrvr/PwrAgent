@@ -177,7 +177,9 @@ The operator's own scheduled actions on that thread still fire. The
 suspension survives the window expiring and a restart. Only the local
 operator's **Rearm follow-ups** in Waiting for clears it; an agent, a peer
 and a federation window cannot. Cancelling, re-creating or rewording a
-follow-up does not reset it. An agent may still create a follow-up while
+follow-up does not reset it. Waiting for shows the suspension and the rearm
+even when no agent follow-up waits, such as after the operator cancelled the
+stuck one. An agent may still create a follow-up while
 suspended, up to the waiting limit. It waits with the others.
 
 The window is anchored to the latest reservation time, which never moves

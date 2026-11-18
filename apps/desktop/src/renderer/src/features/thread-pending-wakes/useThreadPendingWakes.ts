@@ -24,6 +24,8 @@ export type ThreadPendingWakesState =
       ended: readonly ThreadPendingWakeEnded[];
       /** A source could not be read, so a wake may be missing. */
       incomplete: boolean;
+      /** Loop protection stopped agent follow-ups, even with none waiting. */
+      followUpsSuspended?: boolean;
       /** The thread runs on a peer; the list is its owner's. */
       peer: boolean;
     };
@@ -111,7 +113,7 @@ export function useThreadPendingWakes(
             if (disposed || started !== generation) continue;
             if (!response.ok) { settleFailedRead(); continue; }
             publish({ status: "ready", wakes: response.wakes ?? [], ended: response.ended ?? EMPTY_ENDED,
-              incomplete: response.incomplete === true, peer: false });
+              incomplete: response.incomplete === true, followUpsSuspended: response.followUpsSuspended === true, peer: false });
           } catch {
             if (!disposed && started === generation) settleFailedRead();
           }
@@ -195,6 +197,7 @@ export function useThreadPendingWakes(
 
   const peerWakes = thread?.pendingWakes;
   const peerIncomplete = thread?.pendingWakesIncomplete === true;
+  const peerFollowUpsSuspended = thread?.pendingWakesFollowUpsSuspended === true;
   const hidden = peerStopped?.identity === identity && peerStopped.wakes === peerWakes ? peerStopped.keys : undefined;
   const peerState = useMemo((): ThreadPendingWakesState => peerWakes
     ? {
@@ -202,9 +205,10 @@ export function useThreadPendingWakes(
         wakes: hidden ? peerWakes.filter((wake) => !hidden.has(wake.key)) : peerWakes,
         ended: EMPTY_ENDED,
         incomplete: peerIncomplete,
+        followUpsSuspended: peerFollowUpsSuspended,
         peer: true,
       }
-    : UNKNOWN, [hidden, peerIncomplete, peerWakes]);
+    : UNKNOWN, [hidden, peerFollowUpsSuspended, peerIncomplete, peerWakes]);
   return { state: peer ? peerState : local?.identity === identity ? local.state : { status: "loading" }, stop, ended, rearmFollowUps };
 }
 

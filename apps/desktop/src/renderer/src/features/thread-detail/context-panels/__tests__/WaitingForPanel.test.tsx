@@ -106,8 +106,8 @@ function controller(
   return { state, stop, ended, rearmFollowUps };
 }
 
-const ready = (wakes = WAKES, ended = ENDED, peer = false): ThreadPendingWakesState =>
-  ({ status: "ready", wakes, ended, incomplete: false, peer });
+const ready = (wakes = WAKES, ended = ENDED, peer = false, followUpsSuspended = false): ThreadPendingWakesState =>
+  ({ status: "ready", wakes, ended, incomplete: false, peer, ...(followUpsSuspended ? { followUpsSuspended } : {}) });
 
 describe("WaitingForPanel", () => {
   it("does not claim nothing can wake the thread when sources are incomplete", () => {
@@ -210,6 +210,29 @@ describe("WaitingForPanel", () => {
     it("offers a viewer of a peer's thread no rearm, and names where to do it", () => {
       const wakes = [followUp({ followUpSuspended: true })];
       render(<WaitingForPanel thread={thread} ownerLabel="Mac Mini" controller={controller(ready(wakes, [], true))} now={NOW} />);
+
+      expect(screen.getByText("Agent follow-ups suspended")).toBeInTheDocument();
+      expect(screen.getByText(/Rearm on Mac Mini\./)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Rearm follow-ups" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the notice and Rearm after the operator cancelled every waiting follow-up", async () => {
+      const rearm = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, rearmed: true }));
+      render(<WaitingForPanel thread={thread} now={NOW}
+        controller={controller(ready([], [], false, true), undefined, undefined, rearm)} />);
+
+      const notice = screen.getByRole("note");
+      expect(within(notice).getByText("Agent follow-ups suspended")).toBeInTheDocument();
+      expect(screen.getByText("Nothing will wake this thread.")).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(within(notice).getByRole("button", { name: "Rearm follow-ups" }));
+      });
+      expect(rearm).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a peer viewer the notice with no waiting follow-up, and no rearm", () => {
+      render(<WaitingForPanel thread={thread} ownerLabel="Mac Mini" now={NOW}
+        controller={controller(ready([], [], true, true))} />);
 
       expect(screen.getByText("Agent follow-ups suspended")).toBeInTheDocument();
       expect(screen.getByText(/Rearm on Mac Mini\./)).toBeInTheDocument();

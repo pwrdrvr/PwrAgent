@@ -151,7 +151,12 @@ export async function buildThreadPendingWakes(
     ...scheduled.actions.flatMap(endedScheduledAction),
     ...subAgents.flatMap(endedMonitor),
   ].sort((left, right) => right.endedAt - left.endedAt).slice(0, endedLimit);
-  return boundThreadPendingWakes({ wakes, ended, ...(incomplete || scheduled.incomplete ? { incomplete: true as const } : {}) });
+  return boundThreadPendingWakes({
+    wakes,
+    ended,
+    ...(scheduled.followUpsSuspended ? { followUpsSuspended: true as const } : {}),
+    ...(incomplete || scheduled.incomplete ? { incomplete: true as const } : {}),
+  });
 }
 
 /** A compact projection must never grow with command text or an unbounded source. */

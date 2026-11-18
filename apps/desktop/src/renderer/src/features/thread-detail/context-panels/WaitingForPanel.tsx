@@ -139,7 +139,10 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const readOnlyOnPeer = peer && wakes.some((wake) => wake.stop && !canStop(wake));
   const endedRows = state.ended.slice(0, ENDED_ROWS);
   const notice = readHoldNotice(props.thread, wakes);
-  const followUpsSuspended = wakes.some((wake) => wake.kind === "scheduled_action" && wake.followUpSuspended);
+  // The list flag holds with no follow-up waiting; an owner that predates it
+  // marks only its waiting rows.
+  const followUpsSuspended = state.followUpsSuspended
+    || wakes.some((wake) => wake.kind === "scheduled_action" && wake.followUpSuspended);
   // A peer sends a held wake-up only through its project's release.
   const canSendHeld = (wake: ThreadPendingWake): boolean => wake.held?.kind === "project_paused"
     && Boolean(props.onSendHeldNow)
