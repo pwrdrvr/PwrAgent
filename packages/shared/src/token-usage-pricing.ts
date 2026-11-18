@@ -355,6 +355,10 @@ const OPENAI_GPT62_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 10, 17);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
+// Use the documented Codex launch date for Terra's published credit rates.
+// https://learn.chatgpt.com/docs/changelog
+const OPENAI_GPT61_TERRA_CODEX_CREDITS_CATALOG_VERSION = "2026-10-26";
+const OPENAI_GPT61_TERRA_CODEX_CREDITS_EFFECTIVE_FROM = Date.UTC(2026, 9, 26);
 // ChatGPT/Codex Fast credit multipliers are separate from API Fast rates.
 // https://learn.chatgpt.com/docs/agent-configuration/speed.md currently says
 // GPT-5.6 consumes 2.5x credits, while API Fast remains 2x. Keep one value
@@ -1315,6 +1319,20 @@ const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
       inputCreditsPerMillion: 50,
       cachedInputCreditsPerMillion: 2.5,
       outputCreditsPerMillion: 250,
+    },
+  }),
+  // https://learn.chatgpt.com/docs/pricing#token-rates
+  // Fast purchased credits use 2x; Fast included usage uses 2.5x.
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT61_TERRA_CODEX_CREDITS_CATALOG_VERSION,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    effectiveFrom: OPENAI_GPT61_TERRA_CODEX_CREDITS_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
+    standardRates: {
+      inputCreditsPerMillion: 25,
+      cachedInputCreditsPerMillion: 1.25,
+      outputCreditsPerMillion: 125,
     },
   }),
   ...buildCodexCreditsCatalogEntries({

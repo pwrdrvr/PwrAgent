@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ThreadUsageLineRecord } from "../token-usage-pricing";
-import { buildPricingRunningTotals, buildThreadPricingDisplay, buildThreadPricingSnapshotEstimate } from "../thread-pricing-display";
+import {
+  buildPricingRunningTotals,
+  buildThreadPricingDisplay,
+  buildThreadPricingSnapshotEstimate,
+  estimateCodexCreditsForLine,
+} from "../thread-pricing-display";
 
 function line(
   usageLineId: string,
@@ -53,6 +58,22 @@ describe("buildPricingRunningTotals", () => {
     expect(repriced.get("parent-1")?.runningCostMicros).toBe(82_000);
     expect(repriced.get("worker")?.runningCostMicros).toBe(87_000);
     expect(repriced.get("parent-2")?.runningCostMicros).toBe(97_000);
+  });
+});
+
+describe("Codex purchased-credit estimates", () => {
+  it.each([
+    { fastMode: false, totalCreditMicros: 37_500 },
+    { fastMode: true, totalCreditMicros: 75_000 },
+  ])("charges ordinary input credits for cache writes with fastMode=$fastMode", ({ fastMode, totalCreditMicros }) => {
+    const usage = {
+      ...line("cache-write", Date.UTC(2026, 9, 26), undefined),
+      model: "gpt-6.1-terra",
+      fastMode,
+    };
+    // The 750 written tokens are part of the 1,000 uncached input tokens.
+    expect(estimateCodexCreditsForLine({ ...usage, cacheWriteInputTokens: 750 })).toEqual({ totalCreditMicros });
+    expect(estimateCodexCreditsForLine(usage)).toEqual({ totalCreditMicros });
   });
 });
 
