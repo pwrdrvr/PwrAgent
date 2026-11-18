@@ -302,11 +302,14 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
          ) AS suspended
        ) AS guard
        LEFT JOIN scheduled_thread_actions
-         ON backend = ? AND thread_id = ? AND status IN ('scheduled', 'held')
+         ON scheduled_thread_actions.backend = ?
+           AND scheduled_thread_actions.thread_id = ?
+           AND scheduled_thread_actions.status IN ('scheduled', 'held')
        ORDER BY CASE WHEN status = 'scheduled' THEN 0 ELSE 1 END, scheduled_for, created_at, action_id LIMIT 101`,
     ).all(thread.backend, thread.threadId, thread.backend, thread.threadId) as Array<
       Omit<ScheduledThreadActionRow, "action_id"> & { action_id: string | null; follow_ups_suspended: number; follow_up_suspended?: number }>;
-    const followUpsSuspended = joined.some((row) => row.follow_ups_suspended === 1);
+    // The guard column is the same on every row, and there is always one.
+    const followUpsSuspended = joined[0]?.follow_ups_suspended === 1;
     const active = joined.filter((row): row is ScheduledThreadActionRow & { follow_ups_suspended: number; follow_up_suspended?: number } =>
       row.action_id !== null);
     const ended = thread.endedLimit === 0 ? [] : this.stateDb.raw.prepare(
