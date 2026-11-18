@@ -1,16 +1,20 @@
 import { spawnSync, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import ts from "typescript";
 
 const baseline = "d4e7a215b4edaeeb9847ab8d673693612dbee107";
 const core = "apps/desktop/src/main/messaging/core/";
 const tests = "apps/desktop/src/main/__tests__/";
-const directory = ".local/pwr-149-pending-requests/mutations";
-mkdirSync(directory, { recursive: true });
+const root = resolve(".");
+const logs = resolve(".local/pwr-149-pending-requests/mutations");
+mkdirSync(logs, { recursive: true });
+const directory = mkdtempSync(join(logs, "run-"));
 const files = ["messaging-controller.ts", "messaging-pending-request-workflow.ts", "messaging-pending-request-context.ts", "messaging-pending-request-helpers.ts"];
-const originals = new Map(files.map(file => [file, readFileSync(core + file, "utf8")]));
+const suites = ["messaging-pending-request-observable.property.test.ts",
+  "messaging-pending-request-workflow.test.ts", "messaging-pending-request-helpers.property.test.ts"];
 const protectedPaths = ["turn-event-stream.json", "sqlite-write-budgets.json"].map(file => `${tests}fixtures/${file}`);
 const hash = file => createHash("sha256").update(readFileSync(file)).digest("hex");
 const protectedBefore = protectedPaths.map(hash);
@@ -221,27 +225,45 @@ const mutations = [
   ]
 ];
 
-function run(name, shouldPass, pattern) {
-  const log = `${directory}/${name}.log`;
-  const report = resolve(`${directory}/${name}.json`);
+function pnpm(cwd, args, log) {
   const fd = openSync(log, "w");
-  const paths = ["messaging-pending-request-observable.property.test.ts", ...(shouldPass ? [] : ["messaging-pending-request-workflow.test.ts", "messaging-pending-request-helpers.property.test.ts"])];
-  let result;
   try {
-    result = spawnSync("pnpm", ["test", ...paths.map(path => tests + path), ...(pattern ? [`--testNamePattern=${pattern}`] : []),
-      "--reporter=default", "--reporter=json", `--outputFile=${report}`], { stdio: ["ignore", fd, fd] });
+    const env = { ...process.env };
+    delete env.UPDATE_TURN_EVENT_STREAM;
+    delete env.UPDATE_SQLITE_WRITE_BUDGETS;
+    const result = spawnSync("pnpm", args, { cwd, env, stdio: ["ignore", fd, fd] });
+    if (result.error) throw result.error;
+    return result;
   } finally { closeSync(fd); }
-  if (result.error) throw result.error;
+}
+
+function run(checkout, name, paths, pattern) {
+  const log = `${directory}/${name}.log`;
+  const report = `${directory}/${name}.json`;
+  const result = pnpm(checkout, ["test", ...paths.map(path => tests + path),
+    ...(pattern ? [`--testNamePattern=${pattern}`] : []),
+    "--reporter=default", "--reporter=json", `--outputFile=${report}`], log);
+  if (!existsSync(report)) throw new Error(`${name}: no test report; inspect ${log}`);
   const data = JSON.parse(readFileSync(report, "utf8"));
-  const failed = data.testResults.flatMap(file => file.assertionResults).filter(test => test.status === "failed");
+  const assertions = data.testResults.flatMap(file => file.assertionResults);
+  const failed = assertions.filter(test => test.status === "failed");
   const messages = failed.flatMap(test => test.failureMessages).join("\n");
   const output = readFileSync(log, "utf8");
-  if (shouldPass ? result.status !== 0 || failed.length : result.status === 0 || !failed.length || !/AssertionError:/.test(output)
+  const allSuitesRan = paths.every(path => data.testResults.some(file =>
+    file.name.replaceAll("\\", "/").endsWith("/" + tests + path)
+      && file.assertionResults.some(test => test.status === "passed")));
+  if (!pattern && (result.status !== 0 || data.success !== true || failed.length || !allSuitesRan)) {
+    throw new Error(`${name}: clean suites must pass; inspect ${log}`);
+  }
+  if (pattern && (result.status !== 1 || !failed.length || !/AssertionError:/.test(output)
+    || failed.some(test => !new RegExp(pattern).test(test.fullName))
     || /TypeError|ReferenceError|Transform failed|Test timed out|Failed to (?:load|resolve|import)/.test(messages)
-    || /(?:Caused by: )?(?:TypeError|ReferenceError):|Test timed out/.test(output)) throw new Error(`${name}: invalid assertion proof; inspect ${log}`);
+    || /(?:Caused by: )?(?:TypeError|ReferenceError):|Test timed out/.test(output))) {
+    throw new Error(`${name}: invalid assertion proof; inspect ${log}`);
+  }
   const proof = { name, exit: result.status, failedAssertions: failed.length, passed: data.numPassedTests, log };
   console.log(JSON.stringify(proof));
-  return proof;
+  return { proof, assertions };
 }
 function mutate(source, from, to, method) {
   if (!method) {
@@ -257,19 +279,45 @@ function mutate(source, from, to, method) {
 }
 const results = [];
 const original = process.argv.includes("--baseline");
+const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+const edits = execFileSync("git", ["diff", "--binary", "HEAD", "--"], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+const temporary = mkdtempSync(join(tmpdir(), "pwragent-pending-request-mutations-"));
+const checkout = join(temporary, "checkout");
+console.log(`Mutation checkout: ${checkout}\nEvidence: ${directory}`);
 try {
+  // Copy the checked-out revision and tracked edits. Only Git's object
+  // database is shared. Tests and package links resolve inside the clone.
+  execFileSync("git", ["clone", "--quiet", "--shared", "--no-checkout", "--", root, checkout]);
+  execFileSync("git", ["checkout", "--quiet", "--detach", head], { cwd: checkout });
+  if (edits.length) execFileSync("git", ["apply", "--binary", "-"], { cwd: checkout, input: edits });
+  const destination = file => join(checkout, core, file);
+  const originals = new Map(files.map(file => [file, readFileSync(destination(file), "utf8")]));
+  const installLog = join(directory, "install.log");
+  if (pnpm(checkout, ["install", "--frozen-lockfile"], installLog).status !== 0) {
+    throw new Error(`Frozen install failed; inspect ${installLog}`);
+  }
   if (original) {
-    writeFileSync(core + files[0], execFileSync("git", ["show", `${baseline}:${core + files[0]}`]));
-    results.push(run("original-observable", true));
+    writeFileSync(destination(files[0]), execFileSync("git", ["show", `${baseline}:${core + files[0]}`]));
+    results.push(run(checkout, "original-observable", [suites[0]]).proof);
   } else {
+    const clean = run(checkout, "current-unmutated", suites);
+    results.push(clean.proof);
+    for (const [name, , , , pattern] of mutations) {
+      if (!clean.assertions.some(test => test.status === "passed" && new RegExp(pattern).test(test.fullName))) {
+        throw new Error(`${name}: no passing unmutated test matches ${pattern}`);
+      }
+    }
     for (const [name, file, from, to, pattern, method] of mutations) {
-      writeFileSync(core + file, mutate(originals.get(file), from, to, method));
-      try { results.push(run(name, false, pattern)); }
-      finally { writeFileSync(core + file, originals.get(file)); }
+      writeFileSync(destination(file), mutate(originals.get(file), from, to, method));
+      try { results.push(run(checkout, name, suites, pattern).proof); }
+      finally { writeFileSync(destination(file), originals.get(file)); }
     }
   }
+  if (protectedPaths.some((file, index) => hash(join(checkout, file)) !== protectedBefore[index])) {
+    throw new Error("Protected fixture changed in the mutation checkout");
+  }
 } finally {
-  for (const [file, source] of originals) writeFileSync(core + file, source);
+  rmSync(temporary, { recursive: true, force: true });
   if (protectedPaths.some((file, index) => hash(file) !== protectedBefore[index])) throw new Error("Protected fixture changed");
-  writeFileSync(`${directory}/${original ? "baseline" : "mutation"}-summary.json`, JSON.stringify({ baseline, results, protectedBefore }, null, 2) + "\n");
+  writeFileSync(join(directory, "summary.json"), JSON.stringify({ head, baseline, results, protectedBefore }, null, 2) + "\n");
 }
