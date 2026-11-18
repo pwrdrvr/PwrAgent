@@ -15167,6 +15167,8 @@ describe("DesktopBackendRegistry", () => {
         promptContent: [{ type: "text", text: "hello ACP" }],
         parts: [{ type: "text", text: "hello ACP" }],
         turnId: startedTurn.turnId,
+        // No Agent, so no instructions for the client to send.
+        agentInstructions: "",
       },
       {
         sessionId: "session-1",
@@ -15180,6 +15182,7 @@ describe("DesktopBackendRegistry", () => {
           { type: "image", url: imageUrl },
         ],
         turnId: imageTurn.turnId,
+        agentInstructions: "",
       },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);

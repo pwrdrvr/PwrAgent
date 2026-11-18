@@ -98,9 +98,20 @@ export type ThreadAgentChangeStatus = {
   error?: string;
 };
 
+/**
+ * How an Agent's instructions reach the model.
+ *
+ * Absent means PwrAgent delivers them through the backend on every thread
+ * start, resume and edit. `workspace-file` means the thread's own working
+ * directory holds them in an instruction file the backend reads, as the Star
+ * Map and Voice managers do, so PwrAgent must not send them a second time.
+ */
+export type ThreadAgentInstructionsDelivery = "workspace-file";
+
 export type ThreadAgentMetadata = {
   name: string;
   instructions?: string;
+  instructionsDelivery?: ThreadAgentInstructionsDelivery;
   instructionLineCount: number;
   instructionsTooLong: boolean;
   updatedAt: number;
@@ -112,7 +123,7 @@ export type ThreadAgentMetadata = {
  */
 export type NavigationLaunchpadAgent = Pick<
   ThreadAgentMetadata,
-  "name" | "instructions"
+  "name" | "instructions" | "instructionsDelivery"
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
