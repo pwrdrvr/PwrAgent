@@ -1,4 +1,4 @@
-import { readRendererListingDiagnostics } from "../diagnostics/renderer-listing-diagnostics";
+import { readRendererListingDiagnostics, setRendererListingDiagnosticsEnabled } from "../diagnostics/renderer-listing-diagnostics";
 import {
   app,
   BrowserWindow,
@@ -651,6 +651,7 @@ export function createMainWindow(options?: {
         isDevToolsOpened: () => webContents.isDevToolsOpened(),
         takeHeapSnapshot: (filePath) => webContents.takeHeapSnapshot(filePath),
         readDiagnostics: () => readRendererListingDiagnostics(webContents),
+        setListingDiagnosticsEnabled: (enabled) => setRendererListingDiagnosticsEnabled(webContents, enabled),
       },
     });
   };
@@ -772,6 +773,8 @@ export function createMainWindow(options?: {
       const nextConfigKey = hotCpuConfigKey(hotCpuConfig);
       if (hotCpuProfilerPromise) {
         if (hotCpuProfilerConfigKey === nextConfigKey) {
+          // Reload creates a new renderer ring while the monitor survives.
+          await setRendererListingDiagnosticsEnabled(webContents, true);
           return;
         }
         await stopHotCpuProfiler(reason);

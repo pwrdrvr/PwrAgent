@@ -59,12 +59,14 @@ function createMetric(
 function createTarget() {
   let attached = false;
   let destroyed = false;
+  const detached = deferred<void>();
   const debuggerApi = {
     attach: vi.fn(() => {
       attached = true;
     }),
     detach: vi.fn(() => {
       attached = false;
+      detached.resolve();
     }),
     isAttached: vi.fn(() => attached),
     sendCommand: vi.fn(async (method: string): Promise<unknown> => {
@@ -85,6 +87,7 @@ function createTarget() {
   };
 
   return {
+    detached: detached.promise,
     target: {
       debugger: debuggerApi,
       getOSProcessId: vi.fn(() => 1234),
@@ -179,6 +182,30 @@ function createSampleTracker() {
 describe("HotCpuProfiler", () => {
   const cleanups: Array<() => Promise<void>> = [];
   const profilers: HotCpuProfiler[] = [];
+
+  it("arms listing history only for the monitor lifetime and clears it before debugger detach", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path);
+    const session = await createHotCpuProfileSession({ config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version } });
+    if (!session.ok) throw new Error(session.message);
+    const { target, debuggerApi } = createTarget();
+    const enabled = vi.fn((value: boolean) => {
+      expect(debuggerApi.isAttached()).toBe(true);
+      return value;
+    });
+    const profiler = createProfiler({ config, session: session.session, target: { ...target,
+      setListingDiagnosticsEnabled: (value) => { enabled(value); } },
+      getAppMetrics: () => [], logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    expect(enabled).not.toHaveBeenCalled();
+    await profiler.start();
+    expect(enabled.mock.calls).toEqual([[true]]);
+    await profiler.stop("fixture");
+    expect(enabled.mock.calls).toEqual([[true], [false]]);
+    await profiler.stop("again");
+    expect(enabled).toHaveBeenCalledTimes(2);
+  });
 
   const sampleTrackers = new WeakMap<
     HotCpuProfiler,
@@ -711,7 +738,7 @@ describe("HotCpuProfiler", () => {
 
     vi.useFakeTimers();
 
-    const { target, debuggerApi } = createTarget();
+    const { target, debuggerApi, detached } = createTarget();
     let nowCallCount = 0;
     const metrics = [
       createMetric(0, 100),
@@ -757,7 +784,10 @@ describe("HotCpuProfiler", () => {
 
       await vi.runOnlyPendingTimersAsync();
       expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
-      await vi.waitFor(() => expect(debuggerApi.detach).toHaveBeenCalled());
+      // Wait on the owned debugger boundary; waitFor advances fake timers
+      // while profile writes await real I/O and can create an extra sample.
+      await detached;
+      expect(debuggerApi.detach).toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(config.intervalMs);
       await samplesOf(profiler).waitForCount(4);

@@ -14455,6 +14455,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
+      listingDiagnostics.setEnabled(true);
       const before = listingDiagnostics.snapshot().recorded;
       await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
       await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
@@ -14463,7 +14464,7 @@ describe("DesktopBackendRegistry", () => {
       const physical = events.find((event) => event.stage === "registry" && event.phase === "start")!;
       expect(physical).toMatchObject({ caller: "renderer-navigation-query", provider: "codex" });
       expect(events).toContainEqual(expect.objectContaining({ stage: "registry", phase: "cache-hit", targetId: physical.id }));
-    } finally { await registry.close(); }
+    } finally { listingDiagnostics.setEnabled(false); await registry.close(); }
   });
 
   it("propagates an authoritative refresh through the combined provider listing", async () => {

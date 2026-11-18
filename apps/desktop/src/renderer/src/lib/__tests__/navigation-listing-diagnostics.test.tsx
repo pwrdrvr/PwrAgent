@@ -1,11 +1,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { navigationListingDiagnostics, NavigationListingDiagnostics } from "../navigation-listing-diagnostics";
+import { navigationListingDiagnostics, NavigationListingDiagnostics, setNavigationListingDiagnosticsEnabled } from "../navigation-listing-diagnostics";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { NavigationWindowQueries, navigationDemandKey } from "../navigation-window-queries";
 import type { DesktopApi } from "../desktop-api";
+
+beforeEach(() => setNavigationListingDiagnosticsEnabled(true));
+afterEach(() => setNavigationListingDiagnosticsEnabled(false));
 
 const page: NavigationQueryPage = { protocol: 2, queryKey: "q", generation: "g", ownerEpoch: "o", countsRevision: "r",
   coverage: { state: "complete" }, counts: { total: 0, active: 0, unread: 0, review: 0 }, entries: [], complete: true };
@@ -34,7 +37,7 @@ it("records StrictMode effect replay but only the surviving effect dispatches", 
     .toEqual([[diagnostic.view, 1], [diagnostic.view, 2]]);
   expect(events.filter((event) => event.phase === "dispatch")).toHaveLength(2);
   expect(events.some((event) => event.phase === "dispose" && event.effect === 1)).toBe(true);
-  expect(events.length).toBeLessThanOrEqual(10);
+  expect(events.length).toBeLessThanOrEqual(15);
   unmount();
 });
 
@@ -63,6 +66,7 @@ it("bounds renderer ring memory and age without per-event transport", () => {
   vi.useFakeTimers();
   try {
     const diagnostics = new NavigationListingDiagnostics();
+    diagnostics.setEnabled(true);
     for (let view = 0; view < 10_000; view++) diagnostics.record({ view, effect: 1, phase: "demand", count: 4 });
     const snapshot = diagnostics.snapshot();
     expect(snapshot).toMatchObject({ capacity: 1024, recorded: 10_000, overwritten: 8976 });

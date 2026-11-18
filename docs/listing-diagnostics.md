@@ -6,6 +6,15 @@ artifact. Main captures include `listings`; renderer captures include both
 in-memory accounting until a CPU artifact is saved. It makes no per-event log,
 filesystem, IPC, or SQLite write. SQLite cost is **0 MB/day**.
 
+Schema version 2 arms these two rings only while their CPU monitor is on.
+Stopping the monitor clears its ring and removes renderer input listeners.
+Backing slots contain serialized, allowlisted scalar records, never requests,
+notifications, thread objects, DOM nodes or event objects. Main's promise
+identity lookup remains a WeakMap and is replaced when monitoring stops.
+Pending operations from an earlier monitor cannot attach stale parent IDs or
+end records to a newly enabled monitor. Disabled accounting preserves the
+existing asynchronous operation completion boundary.
+
 ## Reading a capture
 
 Filter events by `at` (Unix milliseconds) around the CPU profile interval. A
@@ -55,6 +64,32 @@ reuse, invalidation, cancellation, and page-size/cursor recovery. A logical
 read can legitimately issue several pages. Stable semantic demand ignores
 all diagnostic metadata.
 
+Do not group by `view` alone: every renderer can have view 1. Group main IPC
+requests by `(origin, sender, view, effect)` and match the renderer snapshot's
+`origin` before counting its requests. One capture's main ring can contain
+several windows. The November 18 capture on 1.4.10 contained 60 main IPC
+starts from two origins: 45 from one window and 15 from the profiled window.
+These were page reads, not 60 human navigation actions.
+
+Renderer `invalidate` records include the allowlisted `trigger`, source,
+numeric `batch`, and affected resource `count`, even when an earlier event
+already invalidated the resources. `refresh` has its own batch, selected count
+and `invalidatedOnly` flag. Each `queued` read receives a numeric `read` and
+`resource`. Its `dispatch` and `settled` records include query kind, target
+scope, inventory, cause, trigger, last consumed invalidation batch (`batch`)
+and refresh batch (`refreshBatch`). The aggregate `invalidations` count says
+how many events collapsed before dispatch; preceding invalidation records
+retain their sequence. Queue wait and API duration are separate milliseconds.
+Attempts correlate with main through `(origin, view, effect, logical, attempt)`;
+no new request fields are sent over IPC or Federation.
+
+While monitoring, capture listeners count `scroll`, `pointerdown` and `keydown`
+without inspecting event targets, key values or text. Adjacent same-kind input
+within 100 ms shares one slot with `count`, first `at` and `lastAt`, without a
+flush timer. Nearby interaction is correlation, not proof of a refresh cause;
+a scroll anchor update alone performs no page read. Continuation and selection
+recovery remain identified by their read causes.
+
 The same view with a new effect number identifies an effect setup/cleanup
 cycle, including development StrictMode replay. It is not by itself proof of
 a defect: API replacement can also restart an effect. The StrictMode fixture
@@ -90,10 +125,12 @@ path, raw thread ID, owner ID, or exception message is copied into this history.
 
 The main ring holds 4,096 events; each renderer holds 1,024. Snapshots exclude
 events older than 120 seconds. Appending overwrites one slot in O(1), without
-serializing a request or scanning retained history. `recorded`, `overwritten`,
-and main stage/phase totals remain exact process-lifetime counters. A busy
+serializing a request or scanning retained history. Each append serializes
+only its small scalar record. `recorded`, `overwritten`, and main stage/phase
+totals count the current enabled monitor interval. Adjacent input coalescing
+increments the slot's `count`, rather than appending another event. A busy
 interval can overwrite causal events: a missing `targetId` event is not proof
-that no work ran. Do not use process-lifetime totals as interval counts.
+that no work ran. Do not use monitor-lifetime totals as trigger-window counts.
 
 Promise identities use weak references. Diagnostic records contain only fixed
 vocabulary, bounded opaque tokens, booleans, and numbers. Reading a renderer
@@ -114,7 +151,8 @@ Checked-in regression budgets:
 | --- | --- |
 | Eight concurrent consumers, 500 provider rows | 11 events; one provider scan and one RPC |
 | Three logical IPC reads; two overlap and the third reuses the index | 24 events; two owner loads and one index construction |
-| StrictMode sidebar mount plus unchanged rerender | At most 10 renderer events; two legitimate query dispatches |
+| StrictMode sidebar mount plus unchanged rerender | At most 15 renderer events, including queue/settlement; two legitimate query dispatches |
+| One invalidation and refresh of Q loaded queries | At most 3 summary/input slots + 3Q queue/dispatch/settlement records; Q API calls |
 
 A macOS local run on 2026-09-28 measured 100,000 populated appends in 38.05 ms
 (**0.38 µs/event**), 10,000 traced async operations in 14.16 ms
@@ -122,6 +160,14 @@ A macOS local run on 2026-09-28 measured 100,000 populated appends in 38.05 ms
 bytes). These microbenchmarks measure instrumentation, not an application CPU
 improvement. CI checks event counts and storage bounds rather than a flaky
 wall-time threshold. There are no stack captures or per-row events.
+
+A native macOS arm64 / Node 26.12.1 run on November 17, concurrent with
+validation, measured serialized records at 2.23 µs/main append and
+1.05 µs/renderer append (100,000 populated records each). Full snapshots
+parsed 4,096 main slots in 2.33 ms (858,358 serialized bytes) and 1,024
+renderer slots in 0.96 ms (469,141 bytes). These measurements
+describe instrumentation cost, not a packaged CPU improvement. The renderer
+test enforces a 768 KiB populated snapshot bound.
 
 To reproduce the local timing report from the repository root:
 

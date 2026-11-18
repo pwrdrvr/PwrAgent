@@ -100,6 +100,7 @@ export class HotCpuProfiler {
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
+  private listingDiagnosticsEnabled = false;
 
   constructor(options: {
     config: Extract<HotCpuProfileConfig, { enabled: true }>;
@@ -158,6 +159,7 @@ export class HotCpuProfiler {
       },
     });
     await this.ensureRecording(startedAt.getTime());
+    await this.setListingDiagnosticsEnabled(true);
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
       target: this.session.target ?? "renderer",
       sessionDirectory: this.session.directoryPath,
@@ -177,8 +179,19 @@ export class HotCpuProfiler {
     }
 
     this.stopped = true;
-    this.shutdownPromise = this.stopInner(reason);
+    this.shutdownPromise = this.stopInner(reason).finally(() => this.setListingDiagnosticsEnabled(false));
     await this.shutdownPromise;
+  }
+
+  private async setListingDiagnosticsEnabled(enabled: boolean): Promise<void> {
+    if (this.listingDiagnosticsEnabled === enabled) return;
+    this.listingDiagnosticsEnabled = enabled;
+    try {
+      await this.target.setListingDiagnosticsEnabled?.(enabled);
+    } catch {
+      // Optional diagnostics cannot prevent monitor startup or shutdown.
+      this.logger.warn("[pwragent:hot-cpu] listing diagnostics state unavailable");
+    }
   }
 
   private async stopInner(reason: string): Promise<void> {
@@ -206,6 +219,7 @@ export class HotCpuProfiler {
 
     // An armed recorder without a trigger is discarded, never published.
     await this.discardRecording();
+    await this.setListingDiagnosticsEnabled(false);
     this.detachDebugger();
     await this.session.appendEvent({
       capturedAt: this.now().toISOString(),
