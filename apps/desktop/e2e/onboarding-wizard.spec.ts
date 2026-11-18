@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { findLiveProfileRuntimeMarkers, isProcessAlive } from "../src/main/profile";
+import { PROFILES_OPEN_CHANNEL } from "../src/shared/ipc";
 import { expect, test } from "./fixtures/electron-test";
 import {
   graduatedProfileOwnerArg,
@@ -82,7 +83,7 @@ if (name === "qwen") {
 
 async function launchWizard(
   env: Record<string, string | undefined> = {},
-  graduation?: { profile: string; failBoot?: boolean },
+  graduatedProfile?: string,
 ) {
   const homeRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "pwragent-onboarding-wizard-e2e-"),
@@ -112,14 +113,11 @@ async function launchWizard(
     // No `fixturePath`: thread replay isn't relevant for wizard-only specs.
     suppressOnboarding: false,
     requiresReplayDriver: false,
-    ...(graduation
+    ...(graduatedProfile
       ? {
-          extraArgs: [
-            graduatedProfileOwnerArg(homeRoot),
-            ...(graduation.failBoot ? ["--pwragent-e2e-fail-profile-boot"] : []),
-          ],
+          extraArgs: [graduatedProfileOwnerArg(homeRoot)],
           cleanupDetachedProcesses: () =>
-            killGraduatedProfileInstances(graduation.profile, homeRoot),
+            killGraduatedProfileInstances(graduatedProfile, homeRoot),
         }
       : {}),
     env: {
@@ -629,7 +627,7 @@ test.describe("Onboarding wizard", () => {
       "Native detached profile handoff is covered on macOS and Windows.",
     );
     test.setTimeout(60_000);
-    const app = await launchWizard({ PWRAGENT_PROFILE: "test2" }, { profile: "test2" });
+    const app = await launchWizard({ PWRAGENT_PROFILE: "test2" }, "test2");
     try {
       await expect(
         app.window.getByRole("heading", { name: /Set up.+test2/i }),
@@ -663,7 +661,7 @@ test.describe("Onboarding wizard", () => {
       "Native detached profile handoff is covered on macOS and Windows.",
     );
     test.setTimeout(60_000);
-    const app = await launchWizard({}, { profile: "personal" });
+    const app = await launchWizard({}, "personal");
     try {
       // The detached process inherits this harness setting from bootstrap.
       expect(
@@ -680,12 +678,23 @@ test.describe("Onboarding wizard", () => {
     }
   });
 
-  test("Multiple-mode finish preserves bootstrap and both profiles when the replacement fails to start", async () => {
+  test("Multiple-mode finish preserves bootstrap and both profiles when the replacement never reports ready", async () => {
     test.setTimeout(60_000);
-    const app = await launchWizard({}, { profile: "personal", failBoot: true });
+    const app = await launchWizard();
     try {
       await reachMultipleFinish(app);
       const bootstrap = await observeBootstrap(app);
+      // Model an accepted launch whose process never publishes a heartbeat.
+      // Leave the real readiness IPC and wizard fallback in place.
+      const launchRequests = await app.electronApp.evaluateHandle(({ ipcMain }, channel) => {
+        const profiles: string[] = [];
+        ipcMain.removeHandler(channel);
+        ipcMain.handle(channel, (_event, { profile }: { profile: string }) => {
+          profiles.push(profile);
+          return { opened: true, profile };
+        });
+        return profiles;
+      }, PROFILES_OPEN_CHANNEL);
       await Promise.all([
         app.window.waitForEvent("console", {
           predicate: (message) =>
@@ -695,12 +704,7 @@ test.describe("Onboarding wizard", () => {
         app.window.getByRole("button", { name: /Open my workspace/i }).click(),
       ]);
 
-      // The detached Electron reached the E2E entry, which exited it before
-      // application initialization. The real readiness poll took the fallback.
-      const launchedPids = fs.readdirSync(path.join(app.homeRoot, "chromium"))
-        .map(Number).filter((pid) => pid !== bootstrap.pid);
-      expect(launchedPids).toHaveLength(1);
-      expect(isProcessAlive(launchedPids[0]!)).toBe(false);
+      expect(await launchRequests.jsonValue()).toEqual(["personal"]);
       expect(await app.electronApp.evaluate(() => process.pid)).toBe(bootstrap.pid);
       await expect(app.window.getByRole("dialog", { name: "First-run setup" })).toBeHidden();
       expectMultipleProfilesPersisted(app);
