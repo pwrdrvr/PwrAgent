@@ -1,4 +1,5 @@
 import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
+import { providerPickerValue } from "@pwragent/shared";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryContext } from "./registry-context";
 import type { CodexStartDeliveryReceipt } from "./registry-turn-state";
@@ -4306,9 +4307,12 @@ export class DesktopBackendRegistry {
 
   readBackendComposerSettings(
     backend: AppServerBackendKind,
-  ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "codexFastAllowed"> {
+  ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "modelProviderDefaults" | "codexFastAllowed"> {
+    const defaults = this.resolveProviderModelDefaultsFn();
     return {
-      modelDefaults: this.resolveProviderModelDefaultsFn()[backend],
+      modelDefaults: defaults[backend],
+      modelProviderDefaults: Object.fromEntries(Object.entries(defaults)
+        .filter(([key]) => key === backend || (backend === "codex" && key.startsWith("codex-provider:")))),
       ...(backend === "codex" ? {
         tokenMiser: {
           enabled: this.resolveTokenMiserEnabledFn(),
@@ -8770,7 +8774,7 @@ export class DesktopBackendRegistry {
       },
       persistEnvironment: async (identity) => await this.overlayStore.setThreadCodexEnvironmentRuntime?.({ ...identity, codexEnvironmentRuntime: codexEnvironmentRuntime! }),
       readModelMigration: () => {
-        currentMigration = this.resolveProviderThreadModelMigrationsFn()[backend];
+        currentMigration = this.resolveProviderThreadModelMigrationsFn()[providerPickerValue(backend, modelSettings.model)];
         return currentMigration !== undefined;
       },
       persistModel: async (identity) => await this.overlayStore.setThreadModelSettings({
@@ -9149,7 +9153,7 @@ export class DesktopBackendRegistry {
         });
       }
       const currentMigration =
-        this.resolveProviderThreadModelMigrationsFn()[backend];
+        this.resolveProviderThreadModelMigrationsFn()[providerPickerValue(backend, modelSettings.model)];
       if (
         modelSettings.model !== undefined ||
         modelSettings.reasoningEffort !== undefined ||
@@ -14646,9 +14650,20 @@ export class DesktopBackendRegistry {
   async applyThreadModelMigration(
     params: ApplyThreadModelMigrationRequest,
   ): Promise<ApplyThreadModelMigrationResponse> {
-    const migration =
-      this.resolveProviderThreadModelMigrationsFn()[params.backend];
-    if (!migration) {
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const migrations = this.resolveProviderThreadModelMigrationsFn();
+    const providerSummary = params.backend === "codex"
+      && !current?.model && !params.threadModel && Object.keys(migrations).length > 0
+      ? await this.findThreadForWorkspaceHandoff({
+          backend: params.backend, threadId: params.threadId, callerReason: "thread-model-migration",
+        })
+      : undefined;
+    const providerKey = providerPickerValue(params.backend, current?.model ?? params.threadModel ?? providerSummary?.model);
+    const migration = migrations[providerKey];
+    if (!migration || providerPickerValue(params.backend, migration.model) !== providerKey) {
       return {
         backend: params.backend,
         threadId: params.threadId,
@@ -14656,10 +14671,6 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const current = await this.overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
     if (current?.modelMigrationRevision === migration.revision) {
       return {
         backend: params.backend,
@@ -14706,13 +14717,13 @@ export class DesktopBackendRegistry {
         && current?.model === undefined
         && params.threadModel === undefined
       );
-    const threadSummary = needsThreadSummary
+    const threadSummary = providerSummary ?? (needsThreadSummary
       ? await this.findThreadForWorkspaceHandoff({
           backend: params.backend,
           callerReason: "thread-model-migration",
           threadId: params.threadId,
         })
-      : undefined;
+      : undefined);
     const threadCreatedAt =
       params.threadCreatedAt ?? threadSummary?.createdAt;
     if (threadCreatedAt === undefined) {

@@ -33,7 +33,7 @@ import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
-import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
+import { buildAppendPinRank, insertSubthreadIdAfter, navigationLaunchpadProviderKey, sortSubthreadSummaries } from "@pwragent/shared";
 import {
   isDefaultProjectForgeAutomation,
   resolveProjectForgeAutomation,
@@ -9703,14 +9703,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /** `provider` names whose settings the patch holds; it defaults to the defaults' own. */
   async setLaunchpadDefaults(
     patch: Partial<NavigationLaunchpadDefaults>,
-    options?: { provider?: AppServerBackendKind },
+    options?: { provider?: string },
   ): Promise<NavigationLaunchpadDefaults> {
     const current = this.readLaunchpadDefaults();
     const next = normalizeLaunchpadDefaults(
       applyNavigationLaunchpadDefaultsPatch(
         current,
         patch,
-        options?.provider ?? current.backend,
+        options?.provider ?? navigationLaunchpadProviderKey(current),
       ),
     );
     this.writeLaunchpadDefaults(next);
@@ -9754,7 +9754,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       let count = 0;
       for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
         const usesChangedModelBackend = changedBackends.some((backend) =>
-          launchpad.backend === backend
+          navigationLaunchpadProviderKey(launchpad) === backend
           || launchpad.providerSettings?.[backend] !== undefined
         );
         if (changedAccessBackends.length === 0 && !usesChangedModelBackend) continue;

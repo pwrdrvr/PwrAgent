@@ -57,6 +57,8 @@ export type TomlEdit =
       op: "setTableArray";
       path: readonly string[];
       value: readonly Record<string, TomlEditScalar | readonly string[]>[];
+      /** A generated compatibility marker immediately before the first row. */
+      comment?: string;
     }
   | { op: "deleteTableArray"; path: readonly string[] };
 
@@ -350,6 +352,7 @@ type NewSectionPlan = {
 type NewTableArrayPlan = {
   tableName: string;
   entries: readonly Record<string, TomlEditScalar | readonly string[]>[];
+  comment?: string;
 };
 
 type EditPlan = {
@@ -368,8 +371,19 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
 
   for (const edit of edits) {
     if (edit.op === "deleteTableArray" || edit.op === "setTableArray") {
+      let comment = edit.op === "setTableArray" ? edit.comment : undefined;
       for (const section of findTableArraySections(model, edit.path.join("."))) {
         const { startLine, endLine } = sectionLineRange(model, section);
+        const markerLine = startLine - 1;
+        const removeMarker = edit.op === "setTableArray" && edit.comment
+          && model.lines[markerLine]?.startsWith("# pwragent-legacy-settings ")
+          && model.lines[markerLine]?.includes(`key=${edit.path.at(-1)} `);
+        if (removeMarker) {
+          comment = model.lines[markerLine];
+          // Keep the header deletion separate: a preceding array's deletion
+          // can already include this one comment, but never this header.
+          lineOps.push({ kind: "replace", startLine: markerLine, endLine: markerLine, newLines: [] });
+        }
         lineOps.push({
           kind: "replace",
           startLine,
@@ -381,6 +395,7 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
         newTableArrays.push({
           tableName: edit.path.join("."),
           entries: edit.value,
+          ...(comment ? { comment } : {}),
         });
       }
       continue;
@@ -572,10 +587,13 @@ function executePlan(model: SourceModel, plan: EditPlan): string[] {
   }
 
   for (const tableArray of plan.newTableArrays) {
+    let first = true;
     for (const entry of tableArray.entries) {
       if (result.length > 0 && result[result.length - 1].trim().length !== 0) {
         result.push("");
       }
+      if (first && tableArray.comment) result.push(tableArray.comment);
+      first = false;
       result.push(`[[${tableArray.tableName}]]`);
       for (const [key, value] of Object.entries(entry)) {
         result.push(...formatKeyValue(key, value, ""));

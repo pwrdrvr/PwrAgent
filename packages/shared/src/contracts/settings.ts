@@ -608,7 +608,7 @@ export type PrAutoDispatchBudgetStatus = {
 };
 
 /**
- * Explicit launchpad baseline for one backend in the active PwrAgent profile.
+ * Explicit launchpad baseline for one provider-picker identity in the active profile.
  * Reasoning is remembered per model so switching models never overwrites the
  * operator's preference for another model.
  */

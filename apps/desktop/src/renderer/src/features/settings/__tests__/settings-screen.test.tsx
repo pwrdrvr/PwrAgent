@@ -1074,7 +1074,8 @@ describe("SettingsScreen", () => {
     );
 
     expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual(sections);
-    expect(screen.getByText(`${count} discovered model${count === 1 ? "" : "s"}`)).toBeInTheDocument();
+    const field = screen.getByLabelText("OpenAI default model").closest(".settings-field") as HTMLElement;
+    expect(within(field).getByText(`${count} discovered model${count === 1 ? "" : "s"}`)).toBeInTheDocument();
     // Let the mount's agent read land inside act.
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
@@ -1171,6 +1172,54 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
+  });
+
+  it("saves an endpoint's model, reasoning, and access under its own provider identity", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: { model: "gpt-test", reasoningEffortsByModel: { "gpt-test": "high" }, executionMode: "full-access" },
+      "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "low" } },
+    };
+    const settings = createSettingsState(snapshot);
+    const cachedBackends = [{
+      kind: "codex", label: "OpenAI", available: true, methods: [], capabilities: { createThread: true },
+      executionModes: (["auto", "default", "full-access"] as const).map((mode) => ({ mode, label: mode, available: true })),
+      launchpadOptions: { models: [
+        { id: "gpt-test", label: "GPT test" },
+        { id: "@mathos/one", label: "Math one", providerId: "mathos", providerLabel: "MathOS", reasoningEfforts: ["low", "high"] },
+        { id: "@mathos/two", label: "Math two", providerId: "mathos", providerLabel: "MathOS", defaultReasoningEffort: "high" },
+      ] },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn(async () => ({ fetchedAt: 1, entries: [] }));
+    render(<SettingsScreen
+      cachedBackends={cachedBackends}
+      desktopApi={{ listAcpAgents, listBackends: async () => await new Promise<never>(() => undefined) }}
+      initialSection="models" settings={settings} onClose={() => undefined}
+    />);
+    expect(selectOptionLabels(screen.getByLabelText("MathOS default model"))).toEqual([
+      "Provider advertised default", "Math one", "Math two",
+    ]);
+    chooseSelectOption(screen.getByLabelText("MathOS default model"), "Math two");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": {
+        model: "@mathos/two", reasoningEffortsByModel: { "@mathos/one": "low", "@mathos/two": "high" },
+      },
+    } } }));
+    chooseSelectOption(screen.getByLabelText("MathOS default reasoning"), "high");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "high" } },
+    } } }));
+    chooseSelectOption(screen.getByLabelText("MathOS access for new threads"), "Default Access");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": {
+        model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "low" }, executionMode: "default",
+      },
+    } } }));
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
   });

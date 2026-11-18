@@ -48,6 +48,8 @@ import type {
 } from "./task-monitor-tools";
 import type { ThreadHandoffOrigin } from "./thread-orchestration-tools";
 import type { ThreadSpendAlert } from "../token-usage-pricing";
+import { codexProviderIdOfModel } from "../codex-model-providers";
+import { codexModelProviderPickerValue, parseProviderPickerValue, providerPickerValue } from "../provider-picker";
 
 /** Local durable alert inbox. Acknowledgement removes a delivered entry. */
 export type ListPendingThreadSpendAlertsRequest = { limit?: number };
@@ -823,6 +825,8 @@ export type CodexEnvironmentOption = {
 
 export type NavigationLaunchpadDefaults = {
   backend: AppServerBackendKind;
+  /** Keeps a Codex endpoint selected even while its model is unset. */
+  codexModelProviderId?: string;
   executionMode: ThreadExecutionMode;
   workMode?: LaunchpadWorkMode;
   model?: string;
@@ -830,10 +834,15 @@ export type NavigationLaunchpadDefaults = {
   serviceTier?: string;
   fastMode?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
-  providerSettings?: Partial<
-    Record<AppServerBackendKind, NavigationLaunchpadProviderSettings>
-  >;
+  providerSettings?: Partial<Record<string, NavigationLaunchpadProviderSettings>>;
 };
+
+/** The same provider identity used by the new-thread picker and Settings. */
+export function navigationLaunchpadProviderKey(launchpad: Pick<NavigationLaunchpadDefaults, "backend" | "model" | "codexModelProviderId">): string {
+  return launchpad.backend === "codex" && launchpad.codexModelProviderId
+    ? codexModelProviderPickerValue(launchpad.codexModelProviderId)
+    : providerPickerValue(launchpad.backend, launchpad.model);
+}
 
 export type NavigationLaunchpadProviderSettings = {
   executionMode?: ThreadExecutionMode;
@@ -861,8 +870,8 @@ const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
   "acpRuntime",
 ] as const satisfies readonly (keyof NavigationLaunchpadProviderSettings)[];
 
-/** Lift the active legacy choice once, then discard inactive provider copies. */
-function normalizeNavigationLaunchpadEnvironment<T extends NavigationLaunchpadDefaults>(launchpad: T): T {
+/** Lift legacy environments and split backend-wide Codex settings by endpoint. */
+function normalizeNavigationLaunchpadProviders<T extends NavigationLaunchpadDefaults>(launchpad: T): T {
   const active = launchpad.providerSettings?.[launchpad.backend];
   const environment = !("codexEnvironmentId" in launchpad) && active?.codexEnvironmentId
     ? {
@@ -877,6 +886,34 @@ function normalizeNavigationLaunchpadEnvironment<T extends NavigationLaunchpadDe
       backend, settings ? extractNavigationLaunchpadProviderSettings(settings) : settings,
     ]),
   );
+  // Older snapshots kept every Codex endpoint in the codex bucket. Split
+  // its per-model memory and move the selected settings to their provider.
+  const legacy = providerSettings.codex;
+  if (legacy) {
+    const selectedKey = providerPickerValue("codex", legacy.model);
+    const memories = new Map<string, Record<string, string>>();
+    for (const [model, effort] of Object.entries(legacy.reasoningEffortsByModel ?? {})) {
+      const key = providerPickerValue("codex", model);
+      const memory = memories.get(key) ?? {};
+      memory[model] = effort;
+      memories.set(key, memory);
+    }
+    const selected = memories.size > 0
+      ? { ...legacy, reasoningEffortsByModel: memories.get(selectedKey) }
+      : legacy;
+    if (selectedKey !== "codex") {
+      delete providerSettings.codex;
+      providerSettings[selectedKey] = { ...selected, ...providerSettings[selectedKey] };
+    } else {
+      providerSettings.codex = selected;
+    }
+    for (const [key, memory] of memories) {
+      providerSettings[key] = {
+        ...providerSettings[key],
+        reasoningEffortsByModel: { ...memory, ...providerSettings[key]?.reasoningEffortsByModel },
+      };
+    }
+  }
   return { ...launchpad, ...environment, providerSettings };
 }
 
@@ -982,10 +1019,11 @@ function applyNavigationLaunchpadModelReasoningMemory(
 
 function seedNavigationLaunchpadProviderSettings<T extends NavigationLaunchpadDefaults>(
   launchpad: T,
-): Partial<Record<AppServerBackendKind, NavigationLaunchpadProviderSettings>> {
+): Partial<Record<string, NavigationLaunchpadProviderSettings>> {
   const providerSettings = { ...(launchpad.providerSettings ?? {}) };
-  providerSettings[launchpad.backend] = mergeNavigationLaunchpadProviderSettings(
-    providerSettings[launchpad.backend] ?? {},
+  const key = navigationLaunchpadProviderKey(launchpad);
+  providerSettings[key] = mergeNavigationLaunchpadProviderSettings(
+    providerSettings[key] ?? {},
     extractNavigationLaunchpadProviderSettings(launchpad),
   );
   return providerSettings;
@@ -1014,10 +1052,10 @@ export function supportsProviderExecutionModeDefault(
  * Claude, else Default Access.
  */
 export function resolveDefaultLaunchpadExecutionMode(
-  backend: AppServerBackendKind,
+  backend: string,
   providerDefaults?: Record<string, Pick<DesktopProviderModelDefaults, "executionMode">>,
 ): ThreadExecutionMode {
-  if (!supportsProviderExecutionModeDefault(backend)) return "default";
+  if (!supportsProviderExecutionModeDefault(parseProviderPickerValue(backend).backend)) return "default";
   return providerDefaults?.[backend]?.executionMode ?? "auto";
 }
 
@@ -1026,6 +1064,7 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
 ): T {
   return {
     ...launchpad,
+    codexModelProviderId: undefined,
     // Unset, not "default": the projection then resolves the new provider's
     // own default instead of carrying this one's access across.
     executionMode: undefined as unknown as ThreadExecutionMode,
@@ -1040,18 +1079,22 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
 export function projectNavigationLaunchpadProviderSettings<
   T extends NavigationLaunchpadDefaults,
 >(launchpad: T): T {
-  launchpad = normalizeNavigationLaunchpadEnvironment(launchpad);
+  launchpad = normalizeNavigationLaunchpadProviders(launchpad);
   const legacySettings = extractNavigationLaunchpadProviderSettings(launchpad);
-  const providerSettings = launchpad.providerSettings?.[launchpad.backend];
+  const key = navigationLaunchpadProviderKey(launchpad);
+  const providerSettings = launchpad.providerSettings?.[key];
   const settings = {
     ...legacySettings,
     ...(providerSettings ?? {}),
   };
   return {
     ...launchpad,
+    codexModelProviderId: launchpad.backend === "codex"
+      ? parseProviderPickerValue(key).codexModelProviderId
+      : undefined,
     executionMode:
       settings.executionMode
-      ?? resolveDefaultLaunchpadExecutionMode(launchpad.backend),
+      ?? resolveDefaultLaunchpadExecutionMode(key),
     model: settings.model,
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
@@ -1063,33 +1106,41 @@ export function projectNavigationLaunchpadProviderSettings<
 export function applyNavigationLaunchpadProviderSettingsPatch<
   T extends NavigationLaunchpadDefaults,
 >(launchpad: T, patch: Partial<T>): T {
-  launchpad = normalizeNavigationLaunchpadEnvironment(launchpad);
+  launchpad = normalizeNavigationLaunchpadProviders(launchpad);
   const providerPatch = extractNavigationLaunchpadProviderSettings(patch);
   const backend = patch.backend ?? launchpad.backend;
   const providerSettings = seedNavigationLaunchpadProviderSettings(launchpad);
+  const codexModelProviderId = backend !== "codex" ? undefined
+    : "codexModelProviderId" in patch ? patch.codexModelProviderId
+    : patch.model ? codexProviderIdOfModel(patch.model)
+    : backend === launchpad.backend ? launchpad.codexModelProviderId ?? codexProviderIdOfModel(launchpad.model)
+    : undefined;
+  const providerKey = navigationLaunchpadProviderKey({ backend, codexModelProviderId });
+  const switched = providerKey !== navigationLaunchpadProviderKey(launchpad);
 
   if (hasNavigationLaunchpadProviderSettingPatch(patch)) {
-    const currentProviderSettings = providerSettings[backend] ?? {};
+    const currentProviderSettings = providerSettings[providerKey] ?? {};
     const normalizedProviderPatch = applyNavigationLaunchpadModelReasoningMemory(
       currentProviderSettings,
       providerPatch,
     );
-    providerSettings[backend] = mergeNavigationLaunchpadProviderSettings(
+    providerSettings[providerKey] = mergeNavigationLaunchpadProviderSettings(
       currentProviderSettings,
       normalizedProviderPatch,
     );
-    if (isEmptyNavigationLaunchpadProviderSettings(providerSettings[backend])) {
-      delete providerSettings[backend];
+    if (isEmptyNavigationLaunchpadProviderSettings(providerSettings[providerKey])) {
+      delete providerSettings[providerKey];
     }
   }
 
   const base =
-    backend === launchpad.backend
-      ? { ...launchpad, ...patch, providerSettings }
+    !switched
+      ? { ...launchpad, ...patch, codexModelProviderId, providerSettings }
       : {
           ...clearNavigationLaunchpadProviderFields(launchpad),
           ...patch,
           backend,
+          codexModelProviderId,
           providerSettings,
         };
   return projectNavigationLaunchpadProviderSettings(base as T);
@@ -1103,23 +1154,26 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
  */
 export function applyNavigationLaunchpadDefaultsPatch<
   T extends NavigationLaunchpadDefaults,
->(defaults: T, patch: Partial<T>, provider: AppServerBackendKind): T {
-  if (patch.backend !== undefined || provider === defaults.backend) {
+>(defaults: T, patch: Partial<T>, provider: string): T {
+  if (patch.backend !== undefined || provider === navigationLaunchpadProviderKey(defaults)) {
     return applyNavigationLaunchpadProviderSettingsPatch(defaults, patch);
   }
+  const picked = parseProviderPickerValue(provider);
   const filed = applyNavigationLaunchpadProviderSettingsPatch(defaults, {
     ...patch,
-    backend: provider,
+    backend: picked.backend,
+    codexModelProviderId: picked.codexModelProviderId,
   });
   return applyNavigationLaunchpadProviderSettingsPatch(filed, {
     backend: defaults.backend,
+    codexModelProviderId: defaults.codexModelProviderId ?? codexProviderIdOfModel(defaults.model),
   } as Partial<T>);
 }
 
 export function changedProviderModelDefaultBackends(
   previous: Record<string, DesktopProviderModelDefaults>,
   next: Record<string, DesktopProviderModelDefaults>,
-): AppServerBackendKind[] {
+): string[] {
   return [...new Set([
     ...Object.keys(previous),
     ...Object.keys(next),
@@ -1129,19 +1183,19 @@ export function changedProviderModelDefaultBackends(
     return before?.model !== after?.model
       || before?.reasoningEffortsByModel[before.model ?? ""]
         !== after?.reasoningEffortsByModel[after.model ?? ""];
-  }) as AppServerBackendKind[];
+  });
 }
 
 /** Replace only provider model choices; retain the launchpad's unsent content. */
 export function applyNavigationLaunchpadProviderModelDefaults<T extends NavigationLaunchpadDefaults>(
   value: T,
   defaults: Record<string, DesktopProviderModelDefaults>,
-  changedBackends: AppServerBackendKind[],
+  changedBackends: string[],
   includeAll = false,
 ): T {
   const relevantBackends = changedBackends.filter((backend) =>
     includeAll
-    || value.backend === backend
+    || navigationLaunchpadProviderKey(value) === backend
     || value.providerSettings?.[backend] !== undefined
   );
   if (relevantBackends.length === 0) return value;
@@ -1162,15 +1216,15 @@ export function applyNavigationLaunchpadProviderModelDefaults<T extends Navigati
 export function changedProviderExecutionModeDefaultBackends(
   previous: Record<string, DesktopProviderModelDefaults>,
   next: Record<string, DesktopProviderModelDefaults>,
-): AppServerBackendKind[] {
+): string[] {
   return [...new Set([
     ...Object.keys(previous),
     ...Object.keys(next),
   ])].filter((backend) =>
-    supportsProviderExecutionModeDefault(backend as AppServerBackendKind)
-    && resolveDefaultLaunchpadExecutionMode(backend as AppServerBackendKind, previous)
-      !== resolveDefaultLaunchpadExecutionMode(backend as AppServerBackendKind, next)
-  ) as AppServerBackendKind[];
+    supportsProviderExecutionModeDefault(parseProviderPickerValue(backend).backend)
+    && resolveDefaultLaunchpadExecutionMode(backend, previous)
+      !== resolveDefaultLaunchpadExecutionMode(backend, next)
+  );
 }
 
 /**
@@ -1183,12 +1237,12 @@ export function applyNavigationLaunchpadProviderExecutionModeDefaults<
 >(
   value: T,
   defaults: Record<string, DesktopProviderModelDefaults>,
-  changedBackends: AppServerBackendKind[],
+  changedBackends: string[],
   includeAll = false,
 ): T {
   const relevantBackends = changedBackends.filter((backend) =>
     includeAll
-    || value.backend === backend
+    || navigationLaunchpadProviderKey(value) === backend
     || value.providerSettings?.[backend] !== undefined
   );
   if (relevantBackends.length === 0) return value;
@@ -2519,6 +2573,7 @@ export type NavigationMetadataDependencies = {
 /** Selected launchpad configuration excludes unsent text, attachments and environment output. */
 export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "backend"
+  | "codexModelProviderId"
   | "executionMode"
   | "workMode"
   | "model"
