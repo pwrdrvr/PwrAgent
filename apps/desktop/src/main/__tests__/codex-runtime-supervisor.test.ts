@@ -280,6 +280,37 @@ describe("Codex selection changes with app server generations", () => {
     }
   });
 
+  it("leaves a managed switch pending while a newer selection is still waiting", async () => {
+    let finishFirst!: (outcome: { kind: "promoted"; generation: number }) => void;
+    const rolloverAppServer = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue({ kind: "promoted", generation: 3 });
+    const complete = vi.fn();
+    const service = supervisor({
+      codex: { close: vi.fn(), resetAppServerRestarts: vi.fn(), rolloverAppServer },
+      host: { nativeVoiceLeases: 0, tokenMiserServerCapabilities: new WeakMap(), resolveTokenMiserEnabledFn: () => false },
+      dependencies: { markManagedCodexRuntimeSwitchCompleteFn: complete },
+    });
+    // A managed update starts rolling over.
+    service.setRuntimeRestartPending(true);
+    service.setManagedRuntimeSwitchPending(true);
+    const first = service.maybeRestartCodexForManagedRuntimeChange();
+    await vi.waitFor(() => expect(rolloverAppServer).toHaveBeenCalledOnce());
+    // A provider key change arrives before its handshake finishes.
+    service.setRuntimeRestartPending(true);
+    finishFirst({ kind: "promoted", generation: 2 });
+    expect(await first).toBe(true);
+    // The newer selection has not run, so the switch is not done yet.
+    expect(complete).not.toHaveBeenCalled();
+    expect(service.managedRuntimeSwitchPending).toBe(true);
+    expect(service.runtimeRestartPending).toBe(true);
+
+    expect(await service.maybeRestartCodexForManagedRuntimeChange()).toBe(true);
+    expect(rolloverAppServer.mock.calls).toEqual([[{ selection: 1 }], [{ selection: 2 }]]);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(service.managedRuntimeSwitchPending).toBe(false);
+  });
+
   it("applies the switch's follow-up work at promotion and retries a failed start", async () => {
     const turnState = new RegistryTurnState();
     turnState.registerTurn({ backend: "codex", threadId: "busy", turnId: "turn" });

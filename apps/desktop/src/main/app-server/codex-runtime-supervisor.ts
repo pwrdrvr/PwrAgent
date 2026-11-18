@@ -1180,7 +1180,10 @@ export class CodexRuntimeSupervisor {
         await this.host().prepareTokenMiserRuntime();
       }
       if (completesManagedSwitch) {
-        this.markManagedCodexRuntimeSwitchCompleteFn();
+        // A newer selection asked for meanwhile has not been applied yet:
+        // its own run completes the switch, so Settings keeps saying pending.
+        if (selection === this.codexRuntimeSelection) this.markManagedCodexRuntimeSwitchCompleteFn();
+        else this.managedCodexRuntimeSwitchPending = true;
       }
       return true;
     })();

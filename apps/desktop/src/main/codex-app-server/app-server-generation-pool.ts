@@ -151,6 +151,10 @@ export function createCodexAppServerGenerationPool(
   // The newest selection this pool serves, and the one whose start failed.
   let appliedSelection = 0;
   let failedSelection: number | undefined;
+  const applySelection = (selection: number): void => {
+    appliedSelection = Math.max(appliedSelection, selection);
+    failedSelection = undefined;
+  };
   let status: Omit<CodexAppServerGenerationStatus, "current" | "draining"> = {};
 
   const invoke = (client: CodexAppServerClient, method: Method, args: unknown[]): unknown =>
@@ -402,10 +406,7 @@ export function createCodexAppServerGenerationPool(
           throw new Error("the new app server runs the same executable as the one it would replace");
         }
         promote(candidate, reason, launched);
-        if (selection !== undefined) {
-          appliedSelection = Math.max(appliedSelection, selection);
-          failedSelection = undefined;
-        }
+        if (selection !== undefined) applySelection(selection);
         return { kind: "promoted", generation: candidate.id };
       } catch (error) {
         finalize(candidate, "closed");
@@ -440,8 +441,7 @@ export function createCodexAppServerGenerationPool(
         // Nothing to drain: start the new selection lazily, as a close always
         // has. A process that starts meanwhile is a fresh launch of it.
         await generation.client.close();
-        appliedSelection = selection;
-        failedSelection = undefined;
+        applySelection(selection);
         return { kind: "restarted-lazily" };
       }
       return await startRollover("selection-changed", generation, generation.client.readAppServerExecutable?.(), selection);
