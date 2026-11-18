@@ -1690,7 +1690,7 @@ export class MessagingInboundTurns {
       const deliveryBinding = startingOrigin?.deliveryBinding
         ?? startingOrigin?.binding
         ?? params.binding;
-      this.context.host().setActiveTurn(deliveryBinding, activeTurn);
+      this.context.host().acceptStartedTurn(deliveryBinding, activeTurn);
       // Preserve the accepted turn's normal signal (including a retry after a
       // failed preparation request). This wait is after backend acceptance.
       await preparingActivity?.settled;

@@ -1,3 +1,7 @@
+import type { MessagingTurns } from "../../messaging/core/messaging-turn-state";
+import type { MessagingTurnAdmission } from "../../messaging/core/messaging-turn-admission";
+import type { MessagingAccessControl } from "../../messaging/core/messaging-access-control";
+import type { MessagingAccessHost } from "../../messaging/core/messaging-access-context";
 import type { MessagingBackendEventHost } from "../../messaging/core/messaging-backend-event-context";
 import type { MessagingBackendEventRouter } from "../../messaging/core/messaging-backend-event-router";
 import type { MessagingController } from "../../messaging/core/messaging-controller";
@@ -13,6 +17,10 @@ import type { MessagingInboundHost } from "../../messaging/core/messaging-inboun
 // Test-only access to the actual owner and the facade's late-bound host ports.
 // No moved state or moved operation is accessed through the controller.
 export function messagingModules(controller: MessagingController): {
+  readonly turns: MessagingTurns;
+  readonly admission: MessagingTurnAdmission;
+  readonly access: MessagingAccessControl;
+  readonly accessHost: () => MessagingAccessHost;
   readonly backendEvents: MessagingBackendEventRouter;
   readonly backendEventHost: () => MessagingBackendEventHost;
   readonly privateResponses: MessagingPrivateResponses;
@@ -25,6 +33,10 @@ export function messagingModules(controller: MessagingController): {
   readonly inboundHost: () => MessagingInboundHost;
 } {
   const ports = controller as unknown as {
+    readonly turns: MessagingTurns;
+    readonly turnAdmission: MessagingTurnAdmission;
+    readonly accessControl: MessagingAccessControl;
+    accessHost(): MessagingAccessHost;
     readonly backendEventRouter: MessagingBackendEventRouter;
     backendEventHost(): MessagingBackendEventHost;
     readonly privateResponses: MessagingPrivateResponses;
@@ -37,6 +49,10 @@ export function messagingModules(controller: MessagingController): {
     inboundHost(): MessagingInboundHost;
   };
   return {
+    turns: ports.turns,
+    admission: ports.turnAdmission,
+    access: ports.accessControl,
+    accessHost: () => ports.accessHost(),
     backendEvents: ports.backendEventRouter,
     backendEventHost: () => ports.backendEventHost(),
     privateResponses: ports.privateResponses,

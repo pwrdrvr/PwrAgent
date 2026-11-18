@@ -18,7 +18,7 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     ),
     preLaunchHook: (homeRoot) => {
       applyDesktopSettingsPatch(path.join(homeRoot, ".pwragent/profiles/default/config.toml"), {
-        experimental: { incrementalMarkdownRendering: incrementalEnabled },
+        general: { markdown: { incrementalRendering: incrementalEnabled } },
       });
     },
   });

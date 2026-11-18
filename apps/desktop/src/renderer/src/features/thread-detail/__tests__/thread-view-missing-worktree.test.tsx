@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
+import { appStyleRules } from "../../../styles/__tests__/css-style-rules";
 import {
   ThreadView as ThreadViewWithTerminals,
   type ThreadViewProps,
@@ -47,6 +48,30 @@ function thread(overrides: Partial<NavigationThreadSummary> = {}): NavigationThr
   };
 }
 
+/**
+ * Whether a top-level app.css rule that puts its element in the composer's
+ * column (centred, capped at `--chat-column-max`) matches `element` where
+ * ThreadView actually renders it. The stylesheet oracle in
+ * `styles/__tests__/recovery-slot-column.test.ts` checks that column's edges;
+ * this checks the selector reaches the rendered card. A selector naming the
+ * wrong parent once left the card edge to edge with that oracle green.
+ */
+function inComposerColumn(element: Element | null): boolean {
+  if (!element) return false;
+  return appStyleRules.some((rule) => rule.atRules.length === 0
+    && /align-self:\s*center/.test(rule.body)
+    && /max-width:\s*var\(--chat-column-max\)/.test(rule.body)
+    && rule.selectors.some((selector) => element.matches(selector)));
+}
+
+/** Whether a top-level rule zeroes `element`'s top padding where it renders. */
+function topPaddingZeroed(element: Element | null): boolean {
+  if (!element) return false;
+  return appStyleRules.some((rule) => rule.atRules.length === 0
+    && /padding-top:\s*0\b/.test(rule.body)
+    && rule.selectors.some((selector) => element.matches(selector)));
+}
+
 describe("ThreadView with a missing worktree", () => {
   it("replaces the composer with the recovery card", () => {
     const { container } = render(<ThreadView {...baseProps} selectedThread={thread()} />);
@@ -56,6 +81,9 @@ describe("ThreadView with a missing worktree", () => {
     const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
     expect(toggle.closest(".composer__footer .composer__application-actions")).not.toBeNull();
     expect(toggle).toBeEnabled();
+    // The card and the footer that stands in for the composer share its column.
+    expect(inComposerColumn(container.querySelector(".missing-worktree-card"))).toBe(true);
+    expect(inComposerColumn(toggle.closest(".composer__footer"))).toBe(true);
   });
 
   it("keeps the composer during a live turn so the turn can still be stopped", () => {
@@ -114,6 +142,11 @@ describe("ThreadView with a hibernated checkout", () => {
     );
     expect(screen.getByRole("region", { name: /Checkout hibernated/ })).toBeInTheDocument();
     expect(container.querySelector(".composer")).not.toBeNull();
+    // Same column as the composer, and the card's margin alone is the gap.
+    const card = container.querySelector(".missing-worktree-card");
+    expect(inComposerColumn(card)).toBe(true);
+    expect(card?.nextElementSibling).toBe(container.querySelector(".composer"));
+    expect(topPaddingZeroed(container.querySelector(".composer"))).toBe(true);
   });
 
   it("routes Restore now and Keep it awake to the owner", async () => {

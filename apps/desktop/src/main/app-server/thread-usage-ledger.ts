@@ -316,10 +316,10 @@ export class ThreadUsageLedger {
 
   private async observeUsageAccounting(delivery: TurnEventDelivery): Promise<void> {
     const { event, liveThreadUsageWork } = delivery;
-    await this.recordLiveThreadUsage(
-      event,
-      liveThreadUsageWork,
-    );
+    const pricingAt = await this.recordLiveThreadUsage(event, liveThreadUsageWork);
+    if (liveThreadUsageWork) {
+      delivery.event = { ...event, usagePricingAt: pricingAt ?? liveThreadUsageWork.observedAt };
+    }
     // Token Miser is a fail-open accounting feature; a filesystem error in it
     // must not abort the pipeline before `emitToListeners`, which would drop
     // the notification the renderer is waiting on.
@@ -1221,10 +1221,11 @@ export class ThreadUsageLedger {
 
   private observeLiveThreadRequestUsage(params: {
     backend: AppServerBackendKind;
+    observedAt: number;
     threadId: string;
     tokenUsage: unknown;
     turnId?: string;
-  }): readonly TaskMonitorTokenUsageBreakdown[] | undefined {
+  }): LiveThreadRequestUsage | undefined {
     if (!params.turnId) {
       return undefined;
     }
@@ -1236,13 +1237,14 @@ export class ThreadUsageLedger {
     ].join(":");
     const folded = foldLiveThreadRequestUsage({
       current: this.liveThreadRequestUsage.get(key),
+      observedAt: params.observedAt,
       tokenUsage: params.tokenUsage,
     });
     if (!folded) {
       return undefined;
     }
     this.liveThreadRequestUsage.set(key, folded);
-    return folded.requests;
+    return folded;
   }
 
   // Observe one `thread/tokenUsage/updated` and fold any newly-completed model
@@ -1446,6 +1448,7 @@ export class ThreadUsageLedger {
       derivationKey,
       derivationTail,
       observationSequence: ++this.liveThreadUsageObservationSequence,
+      observedAt: Date.now(),
       precedingDerivation,
       settleDerivation,
       settled,
@@ -1512,7 +1515,7 @@ export class ThreadUsageLedger {
   async recordLiveThreadUsage(
     event: AgentEvent,
     work?: LiveThreadUsageEmitWork,
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     const notification = event.notification;
     if (
       notification.method !== "thread/tokenUsage/updated"
@@ -1540,7 +1543,8 @@ export class ThreadUsageLedger {
     let contextDrop: ObservedContextWindowDrop | undefined;
     let observedReplays: ObservedContextReplayTally | undefined;
     let contextWindow: LiveThreadContextWindowObservation | undefined;
-    let requestTokenUsages: readonly TaskMonitorTokenUsageBreakdown[] | undefined;
+    let requestTokenUsages: Readonly<LiveThreadRequestUsage["requests"]> | undefined;
+    let requestObservedAt: number | undefined;
     try {
       if (
         event.backend === "codex"
@@ -1571,7 +1575,8 @@ export class ThreadUsageLedger {
             [event.backend, threadId, turnId, "live-token-usage"].join(":"),
           )
         : undefined;
-      const cumulativeUsage = readTaskMonitorTokenUsageRecords(tokenUsage)?.totalUsage;
+      const usageRecords = readTaskMonitorTokenUsageRecords(tokenUsage);
+      const cumulativeUsage = usageRecords?.totalUsage;
       if (
         usageCeiling
         && cumulativeUsage
@@ -1590,12 +1595,20 @@ export class ThreadUsageLedger {
         tokenUsage,
         turnId,
       });
-      requestTokenUsages = this.observeLiveThreadRequestUsage({
+      const requestUsage = this.observeLiveThreadRequestUsage({
         backend: event.backend,
+        observedAt: work.observedAt,
         threadId,
         tokenUsage,
         turnId,
       });
+      requestTokenUsages = requestUsage?.requests;
+      if (usageRecords?.latestUsage) {
+        const lastRequest = requestUsage?.cumulativeInputTokens === cumulativeUsage?.inputTokens
+          ? requestTokenUsages?.at(-1)
+          : undefined;
+        requestObservedAt = lastRequest?.observedAt ?? work.observedAt;
+      }
       contextDrop = detectObservedContextWindowDrop({
         cursor: this.liveThreadReplayInputCursor.get(
           [event.backend, threadId].join(":"),
@@ -1678,11 +1691,15 @@ export class ThreadUsageLedger {
           ? { startedAt: recentlyCompletedTurn.startedAt }
           : {}),
     };
+    const createdAt = usageTiming.createdAt ?? usageTiming.completedAt ?? work.observedAt;
+    // The renderer displays this notification's latest request when present.
+    const pricingAt = requestObservedAt ?? createdAt;
     const line = buildLiveThreadUsageLine({
       attributed: derivedUsage.attributed,
       backend: event.backend,
       cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
       ...usageTiming,
+      createdAt,
       fastMode,
       contextWindow,
       model,
@@ -1695,7 +1712,7 @@ export class ThreadUsageLedger {
       turnId,
     });
     if (!line) {
-      return;
+      return pricingAt;
     }
     if (event.backend === "claude") {
       const reported = readRecord(tokenUsage)?.claudeCostUSD;
@@ -1710,6 +1727,7 @@ export class ThreadUsageLedger {
         line.pricingCatalogId = undefined;
         line.pricingCatalogVersion = undefined;
         line.pricingRateId = undefined;
+        line.requestPricing = undefined;
         line.priceUnavailableReason = undefined;
         line.uncachedInputCostMicros = 0;
         line.cachedInputCostMicros = 0;
@@ -1756,7 +1774,7 @@ export class ThreadUsageLedger {
           line,
           observationSequence: work.observationSequence,
         });
-        return;
+        return pricingAt;
       }
       await this.emitThreadPricingUpdated({
         ...(line.parentThreadId === undefined && line.turnId
@@ -1766,6 +1784,7 @@ export class ThreadUsageLedger {
         threadId: line.parentThreadId ?? line.threadId,
       });
     }
+    return pricingAt;
   }
 
   private bufferLiveThreadUsageLine(

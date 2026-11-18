@@ -6955,7 +6955,8 @@ describe("useThreadSessionState", () => {
   });
 
   it("keeps completion monitor usage as top-level activity after hydration", async () => {
-    let now = 10_000;
+    const day = Date.UTC(2026, 10, 17);
+    let now = day + 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     let readCount = 0;
     let agentEventHandler:
@@ -6990,7 +6991,7 @@ describe("useThreadSessionState", () => {
                       id: "assistant-final",
                       role: "assistant" as const,
                       text: "Parent processed monitor result.",
-                      createdAt: 20_000,
+                      createdAt: day + 20_000,
                       turn: {
                         id: "parent-turn-1",
                         status: "completed" as const,
@@ -7005,7 +7006,7 @@ describe("useThreadSessionState", () => {
                       id: "assistant-final",
                       role: "assistant" as const,
                       text: "Parent processed monitor result.",
-                      createdAt: 20_000,
+                      createdAt: day + 20_000,
                     },
                   ],
             pagination: {
@@ -7025,8 +7026,8 @@ describe("useThreadSessionState", () => {
       readThread,
     };
 
-    const initialThread = buildThread({ id: "thread-1", updatedAt: 1_000 });
-    const updatedThread = buildThread({ id: "thread-1", updatedAt: 2_000 });
+    const initialThread = buildThread({ id: "thread-1", updatedAt: day + 1_000 });
+    const updatedThread = buildThread({ id: "thread-1", updatedAt: day + 2_000 });
     const { result, rerender } = renderHook(
       ({ currentThread }) =>
         useThreadSessionState({

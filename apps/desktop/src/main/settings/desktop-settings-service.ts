@@ -1068,6 +1068,16 @@ export class DesktopSettingsService {
           config.general?.htmlPreviewRunScripts,
           false,
         ),
+        markdown: {
+          incrementalRendering: this.resolveConfigBoolean(
+            config.general?.markdown?.incrementalRendering,
+            true,
+          ),
+          mathRendering: this.resolveConfigBoolean(
+            config.general?.markdown?.mathRendering,
+            true,
+          ),
+        },
         // Default on: the gateway only does work for connections the
         // operator explicitly added and authorized, so an empty registry
         // costs nothing. The switch exists to revoke thread access
@@ -1217,14 +1227,6 @@ export class DesktopSettingsService {
         ),
         liveTranscriptEventFiltering: this.resolveConfigBoolean(
           config.experimental?.liveTranscriptEventFiltering,
-          false,
-        ),
-        markdownMathRendering: this.resolveConfigBoolean(
-          config.experimental?.markdownMathRendering,
-          true,
-        ),
-        incrementalMarkdownRendering: this.resolveConfigBoolean(
-          config.experimental?.incrementalMarkdownRendering,
           false,
         ),
         threadPricingSummary: this.resolveConfigBoolean(
@@ -3584,6 +3586,14 @@ export class DesktopSettingsService {
       this.readModelsConfig().codex?.allowFast,
       true,
     ).value;
+  }
+
+  /** Registry construction needs the cached env, not an interactive shell.
+   * Actual provider launches await resolveCodexSpawnEnvAsync before spawning. */
+  readCodexSpawnEnvSnapshot(): NodeJS.ProcessEnv {
+    return this.options.resolveCodexShellEnv
+      ? this.resolveCodexSpawnEnv()
+      : this.ensureBaseCodexSpawnEnv();
   }
 
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {

@@ -56,3 +56,4 @@ packages/pwragent/native/
 packages/pwragent/build/
 packages/pwragent/scripts/stage-runtime.mjs
 packages/pwragent/scripts/build-mcp-ipc-relay.mjs
+packages/pwragent/scripts/native-helper-cache.mjs

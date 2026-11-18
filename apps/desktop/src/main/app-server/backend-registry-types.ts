@@ -310,6 +310,10 @@ export type BackendClient = {
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
+  provideThreadDeveloperInstructions?: CodexAppServerClient["provideThreadDeveloperInstructions"];
+  replaceThreadDeveloperInstructions?(
+    params: Parameters<CodexAppServerClient["replaceThreadDeveloperInstructions"]>[0],
+  ): Promise<void>;
   startThread(params: {
     cwd?: string;
     ephemeral?: boolean;
@@ -326,6 +330,7 @@ export type BackendClient = {
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadSource;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
+    developerInstructions?: string;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
@@ -948,6 +953,7 @@ export type CodexDiscoveryObserver = {
 };
 
 export type ModelSettings = {
+  codexModelProviderId?: string;
   model?: string;
   reasoningEffort?: string;
   reasoningEffortsByModel?: Record<string, string>;
@@ -1310,6 +1316,7 @@ export type LiveThreadUsageEmitWork = {
   derivationKey: string;
   derivationTail: Promise<void>;
   observationSequence: number;
+  observedAt: number;
   precedingDerivation: Promise<void>;
   settleDerivation: () => void;
   settled: Promise<void>;
@@ -1330,18 +1337,19 @@ export type LiveThreadUsageAggregate = {
 
 export type LiveThreadRequestUsage = {
   cumulativeInputTokens: number;
-  requests: TaskMonitorTokenUsageBreakdown[];
+  requests: Array<{ observedAt: number; tokens: TaskMonitorTokenUsageBreakdown }>;
 };
 
 export type RequestComponentsCost = {
   cacheWriteInputCostMicros: number;
   cachedInputCostMicros: number;
   catalogId: string;
-  catalogVersion: string;
+  catalogVersion?: string;
   currency: "USD";
   outputCostMicros: number;
   provider: string;
   rateId?: string;
+  requestPricing: NonNullable<ThreadUsageLineRecord["requestPricing"]>;
   serviceTier: string;
   totalCostMicros: number;
   uncachedInputCostMicros: number;

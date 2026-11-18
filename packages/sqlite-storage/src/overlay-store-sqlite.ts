@@ -33,7 +33,7 @@ import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
-import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
+import { buildAppendPinRank, insertSubthreadIdAfter, navigationLaunchpadProviderKey, sortSubthreadSummaries } from "@pwragent/shared";
 import {
   isDefaultProjectForgeAutomation,
   resolveProjectForgeAutomation,
@@ -46,6 +46,7 @@ import { ThreadDependencyStore } from "./thread-dependency-store";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
+  NavigationLaunchpadAgent,
   AppServerBackendKind,
   ArchiveSubthreadPromotion,
   AppServerBackendScope,
@@ -2403,6 +2404,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             pricing_catalog_version,
             pricing_basis,
             pricing_rate_id,
+            request_pricing,
             uncached_input_cost_micros,
             cache_write_input_cost_micros,
             cached_input_cost_micros,
@@ -2457,6 +2459,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             @pricingCatalogVersion,
             @pricingBasis,
             @pricingRateId,
+            @requestPricing,
             @uncachedInputCostMicros,
             @cacheWriteInputCostMicros,
             @cachedInputCostMicros,
@@ -2511,6 +2514,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             pricing_catalog_version = excluded.pricing_catalog_version,
             pricing_basis = excluded.pricing_basis,
             pricing_rate_id = excluded.pricing_rate_id,
+            request_pricing = excluded.request_pricing,
             uncached_input_cost_micros = excluded.uncached_input_cost_micros,
             cache_write_input_cost_micros = excluded.cache_write_input_cost_micros,
             cached_input_cost_micros = excluded.cached_input_cost_micros,
@@ -5409,7 +5413,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async setThreadAgent(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-    agent: { name: string; instructions?: string } | null;
+    agent: NavigationLaunchpadAgent | null;
     now?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -9706,14 +9710,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /** `provider` names whose settings the patch holds; it defaults to the defaults' own. */
   async setLaunchpadDefaults(
     patch: Partial<NavigationLaunchpadDefaults>,
-    options?: { provider?: AppServerBackendKind },
+    options?: { provider?: string },
   ): Promise<NavigationLaunchpadDefaults> {
     const current = this.readLaunchpadDefaults();
     const next = normalizeLaunchpadDefaults(
       applyNavigationLaunchpadDefaultsPatch(
         current,
         patch,
-        options?.provider ?? current.backend,
+        options?.provider ?? navigationLaunchpadProviderKey(current),
       ),
     );
     this.writeLaunchpadDefaults(next);
@@ -9757,7 +9761,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       let count = 0;
       for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
         const usesChangedModelBackend = changedBackends.some((backend) =>
-          launchpad.backend === backend
+          navigationLaunchpadProviderKey(launchpad) === backend
           || launchpad.providerSettings?.[backend] !== undefined
         );
         if (changedAccessBackends.length === 0 && !usesChangedModelBackend) continue;
@@ -11450,7 +11454,7 @@ function normalizeLinkedDirectoryPath(value: string | undefined): string | undef
 }
 
 function normalizeThreadAgent(
-  input: { name: string; instructions?: string },
+  input: NavigationLaunchpadAgent,
   now = Date.now(),
 ): NonNullable<ThreadOverlayState["agent"]> {
   const name = input.name.trim();
@@ -11462,6 +11466,9 @@ function normalizeThreadAgent(
   return {
     name,
     instructions: instructions || undefined,
+    ...(input.instructionsDelivery === "workspace-file"
+      ? { instructionsDelivery: "workspace-file" as const }
+      : {}),
     instructionLineCount,
     instructionsTooLong:
       instructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
@@ -11606,6 +11613,7 @@ type ThreadUsageLineRow = {
   pricing_catalog_id: string | null;
   pricing_catalog_version: string | null;
   pricing_basis: ThreadUsageLineRecord["pricingBasis"] | null;
+  request_pricing: string | null;
   pricing_rate_id: string | null;
   uncached_input_cost_micros: number;
   cache_write_input_cost_micros: number;
@@ -12008,6 +12016,7 @@ function mergeThreadUsageLineForUpsert(
       pricingCatalogId: existing.pricingCatalogId,
       pricingCatalogVersion: existing.pricingCatalogVersion,
       pricingRateId: existing.pricingRateId,
+      requestPricing: existing.requestPricing,
       totalCostMicros: existing.totalCostMicros,
       uncachedInputCostMicros: existing.uncachedInputCostMicros,
     };
@@ -12130,6 +12139,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
       pricingCatalogId: _forkPricingCatalogId,
       pricingCatalogVersion: _forkPricingCatalogVersion,
       pricingRateId: _forkPricingRateId,
+      requestPricing: _forkRequestPricing,
       cumulativeTotalCostMicros: _forkCumulativeCost,
       ...forkBaseLine
     } = line;
@@ -12275,6 +12285,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     pricingCatalogVersion: line.pricingCatalogVersion ?? null,
     pricingBasis: line.pricingBasis ?? null,
     pricingRateId: line.pricingRateId ?? null,
+    requestPricing: line.requestPricing ? JSON.stringify(line.requestPricing) : null,
     reasoningEffort: line.reasoningEffort ?? null,
     reasoningOutputTokens: line.reasoningOutputTokens,
     scope: line.scope,
@@ -12517,6 +12528,9 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
       : {}),
     ...(row.pricing_basis ? { pricingBasis: row.pricing_basis } : {}),
     ...(row.pricing_rate_id ? { pricingRateId: row.pricing_rate_id } : {}),
+    ...(row.request_pricing
+      ? { requestPricing: JSON.parse(row.request_pricing) as ThreadUsageLineRecord["requestPricing"] }
+      : {}),
     ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
     reasoningOutputTokens: row.reasoning_output_tokens,
     scope: row.scope,

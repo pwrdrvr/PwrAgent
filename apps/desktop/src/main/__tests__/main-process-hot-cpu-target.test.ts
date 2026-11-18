@@ -62,9 +62,9 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
     directoryEnrichmentDiagnostics.record({
       directory: "/fixture/cpu-capture", enricherId: 0, caller: "thread-list", reason: "cold",
     }, { requests: 1, gitStarted: 3 });
-    listingDiagnostics.record("navigation", "invalidate", { reason: "turn", trigger: "turn/completed" });
     gitSubprocessDiagnostics.startGit("/fixture/cpu-capture", ["remote"], "pr-remotes")(false);
     await profiler.start();
+    listingDiagnostics.record("navigation", "invalidate", { reason: "turn", trigger: "turn/completed" });
     const event = await capture;
     await profiler.stop("test-complete");
     expect(event).toMatchObject({ target: "main", profileFilename: "main-hot-0001.cpuprofile", heapSnapshotArtifacts: [] });

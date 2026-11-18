@@ -389,7 +389,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       if (!result.acquired) throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost.`);
     }
   }
-  const config = initializeDesktopConfigStore();
+  const config = initializeDesktopConfigStore({ appVersion: host.application.getVersion() });
   if (host.runtimePolicy?.exclusiveProfileOwner && host.runtimePolicy.codexCommand) {
     await config.write({ onboarding: { completed: true }, models: { codex: { path: host.runtimePolicy.codexCommand } } }, ["onboarding", "models"]);
   }

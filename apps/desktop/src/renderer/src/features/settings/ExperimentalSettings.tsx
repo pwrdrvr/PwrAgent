@@ -24,11 +24,6 @@ const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
   source: "default" as const,
 };
 
-const DEFAULT_MARKDOWN_MATH_RENDERING = {
-  value: true,
-  source: "default" as const,
-};
-
 const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   value: false,
   source: "default" as const,
@@ -109,8 +104,6 @@ export function ExperimentalSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
-  onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
-  onIncrementalMarkdownRenderingChange: (enabled: boolean) => Promise<void>;
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
@@ -134,12 +127,6 @@ export function ExperimentalSettings(props: {
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
-  const markdownMathRendering =
-    props.snapshot.experimental.markdownMathRendering ??
-    DEFAULT_MARKDOWN_MATH_RENDERING;
-  const incrementalMarkdownRendering =
-    props.snapshot.experimental.incrementalMarkdownRendering ??
-    { value: false, source: "default" as const };
   const threadToolAccounting =
     props.snapshot.experimental.threadToolAccounting ??
     DEFAULT_THREAD_TOOL_ACCOUNTING;
@@ -397,48 +384,6 @@ export function ExperimentalSettings(props: {
             source={sourceBadge(threadToolAccounting)}
             onChange={(enabled) => {
               return props.onThreadToolAccountingChange(enabled);
-            }}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="Experimental"
-        title="Incremental Markdown Rendering"
-        description="Reuse completed Markdown blocks while a response streams. Experimental and off by default."
-        chip={incrementalMarkdownRendering.value ? "On" : "Off"}
-        chipKind={incrementalMarkdownRendering.value ? "ok" : "default"}
-      >
-        <div className="settings-fields">
-          <ToggleField
-            checked={incrementalMarkdownRendering.value}
-            disabled={props.saving}
-            label="Enable incremental Markdown rendering"
-            sub="Reduce repeated parsing of long streaming responses."
-            help="Turn off to use the standard Markdown renderer. The additional renderer loads only when enabled."
-            source={sourceBadge(incrementalMarkdownRendering)}
-            onChange={props.onIncrementalMarkdownRenderingChange}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="Experimental"
-        title="Markdown Math Rendering"
-        description="Render LaTeX math delimiters in thread transcripts with KaTeX. On by default; turn it off if rendering causes problems."
-        chip={markdownMathRendering.value ? "On" : "Off"}
-        chipKind={markdownMathRendering.value ? "ok" : "default"}
-      >
-        <div className="settings-fields">
-          <ToggleField
-            checked={markdownMathRendering.value}
-            disabled={props.saving}
-            label="Enable Markdown math rendering"
-            sub="Render \\(…\\) and \\[…\\] expressions as typeset math."
-            help="The KaTeX runtime loads only for messages with potential math. Turning this off restores literal Markdown rendering."
-            source={sourceBadge(markdownMathRendering)}
-            onChange={(enabled) => {
-              return props.onMarkdownMathRenderingChange(enabled);
             }}
           />
         </div>

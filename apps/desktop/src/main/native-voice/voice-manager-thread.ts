@@ -6,6 +6,7 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
+import { markAgentInstructionsDeliveredByWorkspaceFile } from "../app-server/workspace-instructed-agent";
 
 const log = getMainLogger("pwragent:voice-manager");
 
@@ -66,7 +67,7 @@ export type VoiceManagerDeps = {
   overlayStore?: Pick<
     ReturnType<typeof getDesktopOverlayStore>,
     "getVoiceManagerThread" | "setVoiceManagerThread" | "getLaunchpadDefaults" | "getThreadOverlayState"
-  >;
+  > & Partial<Pick<ReturnType<typeof getDesktopOverlayStore>, "setThreadAgent">>;
   listThreadIds?: () => Promise<Set<string>>;
   workspaceDir?: () => string;
 };
@@ -88,6 +89,7 @@ export async function openVoiceManagerThread(
     const remembered = overlayStore.getVoiceManagerThread();
     if (remembered?.backend === "codex" && (await threadStillExists(remembered.threadId, deps))) {
       await refreshManagerWorkspace(deps.workspaceDir);
+      await markWorkspaceFileDelivery(overlayStore, remembered.threadId);
       await turnOffTokenMiser(remembered.threadId, deps);
       return { status: "ready", threadId: remembered.threadId, created: false };
     }
@@ -102,6 +104,9 @@ export async function openVoiceManagerThread(
       agent: {
         name: VOICE_MANAGER_AGENT_NAME,
         instructions: VOICE_MANAGER_AGENT_INSTRUCTIONS,
+        // The workspace file is the one delivery; Codex must not also send
+        // this text as developer instructions.
+        instructionsDelivery: "workspace-file",
       },
     });
     try {
@@ -148,6 +153,23 @@ function codexSettingsFrom(defaults: NavigationLaunchpadDefaults) {
         }
       : {}),
   };
+}
+
+/**
+ * A manager created before `instructionsDelivery` existed has none. Best
+ * effort, like the file refresh below.
+ */
+async function markWorkspaceFileDelivery(
+  overlayStore: NonNullable<VoiceManagerDeps["overlayStore"]>,
+  threadId: string,
+): Promise<void> {
+  try {
+    await markAgentInstructionsDeliveredByWorkspaceFile(overlayStore, { backend: "codex", threadId });
+  } catch (error) {
+    log.warn("could not mark the voice manager instructions as file-delivered", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function refreshManagerWorkspace(workspaceDir?: () => string): Promise<void> {

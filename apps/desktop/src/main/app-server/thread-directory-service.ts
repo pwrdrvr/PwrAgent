@@ -12,6 +12,8 @@ import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwrag
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
 import {
+  navigationLaunchpadProviderKey,
+  providerPickerValue,
   isRemoteLaunchpadStorageKey,
   launchpadStorageKey,
   parseRemoteLaunchpadStorageKey,
@@ -481,6 +483,7 @@ export class ThreadDirectoryService {
           directoryLabel: request.directoryLabel,
           directoryPath: request.directoryPath,
           backend: defaults.backend,
+          codexModelProviderId: defaults.codexModelProviderId,
           executionMode: defaults.executionMode,
           model: defaults.model,
           reasoningEffort: defaults.reasoningEffort,
@@ -551,6 +554,7 @@ export class ThreadDirectoryService {
       directoryLabel: request.directoryLabel,
       directoryPath: request.directoryPath,
       backend: defaults.backend,
+      codexModelProviderId: defaults.codexModelProviderId,
       executionMode: defaults.executionMode,
       model: defaults.model,
       reasoningEffort: defaults.reasoningEffort,
@@ -746,6 +750,9 @@ export class ThreadDirectoryService {
     if (saveSticky && request.patch.backend) {
       stickyPatch.backend = request.patch.backend;
     }
+    if (saveSticky && "codexModelProviderId" in patch) {
+      stickyPatch.codexModelProviderId = patchedLaunchpad.codexModelProviderId;
+    }
     if (saveSticky && patch.executionMode) {
       stickyPatch.executionMode = patch.executionMode;
     }
@@ -776,7 +783,7 @@ export class ThreadDirectoryService {
         // These settings are this launchpad's provider's. Filed under the
         // defaults' provider instead, a Codex model became the Claude default.
         ? await this.context.stores.launchpads.setLaunchpadDefaults(stickyPatch, {
-            provider: persisted.backend,
+            provider: navigationLaunchpadProviderKey(persisted),
           })
         : await this.context.stores.launchpads.getLaunchpadDefaults();
     const shouldResolveStickyModelSettings =
@@ -1548,11 +1555,21 @@ export class ThreadDirectoryService {
     if (!draft) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
-    const projectedDraft = projectNavigationLaunchpadProviderSettings(draft);
+    let projectedDraft = projectNavigationLaunchpadProviderSettings(draft);
+    if (projectedDraft.backend === "codex" && projectedDraft.codexModelProviderId) {
+      if (!projectedDraft.model) {
+        const settings = await this.host().resolveModelSettings("codex", projectedDraft, "launchpad-defaults");
+        projectedDraft = applyNavigationLaunchpadProviderSettingsPatch(projectedDraft, settings);
+      }
+      if (!projectedDraft.model
+        || providerPickerValue("codex", projectedDraft.model) !== navigationLaunchpadProviderKey(projectedDraft)) {
+        throw new Error(`No model is available for ${projectedDraft.codexModelProviderId}. Choose a model for this provider before starting a thread.`);
+      }
+    }
     await this.host().admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
     let launchpad = options?.sourceInstanceId
       ? await this.resolveRemoteLaunchpadModelSettings(draft)
-      : draft;
+      : projectedDraft;
     operation?.update({ backend: launchpad.backend, projectPath: launchpad.directoryPath, title: request.input?.find((item) => item.type === "text")?.text ?? launchpad.prompt });
     operation?.check();
     if (
@@ -2176,8 +2193,11 @@ export class ThreadDirectoryService {
     const providerModelDefaults = this.host().resolveProviderModelDefaultsFn();
     // Access saved for this provider wins; otherwise the provider's default
     // from Settings (Auto for Codex and Claude unless changed).
+    const providerKey = backend.kind === projectedDefaults.backend
+      ? navigationLaunchpadProviderKey(projectedDefaults)
+      : backend.kind;
     const storedExecutionMode =
-      projectedDefaults.providerSettings?.[backend.kind]?.executionMode
+      projectedDefaults.providerSettings?.[providerKey]?.executionMode
       ?? (backend.kind === storedDefaults.backend
         ? storedDefaults.executionMode
         : undefined);
@@ -2187,6 +2207,7 @@ export class ThreadDirectoryService {
         : projectNavigationLaunchpadProviderSettings({
             ...projectedDefaults,
             backend: backend.kind,
+            codexModelProviderId: undefined,
             executionMode: undefined as unknown as ThreadExecutionMode,
             model: undefined,
             reasoningEffort: undefined,
@@ -2196,11 +2217,11 @@ export class ThreadDirectoryService {
           });
     if (storedExecutionMode === undefined) {
       backendDefaults.executionMode = resolveDefaultLaunchpadExecutionMode(
-        backend.kind,
+        providerKey,
         providerModelDefaults,
       );
     }
-    const configuredDefaults = providerModelDefaults[backend.kind];
+    const configuredDefaults = providerModelDefaults[providerKey];
     const configuredModel = configuredDefaults?.model;
     const configuredReasoningEffort = configuredModel
       ? configuredDefaults.reasoningEffortsByModel[configuredModel]

@@ -1,7 +1,10 @@
+import { MessagingTurns } from "./messaging-turn-state";
+import { MessagingAccessControl } from "./messaging-access-control";
+import type { MessagingAccessHost } from "./messaging-access-context";
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
-import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, FULL_ACCESS_RISK_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type FullAccessRiskWarningContext, type AcpRuntimeRiskWarningContext, type FullAccessEscalationContext, type MessagingFullAccessControls, type FullAccessWarningResolution, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
+import { PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, branchPageIndexFromValue, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, resolveNewThreadCodexEnvironmentId, readMessagingToolUpdateModeValue, normalizeNewThreadSessionForBackend, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
 import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
@@ -23,8 +26,8 @@ import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } f
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildReviewBranchOptions, buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, readProviderResponseBlockNotification, describeProviderResponseBlock, permissionForDynamicTool, permissionsForThreadMutation, toolArgsTargetRemoteInstance, resolveNewThreadBackend, selectableNewThreadBackends, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
-import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendSummary, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingPermissionId, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationDirectorySummary, NavigationSelectedDetailRequest, NavigationThreadSummary, RbacResolution, ThreadExecutionMode, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
+import { buildReviewBranchOptions, buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, findPreferredReviewWorkspaceCwd, findPrimaryReviewWorkspaceCwd, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, readProviderResponseBlockNotification, describeProviderResponseBlock, resolveNewThreadBackend, selectableNewThreadBackends, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
+import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AppServerReviewTarget, ModelSettingsRecent, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpRuntimeOptionSource, BackendAcpSessionRuntimeState, BackendSummary, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationDirectorySummary, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier, UpdateDirectoryLaunchpadRequest } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingPrivateConversationResolveResult, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingReviewIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
@@ -64,7 +67,7 @@ import { registerAutomationSourceMessageDeliveryHandler, registerAutomationTarge
 import { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingBindingHost } from "./messaging-binding-context";
 import { threadContextForAdmissionState, normalizeConversationTitle, isDefaultAgentRouteBinding, handoffContextForBinding, type MessagingToolUpdateDefaultModeResolver } from "./messaging-binding-helpers";
-import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, originalAttachmentActorKey, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, turnSettingsForThread, isPromiseLike, DEFAULT_MESSAGING_AGENT_NAME, truncateText, type MessagingFullAccessControlsResolver, type FullAccessRiskPresentationMode } from "./messaging-inbound-helpers";
+import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, originalAttachmentActorKey, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, turnSettingsForThread, DEFAULT_MESSAGING_AGENT_NAME, truncateText, type MessagingFullAccessControlsResolver } from "./messaging-inbound-helpers";
 import { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingInboundHost } from "./messaging-inbound-context";
 
@@ -214,24 +217,6 @@ function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok
   };
 }
 
-function normalizeMessagingFullAccessControls(
-  resolved: MessagingFullAccessControls | undefined,
-): MessagingFullAccessControls {
-  return {
-    allowEscalation: resolved?.allowEscalation ?? true,
-    allowThreadResume: resolved?.allowThreadResume ?? true,
-    warningPolicy: resolved?.warningPolicy ?? "dismissable",
-    authorizedUsers: resolved?.authorizedUsers ?? {},
-    dismissWarning: resolved?.dismissWarning,
-    canDismissWarning: resolved?.canDismissWarning,
-  };
-}
-
-type FullAccessRiskPresentation = {
-  binding?: MessagingBindingRecord;
-  surface?: MessagingSurfaceRef;
-};
-
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
   backend?: AppServerBackendKind;
@@ -342,7 +327,7 @@ export type MessagingControllerOptions = {
 
 export class MessagingController {
   private readonly backendEventRouter: MessagingBackendEventRouter;
-  private readonly authorizedActorIds: Set<string>;
+  private readonly accessControl: MessagingAccessControl;
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   /** Turns whose final assistant item already resolved its images, per binding. */
@@ -396,9 +381,8 @@ export class MessagingController {
   private readonly pendingIntentTtlMs: number;
   private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly queuedTurnActions = new Set<Promise<void>>();
-  private readonly queuedTurnDrainRequests = new Set<string>();
   private readonly interactionMapper: MessagingInteractionMapper;
-  private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
+  private readonly turns: MessagingTurns;
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly preparingTurnActivity = new Map<string, {
@@ -431,11 +415,6 @@ export class MessagingController {
     { parentTurnId: string; suppressed: boolean }
   >();
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly queuedTurnDrainTimers = new Map<string, {
-    timer: ReturnType<typeof setTimeout>;
-    settle: () => void;
-  }>();
-  private readonly queuedTurnDrains = new Map<string, Promise<void>>();
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
   private readonly monitorTimersByBindingId = new Map<
@@ -491,6 +470,14 @@ export class MessagingController {
     const readStore = () => this.options.store;
     const readNow = () => this.now;
     const readLogger = () => this.logger;
+    const readTurnAdmission = () => this.turnAdmission;
+    this.turns = new MessagingTurns({
+      get logger() { return readLogger(); },
+      host: () => ({
+        get turnAdmission() { return readTurnAdmission(); },
+        startNextQueuedTurn: (...args) => this.startNextQueuedTurn(...args),
+      }),
+    });
     this.backendEventRouter = new MessagingBackendEventRouter({
       get store() { return readStore(); },
       get now() { return readNow(); },
@@ -538,7 +525,16 @@ export class MessagingController {
       get config() { return readInboundConfig(); },
       host: () => this.inboundHost(),
     });
-    this.authorizedActorIds = new Set(options.authorizedActorIds);
+    const readAccessConfig = () => this.options;
+    this.accessControl = new MessagingAccessControl({
+      get store() { return readStore(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      get config() { return readAccessConfig(); },
+      host: () => this.accessHost(),
+    }, options.authorizedActorIds);
     this.capabilityProfile = options.adapter.capabilityProfile;
     this.now = options.now ?? Date.now;
     this.pendingIntentTtlMs =
@@ -643,12 +639,24 @@ export class MessagingController {
     }
   }
 
+  private accessHost(): MessagingAccessHost {
+    const readController = () => this;
+    return {
+      desktopActivityLog: (...args) => this.desktopActivityLog(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      get activeAgentMessagingOriginsByTurnKey() { return readController().activeAgentMessagingOriginsByTurnKey; },
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
+    };
+  }
+
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
-    if (!this.authorizeInboundAdmission(event)) {
+    if (!this.accessControl.authorizeInboundAdmission(event)) {
       // In enforcing mode this fires for actors with no permission-granting
       // role (default-deny); record it so operators can see who was inert.
       if (this.options.rbacPolicy?.isEnforcing()) {
-        this.recordCapabilityDenied(event, "(admission)", [], "admission");
+        this.accessControl.recordCapabilityDenied(event, "(admission)", [], "admission");
       }
       await this.deliver(
         buildErrorIntent({
@@ -905,8 +913,8 @@ export class MessagingController {
       newIntentId: (...args) => this.newIntentId(...args),
       cycleToolUpdateMode: (...args) => this.cycleToolUpdateMode(...args),
       cycleStreamingResponseMode: (...args) => this.cycleStreamingResponseMode(...args),
-      requirePermission: (...args) => this.requirePermission(...args),
-      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       get bindingService() { return readController().bindingService; },
       defaultAgentRouteBinding: (...args) => this.defaultAgentRouteBinding(...args),
       get privateReplyClaims() { return readController().privateReplyClaims; },
@@ -917,8 +925,8 @@ export class MessagingController {
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       buildAgentMessagingOrigin: (...args) => this.buildAgentMessagingOrigin(...args),
       get startingAgentMessagingOriginsByThreadKey() { return readController().startingAgentMessagingOriginsByThreadKey; },
-      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
-      deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
+      deliverFullAccessPolicyError: (...args) => this.accessControl.deliverFullAccessPolicyError(...args),
       beginTurnPreparationActivity: (...args) => this.beginTurnPreparationActivity(...args),
       rememberQueuedAgentMessagingOrigin: (...args) => this.rememberQueuedAgentMessagingOrigin(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
@@ -926,27 +934,28 @@ export class MessagingController {
       get pdfAttachmentStore() { return readController().pdfAttachmentStore; },
       rememberAgentMessagingOrigin: (...args) => this.rememberAgentMessagingOrigin(...args),
       setActiveTurn: (...args) => this.setActiveTurn(...args),
+      acceptStartedTurn: (...args) => this.turns.accept(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       reconcileActiveTurnFromThreadStatus: (...args) => this.reconcileActiveTurnFromThreadStatus(...args),
       get backendEventRouter() { return readController().backendEventRouter; },
       observeManagedTopicFromInbound: (...args) => this.observeManagedTopicFromInbound(...args),
-      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       loadNewThreadBackendChoices: (...args) => this.loadNewThreadBackendChoices(...args),
       deliverSelectedNewThreadBackendUnavailable: (...args) => this.deliverSelectedNewThreadBackendUnavailable(...args),
       resolveNewThreadBackendForSession: (...args) => this.resolveNewThreadBackendForSession(...args),
       ensureNewThreadProjectLaunchpad: (...args) => this.ensureNewThreadProjectLaunchpad(...args),
       resolveNewThreadToolUpdateMode: (...args) => this.resolveNewThreadToolUpdateMode(...args),
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
-      resolveFullAccessRiskForSession: (...args) => this.resolveFullAccessRiskForSession(...args),
-      presentFullAccessRiskWarning: (...args) => this.presentFullAccessRiskWarning(...args),
+      resolveFullAccessRiskForSession: (...args) => this.accessControl.resolveFullAccessRiskForSession(...args),
+      presentFullAccessRiskWarning: (...args) => this.accessControl.presentFullAccessRiskWarning(...args),
     };
   }
 
   private commandHost(): MessagingCommandHost {
     return this.commandHostPorts ??= {
-      requirePermission: (...args) => this.requirePermission(...args),
-      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       handleStatusCallback: (...args) => this.callbackHandlers.handleStatusCallback(...args),
       presentStatus: (...args) => this.presentStatus(...args),
       detachBinding: (...args) => this.bindingService.detachBinding(...args),
@@ -994,9 +1003,9 @@ export class MessagingController {
       responseModeForConversation: (...args) => this.inboundTurns.responseModeForConversation(...args),
       reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
       getBackendSummary: (...args) => this.getBackendSummary(...args),
-      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
-      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       desktopActivityLog: (...args) => this.desktopActivityLog(...args),
     };
   }
@@ -1007,13 +1016,13 @@ export class MessagingController {
       get commandHandlers() { return readController().commandHandlers; },
       presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
-      requireRemoteScope: (...args) => this.requireRemoteScope(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
-      requirePermission: (...args) => this.requirePermission(...args),
-      canResumeFullAccessThreads: (...args) => this.canResumeFullAccessThreads(...args),
-      deliverFullAccessPolicyError: (...args) => this.deliverFullAccessPolicyError(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      canResumeFullAccessThreads: (...args) => this.accessControl.canResumeFullAccessThreads(...args),
+      deliverFullAccessPolicyError: (...args) => this.accessControl.deliverFullAccessPolicyError(...args),
       bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
@@ -1024,7 +1033,7 @@ export class MessagingController {
       handleReviewAction: (...args) => this.handleReviewAction(...args),
       get turnAdmission() { return readController().turnAdmission; },
       get sharedQueueNotices() { return readController().sharedQueueNotices; },
-      requireRemoteScopeForBinding: (...args) => this.requireRemoteScopeForBinding(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       startPreparedInput: (...args) => this.inboundTurns.startPreparedInput(...args),
       retireQueuedTurnNotice: (...args) => this.retireQueuedTurnNotice(...args),
       trackQueuedTurnAction: (...args) => this.trackQueuedTurnAction(...args),
@@ -1058,7 +1067,7 @@ export class MessagingController {
       loadDefaultAgentBackendSummaries: (...args) => this.inboundTurns.loadDefaultAgentBackendSummaries(...args),
       notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
-      ensureFullAccessEscalationAllowed: (...args) => this.ensureFullAccessEscalationAllowed(...args),
+      ensureFullAccessEscalationAllowed: (...args) => this.accessControl.ensureFullAccessEscalationAllowed(...args),
       updateBindingPreferences: (...args) => this.bindingService.updateBindingPreferences(...args),
       stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
       enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
@@ -1102,14 +1111,14 @@ export class MessagingController {
       deliverStaleFullAccessWarning: (...args) => this.deliverStaleFullAccessWarning(...args),
       get pendingFullAccessNewThreadPrompts() { return readController().inboundTurns.pendingFullAccessNewThreadPrompts; },
       withNewThreadPromptCaptureExpiry: (...args) => this.withNewThreadPromptCaptureExpiry(...args),
-      resolveFullAccessControls: (...args) => this.resolveFullAccessControls(...args),
-      resolveFullAccessWarning: (...args) => this.resolveFullAccessWarning(...args),
+      resolveFullAccessControls: (...args) => this.accessControl.resolveFullAccessControls(...args),
+      resolveFullAccessWarning: (...args) => this.accessControl.resolveFullAccessWarning(...args),
       deliverMissingFullAccessPrompt: (...args) => this.deliverMissingFullAccessPrompt(...args),
       createNewThreadFromPromptBundle: (...args) => this.inboundTurns.createNewThreadFromPromptBundle(...args),
       deliverNewThreadPromptFailure: (...args) => this.inboundTurns.deliverNewThreadPromptFailure(...args),
       applyNewThreadAcpRuntimeMode: (...args) => this.applyNewThreadAcpRuntimeMode(...args),
       applyBindingAcpRuntimeMode: (...args) => this.applyBindingAcpRuntimeMode(...args),
-      recordFullAccessPolicyViolation: (...args) => this.recordFullAccessPolicyViolation(...args),
+      recordFullAccessPolicyViolation: (...args) => this.accessControl.recordFullAccessPolicyViolation(...args),
       queueAuditKey: (...args) => this.queueAuditKey(...args),
       get pendingQueueAuditMessages() { return readController().pendingQueueAuditMessages; },
       agentMessagingOriginForPendingIntent: (...args) => this.agentMessagingOriginForPendingIntent(...args),
@@ -1155,6 +1164,7 @@ export class MessagingController {
       handleAutomationTurnStarted: (...args) => this.handleAutomationTurnStarted(...args),
       handleAutomationTurnTerminal: (...args) => this.handleAutomationTurnTerminal(...args),
       isAutomationTurnEvent: (...args) => this.isAutomationTurnEvent(...args),
+      observeBackendTurn: (...args) => this.turns.observeBackend(...args),
       setActiveTurn: (...args) => this.setActiveTurn(...args),
       logBindingTurnStateChange: (...args) => this.logBindingTurnStateChange(...args),
       deliverToolActivityForBackendEvent: (...args) => this.deliverToolActivityForBackendEvent(...args),
@@ -2072,7 +2082,7 @@ export class MessagingController {
       }
       // Turn completion can arrive before the steer acknowledgement. Its
       // drain stopped at this claim, so recheck the owning backend now.
-      if (this.queuedTurnDrainRequests.delete(entry.threadKey) && !this.disposed) {
+      if (this.turns.takeDrainRequest(entry.threadKey) && !this.disposed) {
         await this.startNextQueuedTurn(entry.binding);
       }
     }
@@ -2146,31 +2156,7 @@ export class MessagingController {
   }
 
   private scheduleNextQueuedTurn(binding: MessagingBindingRecord): void {
-    const key = this.threadKeyForBinding(binding);
-    const entry = this.turnAdmission.peekNextQueued(key);
-    if (!entry && this.turnAdmission.hasDispatchingEntry(key)) this.queuedTurnDrainRequests.add(key);
-    if (this.disposed || this.queuedTurnDrainTimers.has(key)
-      || this.queuedTurnDrains.has(key) || !entry || entry.manualRetryRequired) return;
-    // A start emits ordered lifecycle events. It cannot acknowledge while
-    // the event that released it is still awaiting this listener. Leave the
-    // delivery stack before draining, and coalesce terminal + idle releases.
-    const { promise: drain, resolve: settle } = Promise.withResolvers<void>();
-    this.queuedTurnDrains.set(key, drain);
-    void drain.finally(() => this.queuedTurnDrains.delete(key));
-    const timer = setTimeout(() => {
-      this.queuedTurnDrainTimers.delete(key);
-      if (this.disposed) {
-        settle();
-        return;
-      }
-      void this.startNextQueuedTurn(binding).catch((error) => {
-        this.logger.warn?.("messaging queued turn dispatch failed", {
-          threadId: binding.threadId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }).finally(settle);
-    }, 0);
-    this.queuedTurnDrainTimers.set(key, { timer, settle });
+    this.turns.schedule(binding);
   }
 
   private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
@@ -2186,7 +2172,7 @@ export class MessagingController {
 
     const entry = this.turnAdmission.peekNextQueued(threadKey);
     if (!entry || entry.manualRetryRequired) {
-      if (this.turnAdmission.hasDispatchingEntry(threadKey)) this.queuedTurnDrainRequests.add(threadKey);
+      if (this.turnAdmission.hasDispatchingEntry(threadKey)) this.turns.requestDrain(threadKey);
       return;
     }
 
@@ -2221,7 +2207,7 @@ export class MessagingController {
       submitted,
       "Queued message sent as the next turn.",
     );
-    if (this.queuedTurnDrainRequests.delete(threadKey) && !this.disposed) {
+    if (this.turns.takeDrainRequest(threadKey) && !this.disposed) {
       await this.startNextQueuedTurn(binding);
     }
   }
@@ -3178,12 +3164,12 @@ export class MessagingController {
       return;
     }
     if (
-      !(await this.requirePermission(
+      !(await this.accessControl.requirePermission(
         event,
         "message.reply",
         "questionnaire:async-reply",
       ))
-      || !(await this.requireRemoteScopeForBinding(
+      || !(await this.accessControl.requireRemoteScopeForBinding(
         event,
         binding,
         "questionnaire:async-reply:remote-instance",
@@ -4742,11 +4728,8 @@ export class MessagingController {
     return true;
   }
 
-  updateAuthorizedActorIds(actorIds: readonly string[]): void {
-    this.authorizedActorIds.clear();
-    for (const actorId of actorIds) {
-      this.authorizedActorIds.add(actorId);
-    }
+  updateAuthorizedActorIds(actorIds: readonly string[]): void{
+    this.accessControl.updateAuthorizedActorIds(actorIds);
   }
 
   dispose(): void {
@@ -4757,14 +4740,9 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
-    for (const { timer, settle } of this.queuedTurnDrainTimers.values()) {
-      clearTimeout(timer);
-      settle();
-    }
-    this.queuedTurnDrainTimers.clear();
+    this.turns.dispose();
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
-    this.queuedTurnDrainRequests.clear();
     this.inboundTurns.clearAdmissionTiming();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
@@ -4814,7 +4792,7 @@ export class MessagingController {
    * it retires. dispose() cancels and settles drains that have not yet begun.
    */
   async whenQueuedTurnDrainsSettled(): Promise<void> {
-    await Promise.allSettled([...this.queuedTurnDrains.values()]);
+    await this.turns.whenDrainsSettled();
   }
 
   async whenQueuedTurnActionsSettled(): Promise<void> {
@@ -5303,7 +5281,7 @@ export class MessagingController {
     this.browseRenderGenerations.set(session.id, token);
     stillCurrent = () => parentCurrent() && this.browseRenderGenerations.get(session.id) === token;
     const inventory = await this.options.backend.listNavigationOwners?.() ?? { owners: [{ label: "This instance" }], omitted: 0 };
-    const canReadRemote = this.actorHasPermission(event, "federation.remote_control");
+    const canReadRemote = this.accessControl.actorHasPermission(event, "federation.remote_control");
     let owners = inventory.owners.filter((owner) => !owner.target || (canReadRemote && session.launchAction !== "assign_default_agent"));
     if (!session.directorySelector && session.selectedProject && session.mode !== "projects" && session.mode !== "new_project") {
       const target = session.selectedProject.federationTarget;
@@ -5318,7 +5296,7 @@ export class MessagingController {
       ...(session.launchAction === "assign_default_agent" ? { allowedBackends: ["codex" as const,
         ...(backendSummaries ?? []).filter((backend) => backend.kind !== "codex" && defaultAgentBackendSupport(backend.kind, backendSummaries) === "supported")
           .map((backend) => backend.kind)] } : {}),
-      excludeFullAccess: session.launchAction === "resume_thread" && !await this.canResumeFullAccessThreads(),
+      excludeFullAccess: session.launchAction === "resume_thread" && !await this.accessControl.canResumeFullAccessThreads(),
     };
     const query: NavigationQuery = session.mode === "projects" || session.mode === "new_project"
       ? { kind: "messaging-projects", ...eligibility, scratchpadFirst: isNewThreadLaunchAction(session.launchAction) }
@@ -5365,7 +5343,7 @@ export class MessagingController {
     navigation: MessagingNewThreadNavigation,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
-    if (!await this.requireRemoteScope(event, project.federationTarget, "messaging-project-create")) return;
+    if (!await this.accessControl.requireRemoteScope(event, project.federationTarget, "messaging-project-create")) return;
     if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
       await this.deliver(
         buildErrorIntent({
@@ -5494,7 +5472,7 @@ export class MessagingController {
       selectedBackend,
     );
     const canCreateWorktree = canCreateNewThreadWorktree(directory);
-    const fullAccessControls = await this.resolveFullAccessControls();
+    const fullAccessControls = await this.accessControl.resolveFullAccessControls();
     const hasMultipleBackends = backendChoices.selectable.length > 1;
     const supportsModel = (selectedBackend.launchpadOptions?.models?.length ?? 0) > 0;
     const supportsReasoning =
@@ -6113,7 +6091,7 @@ export class MessagingController {
       return;
     }
     if (executionMode === "full-access") {
-      const allowed = await this.ensureFullAccessEscalationAllowed(
+      const allowed = await this.accessControl.ensureFullAccessEscalationAllowed(
         { kind: "new-thread", session },
         event,
       );
@@ -6575,7 +6553,7 @@ export class MessagingController {
 
     return await this.options.store.upsertManagedTopic(
       managedTopicRecordFromConversation({
-        actorIds: this.monitorAuthorizedActorIds(event),
+        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
         channel: event.channel.channel,
         conversation: result.conversation,
         now: this.now(),
@@ -6704,7 +6682,7 @@ export class MessagingController {
       });
     const proposal: MessagingTopicCleanupProposalRecord = {
       id: `topic-cleanup:${controlTopic.supergroupId}:${now}`,
-      authorizedActorIds: this.monitorAuthorizedActorIds(event),
+      authorizedActorIds: this.accessControl.monitorAuthorizedActorIds(event),
       channel: event.channel.channel,
       controlTopicRecordId: controlTopic.id,
       createdAt: now,
@@ -6795,7 +6773,7 @@ export class MessagingController {
       }
       const topic = await this.options.store.upsertManagedTopic(
         managedTopicRecordFromConversation({
-          actorIds: this.monitorAuthorizedActorIds(event),
+          actorIds: this.accessControl.monitorAuthorizedActorIds(event),
           channel: event.channel.channel,
           conversation: result.conversation,
           now: this.now(),
@@ -6928,7 +6906,7 @@ export class MessagingController {
     const observedAt = event.receivedAt;
     await this.options.store.mergeManagedTopicObservation({
       ...managedTopicRecordFromConversation({
-        actorIds: this.monitorAuthorizedActorIds(event),
+        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
         channel: event.channel.channel,
         conversation: event.channel.conversation,
         now: observedAt,
@@ -6956,7 +6934,7 @@ export class MessagingController {
     });
     return await this.options.store.upsertManagedTopic({
       ...managedTopicRecordFromConversation({
-        actorIds: this.monitorAuthorizedActorIds(event),
+        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
         channel: event.channel.channel,
         conversation: event.channel.conversation,
         now,
@@ -6966,7 +6944,7 @@ export class MessagingController {
       ...existing,
       authorizedActorIds: existing?.authorizedActorIds.length
         ? existing.authorizedActorIds
-        : this.monitorAuthorizedActorIds(event),
+        : this.accessControl.monitorAuthorizedActorIds(event),
       lastObservedAt: now,
       lifecycle: options.lifecycle,
       recommendation: options.recommendation ?? existing?.recommendation,
@@ -6991,7 +6969,7 @@ export class MessagingController {
       channel: event.channel,
       authorizedActorIds: existing?.authorizedActorIds.length
         ? existing.authorizedActorIds
-        : this.monitorAuthorizedActorIds(event),
+        : this.accessControl.monitorAuthorizedActorIds(event),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       monitor: {
@@ -7104,12 +7082,6 @@ export class MessagingController {
       monitorSurface: undefined,
       updatedAt: now,
     });
-  }
-
-  private monitorAuthorizedActorIds(event: MessagingInboundEvent): string[] {
-    return this.authorizedActorIds.size > 0
-      ? [...this.authorizedActorIds]
-      : [event.actor.platformUserId];
   }
 
   private async enableAndRenderMonitor(
@@ -8314,7 +8286,7 @@ export class MessagingController {
     const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
     if (executionMode === "full-access") {
-      const allowed = await this.ensureFullAccessEscalationAllowed(
+      const allowed = await this.accessControl.ensureFullAccessEscalationAllowed(
         {
           backend: binding.backend,
           binding,
@@ -8385,7 +8357,7 @@ export class MessagingController {
       return;
     }
     if (executionMode === "full-access") {
-      const allowed = await this.ensureFullAccessEscalationAllowed(
+      const allowed = await this.accessControl.ensureFullAccessEscalationAllowed(
         {
           backend: binding.backend,
           binding,
@@ -8418,7 +8390,7 @@ export class MessagingController {
     // RBAC double-gate: a privileged (full-access-equivalent) ACP runtime needs
     // the dedicated danger permission on top of the global Full Access toggle.
     if (
-      !(await this.requirePermission(
+      !(await this.accessControl.requirePermission(
         event,
         "thread.execution.full_access",
         "execution:acp-privileged",
@@ -8426,9 +8398,9 @@ export class MessagingController {
     ) {
       return false;
     }
-    const controls = await this.resolveFullAccessControls();
+    const controls = await this.accessControl.resolveFullAccessControls();
     if (!controls.allowEscalation) {
-      await this.deliverFullAccessPolicyError(
+      await this.accessControl.deliverFullAccessPolicyError(
         context.kind === "thread"
           ? await this.options.store.getBinding(context.bindingId)
           : undefined,
@@ -8438,7 +8410,7 @@ export class MessagingController {
       return false;
     }
 
-    const warning = await this.resolveFullAccessWarning(controls, event);
+    const warning = await this.accessControl.resolveFullAccessWarning(controls, event);
     if (!warning.shouldWarn) {
       return true;
     }
@@ -8451,8 +8423,8 @@ export class MessagingController {
     context: AcpRuntimeRiskWarningContext,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const controls = await this.resolveFullAccessControls();
-    const warning = await this.resolveFullAccessWarning(controls, event);
+    const controls = await this.accessControl.resolveFullAccessControls();
+    const warning = await this.accessControl.resolveFullAccessWarning(controls, event);
     const binding =
       context.kind === "thread"
         ? await this.options.store.getBinding(context.bindingId)
@@ -8539,287 +8511,6 @@ export class MessagingController {
       await this.options.store.upsertPendingIntent({
         ...pending,
         surface: result.surface,
-      });
-    }
-  }
-
-  private async ensureFullAccessEscalationAllowed(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-  ): Promise<boolean> {
-    // RBAC double-gate: escalating a thread to Codex Full Access requires the
-    // dedicated danger permission IN ADDITION to the global Full Access
-    // settings toggle below — the permission is never a bypass of the toggle.
-    if (
-      !(await this.requirePermission(
-        event,
-        "thread.execution.full_access",
-        "execution:full-access",
-      ))
-    ) {
-      return false;
-    }
-    const controls = await this.resolveFullAccessControls();
-    if (!controls.allowEscalation) {
-      await this.recordFullAccessPolicyViolation(context, event);
-      await this.deliverFullAccessPolicyError(
-        context.kind === "thread" ? context.binding : undefined,
-        event,
-        "Escalating to Full Access from messaging is disabled in Settings.",
-      );
-      return false;
-    }
-
-    const warning = await this.resolveFullAccessWarning(controls, event);
-    if (!warning.shouldWarn) {
-      return true;
-    }
-
-    await this.presentFullAccessRiskWarning(context, event);
-    return false;
-  }
-
-  private async presentFullAccessRiskWarning(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-    options: { presentationMode?: FullAccessRiskPresentationMode } = {},
-  ): Promise<void> {
-    const controls = await this.resolveFullAccessControls();
-    const warning = await this.resolveFullAccessWarning(controls, event);
-    const actionContext: FullAccessRiskWarningContext =
-      context.kind === "thread"
-        ? {
-            kind: "thread",
-            bindingId: context.binding?.id ?? "",
-            threadId: context.threadId,
-          }
-        : context.kind === "new-thread"
-          ? {
-            kind: "new-thread",
-            ...(options.presentationMode === "message"
-              ? { pendingPrompt: true }
-              : {}),
-            sessionId: context.session.id,
-          }
-          : {
-              backend: context.backend,
-              ...(context.federatedThread?.target.scope === "remote"
-                ? {
-                    federationInstanceId:
-                      context.federatedThread.target.instanceId,
-                  }
-                : {}),
-              kind: "resume-thread",
-              sessionId: context.session.id,
-              threadId: context.threadId,
-          };
-    const presentation = fullAccessRiskPresentationForContext(
-      context,
-      options.presentationMode ?? "surface",
-    );
-    const actions: MessagingConfirmationIntent["actions"] = [
-      {
-        id: `${FULL_ACCESS_RISK_ACTION_PREFIX}accept`,
-        label: "Yes",
-        style: "primary",
-        fallbackText: "yes",
-        value: actionContext,
-      },
-      ...(warning.canDismiss
-        ? [
-            {
-              id: `${FULL_ACCESS_RISK_ACTION_PREFIX}dismiss`,
-              label: "Yes - and stop warning me",
-              style: "primary" as const,
-              fallbackText: "yes and stop warning me",
-              value: actionContext,
-            },
-          ]
-        : []),
-      {
-        id: `${FULL_ACCESS_RISK_ACTION_PREFIX}cancel`,
-        label: "Cancel",
-        style: "secondary",
-        fallbackText: "cancel",
-        value: actionContext,
-      },
-    ];
-    const intent = buildConfirmationIntent({
-      id: this.newIntentId("full-access-risk"),
-      capabilityProfile: this.capabilityProfile,
-      createdAt: this.now(),
-      delivery: presentation.surface
-        ? {
-            mode: "update",
-            replaceMarkup: true,
-          }
-        : undefined,
-      title: "Enable Full Access?",
-      body: [
-        "Full Access allows network access and read/write access to almost all files on this machine.",
-        "That means data can be exfiltrated unintentionally, or by malicious code the agent downloads and executes through a supply chain attack on npm, PyPI, Rust crates, Go modules, or a similar dependency source.",
-      ].join("\n\n"),
-      fallbackText: warning.canDismiss
-        ? "Reply Yes, Yes - and stop warning me, or Cancel."
-        : "Reply Yes or Cancel.",
-      actions,
-      targetSurface: presentation.surface,
-    });
-    const expiresAt =
-      context.kind === "new-thread" || context.kind === "resume-thread"
-        ? this.now() + MESSAGING_CALLBACK_HANDLE_TTL_MS
-        : undefined;
-    if (
-      expiresAt !== undefined &&
-      (context.kind === "new-thread" || context.kind === "resume-thread")
-    ) {
-      await this.options.store.upsertBrowseSession({
-        ...context.session,
-        expiresAt: Math.max(context.session.expiresAt, expiresAt),
-        textInputExpiresAt:
-          options.presentationMode === "message"
-            ? this.now()
-            : context.session.textInputExpiresAt ?? context.session.expiresAt,
-        updatedAt: this.now(),
-      });
-    }
-    const pending = await this.storePendingIntent(
-      intent,
-      presentation.binding,
-      event,
-      expiresAt === undefined ? undefined : { expiresAt },
-    );
-    const result = await this.deliver(intent, presentation.binding, event);
-    if (result.surface) {
-      await this.options.store.upsertPendingIntent({
-        ...pending,
-        surface: result.surface,
-      });
-    }
-  }
-
-  private async canResumeFullAccessThreads(): Promise<boolean> {
-    return (await this.resolveFullAccessControls()).allowThreadResume;
-  }
-
-  private async resolveFullAccessRiskForSession(
-    session: MessagingBrowseSessionRecord,
-    event: MessagingInboundEvent,
-    options: NewThreadOptionsSummary,
-  ): Promise<"accepted" | "blocked" | "warning"> {
-    if (session.fullAccessRiskAcceptedAt) {
-      return "accepted";
-    }
-    const controls = await this.resolveFullAccessControls();
-    if (!controls.allowEscalation) {
-      await this.recordFullAccessPolicyViolation(
-        { kind: "new-thread", session },
-        event,
-      );
-      await this.deliverFullAccessPolicyError(
-        undefined,
-        event,
-        "Starting a Full Access thread from messaging is disabled in Settings.",
-      );
-      return "blocked";
-    }
-    const warning = await this.resolveFullAccessWarning(controls, event);
-    if (
-      warning.policy === "dismissable" &&
-      options.executionModeSource !== "session"
-    ) {
-      return "accepted";
-    }
-    return warning.shouldWarn ? "warning" : "accepted";
-  }
-
-  private resolveFullAccessControls():
-    | MessagingFullAccessControls
-    | Promise<MessagingFullAccessControls> {
-    const controls = this.options.fullAccessControls;
-    const resolved =
-      typeof controls === "function" ? controls() : controls;
-    return isPromiseLike(resolved)
-      ? Promise.resolve(resolved).then(normalizeMessagingFullAccessControls)
-      : normalizeMessagingFullAccessControls(resolved);
-  }
-
-  private async resolveFullAccessWarning(
-    controls: MessagingFullAccessControls,
-    event: MessagingInboundEvent,
-  ): Promise<FullAccessWarningResolution> {
-    const contact = controls.authorizedUsers?.[event.channel.channel]?.find(
-      (candidate) => candidate.id === event.actor.platformUserId,
-    );
-    const policy = contact?.fullAccessWarningOverride ?? "default";
-    const effectivePolicy =
-      policy === "default" ? controls.warningPolicy : policy;
-    if (effectivePolicy === "never") {
-      return { canDismiss: false, policy: effectivePolicy, shouldWarn: false };
-    }
-    if (effectivePolicy === "always") {
-      return { canDismiss: false, policy: effectivePolicy, shouldWarn: true };
-    }
-    const canPersistDismissal =
-      controls.canDismissWarning
-        ? await controls.canDismissWarning({
-            actorId: event.actor.platformUserId,
-            channel: event.channel.channel,
-          })
-        : Boolean(controls.dismissWarning);
-    return {
-      canDismiss: Boolean(controls.dismissWarning) && canPersistDismissal,
-      policy: effectivePolicy,
-      shouldWarn: contact?.fullAccessWarningDismissed !== true,
-    };
-  }
-
-  private async deliverFullAccessPolicyError(
-    binding: MessagingBindingRecord | undefined,
-    event: MessagingInboundEvent | undefined,
-    body: string,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("full-access-policy"),
-        createdAt: this.now(),
-        title: "Full Access blocked",
-        body,
-        recoverable: true,
-      }),
-      binding,
-      event,
-    );
-  }
-
-  private async recordFullAccessPolicyViolation(
-    context: FullAccessEscalationContext,
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    try {
-      await this.options.onFullAccessPolicyViolation?.({
-        actorId: event.actor.platformUserId,
-        actorDisplayName: event.actor.displayName,
-        backend:
-          context.kind === "thread" || context.kind === "resume-thread"
-            ? context.backend
-            : undefined,
-        bindingId: context.kind === "thread" ? context.binding?.id : undefined,
-        channel: event.channel,
-        requestedAction:
-          context.kind === "thread"
-            ? "messaging.full_access.escalate_thread"
-            : context.kind === "resume-thread"
-              ? "messaging.full_access.resume_with_escalation"
-              : "messaging.full_access.start_new_thread",
-        threadId:
-          context.kind === "thread" || context.kind === "resume-thread"
-            ? context.threadId
-            : undefined,
-      });
-    } catch (error) {
-      this.logger.debug?.("messaging full-access policy log failed", {
-        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -9457,7 +9148,7 @@ export class MessagingController {
     monitor?: MessagingMonitorState,
     countsAsActivity = true,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
-    const activeTurns = new Map(this.activeTurnsByThreadKey);
+    const activeTurns = new Map(this.turns.snapshot());
     if (!this.options.backend.readThreadStatus) {
       return activeTurns;
     }
@@ -9741,14 +9432,14 @@ export class MessagingController {
   private getActiveTurn(
     binding: MessagingBindingRecord,
   ): MessagingActiveTurnSummary | undefined {
-    return this.activeTurnsByThreadKey.get(this.threadKeyForBinding(binding));
+    return this.turns.get(binding);
   }
 
   private setActiveTurn(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
   ): void {
-    this.activeTurnsByThreadKey.set(this.threadKeyForBinding(binding), activeTurn);
+    this.turns.observe(binding, activeTurn);
   }
 
   private threadKeyForBinding(binding: MessagingBindingRecord): string {
@@ -11576,46 +11267,6 @@ export class MessagingController {
     );
   }
 
-  private retainedRequestSource(context: PwrAgentMessagingRequest["context"]): MessagingRequestSource | undefined {
-    if (context.causalMessagingAmbiguous) return undefined;
-    if (context.causalMessagingSource) return this.options.requestStore?.get(context.causalMessagingSource);
-    if (!context.turnId) return undefined;
-    return this.activeAgentMessagingOriginsByTurnKey.get(
-      agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
-    )?.source;
-  }
-
-  private retainedRequestCanCrossInstance(context: PwrAgentMessagingRequest["context"], source: MessagingRequestSource): boolean {
-    return !context.requestingInstanceId || this.actorHasPermission(source.event, "federation.remote_control");
-  }
-
-  private async retainedSourceIsAuthorized(source: MessagingRequestSource, verifyAccess = true): Promise<boolean | undefined> {
-    if (!this.isChannelInScope(source.event.channel)
-      || !source.connectionId || source.connectionId !== this.adapter.retainedSourceConnectionId?.()
-      || !this.adapter.authorizeRetainedSource) return false;
-    const providerAdmission = await this.adapter.authorizeRetainedSource(source.event, verifyAccess);
-    if (providerAdmission !== true) return providerAdmission;
-    if (source.bindingId) {
-      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
-      if (!binding || binding.revokedAt || binding.backend !== source.agent.backend
-        || binding.id !== source.bindingId || binding.threadId !== source.agent.threadId) return false;
-    } else {
-      if (await this.options.store.findActiveBindingForChannel(source.event.channel)) return false;
-      // The effective default route, not any older broader matching assignment,
-      // must still name the Agent that admitted this human request.
-      const assignment = await this.options.store.findActiveDefaultAgentAssignmentForChannel(source.event.channel);
-      if (!assignment || assignment.target.backend !== source.agent.backend
-        || assignment.target.threadId !== source.agent.threadId) return false;
-    }
-    return true;
-  }
-
-  private retainedSourceHasPermissions(source: MessagingRequestSource): boolean {
-    const permissions = this.resolveActorPermissions(source.event);
-    return permissions === null || (["thread.resume", "tools.thread_inspection"] as const)
-      .every((permission) => permissions.permissions.has(permission));
-  }
-
   private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"], code: "forbidden" | "not_found" = "forbidden"): Extract<PwrAgentMessagingResponse, { ok: false }> {
     return { ok: false, error: {
       code: context.causalMessagingAmbiguous ? "ambiguous_location" : code,
@@ -11628,15 +11279,15 @@ export class MessagingController {
   private async listRetainedMessagingSurfaces(
     request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_surfaces" }>,
   ): Promise<PwrAgentMessagingResponse> {
-    const source = this.retainedRequestSource(request.context);
+    const source = this.accessControl.retainedRequestSource(request.context);
     if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
-    if (!this.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.retainedSourceHasPermissions(source)
-      || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
+    if (!this.accessControl.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.accessControl.retainedSourceHasPermissions(source)
+      || !await this.accessControl.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
     if (!isAppServerBackendKind(request.args.backend) || !request.args.threadId?.trim()
       || (request.args.limit !== undefined && (!Number.isInteger(request.args.limit) || request.args.limit < 1 || request.args.limit > 25))) {
       return { ok: false, error: { code: "invalid_arguments", message: "Provide a target backend/threadId and a limit between 1 and 25." } };
     }
-    const canUseRemote = this.actorHasPermission(source.event, "federation.remote_control");
+    const canUseRemote = this.accessControl.actorHasPermission(source.event, "federation.remote_control");
     if (request.args.instanceId && !canUseRemote) return this.retainedSourceUnavailable(request.context);
     const target = await this.resolveAttachTarget({ ...request.args, includeRemote: canUseRemote && request.args.includeRemote !== false });
     if (!target.ok) return target;
@@ -11659,8 +11310,8 @@ export class MessagingController {
       selectionReason: "unavailable",
     };
     for (const candidate of page) {
-      if (!this.retainedSourceHasPermissions(candidate)) continue;
-      const authorized = await this.retainedSourceIsAuthorized(candidate);
+      if (!this.accessControl.retainedSourceHasPermissions(candidate)) continue;
+      const authorized = await this.accessControl.retainedSourceIsAuthorized(candidate);
       if (authorized === undefined) result.countIsComplete = false;
       if (!authorized) continue;
       // Use the immutable request's reply anchor for its causal destination,
@@ -11705,11 +11356,11 @@ export class MessagingController {
   private async attachThreadToRetainedSurface(
     request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_to_surface" }>,
   ): Promise<PwrAgentMessagingResponse> {
-    const source = this.retainedRequestSource(request.context);
+    const source = this.accessControl.retainedRequestSource(request.context);
     if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
-    if (!this.retainedRequestCanCrossInstance(request.context, source) || !this.retainedSourceHasPermissions(source)
-      || !await this.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
-    if (request.args.instanceId && !this.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
+    if (!this.accessControl.retainedRequestCanCrossInstance(request.context, source) || !this.accessControl.retainedSourceHasPermissions(source)
+      || !await this.accessControl.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
+    if (request.args.instanceId && !this.accessControl.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
     let selector = request.args.surfaceSelector;
     if (request.args.selection !== undefined && !["causal", "sole_eligible"].includes(request.args.selection)) {
       return { ok: false, error: { code: "invalid_arguments", message: "selection must be causal or sole_eligible." } };
@@ -11726,8 +11377,8 @@ export class MessagingController {
     }
     const selected = !selector || selector === source.selector ? source
       : this.options.requestStore?.destination(source, selector);
-    if (!selected || !this.retainedSourceHasPermissions(selected)
-      || !await this.retainedSourceIsAuthorized(selected, false)) return this.retainedSourceUnavailable(request.context);
+    if (!selected || !this.accessControl.retainedSourceHasPermissions(selected)
+      || !await this.accessControl.retainedSourceIsAuthorized(selected, false)) return this.retainedSourceUnavailable(request.context);
     if (request.args.expectedRevision && request.args.expectedRevision !== selected.ref.requestId) {
       return { ok: false, error: { code: "forbidden", message: "The selected destination's human reply anchor changed. Inspect its current revision before attaching." } };
     }
@@ -11741,7 +11392,7 @@ export class MessagingController {
       request.args.idempotencyKey ?? null]);
     if (!claim) return this.retainedSourceUnavailable(request.context);
     if (!claim.claimed) {
-      if (!await this.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
+      if (!await this.accessControl.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
       if (claim.result?.ok && "binding" in claim.result.data) {
         const binding = await this.options.store.getBinding(claim.result.data.binding.id);
         if (!binding || binding.revokedAt) return this.retainedSourceUnavailable(request.context);
@@ -11751,7 +11402,7 @@ export class MessagingController {
     }
     const result = await this.attachThreadHereFromAgentMessagingOrigin({
       operation: "attach_thread_here", context: request.context,
-      args: { ...request.args, includeRemote: this.actorHasPermission(source.event, "federation.remote_control") && request.args.includeRemote !== false },
+      args: { ...request.args, includeRemote: this.accessControl.actorHasPermission(source.event, "federation.remote_control") && request.args.includeRemote !== false },
     }, await this.originForRetainedSource(selected));
     this.options.requestStore!.finishAttachment(claim.id, result);
     return result;
@@ -11760,18 +11411,8 @@ export class MessagingController {
   async authorizeRetainedTool(
     context: PwrAgentMessagingRequest["context"],
     check: Parameters<MessagingController["checkDynamicToolPermission"]>[0],
-  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }> {
-    const source = this.retainedRequestSource(context);
-    if (!source || !this.isChannelInScope(source.event.channel)) return { owns: false, allowed: false };
-    if (context.containedPeer) {
-      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
-      if (!source.bindingId || binding?.id !== source.bindingId || !containedMessagingBindingMatches(context, binding)) {
-        return { owns: true, allowed: false, permission: "federation.remote_control" };
-      }
-    }
-    if (!this.retainedRequestCanCrossInstance(context, source)) return { owns: true, allowed: false, permission: "federation.remote_control" };
-    if (!await this.retainedSourceIsAuthorized(source, false)) return { owns: true, allowed: false, permission: "message.reply" };
-    return this.checkDynamicToolPermission(check, source);
+  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }>{
+    return this.accessControl.authorizeRetainedTool(context, check);
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
@@ -11853,7 +11494,7 @@ export class MessagingController {
       return target;
     }
 
-    if (!await this.requireRemoteScope(origin.origin.event, target.federatedThread?.target, "agent-attach:remote-instance", { notify: false })) {
+    if (!await this.accessControl.requireRemoteScope(origin.origin.event, target.federatedThread?.target, "agent-attach:remote-instance", { notify: false })) {
       return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot attach a thread from this instance." } };
     }
 
@@ -11871,8 +11512,8 @@ export class MessagingController {
 
     let attachEvent = origin.origin.event;
     let createdConversation: MessagingChannelRef["conversation"] | undefined;
-    if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
-      || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
+    if (retainedOrigin?.source && (!this.accessControl.retainedSourceHasPermissions(retainedOrigin.source)
+      || !await this.accessControl.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     if (resolvedPlacement.placement === "new_child") {
       if (!this.adapter.createManagedConversation) {
         return {
@@ -11919,8 +11560,8 @@ export class MessagingController {
       };
     }
 
-    if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
-      || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
+    if (retainedOrigin?.source && (!this.accessControl.retainedSourceHasPermissions(retainedOrigin.source)
+      || !await this.accessControl.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     const binding = await this.bindingService.bindChannelToThread(attachEvent, {
       backend: args.backend,
       federatedThread: target.federatedThread,
@@ -12463,7 +12104,7 @@ export class MessagingController {
         },
       };
     }
-    const permission = this.checkDynamicToolPermission({
+    const permission = this.accessControl.checkDynamicToolPermission({
       backend: request.context.backend,
       threadId: request.context.threadId,
       turnId: request.context.turnId,
@@ -12581,7 +12222,7 @@ export class MessagingController {
     }
 
     if (request.context.requestingInstanceId) {
-      const permission = await this.authorizeRetainedTool(request.context, {
+      const permission = await this.accessControl.authorizeRetainedTool(request.context, {
         ...request.context, category: "messaging_context", tool: "send_messaging_file", arguments: request.args,
       });
       if (!permission.allowed || !(await this.resolveAgentMessagingOrigin(request.context)).ok) {
@@ -12790,7 +12431,7 @@ export class MessagingController {
     const active = request.context.turnId ? this.activeAgentMessagingOriginsByTurnKey.get(
       agentMessagingTurnKey(request.context.backend, request.context.threadId, request.context.turnId),
     ) : undefined;
-    const source = this.retainedRequestSource(request.context);
+    const source = this.accessControl.retainedRequestSource(request.context);
     const event = source?.event ?? active?.event;
     // The request store is shared by every provider. An unrelated controller
     // must yield before actor authorization, so the owner can decide access.
@@ -12803,12 +12444,12 @@ export class MessagingController {
     const remoteAuthorized = async (verifyAccess = true): Promise<boolean> => {
       if (!remote || !source || !source.bindingId || source.agent.backend !== request.context.backend
         || source.agent.threadId !== request.context.threadId) return false;
-      if (!await this.retainedSourceIsAuthorized(source, verifyAccess)) return false;
+      if (!await this.accessControl.retainedSourceIsAuthorized(source, verifyAccess)) return false;
       const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
       return binding?.id === source.bindingId && binding.backend === request.context.backend
         && binding.threadId === request.context.threadId && containedMessagingBindingMatches(request.context, binding)
-        && this.retainedRequestCanCrossInstance(request.context, source)
-        && this.checkDynamicToolPermission({ ...request.context, category: "messaging_context",
+        && this.accessControl.retainedRequestCanCrossInstance(request.context, source)
+        && this.accessControl.checkDynamicToolPermission({ ...request.context, category: "messaging_context",
           tool: request.operation, arguments: request.args }, source).allowed;
     };
     if (remote && !await remoteAuthorized()) return this.retainedSourceUnavailable(request.context);
@@ -12816,10 +12457,10 @@ export class MessagingController {
       return { ok: false, error: { code: "not_found", message:
         "This messaging turn's actor cannot be reauthorized after restart. Send a new message in the original conversation, or request the save in a local desktop turn on this thread." } };
     }
-    if (!remote && !active && request.context.causalMessagingSource && (!source || !await this.retainedSourceIsAuthorized(source))) {
+    if (!remote && !active && request.context.causalMessagingSource && (!source || !await this.accessControl.retainedSourceIsAuthorized(source))) {
       return this.retainedSourceUnavailable(request.context);
     }
-    const permission = this.checkDynamicToolPermission({ ...request.context,
+    const permission = this.accessControl.checkDynamicToolPermission({ ...request.context,
       category: "messaging_context", tool: request.operation, arguments: request.args,
     }, source);
     if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot access received attachments." } };
@@ -13121,10 +12762,10 @@ export class MessagingController {
     context: PwrAgentMessagingRequest["context"],
   ): Promise<AgentMessagingOriginResolution> {
     if (context.requestingInstanceId && context.causalMessagingSource) {
-      const source = this.retainedRequestSource(context);
+      const source = this.accessControl.retainedRequestSource(context);
       if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(context, "not_found");
-      if (!this.retainedRequestCanCrossInstance(context, source) || !this.retainedSourceHasPermissions(source)
-        || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(context);
+      if (!this.accessControl.retainedRequestCanCrossInstance(context, source) || !this.accessControl.retainedSourceHasPermissions(source)
+        || !await this.accessControl.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(context);
       return { ok: true, origin: await this.originForRetainedSource(source) };
     }
     if (context.turnId) {
@@ -13222,7 +12863,7 @@ export class MessagingController {
   private summarizeConversationCapabilities(
     origin: ActiveAgentMessagingOrigin,
   ): PwrAgentMessagingConversationCapabilitiesSummary {
-    const permissions = this.resolveActorPermissions(origin.event);
+    const permissions = this.accessControl.resolveActorPermissions(origin.event);
     return {
       rename: {
         allowed:
@@ -13452,159 +13093,6 @@ export class MessagingController {
     };
   }
 
-  private isAuthorized(platformUserId: string): boolean {
-    return this.authorizedActorIds.has(platformUserId);
-  }
-
-  // -------------------------------------------------------------------------
-  // RBAC — capability layer (issue #260). Composes with, never replaces, the
-  // provider admission gate. In legacy-compatible mode (no policy provider, or
-  // enforcement disabled) every method here is a no-op so behavior is identical
-  // to pre-RBAC PwrAgent.
-  // -------------------------------------------------------------------------
-
-  /**
-   * Resolve the triggering actor's effective permissions, or `null` in
-   * legacy-compatible mode (caller should treat null as "allow, Admin-implied").
-   *
-   * The admission-path inference: a caller in `authorizedActorIds` is a *named*
-   * actor (only their named attachments apply); anyone else was admitted by the
-   * provider through a bucket access mode (DM workspace bucket for direct
-   * messages, channel bucket otherwise), so the matching bucket attachment
-   * applies. See #260 §3.
-   */
-  private resolveActorPermissions(
-    event: MessagingInboundEvent,
-  ): RbacResolution | null {
-    const provider = this.options.rbacPolicy;
-    if (!provider) {
-      return null;
-    }
-    const actorId = event.actor.platformUserId;
-    const named = this.authorizedActorIds.has(actorId);
-    const admittedVia = named
-      ? {}
-      : event.channel.conversation.kind === "dm"
-        ? { dmBucket: true }
-        : { channelBucket: true };
-    const input = {
-      actorId,
-      conversationId: event.channel.conversation.id,
-      admittedVia,
-    };
-    // One policy read when the provider supports it — a gated action asks both
-    // "are we enforcing?" and "what may they do?", and each ask re-reads.
-    if (provider.resolveIfEnforcing) {
-      return provider.resolveIfEnforcing(input);
-    }
-    return provider.isEnforcing() ? provider.resolve(input) : null;
-  }
-
-  /**
-   * Admission gate replacement. Legacy mode preserves the exact
-   * `authorizedActorIds` membership check. Enforcing mode admits any actor that
-   * resolves to at least one permission-granting role (named or bucket) and
-   * default-denies the rest.
-   */
-  private authorizeInboundAdmission(event: MessagingInboundEvent): boolean {
-    const resolution = this.resolveActorPermissions(event);
-    if (resolution === null) {
-      return this.isAuthorized(event.actor.platformUserId);
-    }
-    return !resolution.rejected;
-  }
-
-  /**
-   * Gate a single action. Returns true (proceed) in legacy mode or when the
-   * actor holds `permission`; otherwise records an audit row, optionally
-   * notifies the user, and returns false. `notify: false` silently drops (used
-   * for the plain-reply floor to avoid spamming a channel).
-   */
-  private async requirePermission(
-    event: MessagingInboundEvent,
-    permission: MessagingPermissionId,
-    auditAction: string,
-    opts?: { notify?: boolean },
-  ): Promise<boolean> {
-    const resolution = this.resolveActorPermissions(event);
-    if (resolution === null) {
-      return true;
-    }
-    if (resolution.permissions.has(permission)) {
-      return true;
-    }
-    this.recordCapabilityDenied(event, permission, resolution.roleIds, auditAction);
-    if (opts?.notify !== false) {
-      await this.deliverCapabilityDenied(event);
-    }
-    return false;
-  }
-
-  /**
-   * Federation SCOPE gate. Every other permission answers "what may this actor
-   * do"; this one answers "where". Required IN ADDITION to the action's own
-   * permission whenever the thread being acted on lives on another instance —
-   * the same double-gate shape as `thread.execution.full_access`, and for the
-   * same reason: `thread.resume` on a peer's thread is a materially bigger
-   * grant than on a local one, and `thread.execution.full_access` on a peer's
-   * thread is full access on ANOTHER MACHINE.
-   *
-   * Local targets short-circuit to `true`, so this costs nothing for the
-   * single-instance case. Legacy (unenforced) mode is allow-all as always.
-   */
-  private async requireRemoteScope(
-    event: MessagingInboundEvent,
-    target: FederationTarget | undefined,
-    auditAction: string,
-    opts?: { notify?: boolean },
-  ): Promise<boolean> {
-    if (!target || target.scope !== "remote") {
-      return true;
-    }
-    return await this.requirePermission(
-      event,
-      "federation.remote_control",
-      auditAction,
-      opts,
-    );
-  }
-
-  /**
-   * Non-auditing permission probe for render-time filtering. `requirePermission`
-   * records a denial and messages the user, which is right when they ASKED to do
-   * something and wrong when we're deciding what to put on a menu.
-   */
-  private actorHasPermission(
-    event: MessagingInboundEvent,
-    permission: MessagingPermissionId,
-  ): boolean {
-    const resolution = this.resolveActorPermissions(event);
-    return resolution === null || resolution.permissions.has(permission);
-  }
-
-  /**
-   * Strip peers' threads from a snapshot before it reaches a picker. Enforcement
-   * alone would still leak: the resume browser lists thread titles and projects,
-   * so an actor without remote scope would read a peer's work before being told
-   * they can't touch it. Filtering here keeps the menu honest — every row it
-   * shows is a row the actor may actually bind.
-   */
-  /** `requireRemoteScope` for an already-resolved binding. */
-  private async requireRemoteScopeForBinding(
-    event: MessagingInboundEvent,
-    binding: MessagingBindingRecord | undefined,
-    auditAction: string,
-    opts?: { notify?: boolean },
-  ): Promise<boolean> {
-    if (!binding) return true;
-    return await this.requireRemoteScope(
-      event,
-      federationTargetForBinding(binding),
-      auditAction,
-      opts,
-    );
-  }
-
   /**
    * `send_messaging_file` reads a workspace file and pushes its bytes to an
    * external platform. That is the one outbound delivery an operator needs to
@@ -13660,55 +13148,6 @@ export class MessagingController {
     }
   }
 
-  private recordCapabilityDenied(
-    event: MessagingInboundEvent,
-    permission: MessagingPermissionId | "(admission)",
-    roleIds: readonly string[],
-    auditAction: string,
-  ): void {
-    try {
-      const log = this.desktopActivityLog();
-      if (!log) return;
-      const conversation = event.channel.conversation;
-      const who = event.actor.displayName ?? event.actor.platformUserId;
-      log.record({
-        platform: event.channel.channel,
-        kind: "inbound-rejected",
-        conversationId: conversation.id,
-        conversationTitle: conversation.title,
-        actorId: event.actor.platformUserId,
-        actorDisplayName: event.actor.displayName,
-        summary: `Denied ${auditAction}: ${who} lacks ${permission}`,
-        createdAt: this.now(),
-        payload: {
-          reason: "unauthorized-capability",
-          permission,
-          roleIds: [...roleIds],
-          auditAction,
-          conversationKind: conversation.kind,
-        },
-      });
-    } catch {
-      // Activity log is best-effort observability.
-    }
-  }
-
-  private async deliverCapabilityDenied(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("capability-denied"),
-        createdAt: this.now(),
-        title: "Not permitted",
-        body: "You don't have permission to do that.",
-        recoverable: false,
-      }),
-      undefined,
-      event,
-    );
-  }
-
   /**
    * Authorize an agent dynamic-tool call against the RBAC actor who started the
    * turn. `owns: false` means this controller has no record of the turn (a
@@ -13733,61 +13172,8 @@ export class MessagingController {
     category: MessagingDynamicToolCategory;
     tool: string;
     arguments?: Record<string, unknown> | null;
-  }, source?: MessagingRequestSource): { owns: boolean; allowed: boolean; permission?: string } {
-    if (!params.turnId && !source) {
-      return { owns: false, allowed: true };
-    }
-    const origin = source ? { event: source.event } : this.activeAgentMessagingOriginsByTurnKey.get(
-      agentMessagingTurnKey(params.backend, params.threadId, params.turnId!),
-    );
-    if (!origin) {
-      return { owns: false, allowed: true };
-    }
-    const resolution = this.resolveActorPermissions(origin.event);
-    if (resolution === null) {
-      if (params.tool === "manage_pwragent") {
-        // Lifecycle control requires an explicit current grant, including in legacy mode.
-        return { owns: true, allowed: false, permission: "tools.instance_lifecycle" };
-      }
-      // Legacy-compatible mode: full capability, exactly as before RBAC.
-      return { owns: true, allowed: true };
-    }
-    // `mutate_thread` is gated PER FIELD (model/reasoning/fast/rename/execution
-    // mode) at parity with the status buttons, including the Full Access danger
-    // gate; every other tool needs a single category permission.
-    const required =
-      params.category === "thread_inspection" && params.tool === "mutate_thread"
-        ? permissionsForThreadMutation(params.arguments)
-        : ((): MessagingPermissionId[] => {
-            const permission = permissionForDynamicTool(params.category, params.tool);
-            return permission ? [permission] : [];
-          })();
-    // Scope: the thread tools accept `instanceId` / `includeRemote`, so the
-    // agent can aim them at a peer. Reaching another instance needs the scope
-    // permission on top of the tool's own — and it applies even to otherwise
-    // ungated tools, because "benign here" is not benign on someone else's
-    // machine.
-    if (toolArgsTargetRemoteInstance(params.arguments)) {
-      required.push("federation.remote_control");
-    }
-    if (params.tool === "manage_pwragent") required.push("tools.instance_lifecycle");
-    if (required.length === 0) {
-      // Benign tool (e.g. get_current_messaging_surface, or a no-op mutation).
-      return { owns: true, allowed: true };
-    }
-    const missing = required.find(
-      (permission) => !resolution.permissions.has(permission),
-    );
-    if (!missing) {
-      return { owns: true, allowed: true };
-    }
-    this.recordCapabilityDenied(
-      origin.event,
-      missing,
-      resolution.roleIds,
-      `tool:${params.category}:${params.tool}`,
-    );
-    return { owns: true, allowed: false, permission: missing };
+  }, source?: MessagingRequestSource): { owns: boolean; allowed: boolean; permission?: string }{
+    return this.accessControl.checkDynamicToolPermission(params, source);
   }
 
   private newIntentId(prefix: string): string {
@@ -14005,22 +13391,6 @@ function formatTopicCleanupProposalBody(
     `Delete candidates: ${grouped.delete.length}`,
     ...grouped.delete.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
   ].join("\n");
-}
-
-function fullAccessRiskPresentationForContext(
-  context: FullAccessEscalationContext,
-  presentationMode: FullAccessRiskPresentationMode,
-): FullAccessRiskPresentation {
-  if (presentationMode === "message") {
-    return {};
-  }
-  if (context.kind === "thread") {
-    return {
-      binding: context.binding,
-      surface: context.binding?.statusSurface ?? context.binding?.pinnedStatusSurface,
-    };
-  }
-  return { surface: context.session.surface };
 }
 
 function reviewWorkspaceMatches(

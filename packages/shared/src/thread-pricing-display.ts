@@ -492,6 +492,9 @@ export function estimateCodexCreditsForLine(line: PricingUsageLine):
   if (isForkBaselineLine(line)) {
     return undefined;
   }
+  if (line.requestPricing) {
+    return line.requestPricing.codexCredits;
+  }
   const estimate = estimateOpenAiCodexCreditUsage({
     at: line.createdAt,
     cachedInputTokens: line.cachedInputTokens,
