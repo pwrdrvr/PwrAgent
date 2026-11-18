@@ -26163,9 +26163,12 @@ a.button {
    composer, not a row inside it, so it does not get the composer's 16px side
    padding or its centred `--chat-column-max` column. It takes that column
    itself; otherwise it runs edge to edge across the pane while the composer
-   below it sits inset. See `styles/__tests__/recovery-slot-column.test.ts`. */
+   below it sits inset. The bare composer footer that stands in for the
+   composer under the missing-worktree card is in the same position. See
+   `styles/__tests__/recovery-slot-column.test.ts`. */
 .thread-view__primary > .missing-worktree-card,
-.thread-view__primary > .workspace-recovery-notice {
+.thread-view__primary > .workspace-recovery-notice,
+.thread-view__primary > .composer__footer {
   align-self: center;
   width: calc(100% - 32px);
   max-width: var(--chat-column-max);

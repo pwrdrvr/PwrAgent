@@ -59,31 +59,45 @@ function resolveLength(value: string | undefined, pane: number): number | undefi
   throw new Error(`Recovery slot model does not understand the length ${value}`);
 }
 
-function sidePadding(padding: string | undefined): number {
-  const parts = (padding ?? "0").split(/\s+/).map((part) => Number.parseFloat(part));
-  // 1 value: all sides; 2-4 values: the second is left/right.
-  return parts.length === 1 ? parts[0]! : parts[1]!;
+/** [left, right] of a 1-4 value box shorthand (`padding`, `margin`). */
+function sides(shorthand: string | undefined): [number, number] {
+  const parts = (shorthand ?? "0").split(/\s+/).map((part) => Number.parseFloat(part));
+  const right = parts[1] ?? parts[0]!;
+  const left = parts[3] ?? right;
+  return [left, right];
 }
 
 /** The composer's rows: the pane less its side padding, capped and centred. */
 function composerColumn(pane: number): Box {
-  const padding = sidePadding(declarations([".composer"]).get("padding"));
+  const [padLeft, padRight] = sides(declarations([".composer"]).get("padding"));
   const rows = declarations([".composer > *"]);
-  const inner = pane - padding * 2;
+  const inner = pane - padLeft - padRight;
   const width = Math.min(resolveLength(rows.get("width"), inner) ?? inner, resolveLength(rows.get("max-width"), inner) ?? inner);
-  const left = padding + (inner - width) / 2;
+  const left = padLeft + (inner - width) / 2;
   return { left, right: left + width };
 }
 
 /** A flex item of the `.thread-view__primary` column. */
 function slotBox(className: string, pane: number): Box {
-  const own = declarations([className, `.thread-view__primary > ${className}`]);
+  // The child-combinator rule outranks the bare class whatever their order in
+  // the file, so it is applied second rather than merged in source order.
+  const own = new Map([
+    ...declarations([className]),
+    ...declarations([`.thread-view__primary > ${className}`]),
+  ]);
+  // The model centres or stretches the border box; a side margin would move
+  // it, so refuse one rather than report edges Chromium does not draw.
+  const [marginLeft, marginRight] = sides(own.get("margin"));
+  for (const margin of [marginLeft, marginRight, own.get("margin-left"), own.get("margin-right"), own.get("margin-inline")]) {
+    if (margin !== undefined && margin !== 0 && margin !== "0") {
+      throw new Error(`Recovery slot model does not handle a side margin on ${className}`);
+    }
+  }
   const width = resolveLength(own.get("width"), pane);
   const maxWidth = resolveLength(own.get("max-width"), pane);
   const alignSelf = own.get("align-self");
   if (width === undefined && (alignSelf === undefined || alignSelf === "stretch")) {
-    // Stretched across the column's cross axis; the slot cards declare no
-    // side margins, which the model would otherwise have to subtract.
+    // Stretched across the column's cross axis (side margins refused above).
     const used = Math.min(pane, maxWidth ?? pane);
     return { left: 0, right: used };
   }
@@ -98,7 +112,9 @@ function slotBox(className: string, pane: number): Box {
 describe("workspace recovery slot column", () => {
   const panes = [360, 520, 760, 940, 972, 984, 1200, 1600, 2400];
 
-  for (const className of [".missing-worktree-card", ".workspace-recovery-notice"]) {
+  // `.composer__footer` stands alone in the column when the missing-worktree
+  // card replaces the composer, and must line up with the card above it.
+  for (const className of [".missing-worktree-card", ".workspace-recovery-notice", ".composer__footer"]) {
     it(`puts ${className} on the composer's left and right edges`, () => {
       for (const pane of panes) {
         expect({ pane, ...slotBox(className, pane) }).toEqual({ pane, ...composerColumn(pane) });
