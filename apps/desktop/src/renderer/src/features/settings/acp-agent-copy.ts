@@ -3,7 +3,27 @@ import type {
   DesktopUpdateChannel,
 } from "@pwragent/shared";
 
+/** Local discovery can mark Grok as not requiring auth even when opening a
+ * session returned an authentication rejection. The session is authoritative. */
+export function grokSignInRequired(entry: AcpAgentSettingsEntry): boolean {
+  if (entry.registryId !== "grok" || !entry.installed) return false;
+  const detail =
+    entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
+  return entry.authStatus === "required"
+    || /(?:^|:\s*)Authentication required\b/i.test(detail ?? "");
+}
+
+/** A command to paste into a POSIX shell or Windows PowerShell. Use the
+ * selected executable so a bundled/custom build signs in through that build. */
+export function grokSignInCommand(command: string, windows: boolean): string {
+  const quoted = "'" + command.replaceAll("'", windows ? "''" : "'\"'\"'") + "'";
+  return `${windows ? "& " : ""}${quoted} login`;
+}
+
 export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
+  if (grokSignInRequired(entry)) {
+    return "Sign in required";
+  }
   if (entry.installed && entry.authStatus === "required") {
     return "Discovered - setup required";
   }

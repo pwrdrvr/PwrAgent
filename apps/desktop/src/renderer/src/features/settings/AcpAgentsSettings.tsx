@@ -24,6 +24,8 @@ import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
   acpRelativeTime,
   acpStatusLabel,
+  grokSignInCommand,
+  grokSignInRequired,
   MANAGED_BUILD_TRACK_SUB,
   managedBuildTrackOptions,
 } from "./acp-agent-copy";
@@ -362,6 +364,7 @@ function AcpAgentSection(props: {
 
   const detail =
     entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
+  const signInRequired = grokSignInRequired(entry);
   const normalizedSavedPath = savedPath.trim();
   const envForced = props.cliPathSnapshot?.source === "env";
   const checkingPath = pathUpdating || props.refreshing === true;
@@ -447,7 +450,11 @@ function AcpAgentSection(props: {
       title={entry.name}
       sectionId={`acp-${entry.registryId}`}
       chip={enabled ? acpStatusLabel(entry) : "Disabled"}
-      chipKind={enabled ? (entry.installed ? "ok" : "muted") : "muted"}
+      chipKind={
+        enabled
+          ? (signInRequired ? "warn" : entry.installed ? "ok" : "muted")
+          : "muted"
+      }
     >
       <div className="settings-fields">
         {props.onEnabledChange ? (
@@ -463,6 +470,42 @@ function AcpAgentSection(props: {
               return props.onEnabledChange?.(entry.registryId, next)
                 ?? Promise.resolve();
             }}
+          />
+        ) : null}
+
+        {enabled && signInRequired ? (
+          <SettingsField
+            label="Authentication"
+            sub="Run this in your terminal to sign in to Grok, then check sign-in."
+            error="Grok requires sign-in before PwrAgent can discover models or start new threads."
+            control={
+              <div className="settings-fields">
+                <SettingsCopyValue
+                  value={grokSignInCommand(
+                    entry.activeCommand ?? "grok",
+                    /Windows/i.test(window.navigator.userAgent),
+                  )}
+                  desktopApi={props.desktopApi}
+                  label="Grok sign-in command"
+                />
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--secondary"
+                    disabled={props.saving || props.refreshing || pathUpdating}
+                    type="button"
+                    onClick={() => void props.onRefresh()}
+                  >
+                    {props.refreshing ? "Checking sign-in…" : "Check sign-in"}
+                  </button>
+                </div>
+                {detail ? (
+                  <details>
+                    <summary>Technical details</summary>
+                    <p className="settings-empty">{detail}</p>
+                  </details>
+                ) : null}
+              </div>
+            }
           />
         ) : null}
 
@@ -557,7 +600,7 @@ function AcpAgentSection(props: {
               : "Previously detected binaries. Enable this provider and Refresh before launching new threads."
           }
           source={`${instances.length + rejectedInstances.length} found`}
-          error={detail}
+          error={signInRequired ? undefined : detail}
           control={
             <div className="settings-paths" aria-label={`${entry.name} installs`}>
               {instances.length === 0 && rejectedInstances.length === 0 ? (
