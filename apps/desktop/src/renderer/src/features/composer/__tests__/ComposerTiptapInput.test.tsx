@@ -16,6 +16,35 @@ afterEach(() => {
   cleanup();
 });
 
+it.each(["", "**Keep this**"])("appends transcript text to draft %j without interpreting it as markup", async (draft) => {
+  const input = createRef<ComposerInputHandle>();
+  const onChange = vi.fn();
+  render(
+    <ComposerTiptapInput
+      ref={input}
+      id="reply"
+      label="Reply"
+      markdownConversion
+      onChange={onChange}
+      placeholder="Ask anything"
+      skillTokens={[]}
+      value={draft}
+    />,
+  );
+  const editor = await screen.findByRole("textbox", { name: "Reply" });
+  act(() => {
+    input.current?.setSelectionRange(0, 0);
+    expect(input.current?.appendPlainText("<em>Spoken</em>\n**words**")).toBe(true);
+  });
+  const paragraphs = editor.querySelectorAll("p");
+  expect(paragraphs).toHaveLength(draft ? 2 : 1);
+  if (draft) expect(paragraphs[0].querySelector("strong")).toHaveTextContent("Keep this");
+  expect(paragraphs[paragraphs.length - 1]).toHaveTextContent("<em>Spoken</em>**words**");
+  expect(editor.querySelector("em")).toBeNull();
+  if (draft) expect(input.current?.selectionStart).toBe(0);
+  expect(onChange).toHaveBeenCalledTimes(1);
+});
+
 function renderTiptapInput(props?: {
   editorDocument?: JSONContent;
   markdownConversion?: boolean;

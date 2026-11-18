@@ -160,6 +160,10 @@ export class NativeVoiceSessionManager {
     return this.session?.owner === owner && this.session.established === true && !this.session.cancelled;
   }
 
+  get active(): boolean {
+    return this.session !== undefined;
+  }
+
   async setCamera(owner: number, sessionId: string, enabled: boolean): Promise<void> {
     const session = this.session;
     if (!session || !this.allowsCameraSession(owner, sessionId)) throw new Error("No voice session is open in this window.");

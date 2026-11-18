@@ -5,6 +5,17 @@ import {
 } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 
+describe("audio transcription preference", () => {
+  it.each([false, true])("persists an explicit setting of %s", (enabled) => {
+    const edits = desktopSettingsPatchToEdits({
+      models: { audioTranscriptionEnabled: enabled },
+    });
+    const written = applyTomlEdits("", edits);
+    expect(parseDesktopSettingsToml(written, "test.toml").models?.audioTranscriptionEnabled)
+      .toBe(enabled);
+  });
+});
+
 describe("desktop config provider model defaults", () => {
   it("reads legacy endpoint defaults without treating them as OpenAI and converts only on save", () => {
     const source = [

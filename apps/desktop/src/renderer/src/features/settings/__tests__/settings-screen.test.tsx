@@ -10496,6 +10496,7 @@ describe("SettingsScreen", () => {
       "Local decision model",
       "TypeSafe Jev",
       "OpenAI Decisions",
+      "Audio transcription",
     ]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
@@ -10586,6 +10587,11 @@ describe("SettingsScreen", () => {
     expect(
       document.querySelector(".settings-titlebar__current")?.textContent,
     ).toBe("OpenAI Decisions");
+    const transcription = within(nav).getByRole("button", { name: /Audio transcription/ });
+    expect(transcription).toHaveTextContent("no key");
+    fireEvent.click(transcription);
+    expect(transcription).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("region", { name: "Audio transcription settings" })).toBeInTheDocument();
   });
 
   it("marks a keyed direct API provider ready and a refused local endpoint invalid in the nav", () => {

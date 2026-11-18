@@ -22,9 +22,11 @@ import { NativeVoiceSessionManager } from "../../codex-app-server/native-voice-s
 import { isVoiceManagerThread, openVoiceManagerThread } from "../../native-voice/voice-manager-thread";
 import { isOperatorFocusSnapshot, publishOperatorFocus } from "../native-voice/operator-focus-registry";
 import { isLocalMainWindowWebContents } from "../window-channels";
+import { allowsDictationMicrophone, dictationActive } from "./audio-transcription";
 
 const cameraLog = getMainLogger("pwragent:voice-camera");
 const sessions = new NativeVoiceSessionManager((threadId) => getDesktopBackendRegistry().acquireNativeVoiceBackend(threadId));
+export const nativeVoiceBusy = (): boolean => sessions.active;
 // Cold model loading can take a minute or more. Opt-out still aborts immediately.
 const CAMERA_WARMUP_TIMEOUT_MS = 5 * 60_000;
 const CAMERA_ANALYSIS_TIMEOUT_MS = 8000;
@@ -85,10 +87,12 @@ function validTarget(request: NativeVoiceTarget): void {
 export const nativeVoiceMediaRules: MediaPermissionRules = {
   check: (contents, details) => Boolean(details.isMainFrame
     && (details.mediaType === "audio"
-      ? sessions.allowsMicrophone(contents.id)
+      ? sessions.allowsMicrophone(contents.id) || allowsDictationMicrophone(contents.id)
       : details.mediaType === "video" && sessions.allowsCamera(contents.id))),
   request: (contents, details) => Boolean("mediaTypes" in details && details.mediaTypes?.length === 1 && details.isMainFrame
-    && (details.mediaTypes[0] === "audio" ? sessions.allowsMicrophone(contents.id) : details.mediaTypes[0] === "video" && sessions.allowsCamera(contents.id))),
+    && (details.mediaTypes[0] === "audio"
+      ? sessions.allowsMicrophone(contents.id) || allowsDictationMicrophone(contents.id)
+      : details.mediaTypes[0] === "video" && sessions.allowsCamera(contents.id))),
 };
 export function registerNativeVoiceIpcHandlers(): void {
   ipcMain.handle(NATIVE_VOICE_CAPABILITY_CHANNEL, async () => {
@@ -98,6 +102,7 @@ export function registerNativeVoiceIpcHandlers(): void {
     catch { return { available: false, reason: "Connect and sign in to Codex before starting voice.", camera }; }
   });
   ipcMain.handle(NATIVE_VOICE_START_CHANNEL, async (event, request: NativeVoiceStart) => {
+    if (dictationActive()) throw new Error("Stop dictation before starting voice.");
     validTarget(request);
     if (typeof request.threadId !== "string" || request.threadId.length > 200 || !request.threadId
       || typeof request.sdp !== "string" || request.sdp.length > 100_000 || !request.sdp.startsWith("v=0")) {

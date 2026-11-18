@@ -92,6 +92,8 @@ import {
   useAcpAgentCatalog,
 } from "./useAcpAgentCatalog";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { DICTATION_PRICE } from "../../../../shared/audio-transcription";
+import { SecretField } from "./SecretField";
 import {
   DECISION_PROVIDER_FOCUS,
   DecisionModelDefaults,
@@ -104,6 +106,7 @@ import {
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
 import {
+  AUDIO_TRANSCRIPTION_FOCUS,
   modelServicesByKind,
   PROVIDER_KINDS,
   type ModelServiceEntry,
@@ -200,6 +203,7 @@ export function ModelsSettings(props: {
   onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist AI Providers → OpenAI Decisions account ids. */
   onSaveOpenAIDecisions?: (settings: DesktopOpenAIDecisionsSettings) => Promise<unknown>;
+  onAudioTranscriptionEnabledChange?: (enabled: boolean) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
   /** Persist which pwrdrvr/codex track the managed runtime follows. */
@@ -235,6 +239,7 @@ export function ModelsSettings(props: {
   const catalogRefresh = useProviderCatalogRefresh(props.desktopApi);
   const catalogBusy = refreshingCatalog || catalogRefresh.running;
   const codex = props.snapshot.models.codex;
+  const audioTranscriptionEnabled = props.snapshot.models.audioTranscriptionEnabled?.value ?? true;
   const envForced = codex.path.source === "env";
   const managedCodexProgress = useManagedRuntimeProgress(props.desktopApi, "codex");
   const managedCodexRuntime = props.snapshot.runtime.tokenMiser?.managedCodex;
@@ -703,6 +708,43 @@ export function ModelsSettings(props: {
     );
   }
 
+  if (props.focus === AUDIO_TRANSCRIPTION_FOCUS) {
+    const key = props.snapshot.models.audioTranscriptionApiKey
+      ?? { configured: false, source: "unset", writable: false };
+    return (
+      <SettingsSectionStack paneId="models-audio-transcription" aria-label="Audio transcription settings">
+        <SettingsPanelHead
+          eyebrow="AI Providers"
+          title="Audio transcription"
+          help={`Use the composer microphone to dictate with OpenAI gpt-live-transcribe. OpenAI bills your API project ${DICTATION_PRICE} of audio. Stop dictation to add the transcript to your draft.`}
+        />
+        <SettingsSection title="Connection" sectionId="audio-transcription-connection">
+          <div className="settings-fields">
+            {props.onAudioTranscriptionEnabledChange ? (
+              <ToggleField
+                checked={audioTranscriptionEnabled}
+                disabled={props.saving}
+                label="Enabled"
+                switchQualifier="Audio transcription"
+                sub="Show the composer microphone when a key is saved. Turning this off keeps the saved key."
+                onChange={props.onAudioTranscriptionEnabledChange}
+              />
+            ) : null}
+            <SecretField
+              label="OpenAI project API key"
+              sub="Use an OpenAI Platform project key with Realtime API access. Billing is separate from your ChatGPT or Codex subscription."
+              secret="openaiTranscriptionApiKey"
+              state={key}
+              disabled={props.saving || !key.writable}
+              onClearSecret={props.onClearSecret}
+              onReplaceSecret={props.onReplaceSecret}
+            />
+          </div>
+        </SettingsSection>
+      </SettingsSectionStack>
+    );
+  }
+
   if (props.focus === "claude") {
     return (
       <SettingsSectionStack paneId="models-claude" aria-label="Claude provider settings">
@@ -1002,8 +1044,7 @@ function ProviderKindGroup(props: {
   );
 }
 
-/** An index row for a provider that runs no threads (decision models,
- *  OpenAI Decisions). */
+/** An index row for a provider that runs no threads. */
 function ModelServiceIndexRow(props: {
   service: ModelServiceEntry;
   decision: ReturnType<typeof resolveDecisionModelSettings>;
@@ -1011,6 +1052,19 @@ function ModelServiceIndexRow(props: {
   onOpen: () => void;
 }) {
   const { decision, service } = props;
+  if (service.focus === AUDIO_TRANSCRIPTION_FOCUS) {
+    const enabled = props.snapshot.models.audioTranscriptionEnabled?.value ?? true;
+    return (
+      <SettingsIndexRow
+        name={service.name}
+        meta="Live composer dictation with gpt-live-transcribe"
+        chip={enabled ? (service.keyReady ? "Enabled" : "No API key") : "Disabled"}
+        chipKind={enabled && service.keyReady ? "ok" : "muted"}
+        off={!enabled}
+        onOpen={props.onOpen}
+      />
+    );
+  }
   if (service.decisionProvider) {
     const inUse = decision.model === service.decisionProvider;
     return (

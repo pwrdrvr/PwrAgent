@@ -739,6 +739,8 @@ export type DesktopSettingsSecretName =
   | "typesafeJevApiKey"
   /** OpenAI platform API key for registered OpenAI Decisions (POST /v1/decisions). */
   | "openaiDecisionsApiKey"
+  /** OpenAI project key dedicated to recorded audio transcription. */
+  | "openaiTranscriptionApiKey"
   /** Codex model provider API keys, one JSON object keyed by provider id. */
   | "codexModelProviderKeys";
 
@@ -787,6 +789,7 @@ export function isMessagingRuntimeSecret(
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
     case "openaiDecisionsApiKey":
+    case "openaiTranscriptionApiKey":
     case "codexModelProviderKeys":
       return false;
   }
@@ -1658,6 +1661,9 @@ export type DesktopSettingsSnapshot = {
      * ChatGPT or Codex sign-in. Absent on older builds.
      */
     openaiDecisions?: DesktopOpenAIDecisionsSettingsSnapshot;
+    audioTranscriptionEnabled?: DesktopSettingsValue<boolean>;
+    /** Credential presence only. The API key stays in the owner process. */
+    audioTranscriptionApiKey?: DesktopSettingsSecretState;
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -2019,6 +2025,7 @@ export type DesktopSettingsConfigPatch = {
     decisionModels?: DesktopDecisionModelSettings;
     /** Replaces the OpenAI Decisions account ids. Omit a field to clear it. */
     openaiDecisions?: DesktopOpenAIDecisionsSettings;
+    audioTranscriptionEnabled?: boolean;
     codex?: {
       path?: string;
       profile?: string;

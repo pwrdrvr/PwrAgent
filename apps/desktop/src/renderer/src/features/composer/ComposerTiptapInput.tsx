@@ -3672,6 +3672,19 @@ export const ComposerTiptapInput = forwardRef<
   }, [commandChipText, commandChipTooltip, editor]);
 
   useImperativeHandle(ref, () => ({
+    appendPlainText: (text) => {
+      if (!editor?.isEditable || propsRef.current.readOnly || !text) return false;
+      const paragraph = editor.schema.nodes.paragraph;
+      const content = paragraph.create(null, splitTextContent(text).map((node) => editor.schema.nodeFromJSON(node)));
+      // Insert a separate paragraph so marks, inline chips and the active
+      // selection in the existing draft keep their meaning.
+      if (editor.isEmpty) {
+        return editor.commands.setContent(content.toJSON());
+      }
+      return editor.commands.insertContentAt(editor.state.doc.content.size, content.toJSON(), {
+        updateSelection: false,
+      });
+    },
     deleteSelection: () => {
       if (propsRef.current.readOnly) return;
       editor?.commands.deleteSelection();

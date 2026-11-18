@@ -170,6 +170,7 @@ import {
   PencilIcon,
   PlanIcon,
   PlayIcon,
+  MicIcon,
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
@@ -364,6 +365,9 @@ import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
 import { PendingSpinner } from "../../components/PendingSpinner";
+import { useComposerDictation } from "./useComposerDictation";
+import { ComposerDictationFeedback } from "./ComposerDictationFeedback";
+import { DICTATION_PRICE } from "../../../../shared/audio-transcription";
 
 export type ComposerProps = {
   activeTurnId?: string;
@@ -385,6 +389,8 @@ export type ComposerProps = {
   prAutoDispatchAllowed?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
+  composerCovered?: boolean;
+  dictationAvailable?: boolean;
   /**
    * Surface a transient app-level toast (image attachment limit reached,
    * pasted image rejected on a non-vision model). Plumbed up to the shared
@@ -3330,8 +3336,7 @@ function useComposerController(props: ComposerProps) {
 
   function useComposerSessionState() {
     const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
-    // Composer voice entry points stay hidden until dictation can edit only the
-    // draft. Keep the bar so an already-open session or failed stop can be ended.
+    // Keep the bar so an already-open voice session or failed stop can be ended.
     const { threadId: nativeVoiceThreadId } = threadVoiceTarget(props.thread, props.launchpad);
     const threadLinks = useThreadLinks();
     const pullRequestLinks = usePullRequestLinks();
@@ -6251,6 +6256,18 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
+  const dictationApi = props.dictationAvailable && !props.composerCovered
+    && filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
+    ? props.desktopApi?.dictation
+    : undefined;
+  const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) =>
+    activeComposerScopeKeyRef.current === composerScopeKey
+    && inputRef.current?.appendPlainText(text) === true,
+  );
+  const dictationLabel = dictation.phase === "idle" ? "Dictate with OpenAI"
+    : dictation.phase === "connecting" ? "Cancel dictation"
+      : dictation.phase === "listening" ? "Stop dictation"
+        : "Finishing dictation";
 
   useEffect(() => {
     if (!isReviewComposerOpen) {
@@ -13628,6 +13645,8 @@ function useComposerController(props: ComposerProps) {
         );
       })}
 
+      <ComposerDictationFeedback phase={dictation.phase} text={dictation.text} error={dictation.error} />
+
       {/* Last in the band, nearest the input it describes. Hidden once the
           launchpad is submitted: the starting thread is no longer a draft
           to detach. */}
@@ -15394,6 +15413,8 @@ function useComposerController(props: ComposerProps) {
               </button>
             </ReferencePicker>
           ) : null}
+
+          {dictationApi && (!preparingSend || dictation.phase === "idle") ? renderDictationButton() : null}
           <ComposerThreadOptionsMenu
             agentThread={props.thread?.agentChange && !props.thread.agentChange.error
               ? props.thread.agentChange.enabled
@@ -15457,6 +15478,22 @@ function useComposerController(props: ComposerProps) {
           />
         </div>
       ) : null
+    );
+  }
+
+  function renderDictationButton(): ReactNode {
+    return (
+      <button
+        type="button"
+        className={`composer__toggle tooltip-target${dictation.phase === "idle" ? "" : " is-active"}`}
+        aria-label={dictationLabel}
+        data-tooltip={dictation.phase === "idle" ? `Dictate with OpenAI · ${DICTATION_PRICE}` : dictationLabel}
+        disabled={dictation.phase === "finishing"
+          || (dictation.phase === "idle" && (launchpadSubmitting || forking))}
+        onClick={() => void dictation.toggle()}
+      >
+        <MicIcon size={15} aria-hidden="true" />
+      </button>
     );
   }
 
@@ -15652,6 +15689,8 @@ function useComposerController(props: ComposerProps) {
               })
               : undefined}
           />
+          {/* Keep the active microphone control out of the disabled fieldset. */}
+          {dictationApi && preparingSend && dictation.phase !== "idle" ? renderDictationButton() : null}
           {preparingSend ? (
             <button
               className="button button--ghost composer__cancel-preparation"

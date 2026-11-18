@@ -15,6 +15,8 @@ import {
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
 
+export const AUDIO_TRANSCRIPTION_FOCUS = "audio-transcription";
+
 /**
  * The kinds of AI provider, in the order the Settings nav and the AI
  * Providers page list them. Both group their rows under these headings, so
@@ -112,6 +114,7 @@ export function modelServiceEntries(
     };
   });
   const openAIKeyReady = openAIDecisionsKeyState(snapshot).configured;
+  const transcriptionKeyReady = Boolean(snapshot.models.audioTranscriptionApiKey?.configured);
   const services: ModelServiceEntry[] = [
     ...decisions,
     {
@@ -120,6 +123,15 @@ export function modelServiceEntries(
       kind: "direct-api",
       keyReady: openAIKeyReady,
       nav: navState(openAIKeyReady, undefined),
+    },
+    {
+      focus: AUDIO_TRANSCRIPTION_FOCUS,
+      name: "Audio transcription",
+      kind: "direct-api",
+      keyReady: transcriptionKeyReady,
+      nav: snapshot.models.audioTranscriptionEnabled?.value === false
+        ? { dot: "off", chip: "off" }
+        : navState(transcriptionKeyReady, undefined),
     },
   ];
   // Stable sort into kind order, so a group's rows stay contiguous.

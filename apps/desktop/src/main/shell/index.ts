@@ -1,7 +1,8 @@
 import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown, releaseOwnerFederationLeaseSync } from "../owner-services";
 
 import { createDesktopOwnerHostServices } from "./owner-host-services";
-import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { nativeVoiceBusy, nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
+import { registerAudioTranscriptionIpc } from "./ipc/audio-transcription";
 import { installPermissionPolicy } from "./permission-policy";
 
 import { configureBundledGit } from "../bundled-git";
@@ -1385,6 +1386,7 @@ export function bootstrapApp(): void {
     installWindowFrameSync(app);
     registerAppServerIpcHandlers();
     registerNativeVoiceIpcHandlers();
+    registerAudioTranscriptionIpc(nativeVoiceBusy);
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
     // A to-do's "Start thread on" runs through the same federation tools,

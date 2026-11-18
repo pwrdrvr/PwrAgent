@@ -48661,6 +48661,19 @@ button.composer__subthread-source-parent:hover {
   line-height: 1.45;
 }
 
+.composer__dictation-feedback {
+  display: grid;
+  gap: 4px;
+}
+
+.composer__dictation-preview {
+  max-height: 5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .composer__meta--error {
   color: var(--danger-text);
 }

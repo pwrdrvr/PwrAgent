@@ -888,6 +888,8 @@ export type ThreadViewProps = {
   selectedThread?: NavigationThreadSummary;
   threads?: NavigationThreadSummary[];
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
+  composerCovered?: boolean;
+  dictationAvailable?: boolean;
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
@@ -3531,6 +3533,8 @@ export function ThreadView(props: ThreadViewProps) {
             : threadMcpAccessSupported ? showThreadMcpAccess : undefined
         }
         composerImplementation={props.composerImplementation}
+        composerCovered={props.composerCovered}
+        dictationAvailable={props.dictationAvailable}
         draftStore={props.composerDraftStore}
         directory={props.selectedDirectory}
         directories={props.directories}

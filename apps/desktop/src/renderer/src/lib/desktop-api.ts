@@ -3,6 +3,7 @@ import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
+import type { DictationApi } from "../../../shared/audio-transcription";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
 import type {
   ListBackgroundTerminalsRequest,
@@ -1822,6 +1823,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   pickDirectoryFromDisk?: () => Promise<PickDirectoryFromDiskResponse>;
   /** Composer file-reference picker (multi-select; paths only, no register step). */
   pickFileFromDisk?: () => Promise<PickFileFromDiskResponse>;
+  dictation?: DictationApi;
   /**
    * Combined file-or-directory reference picker (macOS only — the other
    * platforms cannot combine both kinds in one OS dialog). Entries come

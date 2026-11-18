@@ -3054,6 +3054,7 @@ describe("App", () => {
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(await screen.findByText("Checking providers…")).toBeInTheDocument();
 
+    // Navigation stays usable before and after adopting a snapshot without models.
     await act(async () => {
       settings.resolve({
         snapshot: {
@@ -3086,6 +3087,7 @@ describe("App", () => {
       });
     });
 
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
