@@ -52,6 +52,8 @@ type Resource = {
   token: string;
   value: NavigationWindowResource;
   pending?: Promise<void>;
+  /** A correlated viewer pin publication is waiting for this resource. */
+  pinPublicationPending?: boolean;
   refreshAfterPending: boolean;
   invalidated: boolean;
   /** Row metadata can be stale while complete membership still excludes unrelated events. */
@@ -356,10 +358,13 @@ export class NavigationWindowQueries {
     // action can consume a seen/status invalidation without becoming its cause.
     const batch = ++this.nextDiagnosticBatch;
     const forceRead = (resource: Resource) => !invalidatedOnly || (includeDirectoryIndex && resource.value.id === "directory-index");
-    const selected = resources.filter((resource) => (forceRead(resource) || resource.invalidated || (resource.pending && resource.value.state.stale))
+    const joinPinReads = trigger === "action/remote-pin-add";
+    const selected = resources.filter((resource) => (forceRead(resource) || resource.invalidated
+      || (joinPinReads && resource.pending && resource.pinPublicationPending))
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))));
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
+    const batchPinLoading = selected.some((resource) => resource.pinPublicationPending && !resource.pending);
     let startedReads = false;
     const refreshed = Promise.all(selected.map(async (resource) => {
       if (forceRead(resource) || resource.invalidated) {
@@ -373,22 +378,23 @@ export class NavigationWindowQueries {
         if (!resource.invalidated) resource.membershipUncertain = true;
         if (resource.pending) resource.refreshAfterPending = true;
         const pending = resource.pending;
-        const read = this.read(resource, false, undefined, false, "refresh", false);
-        startedReads ||= !pending && Boolean(resource.pending);
+        const read = this.read(resource, false, undefined, false, "refresh", !batchPinLoading);
+        startedReads ||= batchPinLoading && !pending && Boolean(resource.pending);
         await read;
       }
       // A caller awaiting refresh owns the coalesced replacement too, not
       // merely the stale read that happened to occupy this resource first.
       while (this.isCurrent(resource) && resource.pending) await resource.pending;
     }));
-    // All these reads begin in the same turn. Copy the resource map and
-    // notify the view once for the wave, with every queued read loading.
+    // The pin discovery wave queues its reads in one turn. Publish its
+    // loading state once, with every newly queued read marked as loading.
     if (startedReads) this.publish();
     return refreshed.then(() => undefined);
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
   invalidate(id?: string, owners?: readonly FederationTarget[], event?: AgentEvent): void {
+    let correlatedPinPublication = false;
     if (!id && event?.federationTarget?.scope !== "remote" && event?.notification.method === "navigation/remoteThreadPins/changed") {
       const publicationId = event.notification.params?.publicationId;
       // The broadcast and action reply can arrive in either order. Both
@@ -399,6 +405,7 @@ export class NavigationWindowQueries {
           this.recentPinPublications.delete(this.recentPinPublications.values().next().value!);
         }
         this.recentPinPublications.add(publicationId);
+        correlatedPinPublication = true;
       }
     }
     let changed = false;
@@ -409,6 +416,7 @@ export class NavigationWindowQueries {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
       if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
+      if (correlatedPinPublication) resource.pinPublicationPending = true;
       count++;
       resource.diagnosticBatch = batch;
       const method = event?.notification.method === "navigation/invalidated"
@@ -920,6 +928,7 @@ export class NavigationWindowQueries {
           if (repeat && !resource.value.state.rebaselineRequired) {
             void this.read(resource, false);
           } else {
+            resource.pinPublicationPending = false;
             resource.value = { ...resource.value, loading: false };
             this.publish();
           }

@@ -31,7 +31,7 @@ it("publishes one loading snapshot when a pin refresh queues the admitted direct
       const population = () => [...queries.getSnapshot().resources.values()].map(({ state }) => state.page?.entries[0]?.row.id);
       const before = population();
       queries.invalidate(undefined, [{ scope: "local" }], { backend: "codex", notification: {
-        method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: "mount", pinned: true },
+        method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: "mount", pinned: true, publicationId: "mount-1" },
       } });
       const loadingSnapshots: number[] = [];
       const populations: ReturnType<typeof population>[] = [];
@@ -49,6 +49,49 @@ it("publishes one loading snapshot when a pin refresh queues the admitted direct
       expect(populations.every((published) => JSON.stringify(published) === JSON.stringify(before))).toBe(true);
     } finally { queries.dispose(); }
   }), { numRuns: 12 });
+});
+
+it("lets a pin reply join its dispatched replacement without delaying other scoped refreshes", async () => {
+  const owners = [{ scope: "local" }] as const;
+  const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+    query: { kind: "directory", directoryKey: "project", roots: "unpinned" } };
+  const before: NavigationQueryPage = { protocol: 2, queryKey: "project", generation: "old", ownerEpoch: "viewer",
+    countsRevision: "old", counts: { total: 0, active: 0, unread: 0, review: 0 },
+    coverage: { state: "complete" }, complete: true, entries: [] };
+  const dispatched = deferred<void>();
+  const replacement = deferred<NavigationQueryPage>();
+  const read = vi.fn(async () => before);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["project", request]]));
+    await queries.refresh();
+    read.mockClear();
+    read.mockImplementationOnce(() => {
+      dispatched.resolve();
+      return replacement.promise;
+    });
+    queries.invalidate(undefined, owners, { backend: "codex", notification: {
+      method: "navigation/remoteThreadPins/changed",
+      params: { instanceId: "peer", threadId: "mount", pinned: true, publicationId: "mount-1" },
+    } });
+    const fromBroadcast = queries.refresh(undefined, owners, true);
+    await dispatched.promise;
+
+    let pinCompleted = false;
+    const fromReply = queries.refresh(undefined, owners, true, undefined, "action/remote-pin-add")
+      .then(() => { pinCompleted = true; });
+    await queries.refresh(undefined, owners, true);
+    expect(pinCompleted).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    replacement.resolve({ ...before, countsRevision: "new" });
+    await Promise.all([fromBroadcast, fromReply]);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("project")?.state.page?.countsRevision).toBe("new");
+  } finally {
+    replacement.resolve(before);
+    queries.dispose();
+  }
 });
 
 // The owner is a fixed ordered list. A metadata event can fence a read but
