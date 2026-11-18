@@ -189,7 +189,7 @@ import {
   type NavigationHistoryLocation,
 } from "./lib/useNavigationHistory";
 import { TranscriptLinkProvider } from "./lib/transcript-links";
-import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-options";
+import { MarkdownRenderingSettingsProvider } from "./lib/markdown-rendering-options";
 import {
   InteractiveSvgPreferencesProvider,
   type InteractiveSvgPreferences,
@@ -4866,14 +4866,7 @@ function DesktopAppShell(props: {
                 />
               </section>
             ) : ThreadViewComponent ? (
-              <MarkdownRenderingOptionsProvider
-                incrementalEnabled={
-                  settings.snapshot?.general.markdown?.incrementalRendering.value ?? true
-                }
-                mathEnabled={
-                  settings.snapshot?.general.markdown?.mathRendering.value ?? true
-                }
-              >
+              <MarkdownRenderingSettingsProvider generalSettings={settings.snapshot?.general}>
                 <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
                   <HtmlPreviewPreferencesProvider
                     runScripts={
@@ -4897,7 +4890,7 @@ function DesktopAppShell(props: {
                     </TerminalPreferencesProvider>
                   </HtmlPreviewPreferencesProvider>
                 </InteractiveSvgPreferencesProvider>
-              </MarkdownRenderingOptionsProvider>
+              </MarkdownRenderingSettingsProvider>
             ) : null}
           </main>
 
