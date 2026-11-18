@@ -17,9 +17,10 @@ import type { BackendRateLimitSummary } from "@pwragent/shared";
  *   reset well before it is a reading from the previous window, and ignored.
  * - A precise reading may refine the reset and labels a coarse reading left;
  *   a coarse one only fills gaps and raises usage.
- * - A reading requested after everything held (see `mark`) is the newest
- *   value and replaces the windows it names, even downward: a Codex reset
- *   credit lowers usage inside a window.
+ * - A reading requested after every precise reading held (see `mark`) is the
+ *   newest value and replaces the windows it names, even downward: a Codex
+ *   reset credit or a Claude Fable reset lowers usage inside a window. Coarse
+ *   readings recorded meanwhile do not overtake it.
  * - A balance (`windowKey: "credits"`) has no window to order by, so the last
  *   reading replaces it.
  *
@@ -40,8 +41,9 @@ const USAGE_FIELDS = ["usedPercent", "used", "remaining"] as const;
 export type PlanLimitReading = {
   limits: readonly BackendRateLimitSummary[];
   /**
-   * What `mark` returned when this reading was requested. If nothing was
-   * recorded since, the reading is the newest and replaces what it names. If
+   * What `mark` returned when this reading was requested. If no precise
+   * reading was recorded since, the reading is the newest and replaces what
+   * it names. If
    * the limits were cleared since, it describes the old account and is
    * dropped. Without it, the reading may be older than what is held.
    */
@@ -94,7 +96,7 @@ export type PlanLimitStoreOptions = { now?: () => number };
 
 export class PlanLimitStore {
   private readonly entries = new Map<string, Entry>();
-  /** Bumped by every record and clear; `mark` hands out the current value. */
+  /** Bumped by every precise record and clear; `mark` hands out the current value. */
   private readonly revisions = new Map<string, number>();
   private readonly clearedAt = new Map<string, number>();
   private sequence = 0;
@@ -146,7 +148,11 @@ export class PlanLimitStore {
     if (held.length === 0) entry.observedAt = undefined;
     else if (dated || entry.observedAt === undefined) entry.observedAt = now;
     if ("account" in reading) entry.account = reading.account;
-    this.revisions.set(provider, ++this.sequence);
+    // Only a precise reading can overtake a read in flight. A coarse one
+    // (Claude's stream) arrives from every running CLI, so letting it
+    // overtake would keep any probe from ever lowering a window after a
+    // reset credit; it could only raise usage anyway.
+    if (reading.precise) this.revisions.set(provider, ++this.sequence);
     return this.settle(entry, before);
   }
 
