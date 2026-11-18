@@ -120,12 +120,22 @@ export class CodexModelProviderCatalog {
 
   /** Runtime discovery uses the same bounded, authenticated read as the picker. */
   async resolveRuntimeProvider(provider: CodexModelProviderSettings): Promise<CodexModelProviderSettings> {
-    const generation = this.discoveryGeneration;
-    const keys = provider.discoverModels === false ? {} : await this.options.resolveKeys().catch((): Record<string, string> => ({}));
-    const discovered = provider.discoverModels === false ? []
-      : (await this.discover(provider, keys[provider.id], generation))?.discovery?.models ?? [];
+    let discovery: Discovery | undefined;
+    while (provider.discoverModels !== false) {
+      const generation = this.discoveryGeneration;
+      const keys = await this.options.resolveKeys().catch((): Record<string, string> => ({}));
+      const state = await this.discover(provider, keys[provider.id], generation);
+      if (state && this.discovery.get(provider.id) === state) {
+        discovery = state.discovery;
+        break;
+      }
+      // A save or refresh invalidated this read. Join the current discovery
+      // while the runtime's endpoint still belongs to the configured provider.
+      const current = this.options.resolveProviders().find(({ id }) => id === provider.id);
+      if (!current || current.baseUrl !== provider.baseUrl || current.discoverModels === false) break;
+    }
     const metadata = new Map((provider.modelMetadata ?? []).map((model) => [model.id, { ...model }]));
-    for (const model of discovered) {
+    for (const model of discovery?.models ?? []) {
       // Fresh serving limits supersede saved observations. Discovery cannot
       // assert verified search support, so that capability remains separate.
       metadata.set(model.id, { ...model, ...metadata.get(model.id),
