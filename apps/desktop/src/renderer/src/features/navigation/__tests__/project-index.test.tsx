@@ -367,10 +367,13 @@ describe("Sidebar project index", () => {
     // Scrolling back up until the tail is off screen drops it.
     scrollTop = 1600;
     fireEvent.scroll(list);
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
     expect(tail.style.height).toBe("200px");
     scrollTop = 1400;
     fireEvent.scroll(list);
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
     expect(tail.style.height).toBe("");
+    expect(scrollTop).toBe(1400);
   });
 
   it("hides and shows from the toggle beside the lens switch", () => {

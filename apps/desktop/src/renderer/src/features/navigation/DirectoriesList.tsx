@@ -575,15 +575,24 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   // Written to the DOM directly, not through state: the jump scrolls in the
   // same frame it grows the tail, and a re-render must not reset it.
   const jumpTailRef = useRef<HTMLDivElement>(null);
-  const dropJumpTailOffscreen = (): void => {
+  const jumpTailFrame = useRef<number | undefined>(undefined);
+  const scheduleJumpTailCheck = useCallback((): void => {
     const list = directoryListRef.current;
     const tail = jumpTailRef.current;
-    if (!list || !tail || tail.offsetHeight === 0) return;
-    const viewportBottom = list.getBoundingClientRect().bottom;
-    if (jumpTailIsOffscreen(tail.getBoundingClientRect().top, viewportBottom)) {
-      tail.style.height = "";
-    }
-  };
+    if (!list || !tail?.style.height || jumpTailFrame.current !== undefined) return;
+    // Read the current layout once after a burst of scroll events. A hidden
+    // list still owns its spacer and can use it when it becomes visible again.
+    jumpTailFrame.current = requestAnimationFrame(() => {
+      jumpTailFrame.current = undefined;
+      if (directoryListRef.current !== list || jumpTailRef.current !== tail || tail.offsetHeight === 0) return;
+      const viewportBottom = list.getBoundingClientRect().bottom;
+      if (jumpTailIsOffscreen(tail.getBoundingClientRect().top, viewportBottom)) tail.style.height = "";
+    });
+  }, []);
+  useEffect(() => () => {
+    if (jumpTailFrame.current !== undefined) cancelAnimationFrame(jumpTailFrame.current);
+    jumpTailFrame.current = undefined;
+  }, []);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -683,14 +692,15 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       if (request.jump && section && list && tail) {
         // A jump lands the section at the top even near the end of the list,
         // growing the tail by what the list is short.
+        const tailHeight = tail.offsetHeight;
         const plan = jumpScrollPlan({
           scrollTop: list.scrollTop,
           blockTop: section.getBoundingClientRect().top - list.getBoundingClientRect().top,
           scrollHeight: list.scrollHeight,
           clientHeight: list.clientHeight,
-          tailHeight: tail.offsetHeight,
+          tailHeight,
         });
-        if (plan.tailHeight !== tail.offsetHeight) tail.style.height = `${plan.tailHeight}px`;
+        if (plan.tailHeight !== tailHeight) tail.style.height = `${plan.tailHeight}px`;
         list.scrollTop = plan.scrollTop;
       } else {
         section?.scrollIntoView?.({ block: "start" });
@@ -1971,7 +1981,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     <div
       ref={directoryListRef}
       className="directory-list sidebar-list sidebar-list--dense"
-      onScroll={dropJumpTailOffscreen}
+      onScroll={scheduleJumpTailCheck}
     >
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
