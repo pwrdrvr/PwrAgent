@@ -7549,6 +7549,50 @@ describe("Composer", () => {
       await act(async () => { check.resolve(false); });
     });
 
+    it.each(["Reply", "Find in thread"])("leaves focus on %s when a transcript arrives", async (label) => {
+      const { dictation, props } = fixture();
+      const finish = createDeferred<string>();
+      dictation.finish.mockReturnValue(finish.promise);
+      render(<><input aria-label="Find in thread" /><Composer {...props} /></>);
+      await clickButton("Dictate with OpenAI");
+      await clickButton("Stop dictation");
+      await waitFor(() => expect(dictation.finish).toHaveBeenCalledOnce());
+      const focused = screen.getByRole("textbox", { name: label });
+      act(() => focused.focus());
+
+      await act(async () => { finish.resolve("Final transcript"); });
+      // Tiptap applies queued focus on the next animation frame.
+      await act(async () => { await new Promise(requestAnimationFrame); });
+      expect(focused).toHaveFocus();
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent("Final transcript");
+    });
+
+    it.each(["idle", "listening"])("blocks only new dictation during a fork (%s)", async (phase) => {
+      const { dictation, props } = fixture();
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      const [backend] = props.backends;
+      const backends = [{ ...backend, capabilities: { ...backend.capabilities, forkThread: true } }];
+      render(<Composer {...props} backends={backends} onForkThread={onForkThread} />);
+      const start = screen.getByRole("button", { name: "Dictate with OpenAI" });
+      if (phase === "listening") await clickButton("Dictate with OpenAI");
+
+      const reply = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.change(reply, { target: { value: "/fork " } });
+      fireEvent.keyDown(reply, { key: "Enter" });
+      expect(onForkThread).toHaveBeenCalledOnce();
+      if (phase === "listening") {
+        expect(screen.getByRole("button", { name: "Stop dictation" })).toBeEnabled();
+        await clickButton("Stop dictation");
+        await waitFor(() => expect(dictation.finish).toHaveBeenCalledOnce());
+      } else {
+        expect(start).toBeDisabled();
+        expect(dictation.start).not.toHaveBeenCalled();
+      }
+      await act(async () => pending.resolve(false));
+      expect(screen.getByRole("button", { name: "Dictate with OpenAI" })).toBeEnabled();
+    });
+
     it("places live dictation feedback inside the shrinkable band", async () => {
       const { props, delta } = fixture();
       render(<Composer {...props} />);

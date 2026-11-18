@@ -15,15 +15,23 @@ export async function startDictationCapture(
   };
   let context: AudioContext | undefined;
   const close = () => {
+    signal.removeEventListener("abort", close);
     stopTracks();
     if (context && context.state !== "closed") void context.close().catch(() => undefined);
   };
+  const checkMicrophone = () => {
+    signal.throwIfAborted();
+    if (tracks.some((track) => track.readyState === "ended")) {
+      throw new Error("The microphone stopped.");
+    }
+  };
   signal.addEventListener("abort", close, { once: true });
   try {
-    signal.throwIfAborted();
+    for (const track of tracks) track.addEventListener("ended", onInterrupted, { once: true });
+    checkMicrophone();
     context = new AudioContext({ sampleRate: DICTATION_RATE });
     await context.audioWorklet.addModule(new URL("./dictation-capture.worklet.js?no-inline", import.meta.url).href);
-    signal.throwIfAborted();
+    checkMicrophone();
     const capture = new AudioWorkletNode(context, "pwragent-dictation", {
       channelCount: 1,
       channelCountMode: "explicit",
@@ -35,12 +43,11 @@ export async function startDictationCapture(
       if (data === "flushed") flushed.resolve();
     };
     capture.onprocessorerror = onInterrupted;
-    for (const track of tracks) track.addEventListener("ended", onInterrupted, { once: true });
     context.createMediaStreamSource(microphone).connect(capture);
     // The worklet leaves its output silent.
     capture.connect(context.destination);
     await context.resume();
-    signal.throwIfAborted();
+    checkMicrophone();
 
     return { finish: async () => {
       stopTracks();

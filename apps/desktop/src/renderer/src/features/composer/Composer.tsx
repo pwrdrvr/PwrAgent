@@ -6258,12 +6258,10 @@ function useComposerController(props: ComposerProps) {
     && filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
     ? props.desktopApi?.dictation
     : undefined;
-  const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) => {
-    const inserted = activeComposerScopeKeyRef.current === composerScopeKey
-      && inputRef.current?.appendPlainText(text) === true;
-    if (inserted) focusComposerInput();
-    return inserted;
-  });
+  const dictation = useComposerDictation(dictationApi, composerScopeKey, (text) =>
+    activeComposerScopeKeyRef.current === composerScopeKey
+    && inputRef.current?.appendPlainText(text) === true,
+  );
   const dictationLabel = dictation.phase === "idle" ? "Dictate with OpenAI"
     : dictation.phase === "connecting" ? "Cancel dictation"
       : dictation.phase === "listening" ? "Stop dictation"
@@ -15474,7 +15472,8 @@ function useComposerController(props: ComposerProps) {
         className={`composer__toggle tooltip-target${dictation.phase === "idle" ? "" : " is-active"}`}
         aria-label={dictationLabel}
         data-tooltip={dictation.phase === "idle" ? `Dictate with OpenAI · ${DICTATION_PRICE}` : dictationLabel}
-        disabled={dictation.phase === "finishing" || (dictation.phase === "idle" && launchpadSubmitting)}
+        disabled={dictation.phase === "finishing"
+          || (dictation.phase === "idle" && (launchpadSubmitting || forking))}
         onClick={() => void dictation.toggle()}
       >
         <MicIcon size={15} aria-hidden="true" />

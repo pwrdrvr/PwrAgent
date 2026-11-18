@@ -3681,7 +3681,9 @@ export const ComposerTiptapInput = forwardRef<
       if (editor.isEmpty) {
         return editor.commands.setContent(content.toJSON());
       }
-      return editor.commands.insertContentAt(editor.state.doc.content.size, content.toJSON());
+      return editor.commands.insertContentAt(editor.state.doc.content.size, content.toJSON(), {
+        updateSelection: false,
+      });
     },
     deleteSelection: () => {
       if (propsRef.current.readOnly) return;

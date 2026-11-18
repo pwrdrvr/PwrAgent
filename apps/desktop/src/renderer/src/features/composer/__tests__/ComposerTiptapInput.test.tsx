@@ -41,6 +41,7 @@ it.each(["", "**Keep this**"])("appends transcript text to draft %j without inte
   if (draft) expect(paragraphs[0].querySelector("strong")).toHaveTextContent("Keep this");
   expect(paragraphs[paragraphs.length - 1]).toHaveTextContent("<em>Spoken</em>**words**");
   expect(editor.querySelector("em")).toBeNull();
+  if (draft) expect(input.current?.selectionStart).toBe(0);
   expect(onChange).toHaveBeenCalledTimes(1);
 });
 

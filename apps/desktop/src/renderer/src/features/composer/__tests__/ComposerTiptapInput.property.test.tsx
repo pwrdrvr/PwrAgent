@@ -1,9 +1,10 @@
 import { act, render } from "@testing-library/react";
-import { useState } from "react";
+import { createRef, useState } from "react";
+import type { Editor } from "@tiptap/react";
 import { expect, it } from "vitest";
 import fc from "fast-check";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
-import type { ComposerSkillToken } from "../ComposerInputTypes";
+import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 
 type Accessibility = { disabled: boolean; readOnly: boolean; expanded: boolean };
 const accessibility = fc.record({ disabled: fc.boolean(), readOnly: fc.boolean(), expanded: fc.boolean() });
@@ -54,4 +55,28 @@ it("restoring autocomplete and replaying accessibility inputs reaches a silent d
 
 it("does not replay stale content while restoring /a (shrunk #2281 regression)", () => {
   checkFixpoint("/a", [{ disabled: false, readOnly: false, expanded: false }]);
+});
+
+it("preserves the active selection anywhere in the existing draft when appending dictation", () => {
+  const value = "Keep editing this draft";
+  const position = fc.integer({ min: 1, max: value.length + 1 });
+  fc.assert(fc.property(position, position, (anchor, head) => {
+    const input = createRef<ComposerInputHandle>();
+    const view = render(<ComposerTiptapInput ref={input} id="reply" label="Reply"
+      value={value} skillTokens={[]} placeholder="Reply" onChange={() => {}} />);
+    try {
+      const textbox = view.getByRole("textbox", { name: "Reply" });
+      const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+      act(() => {
+        editor.commands.setTextSelection({ from: anchor, to: head });
+      });
+      const before = editor.state.selection.toJSON();
+      act(() => {
+        expect(input.current?.appendPlainText("Spoken text")).toBe(true);
+      });
+      expect(editor.state.selection.toJSON()).toEqual(before);
+    } finally {
+      view.unmount();
+    }
+  }), { numRuns: 25 });
 });
