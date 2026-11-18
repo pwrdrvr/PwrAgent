@@ -5,6 +5,10 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  # Security releases published 2026-11-11. Hono completes the form validator
+  # and mount fixes in 4.13.16; the Node adapter fixes static path handling.
+  - 'hono@4.13.18'
+  - '@hono/node-server@2.1.7'
   # GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249 security fixes.
   # path-scurry 3 is required by glob 14. All three were published 2026-10-27.
   - 'glob@14.0.2'
@@ -168,7 +172,7 @@ overrides:
   # Keep transitive agent-client/discovery callers on the same fixed transport.
   "@pwrdrvr/agent-transport": "0.1.8"
   "@babel/core": "7.29.6"
-  "@hono/node-server": "2.1.3"
+  "@hono/node-server": "2.1.7"
   "@types/node": "^24.12.4"
   "axios": "^1.16.0"
   "body-parser@2": "2.4.0"
@@ -181,7 +185,7 @@ overrides:
   "form-data": "4.0.6"
   # Keep glob 7 for callback consumers; its parser compatibility is patched.
   "glob@13": "14.0.2"
-  "hono": "4.13.11"
+  "hono": "4.13.18"
   "ip-address": "10.7.4"
   "js-yaml": "4.3.2"
   "katex@<0.18.2": "0.18.2"
