@@ -2069,6 +2069,9 @@ describe("bootstrapApp", () => {
       });
       getAllWindowsMock.mockReturnValue(windows);
       const focusedMock = vi.mocked(electron.BrowserWindow.getFocusedWindow);
+      onTestFinished(() => {
+        focusedMock.mockReturnValue(null);
+      });
       return { windows, focusedMock };
     }
 
@@ -2088,7 +2091,6 @@ describe("bootstrapApp", () => {
       expect(main!.focus).toHaveBeenCalledOnce();
       expect(logs!.focus).not.toHaveBeenCalled();
       expect(createMainWindowMock).toHaveBeenCalledTimes(1);
-      focusedMock.mockReturnValue(null);
     });
 
     it("keeps the top window when another window covers it", async () => {

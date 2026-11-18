@@ -825,8 +825,8 @@ function installDevelopmentDockIcon(): void {
 
 let lastFocusedWindow: BrowserWindow | undefined;
 let applicationMenu: Electron.Menu | undefined;
-// Windows that are on screen, even if covered. On macOS isVisible() can be
-// false for a covered window, and "hide" also fires on occlusion.
+// Windows that are on screen, even if covered. On macOS "hide" also fires
+// when another window covers one, while isVisible() still reports true.
 const shownWindows = new WeakSet<BrowserWindow>();
 // A Dock click raises the window that was on top when the app lost focus.
 const activationWindowRestorer = createActivationWindowRestorer<BrowserWindow>({
@@ -1082,7 +1082,7 @@ function installWindowMenuRefreshHandlers(): void {
       // macOS also emits "hide" when another window covers this one (an
       // occlusion change); the window still reports visible. Only an
       // ordered-out window stops counting as shown.
-      if (window.isVisible()) {
+      if (isMac && window.isVisible()) {
         return;
       }
       shownWindows.delete(window);
