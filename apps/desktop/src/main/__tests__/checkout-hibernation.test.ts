@@ -1,5 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -80,13 +80,38 @@ const registries: DesktopBackendRegistry[] = [];
 const databases: StateDb[] = [];
 const roots: string[] = [];
 const releases: Array<() => void> = [];
-const fixtureWork = new Set<Promise<unknown>>();
+class FixtureOwner {
+  readonly work = new Set<Promise<unknown>>();
+  private closing = false;
+  constructor(private readonly signal: AbortSignal) {}
+  check(): void {
+    this.signal.throwIfAborted();
+    if (this.closing) throw new Error("Checkout fixture owner retired");
+  }
+  stop(): void { this.closing = true; }
+  async close(): Promise<void> {
+    this.stop();
+    while (this.work.size) await Promise.allSettled([...this.work]);
+  }
+}
+let fixtureOwner: FixtureOwner;
+let retirement: Promise<void> | undefined;
+beforeEach(({ signal }) => { fixtureOwner = new FixtureOwner(signal); retirement = undefined; });
 
 function ownFixtureWork<T>(work: Promise<T>): Promise<T> {
-  fixtureWork.add(work);
-  const settled = () => { fixtureWork.delete(work); };
+  const owner = fixtureOwner;
+  owner.work.add(work);
+  const settled = () => { owner.work.delete(work); };
   void work.then(settled, settled);
   return work;
+}
+
+function ownFixtureTest<Args extends unknown[]>(run: (...args: Args) => Promise<void>): (...args: Args) => Promise<void> {
+  return (...args) => {
+    const owner = fixtureOwner;
+    owner.check();
+    return ownFixtureWork(Promise.resolve().then(() => { owner.check(); return run(...args); }));
+  };
 }
 
 async function disposeFixtures() {
@@ -95,19 +120,38 @@ async function disposeFixtures() {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 }
 
+function cleanupFixtureTest(): Promise<void> {
+  return retirement ??= (async () => {
+    fixtureOwner.stop();
+    for (const release of releases.splice(0)) release();
+    // The whole test owns setup, Git, SQLite, assertions and generated cases.
+    // Vitest's deadline stops waiting; it does not retire that asynchronous work.
+    await fixtureOwner.close();
+    await disposeFixtures();
+    vi.unstubAllEnvs();
+    ArchiveWorktreeTransport.threads = [];
+    ArchiveWorktreeTransport.requests = [];
+    ArchiveWorktreeTransport.onList = undefined;
+    probeHook.onInspect = undefined;
+    probeHook.calls = 0;
+    probeHook.identities = 0;
+  })();
+}
+// The control body may retire the fixture it is observing. Its own lifetime
+// therefore belongs to the outer hook, outside that fixture's retirement.
+const oracleWork = new Set<Promise<void>>();
+function ownFixtureOracle<Args extends unknown[]>(run: (...args: Args) => Promise<void>): (...args: Args) => Promise<void> {
+  return (...args) => {
+    const work = Promise.resolve().then(() => run(...args));
+    oracleWork.add(work);
+    const settled = () => { oracleWork.delete(work); };
+    void work.then(settled, settled);
+    return work;
+  };
+}
 afterEach(async () => {
-  for (const release of releases.splice(0)) release();
-  // A timeout ends Vitest's wait, not an async property. Drain its current
-  // case before resetting the provider inventory used by the next test.
-  await Promise.all([...fixtureWork].map((work) => work.catch(() => {})));
-  await disposeFixtures();
-  vi.unstubAllEnvs();
-  ArchiveWorktreeTransport.threads = [];
-  ArchiveWorktreeTransport.requests = [];
-  ArchiveWorktreeTransport.onList = undefined;
-  probeHook.onInspect = undefined;
-  probeHook.calls = 0;
-  probeHook.identities = 0;
+  while (oracleWork.size) await Promise.allSettled([...oracleWork]);
+  await cleanupFixtureTest();
 });
 
 const ON: DesktopCheckoutHibernationPolicy = {
@@ -115,11 +159,14 @@ const ON: DesktopCheckoutHibernationPolicy = {
 };
 
 async function git(cwd: string, args: string[]): Promise<string> {
+  fixtureOwner.check();
   return (await execute("git", ["-C", cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
     "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", ...args])).stdout;
 }
 
 async function createFixture(options: { environment?: boolean; worktreeRoot?: ".pwragent" | ".codex" } = {}) {
+  const scope = fixtureOwner;
+  scope.check();
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-")));
   roots.push(root);
   const repo = path.join(root, "repo");
@@ -142,6 +189,7 @@ async function createFixture(options: { environment?: boolean; worktreeRoot?: ".
   const { dbPath, tempDir } = createTempStateDb("pwragent-hibernate-db-");
   roots.push(tempDir);
   const open = (policy: DesktopCheckoutHibernationPolicy = ON, extra: { commandRunner?: CodexEnvironmentCommandRunner } = {}) => {
+    scope.check();
     // Without the counters every budget below, the zeros included, would pass unmeasured.
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
     const db = StateDb.open(dbPath);
@@ -226,21 +274,21 @@ async function outsideRegistrationFixture() {
 }
 
 describe("hibernation workspace checks (real Git)", () => {
-  it("accepts a clean checkout and one with small uncommitted changes", async () => {
+  it("accepts a clean checkout and one with small uncommitted changes", ownFixtureTest(async () => {
     const { worktree } = await createFixture();
     expect(await probe(worktree)).toEqual({ files: 0, bytes: 0 });
     await writeFile(path.join(worktree, "file.txt"), "edited\n");
     await writeFile(path.join(worktree, "notes.txt"), "new\n");
     expect(await probe(worktree)).toMatchObject({ files: 2 });
-  });
+  }));
 
-  it("keeps changes over the snapshot limit", async () => {
+  it("keeps changes over the snapshot limit", ownFixtureTest(async () => {
     const { worktree } = await createFixture();
     await writeFile(path.join(worktree, "big.bin"), Buffer.alloc(6 * MB, 1));
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.overLimit });
-  });
+  }));
 
-  it("keeps a submodule with uncommitted work", async () => {
+  it("keeps a submodule with uncommitted work", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const sub = path.join(fixture.root, "sub");
     await mkdir(sub);
@@ -257,18 +305,18 @@ describe("hibernation workspace checks (real Git)", () => {
     await rm(path.join(fixture.worktree, "vendor", "sub", "scratch.txt"));
     await writeFile(path.join(fixture.worktree, "vendor", "sub", "lib.txt"), "changed\n");
     expect((await probe(fixture.worktree)).keep).toBeDefined();
-  });
+  }));
 
-  it.each([true, false])("ignored files do not keep a checkout with legacy output policy %s", async (legacyPolicy) => {
+  it.each([true, false])("ignored files do not keep a checkout with legacy output policy %s", ownFixtureTest(async (legacyPolicy) => {
     const { worktree } = await createFixture();
     await writeFile(path.join(worktree, ".env.local"), "SECRET=1\n");
     await mkdir(path.join(worktree, "node_modules", "dep"), { recursive: true });
     await writeFile(path.join(worktree, "node_modules", "dep", "output.bin"), Buffer.alloc(1024));
     expect(await probe(worktree, { removeRebuildableOutput: legacyPolicy, limitBytes: 1 }))
       .toEqual({ files: 0, bytes: 0, removedOutput: ["node_modules"] });
-  });
+  }));
 
-  it("keeps a checkout in the middle of a rebase", async () => {
+  it("keeps a checkout in the middle of a rebase", ownFixtureTest(async () => {
     const { repo, worktree } = await createFixture();
     await writeFile(path.join(worktree, "file.txt"), "branch side\n");
     await git(worktree, ["commit", "-am", "branch"]);
@@ -276,9 +324,9 @@ describe("hibernation workspace checks (real Git)", () => {
     await git(repo, ["commit", "-am", "main"]);
     await expect(git(worktree, ["rebase", "main"])).rejects.toThrow();
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.operation });
-  });
+  }));
 
-  it("keeps a checkout in the middle of a merge", async () => {
+  it("keeps a checkout in the middle of a merge", ownFixtureTest(async () => {
     const { repo, worktree } = await createFixture();
     await writeFile(path.join(worktree, "file.txt"), "branch side\n");
     await git(worktree, ["commit", "-am", "branch"]);
@@ -286,15 +334,15 @@ describe("hibernation workspace checks (real Git)", () => {
     await git(repo, ["commit", "-am", "main"]);
     await expect(git(worktree, ["merge", "main"])).rejects.toThrow();
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.operation });
-  });
+  }));
 
-  it("keeps a checkout with a bisect in progress", async () => {
+  it("keeps a checkout with a bisect in progress", ownFixtureTest(async () => {
     const { worktree } = await createFixture();
     await git(worktree, ["bisect", "start"]);
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.operation });
-  });
+  }));
 
-  it("keeps a checkout whose branch has a stash", async () => {
+  it("keeps a checkout whose branch has a stash", ownFixtureTest(async () => {
     const { repo, worktree } = await createFixture();
     await writeFile(path.join(worktree, "file.txt"), "stashed\n");
     await git(worktree, ["stash", "push", "-m", "keep me"]);
@@ -306,25 +354,25 @@ describe("hibernation workspace checks (real Git)", () => {
     await writeFile(path.join(worktree, "file.txt"), "other\n");
     await git(worktree, ["commit", "-am", "move off main's commit"]);
     expect(await probe(worktree)).toEqual({ files: 0, bytes: 0 });
-  });
+  }));
 
-  it("keeps commits no branch or remote retains", async () => {
+  it("keeps commits no branch or remote retains", ownFixtureTest(async () => {
     const { worktree } = await createFixture();
     await git(worktree, ["checkout", "--detach"]);
     await writeFile(path.join(worktree, "file.txt"), "detached commit\n");
     await git(worktree, ["commit", "-am", "detached"]);
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.unretained });
-  });
+  }));
 
-  it("keeps a locked worktree", async () => {
+  it("keeps a locked worktree", ownFixtureTest(async () => {
     const { repo, worktree } = await createFixture();
     await git(repo, ["worktree", "lock", worktree]);
     expect(await probe(worktree)).toEqual({ keep: HIBERNATION_WORKSPACE_KEEP_REASONS.locked });
-  });
+  }));
 });
 
 describe("hibernating a checkout (real Git)", () => {
-  it("keeps the checkout when it changes after the snapshot is written", async () => {
+  it("keeps the checkout when it changes after the snapshot is written", ownFixtureTest(async () => {
     const { repo, worktree } = await createFixture();
     await writeFile(path.join(worktree, "file.txt"), "saved edit\n");
     const service = new WorktreeArchiveService();
@@ -340,9 +388,9 @@ describe("hibernating a checkout (real Git)", () => {
     expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("saved edit\n");
     // The per-path snapshot ref goes back to what it was: nothing.
     expect((await git(repo, ["for-each-ref", "refs/pwragent/snapshots/", "refs/codex/snapshots/"])).trim()).toBe("");
-  });
+  }));
 
-  it("caps the snapshot at the hibernation limit even where archive would allow more", async () => {
+  it("caps the snapshot at the hibernation limit even where archive would allow more", ownFixtureTest(async () => {
     const { repo, worktree } = await createFixture();
     await writeFile(path.join(worktree, "big.bin"), Buffer.alloc(2 * MB, 1));
     const service = new WorktreeArchiveService({ maxSnapshotBytes: 100 * MB });
@@ -350,11 +398,11 @@ describe("hibernating a checkout (real Git)", () => {
       ...identity, worktreePath: worktree, repositoryPath: repo, capSnapshotBytes: 1 * MB, beforeRemove: async () => () => {},
     })).rejects.toThrow(/Snapshot size limit exceeded/);
     expect(await exists(path.join(worktree, "big.bin"))).toBe(true);
-  });
+  }));
 });
 
 describe("idle checkout hibernation and restore", () => {
-  it("hibernates an idle checkout with one commit and restores it on the same path, branch and tree", async () => {
+  it("hibernates an idle checkout with one commit and restores it on the same path, branch and tree", ownFixtureTest(async () => {
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked notes\n");
@@ -380,11 +428,11 @@ describe("idle checkout hibernation and restore", () => {
     expect(await new WorktreeArchiveService().readCheckoutTree(fixture.worktree)).toBe(before);
     expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked notes\n");
     expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
-  });
+  }));
 
   // Codex never removes its own ~/.codex/worktrees checkouts, so they
   // hibernate like PwrAgent's and come back on the same path.
-  it("hibernates and restores a checkout under Codex's worktree root", async () => {
+  it("hibernates and restores a checkout under Codex's worktree root", ownFixtureTest(async () => {
     const fixture = await createFixture({ worktreeRoot: ".codex" });
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     const before = await new WorktreeArchiveService().readCheckoutTree(fixture.worktree);
@@ -396,9 +444,9 @@ describe("idle checkout hibernation and restore", () => {
     await registry.restoreWorktree({ ...identity, worktreePath: fixture.worktree, snapshotRef: snapshot!.snapshotRef });
     expect((await git(fixture.worktree, ["symbolic-ref", "--short", "HEAD"])).trim()).toBe("owned");
     expect(await new WorktreeArchiveService().readCheckoutTree(fixture.worktree)).toBe(before);
-  });
+  }));
 
-  it("makes no commits across 24 sweeps with nothing to hibernate, or when it keeps a checkout", async () => {
+  it("makes no commits across 24 sweeps with nothing to hibernate, or when it keeps a checkout", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
     await sweep(registry);
@@ -418,16 +466,16 @@ describe("idle checkout hibernation and restore", () => {
     });
     expectSqliteWriteBudget({ scenario: "checkout-hibernation-kept", note: "one sweep that keeps the only checkout", writes: keptWrites });
     expect(await exists(kept.worktree)).toBe(true);
-  });
+  }));
 
-  it("writes nothing while hibernation is off, which is the default", async () => {
+  it("writes nothing while hibernation is off, which is the default", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     expect(await sweep(registry)).toMatchObject({ skipped: "Hibernation is off" });
     expect(await exists(fixture.worktree)).toBe(true);
-  });
+  }));
 
-  it("refuses a checkout with an open terminal, and never closes it", async () => {
+  it("refuses a checkout with an open terminal, and never closes it", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const closed = vi.fn();
     releases.push(registerWorktreeTerminalOwner({
@@ -439,9 +487,9 @@ describe("idle checkout hibernation and restore", () => {
     expect(closed).not.toHaveBeenCalled();
     expect(await exists(fixture.worktree)).toBe(true);
     expect(await snapshotOf(store)).toBeUndefined();
-  });
+  }));
 
-  it("keeps a pinned thread listed and pinned, and hibernates its checkout", async () => {
+  it("keeps a pinned thread listed and pinned, and hibernates its checkout", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     await store.setThreadPin({ ...identity, pinned: true });
@@ -449,9 +497,9 @@ describe("idle checkout hibernation and restore", () => {
     expect(rank).toBeDefined();
     expect(await sweep(registry)).toMatchObject({ hibernated: 1 });
     expect((await store.getThreadOverlayState(identity))?.pinnedRank).toBe(rank);
-  });
+  }));
 
-  it("is cancelled by a send that arrives while it re-runs its checks", async () => {
+  it("is cancelled by a send that arrives while it re-runs its checks", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     let operator: Promise<unknown> | undefined;
@@ -463,9 +511,9 @@ describe("idle checkout hibernation and restore", () => {
     await operator;
     expect(await exists(fixture.worktree)).toBe(true);
     expect(await snapshotOf(store)).toBeUndefined();
-  });
+  }));
 
-  it("restores on send: the message waits for the restore, and concurrent sends share one", async () => {
+  it("restores on send: the message waits for the restore, and concurrent sends share one", ownFixtureTest(async () => {
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     const { registry } = fixture.open();
@@ -480,9 +528,9 @@ describe("idle checkout hibernation and restore", () => {
     expect(recreate).toHaveBeenCalledTimes(1);
     expect(started).toHaveBeenCalledTimes(2);
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
-  });
+  }));
 
-  it.each([false, true])("keeps a queued send behind its own checkout restore (delayed acknowledgement: %s)", async (delayAcknowledgement) => {
+  it.each([false, true])("keeps a queued send behind its own checkout restore (delayed acknowledgement: %s)", ownFixtureTest(async (delayAcknowledgement) => {
     // Each provider inventory has one registry owner. The preceding direct
     // sends must settle and close before a queued-send fixture replaces it.
     expect(registries).toHaveLength(0);
@@ -519,9 +567,9 @@ describe("idle checkout hibernation and restore", () => {
     expect(recreate).toHaveBeenCalledTimes(1);
     expect(started).toHaveBeenCalledTimes(1);
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("queued edit\n");
-  });
+  }));
 
-  it("restores with environment setup in two commits", async () => {
+  it("restores with environment setup in two commits", ownFixtureTest(async () => {
     const fixture = await createFixture({ environment: true });
     const runner = vi.fn<CodexEnvironmentCommandRunner>(async () => ({ exitCode: 0, output: "installed", durationMs: 1 }));
     const { registry, store } = fixture.open(ON, { commandRunner: runner });
@@ -537,7 +585,7 @@ describe("idle checkout hibernation and restore", () => {
     expectSqliteWriteBudget({ scenario: "checkout-hibernation-restore-with-setup", note: "restore one hibernated checkout and re-run its environment setup", writes });
     expect(runner).toHaveBeenCalledTimes(1);
     expect(runner.mock.calls[0]![0].cwd).toBe(fixture.worktree);
-  });
+  }));
 
   it.each([
     ["the branch is checked out elsewhere", async (fixture: Awaited<ReturnType<typeof createFixture>>) => {
@@ -554,7 +602,7 @@ describe("idle checkout hibernation and restore", () => {
       await git(fixture.repo, ["commit", "-m", "move"]);
       await git(fixture.repo, ["branch", "-f", "owned", "main"]);
     }],
-  ])("keeps the snapshot and holds the message when %s", async (_name, breakRestore) => {
+  ])("keeps the snapshot and holds the message when %s", ownFixtureTest(async (_name, breakRestore) => {
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     const { registry, store } = fixture.open();
@@ -578,7 +626,7 @@ describe("idle checkout hibernation and restore", () => {
     expect(started).not.toHaveBeenCalled();
     expect(registry.readCheckoutHibernation(identity).restoreFailure?.message).toBe(registry.getQueuedTurnsForThread(identity)[0]!.holdReason);
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
-  });
+  }));
 });
 
 describe("Restore now and Keep it awake", () => {
@@ -591,7 +639,7 @@ describe("Restore now and Keep it awake", () => {
     return events;
   };
 
-  it("keeps a thread awake in one commit, restores its checkout, and the sweep then keeps it", async () => {
+  it("keeps a thread awake in one commit, restores its checkout, and the sweep then keeps it", ownFixtureTest(async () => {
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     const { registry, store } = fixture.open();
@@ -627,9 +675,9 @@ describe("Restore now and Keep it awake", () => {
     expect(unchanged.commits).toBe(0);
     // With the exemption off, the restore it made still counts as activity.
     expect(await sweep(registry)).toMatchObject({ hibernated: 0, kept: { "Recently active": 1 } });
-  });
+  }));
 
-  it("restores now without a send, and reports the snapshot it saved", async () => {
+  it("restores now without a send, and reports the snapshot it saved", ownFixtureTest(async () => {
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked\n");
@@ -645,9 +693,9 @@ describe("Restore now and Keep it awake", () => {
     expect(result).toEqual({ ...identity, keepAwake: false, hibernated: false });
     expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("untracked\n");
     expect((await store.getThreadOverlayState(identity))?.keepCheckoutAwake).toBeUndefined();
-  });
+  }));
 
-  it("answers a refused restore with its reason and keeps the snapshot", async () => {
+  it("answers a refused restore with its reason and keeps the snapshot", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     await sweep(registry);
@@ -660,9 +708,9 @@ describe("Restore now and Keep it awake", () => {
     // The card goes back to the hibernated checkout; it never reads awake.
     expect(events.at(-1)?.workspace).toMatchObject({ worktreePath: fixture.worktree, branch: "owned" });
     expect(events.at(-1)?.workspace).not.toHaveProperty("restoring");
-  });
+  }));
 
-  it("ends a restore that throws, so no surface keeps showing it", async () => {
+  it("ends a restore that throws, so no surface keeps showing it", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     await sweep(registry);
@@ -674,9 +722,9 @@ describe("Restore now and Keep it awake", () => {
     expect(events.at(-1)?.workspace).toMatchObject({ worktreePath: fixture.worktree });
     expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated" });
-  });
+  }));
 
-  it("says the restore runs project setup before any restore starts", async () => {
+  it("says the restore runs project setup before any restore starts", ownFixtureTest(async () => {
     const fixture = await createFixture({ environment: true });
     const { registry, store } = fixture.open();
     await store.setThreadCodexEnvironmentRuntime({ ...identity, codexEnvironmentRuntime: {
@@ -685,9 +733,9 @@ describe("Restore now and Keep it awake", () => {
     const events = hibernationEvents(registry);
     await sweep(registry);
     expect(events).toEqual([{ threadId: THREAD_ID, workspace: expect.objectContaining({ runsSetup: true }) }]);
-  });
+  }));
 
-  it("keeps the restoring card through project setup, then clears it", async () => {
+  it("keeps the restoring card through project setup, then clears it", ownFixtureTest(async () => {
     const fixture = await createFixture({ environment: true });
     let releaseSetup!: () => void;
     const setupStarted = new Promise<void>((resolve) => {
@@ -716,25 +764,25 @@ describe("Restore now and Keep it awake", () => {
     releaseSetup();
     await restore;
     expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
-  });
+  }));
 });
 
 describe("Thread maintenance's hibernate step", () => {
-  it("uses fleet membership rather than a missing archive timestamp to ignore an archived co-owner", async () => {
+  it("uses fleet membership rather than a missing archive timestamp to ignore an archived co-owner", ownFixtureTest(async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads.push({ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true });
     const { registry } = fixture.open({ ...ON, enabled: false });
     const candidate = (await registry.listAutoArchiveCandidates()).find((item) => item.thread.id === THREAD_ID)!;
     expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true })).toBe(true);
     expect(await exists(fixture.worktree)).toBe(false);
-  });
+  }));
 
   // Codex reports no archive time, so the archived page is the only archive
   // evidence. Retired monitor workers once shared a release worktree this way
   // and held it awake. The provider inventory is the oracle: only an
   // unarchived co-owner shares the checkout, and an archived row is never
   // offered for archive again.
-  it("treats co-owners from the provider's archived page as archived, not as sharing users (oracle property)", async () => {
+  it("treats co-owners from the provider's archived page as archived, not as sharing users (oracle property)", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const target = ArchiveWorktreeTransport.threads[0]!;
     const { registry } = fixture.open({ ...ON, enabled: false });
@@ -750,11 +798,11 @@ describe("Thread maintenance's hibernate step", () => {
       const archivedIds = archived.flatMap((isArchived, index) => isArchived ? [`co-owner-${index}`] : []);
       expect(offered.filter((threadId) => archivedIds.includes(threadId))).toEqual([]);
     }), { numRuns: 12, examples: [[[true, true]], [[true, false]]] });
-  });
+  }));
 
   // ACP summaries drop the session's archive time, as Codex rows have none.
   // The page that lists the session is the oracle for whether it shares.
-  it("treats an ACP session from the archived page as archived, not as a sharing user (oracle property)", async () => {
+  it("treats an ACP session from the archived page as archived, not as a sharing user (oracle property)", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const acp = (registry as unknown as { acpBackend: {
@@ -776,14 +824,14 @@ describe("Thread maintenance's hibernate step", () => {
       const scan = await service.scan({ steps: ["hibernate"] });
       expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(archived);
     }), { numRuns: 4, examples: [[true], [false]] });
-  });
+  }));
 
   // Model test. Maintenance splits its owners into active and archived for
   // checkout ownership, and hibernation's sharing rule indexes owners in
   // CheckoutPathOwners. A retention start alone (a thread restored in the
   // Codex app keeps it) used to be archived to the first and a live owner to
   // the second, so one scan gave the same thread two answers.
-  it("splits checkout owners exactly as the shared-checkout index counts them (model property)", async () => {
+  it("splits checkout owners exactly as the shared-checkout index counts them (model property)", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const inventory = (candidates: ThreadArchiveCandidate[]) => (registryModules(registry).threadArchiveCoordinator as unknown as {
@@ -805,9 +853,9 @@ describe("Thread maintenance's hibernate step", () => {
         expect(active.has(candidate.thread.id)).toBe(owners.sharedWithAnotherThread(outsider, path.join(fixture.root, `checkout-${index}`)));
       }
     }), { numRuns: 40, examples: [[["retention"]]] });
-  });
+  }));
 
-  it("keeps a co-owner that both provider pages list as a sharing user", async () => {
+  it("keeps a co-owner that both provider pages list as a sharing user", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const coOwner = { id: "co-owner", cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: false };
     ArchiveWorktreeTransport.threads.push(coOwner);
@@ -817,9 +865,9 @@ describe("Thread maintenance's hibernate step", () => {
     const scan = await maintenance(registry).scan({ steps: ["hibernate"] });
     expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(false);
     expect(scan.hibernate?.kept["Shared with another thread"]).toBeGreaterThan(0);
-  });
+  }));
 
-  it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {
+  it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
     const targets = [{ ...identity, worktreePath: fixture.worktree }];
@@ -850,9 +898,9 @@ describe("Thread maintenance's hibernate step", () => {
       && request.params.archived === true && !request.params.cursor);
     expect(membershipReads).toHaveLength(1);
     for (const target of targets) expect(await exists(target.worktreePath)).toBe(false);
-  });
+  }));
 
-  it("uses shared fleet admission and reports real snapshot-to-deletion stages", async () => {
+  it("uses shared fleet admission and reports real snapshot-to-deletion stages", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
     const candidate = (await registry.listAutoArchiveCandidates())[0]!;
@@ -869,9 +917,9 @@ describe("Thread maintenance's hibernate step", () => {
     const snapshot = (await snapshotOf(store))!;
     expect(snapshot.state).toBe("hibernated");
     expect(await git(fixture.repo, ["show", `${snapshot.snapshotRef}:file.txt`])).toBe("original\n");
-  });
+  }));
 
-  it.each(["cli", "subAgentThreadSpawn"])("fresh hibernation admission sees a new %s owner while exploratory discovery is pending", async (source) => {
+  it.each(["cli", "subAgentThreadSpawn"])("fresh hibernation admission sees a new %s owner while exploratory discovery is pending", ownFixtureTest(async (source) => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
     const candidate = (await registry.listAutoArchiveCandidates())[0]!;
@@ -904,9 +952,9 @@ describe("Thread maintenance's hibernate step", () => {
       expect(sharedRead).not.toHaveBeenCalled();
       expect(await exists(fixture.worktree)).toBe(true);
     } finally { release(); await exploratory; }
-  });
+  }));
 
-  it("keeps a checkout when fresh admission cannot read a possible owner's state", async () => {
+  it("keeps a checkout when fresh admission cannot read a possible owner's state", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     const candidate = (await registry.listAutoArchiveCandidates())[0]!;
@@ -917,9 +965,9 @@ describe("Thread maintenance's hibernate step", () => {
     };
     expect(await boundary.hibernateIdleCheckout(candidate, ON)).toBe("Thread state unreadable");
     expect(await exists(fixture.worktree)).toBe(true);
-  });
+  }));
 
-  it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", async (lifecycleState) => {
+  it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", ownFixtureTest(async (lifecycleState) => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
     const watch: ThreadPullRequestWatchSummary = { ...identity, watchId: "terminal-watch", prKey: "github.com/example/project#12",
@@ -956,9 +1004,9 @@ describe("Thread maintenance's hibernate step", () => {
     // Eligibility neither dispatches nor retires the watch, and does not unlock.
     expect(await store.listActiveThreadPrStatusWatches(identity)).toHaveLength(1);
     expect((await store.getThreadOverlayState(identity))?.lock?.lockedAt).toBe(1);
-  });
+  }));
 
-  it("rechecks managed-root ownership when a reviewed external checkout moves outside through a symlink", async () => {
+  it("rechecks managed-root ownership when a reviewed external checkout moves outside through a symlink", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
     await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: { ...fixture.directory, worktreeOwnership: "external" } });
@@ -973,9 +1021,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1, failed: 0 });
     expect(await readFile(path.join(outside, "file.txt"), "utf8")).toBe("original\n");
     expect(await snapshotOf(store)).toBeUndefined();
-  });
+  }));
 
-  it("registers an explicitly approved outside linked checkout without weakening snapshot or ownership checks (Git oracle)", async () => {
+  it("registers an explicitly approved outside linked checkout without weakening snapshot or ownership checks (Git oracle)", ownFixtureTest(async () => {
     const fixture = await outsideRegistrationFixture();
     const { registry, store, approvals, call } = fixture;
     await writeFile(path.join(fixture.worktree, "file.txt"), "registered edit\n");
@@ -1004,9 +1052,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("registered edit\n");
     expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("registered notes\n");
     expect(await exists(path.join(fixture.worktree, ".env.local"))).toBe(false);
-  });
+  }));
 
-  it.each(["Cancel", "Register worktree"])("requires the exact operator answer in Full Access: %s", async (answer) => {
+  it.each(["Cancel", "Register worktree"])("requires the exact operator answer in Full Access: %s", ownFixtureTest(async (answer) => {
     const { registry, store, worktree, call } = await outsideRegistrationFixture();
     await store.setThreadExecutionMode({ backend: "codex", threadId: "registration-agent", executionMode: "full-access" });
     const measured = await measureSqliteWrites(async () => {
@@ -1033,9 +1081,9 @@ describe("Thread maintenance's hibernate step", () => {
     expectSqliteWriteBudget({ scenario: answer === "Cancel" ? "worktree-registration-card-cancel" : "worktree-registration-card-approve",
       writes: measured.writes, note: "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved" });
     expect(await exists(worktree)).toBe(true);
-  });
+  }));
 
-  it.each(["main", "unattached", "unknown", "alias", "ended", "moved-during-review"])("refuses registration for %s", async (scenario) => {
+  it.each(["main", "unattached", "unknown", "alias", "ended", "moved-during-review"])("refuses registration for %s", ownFixtureTest(async (scenario) => {
     const { registry, store, root, repo, worktree, call, approvals, live } = await outsideRegistrationFixture();
     const approval = vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockImplementation(async () => {
       if (scenario === "moved-during-review") {
@@ -1063,9 +1111,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await exists(repo)).toBe(true);
     expect(await exists(worktree)).toBe(true);
     await registry.close();
-  });
+  }));
 
-  it("revokes a reviewed registration and keeps outside external owners protected", async () => {
+  it("revokes a reviewed registration and keeps outside external owners protected", ownFixtureTest(async () => {
     const { registry, store, worktree, call, approvals } = await outsideRegistrationFixture();
     vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
@@ -1079,7 +1127,7 @@ describe("Thread maintenance's hibernate step", () => {
     expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1 });
     expect(await exists(worktree)).toBe(true);
     expect(await snapshotOf(store)).toBeUndefined();
-  });
+  }));
 
   // Each case owns its native fixture through afterEach; no generated case
   // leaves a registry, SQLite connection or Git tree alive for the next one.
@@ -1087,7 +1135,7 @@ describe("Thread maintenance's hibernate step", () => {
     Array.from({ length: 2 ** ownerCount }, (_, mask) => ({
       authorizations: Array.from({ length: ownerCount }, (_, index) => Boolean(mask & (1 << index))),
     })));
-  it.each(archivedOwnerReceiptCases)("requires every archived external owner's receipt at hibernation admission: $authorizations (Git oracle)", async ({ authorizations }) => {
+  it.each(archivedOwnerReceiptCases)("requires every archived external owner's receipt at hibernation admission: $authorizations (Git oracle)", ownFixtureTest(async ({ authorizations }) => {
     await ownFixtureWork((async () => {
       // Each exhaustive case owns its registry, database and Git checkout until
       // it settles. None may survive into the next provider inventory.
@@ -1130,9 +1178,9 @@ describe("Thread maintenance's hibernate step", () => {
         expect(inspected.result.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(allowed);
       } finally { await disposeFixtures(); }
     })());
-  });
+  }));
 
-  it("reads one Git identity for a checkout shared with one authorized archived owner (shrunk regression)", async () => {
+  it("reads one Git identity for a checkout shared with one authorized archived owner (shrunk regression)", ownFixtureTest(async () => {
     const { registry, store, directory, worktree } = await outsideRegistrationFixture();
     const registration = { ...await inspectRegisterableWorktree(worktree), authorizedAt: 1,
       requestedBy: { backend: "codex" as const, threadId: "registration-agent" } };
@@ -1147,9 +1195,9 @@ describe("Thread maintenance's hibernate step", () => {
     const candidates = await registry.listAutoArchiveCandidates();
     expect(candidates.find((candidate) => candidate.thread.id === THREAD_ID)?.managedWorktreePath).toBe(worktree);
     expect(probeHook.identities - before).toBe(1);
-  });
+  }));
 
-  it("compares every owner's receipt with the current Git checkout, without retaining the observation (Git oracle property)", async ({ signal }) => {
+  it("compares every owner's receipt with the current Git checkout, without retaining the observation (Git oracle property)", ownFixtureTest(async ({ signal }) => {
     const { registry, store, repo, worktree } = await outsideRegistrationFixture();
     const old = { ...await inspectRegisterableWorktree(worktree), authorizedAt: 1,
       requestedBy: { backend: "codex" as const, threadId: "registration-agent" } };
@@ -1182,9 +1230,9 @@ describe("Thread maintenance's hibernate step", () => {
     await git(repo, ["worktree", "add", worktree, "owned"]);
     // Even the same inventory object must get a new physical identity read.
     expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(false);
-  });
+  }));
 
-  it.for(["hibernating-owner", "archived-owner"])("revoking the %s receipt cancels an in-flight hibernation before removal", async (ownerKind, { signal }) => {
+  it.for(["hibernating-owner", "archived-owner"])("revoking the %s receipt cancels an in-flight hibernation before removal", ownFixtureTest(async (ownerKind, { signal }) => {
     const { registry, store, directory, worktree, call, approvals } = await outsideRegistrationFixture();
     vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
@@ -1237,9 +1285,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect((await run).steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1 });
     expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("kept after revocation\n");
     expect(await snapshotOf(store)).toBeUndefined();
-  });
+  }));
 
-  it("reads a durable receipt after restart but requires current-profile membership", async () => {
+  it("reads a durable receipt after restart but requires current-profile membership", ownFixtureTest(async () => {
     const fixture = await outsideRegistrationFixture();
     vi.spyOn(fixture.approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await fixture.call(fixture.worktree)).ok).toBe(true);
@@ -1256,9 +1304,9 @@ describe("Thread maintenance's hibernate step", () => {
     ArchiveWorktreeTransport.threads = [];
     expect((await tool.call(fixture.worktree, "inspect")).ok).toBe(false);
     expect(await exists(fixture.worktree)).toBe(true);
-  });
+  }));
 
-  it("models approval, rejection, observation and revocation without inferring ownership", async ({ signal }) => {
+  it("models approval, rejection, observation and revocation without inferring ownership", ownFixtureTest(async ({ signal }) => {
     const fixture = await outsideRegistrationFixture();
     const { registry, store, worktree, call, approvals } = fixture;
     const approval = vi.spyOn(approvals, "requestThreadMaintenanceConfirmation");
@@ -1295,9 +1343,9 @@ describe("Thread maintenance's hibernate step", () => {
       await fc.asyncModelRun(() => ({ model: { authorized: false }, real: fixture }), commands);
     }), { numRuns: 10 }));
     expect((await call(worktree, "inspect")).ok).toBe(true);
-  });
+  }));
 
-  it.each(["recent", "active", "shared", "snapshot-limit", "replaced"])("retains %s protection after outside registration and review", async (protection) => {
+  it.each(["recent", "active", "shared", "snapshot-limit", "replaced"])("retains %s protection after outside registration and review", ownFixtureTest(async (protection) => {
     const { registry, store, root, repo, worktree, call, approvals } = await outsideRegistrationFixture();
     vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
@@ -1318,9 +1366,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 0, kept: 1 });
     expect(await exists(worktree)).toBe(true);
     expect(await snapshotOf(store)).toBeUndefined();
-  });
+  }));
 
-  it.each(["sole", "active", "external-archived"])("archives a registered outside checkout subject to %s ownership (Git oracle)", async (ownership) => {
+  it.each(["sole", "active", "external-archived"])("archives a registered outside checkout subject to %s ownership (Git oracle)", ownFixtureTest(async (ownership) => {
     const { registry, store, repo, worktree, directory, call, approvals } = await outsideRegistrationFixture();
     vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
@@ -1337,9 +1385,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await exists(repo)).toBe(true);
     if (ownership === "sole") expect(await snapshotOf(store)).toMatchObject({ worktreePath: worktree });
     else expect(await readFile(path.join(worktree, "file.txt"), "utf8")).toBe("saved archive edit\n");
-  });
+  }));
 
-  it.each([".pwragent", ".codex"] as const)("uses canonical PwrAgent root ownership for an attached external checkout: %s", async (worktreeRoot) => {
+  it.each([".pwragent", ".codex"] as const)("uses canonical PwrAgent root ownership for an attached external checkout: %s", ownFixtureTest(async (worktreeRoot) => {
     const fixture = await createFixture({ worktreeRoot });
     const { registry, store } = fixture.open({ ...ON, enabled: false });
     await store.replaceWorkspaceLinkedDirectory({ ...identity, directory: { ...fixture.directory, worktreeOwnership: "external" } });
@@ -1357,9 +1405,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await exists(fixture.worktree)).toBe(false);
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
     expect((await store.getThreadOverlayState(identity))?.extraLinkedDirectories[0]?.worktreeOwnership).toBe("external");
-  });
+  }));
 
-  it("does not confuse a persisted archive with an archive operation still in flight", async () => {
+  it("does not confuse a persisted archive with an archive operation still in flight", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const candidate = (await registry.listAutoArchiveCandidates())[0]!;
@@ -1370,9 +1418,9 @@ describe("Thread maintenance's hibernate step", () => {
       expect(registry.isArchiveCandidateBusy({ ...candidate, overlay: { ...candidate.overlay!, ...archiveState } })).toBe(false);
     }
     expect(registry.isArchiveCandidateBusy({ ...candidate, thread: { ...candidate.thread, archivedAt: 1 } })).toBe(false);
-  });
+  }));
 
-  it("discovers a provider-archived checkout, saves its work and leaves its conversation archived", async () => {
+  it("discovers a provider-archived checkout, saves its work and leaves its conversation archived", ownFixtureTest(async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads[0]!.archived = true;
     ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 5 * 86_400;
@@ -1392,9 +1440,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("saved archived edit\n");
     expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("saved archived notes\n");
     expect(ArchiveWorktreeTransport.threads[0]!.archived).toBe(true);
-  });
+  }));
 
-  it("allows inspecting a reviewed thread through the final snapshot admission without restarting its idle clock", async () => {
+  it("allows inspecting a reviewed thread through the final snapshot admission without restarting its idle clock", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     const candidate = (await registry.listAutoArchiveCandidates())[0]!;
@@ -1402,9 +1450,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await registry.hibernateReviewedCheckout(candidate, ON)).toBe(true);
     expect(await exists(fixture.worktree)).toBe(false);
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
-  });
+  }));
 
-  it("carries the protecting watch's PR into the kept checkout even before a PR chip was cached", async () => {
+  it("carries the protecting watch's PR into the kept checkout even before a PR chip was cached", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open();
     const watch = { watchId: "watch-fixture", backend: "codex" as const, threadId: THREAD_ID,
@@ -1426,11 +1474,11 @@ describe("Thread maintenance's hibernate step", () => {
     expect(kept).toMatchObject({ reason: "Watching a PR", threads: [{ backend: "codex", threadId: THREAD_ID,
       pullRequests: [{ url: watch.prUrl, title: watch.prTitle, number: watch.prNumber }] }] });
     expect(scan.hibernate?.items).toEqual([]);
-  });
+  }));
 
   // Provider inventory is the oracle, independently of navigation's source
   // and companion-app filters. A hidden row can still hold real disk space.
-  it("includes every provider checkout owner even when navigation hides it", async () => {
+  it("includes every provider checkout owner even when navigation hides it", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
     await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.constantFrom("cli", "vscode", "exec", "appServer"), { minLength: 1 }), async (sources) => {
@@ -1440,11 +1488,11 @@ describe("Thread maintenance's hibernate step", () => {
       const found = await registry.listAutoArchiveCandidates();
       expect(found.map((row) => row.thread.id).sort()).toEqual(ArchiveWorktreeTransport.threads.map((row) => row.id).sort());
     }), { numRuns: 12 });
-  });
+  }));
 
   // Git is the oracle for workspace kind. A provider's minimal cwd summary
   // must not turn a real linked checkout into a plain directory on recheck.
-  it("revalidates provider cwd summaries against Git instead of losing their checkout", async () => {
+  it("revalidates provider cwd summaries against Git instead of losing their checkout", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
     const listed = (await registry.listAutoArchiveCandidates())[0]!;
@@ -1467,9 +1515,9 @@ describe("Thread maintenance's hibernate step", () => {
         kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
       })]);
     }), { numRuns: 8, examples: [[1]] });
-  });
+  }));
 
-  it("observes Git metadata again on the next pass when a checkout path is replaced (oracle)", async () => {
+  it("observes Git metadata again on the next pass when a checkout path is replaced (oracle)", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
     expect((await registry.listAutoArchiveCandidates())[0]!.thread.linkedDirectories)
@@ -1484,7 +1532,7 @@ describe("Thread maintenance's hibernate step", () => {
       .toBe(path.join(replacement, ".git").replace(/\\/g, "/"));
     const next = (await registry.listAutoArchiveCandidates())[0]!;
     expect(next.thread.linkedDirectories).toContainEqual(expect.objectContaining({ kind: "worktree", path: replacement, worktreePath: fixture.worktree }));
-  });
+  }));
 
   function maintenance(registry: DesktopBackendRegistry) {
     return new ThreadMaintenanceService({
@@ -1503,7 +1551,7 @@ describe("Thread maintenance's hibernate step", () => {
     });
   }
 
-  it("hibernates a reviewed checkout in one commit while the hourly sweep is off", async () => {
+  it("hibernates a reviewed checkout in one commit while the hourly sweep is off", ownFixtureTest(async () => {
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "uncommitted edit\n");
     const { registry, store } = fixture.open({ ...ON, enabled: false });
@@ -1522,9 +1570,9 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await snapshotOf(store)).toMatchObject({ state: "hibernated", worktreePath: fixture.worktree });
     // The sweep itself stays off.
     expect(await sweep(registry)).toMatchObject({ skipped: "Hibernation is off" });
-  });
+  }));
 
-  it.each(["before scan", "after scan"])("hibernates with ignored files %s and restores only saved work", async (when) => {
+  it.each(["before scan", "after scan"])("hibernates with ignored files %s and restores only saved work", ownFixtureTest(async (when) => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 5 * 86_400;
     await writeFile(path.join(fixture.worktree, "file.txt"), "saved tracked edit\n");
@@ -1554,12 +1602,12 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await readFile(path.join(fixture.worktree, "notes.txt"), "utf8")).toBe("saved untracked work\n");
     expect(await exists(path.join(fixture.worktree, ".env.local"))).toBe(false);
     expect(await exists(path.join(fixture.worktree, "node_modules"))).toBe(false);
-  });
+  }));
 
   // Oracle: the registry's own rules. Every thread with a checkout lands in
   // exactly one count, the dialog's idle days decide "not idle yet" for the
   // scan and its run, and a hibernated checkout is not eligible at all.
-  it("scans and runs with the dialog's idle days, and counts each thread once", async () => {
+  it("scans and runs with the dialog's idle days, and counts each thread once", ownFixtureTest(async () => {
     const fixture = await createFixture();
     // Last active two days ago: Settings' 7 days keeps it, the dialog's 1 day does not.
     ArchiveWorktreeTransport.threads[0]!.updatedAt = Math.floor(Date.now() / 1000) - 2 * 86_400;
@@ -1580,9 +1628,9 @@ describe("Thread maintenance's hibernate step", () => {
     const after = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 1 });
     expect(after.hibernate).toMatchObject({ checked: 0, notIdleYet: 0, kept: {}, items: [] });
     expect(after.hibernate).not.toHaveProperty("alreadyHibernated");
-  });
+  }));
 
-  it("keeps a reviewed checkout whose saved work grows past the snapshot limit", async () => {
+  it("keeps a reviewed checkout whose saved work grows past the snapshot limit", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const service = maintenance(registry);
@@ -1592,5 +1640,92 @@ describe("Thread maintenance's hibernate step", () => {
       removeEmptyFolders: false, hibernate: [identity] });
     expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "kept", reason: "Changes over the snapshot limit" })]);
     expect(await exists(fixture.worktree)).toBe(true);
-  });
+  }));
 });
+
+
+// A deadline is unnecessary: gate an admitted body, request the real fixture
+// teardown, then observe native Git, its file, and its SQLite owner directly.
+it("fixture owner joins the complete test before closing Git and SQLite roots", ownFixtureOracle(async () => {
+  const fixture = await createFixture();
+  const { registry, store } = fixture.open({ ...ON, enabled: false });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const close = vi.spyOn(registry, "close");
+  let observations: PromiseSettledResult<unknown>[] = [];
+  const run = ownFixtureTest(async () => {
+    entered.resolve();
+    await release.promise;
+    observations = await Promise.allSettled([
+      execute("git", ["-C", fixture.worktree, "rev-parse", "--verify", "HEAD"]),
+      readFile(path.join(fixture.worktree, "file.txt"), "utf8"),
+      store.getThreadOverlayState(identity),
+    ]);
+  })();
+  await entered.promise;
+  const retiring = cleanupFixtureTest();
+  let premature = false;
+  try {
+    // One host boundary observes whether teardown has admitted registry.close;
+    // it cannot stand in for completion of the separately gated test body.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    premature = close.mock.calls.length > 0;
+    if (premature) await retiring;
+  } finally {
+    release.resolve();
+    await run;
+    await retiring;
+    close.mockRestore();
+  }
+  expect({ premature, nativeReads: observations.map((item) => item.status) }).toEqual({
+    premature: false, nativeReads: ["fulfilled", "fulfilled", "fulfilled"],
+  });
+  expect(await exists(fixture.root)).toBe(false);
+}));
+
+it("fixture owner rejects an aborted case before allocating its real Git roots", ownFixtureOracle(async () => {
+  const controller = new AbortController();
+  const reason = new Error("controlled aborted checkout case");
+  controller.abort(reason);
+  fixtureOwner = new FixtureOwner(controller.signal);
+  const before = roots.length;
+  let failure: unknown;
+  try { await createFixture(); } catch (error) { failure = error; }
+  expect({ rejectedWithOwnerReason: failure === reason, allocatedRoots: roots.length - before })
+    .toEqual({ rejectedWithOwnerReason: true, allocatedRoots: 0 });
+}));
+
+it("fixture owner rejects database admission after retirement", ownFixtureOracle(async () => {
+  const fixture = await createFixture();
+  const fixtureRoots = [...roots];
+  await cleanupFixtureTest();
+  const opening = vi.spyOn(StateDb, "open");
+  let failure: unknown;
+  try {
+    try { fixture.open(); } catch (error) { failure = error; }
+    expect({ message: (failure as Error | undefined)?.message, databaseOpens: opening.mock.calls.length })
+      .toEqual({ message: "Checkout fixture owner retired", databaseOpens: 0 });
+  } finally {
+    opening.mockRestore();
+    await disposeFixtures();
+    await Promise.all(fixtureRoots.map((root) => rm(root, { recursive: true, force: true })));
+  }
+}));
+
+it("fixture owner rejects a Git mutation after abort", ownFixtureOracle(async () => {
+  const fixture = await createFixture();
+  const controller = new AbortController();
+  const reason = new Error("controlled aborted Git admission");
+  fixtureOwner = new FixtureOwner(controller.signal);
+  controller.abort(reason);
+  let failure: unknown;
+  try { await git(fixture.repo, ["config", "--local", "fixture.admission", "unexpected"]); }
+  catch (error) { failure = error; }
+  // Git's persisted config is independent of the helper's admission logic.
+  const value = await execute("git", ["-C", fixture.repo, "config", "--get", "fixture.admission"])
+    .then((result) => result.stdout.trim(), (error: { code: number }) => {
+      if (error.code !== 1) throw error;
+      return "absent";
+    });
+  expect({ refused: failure === reason, value }).toEqual({ refused: true, value: "absent" });
+}));
