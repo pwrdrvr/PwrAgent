@@ -131,7 +131,7 @@ complete scope, native typecheck command and formatting policy.
   changed since; an agent's `update_todo` cannot slip a raise in between.
 - Messaging surfaces deliberately do NOT share this gate. An escalation
   requested over Telegram or Discord is made by a remote actor, so
-  `MessagingController.ensureFullAccessEscalationAllowed` gates it on the
+  `MessagingAccessControl.ensureFullAccessEscalationAllowed` gates it on the
   `thread.execution.full_access` permission, the operator's `warningPolicy`,
   and a per-contact dismissal. The desktop-local preference is the operator's
   own acknowledgement and must never dismiss a contact's warning.

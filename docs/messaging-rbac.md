@@ -157,8 +157,10 @@ name; a custom role needs explicit grants. The local provider transport supplies
 thread/turn identity. Discovery and execution re-resolve the persisted Agent
 designation and retained actor, including after response acknowledgement.
 
-All enforcement funnels through `requirePermission` in
-[`apps/desktop/src/main/messaging/core/messaging-controller.ts`](../apps/desktop/src/main/messaging/core/messaging-controller.ts):
+Action enforcement funnels through `MessagingAccessControl.requirePermission` in
+[`messaging-access-control.ts`](../apps/desktop/src/main/messaging/core/messaging-access-control.ts).
+The controller routes commands and callbacks through late-bound owner ports and
+retains the public dynamic-tool authorization facade:
 
 - command dispatch (`/resume`, `/new`, `/status`, `/detach`, `/monitor`, …;
   `/help` is deliberately ungated),
