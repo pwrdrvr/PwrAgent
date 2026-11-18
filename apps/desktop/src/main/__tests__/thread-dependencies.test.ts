@@ -20,7 +20,10 @@ let dbPath: string;
 let now: number;
 let busy: boolean;
 let snapshots: Map<string, DependencyThreadSnapshot>;
-const submit = vi.fn(async (_params: { threadId: string }): Promise<{ status: "started" | "busy"; turnId?: string }> => ({ status: "started", turnId: "continuation-turn" }));
+// A consumer with a running turn takes the wake into its queue, as the
+// registry's joinRunningTurn admission does; an idle one starts a turn.
+const submit = vi.fn(async (_params: { threadId: string }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }> =>
+  busy ? { status: "queued" } : { status: "started", turnId: "continuation-turn" });
 const condition = (threadId: string, when: ThreadDependencyCondition["when"] = "ci_passed"): ThreadDependencyCondition => ({ backend: "codex", threadId, when });
 const pr = (overrides: Partial<PrSummary> = {}): PrSummary => ({
   provider: "github.com", org: "example", repo: "fixture", number: 1,
@@ -39,7 +42,6 @@ function coordinator(dependencyStore = store, changed: (item: ThreadDependency) 
       if (!snapshot) throw new Error("Thread not found");
       return snapshot;
     },
-    isConsumerBusy: () => busy,
     submit,
     changed,
     now: () => now,
@@ -208,9 +210,10 @@ describe("durable thread dependencies", () => {
     expect(submit).toHaveBeenCalledTimes(1);
     snapshots.get("security")!.activeTurnId = undefined;
     snapshots.get("security")!.turns = [{ id: "done", status: "completed" }];
-    // The first continuation holds the consumer until its turn ends.
+    // A second continuation does not wait for the first one's turn to end:
+    // the consumer's queue takes it at once and shares that delivery.
     await create(agent, [condition("security", "turn_completed")]);
-    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledTimes(2);
     await agent.handleThreadEvent(condition("dependencies"), { id: "continuation-turn", status: "completed" });
     expect(submit).toHaveBeenCalledTimes(2);
   });
@@ -349,18 +352,64 @@ describe("durable thread dependencies", () => {
     expect(store.get("codex", "dependencies", item.id)?.evidence[0].prUrl).toBe(pr().url);
   });
 
-  it("holds a ready notification while its consumer is busy and rechecks the PR before admission", async () => {
+  it("queues a ready notification into a busy consumer's turn and delivers it on the wake's own started event", async () => {
     const agent = coordinator(); busy = true;
     snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
     await create(agent);
-    expect(store.active()[0].status).toBe("ready");
-    snapshots.get("foundation")!.prs = [{ pr: pr({ headSha: "new-pending-head" }), fetchedAt: now }];
+    expect(submit).toHaveBeenCalledTimes(1);
+    const item = store.active()[0]!;
+    expect(item).toMatchObject({ status: "dispatching" });
+    expect(item.error).toBeUndefined();
+    // Waiting in this process's queue is not an interrupted claim.
+    await agent.reconcile();
+    expect(store.active()[0]).toMatchObject({ status: "dispatching" });
+    expect(store.active()[0]!.error).toBeUndefined();
+    expect(submit).toHaveBeenCalledTimes(1);
+    await agent.handleDeliveryProgress({ backend: "codex", threadId: "dependencies", dependencyId: item.id, status: "started", turnId: "consumer-turn" });
+    expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered", turnId: "consumer-turn" });
+  });
+
+  it("ends a queued wake the operator cancelled without waking the thread or holding other waits", async () => {
+    const agent = coordinator(); busy = true;
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    snapshots.get("security")!.prs = [{ pr: pr({ number: 2, url: "https://github.com/example/fixture/pull/2", checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await create(agent);
+    const item = store.active()[0]!;
+    await agent.handleDeliveryProgress({ backend: "codex", threadId: "dependencies", dependencyId: item.id, status: "cancelled" });
+    expect(store.list("codex", "dependencies").find((entry) => entry.id === item.id)).toMatchObject({ status: "cancelled" });
     busy = false;
-    await agent.handleThreadEvent(condition("dependencies"), { id: "consumer-turn", status: "completed" });
-    expect(submit).not.toHaveBeenCalled();
-    snapshots.get("foundation")!.prs = [{ pr: pr({ headSha: "new-passing-head", checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await agent.handleThreadEvent(condition("dependencies"), { id: "consumer-turn", status: "completed" }, true);
     await agent.handlePrEvent();
     expect(submit).toHaveBeenCalledTimes(1);
+    // A later wait for the same thread is not held behind a review.
+    await create(agent, [condition("security")]);
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles a wake restored by a quiet restart when its own started event arrives", async () => {
+    busy = true;
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await create(coordinator());
+    const item = store.active()[0]!;
+    expect(item.status).toBe("dispatching");
+    // A new process: it did not admit the wake, and reconcile flags the claim.
+    const restarted = coordinator();
+    await restarted.reconcile();
+    expect(store.active()[0]!.error).toMatch(/interrupted/);
+    // The restored queue entry then reaches the thread.
+    await restarted.handleDeliveryProgress({ backend: "codex", threadId: "dependencies", dependencyId: item.id, status: "started", turnId: "restored-turn" });
+    expect(store.list("codex", "dependencies").find((entry) => entry.id === item.id)).toMatchObject({ status: "delivered", turnId: "restored-turn" });
+    expect(store.list("codex", "dependencies").find((entry) => entry.id === item.id)!.error).toBeUndefined();
+  });
+
+  it("queues every ready wait for one busy consumer instead of admitting one per turn", async () => {
+    const agent = coordinator(); busy = true;
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    snapshots.get("security")!.prs = [{ pr: pr({ number: 2, url: "https://github.com/example/fixture/pull/2", checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await create(agent);
+    await create(agent, [condition("security")]);
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(store.active().map((item) => item.status)).toEqual(["dispatching", "dispatching"]);
   });
 
   it("recovers waiting prerequisites after reopening the database and never replays delivered ones", async () => {
@@ -408,6 +457,21 @@ describe("durable thread dependencies", () => {
     db.raw.prepare("INSERT INTO thread_message_origins(backend, thread_id, message_id, created_at, payload) VALUES (?, ?, ?, ?, ?)").run("codex", "dependencies", "receipt", now, JSON.stringify({ kind: "pwragent", dependencyId: original.id }));
     await coordinator().reconcile();
     expect(store.list("codex", "dependencies")[0].status).toBe("delivered");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("finds the receipt of a wake delivered inside a combined delivery", async () => {
+    const agent = coordinator(); await create(agent);
+    const original = store.active()[0];
+    store.replace(original, { ...original, status: "dispatching", dispatchOwnerPid: 2_000_000_000 });
+    db.raw.prepare("INSERT INTO thread_message_origins(backend, thread_id, message_id, created_at, payload) VALUES (?, ?, ?, ?, ?)").run(
+      "codex", "dependencies", "combined", now, JSON.stringify({ kind: "agent", deliveredMessages: [
+        { origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "lane-a" } }, receivedAt: now, inputItemCount: 1 },
+        { origin: { kind: "pwragent", dependencyId: original.id }, receivedAt: now, inputItemCount: 1 },
+      ] }));
+    await coordinator().reconcile();
+    expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered" });
+    expect(store.list("codex", "dependencies")[0].error).toBeUndefined();
     expect(submit).not.toHaveBeenCalled();
   });
 

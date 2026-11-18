@@ -28801,6 +28801,29 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   background: var(--bg-panel-elevated);
 }
 
+/* A combined delivery: several messages that reached the model as one input.
+   One bubble; each sender's section is that sender's message as it renders
+   alone, drawn flat inside it and separated by a rule. */
+.transcript-delivery {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+
+.transcript-delivery__member + .transcript-delivery__member {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-delivery__member > .transcript-message {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .transcript-message--monitor-result {
   padding-bottom: 10px;
 }

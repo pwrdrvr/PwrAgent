@@ -49,7 +49,7 @@ test("Electron Claude SDK self-started hooks preserve immutable held admissions"
 });
 
 for (const grouped of [false, true]) {
-  test(`Electron desktop ${grouped ? "grouped" : "individual"} agent replacement retires its old identity`, async () => {
+  test(`Electron desktop ${grouped ? "neighboring" : "individual"} agent replacement retires its old identity`, async () => {
     let driverPath = "";
     const app = await launchElectronApp({
       fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
@@ -79,19 +79,20 @@ for (const grouped of [false, true]) {
           exerciseDesktopAgentAdmission: typeof exerciseDesktopAgentAdmission;
         };
         return args.grouped ? await driver.exerciseDesktopAgentAdmission(args.root, true)
-          : { ...await driver.exerciseDesktopAgentReplacement(args.root, false), additionalIds: [] as string[] };
+          : { ...await driver.exerciseDesktopAgentReplacement(args.root, false), additionalIds: [] as string[], bobId: "", bobText: "" };
       }, { driverPath, root: path.join(app.homeRoot, "isolated-replacement-owner"), grouped });
       expect(result.replacementId).not.toBe(result.originalId);
       expect(result.retired).toBe(true);
       expect(result.statuses).toEqual([[result.originalId, "cancelled"], [result.replacementId, "queued"]]);
-      expect(result.waiting).toEqual([...(grouped ? ["group-review"] : []), result.replacementId, ...result.additionalIds, "replacement-neighbor"]);
+      expect(result.waiting).toEqual([...(grouped ? ["group-review"] : []), result.replacementId,
+        ...(grouped ? [result.bobId] : []), ...result.additionalIds, "replacement-neighbor"]);
       expect(result.additionalIds).toHaveLength(grouped ? 3 : 0);
       expect(result.text).toContain("Fresh Alice input");
       expect(result.text).not.toContain("Original Alice input");
       if (grouped) {
-        expect(result.text).toContain("Unchanged Bob input");
-        expect(result.untouchedSenderText).toContain("Fresh Bob input");
-        expect(result.untouchedSenderText).toContain("Fresh Alice input");
+        expect(result.text).not.toContain("Unchanged Bob input");
+        expect(result.bobText).toBe("Fresh Bob input");
+        expect(result.untouchedSenderText).toBe("Fresh Alice input");
       } else {
         expect(result.cancelledReceipt).toContain("Fresh receipt input");
         expect(result.cancelledReceipt).toContain("Cancelled");

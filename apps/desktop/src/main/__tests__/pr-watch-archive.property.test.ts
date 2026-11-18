@@ -344,7 +344,7 @@ describe("Auto-fix ends at archive", () => {
 
 type PrerequisiteCommand = "register" | "archive" | "restore" | "event" | "settle";
 
-/** A delivered continuation holds the consumer until its turn ends; archive revokes pending waits. */
+/** Each ready wait wakes its consumer on the next evaluation; archive revokes pending waits. */
 async function prerequisiteLifecycle(commands: PrerequisiteCommand[]): Promise<void> {
   const db = openInMemoryStateDb();
   const overlays = new SqliteOverlayStore(db);
@@ -357,13 +357,11 @@ async function prerequisiteLifecycle(commands: PrerequisiteCommand[]): Promise<v
   // An undelivered wait. Registering an identical one returns it, and the
   // prerequisite is already merged, so any evaluation makes it ready.
   let pending = false;
-  // A started continuation holds its consumer until that turn ends; a
-  // wait registered meanwhile stays ready behind it.
-  let busy = false;
+  // A running consumer turn no longer holds a ready wait back: the queue
+  // takes it and shares that delivery.
   const wake = () => {
-    if (busy || !pending) return 0;
+    if (!pending) return 0;
     pending = false;
-    busy = true;
     return 1;
   };
   try {
@@ -382,10 +380,9 @@ async function prerequisiteLifecycle(commands: PrerequisiteCommand[]): Promise<v
       } else if (command === "event") {
         await coordinator.handlePrEvent(pr.url);
         expect(submit).toHaveBeenCalledTimes(wake());
-      } else if (busy) {
-        // The consumer's wake turn ends, which releases it for the next ready wait.
+      } else {
+        // The consumer's wake turn ends; any wait still pending wakes now.
         await coordinator.handleThreadEvent(identity, { id: "wake", status: "completed" });
-        busy = false;
         expect(submit).toHaveBeenCalledTimes(wake());
       }
       expect(store.active().length > 0).toBe(pending);
@@ -394,11 +391,11 @@ async function prerequisiteLifecycle(commands: PrerequisiteCommand[]): Promise<v
 }
 
 describe("PR prerequisite subscriptions end at archive", () => {
-  it("holds the shrunk register/event/register/event sequence until the consumer turn ends", async () => {
+  it("wakes for each wait in the shrunk register/event/register/event sequence", async () => {
     await prerequisiteLifecycle(["register", "event", "register", "event", "settle", "event"]);
   });
 
-  it("retires a wait queued behind a running consumer without replay after restore", async () => {
+  it("retires a wait revoked by archive without replay after restore", async () => {
     await prerequisiteLifecycle(["register", "event", "register", "event", "archive", "restore", "settle", "event"]);
   });
 

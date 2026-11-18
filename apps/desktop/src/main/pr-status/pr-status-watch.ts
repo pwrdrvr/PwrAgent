@@ -34,7 +34,8 @@ type PrStatusWatchRegistry = {
     input: AppServerTurnInputItem[];
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started" | "busy"; turnId?: string }>;
+    joinRunningTurn: true;
+  }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }>;
 };
 
 export type PrStatusWatchOutcome = "success" | "failure";
@@ -339,6 +340,8 @@ export class PrStatusWatchCoordinator {
             : buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
         }],
         origin: "automation",
+        // The wake joins the thread's running turn instead of waiting for it.
+        joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",
           prAutomation: {
@@ -415,6 +418,8 @@ export class PrStatusWatchCoordinator {
           }),
         }],
         origin: "automation",
+        // The wake joins the thread's running turn instead of waiting for it.
+        joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",
           prAutomation: {
