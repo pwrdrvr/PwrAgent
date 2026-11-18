@@ -1,11 +1,12 @@
 import type { MessagingMonitorContext } from "./messaging-monitor-context";
 import { topicChannelRef } from "./messaging-callback-helpers";
 import { type MonitorCommandAction } from "./messaging-command-helpers";
-import { federationTargetForBinding } from "./messaging-backend-event-helpers";
+import { federationTargetForBinding, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import type { AppServerBackendKind, FederationTarget, NavigationThreadSummary } from "@pwragent/shared";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingChannelRef, MessagingInboundCommandEvent, MessagingInboundEvent, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
 import { buildMonitorStatusIntent, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT, MESSAGING_MONITOR_INTERVAL_MS, normalizeMonitorThreadLimit, selectMonitorThreads, type MessagingMonitorNavigation, type MessagingMonitorRows } from "./messaging-monitor-card.js";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
+import { buildMessagingConversationKey } from "./messaging-store.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { federationTargetForThread, threadKeyForNavigationThread, formatTimeOfDay, resolveMonitorStateOptions, buildMonitorSubscriptionId, managedTopicRecordFromConversation, topicTitleForThread, formatManagedTopicRights, formatTopicCleanupProposalBody, isPermanentMessagingTargetFailure } from "./messaging-monitor-helpers";
 
@@ -19,6 +20,8 @@ export class MessagingMonitorWorkflow {
     ReturnType<typeof setTimeout>
   >();
 
+  private readonly monitorRenders = new Map<string, MessagingCancellationSignal>();
+
   constructor(private readonly context: MessagingMonitorContext) {}
 
   dispose(): void {
@@ -30,6 +33,10 @@ export class MessagingMonitorWorkflow {
       clearTimeout(timer);
     }
     this.monitorTimersBySubscriptionId.clear();
+    for (const render of this.monitorRenders.values()) {
+      render.cancel();
+    }
+    this.monitorRenders.clear();
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
@@ -41,7 +48,7 @@ export class MessagingMonitorWorkflow {
         });
       for (const subscription of subscriptions) {
         if (subscription.monitor.enabled) {
-          await this.runMonitorSubscriptionTick(subscription.id);
+          await this.runMonitorSubscriptionTick(subscription);
         }
       }
     }
@@ -547,46 +554,48 @@ export class MessagingMonitorWorkflow {
     event: MessagingInboundEvent,
     action: MonitorCommandAction = { kind: "start" },
   ): Promise<MessagingMonitorSubscriptionRecord> {
-    const now = this.context.now();
     const existing =
       await this.context.store.findActiveMonitorSubscriptionForChannel(event.channel);
+    const now = this.context.now();
     const monitorOptions = resolveMonitorStateOptions(existing?.monitor, action);
-    const subscription = await this.context.store.upsertMonitorSubscription({
-      id: existing?.id ?? buildMonitorSubscriptionId(event.channel),
-      channel: event.channel,
-      authorizedActorIds: existing?.authorizedActorIds.length
-        ? existing.authorizedActorIds
-        : this.context.host().monitorAuthorizedActorIds(event),
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      monitor: {
-        ...existing?.monitor,
-        enabled: true,
-        intervalMs: monitorOptions.intervalMs,
-        lastRenderedAt: existing?.monitor.lastRenderedAt,
-        pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
-        recentThreadLimit: monitorOptions.recentThreadLimit,
-        showLastResponseSnippet: monitorOptions.showLastResponseSnippet,
-        showStatusLine: monitorOptions.showStatusLine,
+    const subscriptionId = existing?.id ?? buildMonitorSubscriptionId(event.channel);
+    return await this.withMonitorRender(channelMonitorRenderKey(event.channel), async (render) => {
+      const subscription = await this.context.store.upsertMonitorSubscription({
+        id: subscriptionId,
+        channel: event.channel,
+        authorizedActorIds: existing?.authorizedActorIds.length
+          ? existing.authorizedActorIds
+          : this.context.host().monitorAuthorizedActorIds(event),
+        createdAt: existing?.createdAt ?? now,
         updatedAt: now,
-      },
-      monitorSurface: existing?.monitorSurface,
-    });
-    if (existing) {
-      this.clearMonitorSubscriptionTimer(existing.id);
-    }
-    try {
-      const rendered = await this.renderChannelMonitorStatus(subscription, event);
-      this.scheduleMonitorSubscriptionTick(rendered);
-      return rendered;
-    } catch (error) {
-      this.context.logger.debug?.("messaging channel monitor initial render failed", {
-        error: error instanceof Error ? error.message : String(error),
-        subscriptionId: subscription.id,
+        monitor: {
+          ...existing?.monitor,
+          enabled: true,
+          intervalMs: monitorOptions.intervalMs,
+          lastRenderedAt: existing?.monitor.lastRenderedAt,
+          pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
+          recentThreadLimit: monitorOptions.recentThreadLimit,
+          showLastResponseSnippet: monitorOptions.showLastResponseSnippet,
+          showStatusLine: monitorOptions.showStatusLine,
+          updatedAt: now,
+        },
+        monitorSurface: existing?.monitorSurface,
       });
-      this.scheduleMonitorSubscriptionTick(subscription);
-      return subscription;
-    }
+      if (!render.isCancelled()) this.clearMonitorSubscriptionTimer(subscriptionId);
+      try {
+        const rendered = await this.renderChannelMonitorStatus(subscription, render, event);
+        if (rendered && !render.isCancelled()) this.scheduleMonitorSubscriptionTick(rendered);
+        return rendered ?? subscription;
+      } catch (error) {
+        this.context.logger.debug?.("messaging channel monitor initial render failed", {
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId,
+        });
+        const latest = await this.readCurrentChannelMonitor(subscription, render);
+        if (latest && !render.isCancelled()) this.scheduleMonitorSubscriptionTick(latest);
+        return latest ?? subscription;
+      }
+    });
   }
 
   async stopMonitoringForChannel(
@@ -610,8 +619,8 @@ export class MessagingMonitorWorkflow {
       return undefined;
     }
 
-    this.clearMonitorSubscriptionTimer(subscription.id);
-    const now = this.context.now();
+    const stopped = await this.persistStoppedChannelMonitor(subscription);
+    const now = stopped.updatedAt;
     if (subscription.monitorSurface) {
       try {
         await this.context.host().deliver(
@@ -657,47 +666,39 @@ export class MessagingMonitorWorkflow {
       );
     }
 
-    return await this.context.store.upsertMonitorSubscription({
-      ...subscription,
-      monitor: {
-        ...subscription.monitor,
-        enabled: false,
-        intervalMs: subscription.monitor.intervalMs,
-        lastRenderedAt: subscription.monitor.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
+    return stopped;
   }
 
   async enableAndRenderMonitor(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
   ): Promise<MessagingBindingRecord> {
-    const enabledBinding = await this.context.store.upsertBinding({
-      ...binding,
-      monitor: {
-        enabled: true,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: binding.monitor?.lastRenderedAt,
+    return await this.withMonitorRender(`binding:${binding.id}`, async (render) => {
+      const enabledBinding = await this.context.store.upsertBinding({
+        ...binding,
+        monitor: {
+          enabled: true,
+          intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+          lastRenderedAt: binding.monitor?.lastRenderedAt,
+          updatedAt: this.context.now(),
+        },
         updatedAt: this.context.now(),
-      },
-      updatedAt: this.context.now(),
-    });
-    try {
-      const rendered = await this.renderMonitorStatus(enabledBinding, event);
-      this.scheduleMonitorTick(rendered);
-      return rendered;
-    } catch (error) {
-      this.context.logger.debug?.("messaging monitor initial render failed", {
-        bindingId: enabledBinding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: enabledBinding.threadId,
       });
-      this.scheduleMonitorTick(enabledBinding);
-      return enabledBinding;
-    }
+      try {
+        const rendered = await this.renderMonitorStatus(enabledBinding, render, event);
+        if (rendered && !render.isCancelled()) this.scheduleMonitorTick(rendered);
+        return rendered ?? enabledBinding;
+      } catch (error) {
+        this.context.logger.debug?.("messaging monitor initial render failed", {
+          bindingId: enabledBinding.id,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: enabledBinding.threadId,
+        });
+        const latest = await this.readCurrentBindingMonitor(enabledBinding, render);
+        if (latest && !render.isCancelled()) this.scheduleMonitorTick(latest);
+        return latest ?? enabledBinding;
+      }
+    });
   }
 
   async stopMonitoringForBinding(
@@ -705,8 +706,20 @@ export class MessagingMonitorWorkflow {
     event?: MessagingInboundEvent,
     options: { deliverStatus?: boolean } = {},
   ): Promise<MessagingBindingRecord> {
+    this.monitorRenders.get(`binding:${binding.id}`)?.cancel();
     this.clearMonitorTimer(binding.id);
     const now = this.context.now();
+    const stopped = await this.context.store.upsertBinding({
+      ...binding,
+      monitor: {
+        enabled: false,
+        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        lastRenderedAt: binding.monitor?.lastRenderedAt,
+        updatedAt: now,
+      },
+      monitorSurface: undefined,
+      updatedAt: now,
+    });
     const deliverStatus = options.deliverStatus ?? true;
     if (deliverStatus && binding.monitorSurface) {
       try {
@@ -752,25 +765,15 @@ export class MessagingMonitorWorkflow {
       );
     }
 
-    return await this.context.store.upsertBinding({
-      ...binding,
-      monitor: {
-        enabled: false,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: binding.monitor?.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
+    return stopped;
   }
 
   async disableChannelMonitorSubscription(
     subscription: MessagingMonitorSubscriptionRecord,
     event?: MessagingInboundEvent,
   ): Promise<MessagingMonitorSubscriptionRecord> {
-    this.clearMonitorSubscriptionTimer(subscription.id);
-    const now = this.context.now();
+    const stopped = await this.persistStoppedChannelMonitor(subscription);
+    const now = stopped.updatedAt;
     if (subscription.monitorSurface) {
       try {
         await this.context.host().deliver(
@@ -798,13 +801,21 @@ export class MessagingMonitorWorkflow {
         });
       }
     }
+    return stopped;
+  }
+
+  private async persistStoppedChannelMonitor(
+    subscription: MessagingMonitorSubscriptionRecord,
+  ): Promise<MessagingMonitorSubscriptionRecord> {
+    // Stop owns the state transition before any confirmation can wait on a provider.
+    this.monitorRenders.get(channelMonitorRenderKey(subscription.channel))?.cancel();
+    this.clearMonitorSubscriptionTimer(subscription.id);
+    const now = this.context.now();
     return await this.context.store.upsertMonitorSubscription({
       ...subscription,
       monitor: {
         ...subscription.monitor,
         enabled: false,
-        intervalMs: subscription.monitor.intervalMs,
-        lastRenderedAt: subscription.monitor.lastRenderedAt,
         updatedAt: now,
       },
       monitorSurface: undefined,
@@ -828,27 +839,18 @@ export class MessagingMonitorWorkflow {
     return { kind: "bounded-monitor", threads: pages.flat() };
   }
 
-  async renderMonitorStatus(
+  private async renderMonitorStatus(
     binding: MessagingBindingRecord,
+    render: MessagingDeliveryGuard,
     event?: MessagingInboundEvent,
-    navigation?: MessagingMonitorNavigation,
-  ): Promise<MessagingBindingRecord> {
-    const snapshot =
-      navigation ??
-      (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
+  ): Promise<MessagingBindingRecord | undefined> {
+    if (render.isCancelled()) return undefined;
+    const snapshot = await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding));
     const now = this.context.now();
-    // Startup and timer renders have no inbound operator event.
     const countsAsActivity = event !== undefined;
-    const activeTurns = await this.resolveMonitorActiveTurns(
-      snapshot,
-      binding.monitor,
-      countsAsActivity,
-    );
-    const snippetsByThreadKey = await this.resolveMonitorSnippets(
-      snapshot,
-      binding.monitor,
-      countsAsActivity,
-    );
+    const activeTurns = await this.resolveMonitorActiveTurns(snapshot, binding.monitor, countsAsActivity);
+    const snippetsByThreadKey = await this.resolveMonitorSnippets(snapshot, binding.monitor, countsAsActivity);
+    if (render.isCancelled()) return undefined;
     const intent = buildMonitorStatusIntent({
       activeTurnsByThreadKey: activeTurns,
       binding,
@@ -859,20 +861,13 @@ export class MessagingMonitorWorkflow {
       snippetsByThreadKey,
       topicControls: this.supportsMonitorTopicControls(event?.channel ?? binding.channel),
     });
-    const result = await this.context.host().deliver(intent, binding, event);
-    const latestBinding = await this.context.store.getBinding(binding.id);
-    if (latestBinding?.revokedAt) {
-      this.clearMonitorTimer(binding.id);
-      return latestBinding;
-    }
-    const currentBinding = latestBinding ?? binding;
+    const result = await this.context.host().deliver(intent, binding, event, render);
+    const currentBinding = await this.readCurrentBindingMonitor(binding, render);
+    if (!currentBinding?.monitor || render.isCancelled()) return undefined;
     return await this.context.store.upsertBinding({
       ...currentBinding,
       monitor: {
         ...currentBinding.monitor,
-        enabled: true,
-        intervalMs:
-          currentBinding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
         lastRenderedAt: now,
         updatedAt: now,
       },
@@ -884,14 +879,13 @@ export class MessagingMonitorWorkflow {
     });
   }
 
-  async renderChannelMonitorStatus(
+  private async renderChannelMonitorStatus(
     subscription: MessagingMonitorSubscriptionRecord,
+    render: MessagingDeliveryGuard,
     event?: MessagingInboundEvent,
-    navigation?: MessagingMonitorNavigation,
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    const snapshot =
-      navigation ??
-      (await this.readMonitorRows(subscription.monitor));
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    if (render.isCancelled()) return undefined;
+    const snapshot = await this.readMonitorRows(subscription.monitor);
     const now = this.context.now();
     const countsAsActivity = event !== undefined;
     const activeTurns = await this.resolveMonitorActiveTurns(
@@ -904,6 +898,7 @@ export class MessagingMonitorWorkflow {
       subscription.monitor,
       countsAsActivity,
     );
+    if (render.isCancelled()) return undefined;
     const intent = {
       ...buildMonitorStatusIntent({
         activeTurnsByThreadKey: activeTurns,
@@ -932,33 +927,22 @@ export class MessagingMonitorWorkflow {
             }),
           }),
     };
-    const result = await this.context.host().deliver(intent, undefined, event);
+    const result = await this.context.host().deliver(intent, undefined, event, render);
+    const current = await this.readCurrentChannelMonitor(subscription, render);
+    if (!current || render.isCancelled()) return undefined;
+
     if (isPermanentMessagingTargetFailure(result)) {
-      const revoked = await this.context.store.revokeMonitorSubscription({
-        subscriptionId: subscription.id,
-        revokedAt: now,
+      await this.context.store.revokeMonitorSubscription({
+        subscriptionId: current.id,
+        revokedAt: this.context.now(),
       });
-      this.clearMonitorSubscriptionTimer(subscription.id);
-      return revoked ?? {
-        ...subscription,
-        revokedAt: now,
-        updatedAt: now,
-      };
+      return undefined;
     }
 
-    const latest =
-      await this.context.store.getMonitorSubscription(subscription.id);
-    if (latest?.revokedAt) {
-      this.clearMonitorSubscriptionTimer(subscription.id);
-      return latest;
-    }
-    const current = latest ?? subscription;
     return await this.context.store.upsertMonitorSubscription({
       ...current,
       monitor: {
         ...current.monitor,
-        enabled: true,
-        intervalMs: current.monitor.intervalMs,
         lastRenderedAt: now,
         updatedAt: now,
       },
@@ -968,6 +952,66 @@ export class MessagingMonitorWorkflow {
           : current.monitorSurface,
       updatedAt: now,
     });
+  }
+
+  private async readCurrentBindingMonitor(
+    binding: MessagingBindingRecord,
+    render: MessagingDeliveryGuard,
+  ): Promise<MessagingBindingRecord | undefined> {
+    if (render.isCancelled()) return undefined;
+    const latest = await this.context.store.getBinding(binding.id);
+    if (
+      latest?.monitor?.enabled
+      && latest.revokedAt === undefined
+      && latest.createdAt === binding.createdAt
+      && latest.monitor.updatedAt === binding.monitor?.updatedAt
+    ) {
+      return latest;
+    }
+    return undefined;
+  }
+
+  private async readCurrentChannelMonitor(
+    subscription: MessagingMonitorSubscriptionRecord,
+    render: MessagingDeliveryGuard,
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    if (render.isCancelled()) return undefined;
+    const latest = await this.context.store.findActiveMonitorSubscriptionForChannel(subscription.channel);
+    if (
+      latest?.monitor.enabled
+      && latest.revokedAt === undefined
+      && latest.id === subscription.id
+      && latest.createdAt === subscription.createdAt
+      && latest.monitor.updatedAt === subscription.monitor.updatedAt
+    ) {
+      return latest;
+    }
+    return undefined;
+  }
+
+  private async withMonitorRender<T>(
+    key: string,
+    run: (render: MessagingDeliveryGuard) => Promise<T>,
+  ): Promise<T> {
+    // The command or tick owns delivery, settlement and rearming for this render.
+    // A newer command can invalidate that ownership even within the same millisecond.
+    this.monitorRenders.get(key)?.cancel();
+    const cancelled = Promise.withResolvers<void>();
+    let active = true;
+    const render: MessagingCancellationSignal = {
+      isCancelled: () => !active || this.context.disposed,
+      whenCancelled: cancelled.promise,
+      cancel: () => {
+        active = false;
+        cancelled.resolve();
+      },
+    };
+    this.monitorRenders.set(key, render);
+    try {
+      return await run(render);
+    } finally {
+      if (this.monitorRenders.get(key) === render) this.monitorRenders.delete(key);
+    }
   }
 
   scheduleMonitorTick(binding: MessagingBindingRecord): void {
@@ -1004,7 +1048,7 @@ export class MessagingMonitorWorkflow {
       subscription.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
     const timer = setTimeout(() => {
       this.monitorTimersBySubscriptionId.delete(subscription.id);
-      void this.runMonitorSubscriptionTick(subscription.id);
+      void this.runMonitorSubscriptionTick(subscription);
     }, intervalMs);
     this.monitorTimersBySubscriptionId.set(subscription.id, timer);
   }
@@ -1028,56 +1072,50 @@ export class MessagingMonitorWorkflow {
   }
 
   async runMonitorTick(bindingId: string): Promise<void> {
-    const binding = await this.context.store.getBinding(bindingId);
-    if (!binding || binding.revokedAt || !binding.monitor?.enabled) {
-      this.clearMonitorTimer(bindingId);
-      return;
-    }
-
-    let rendered: MessagingBindingRecord | undefined;
-    try {
-      rendered = await this.renderMonitorStatus(binding);
-    } catch (error) {
-      this.context.logger.debug?.("messaging monitor tick failed", {
-        bindingId,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
-    }
-
-    const latest = rendered ?? await this.context.store.getBinding(bindingId);
-    if (latest && !latest.revokedAt && latest.monitor?.enabled) {
-      this.scheduleMonitorTick(latest);
-    }
+    const key = `binding:${bindingId}`;
+    if (this.context.disposed || this.monitorRenders.has(key)) return;
+    await this.withMonitorRender(key, async (render) => {
+      const binding = await this.context.store.getBinding(bindingId);
+      if (!binding?.monitor?.enabled || binding.revokedAt !== undefined || render.isCancelled()) return;
+      let latest: MessagingBindingRecord | undefined;
+      try {
+        latest = await this.renderMonitorStatus(binding, render);
+      } catch (error) {
+        this.context.logger.debug?.("messaging monitor tick failed", {
+          bindingId,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+        latest = await this.readCurrentBindingMonitor(binding, render);
+      }
+      if (latest && !render.isCancelled()) this.scheduleMonitorTick(latest);
+    });
   }
 
-  async runMonitorSubscriptionTick(subscriptionId: string): Promise<void> {
-    const subscription =
-      await this.context.store.getMonitorSubscription(subscriptionId);
-    if (
-      !subscription ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled
-    ) {
-      this.clearMonitorSubscriptionTimer(subscriptionId);
-      return;
-    }
-
-    let rendered: MessagingMonitorSubscriptionRecord | undefined;
-    try {
-      rendered = await this.renderChannelMonitorStatus(subscription);
-    } catch (error) {
-      this.context.logger.debug?.("messaging channel monitor tick failed", {
-        error: error instanceof Error ? error.message : String(error),
-        subscriptionId,
-      });
-    }
-
-    const latest =
-      rendered ?? await this.context.store.getMonitorSubscription(subscriptionId);
-    if (latest && !latest.revokedAt && latest.monitor.enabled) {
-      this.scheduleMonitorSubscriptionTick(latest);
-    }
+  async runMonitorSubscriptionTick(scheduled: MessagingMonitorSubscriptionRecord): Promise<void> {
+    const subscriptionId = scheduled.id;
+    const key = channelMonitorRenderKey(scheduled.channel);
+    if (this.context.disposed || this.monitorRenders.has(key)) return;
+    await this.withMonitorRender(key, async (render) => {
+      const subscription = await this.context.store.findActiveMonitorSubscriptionForChannel(scheduled.channel);
+      if (
+        subscription?.id !== subscriptionId
+        || subscription.revokedAt !== undefined
+        || !subscription.monitor.enabled
+        || render.isCancelled()
+      ) return;
+      let latest: MessagingMonitorSubscriptionRecord | undefined;
+      try {
+        latest = await this.renderChannelMonitorStatus(subscription, render);
+      } catch (error) {
+        this.context.logger.debug?.("messaging channel monitor tick failed", {
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId,
+        });
+        latest = await this.readCurrentChannelMonitor(subscription, render);
+      }
+      if (latest && !render.isCancelled()) this.scheduleMonitorSubscriptionTick(latest);
+    });
   }
 
   async resolveMonitorActiveTurns(
@@ -1181,4 +1219,8 @@ export class MessagingMonitorWorkflow {
     }
     return ["codex"];
   }
+}
+
+function channelMonitorRenderKey(channel: MessagingChannelRef): string {
+  return `subscription:${buildMessagingConversationKey(channel)}`;
 }

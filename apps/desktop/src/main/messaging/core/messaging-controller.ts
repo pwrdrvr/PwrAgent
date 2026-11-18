@@ -6906,6 +6906,7 @@ export class MessagingController {
       if (
         binding &&
         result.channel === binding.channel.channel &&
+        !guard?.isCancelled() &&
         isPermanentMessagingTargetFailure(result)
       ) {
         await this.options.store.revokeBinding({
