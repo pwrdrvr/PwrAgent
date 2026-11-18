@@ -11,7 +11,7 @@ import { inlineWorkerDebugCode } from "./scripts/inline-worker-debug-code.mjs";
  * `http://<host>:<port>` as its very first script — the hook has to be
  * installed before `react-dom` initializes or React never registers a
  * renderer with it. Companion vars pick the endpoint; see
- * `apps/desktop/AGENTS.md` ("Profiling the Renderer with React DevTools").
+ * `apps/desktop/docs/react-devtools-profiling.md`.
  *
  * Read at Vite config time, not at app runtime. With the var unset the
  * plugin below is never constructed, so a normal `electron-vite build`

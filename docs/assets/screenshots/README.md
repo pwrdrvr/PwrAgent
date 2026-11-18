@@ -47,7 +47,7 @@ pnpm --filter @pwragent/desktop screenshot:readme
 The full walkthrough — the spec, fixtures, state-seeding helpers, native
 capture and GIF stitching utilities, and the macOS Screen Recording
 permission prompt — lives in
-[`apps/desktop/AGENTS.md`](../../../apps/desktop/AGENTS.md#capturing-readme-screenshots).
+[`apps/desktop/docs/screenshots.md`](../../../apps/desktop/docs/screenshots.md#capturing-readme-screenshots).
 
 ## When to regenerate
 

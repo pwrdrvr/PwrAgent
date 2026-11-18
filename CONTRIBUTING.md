@@ -402,7 +402,7 @@ The README's download chips come from
 `apps/desktop/scripts/generate-readme-chips.swift` (run from `apps/desktop`);
 edit its chip list rather than the PNGs in `docs/assets/buttons/`. README
 screenshots live in `docs/assets/screenshots/`; see "Capturing README
-Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+Screenshots" in [apps/desktop/docs/screenshots.md](apps/desktop/docs/screenshots.md#capturing-readme-screenshots).
 
 ## Further Reading
 

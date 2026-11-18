@@ -63,7 +63,7 @@ Decide explicitly: "thread-state events use `broadcastAgentEvent`; settings/mess
 
 - `apps/desktop/src/main/ipc/messaging-status.ts`
 - `apps/desktop/src/main/ipc/agent-ipc.ts`
-- `apps/desktop/AGENTS.md` — update the Thread-State Update Bus guidance if the strategy changes
+- `apps/desktop/docs/thread-state-update-bus.md` — update the Thread-State Update Bus guidance if the strategy changes
 
 ## Resources
 

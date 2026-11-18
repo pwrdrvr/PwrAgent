@@ -2,36 +2,20 @@
 
 ## Style Guide
 
-Use [../../docs/UI-THEME.md](../../docs/UI-THEME.md) as the visual theme source of truth for renderer UI work.
-
-Use [../../docs/design/desktop-style-guide.md](../../docs/design/desktop-style-guide.md) for broader desktop layout, product tone, component behavior, and copy guidance.
-
-The theme guide defines:
-
-- theme thesis
-- palette and token usage
-- component theme rules
-- interaction constraints
-- visual anti-patterns
-
-The desktop style guide defines:
-
-- product tone
-- typography
-- shell composition
-- sidebar and thread-row rules
-- component constraints
-- copy rules
-- anti-patterns
+Before renderer UI work, read [../../docs/UI-THEME.md](../../docs/UI-THEME.md),
+the visual theme source of truth (theme thesis, palette and token usage,
+component theme rules, interaction constraints, visual anti-patterns), and
+[../../docs/design/desktop-style-guide.md](../../docs/design/desktop-style-guide.md)
+for product tone, typography, shell composition, sidebar and thread-row rules,
+component constraints, copy rules, and anti-patterns.
 
 ## Code Formatting & Linting
 
-Oxlint is the correctness linter. Run `pnpm lint:oxlint` after edits and
-`pnpm lint:oxlint:typed` for production receiver safety; CI runs both. Do not
-use linter fixes to reformat. There is no autoformatter by design: never run
-Prettier on a renderer or main-process file. Match adjacent code by hand,
-including leading binary operators. See the repo-root `AGENTS.md` for the
-complete scope, native typecheck command and formatting policy.
+Run `pnpm lint:oxlint` after edits and `pnpm lint:oxlint:typed` for production
+receiver safety; CI runs both. There is no autoformatter by design: never run
+Prettier on a renderer or main-process file or reformat with linter fixes.
+Match adjacent code by hand, including leading binary operators. The repo-root
+`AGENTS.md` has the full scope, native typecheck command, and formatting policy.
 
 ## Non-Negotiables
 
@@ -42,9 +26,8 @@ complete scope, native typecheck command and formatting policy.
   from `NavigationThreadSummary`.
 - Attention is a work queue: focusing a thread there must not clear its unread
   cookie. Replying or explicitly choosing Mark Read clears it. See
-  "Current Product Direction" in the
-  [repo-root `AGENTS.md`](../../AGENTS.md) for why that rule is lens-scoped
-  rather than global.
+  [thread navigation rules](../../docs/thread-navigation-rules.md#unread-behavior)
+  for why that rule is lens-scoped rather than global.
 - Attention rows are ranked per turn, not per update
   ([attention-order.ts](src/renderer/src/features/navigation/attention-order.ts)).
   Do not re-sort the lens by `updatedAt` — that is the bug the ranks exist to
@@ -91,50 +74,19 @@ complete scope, native typecheck command and formatting policy.
 
 ### Star Map Interactions
 
-- Interactive Star Map children must guard canvas pan, wheel, and keyboard
-  handlers before shipping.
-- The map publishes its on-screen state to the main process for the
-  `read_star_map_view` Agent tool. Keep that snapshot in memory only and keep
-  it built inside the publisher's throttle — it sits on the drag path, so the
-  input it is given must not build collections either. Read
-  [../../docs/star-map-manager.md](../../docs/star-map-manager.md) before
-  changing the snapshot shape, the manager thread's identity, or how its
-  instructions are delivered.
-- Agent commands to the map (`fly_star_map_to`,
-  `highlight_star_map_threads`, `set_star_map_view`) arrive through
-  `useStarMapCommands` and must be answered exactly once, even when the
-  handler throws: main holds the Agent's tool call open until the map
-  replies. Each answer carries its command's kind, and main drops one that
-  does not match. No Agent command may move keyboard focus. An Agent's
-  highlight is its own ring, never written into the operator's selection.
+- Guard canvas pan, wheel, and keyboard handlers in interactive children. Agent
+  map commands are answered exactly once and never move keyboard focus. Before
+  changing Star Map interactions, its view snapshot, or Agent map commands, read
+  [docs/star-map-interactions.md](docs/star-map-interactions.md#star-map-interactions).
 
 ### Full Access Escalation
 
-- Every renderer surface that can raise a thread's execution mode routes the
-  selection through `useExecutionModeSelection`
-  ([lib/useExecutionModeSelection.tsx](src/renderer/src/lib/useExecutionModeSelection.tsx)),
-  never through `desktopApi.setThreadExecutionMode` directly. The gate owns the
-  "Enable Full Access?" confirmation and the dismissed-forever preference; a
-  surface that calls the API itself is a one-click, un-gated escalation, which
-  is what the Star Map chat card's settings chip was while the dialog lived
-  inside `Composer`.
-- A surface with a live settings snapshot (the main window's `App`) passes
-  `dismissed` / `onDismiss`; anything else lets the gate read and write the
-  preference itself.
-- An agent never raises access itself (`checkAgentAccessRequest`). When it
-  needs a thread with more access than its own, it proposes a `start_thread`
-  to-do card at that mode, as the Voice and Star Map managers are told to.
-  Starting the card is the operator's escalation, and runs through
-  `useThreadTodoFullAccessGate`, which wraps this same gate. The gate judges
-  the window's copy of the card, so the run carries the access it showed
-  (`seenExecutionMode`) and the owner refuses the start if the stored card
-  changed since; an agent's `update_todo` cannot slip a raise in between.
-- Messaging surfaces deliberately do NOT share this gate. An escalation
-  requested over Telegram or Discord is made by a remote actor, so
-  `MessagingAccessControl.ensureFullAccessEscalationAllowed` gates it on the
-  `thread.execution.full_access` permission, the operator's `warningPolicy`,
-  and a per-contact dismissal. The desktop-local preference is the operator's
-  own acknowledgement and must never dismiss a contact's warning.
+- Every renderer surface that can raise a thread's execution mode goes through
+  `useExecutionModeSelection`, never `desktopApi.setThreadExecutionMode`
+  directly. An agent never raises access itself; it proposes a `start_thread`
+  to-do card. Messaging surfaces deliberately use their own permission gate.
+- Before adding or changing any execution-mode control, to-do card start, or
+  messaging escalation, read [docs/full-access-escalation.md](docs/full-access-escalation.md#full-access-escalation).
 
 ## Codex Data Boundary
 
@@ -161,884 +113,68 @@ a durable backup, and validating the session belongs to the requested thread.
 
 ## Running the App for Development
 
-Choose the target checkout and profile before starting or controlling an app.
-For a checkout-bound `dev` profile, use the project-local
-[`pwragent-dev-profile` skill](../../.agents/skills/pwragent-dev-profile/SKILL.md):
-
-```bash
-.agents/skills/pwragent-dev-profile/scripts/pwragent-dev-profile.zsh status --root "$PWD"
-.agents/skills/pwragent-dev-profile/scripts/pwragent-dev-profile.zsh restart --root "$PWD"
-```
-
-Run `status` first and only `restart` when a new process is actually wanted.
-The skill supplies both `PWRAGENT_PROFILE=dev` and
-`PWRAGENT_INSTANCE_ROOT="$PWD"` so it manages the instance for this checkout.
-Use the
-[`pwragent-dev-restart` skill](../../.agents/skills/pwragent-dev-restart/SKILL.md)
-for a delayed restart that must survive the current in-app Agent session.
-
-To launch the desktop app with live threads and real user state, run from the **repo root** (or worktree root):
-
-```bash
-pnpm dev
-```
-
-- Do **not** override `HOME` or set `NODE_ENV` — the app needs the real user data directory to load saved threads and Keychain secrets.
-- Messaging adapters are guarded by a profile-scoped sqlite lease. A shared runtime lease manager records the owning PID, runtime instance ID, and start time once, then verifies that identity against the existing profile runtime marker when another instance challenges the lease. A matching live identity remains authoritative across wall-clock corrections. Once the identity is absent, an owner that predates the current OS boot, or one the host proved gone (the Outpost names the earlier holders of its kernel-released headless lock, since every container owner is PID 1), is reclaimed immediately; otherwise the first confirmed absence is persisted and a one-minute reclaim grace protects a temporarily hung process. PID reuse cannot revive the dead owner. If another live instance already owns messaging for the active profile, this process stays usable but leaves messaging stopped.
-- The federation runtime asks the same lease manager for a parallel profile-scoped lease (lease key `profile-federation`, independent of the messaging lease). If another live instance already runs federation for the active profile, this process keeps its federation runtime stopped and reports the holder in federation health instead of fighting over the shared instance identity.
-- Use `pnpm dev:no-messaging` when you explicitly want to guarantee that this app process never starts messaging adapters.
-- For visual verification of UI changes, either command can show real threads in the sidebar and thread detail pane; prefer `dev:no-messaging` when the UI work does not need live messaging.
-- If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
-
-### Targeting an Existing Electron App
-
-- Confirm the intended checkout/profile with the dev-profile skill before
-  driving a window. Dev builds run as the generic `Electron` process and share
-  the `com.github.Electron` bundle id with every other unsigned Electron app.
-  **Never target either generic identity.** Do not target the installed
-  `com.pwrdrvr.pwragent` bundle either: it is a packaged build and does not
-  contain the checkout's code.
-- Launch or inspect with the project-local dev-profile skill. Its successful
-  `status` / `restart` / `verify` output includes a `Computer Use target` line
-  with the checkout-local Electron main PID, exact `Electron.app` path,
-  expected native window title (`PwrAgent`), and renderer URL/port. For Computer
-  Use, target that exact app path, then confirm the returned window title and
-  AX URL match before clicking anything. The title alone is not unique when
-  another PwrAgent checkout is open; the port alone is not enough without the
-  checkout-local executable and `--app-path` process evidence.
-- If the target cannot be resolved unambiguously, stop instead of guessing.
-  An ambiguous lookup can raise or operate a sibling Pwr app, another checkout,
-  or an unrelated project's broken default Electron window.
-- With a Codex browser/Electron controller, select and reuse the existing
-  PwrAgent Electron target and its window/page binding. With persistent
-  `node_repl` Playwright, reuse the existing `electronApp` and `appWindow`
-  handles. Playwright's `_electron.launch()` always creates a new process; it
-  cannot attach those handles to an arbitrary Electron app that was started
-  elsewhere, so use Computer Use or an existing controller binding instead.
-- If a separate Playwright-owned instance is explicitly required, prefer the
-  repository's E2E/inspect commands. A manual Playwright launch must pass the
-  PwrAgent package entry: `.` with `cwd` set to `apps/desktop`, or
-  `apps/desktop` with `cwd` set to the repository root, plus the intended
-  `PWRAGENT_PROFILE` and `PWRAGENT_INSTANCE_ROOT` environment.
-- **Never launch `Electron.app`, its `Contents/MacOS/Electron` executable, or
-  the repo's Electron binary without the PwrAgent app entry/path.** A bare
-  Electron launch opens Electron's default shell, not PwrAgent.
+Choose the checkout and profile first: run the project-local
+[`pwragent-dev-profile` skill](../../.agents/skills/pwragent-dev-profile/SKILL.md)'s
+`status` before any `restart`. Do not override `HOME` or set `NODE_ENV`. Never
+target the generic `Electron` / `com.github.Electron` identity or the installed
+`com.pwrdrvr.pwragent` bundle, never launch bare Electron without the PwrAgent
+app entry, and stop if the target is ambiguous. Before launching, restarting,
+or driving a desktop app window (Computer Use, Playwright, a controller), or
+changing messaging/federation lease startup, read
+[docs/running-the-app.md](docs/running-the-app.md#running-the-app-for-development).
 
 ## Renderer update diagnostics in release builds
 
-For continuous compositor/GPU work, use the opt-in, bounded
-[rendering capture](../../docs/rendering-diagnostics.md). It associates native
-Chromium frame counters with numeric window IDs, visibility and known animation
-sources, without enabling continuous profiling.
-
-The renderer keeps a 64-entry in-memory history of selected composer, Tiptap,
-context-card, and tooltip update requests. Consecutive identical requests
-coalesce; counters retain totals since renderer startup. These are requests,
-including no-ops, rather than React render or commit counts. Scope labels are
-static composer modes or React-generated tooltip IDs. No draft text, document
-contents, thread IDs, paths, or token usage enter the recorder.
-
-In the Electron DevTools console, inspect:
-
-```js
-window.__pwragentRendererUpdates.snapshot()
-window.__pwragentRendererUpdates.lastError()
-window.__pwragentRendererUpdates.eventNames
-```
-
-`eventNames[event.event]` decodes an event code; `counts` uses the same order.
-`firstMs`, `lastMs`, and `capturedAtMs` are renderer `performance.now()` times.
-Snapshots are detached copies. `lastError()` retains the latest reported
-failure through automatic recovery; a renderer reload clears this history.
-The error boundary captures before failed-tree teardown. The first identical
-global error or unhandled rejection in a one-minute window captures at notification
-time; further notifications increment a count without capture or IPC. One trailing
-timeout, eviction, or teardown flushes the repeat count and timestamps without
-replacing the retained snapshot. Renderer and main summary tables each have 64
-slots with bounded summary strings and fixed-size keys. Explicit recovery reports
-remain immediate. Each admitted renderer window has its own fixed-size ID, used
-by main for summary and detail admission so IPC latency cannot suppress the next
-window's snapshot. Merged repeat batches retain their earliest/latest occurrence
-timestamps. See [../../docs/renderer-recovery.md](../../docs/renderer-recovery.md)
-for the delivery and eviction limits.
-
-Normal recording has no timers, IPC, logging, or database writes. Fixed arrays
-use 1,944 bytes for numeric storage and scope-reference slots, plus JavaScript
-object/string overhead. A reported error also retains one bounded snapshot.
-Main logs `report update diagnostics` as a separate JSON string, capped at
-8 KiB, associated with the existing `stackId`. Identical fault details are
-budgeted by their renderer reporting window; reports without window metadata use
-main's one-minute interval. The log includes event names and the number of
-entries omitted to meet the limit. This history covers the instrumented edges;
-it does not identify every React setter or prove which request caused a loop.
+`window.__pwragentRendererUpdates` keeps a bounded, content-free history of
+composer, Tiptap, context-card, and tooltip update requests; normal recording
+has no timers, IPC, logging, or database writes. Before investigating an update
+loop or recovery report, or changing that recorder, read
+[docs/renderer-update-diagnostics.md](docs/renderer-update-diagnostics.md#renderer-update-diagnostics-in-release-builds).
 
 ## Profiling the Renderer with React DevTools
 
-Nothing in the app connects React DevTools on its own. Two opt-in env vars,
-both read by [`electron.vite.config.ts`](electron.vite.config.ts) at Vite
-config time, turn it on:
+React DevTools is opt-in through `PWRAGENT_DEV_REACT_DEVTOOLS` /
+`PWRAGENT_DEV_REACT_PROFILING`; never add `react-devtools` to `package.json`,
+and packaging must never ship the bridge. Before profiling the renderer or
+changing those variables, read
+[docs/react-devtools-profiling.md](docs/react-devtools-profiling.md#profiling-the-renderer-with-react-devtools).
 
-| Variable | What it does |
-|---|---|
-| `PWRAGENT_DEV_REACT_DEVTOOLS=1` | Injects `<script src="http://localhost:8097">` as the first `<head>` script so the renderer loads the standalone DevTools backend. |
-| `PWRAGENT_DEV_REACT_DEVTOOLS_HOST` / `_PORT` | Point that script somewhere other than `localhost:8097`. |
-| `PWRAGENT_DEV_REACT_PROFILING=1` | Aliases `react-dom/client` → `react-dom/profiling` for `electron-vite build` only. |
+## Desktop E2E Specs
 
-With both unset the plugin is never constructed and the alias key is never
-added, so a normal build is byte-identical to one from a tree without this
-feature. That was verified by building from both configs and diffing
-`out/renderer` — no output difference.
-
-### Attaching to the dev build
-
-This is the configuration to reach for first, and it needs no build changes.
-
-```bash
-npx react-devtools
-```
-
-Then, from the repository root, start the app for this checkout with the
-bridge enabled:
-
-```bash
-PWRAGENT_DEV_REACT_DEVTOOLS=1 .agents/skills/pwragent-dev-profile/scripts/pwragent-dev-profile.zsh restart --root "$PWD"
-```
-
-The skill's daemon passes the current environment through to `pnpm dev`, so
-exporting the variable before the call is enough. `npx react-devtools` must
-already be listening when the renderer loads; the script tag is a synchronous
-classic script, and a refused connection simply means React never registers a
-renderer with the hook.
-
-Do not add `react-devtools` to `package.json`. It depends on `electron@^23`,
-which would pull a second Electron runtime into `node_modules` alongside the
-one the app actually uses.
-
-### Knowing which instance you attached
-
-Several PwrAgent checkouts usually run at once on this machine and the
-standalone DevTools window says nothing about which page is on the other end
-of its socket. Two things resolve it:
-
-- The bridge is opt-in per process. An instance started without
-  `PWRAGENT_DEV_REACT_DEVTOOLS=1` has no script tag and *cannot* connect, so
-  starting exactly one bridged instance is itself the isolation.
-- The injected bridge logs its endpoint and the checkout it was built from to
-  the renderer console:
-  `[pwragent] React DevTools bridge -> http://localhost:8097 (renderer from /…/apps/desktop)`.
-  Open that window's own Electron DevTools and read the line to confirm.
-
-To profile two checkouts at once, give each its own port and run one
-`react-devtools` per port:
-
-```bash
-npx react-devtools --port 8098
-PWRAGENT_DEV_REACT_DEVTOOLS=1 PWRAGENT_DEV_REACT_DEVTOOLS_PORT=8098 …
-```
-
-Every window in the process loads the same renderer bundle, so auxiliary
-windows (Star Map, Settings, Activity) carry the bridge too. The standalone
-server accepts one connection at a time and logs a warning when it replaces
-an earlier one.
-
-### Which build to use for what
-
-**Use the dev build to find re-render storms and update loops.** It is the
-better tool for that, not a fallback:
-
-- The Profiler's "Record why each component rendered" attribution is richer
-  in a development build — it reports the specific changed props by name and
-  the changed hook indices (`Hook 7 changed`). The production profiling build
-  drops some of that detail.
-- No build step, no packaging, and HMR still works.
-- A pathology shows up as a *ratio* — components re-rendered per commit,
-  or commits per interaction — and ratios survive the dev build's overhead
-  intact.
-
-**Use the profiling build only when an absolute millisecond number has to be
-trustworthy.** Development React is much slower than production React and the
-overhead is uneven across component shapes, so dev-build durations rank badly
-against each other and must never be quoted as the cost users pay. A plain
-production build is not an option here: it reports "Profiling not supported"
-because production `react-dom` is compiled without the timing
-instrumentation.
-
-The profiling build is **not** a prerequisite for spotting a storm. Reach for
-it after the dev build has told you where to look.
-
-```bash
-PWRAGENT_DEV_REACT_PROFILING=1 PWRAGENT_DEV_REACT_DEVTOOLS=1 pnpm --filter @pwragent/desktop build
-pnpm --filter @pwragent/desktop preview
-```
-
-Measured cost of the alias on the renderer bundle, `react-dom` 19.2.8:
-
-| | baseline | profiling | delta |
-|---|---|---|---|
-| `vendor-react-*.js` raw | 382,982 B | 402,937 B | +19,955 B (+5.2%) |
-| `vendor-react-*.js` gzip | 118,127 B | 123,956 B | +5,829 B (+4.9%) |
-| whole `out/renderer` | 5,463,569 B | 5,483,765 B | +20,196 B (+0.4%) |
-
-Only `react-dom/client` is aliased. Bare `react-dom` (`createPortal`,
-`flushSync`) and `react-dom/server` keep resolving normally, and that is what
-keeps one reconciler in the bundle: in React 19 both `react-dom/client` and
-`react-dom/profiling` require the shared bare `react-dom` module for their
-internals, so swapping the client entry alone cannot produce two copies.
-Confirm a build really is the profiling one by grepping the chunk for a
-Profiler-only fiber field — `treeBaseDuration` appears 21 times in the
-profiling bundle and 0 times in the baseline.
-
-### The DevTools browser extension does not work here
-
-`electron-devtools-installer` plus the React DevTools MV3 extension is a dead
-end on Electron 41, and the half that works makes it look like it might.
-Measured on Electron 41.10.7 with React Developer Tools 8.0.0:
-
-- The extension installs and Electron accepts `manifest_version: 3`.
-- Its background **service worker runs**.
-- Content-script injection works — `__REACT_DEVTOOLS_GLOBAL_HOOK__` is
-  installed in the page with the full hook API. The old `chrome.scripting`
-  blocker from 2023 is genuinely gone.
-- **The extension's `devtools_page` never loads.** No webContents is created
-  for it, and no Components or Profiler tab appears in Electron's DevTools,
-  with the window shown or hidden.
-
-So the backend half attaches and the frontend half does not, which yields a
-hook and no UI. Use the standalone route.
-
-### Packaging cannot ship the bridge
-
-`PWRAGENT_DEV_REACT_DEVTOOLS` is read at build time, so nothing at app
-runtime can undo a renderer HTML that was built with it.
-[`verify-asar-contents.mjs`](scripts/verify-asar-contents.mjs) fails packaging
-when any packaged HTML loads a remote script; `release.mjs` runs it on every
-packaging path. The rule is written against the shape — a remote `<script
-src>` in a shipped renderer — not against the flag.
-
-All four variables are also listed in `rejectDevOnlyEnvVarsInProduction`
-([`src/main/index.ts`](src/main/index.ts)). The `delete` there is inert for
-them, since this process never reads them; the point is the `console.error`
-line, so an operator who exports one and then launches a packaged build is
-told it did nothing instead of wondering why the Profiler never connects.
-
-## E2E Failure Timing
-
-Import `test` from `e2e/fixtures/electron-test` in desktop specs. Its automatic
-fixture attaches the main process's existing listing and Git timing snapshots
-only for failed attempts, including timeouts. `launchElectronApp` captures them
-before explicit close calls, while the app is still reachable. Passing attempts
-discard those in-memory copies. The bridge requires `PWRAGENT_E2E=1`, a replay
-fixture, and an unpackaged app.
-
-## E2E Locator Hygiene Around Global Chrome
-
-The thread/search title bars always render the history Back/Forward
-buttons (accessible names `Back` and `Forward`), and they stay mounted
-behind overlays like the onboarding wizard. A page-wide
-`getByRole("button", { name: /Back/i })` will resolve to multiple
-elements and fail Playwright strict mode. When writing specs:
-
-- Scope to a container (`dialog.getByRole(...)`) or anchor the regex to
-  the full label (e.g. the wizard's `/^← Back/i`).
-- Target the history buttons themselves via their test ids:
-  `history-nav-back` / `history-nav-forward`.
-
-The composer's stop-the-turn button is the same story and has the test id
-`composer-stop-turn`. Use it rather than `getByRole("button", { name:
-"Stop" })`, which 21 call sites across 10 specs once relied on. Adding the
-active sub-agents strip broke every one of them, because a row control named
-"Stop sub-agent: <task>" still matches: **Playwright matches an accessible
-`name` as a normalized substring by default**, so qualifying the new button's
-label was not enough — only `exact: true` or a test id disambiguates. The
-`toHaveCount(0)` assertions were the sharpest edge, since they assert no Stop
-button exists anywhere in the window.
-
-Note the vitest/Playwright asymmetry when you write a unit test to guard one
-of these: Testing Library matches a string `name` **exactly**, so a unit
-assertion that "Stop" no longer resolves will pass while the Playwright
-locator it was meant to protect still breaks.
-
-The same trap runs in the other direction, and it bites the *renderer*
-rather than the spec: **`getByLabel` matches on substring**, and 31 call
-sites across 23 specs drive the composer with `getByLabel("Reply")`. A new
-`aria-label` anywhere in the app that merely *contains* "reply" turns every
-one of them into a strict-mode violation as soon as the labelled element
-renders. The unsent-draft chip was originally labelled "Unsent draft reply"
-and did exactly that — the unit suite was green and only Desktop E2E caught
-it. When you add an `aria-label`, grep the specs for the words in it before
-you settle on the wording.
-
-## Inspecting Branch Drift Dialog E2E
-
-To open the replay-backed "Thread branch changed" dialog and keep Electron
-open for manual screenshots, run from the repo root:
-
-```bash
-pnpm --filter @pwragent/desktop inspect:e2e:branch-drift
-```
-
-The script builds the desktop app, launches a deterministic branch-drift
-fixture in headed Electron, waits with the dialog visible, and exits only
-after you close the Electron window or quit the app. Use this for visual
-inspection of the dialog instead of the normal `thread-branch-drift.spec.ts`,
-which closes Electron automatically after assertions pass.
+Import `test` from `e2e/fixtures/electron-test`. Scope locators to a container
+or use test ids (`history-nav-back`, `composer-stop-turn`): Playwright matches
+names and `getByLabel` as substrings. Before writing or changing a desktop E2E
+spec, adding an `aria-label`, or inspecting the branch-drift dialog, read
+[docs/e2e-specs.md](docs/e2e-specs.md).
 
 ## Capturing README Screenshots
 
-> The top-level README now uses WebP captures,
-> `docs/assets/screenshots/*.webp` (hero, Star Map, backends, review,
-> terminal), taken from the built app at 1440×900 on a Retina display with
-> invented showcase data. They are ordinary Git blobs, not LFS: GitHub's
-> README renderer cannot resolve LFS pointers. The spec below still exists
-> and still writes the older PNG and GIF captures.
+`pnpm --filter @pwragent/desktop screenshot:readme` and `screenshot:docs-site`
+capture native windows on a Retina display, through a noise filter. Before
+running, adding, or changing a README or docs-site capture, read
+[docs/screenshots.md](docs/screenshots.md#capturing-readme-screenshots).
 
-The PNGs and animated GIF under `docs/assets/screenshots/` are produced by an inspect-style Playwright
-spec that drives five known UI surfaces and shells out to Swift for
-native macOS window capture (with stoplights, drop shadow, and retina
-resolution — Playwright's `Page.screenshot()` only grabs the renderer
-DOM, which loses the OS chrome).
+## Capturing Agent Protocol Traffic
 
-Re-capture all five with:
-
-```bash
-pnpm --filter @pwragent/desktop screenshot:readme
-```
-
-For the **docs-site** screenshots (the `docs.pwragent.ai` site —
-Settings → Applications / Worktrees / Models panels, Settings →
-Messaging panels for each of the six platforms, and a Recents lens
-hero), the docs themselves live in a separate repo at
-[pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai)
-but the capture pipeline still lives here. The command is:
-
-```bash
-pnpm --filter @pwragent/desktop screenshot:docs-site
-```
-
-It runs the same `capture-window.swift` pipeline as the README
-screenshots and uses `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1` as
-its gate. PNGs are written into the **sibling docs.pwragent.ai
-checkout**'s `assets/screenshots/` directory — by default
-`~/github/docs.pwragent.ai/assets/screenshots/`, overridable via
-the `PWRAGENT_DOCS_SITE_REPO` environment variable when your
-checkout lives somewhere else. After the run, `cd` into that
-checkout to review + commit the captured PNGs. See the docs repo
-for its own SHOT_LIST tracking.
-
-### Capturing under a non-default theme or density
-
-Both screenshot pipelines honor two optional env vars that seed the
-launched profile's `[general.appearance]` block before Electron boots:
-
-- `PWRAGENT_SCREENSHOT_THEME` — `dark` (default), `light`, or `system`.
-- `PWRAGENT_SCREENSHOT_DENSITY` — `mission-control` (default), `compact`, or `minimal`.
-
-Defaults match the committed PNGs (dark + mission-control), so omitting
-the variables leaves the existing pipeline pixel-stable. The pre-React
-bootstrap (main → preload → inline script in `index.html`) applies the
-matching `<html data-*>` attributes on the first paint, so no UI driving
-is required to flip the theme — just set the env var:
-
-```bash
-PWRAGENT_SCREENSHOT_THEME=light \
-  pnpm --filter @pwragent/desktop screenshot:readme
-```
-
-The wiring lives in
-[`e2e/fixtures/screenshot-appearance.ts`](e2e/fixtures/screenshot-appearance.ts)
-and is consumed by both inspect specs. The capability is intentionally
-scoped to the screenshot pipelines — production E2E keeps its dark
-default unconditionally so color-assertion tests stay deterministic on
-every CI runner.
-
-We do not currently regenerate the committed PNGs under light theme or
-ship them in the docs site. That's tracked separately under issue #508
-(theming v1 polish follow-up to #472).
-
-The script builds the desktop app, launches it headed against curated
-replay fixtures + state-seeded sqlite rows, takes the screenshots,
-then runs the **noise filter** (`filter-noise-screenshots.mjs`) to
-revert any PNG whose pixels are identical to the committed version
-— the `screencapture` encoder produces nondeterministic byte streams
-for deterministic input pixels, and PNGs don't delta-compress in
-git's pack format, so committing re-encode noise adds ~900 KB per
-file per regen for zero visual benefit. macOS Screen Recording
-permission is required for whichever terminal/IDE runs the spec —
-the first invocation triggers the system prompt; subsequent runs
-are silent.
-
-**Captures must come off a Retina (2x) display**, and the specs place
-the window on one for you. `screencapture -l` renders at the backing
-scale of whichever display the window occupies and offers no flag to
-request 2x, so a run with the window on a 1x external monitor silently
-produces half-resolution PNGs. The noise filter does not catch this —
-half-res pixels *are* different pixels, so it keeps them. On
-2026-09-01 a run in exactly that state overwrote all 21 committed
-docs-site PNGs at half resolution, and 8 also caught a stray toast.
-
-Two layers now prevent it:
-
-* `e2e/fixtures/capture-window-placement.ts` centers the window on a
-  Retina display before every capture. It probes the displays once, on
-  the first `bringToFront` of the run, and trusts that probe for the rest
-  of the run. Only 2x displays are eligible —
-  a 1x panel cannot produce the asset at all — and among those it
-  prefers one the window actually fits on, then the built-in panel (the
-  usual laptop-docked-to-a-1x-monitor case), then the sharpest. It never
-  resizes (the committed PNGs depend on the window size the spec sets),
-  warns if no 2x display is attached, and throws if the window a capture
-  targets cannot be found rather than silently capturing an unplaced
-  one. Its selection rule is pure and unit-tested in
-  `src/main/__tests__/capture-window-placement.test.ts`; the `evaluate`
-  callbacks only read and write Electron state, because anything inside
-  one is unreachable from Vitest. That test lives under `src/main/`
-  rather than beside the fixture because `e2e/` is Playwright's
-  `testDir` and its default `testMatch` claims `*.test.ts` — the same
-  reason `sub-agent-state-seeding.test.ts` sits there.
-* `scripts/capture-window.swift` stages each capture in a temp file,
-  checks the observed scale, and exits 6 **without touching the
-  destination** when it lands below ~1.5x — or when the staged file
-  cannot be decoded to check at all. The check fails closed on purpose.
-  The replace itself goes through `replaceItemAt`, so a failure cannot
-  leave the destination missing. Pass `--allow-low-dpi` only if you
-  genuinely want a 1x asset; both specs forward it when
-  `PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI=1`. If the probe found a Retina
-  display, `captureWhileFocused` treats a 1x refusal like an inactive-window
-  refusal. It raises the window, which places it back on the Retina
-  display, and captures again. If the probe found none, the refusal fails
-  the capture immediately, because every retry would land on the same 1x
-  display.
-
-Both specs pass `--pid=<Electron main pid>` to `capture-window.swift`
-through `captureOwnerPidArg`. The script's owner match is the name
-"Electron", and every unpackaged Electron app has that name. One run
-captured a different Electron dev app that was frontmost at the time,
-and wrote its window out as `settings-messaging-line.png`. The
-inactive-window check passed as well, because it checked the app that
-had been captured, and that app was active. Pass the PID on any new
-capture.
-
-Capturing off-screen is fine: `screencapture -l` pulls the window's
-full composited image from the window server, so the shadow is never
-clipped by a screen edge — verified against a probe window positioned
-past the display edge, whose off-screen rows came back at full opacity.
-What an oversized window loses is the centering, not the pixels.
-
-Notices are suppressed during capture: unpackaged E2E launches do not
-arm the vendor Grok CLI update check (`grokUpdateChecksDisabled` in
-`main/acp/grok-cli-update.ts`), because its notice is durable and
-would otherwise paint "Grok update available" over whatever the
-capture happens to catch. `auto-updater.ts` gates PwrAgent's own
-update check on the same predicate.
-
-Hover is suppressed too, for the same reason. Placement slides the
-window out from under the OS cursor, which does not move with it, so
-whatever lands at the cursor's screen position picks up `:hover` — and
-which element that is depends on how far the window moved. A Settings
-→ Profiles capture came back with two nav items highlighted this way:
-the spec clicked "Profiles" at x=2056, placement moved the window to
-x=28, and the stationary cursor came to rest on "General", whose
-`:hover` rule paints the same box as `.is-active`. `bringToFront`
-therefore parks the pointer at (-10, -10) via `sendInputEvent` after
-placing the window. No capture drives hover deliberately; if one ever
-needs to, it has to set the hover after `bringToFront`, not before.
-
-Scroll position is the third trap. Chromium snaps a scroll offset to the
-device pixels of the display the window is on when the scroll lands, and
-moving the window afterwards does not re-snap it. Settings → Messaging →
-Slack opens with a smooth scroll to its Connect section, which came to
-rest at `scrollTop` 171 when macOS opened the window on a 1x monitor and
-at 170.5 when it opened on the Retina panel. The two captures differed
-by one device pixel across the whole content pane, so the noise filter
-kept both. The docs-site spec therefore calls `bringToFront` once right
-after launch, before any navigation, as well as before each capture.
-`waitForSettingsScrollToSettle` then holds a Settings capture until the
-scroll pane has kept one `scrollTop` for 10 rendered frames, instead of
-trusting a fixed delay to outlast the ~250ms smooth scroll.
-
-Content that changes on its own is the fourth trap. None of it is a
-rendering difference, so the noise filter keeps every variant. The
-docs-site spec pins each source it has met:
-
-* **Motion.** `launchDocsSiteApp` emulates `prefers-reduced-motion`,
-  which parks the thinking scanner on its reduced-motion pose instead of
-  mid-sweep. It also hides the text caret, which blinks on Chromium's own
-  timer.
-* **Wall-clock time.** Captures that print a time launch with `TZ=UTC`.
-  `pinWallClock` pins `Date.now` in main and the renderer before a turn
-  stamps its rows, the way `visual-regression.spec.ts` does. Main stamps
-  a profile's `last_used` before the spec can reach it, so
-  `pinProfileLastUsed` rewrites `profiles.toml` after launch instead.
-* **Measured durations.** The thread context panel's "Initial load" row
-  reports how long the first read took, 0 or 1 ms against a replay.
-  `pinInitialLoad` sets it to a fixed value before the capture.
-* **Temp paths.** Settings → Worktrees prints a path under the home
-  root, so that capture launches on a fixed home root instead of an
-  `mkdtemp` one.
-* **Random tokens.** A pairing token exists only in the Generate
-  response; sqlite keeps its HMAC. `pinPairingToken` swaps the displayed
-  token for a fixed one of the same length.
-* **Host discovery.** Settings → AI Providers reads main's cached
-  provider catalog once, as the pane mounts. The spec waits for the
-  startup provider refresh to settle before opening it. The rows still
-  show whichever CLIs the capturing Mac has installed.
-
-What's left is GPU raster noise, which the spec doesn't pin. Any
-capture can come out with a few anti-aliased pixels, on rounded corners,
-icon strokes or glyph edges, a few levels off from the last run. Pairing
-frame 1's segment corners do it about one run in four. Rarely, one glyph
-comes out corrupt. `--disable-gpu-rasterization` isn't a fix. It moved
-the variance into other pixels and across batches of runs. Look at a
-diff that small before chasing it, and re-capture a corrupt glyph.
-
-Before adding a capture, check it for anything else in that list: dates,
-durations, generated IDs, temp paths, spinners, or discovery results.
-Then run the spec twice and compare decoded pixels, not PNG bytes.
-
-Pieces, all under `apps/desktop/`:
-
-| File | What it does |
-|---|---|
-| `e2e/readme-screenshots.inspect.spec.ts` | Five tests, one per surface. Gated behind `PWRAGENT_SCREENSHOT_CAPTURE=1`. |
-| `e2e/docs-site-screenshots.inspect.spec.ts` | Tests producing PNGs for `docs.pwragent.ai` (Settings panels + per-provider Messaging panels + Recents hero + composer features + first-run onboarding wizard + live work rail). Gated behind `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`. Output lands in the **sibling docs repo's** `assets/screenshots/` (default `~/github/docs.pwragent.ai/`, override with `PWRAGENT_DOCS_SITE_REPO`). |
-| `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
-| `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
-| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then raises it and makes it the active app (`app.focus({ steal: true })`), waiting until focus holds for 2s so an app that takes focus back does so before the capture, not during it. `captureWhileFocused` wraps each capture: when `capture-window.swift` refuses an inactive window (exit 7), or a 1x capture (exit 6) while the run has a Retina display, it raises the window and captures again, up to 3 tries. Displays are probed on the first `bringToFront` of a run only. Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) and the focus waits (`waitForSteadyFocus`, `captureWhileFocused`) so they can be tested. |
-| `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. It also saves a Slack agent name (`PwrAgent - riley`), so the Slack capture shows Connect past its Name step instead of the suggestion built from the OS username of whoever runs it. |
-| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture, or with one it cannot decode to verify. Replaces atomically via `replaceItemAt`. Also refuses (exit 7) when the window's app is not the active app before or after the capture, since an inactive window comes out with grey traffic lights and a smaller shadow. Optional `--title=<substring>` for multi-window apps, `--pid=<owner-pid>` to match only that process's windows, `--allow-low-dpi` to bypass the scale check; an unrecognized argument is an error (exit 2), not a silent no-op. |
-| `scripts/filter-noise-screenshots.mjs` | Post-capture cleanup. Iterates modified PNGs in the current repo (default: under `docs/assets/screenshots/` only) or another repo (via `--root <path>`, used by `screenshot:docs-site` against the sibling docs repo). Decodes HEAD and working-tree to TIFF via `sips`, SHA-256 compares. Identical → `git restore --source=HEAD --worktree`. Visually different → kept for review. Net-new PNGs (untracked) are left alone. |
-| `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
-| `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |
-
-To produce a new multi-frame demo GIF outside the README spec:
-
-```bash
-pnpm --filter @pwragent/desktop exec tsx \
-  apps/desktop/scripts/stitch-demo-gif.ts \
-  --output docs/assets/screenshots/screenshot-some-demo.gif \
-  --frame-duration-ms 1500 \
-  docs/assets/screenshots/some-demo-frame-1.png \
-  docs/assets/screenshots/some-demo-frame-2.png \
-  docs/assets/screenshots/some-demo-frame-3.png
-```
-
-Works for 2+ frames; the indicator scales horizontally with frame
-count.
-
-## Capturing ACP Protocol Transcripts
-
-`scripts/capture-acp-transcript.mjs` drives a real ACP agent over stdio the
-way `AcpAgentClient` does — same `initialize` params, `session/new`, one
-`session/prompt` — and writes every JSON-RPC frame in both directions to
-stdout:
-
-```bash
-node apps/desktop/scripts/capture-acp-transcript.mjs \
-  --cmd ~/.kimi-code/bin/kimi --args acp \
-  --cwd /tmp/acp-scratch \
-  --prompt "tell me your favorite breakfast cereal" > capture.json
-```
-
-Flags: `--cmd` (required), `--args` (comma-separated), `--cwd`, `--prompt`,
-`--quiet-ms` (drain window after the prompt resolves), `--timeout-ms`,
-`--allow-tools`. Exit code is 0 only on a completed capture. For helper
-sessions: `--session-meta <json>` (the `_meta` of `session/new`, such as a
-Grok agent profile), `--config model=<id>,reasoning_effort=<level>`
-(`session/set_config_option` writes before the prompt), `--deny-cancelled`
-(answer permission requests `cancelled`, as a `deny-all` session does),
-`--after session/close,_x.ai/session/delete` (methods called with
-`{ sessionId }` after the answer), and `--list-sessions` (`session/list` for
-the cwd, last).
-
-Grok 1.0.44 findings those flags established, which a helper must respect:
-`tools: []` in an agent profile means the default toolset; the MCP meta-tools
-`search_tool` and `use_tool` survive an allowlist and reach the operator's own
-Grok MCP servers; read-only tools run without a permission request in every
-mode; and a closed session stays listed until `_x.ai/session/delete`. See
-`src/main/acp/minimal-helper-session.ts`.
-
-An open ACP session keeps its MCP servers running until `session/close`.
-On Grok 1.0.45-pwragent.2, `session/new` started a session's stdio MCP
-server, `session/close` stopped it, and `session/load` started it again.
-`AcpAgentClient.closeIdleSessions` therefore closes a session after 10
-minutes without a request, update or permission request, and every session
-request reloads a closed session first. A helper session created with an
-agent profile in `_meta` or with no MCP servers stays open, because
-`session/load` cannot recreate either.
-
-Reach for this whenever a question about an agent's wire behavior would
-otherwise be answered by reading its source or guessing. **The committed
-`__tests__/fixtures/acp-transcripts/*-build.json` fixtures cannot answer
-turn-end questions** — they are normalizer-parity captures containing no
-completed turn, so grepping them for usage, stop reasons, or totals returns a
-confident wrong answer. That mistake is why
-`kimi-code-0-31-cereal.json` exists: a full captured turn establishing that
-Kimi Code 0.31.1 puts no token usage on the ACP wire.
-
-Two things to know before running it:
-
-- **Permission requests are denied by default.** Pass `--allow-tools` only
-  when tool traffic is the point, and point `--cwd` somewhere disposable when
-  you do — the harness answers on your behalf and the agent acts for real.
-- **Output is raw protocol.** The operator home directory and the capture cwd
-  are rewritten, but an agent can echo anything it read into a transcript.
-  Read a capture before committing it as a fixture.
-
-## Capturing Codex Account Protocol
-
-`scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server
-probe without reading Codex-owned storage. It reads account, rate-limit, and
-account-wide usage state; runs one isolated ephemeral structured turn with
-profile tools, hooks, apps, skills, and MCP servers disabled; and reads the
-same state again:
-
-```bash
-pnpm --filter @pwragent/desktop capture:codex-usage -- \
-  --codex-home /path/to/codex-profile \
-  --capture-root .local/protocol-captures
-```
-
-Use this when an account type appears to expose incomplete quota or usage
-information. The JSONL output contains every protocol frame and can include
-account identity, local paths, prompts, and model output. Keep captures under
-`.local/`, which is gitignored; never commit a raw account capture.
+Answer agent wire-behavior questions with a capture, not source reading or the
+committed `*-build.json` fixtures. Keep raw account captures under `.local/` and
+never commit them. Before capturing ACP or Codex account protocol, or changing
+ACP session lifetime, read [docs/protocol-captures.md](docs/protocol-captures.md).
 
 ## Thread Row Density and X-ray
 
-Density is `<html data-density>`: absent for Mission Control, `compact`, or
-`minimal`. It lives in CSS only, so a density change re-renders no row.
-
-- **Mission Control and Compact** draw at most two PR chips in the flow: the
-  lead PR's own chip and a `+N PRs` chip (`PrRollupChip` with
-  `variant="overflow"`, rule in `resolvePrOverflow`) whose list holds every
-  PR and Detach all.
-- **Compact** hides every `.thread-row__chip` without the
-  `thread-row__chip--persistent` marker. PR chips and reactions stay.
-- **Minimal** hides every flow chip without the `thread-row__chip--essential`
-  marker (held messages, approvals, questions). The title line instead shows,
-  each mounted only while `ThreadRowDensityContext` says `minimal`: a pencil
-  before the title for an unsent draft, the reactions, and `PrRollupChip`, one
-  chip that wears the least ready PR's state (`pr-rollup.ts`) with a hover list
-  of every PR. Add `--essential` only to a chip that is waiting on the
-  operator.
-- **X-ray** (`lib/xray-mode.ts`): holding ⌘ (Ctrl off macOS) sets
-  `<html data-xray>` and lifts one row into a card with every chip
-  (`features/navigation/xray-spy-card.ts`): the row under the pointer, or
-  else the selected row if it is on screen. The lifted shell gets
-  `data-xray-target`, which every density rule excludes, and keeps its own
-  height, so no other row moves and the list never scrolls. Lifting every
-  row pushed the selected thread out of sight. A double press, or the
-  badge's pin, keeps X-ray on.
-- **Previews.** The Settings and onboarding density pickers render real
-  `ThreadRow`s, inert, inside `.density-preview--<density>`. Write each density
-  rule twice: the `:root[data-density="…"] … :not(:is(.density-preview, [data-xray-target]) *)`
-  half and the `.density-preview--… ` half.
-  `styles/__tests__/density-contract.test.ts` fails when a rule lacks either.
+Density lives in CSS only (`<html data-density>`). Before changing thread-row
+chips, density rules, X-ray, or density previews, read
+[docs/thread-row-density.md](docs/thread-row-density.md#thread-row-density-and-x-ray).
 
 ## Accessibility
 
-The renderer is audited against WCAG 2.0 / 2.1 / 2.2 Level AA via
-`apps/desktop/e2e/a11y.spec.ts`, which launches Electron under the
-existing replay-fixture harness and runs `@axe-core/playwright`'s
-`AxeBuilder` against each surface. CI picks it up automatically through
-`pnpm run test:desktop-e2e` — no separate workflow.
-
-Things to know when extending the audit:
-
-- **Surface coverage.** Each `test(...)` block drives the renderer to a
-  state (open thread, settings overlay, settings → messaging, the
-  dedicated Star Map window, the Star Map intake dialog) and then calls
-  `runAxe(window)`. Add a new block per surface you want gated; go
-  through `launchAuditApp()`, which emulates reduced motion and takes an
-  optional `fixturePath` / `theme`. A surface in a secondary
-  BrowserWindow is a different Playwright `Page`: pass THAT page to
-  `runAxe`, and re-emulate reduced motion on it — `launchAuditApp` only
-  configured the main window's page.
-- **Seed the fixture so the surface is actually populated.** The smoke
-  fixture's thread reaches no Star Map lane — `deriveInboxState` keeps a
-  first-snapshot thread out of the inbox, and an idle thread with no PR
-  and no unpushed commits matches no attention category — so auditing the
-  map on it would scan chrome and no cards. `e2e/fixtures/star-map/` is a
-  hand-written fixture (same class as `readme-recents-hero/`) whose
-  threads are `threadStatus: "active"` for exactly that reason. Check
-  what your surface renders before trusting a green run.
-- **Some surfaces need seeded sqlite, not a richer fixture.** The active
-  sub-agents strip only renders when a thread has a non-terminal sub-agent or
-  an undismissed failure, and no replay fixture produces one — every producer
-  persists a `ThreadSubAgentSummary` through `upsertThreadSubAgent` into the
-  `thread_sub_agents` table. `e2e/fixtures/sub-agent-state-seeding.ts` writes
-  the cards into the `threads` payload the way older builds did, and the
-  capture triggers move them into the table (seed after launch, then
-  `window.reload()` — the renderer does not re-poll on a direct sqlite
-  mutation), the same shape the README capture spec's seeders use. A
-  hand-written `threads` row encodes assumptions about the storage key, the
-  payload and those triggers that the app can change underneath it, and a
-  seeder writing a row nothing reads would leave the audit green while it
-  scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
-  pins the round-trip in vitest.
-- **Every surface is audited in every color theme.** The file wraps its
-  `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
-  light pair plus each other dark theme in the dark scheme and each light
-  theme in the light scheme. It threads that appearance into
-  `launchAuditApp(appearance)`, so a new block is gated in all of them for
-  free. This matters because contrast is the one rule class that is
-  genuinely theme-dependent — roles, names, and focus order are not. The
-  gate ran dark-only for its whole life, which is how three token-level
-  light-theme contrast failures shipped unnoticed. Add a new color theme to
-  `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
-- **Work that reads no color runs once.** A color theme sets color tokens
-  only. Tangerine dark and light run the full WCAG AA tag set; the other
-  color themes run only `COLOR_RULES` (`color-contrast`,
-  `link-in-text-block`), through the loop's local `runAxe`. A block whose
-  colors a unit test already measures in every theme (the composer
-  autocomplete block, through `theme-contract.test.tsx`) runs outside the
-  loop in the Tangerine pair, and behavior checks with no scan run only when
-  `runsFunctionalChecks` is true (Tangerine dark). Put a new block like that
-  in the same place; each Electron launch in the loop costs eleven.
-- **`runAxe(window, { include })` narrows the scan to one subtree.** No
-  block passes it today, and it is not a tool for silencing a failure —
-  everything outside the scope stops being gated. Prefer a
-  `KNOWN_VIOLATIONS` entry, which waives one selector for one rule and
-  leaves the rest of the surface audited. (It exists because the
-  celestial-watermark blocks once scoped to `.thread-view__primary` to
-  avoid measuring window-wide light-theme debt; that debt is fixed, light
-  theme is gated unscoped, and those blocks folded their
-  watermark-is-painted assertion into "open thread view".)
-- **Reduced motion has to reach the element that animates.** The gate
-  emulates `prefers-reduced-motion: reduce` so it measures contrast at
-  rest; a rule that zeroes the animation on the wrong selector leaves
-  text mid-fade and axe reports a real-looking contrast miss. That is how
-  the Star Map card rise was caught: the animation lives on
-  `.star-map-card-shell`, the reduced-motion rule named `.star-map-card`.
-- **`setLegacyMode(true)` is required under Electron.** The default
-  `AxeBuilder.analyze()` opens a worker page via
-  `browserContext.newPage()` to scan cross-origin iframes; Electron's
-  CDP target returns "Not supported" for that. The renderer is
-  single-origin with no cross-origin iframes, so the legacy
-  single-context path covers everything we ship.
-- **`KNOWN_VIOLATIONS` is a baseline, not a permission slip.** Each
-  entry waives one selector for one rule with a written reason. Fix
-  the underlying issue, then delete the entry — axe will hold the
-  line on it going forward.
-- **No raw color literals outside the token blocks** (see Implementation
-  Notes below) — this is also what keeps the contrast pair audited by
-  axe stable across theme + density variants.
-
-To run the gate locally:
-
-```bash
-pnpm --filter @pwragent/desktop exec playwright test \
-  -c playwright.config.ts e2e/a11y.spec.ts
-```
-
-(The package's `test:e2e` script checks the Electron runtime and runs a
-Vite build first; the `playwright test` form above skips that when you've
-already built once.)
-
-### Modal dialogs and overlays
-
-Every `aria-modal` dialog goes through
-[`useModalDialog`](src/renderer/src/lib/useModalDialog.ts). Put its ref on the
-element that holds every control of the dialog. Focus then enters on open,
-Tab and Shift+Tab stay inside (WCAG 2.1 SC 2.4.3), Escape closes only the
-topmost layer, and focus goes back to the opener on close. Before it existed,
-most dialogs here had no Escape and no trap, and Tab walked into the dimmed
-app behind them.
-
-- **Do not add your own Escape or Tab listener to a dialog.** It becomes a
-  second owner of the key. Traps and layers resolve one owner per keypress
-  (the one holding focus, deepest first, else the newest), and a private
-  listener outside that stack is how one Escape used to close a dialog and
-  the find bar behind it.
-- **A popup inside a dialog registers with
-  [`useDismissableLayer`](src/renderer/src/lib/useDismissableLayer.ts),** or
-  the dialog takes its Escape and both close. Move to Project's destination
-  list (`ProjectDestinationCombobox`) is the example.
-- **A claimed Escape is prevented and stopped.** A window listener that closes
-  something on Escape must check `defaultPrevented`, as `ThreadFindBar` and
-  the composer autocomplete do. The stop is for React handlers in a tree the
-  dialog portals out of: the Star Map layer drops the card selection on any
-  Escape that reaches it.
-- **A busy dialog refuses in `onClose`, and the key is still claimed.** Mirror
-  the disabled Cancel button; do not let Escape through to what is behind.
-- **The opener is captured during render,** because `autoFocus` moves focus
-  before any effect can look. A dialog opened from a menu item returns focus
-  to the menu's trigger (found through `aria-controls`, or an expanded
-  `aria-haspopup` beside the menu). Pass `returnFocus` where nothing marks the
-  trigger, as the sidebar's context menu does.
-- **`tabIndex={-1}` on the dialog element** when it is the initial focus
-  (`initialFocus: "dialog"`), or when every control in it can be disabled at
-  once (the Codex login dialog while the login starts). Otherwise focus stays
-  behind the scrim. Give such an element `:focus { outline: none }`.
-- **Chromium makes an overflowing scroller with nothing focusable in it a Tab
-  stop**, though its `tabIndex` reads -1. The trap counts those; a trap that
-  cannot see them wraps past them.
-- **A dialog with its own Tab order passes `ownTabOrder`.** The jump palette
-  steps through the active row's PR chips only; the trap still owns the key
-  against a dialog beneath it and fetches stray focus back in.
-
-Test a new dialog with `tabEscapes(dialog)` from
-[`src/renderer/src/test/tab-walk.ts`](src/renderer/src/test/tab-walk.ts). It
-walks 60 Tabs each way between sentinel buttons placed before and after the
-page, and names every stop outside the dialog that focus reached. jsdom runs
-no sequential focus navigation and has no layout, so the helper emulates the
-walk and cannot see scroller stops. Check those in headless Chromium.
-
-### Menus
-
-A `role="menu"` goes through
-[`useMenuNavigation`](src/renderer/src/lib/useMenuNavigation.ts). The role
-promises the ARIA menu keyboard, and a screen-reader user told "menu" reaches
-for the arrows. Focus moves to the first item on open, the arrows, Home and
-End move between items, Escape closes and returns focus to the trigger, and
-Tab closes and moves on from the trigger. The sidebar's menus said
-`role="menu"` and did none of it: opening one left focus on the ⋮ button, and
-the menu renders after the whole thread list, so Tab reached it only after
-every later row.
-
-- **The hook registers the menu with `useDismissableLayer`.** Do not add an
-  Escape listener, and do not register the menu again.
-- **Pass the trigger as `triggerRef`.** A menu opened by right-click has no
-  button, so record whatever held focus as it opened, as `Sidebar` does with
-  `rememberMenuOpener`. A dialog opened from the menu can use the same ref as
-  its `returnFocus`.
-- **Pass `open` only once the menu can take focus.** The sidebar's floating
-  menus measure themselves at `visibility: hidden` before they are placed,
-  and Chromium will not focus a hidden element. jsdom will, so only a
-  headless-Chromium check catches a menu that opens too early.
-- **Mark the trigger.** `aria-haspopup="menu"` plus `aria-expanded`. When the
-  trigger sits in a memoized row, pass the row a boolean, not the open row's
-  key, or every row re-renders on each open and close.
-- **`tabIndex={-1}` on the menu** when every item in it can be disabled at
-  once, as the profile menu's can. Focus then lands on the menu, where Escape
-  and Tab still work.
-
-### Selects
-
-A single choice from a list goes through
-[`Select`](src/renderer/src/components/Select.tsx), not a native `<select>`.
-On macOS, Chromium hands a `<select>` to the system menu, which opens over
-the control in the system font and blue highlight, and CSS cannot reach it.
-
-- **It is the ARIA select-only combobox.** The trigger is a
-  `<button role="combobox">` that keeps DOM focus while the list is open; the
-  keyboard cursor is `aria-activedescendant`. A wrapping `<label>` names it,
-  so `getByLabelText` still finds the field.
-- **The list is portalled to `document.body`** at `z-index: 150`, above
-  Settings and Automations, and registers with `useDismissableLayer`, so
-  Escape inside a dialog closes the list alone. Do not add an Escape listener.
-- **Tab closes without choosing.** The APG example commits on Tab. Here,
-  arrowing past an option on the way out must not change the value.
-- **The closed field's chrome comes from its surface,** through `className`
-  or a descendant rule (`.automation-field .select-trigger`). The list cannot
-  inherit type from the field, so a surface that needs it passes
-  `listboxClassName`.
-- **Tests drive it through [`test/select.ts`](src/renderer/src/test/select.ts).**
-  `fireEvent.change` does nothing to a button. Choose by label with
-  `chooseSelectOption`, read the list with `selectOptionLabels`, and read the
-  stored value from `data-value`. Options exist only while the list is open,
-  so waiting for `getByRole("option")` to disappear from a closed field passes
-  vacuously.
+`e2e/a11y.spec.ts` gates WCAG 2.2 AA with axe in every color theme. Every
+`aria-modal` dialog uses `useModalDialog`, every `role="menu"` uses
+`useMenuNavigation`, and a single choice uses `Select`, never a native
+`<select>`; never add private Escape or Tab listeners. Before adding or
+changing a dialog, menu, select, popup, or audited surface, or extending the
+audit, read [docs/accessibility.md](docs/accessibility.md#accessibility).
 
 ## Config File Evolution
 
@@ -1050,38 +186,9 @@ and avoid whole-file rewrites that discard user comments.
 
 ## Explicit-Save Settings Forms
 
-Most Settings write as they change. The few that collect edits behind a Save
-button (Federation's Configuration and its manual Cloudflare edge policy) have
-two rules, because the settings snapshot they render from changes constantly —
-`useDesktopSettings` replaces it on **any** config write, from any section or
-any window, plus on runtime-changed events.
-
-- **Never copy the snapshot back into form state.** Federation had a
-  `useEffect` on `[props.snapshot]` that re-seeded every field, so an unrelated
-  write (Cloudflare Access "Connect" calls `onSettingsChanged`) silently
-  reverted whatever was typed. Use
-  [`useSettingsDraft`](src/renderer/src/features/settings/useSettingsDraft.ts):
-  a field follows the saved value until it is edited, then holds the edit until
-  it is saved or discarded. Discard the draft after a successful write — what
-  is typed and what is stored can differ (`"047831"`, blank endpoint lines).
-- **Tell Settings what would be lost.** Register with
-  [`useUnsavedSettingsChanges`](src/renderer/src/features/settings/UnsavedSettingsChanges.tsx)
-  while the form is dirty. A route that unmounts the pane — a nav item, Exit
-  Settings, or anything in `App` that changes `mainView` — then asks Save /
-  Discard / Keep editing first. A jump to another section of the same pane does
-  not, because nothing unmounts.
-
-**A setup step must not read another section's unsaved field.** `CloudflareSetup`
-takes the *saved* listener (`props.snapshot.federation.listenPort.value`) and
-says so in the Create step, because Create writes that port into Cloudflare's
-tunnel: reading the Configuration form's draft once published an endpoint on a
-port the operator had typed but never saved, which collided with another
-profile's gateway.
-
-Closing the window is still not guarded. Electron emits the BrowserWindow
-`close` event *before* the renderer's `beforeunload`, and `close` already hands
-off to the quit manager, so a `beforeunload` guard would cancel an unload
-whose shutdown had begun. Quitting with unsaved Settings edits discards them.
+Never copy the settings snapshot back into form state; use `useSettingsDraft`
+and `useUnsavedSettingsChanges`. Before changing a Settings form with a Save
+button, read [docs/settings-forms.md](docs/settings-forms.md#explicit-save-settings-forms).
 
 ## Thread History Persistence
 
@@ -1098,216 +205,19 @@ table.
 
 ## Pull-Request Status Source of Truth
 
-There are two stores holding PR data, and they answer **different
-questions**. Do not treat them as interchangeable:
-
-- **Attachment list** — `ThreadOverlayState.prs` (sqlite `threads`
-  overlay JSON, written by `setThreadPullRequests`). Authoritative for
-  *which* PRs belong to a thread. The status fields on those rows are a
-  cached projection and go stale by design: they are only rewritten when
-  the attachment list itself is rewritten (a branch lookup).
-- **Status** — the PR status registry in `DesktopAppServerService`
-  (`prStatusRegistry`, durable via the `pr_status_cache` table).
-  Authoritative for *what state* a PR is in. The background poller
-  writes here and here only, then emits `pullRequest/status/updated`.
-  It never writes back into the overlay.
-
-**Every path that serves PR chips to a client MUST canonicalize the
-overlay rows through the status registry.** The seam is the injected
-`ThreadPullRequestCanonicalizer` (`setThreadPullRequestCanonicalizer`,
-backed by `canonicalizeStoredPullRequests`, which loads
-`pr_status_cache` first so it works before any window has driven a
-lookup). Use `canonicalizeNavigationThreadPullRequests` for a navigation
-snapshot's threads.
-
-Skipping it is not a cosmetic staleness bug. `collectPrPollTargets`
-drops terminal PRs from the rotation, so once a PR merges the background
-poller emits no further `pullRequest/status/updated` for it — a client
-served an uncanonicalized snapshot shows that PR as open with checks
-running until something else happens to refresh it. (An owner-side
-branch lookup still republishes terminal PRs via
-`thread/pullRequests/updated`, so the row can converge if the *owner*
-opens that thread — but nothing the viewer does will fix it.) This is
-exactly what federation remote viewers hit: their only snapshot source
-is `DesktopMessagingBackendBridge.getNavigationSnapshot`, which did not
-canonicalize, while the renderer's local path did.
-
-Canonicalization failures degrade rather than propagate:
-`canonicalizeNavigationThreadPullRequests` catches, logs, and serves the
-overlay rows, because possibly-stale chips beat a failed snapshot (which
-for a viewer means a disconnected window).
-
-### Which PRs a thread attaches automatically
-
-A thread gets a PR without the operator asking from two sources only:
-
-- **A branch lookup of its own branch and directories.** A default branch
-  (`main`, the remote's `HEAD`) looks up nothing, so a thread on it
-  attaches nothing automatically (`resolvePrLookupBranches`).
-  The lookup uses the upstream's branch name when the branch tracks one.
-  A branch with no remote upstream may have been pushed under another
-  name, and that branch may be deleted after a merge. When its own name
-  finds no PR, the lookup asks the forge for PRs on the tip commit and
-  keeps only one whose head *is* the tip. It skips that step when a
-  default branch already holds the tip, because the PR that landed the
-  commit there belongs to another thread.
-- **Its own history.** A PR the thread attached earlier, on another
-  branch, stays attached after the checkout moves on.
-
-**A thread never inherits another thread's PRs**, even when both are on
-the same branch in the same checkout. The PR lookup registry
-(`prLookupRegistry`, durable via `pr_lookup_cache`) is keyed by provider,
-branch and directories, not by thread. Every thread on that branch and
-checkout reads the same entry. It must therefore hold only what
-`detectPullRequestsForThread` returned. Never seed it from a thread's
-overlay `prs` or `detachedPrs`. That list is the thread's history.
-Seeding it once attached four old merged PRs to every new thread in a
-primary checkout on `main`. Detaching them on one thread did not stop the
-next thread from getting them.
-`app-server-ipc.test.ts` ("never shares one thread's PR history…") holds
-this.
-
-### Who owns a PR's status when two instances can see it
-
-A window with no federation target shows local threads and pinned remote
-rows together, so the same GitHub PR can appear twice — once monitored
-by the local poller, once as a peer's observation. Two monitors writing
-the same rows from slightly different points in time reads as the status
-flickering. The rule is **local monitoring wins, and a peer only fills a
-gap it alone can see**:
-
-- `broadcastAgentEvent` drops a remote-stamped `pullRequest/status/updated`
-  before it reaches any non-federation window when
-  `registry.isPullRequestLocallyMonitored(prKey)` — the PR is attached to
-  a local thread's primary workspace, so our own poller owns it. The
-  resolver is injected from `DesktopAppServerService` and uses the same
-  test as `collectPrPollTargets`. Terminal PRs still count as ours: they
-  leave the poll rotation, but our last observation of them is final.
-- Federation windows always receive the event. The peer is their only
-  source of truth, and their renderer-side target filter decides whether
-  it belongs to the instance they front.
-- When we *do* own the PR, the pinned remote row still updates — local
-  `pullRequest/status/updated` matches by `prKey` across every thread in
-  the snapshot, so the local observation lands on the remote row too.
-  That is why dropping the peer's copy loses nothing.
-
-`thread/pullRequests/updated` is **not** gated: a thread's *attachment
-list* is owned by the instance the thread lives on, so a peer is always
-authoritative for its own threads' lists. It is instead scoped by origin
-in `applyThreadPullRequestsUpdate`, which matches the thread's
-`federation.ref.target` against the event's, so a peer's event cannot
-rewrite a local thread that happens to share an id. Do not "fix" the
-asymmetry by adding this method to the gate — status and attachment
-lists have different owners, and a test pins the distinction.
-
-Two deliberate cases where we defer to the peer rather than claim
-ownership, both because claiming it would assert a freshness we do not
-have:
-
-- **Non-primary attachments.** The test is the PR matching a local
-  thread's *primary* repository, matching `collectPrPollTargets`. Fork
-  contributions match their separate `sourceRepository`; an explicitly attached
-  contribution also matches its destination repository. Use the shared
-  `pullRequestMatchesRepositoryKey` predicate. Keep `explicitlyAttached` on the
-  thread's attachment when applying shared provider status; never copy it into
-  the status cache. Their status key still belongs
-  to the destination repository. A PR
-  attached to a local thread some other way is not polled by us either,
-  so the peer's observation is the fresher one.
-- **Before the first local snapshot.** `attachedPrsByThreadKey` is
-  populated by the local navigation-snapshot path, so until it first
-  runs every PR answers "not monitored" and peer observations flow
-  through. The local poller corrects any row it owns on its next
-  observation.
-
-### Transcript PR fetch trust and status ownership
-
-- Automatic transcript/composer PR reads admit only the exact HTTPS origins
-  `github.com` and `gitlab.com` in the main process. A URL in authored text is
-  not authorization to send inherited CLI credentials to its host. Never
-  replace this origin allowlist with GitLab URL syntax or a hostname prefix.
-- Self-hosted references can still display navigation status and use explicit
-  attachments. Display-only parsing must not authorize automatic fetching.
-- A `ci_run` Continue After wait reads an agent-supplied run URL. It admits
-  github.com, gitlab.com, and the exact GitHub Enterprise hosts the operator
-  listed in `[git] github_enterprise_hosts` (`parseCiRunUrl`). A CLI login is
-  not authorization. Never match that list by pattern, suffix or subdomain.
-- The renderer resolves status authority per PR across all navigation rows:
-  local primary-workspace attachments win, then peer observations, then other
-  local attachments. Use `pullRequestMatchesRepositoryKey` with main's
-  `primaryGitRepository` for the local-primary check, including explicit fork
-  contributions to that repository.
-- Both transcript chips and composer hover cards use `useTranscriptPullRequest`.
-  Peer observations suppress local subscription results in every window,
-  including pinned peers in the main window. An ownership change must notify
-  subscribers even if the visible PR metadata did not change.
+The overlay attachment list owns which PRs a thread has; the PR status registry
+owns their state. Every path that serves PR chips must canonicalize through the
+registry, and a thread never inherits another thread's PRs. Before changing PR
+attachment, lookup, polling, status events, or PR fetch trust, read
+[docs/pull-request-status.md](docs/pull-request-status.md#pull-request-status-source-of-truth).
 
 ## Thread-State Update Bus
 
-When mutating persistent thread state (model, reasoning effort, fast mode,
-permissions/execution mode, name, compaction), `BackendRegistry` MUST emit a
-typed `AppServerNotification` from the mutation method on success. That
-notification fans out through two existing listeners:
-
-- **Renderer**: `apps/desktop/src/main/ipc/agent-ipc.ts:broadcastAgentEvent` →
-  `agent:event` IPC → `desktopApi.onAgentEvent` → `useThreadNavigation`
-  patches the navigation snapshot in place.
-- **Messaging controllers**: `apps/desktop/src/main/messaging/messaging-runtime.ts`
-  fans the event out to every `MessagingController.handleBackendEvent`,
-  which routes thread-state methods to `refreshStatusSurfacesForThread`
-  to re-render every binding's status surface on its channel.
-
-This is what keeps Telegram, Discord, and the desktop UI in sync when any
-surface changes a setting. The cross-surface refresh is automatic — do
-NOT add ad-hoc IPC channels or per-controller refresh fan-outs for new
-thread-state fields. Instead:
-
-1. Add the new notification method to `AppServerNotification` in
-   `packages/shared/src/contracts/normalized-app-server.ts`.
-2. Emit from the registry mutation method via `await this.emit(...)`.
-3. Add a handler branch in `useThreadNavigation`'s `onAgentEvent`
-   subscription, mirroring `applyThreadModelSettingsUpdate` /
-   `applyThreadExecutionModeUpdate`.
-4. Add a method-name branch in `MessagingController.handleBackendEvent`
-   that routes to `refreshStatusSurfacesForThread`.
-
-Mutation handlers in `MessagingController` (e.g. `togglePermissionsMode`)
-should NOT call `renderBindingStatus` inline for state that flows through
-the bus — the bus is the single source of refresh, and an inline render
-would be redundant. Update binding-local preferences before the registry
-call so the bus-path render sees fresh prefs.
-
-For binding-local mutations that do NOT flow through the registry
-(e.g. `cycleToolUpdateMode`, `syncConversationName`), keep the inline
-`renderBindingStatus` call — there's no bus event for those.
-
-### Permission-mode queue events
-
-A toggle of `executionMode` while a turn is active produces additional
-notifications beyond `thread/executionMode/updated`:
-
-- `thread/executionMode/queued` — fired when the registry queues a
-  pending mode change instead of applying it immediately. Params:
-  `{ threadId, queuedExecutionMode, queuedAt }`. Renderer patches
-  `NavigationThreadSummary.queuedExecutionMode` and shows the queue
-  indicator in the composer; messaging posts an audit message in every
-  bound conversation with a Cancel button.
-- `thread/executionMode/queueCleared` — fired on either `cancelled`
-  (user clicked Cancel) or `applied` (turn ended and the queue
-  flushed). Params: `{ threadId, reason: "applied" | "cancelled" }`.
-  Renderer clears the queue indicator; messaging edits the previously
-  posted audit message in place (or falls back to a fresh message if
-  edit fails). On `applied`, this fires AFTER `thread/executionMode/updated`
-  — clients should see the apply before the queue-clear so the UI
-  transitions cleanly through "queued → applying → applied".
-
-The persistent `permissionTransitionLog` on `ThreadOverlayState` (capped
-at 100 entries, sqlite-backed) is the audit trail. Renderer materializes
-log entries into the transcript as synthetic activity entries with id
-prefix `permission-transition-`. The queue itself (`queuedExecutionMode`,
-`queuedExecutionModeAt`) lives in registry memory only and is cleared on
-app restart — that's intentional, since the active turn would have been
-interrupted on shutdown.
+A `BackendRegistry` mutation of persistent thread state emits a typed
+`AppServerNotification`; do not add ad-hoc IPC channels or per-controller
+refresh fan-outs. Before adding or changing a thread-state field, its
+notification, or execution-mode queue events, read
+[docs/thread-state-update-bus.md](docs/thread-state-update-bus.md#thread-state-update-bus).
 
 ## Dependency Boundary Enforcement
 
@@ -1325,317 +235,20 @@ The desktop app sits at the **top** of the dependency hierarchy and may import a
 
 Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 
-## No Real Agent CLIs in Vitest
+## Vitest Guards
 
-The `desktop-main` project loads
-[`src/main/__tests__/setup/agent-cli-spawn-guard.ts`](src/main/__tests__/setup/agent-cli-spawn-guard.ts)
-as a setup file. It fails any test that spawns a `codex` / `gemini` / `grok` /
-`kimi` / `qwen` executable from outside the OS temp dir.
-
-It exists because **sandboxing `PATH` does not sandbox discovery**. The ACP kit
-also scans well-known `$HOME` bin dirs (`~/.local/bin`, `~/.bun/bin`, every
-installed nvm node bin) and each strategy's absolute fallback candidates
-(`~/.kimi-code/bin/kimi`, `~/.grok/bin/grok`); Codex discovery probes its own
-install locations, including the `codex` inside ChatGPT.app. Before #1740 the
-suite ran ~169 real agent processes per run and asserted against whatever
-versions the developer had installed.
-
-**CI cannot catch this on its own.** CI machines have none of those binaries, so
-the probe fails, discovery finds nothing, and the assertions still pass — the
-tests take a different code path locally than on CI. The guard makes both the
-same failure.
-
-The hook is `ChildProcess.prototype.spawn`, not the `child_process` exports:
-it is the one chokepoint every async spawn path funnels through, and a
-prototype patch survives however a module imported `child_process` — including
-externally bundled dependencies vitest never transforms, which `vi.mock` cannot
-reach. It records **and** throws; the recording is what fails the test, because
-discovery probes run inside `try/catch` and swallow a bare throw. Sync spawns
-(`spawnSync` / `execFileSync`) are not covered — all agent discovery is async.
-
-Fix a failure by injecting the seam, never by widening the guard's allowed
-roots:
-
-| Surface | Seam |
-|---|---|
-| ACP discovery | `listExecutables` + `fallbackRootDir` (+ `bundledGrokCommand: null`) to confine candidates to the fixture, or inject `discover` / `readVersionOutput` |
-| Codex discovery | inject `codexDiscoveryCoordinator`, or `vi.mock("@pwrdrvr/codex-discovery")` via [`__tests__/helpers/codex-discovery-stub.ts`](src/main/__tests__/helpers/codex-discovery-stub.ts) |
-| Anything else | `vi.mock` the discovery module, as `settings-ipc` and `backend-registry` already do |
-
-`acp-runtime-override-launch.test.ts` is the worked example of the ACP seams,
-and `acp-instance-discovery.test.ts` of plain probe injection.
-
-## No Git Against the Checkout in Vitest
-
-[`src/main/__tests__/setup/checkout-git-spawn-guard.ts`](src/main/__tests__/setup/checkout-git-spawn-guard.ts)
-fails a `desktop-main` test that runs Git against the repository checkout the
-suite runs in, whether through `-C <path>`, a `cwd` inside it, `--git-dir`,
-`--work-tree`, or `GIT_DIR` / `GIT_WORK_TREE` in the child's environment.
-`init` and `clone` are judged by the directory they write, and a local `clone`
-by its source too.
-
-A thread started with `cwd: process.cwd()` did this without anyone asking.
-`startThread` ran `git rev-parse --abbrev-ref HEAD` whenever the head-branch
-file probe could not prove the layout, and a linked worktree is enough for
-that. `get_thread_status` read the working state with ten commands across the
-whole tree, about a second per call on a GitHub runner and under 100 ms on a
-warm local worktree. A property test made 30 such calls and timed out on CI
-only (#3687). The results also depended on the checkout's branch and dirty
-files.
-
-Fix a failure without widening the guard:
-
-- A test whose subject is not Git: start the thread in an empty
-  `mkdtemp` directory (`nonRepositoryCwd` in `backend-registry.test.ts`), or
-  inject `gitWorkingStateService` / `gitDirectoryService`.
-- A test of Git itself: build its own repository under `os.tmpdir()`.
-
-Like the agent-CLI guard it hooks `ChildProcess.prototype.spawn`, records and
-throws, and does not see sync launches or, on Windows, `ownProcessTree`
-launches, which start the PowerShell job wrapper rather than Git. `checkout-git-spawn-guard.test.ts`
-checks the classifier against Git's own `rev-parse --show-toplevel`.
-
-## No Network and No Operator State in Vitest
-
-Two more suite-wide guards, both pure test infrastructure. Production code has
-no test-awareness and behaves identically either way — the seams are in
-`vitest.workspace.ts`.
-
-**Where.** Every desktop project sets `PWRAGENT_HOME` to
-`<os.tmpdir()>/pwragent-vitest-home-<pid>`. `resolvePwragentRoot` otherwise
-falls back to `~/.pwragent`, and only about a dozen main tests override it
-themselves, so every other test that touches a root-relative path was reading
-and writing the operator's live application state. A plain `pnpm test` really
-did install a ~353 MB Grok runtime into `~/.pwragent/agents/grok/`, and the
-suite still writes a scratch projects directory and `state/image-inputs` —
-those now land in the temp root.
-
-Nothing pre-creates the directory, so a well-behaved run leaves no trace at
-all; anything that appears there is a test writing to the PwrAgent root. The
-pid keeps concurrent runs (several worktrees testing at once is normal) off
-each other's state. A test that needs its own root still wins with `vi.stubEnv`
-or an explicit `env` argument. `__tests__/disposable-pwragent-home.test.ts`
-pins both halves — that each project still declares the redirect, and that the
-value actually reaches a forked worker — so a config edit cannot quietly drop
-it. The one root path it does not cover is `userHomeWorktreesRoot`, which is
-deliberately `os.homedir()`-anchored; no test has ever created it, and
-`git-directory-service` takes an injected `homeDir`.
-
-`XDG_CONFIG_HOME` and `XDG_STATE_HOME` travel with it, pinned to
-`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on each project and
-guarded by the same test. Nothing in the app reads them today; the pre-profile
-migration that searched them for `pwragnt/` state is gone. They stay because
-`PWRAGENT_HOME` never covered them: those roots came from `os.homedir()` and
-the ambient XDG variables, so a test that stubbed only the PwrAgent root still
-read the operator's real `~/.config` and `~/.local/state` — and a developer
-carrying pre-1.0 files then ran a different code path than CI on every
-`initializeAppState`. Set all three together when a suite needs its own roots.
-
-`PATH` is sandboxed on every project, including messaging and shared. The
-directory of the Node running the suite comes first, so `node` and a fixture's
-`#!/usr/bin/env node` shebang are always that Node. The repository's own
-`node_modules/.bin` directories that pnpm prepends come next; they hold the
-project's pinned tools, such as the `tsgolint` that typed oxlint runs. On POSIX
-only `/usr/bin`, `/bin`, `/usr/sbin` and `/sbin` follow; on Windows every entry
-outside the user's profile does, because Git for Windows lives in system
-locations that vary by machine. It exists because the operator's shell `PATH` starts with
-version-manager shims: a mise shim read `~/.config/mise/config.toml` on every
-ACP fixture launch, and an unparseable one failed the suite on one Mac only.
-It also keeps operator-authenticated tools such as `gh` and `op` out of reach.
-Production code that appends search directories for agent launches still
-does; the agent-CLI spawn guard covers what that can reach. A test that needs
-another tool should resolve it by absolute path, as the deploy-isolation test
-does with `npm_execpath`, or supply it, as the manual Git LFS validation test
-does, rather than widen the sandbox. `disposable-pwragent-home.test.ts` pins
-the sandbox for every project and in the running worker.
-
-**Whether.** [`src/test-setup/outbound-fetch-guard.ts`](src/test-setup/outbound-fetch-guard.ts)
-replaces `globalThis.fetch` and fails any test that makes a real outbound
-request. It hooks the global rather than taking an injected `fetch` per caller
-for the same reason the spawn guard hooks a prototype: it is the one chokepoint
-every request funnels through, so it also covers `acp-registry-service`,
-`mcp-connection-gateway-service`, and `auto-updater` — none of which were given a
-seam — plus any network path added later. Injection is how you *fix* a failure
-(`fetchLatestCompatibleRelease` honors `options.fetch`, and
-`grok-managed-runtime.test.ts` passes one); it cannot be what enforces the
-rule, because a module with no seam is exactly the case that needs catching.
-
-Like the spawn guard it records **and** throws — every one of these callers
-degrades to a cached value or a logged warning inside its own `try`/`catch`, so
-a bare throw would be swallowed and the test would pass green having attempted
-the request anyway. Unlike the spawn guard's prototype patch, the global is
-routinely replaced by tests, so the guard reinstalls itself on every setup run
-rather than once per worker; a test that drives its own fake HTTP layer
-replaces it for its own duration, as `auto-updater.test.ts` does. Not covered:
-`http.request` / `https.request` / `net.connect`, which Node's undici `fetch`
-does not route through and nothing here uses directly.
-
-**Loopback goes through.** `localhost` (and any `*.localhost`),
-`127.0.0.0/8` — including the `::ffff:127.0.0.1` form a dual-stack socket
-reports — `::1`, and the wildcard bind addresses `0.0.0.0` / `::` cannot leave
-the machine, so they are not what the guard is for: that is a test talking to a
-server it started, the same category as the spawn guard's `os.tmpdir()`
-allowance. `agent-tool-mcp-server.test.ts` drives its MCP server's real HTTP
-surface (auth, CORS, thread binding) exactly this way. A scheme that opens no
-socket at all — `data:`, `blob:`, `file:` — is allowed for the same reason;
-those have no host to classify, and reading an inline fixture is not egress.
-The allowance is pinned by the self-test, including that a remote host merely
-*containing* "localhost" is still blocked.
-
-Both renderer projects load the fetch guard too. It has no `fetch` call site
-today and reaches the network through IPC, but `lint:boundaries` reads imports
-and cannot see a `globalThis.fetch`, and jsdom inherits a live one from Node —
-so this is the only thing here that would catch a renderer reaching a remote
-host directly. A relative URL is resolved against the document origin before it
-is classified, so a same-origin renderer fetch is allowed through as loopback;
-the guard measures egress, not same-origin. Node has no `location`, so the same
-input there stays unparseable and is treated as escaping.
-
-`__tests__/outbound-fetch-guard.test.ts` is the guard's self-test, in the same
-shape as `agent-cli-spawn-guard.test.ts`;
-`renderer/src/test/outbound-fetch-guard.test.ts` covers the one case that needs
-a document origin.
+Desktop Vitest fails a test that spawns a real agent CLI, runs Git against the
+checkout, makes an outbound request, or touches operator state. Fix a failure
+by injecting a seam, never by widening a guard. Before fixing a guard failure,
+or changing the guards, `PWRAGENT_HOME`, XDG, or `PATH` sandboxing in
+`vitest.workspace.ts`, read [docs/vitest-guards.md](docs/vitest-guards.md).
 
 ## Sqlite Write-Volume Instrumentation
 
-PR #1406 fixed tool accounting running one implicit transaction per streamed
-8 KiB command-output chunk: **3,693 commits and 58 MB of WAL growth** for a
-single `find /`, to persist about nineteen integer counters. The whole suite
-passed either way. It had to be found by hand.
-
-The reason nothing caught it is worth internalizing before you reach for a
-unit test here: **the main-process suites mock the overlay store.**
-`backend-registry.test.ts` alone constructs `createOverlayStoreMock` in 450+
-places, so no sqlite is involved and no assertion about write behavior is
-possible. The code path that writes for real only runs in the app — which the
-E2E harness does exercise, against a real `state.db` under a temp
-`PWRAGENT_HOME`.
-
-So the instrumentation lives on the database, in
-[`src/main/state/sqlite-write-metrics.ts`](src/main/state/sqlite-write-metrics.ts),
-and covers vitest, E2E, and dev runs from one place.
-
-**Measure commits, not statements.** Each implicit transaction flushes its
-dirty pages, and a row update drags along every index it moved — in #1406's
-case four 4 KB pages per write, because `observed_at` sits in all three
-indexes on `thread_tool_invocations`. Ranking by statements would call a
-batched migration expensive and a per-event write loop cheap.
-
-### Running it
-
-```bash
-pnpm test:sqlite-writes                       # whole suite, then the ranking
-pnpm test:sqlite-writes apps/desktop/src/main/__tests__/state-db.test.ts
-```
-
-Every desktop E2E run reports automatically — the harness is the only place
-the real write path executes, the overhead is a `statSync` per commit against
-a run that launches Electron, and the ranking prints at teardown into the run
-log (`e2e.log` on the lab guest). Opt out with
-`PWRAGENT_DEV_SQLITE_WRITE_METRICS=0`.
-
-### Things that will bite you
-
-- **Attach after migrations, not before.** Schema migrations commit once per
-  version on a fresh database. A suite that opens a temp db per test would
-  otherwise rank whichever file opened the most databases as the heaviest
-  writer — the first version of this reported 164 commits for 16 statements.
-- **Instrumentation must be invisible to the code it measures.**
-  better-sqlite3 hangs `.default` / `.deferred` / `.immediate` / `.exclusive`
-  off the callable `transaction()` returns, and they are **not enumerable**.
-  Copying with `Object.assign` drops them and every `tx.immediate(...)` caller
-  dies with "is not a function"; `pr-auto-dispatch.test.ts` is what caught it.
-- **A zero is not a clean bill of health.** A test file that mocks its store
-  reports zero writes no matter what it does in production. Read the ranking
-  as "of the code that touched real sqlite, here is the order", never as
-  coverage.
-
-### Known baselines
-
-Numbers to compare a new write path against, all measured with this harness:
-
-| Path | Cost |
-|---|---|
-| Streamed command output, per-chunk (pre-#1406) | 3,693 commits / 58 MB WAL for one `find /` |
-| Streamed command output, coalesced (today) | 34 commits / 0.54 MB for the same command |
-| Environment action output, row rewritten per 500 ms snapshot (former) | 122 commits / 2.9 MB for one minute of output |
-| Environment action output, in memory until a run boundary (today) | 2 commits / 74 KB per run, whatever its length |
-| Former 10-second runtime lease heartbeats | 720 commits / 2.7 MB per hour (~65 MB/day) |
-| PID-owned messaging + federation leases, idle hour | 0 commits / 0 MB WAL |
-| PID-owned lease lifecycle (register, acquire/release both, exit) | 6 commits / ~93 KB WAL |
-| PID-owned dead-owner observation + takeover, both leases | 5 commits / ~72 KB WAL |
-| Whole vitest suite | 51 sources / ~3,000 commits / ~27 MB WAL |
-| One replay E2E spec | ~28 commits across two Electron processes |
-
-The former idle figure came from two 10-second sqlite renewal loops. Runtime
-leases now register one process identity and verify its PID, instance ID, and
-start time against the existing profile runtime marker only when a challenger
-tries to acquire messaging or federation. A confirmed dead-owner observation
-is persisted and becomes reclaimable after one minute, even if the PID is
-reused in the meantime. Holding either lease adds no sqlite timer and no idle
-sqlite writes. A process that is alive but hung retains ownership while its
-profile marker remains fresh; this deliberately favors preventing dual owners
-over preempting a possibly healthy process.
-
-### Write budgets
-
-[`src/main/__tests__/fixtures/sqlite-write-budgets.json`](src/main/__tests__/fixtures/sqlite-write-budgets.json)
-records what each measured scenario costs, and
-`sqlite-write-metrics.test.ts` fails when one moves:
-
-```
-sqlite write budget "streamed-command-output" changed.
-  budget:   2 commits, 2 statements, 2 rows (~36 KB WAL)
-  measured: 501 commits, 501 statements, 501 rows (~2820 KB WAL)
-```
-
-That is the pre-#1406 write pattern being caught automatically. Note the
-budget: **2 commits for 501 streamed events**, because commits must not scale
-with events.
-
-**Setup is excluded by construction.** `measureSqliteWrites(fn)` measures only
-what the callback does, so opening the database, applying migrations, and
-seeding fixtures all sit outside it. A budget therefore tracks the feature and
-stays put when a test grows more setup — no classifying writes after the fact,
-no arguing about which INSERT was "arrange".
-
-**Only the deterministic counters are asserted.** Commits, write statements,
-and rows changed are a pure function of the code path — same operations, same
-numbers, on any machine under any load, which is what makes an exact assertion
-safe here rather than a tolerance. WAL bytes are *not* deterministic (page fill
-and checkpoint timing move them run to run), so `observedWalBytes` is recorded
-for humans to read and never asserted. Commits are the honest proxy for volume.
-
-Deviation fails in **both** directions. An increase is the regression this
-exists to catch; a decrease means the budget has gone stale and would stop
-catching anything, so lowering it is a deliberate act.
-
-### Adding a budget
-
-Any new write path that fires per command, per turn, per item, per streamed
-event, or on a timer gets one. Wrap the feature — not its setup — and name the
-scenario:
-
-```ts
-const { writes } = await measureSqliteWrites(async () => {
-  // drive the feature
-});
-expectSqliteWriteBudget({
-  note: "what one unit of work is, in words",
-  scenario: "my-feature",
-  writes,
-});
-```
-
-Then record it with `UPDATE_SQLITE_WRITE_BUDGETS=1 pnpm test <file>` and commit
-the JSON. Re-record the same way when a change moves a number **on purpose**,
-and say why in the commit message — the point of the file is that a write-cost
-change shows up as a reviewable line in a diff instead of never showing up at
-all.
-
-Before recording, do the projection: writes/second × how long a real session
-runs → MB/day. If it looks excessive, raise it rather than baking it in. A
-budget is a record of what a path costs, not permission for it to cost that.
+Measure commits, not statements, and record every per-command, per-turn,
+per-item, per-event, or timer write path as a write budget. Before adding such
+a write, changing a budget, or running `pnpm test:sqlite-writes`, read
+[docs/sqlite-write-volume.md](docs/sqlite-write-volume.md#sqlite-write-volume-instrumentation).
 
 ## SQLite Query Rules
 
@@ -1653,134 +266,27 @@ budget is a record of what a path costs, not permission for it to cost that.
 
 ## Implementation Notes
 
-- Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.
-- **No raw color literals outside `:root` / `:root[data-theme="..."]`.** All
-  hex / rgb / hsl / `color-mix(in srgb, #..., ...)` constants belong in the
-  token blocks at the top of `styles/app.css`. Use `var(--token)` everywhere
-  else. The renderer ships light and dark themes via `data-theme` attribute
-  selectors plus a synchronous pre-React bootstrap in `index.html` — any new
-  raw color literal in a component rule (or further down in `app.css`) will
-  not flip with the theme and is a regression. Derived alpha overlays should
-  use `color-mix(in srgb, var(--token) <pct>%, transparent)` so they
-  automatically follow the token in every theme.
-- **Theme + density source of truth is per-profile `config.toml`
-  `[general.appearance]`.** The full path: main process
-  `readBootstrapAppearance` (sync TOML read in
-  `src/main/settings/appearance-bootstrap.ts`) → BrowserWindow
-  `webPreferences.additionalArguments` → preload
-  `contextBridge.exposeInMainWorld("__pwragentAppearance", …)` → inline
-  `<script>` in `src/renderer/index.html` sets `<html data-theme/data-density>`
-  before any React code runs. The renderer's `useAppearance` hook adopts
-  the snapshot value when it arrives over IPC and writes changes back via
-  `writeSettingsConfig({ general: { appearance: { theme, density } } })`.
-  The hook lifts to `App.tsx` and threads the controller down — instantiate
-  it once per window so the React state is consistent. Do not reintroduce
-  localStorage as a persistence layer; TOML is authoritative across all
-  windows and profiles.
-- Reuse shell primitives instead of adding one-off page styling.
-- When in doubt, make the interface calmer, denser, and more editorial.
-- Every tooltip is a portal on `document.body`. A plain-text tooltip is
-  `className="tooltip-target"` plus `data-tooltip={text}`:
-  [`DataTooltipLayer`](src/renderer/src/lib/DataTooltipLayer.tsx), mounted
-  once in `main.tsx`, draws it for every window. That works inside any
-  clipping pane and beside the sidebar. Anything richer (a `ReactNode`, a
-  card class, a hover delay, pointer-following placement) uses
-  `src/renderer/src/lib/useViewportTooltip.tsx` with the shared
-  `.viewport-tooltip` class. Never draw a tooltip with `::after` /
-  `content: attr(…)`: a pseudo-element is clipped by its pane and capped by
-  its stacking context. The composer's tooltips kept going under the left
-  bar until the declarative path moved onto the portal. When a tooltip is
-  clipped or buried, fix the layer it renders in. Do not move one
-  tooltip's x or raise one control's z-index.
-  - **Structured hover cards pass their own class instead of
-    `.viewport-tooltip`.** The hook takes a `ReactNode`, so a card with
-    sections and meters (`.context-usage-card`, `.pr-status-card`) styles
-    itself; keep new ones on those two's measurements so the app's hover
-    cards stay one family. Plain text tooltips keep `.viewport-tooltip`.
-  - **Check the layer your trigger lives in.** The portal renders on
-    `document.body`, and `.app-shell` opens no stacking context, so
-    full-window layers (Settings at `z-index: 120`) sit in the same root
-    stacking context and will paint OVER a tooltip left at the default
-    90. Anything reachable from those surfaces needs an explicit higher
-    layer — see `.messaging-status-tooltip` and `.pr-status-card`. The
-    dedicated Star Map window has the same shape: `.star-map-window`
-    opens a stacking context that scopes the card z-scale, so its portal
-    tooltips (`.star-map-card__tooltip`) also carry an explicit layer.
-  - **An enterable card passes `interactive`.** The sidebar's PR cards
-    (`PrChip` `cardActions`) open beside the sidebar and carry Copy URL and
-    Detach. `lib/hover-card-bridge.ts` owns them: leaving a chip or its card
-    keeps the card for the 300 ms bridge, and entering any chip closes it
-    at once and shows the new one without the hover delay, so a sweep across
-    chips reads as before. A card that falls back over the rows does not
-    bridge. Its buttons stay out of the Tab order and the chip's description;
-    the chip keeps Delete and its menu for the keyboard. The card stops React
-    propagation of presses, since its portal sits in the row's React tree.
-  - **A card with content worth hearing needs `aria-describedby`.** Point the
-    trigger at the hook's `tooltipId` while `visible`; nothing else references
-    the portal, so an unwired card is sighted-only. Do not solve this by
-    stuffing the data into the trigger's `aria-label` — that changes the
-    control's name, not its description.
-- Use the project-local [desktop E2E fixture seeding skill](../../.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when capturing or refreshing replay-backed desktop E2E fixtures.
+- No raw color literals outside the `:root` token blocks in `styles/app.css`.
+  Theme and density come from per-profile `config.toml`
+  `[general.appearance]`; never persist them in localStorage.
+- Every tooltip is a portal on `document.body`; never draw one with `::after`.
+- Before changing renderer styles, tokens, theme or density plumbing,
+  tooltips, or hover cards, read
+  [docs/renderer-implementation-notes.md](docs/renderer-implementation-notes.md#implementation-notes).
 
 ## Third-Party Brand Assets
 
-- Vendor-supplied brand assets (logos, marks, icons) live under `src/renderer/src/assets/<vendor>/` as **files from the vendor's official brand kit** — never hand-redrawn, recolored, cropped, or padded. A mechanical, scripted resize of the vendor's own artwork is the one transformation allowed, and only when the asset's `README.md` records it and a script reproduces it; see the PwrSuite sister marks below.
-- Each asset directory MUST include a `README.md` documenting: the source URL, the vendor's usage rules, and the procedure for re-fetching on update. See [`src/renderer/src/assets/mattermost/README.md`](src/renderer/src/assets/mattermost/README.md) as the reference example.
-- Render verbatim assets via `<img>`, NOT inline `<svg>` with `currentColor`. The `<img>` tag is structurally insulated from parent CSS `color` rules, which protects the asset from accidental recoloring.
-- Do not add hand-drawn `currentColor` vendor silhouettes. If a platform has a recognizable mark, follow the Mattermost/Telegram/Discord pattern instead.
-
-### An app's mark outside macOS comes from `build/icon.png`
-
-Every PwrSuite app builds its macOS icon from an Icon Composer package
-(`build/icon.icon`), and `actool` derives a legacy `.icns` from it at package
-time. **Neither is the mark to use anywhere else.** Every member of that
-`.icns`, and the `build/icon-macos.png` beside it, is padded to Apple's
-824-in-1024 safe-area template — the plate covers 80% of its canvas.
-
-For any non-macOS context — a web page, a favicon, a cross-app brand mark in
-another app's UI — use **`apps/desktop/build/icon.png`**, the full-bleed master
-each repo already keeps as its Windows/Linux source. That is what PwrAgent
-serves for its own mark on the OAuth callback page, and what
-[`scripts/sync-pwrsuite-brand-icon.mjs`](scripts/sync-pwrsuite-brand-icon.mjs)
-copies from a sister checkout.
-
-Getting this wrong does not look like a bug in the asset — it looks like a
-layout problem on whatever surface drew it, and the local fix is to scale the
-mark back up in CSS. PwrAgent carried that compensation at three draw sites
-across two stylesheets before the assets were re-sourced, and the second one
-was added months after the first by someone looking at one small mark. If a
-mark paints at 80% of what is beside it, re-source the asset.
+Use vendor brand-kit files verbatim, each with a `README.md`, rendered through
+`<img>`. Outside macOS, an app's mark comes from `build/icon.png`. Before adding
+or changing a vendor or PwrSuite mark, read
+[docs/brand-assets.md](docs/brand-assets.md#third-party-brand-assets).
 
 ## Quit Retries
 
-A quit that a `before-quit` listener defers is re-issued from a macrotask,
-through `retryQuitAfterDispatch` in
-[`src/main/quit-retry.ts`](src/main/quit-retry.ts). That includes an
-`app.quit()` the quit manager runs synchronously while the listener is still
-on the stack. Never call `app.quit()` from the listener itself or from a
-promise chain that can settle in microtasks.
-
-- Electron 41's `Browser::Quit()` assigns `is_quitting_` after the
-  before-quit emit returns. An emit that starts from a native task (Dock →
-  Quit, logout, Electron's own SIGTERM handling) runs a microtask checkpoint
-  before that assignment, so a nested pass's quit is overwritten. The windows
-  close, Electron emits `window-all-closed` instead of `will-quit`, and the
-  process can stay alive with no windows. PwrSnap shipped that stall in
-  pwrdrvr/PwrSnap#659 and fixed it in pwrdrvr/PwrSnap#677.
-- Here the `window-all-closed` handler re-issues the quit after resource
-  shutdown completes, which hid the lost pass. It is not a substitute: it
-  stands down during an update install, and a pass that skipped resource
-  shutdown never satisfies it.
-- `menu.ts` quits through a click handler, and the main process installs its
-  own SIGTERM handler, so neither ⌘Q nor a signal reaches `before-quit` from a
-  native task. Dock → Quit and a logout still do.
-- Playwright E2E quits from JS, which never nests, so E2E cannot catch this.
-  The "under a native quit" tests in `__tests__/index.test.ts` run the real
-  handlers through
-  [`__tests__/helpers/electron-quit-model.ts`](src/main/__tests__/helpers/electron-quit-model.ts).
-  `pnpm --filter @pwragent/desktop probe:quit-reentry` checks that model
-  against the shipped Electron with hidden windows. Re-run it on an Electron
-  major bump.
+Re-issue a deferred quit through `retryQuitAfterDispatch`; never call
+`app.quit()` from a `before-quit` listener or a microtask chain. Before
+changing quit, shutdown, or `before-quit` handling, read
+[docs/quit-retries.md](docs/quit-retries.md#quit-retries).
 
 ## Worktree Path Computation
 
@@ -1791,16 +297,6 @@ promise chain that can settle in microtasks.
 
 ## Release Notes
 
-- The first signed v1.x build is signed under the PwrDrvr LLC Developer ID
-  (Team ID `T44CNHC4UH`) with bundle id `com.pwrdrvr.pwragent`. macOS Keychain
-  scopes `safeStorage` keys by signing identity + bundle id, so any pre-v1.0
-  development build's encrypted secrets at
-  `~/.local/state/pwragent/settings-secrets.json` (Telegram / Discord bot
-  tokens) WILL fail to decrypt under the new signed build. The
-  `desktop-secret-store` returns `undefined` on decrypt failure and prompts the
-  user to re-enter the secret in Settings — no crash, no stale ciphertext
-  re-used as plaintext. Document this in v1.0.0 release notes for any internal
-  testers upgrading from pre-v1.0 dev builds.
-- Hardcoded version strings in shipped code are an anti-pattern. Always use
-  `app.getVersion()` (main process) or `desktopApi.readAppMetadata()` (renderer)
-  so every release reports its real version.
+Never hardcode a version string; use `app.getVersion()` or
+`desktopApi.readAppMetadata()`. Before release-note, signing-identity, or
+secret-store migration work, read [docs/release-notes.md](docs/release-notes.md#release-notes).
