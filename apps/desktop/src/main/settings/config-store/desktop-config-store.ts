@@ -89,6 +89,7 @@ export class DesktopConfigStore {
   private readonly updateSubscriptions = new Set<
     (event: ConfigStoreUpdate) => void
   >();
+  private readonly codexModelProviderSubscriptions = new Set<() => void>();
   private diagnosticEventCount = 0;
   private readonly diagnosticOperationCounts: Record<
     ConfigStoreDiagnosticEvent["operation"],
@@ -235,6 +236,12 @@ export class DesktopConfigStore {
     };
   }
 
+  /** Observe changes from disk and explicit saves, even when the saved list is identical. */
+  subscribeCodexModelProviders(listener: () => void): () => void {
+    this.codexModelProviderSubscriptions.add(listener);
+    return () => this.codexModelProviderSubscriptions.delete(listener);
+  }
+
   async write<K extends keyof ConfigDomainMap>(
     patch: DesktopSettingsConfigPatch,
     returnDomains: readonly K[],
@@ -257,6 +264,7 @@ export class DesktopConfigStore {
       config: observation.config,
       previousProviders: previous.domains.providers,
     });
+    const codexModelProvidersSaved = patch.models?.codex?.providers !== undefined;
     const next =
       previous.configFile.kind === "valid"
       && previous.configFile.contentHash === observation.contentHash
@@ -269,7 +277,9 @@ export class DesktopConfigStore {
             },
             configRevision: observation.contentHash,
             domains,
+            codexModelProvidersSaved,
           });
+    if (next === previous && codexModelProvidersSaved) this.notifyCodexModelProviders();
     if (
       this.durable
       && next.configRevision !== this.durableConfigRevision
@@ -523,12 +533,14 @@ export class DesktopConfigStore {
     this.providerRefresh?.dispose();
     this.subscriptions.clear();
     this.updateSubscriptions.clear();
+    this.codexModelProviderSubscriptions.clear();
   }
 
   private publish(params: {
     configFile: ConfigFileStatus;
     configRevision: string;
     domains: ConfigDomainMap;
+    codexModelProvidersSaved?: boolean;
   }): ConfigStoreSnapshot {
     const previous = this.snapshot;
     const changedDomains = changedConfigDomains(previous.domains, params.domains);
@@ -542,7 +554,19 @@ export class DesktopConfigStore {
     });
     this.snapshot = next;
     this.notify(changedDomains, next);
+    if (
+      params.codexModelProvidersSaved
+      || (changedDomains.includes("models")
+        && JSON.stringify(previous.domains.models.codex?.providers ?? [])
+          !== JSON.stringify(next.domains.models.codex?.providers ?? []))
+    ) {
+      this.notifyCodexModelProviders();
+    }
     return next;
+  }
+
+  private notifyCodexModelProviders(): void {
+    for (const listener of this.codexModelProviderSubscriptions) listener();
   }
 
   private publishProvider(projection: ProviderProjection): void {
