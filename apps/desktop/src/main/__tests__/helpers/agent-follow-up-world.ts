@@ -61,11 +61,11 @@ export class AgentFollowUpWorld {
    */
   heartbeatOnTick = true;
   /**
-   * Every launch gets the process ID the dead one had, as an operating system
-   * may hand out. Only the runtime marker tells the two apart, and the new
-   * process trusts that only after the confirmation grace.
+   * Every launch gets the previous scheduler's process ID. As in production,
+   * only a locally registered owner token can own work under the local PID.
    */
   reuseProcessId = false;
+  unconfirmedPeerProcessId: number | undefined;
   readonly admissions: Array<{ actionId: string; trueTime: number }> = [];
   service!: ScheduledThreadActionService;
   store!: ScheduledThreadActionStore;
@@ -105,9 +105,11 @@ export class AgentFollowUpWorld {
       store: this.store,
       now: () => this.clock,
       ownerId: schedulerOwnerId({ processId, instanceId, startedAt: this.clock }),
-      // Only this launch's process runs. Its marker carries only its identity.
+      // Only this launch has a fresh marker. A scenario can keep a peer PID alive.
       ownerProbes: {
-        isProcessAlive: (candidate) => live() && candidate === processId,
+        currentProcessId: processId,
+        isProcessAlive: (candidate) => live()
+          && (candidate === processId || candidate === this.unconfirmedPeerProcessId),
         isRuntimeIdentityLive: (identity) => live() && identity.instanceId === instanceId,
       },
       setTimer: () => ({}) as ReturnType<typeof setTimeout>,
@@ -155,8 +157,8 @@ export class AgentFollowUpWorld {
     if (this.alive) this.crash();
     this.advanceClock(LEASE_MS + 1);
     await this.start();
-    // A reused process ID keeps the dead owner unconfirmed, not dead, until
-    // the grace runs out; the scheduler's next passes then act on it.
+    // Keep the elapsed time from the reused-PID lifecycle scenarios so a
+    // follow-up can also become due during the first restart.
     if (this.reuseProcessId) await this.tick(SCHEDULER_OWNER_CONFIRMATION_GRACE_MS);
   }
 

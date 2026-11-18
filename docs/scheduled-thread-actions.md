@@ -87,13 +87,11 @@ Two operations take an action out of `held`:
 A lock's hold lives in the holder's memory and dies with it. Every pass of
 the due-action evaluation, which runs at launch, on the heartbeat and when the
 restart gate opens, first looks for `held` actions whose cause is a thread
-lock and whose holder is not alive. Holder observation continues while the
-restart gate is closed, so the confirmation grace can elapse while
-continuations resume. Claims and readmission wait for the gate to open.
-The service reads an action's payload only once its holder is found dead, and
-remembers a row that is not a lock hold until the row changes. It claims each
-with `claimHeld`, which succeeds only while the dead holder still holds it,
-so two instances cannot both take it. The claim drops `manualReleaseRequired`, and the action is
+lock and whose holder is not alive. It reads an action's payload only once its
+holder is found dead, and remembers a row that is not a lock hold until the
+row changes. It claims each with `claimHeld`, which
+succeeds only while the dead holder still holds it, so two instances cannot
+both take it. The claim drops `manualReleaseRequired`, and the action is
 dispatched as when it came due: a thread still locked holds it again in this
 queue, and an unlocked one starts it. Other held actions, such as a stale
 steering message, wait for the operator as before. This cannot start a turn

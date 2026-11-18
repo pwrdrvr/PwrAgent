@@ -457,11 +457,8 @@ export class ScheduledThreadActionService {
 
   async evaluateDueActions(): Promise<void> {
     if (this.evaluating) return;
-    if (this.options.registry.isRestartGateClosed?.()) {
-      // Let the holder confirmation grace elapse while continuations resume.
-      this.orphanedLockHolds({ observeOnly: true });
-      return;
-    }
+    // The gate opening evaluates again.
+    if (this.options.registry.isRestartGateClosed?.()) return;
     this.evaluating = true;
     try {
       // No await without an orphan: a create that evaluates while this pass
@@ -504,7 +501,7 @@ export class ScheduledThreadActionService {
    * started from a dead holder's queue without first moving the action out of
    * `held` (see `markHeldQueued`), so this cannot run a turn twice.
    */
-  private orphanedLockHolds({ observeOnly = false } = {}): ScheduledThreadActionHold[] {
+  private orphanedLockHolds(): ScheduledThreadActionHold[] {
     const holds = this.options.store.listHeldHolds();
     const versions = new Set(holds.map(holdVersion));
     for (const version of this.notLockHolds) {
@@ -518,7 +515,6 @@ export class ScheduledThreadActionService {
         holderAlive.set(hold.holderId, alive);
         if (alive) return false;
       }
-      if (observeOnly) return false;
       // The cause lives in the payload, so read it only for an orphan, and
       // remember a row that is not a lock hold until it changes.
       const version = holdVersion(hold);
@@ -1025,6 +1021,8 @@ function mutationResponseForAction(
 }
 
 export type SchedulerOwnerProbes = {
+  /** The local process ID, overridable by the restart model. */
+  currentProcessId?: number;
   isProcessAlive: (processId: number) => boolean;
   /** Whether a fresh profile runtime marker carries this exact identity. */
   isRuntimeIdentityLive: (identity: { instanceId: string; processId: number; startedAt: number }) => boolean;
@@ -1061,7 +1059,9 @@ export function readSchedulerOwnerLiveness(
   if (!Number.isSafeInteger(processId) || processId <= 0) return "dead";
   // A process can create a replacement scheduler without exiting. For the
   // current process, require the exact owner token instead of its ID alone.
-  if (processId === process.pid) return activeSchedulerOwnerIds.has(ownerId) ? "alive" : "dead";
+  if (processId === (probes.currentProcessId ?? process.pid)) {
+    return activeSchedulerOwnerIds.has(ownerId) ? "alive" : "dead";
+  }
   if (!probes.isProcessAlive(processId)) return "dead";
   if (match[2] === undefined) return "alive";
   return probes.isRuntimeIdentityLive({ instanceId: match[2], processId, startedAt: Number(match[3]) })

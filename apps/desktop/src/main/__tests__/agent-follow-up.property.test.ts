@@ -8,6 +8,7 @@ import {
   AGENT_FOLLOW_UP_MIN_DELAY_MS,
   type ScheduleFollowUpToolResult,
 } from "@pwragent/shared";
+import { SCHEDULER_OWNER_CONFIRMATION_GRACE_MS } from "../scheduled-actions/scheduled-thread-action-service";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -227,6 +228,27 @@ describe("agent follow-up lifecycle model", () => {
       expect(world.actions().map((action) => action.status)).toEqual(["started"]);
       expect(world.admissions).toHaveLength(1);
     }, { reuseProcessId: true });
+  });
+
+  it("keeps a live peer's hold when the restart gate opens after its marker went stale", async () => {
+    await withWorld(async (world) => {
+      await world.create(1);
+      await world.setLocked(true);
+      await world.tick(2 * MINUTE);
+      const holds = world.store.listHeldHolds();
+      const [hold] = holds;
+      expect(hold?.holderId).toBeDefined();
+      world.unconfirmedPeerProcessId = Number(hold!.holderId!.split(":")[1]);
+
+      await world.setGateClosed(true);
+      await world.restart();
+      await world.tick(SCHEDULER_OWNER_CONFIRMATION_GRACE_MS);
+      await world.setLocked(false);
+      await world.setGateClosed(false);
+
+      expect(world.store.listHeldHolds()).toEqual(holds);
+      expect(world.admissions).toHaveLength(0);
+    });
   });
 
   it("retires a cancelled model before another test can measure writes", async (context) => {
