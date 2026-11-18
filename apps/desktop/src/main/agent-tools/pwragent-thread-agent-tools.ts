@@ -125,6 +125,19 @@ const PWRAGENT_ONLY_THREAD_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionOpera
   "open_thread_maintenance",
 ]);
 
+/**
+ * Operations whose handler reads the calling turn. A wake registered for
+ * later (Continue After, follow-ups) takes its messaging contact from that
+ * turn's stored origin; without the turn id the woken turn runs unattributed
+ * and unchecked against the contact's role.
+ */
+const TURN_SCOPED_THREAD_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionOperationName> = new Set([
+  "mutate_thread",
+  "apply_thread_maintenance",
+  "manage_thread_dependencies",
+  "schedule_follow_up",
+]);
+
 export function buildPwrAgentThreadToolDefinitions(
   handler: PwrAgentThreadInspectionHandler | undefined,
   options: { namespace?: string } = {},
@@ -153,7 +166,7 @@ export function buildPwrAgentThreadToolDefinitions(
         context: {
           backend: context.backend,
           threadId: context.threadId,
-          ...((operation === "mutate_thread" || operation === "apply_thread_maintenance" || operation === "schedule_follow_up") && context.turnId
+          ...(TURN_SCOPED_THREAD_OPERATIONS.has(operation) && context.turnId
             ? { turnId: context.turnId } : {}),
           ...(operation === "apply_thread_maintenance" && context.callId ? { callId: context.callId } : {}),
         },
