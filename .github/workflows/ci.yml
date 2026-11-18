@@ -50,6 +50,20 @@ jobs:
       # case this script cannot decide, runs them.
       full_platforms: ${{ steps.classify.outputs.full_platforms }}
     steps:
+      # Docs-only PRs skip Lint, so the instruction-size guard runs here,
+      # where every PR and push passes through.
+      - name: Checkout agent instructions
+        uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          sparse-checkout: |
+            AGENTS.md
+            scripts/check-agent-instructions-size.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Check root AGENTS.md size
+        run: node ./scripts/check-agent-instructions-size.mjs
+
       - name: Classify changed files
         id: classify
         uses: actions/github-script@v9
@@ -199,7 +213,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes, install-deps]
-    if: needs.changes.outputs.code_impacting == 'true'
+    # Branch protection counts a skipped required check as satisfied. When
+    # the classifier fails (for example, its root AGENTS.md size check),
+    # every job that needs it would skip, so Lint runs instead and fails
+    # on its own copy of the check.
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success'
+        || needs.changes.outputs.code_impacting == 'true')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -211,6 +232,10 @@ jobs:
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+
+      - name: Root AGENTS.md size
+        timeout-minutes: 1
+        run: pnpm lint:agent-instructions
 
       - name: License metadata
         timeout-minutes: 10
