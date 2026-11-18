@@ -14619,24 +14619,41 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
     };
     const current = await this.overlayStore.getThreadOverlayState(identity);
+    const acpBackend = isAcpBackendId(params.backend) ? params.backend : undefined;
     const requestedModel = params.model;
     const hasExplicitEffort = "reasoningEffort" in params;
     // Older or externally created threads may lack a PwrAgent model overlay.
-    const needsCodexSettings = params.backend === "codex" && !hasExplicitEffort && (
+    const needsProviderSettings = !hasExplicitEffort && (
       current?.model === undefined
       || (requestedModel !== undefined && requestedModel !== current.model && current.reasoningEffort === undefined)
     );
-    const liveSettings = needsCodexSettings
+    const liveCodexSettings = needsProviderSettings && params.backend === "codex"
       ? observedCodexSettings ?? await this.codexClient.readThreadModelSettings?.({ threadId: params.threadId })
         .catch(() => undefined)
       : undefined;
-    const cachedSettings = needsCodexSettings ? this.threadInfoStore.getSummary(identity) : undefined;
-    const currentModel = current?.model ?? liveSettings?.model ?? cachedSettings?.model;
-    const currentEffort = current?.reasoningEffort ?? liveSettings?.reasoningEffort ?? cachedSettings?.reasoningEffort;
+    const acpRuntime = needsProviderSettings && acpBackend
+      ? this.acpBackend.getSession(acpBackend, params.threadId)?.acpRuntime
+      : undefined;
+    const acpCapabilities = acpRuntime && acpBackend
+      ? this.acpBackend.getInstalledAgent(acpBackend)?.runtimeCapabilities
+      : undefined;
+    const acpModelOption = findAcpModelConfigOption(acpCapabilities);
+    const acpEffortOption = findAcpThoughtLevelConfigOption(acpCapabilities);
+    const cachedSettings = needsProviderSettings ? this.threadInfoStore.getSummary(identity) : undefined;
+    const currentModel = current?.model
+      ?? liveCodexSettings?.model
+      ?? (acpModelOption && acpRuntime?.configValues?.[acpModelOption.id])
+      ?? acpRuntime?.currentModelId
+      ?? cachedSettings?.model;
+    const currentEffort = current?.reasoningEffort
+      ?? liveCodexSettings?.reasoningEffort
+      ?? (acpEffortOption && acpRuntime?.configValues?.[acpEffortOption.id])
+      ?? acpRuntime?.reasoningEffort
+      ?? cachedSettings?.reasoningEffort;
     const modelChanged =
       requestedModel !== undefined && requestedModel !== currentModel;
     let fallbackReasoningEfforts: ModelSettings["fallbackReasoningEfforts"];
-    if (params.backend === "codex" && modelChanged && !hasExplicitEffort) {
+    if (modelChanged && !hasExplicitEffort) {
       const providerKey = providerPickerValue(params.backend, requestedModel);
       const configured = this.resolveProviderModelDefaultsFn()[providerKey];
       fallbackReasoningEfforts = [
@@ -14666,9 +14683,6 @@ export class DesktopBackendRegistry {
       },
       "settings-refresh",
     );
-    const acpBackend = isAcpBackendId(params.backend)
-      ? params.backend
-      : undefined;
     const acpRuntimeModelChanged =
       modelSettings.model !== current?.model ||
       modelSettings.reasoningEffort !== current?.reasoningEffort;

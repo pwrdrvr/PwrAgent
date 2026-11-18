@@ -24792,6 +24792,64 @@ script = "echo setup"
     ), { numRuns: 30 });
   });
 
+  it("preserves a supported Claude effort when switching models", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("high", "medium"), async (effort) => {
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+      const { claudeBackend } = registry as unknown as { claudeBackend: ClaudeBackend };
+      const models = ["sonnet", "opus"].map((id) => ({
+        id, defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high"], supportsReasoning: true,
+      }));
+      vi.spyOn(claudeBackend, "summary").mockReturnValue({
+        ...claudeBackend.summary(), launchpadOptions: { models },
+      });
+      const thread = { backend: "claude" as const, threadId: "existing" };
+      try {
+        await registry.setThreadModelSettings({ ...thread, model: "sonnet", reasoningEffort: effort });
+        await expect(registry.setThreadModelSettings({ ...thread, model: "opus" }))
+          .resolves.toMatchObject({ model: "opus", reasoningEffort: effort });
+      } finally {
+        await registry.close();
+      }
+    }), { numRuns: 10 });
+  });
+
+  it("carries a compatible ACP session thought level into the model change", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("high", "medium"), async (effort) => {
+      const backend = "acp:grok" as const;
+      const threadId = "grok-thread";
+      const source = "grok-current";
+      const destination = "grok-next";
+      const { registry, acpClient } = createKimiAcpRegistry({
+        acpBackendId: backend,
+        sessionId: threadId,
+        sessions: [{
+          backendId: backend, sessionId: threadId, title: "Fixture", status: "idle",
+          executionMode: "default", createdAt: 1, updatedAt: 1,
+          acpRuntime: { currentModelId: source, reasoningEffort: effort, updatedAt: 1 },
+        }],
+        runtimeCapabilities: {
+          schemaVersion: 1, status: "discovered",
+          models: {
+            currentModelId: source,
+            availableModels: [source, destination].map((id) => ({
+              id, label: id, defaultReasoningEffort: "low",
+              reasoningEfforts: ["low", "medium", "high"], supportsReasoning: true,
+            })),
+          },
+        },
+      });
+      try {
+        await expect(registry.setThreadModelSettings({ backend, threadId, model: destination }))
+          .resolves.toMatchObject({ model: destination, reasoningEffort: effort });
+        expect(acpClient.setRuntimeOption).toHaveBeenCalledWith(expect.objectContaining({
+          sessionId: threadId, value: destination, reasoningEffort: effort,
+        }));
+      } finally {
+        await registry.close();
+      }
+    }), { numRuns: 10 });
+  });
+
   describe("Codex model settings on an untracked thread", () => {
     const source = "gpt-6.1-sol";
     const destination = "gpt-6.2-sol";
