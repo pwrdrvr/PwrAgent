@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   buildProviderPickerEntries,
   providerPickerValue,
@@ -94,10 +94,8 @@ import {
 import { SettingsSwitch } from "./SettingsSwitch";
 import {
   DECISION_PROVIDER_FOCUS,
-  DECISION_PROVIDER_NAMES,
   DecisionModelDefaults,
   DecisionProviderScreen,
-  decisionSecrets,
 } from "./DecisionModelSettings";
 import {
   OPENAI_DECISIONS_FOCUS,
@@ -105,6 +103,12 @@ import {
   openAIDecisionsKeyLabel,
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
+import {
+  modelServiceEntries,
+  PROVIDER_KINDS,
+  type ModelServiceEntry,
+  type ProviderKind,
+} from "./provider-kinds";
 import {
   commandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure,
@@ -894,6 +898,7 @@ export function ModelsSettings(props: {
         description="Each provider has its own screen for paths, auth, and connection checks."
       >
         <div className="settings-index" aria-label="Provider index">
+          <ProviderKindHeading kind="harness" />
           <SettingsIndexRow
             name="Codex"
             meta={codex.discovery.selectedCommand ?? "No executable selected"}
@@ -939,27 +944,6 @@ export function ModelsSettings(props: {
               />
             );
           })}
-          {DECISION_PROVIDER_IDS.map((provider) => {
-            const decision = resolveDecisionModelSettings(props.snapshot.models.decisionModels);
-            const ready = provider === "local" || decisionSecrets(props.snapshot).jevApiKey.configured;
-            return (
-              <SettingsIndexRow
-                key={provider}
-                name={DECISION_PROVIDER_NAMES[provider]}
-                meta={provider === "local" ? decision.localEndpoint : decision.jevModel}
-                chip={decision.model === provider ? "In use" : ready ? "Decision model" : "No API key"}
-                chipKind={decision.model === provider ? "ok" : "muted"}
-                onOpen={() => props.onFocusChange?.(DECISION_PROVIDER_FOCUS[provider])}
-              />
-            );
-          })}
-          <SettingsIndexRow
-            name="OpenAI Decisions"
-            meta="Registered decisions on gpt-6-luna"
-            chip={openAIDecisionsKeyLabel(openAIDecisionsKeyState(props.snapshot))}
-            chipKind={openAIDecisionsKeyState(props.snapshot).configured ? "ok" : "muted"}
-            onOpen={() => props.onFocusChange?.(OPENAI_DECISIONS_FOCUS)}
-          />
           {orderedAcpEntries.length === 0 ? (
             <p className="settings-empty">
               {acpCatalog.unavailable
@@ -970,9 +954,82 @@ export function ModelsSettings(props: {
                     : "Discovering AI providers…")}
             </p>
           ) : null}
+          {PROVIDER_KINDS.filter((entry) => entry.kind !== "harness").map((entry) => {
+            const services = modelServiceEntries(props.snapshot).filter(
+              (service) => service.kind === entry.kind,
+            );
+            if (services.length === 0) return null;
+            return (
+              <Fragment key={entry.kind}>
+                <ProviderKindHeading kind={entry.kind} />
+                {services.map((service) => (
+                  <ModelServiceIndexRow
+                    key={service.focus}
+                    service={service}
+                    snapshot={props.snapshot}
+                    onOpen={() => props.onFocusChange?.(service.focus)}
+                  />
+                ))}
+              </Fragment>
+            );
+          })}
         </div>
       </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+/** Names one kind of provider in the index, with what its rows share. The
+ *  nav's AI Providers sublist uses the same headings in the same order. */
+function ProviderKindHeading(props: { kind: ProviderKind }) {
+  const entry = PROVIDER_KINDS.find((candidate) => candidate.kind === props.kind);
+  if (!entry) return null;
+  return (
+    <p className="settings-index__kind">
+      <span className="settings-index__kind-label">{entry.label}</span>
+      <span className="settings-index__kind-description">
+        {entry.description}
+      </span>
+    </p>
+  );
+}
+
+/** An index row for a provider that runs no threads (decision models,
+ *  OpenAI Decisions). */
+function ModelServiceIndexRow(props: {
+  service: ModelServiceEntry;
+  snapshot: DesktopSettingsSnapshot;
+  onOpen: () => void;
+}) {
+  const { service } = props;
+  if (service.decisionProvider) {
+    const decision = resolveDecisionModelSettings(
+      props.snapshot.models.decisionModels,
+    );
+    const inUse = decision.model === service.decisionProvider;
+    return (
+      <SettingsIndexRow
+        name={service.name}
+        meta={service.decisionProvider === "local"
+          ? decision.localEndpoint
+          : decision.jevModel}
+        chip={inUse
+          ? "In use"
+          : service.keyReady ? "Decision model" : "No API key"}
+        chipKind={inUse ? "ok" : "muted"}
+        onOpen={props.onOpen}
+      />
+    );
+  }
+  const keyState = openAIDecisionsKeyState(props.snapshot);
+  return (
+    <SettingsIndexRow
+      name={service.name}
+      meta="Registered decisions on gpt-6-luna"
+      chip={openAIDecisionsKeyLabel(keyState)}
+      chipKind={keyState.configured ? "ok" : "muted"}
+      onOpen={props.onOpen}
+    />
   );
 }
 
