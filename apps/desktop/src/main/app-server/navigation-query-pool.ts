@@ -2,7 +2,7 @@ import type { NavigationDiagnosticCause } from "../../shared/navigation-diagnost
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import type { FederationTarget, NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse,
   NavigationLaunchpadConfigResponse, NavigationQueueProjection, ListScheduledThreadActionsResponse } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationQueryPageBudgetBytes } from "@pwragent/shared";
 import { navigationQueryKey } from "@pwragent/owner-core/navigation-query-projection";
 import { NavigationQueryError } from "./navigation-query-store";
 
@@ -297,7 +297,9 @@ export class NavigationQueryPool {
       const page = await (params.query.kind === "query" ? listingDiagnostics.trace("owner-read", {}, load) : load());
       signal.throwIfAborted();
       const bytes = Buffer.byteLength(JSON.stringify(page), "utf8");
-      if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+      // The budget is the owner's content. A viewer's `remoteOwner` block is
+      // retained and counted below, but it has its own cap.
+      if ((params.query.kind === "query" ? navigationQueryPageBudgetBytes(page as NavigationQueryPage) : bytes) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         throw new NavigationQueryError("navigation_item_too_large", "Navigation page exceeds its result budget.");
       }
       if (params.read.loadedAt !== params.query.invalidationSequence) {
