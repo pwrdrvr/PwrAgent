@@ -1,5 +1,13 @@
 # Desktop E2E shard allocation
 
+The current allocation is `77:91:104:133` for 405 tests in 216 groups.
+See the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md)
+for native measurements, phase comparisons, source identities and coverage checks.
+The current [fitter input](desktop-e2e-shard-durations.json) includes every test ID
+and platform skip. Four lanes, one worker and existing job deadlines are unchanged.
+
+## November 4 allocation
+
 The shared `PWTEST_SHARD_WEIGHTS` changes from `9:12:12:14` to `83:82:67:88`.
 The current suite collects 320 tests in 168 groups: 68 individual a11y groups
 and 100 other spec-file groups. The old allocation collects 62/85/79/94 tests;
@@ -26,7 +34,7 @@ The first run's failed Windows lane 2 is excluded from the fit; the other
 costs. Platform skips contribute collected tests and their negligible
 recorded duration.
 
-[The measured input](desktop-e2e-shard-durations.json) records median completed
+[The historical measured input](desktop-e2e-shard-durations-2026-11-04.json) records median completed
 group durations in seconds, in collection order. Each non-a11y row sums the
 spec's attempts before taking its median across successful lanes. Each a11y
 test has its own row and stable Playwright ID. Failed or interrupted lanes
@@ -78,8 +86,8 @@ In particular, `federation-remote-window.spec.ts` moves to lane 2, and
 Reproduce the baseline and exhaustive refit with Python's standard library:
 
 ```sh
-python3 scripts/ci/fit-desktop-e2e-shards.py --fit
-python3 scripts/ci/fit-desktop-e2e-shards.py --weights 83:82:67:88
+python3 scripts/ci/fit-desktop-e2e-shards.py --data docs/desktop-e2e-shard-durations-2026-11-04.json --fit
+python3 scripts/ci/fit-desktop-e2e-shards.py --data docs/desktop-e2e-shard-durations-2026-11-04.json --weights 83:82:67:88
 ```
 
 To refresh the input, download each successful lane's
