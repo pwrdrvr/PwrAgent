@@ -78,8 +78,11 @@ export class MessagingQueueRecoveries {
     return state?.phase === "retrying" && state.receipt === receipt ? state : undefined;
   }
 
-  settle(id: string, receipt: symbol, accepted: boolean): void {
-    this.commit(id, { type: "settled", receipt, accepted });
+  settle(id: string, receipt: symbol, accepted: boolean): MessagingQueuedTurnEntry | undefined {
+    const state = this.commit(id, { type: "settled", receipt, accepted });
+    // Return the terminal projection before cleanup loses a surface that
+    // arrived while the claimed operation was awaiting backend acceptance.
+    return state?.phase === "terminal" && state.outcome === "accepted" ? state.entry : undefined;
   }
 
   cancel(id: string): boolean {

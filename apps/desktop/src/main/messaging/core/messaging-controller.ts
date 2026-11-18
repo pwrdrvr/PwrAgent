@@ -1984,7 +1984,7 @@ export class MessagingController {
     body: string,
     event?: MessagingInboundCallbackEvent,
   ): Promise<void> {
-    const targetSurface = entry.surface ?? event?.interaction;
+    const targetSurface = entry.surface ?? event?.sourceSurface ?? event?.interaction;
     if (!targetSurface) {
       return;
     }

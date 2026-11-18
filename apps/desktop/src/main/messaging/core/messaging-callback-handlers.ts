@@ -58,8 +58,8 @@ export class MessagingCallbackHandlers {
         });
         if (result === "failed") return;
         accepted = true;
-        this.context.host().queueRecoveries.settle(entry.id, claim.receipt, true);
-        await this.context.host().retireQueuedTurnNotice(entry, result === "queued"
+        const retiredEntry = this.context.host().queueRecoveries.settle(entry.id, claim.receipt, true) ?? entry;
+        await this.context.host().retireQueuedTurnNotice(retiredEntry, result === "queued"
           ? "Queued message handed to the thread queue."
           : "Queued message sent as the next turn.", event);
       } finally {
@@ -119,9 +119,9 @@ export class MessagingCallbackHandlers {
         return;
       }
       accepted = true;
-      this.context.host().queueRecoveries.settle(entry.id, receipt, true);
+      const retiredEntry = this.context.host().queueRecoveries.settle(entry.id, receipt, true) ?? entry;
       if (this.context.host().isDisposed()) return;
-      await this.context.host().retireQueuedTurnNotice(entry, "Queued message was sent as a steering message.", event);
+      await this.context.host().retireQueuedTurnNotice(retiredEntry, "Queued message was sent as a steering message.", event);
     } finally {
       this.context.host().queueRecoveries.settle(entry.id, receipt, accepted);
     }

@@ -23,15 +23,15 @@ describe("held messaging input recovery", () => {
           expect(owner.cancel(entry.id)).toBe(false);
           owner.surface(entry.id, { channel: "telegram", id: "late fixture surface" });
           expect(owner.get(entry.id)).toBeUndefined();
-          owner.settle(entry.id, Symbol(), true);
+          expect(owner.settle(entry.id, Symbol(), true)).toBeUndefined();
           expect(owner.size).toBe(inputs.length - index);
-          owner.settle(entry.id, claim.receipt, false);
+          expect(owner.settle(entry.id, claim.receipt, false)).toBeUndefined();
           expect(owner.get(entry.id)?.input).toEqual([{ type: "text", text: inputs[index] }]);
           const retry = owner.claim(entry.id)!;
           expect(retry).toBeDefined();
           owner.settle(entry.id, claim.receipt, true);
           expect(owner.size).toBe(inputs.length - index);
-          owner.settle(entry.id, retry.receipt, true);
+          expect(owner.settle(entry.id, retry.receipt, true)?.surface).toEqual({ channel: "telegram", id: "late fixture surface" });
           owner.surface(entry.id, { channel: "telegram", id: "after acceptance" });
           expect(owner.get(entry.id)).toBeUndefined();
           expect(owner.size).toBe(inputs.length - index - 1);
