@@ -36,6 +36,9 @@ it("desktop and Outpost defer login-shell probing until the environment is reque
           if (command === process.env.SHELL) probes++;
           return execute.call(this, command, ...args);
         };
+        for (const key of Object.getOwnPropertySymbols(execute)) {
+          Object.defineProperty(cp.execFile, key, Object.getOwnPropertyDescriptor(execute, key));
+        }
         const app = require("./dist/index.js");
         (async () => {
           const services = await app.startHeadlessHost(undefined, { manageSignals: false });
