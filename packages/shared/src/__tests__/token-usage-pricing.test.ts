@@ -519,6 +519,8 @@ describe("token usage pricing", () => {
       ["standard", 25],
       ["priority", 25],
       ["priority", 50],
+      ["ultrafast", 75],
+      ["ultrafast", 150],
     ]);
     expect(
       listOpenAiTokenUsagePricingRates().find(
@@ -654,7 +656,7 @@ describe("token usage pricing", () => {
     expect(
       estimateOpenAiTokenUsageCost({ ...usage, serviceTier: "flex" }),
     ).toBeUndefined();
-    expect(estimateOpenAiCodexCreditUsage(usage)).toBeUndefined();
+    expect(estimateOpenAiCodexCreditUsage({ ...usage, serviceTier: "flex" })).toBeUndefined();
   });
 
   it("does not price GPT-5.6 usage before its catalog effective date", () => {
@@ -928,9 +930,8 @@ describe("token usage pricing", () => {
       }),
     ).toBeUndefined();
     expect(resolveOpenAiPricingServiceTier({ serviceTier: "flex" })).toBeUndefined();
-    expect(resolveOpenAiPricingServiceTier({ serviceTier: "ultrafast", fastMode: true })).toBeUndefined();
     expect(estimateOpenAiTokenUsageCost({
-      model: "gpt-6-astra", serviceTier: "ultrafast", fastMode: false,
+      model: "gpt-6-astra", serviceTier: "flex", fastMode: true,
       cachedInputTokens: 0, uncachedInputTokens: 100, outputTokens: 100,
     })).toBeUndefined();
   });

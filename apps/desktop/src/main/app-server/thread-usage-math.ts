@@ -1711,6 +1711,7 @@ export function buildLiveThreadUsageLine(params: {
     cost
       ? undefined
       : resolveTokenUsagePriceUnavailableReason({
+          at: createdAt,
           cachedInputTokens,
           fastMode: params.fastMode,
           model: params.model,

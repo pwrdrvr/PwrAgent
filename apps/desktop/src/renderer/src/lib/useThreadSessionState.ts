@@ -7975,6 +7975,7 @@ export function useThreadSessionState(params: {
             ? `live-turn-usage-${turn?.id ?? notificationThreadId}`
             : `live-token-usage-${turn?.id ?? notificationThreadId}`;
           let usageEntry = buildTokenUsageActivityEntry({
+            createdAt: knownTurnUsage.createdAt,
             fastMode,
             id: usageEntryId,
             model,
@@ -7986,12 +7987,6 @@ export function useThreadSessionState(params: {
               turn,
             }),
           });
-          if (usageEntry && typeof knownTurnUsage.createdAt === "number") {
-            usageEntry = {
-              ...usageEntry,
-              createdAt: knownTurnUsage.createdAt,
-            };
-          }
           let pendingTurnUsage = current.pendingTurnUsage;
           const activeTurnUsage = Boolean(
             usageEntry &&

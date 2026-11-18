@@ -4,7 +4,7 @@ import {
   OPENROUTER_ASSUMED_PRICING_VERSION,
 } from "./openrouter-assumed-pricing";
 
-export type TokenUsagePricingServiceTier = "standard" | "priority";
+export type TokenUsagePricingServiceTier = "standard" | "priority" | "ultrafast";
 
 export type TokenUsagePricingProvider = "anthropic" | "openai" | "openrouter" | "qwen" | "xai";
 
@@ -323,6 +323,10 @@ type CodexCreditsStandardRates = Pick<
   | "outputCreditsPerMillion"
 >;
 
+type PricingRateInterval = Pick<PricingCatalogEntry, "catalogVersion" | "effectiveFrom" | "effectiveTo"> & {
+  multiplier: number;
+};
+
 const OPENAI_PRICING_CATALOG_ID = "openai-api";
 const OPENAI_PRICING_CATALOG_VERSION = "2026-06-16";
 const OPENAI_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 3, 23);
@@ -344,13 +348,41 @@ const OPENAI_GPT6_SOL_LUNA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 22);
 // https://developers.openai.com/api/docs/models/gpt-6.1-sol
 const OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION = "2026-09-29";
 const OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 29);
+// https://developers.openai.com/api/docs/changelog
+const OPENAI_GPT62_PRICING_CATALOG_VERSION = "2026-11-17";
+const OPENAI_GPT62_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 10, 17);
+const OPENAI_GPT61_TERRA_CODEX_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 9, 26);
+
+// These Ultrafast intervals apply to API token rates and Codex purchased credits / PAYG.
+// Included Codex allowance uses its own multipliers (6x for 6.2, 8x for 6/6.1).
+// https://developers.openai.com/api/docs/pricing#astra
+// https://learn.chatgpt.com/docs/pricing#speed-multipliers
+const GPT62_ULTRAFAST_PROMOTION_END = Date.UTC(2027, 2, 1, 8); // Midnight Pacific (PST).
+const GPT62_ULTRAFAST_RATE_INTERVALS: readonly PricingRateInterval[] = [
+  {
+    catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    effectiveTo: GPT62_ULTRAFAST_PROMOTION_END,
+    multiplier: 3,
+  },
+  {
+    catalogVersion: "2027-03-01",
+    effectiveFrom: GPT62_ULTRAFAST_PROMOTION_END,
+    multiplier: 6,
+  },
+];
+// API and Codex changelogs record the same release date for each of these tiers.
+const GPT6_ASTRA_ULTRAFAST_RATE_INTERVALS: readonly PricingRateInterval[] = [
+  { catalogVersion: "2026-09-29", effectiveFrom: Date.UTC(2026, 8, 29), multiplier: 6 },
+];
+const GPT61_SOL_ULTRAFAST_RATE_INTERVALS: readonly PricingRateInterval[] = [
+  { catalogVersion: "2026-10-08", effectiveFrom: Date.UTC(2026, 9, 8), multiplier: 6 },
+];
+
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
-// ChatGPT/Codex Fast credit multipliers are separate from API Fast rates.
-// https://learn.chatgpt.com/docs/agent-configuration/speed.md currently says
-// GPT-5.6 consumes 2.5x credits, while API Fast remains 2x. Keep one value
-// here so every derived rate stays aligned.
+// Historical Codex Fast credit multipliers for the GPT-5 family rate cards.
 const OPENAI_CODEX_FAST_RATE_MULTIPLIERS = {
   "gpt-5.4": 2,
   "gpt-5.5": 2.5,
@@ -374,143 +406,117 @@ const QWEN_PRICING_CATALOG_ID = "qwen-modelstudio-international";
 const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
 const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 
+function buildOpenAiBandedPricingEntries(params: {
+  catalogVersion: string;
+  displayModel: string;
+  effectiveFrom: number;
+  model: string;
+  shortRates: {
+    inputUsdPerMillion: number;
+    cachedInputUsdPerMillion: number;
+    cacheWriteInputUsdPerMillion: number;
+    outputUsdPerMillion: number;
+  };
+  ultrafastRates: readonly PricingRateInterval[];
+}): PricingCatalogEntry[] {
+  const { catalogVersion, displayModel, effectiveFrom, model, shortRates } = params;
+  const rateFromMultiplier = (rate: number, multiplier: number) =>
+    microsToCurrencyUnits(dollarsToMicros(rate * multiplier));
+
+  const speeds = [
+    { catalogVersion, effectiveFrom, serviceTier: "standard", label: "Standard", multiplier: 1 },
+    { catalogVersion, effectiveFrom, serviceTier: "priority", label: "Fast", multiplier: 2 },
+    ...params.ultrafastRates.map((rate) => ({ ...rate, serviceTier: "ultrafast", label: "Ultrafast" } as const)),
+  ] as const;
+
+  return speeds.flatMap(({ label, multiplier, ...speed }): PricingCatalogEntry[] => [
+    {
+      ...speed,
+      catalogId: OPENAI_PRICING_CATALOG_ID,
+      displayModel,
+      displayTier: `${label} (<=272K input)`,
+      provider: "openai",
+      model,
+      inputUsdPerMillion: rateFromMultiplier(shortRates.inputUsdPerMillion, multiplier),
+      cachedInputUsdPerMillion: rateFromMultiplier(shortRates.cachedInputUsdPerMillion, multiplier),
+      cacheWriteInputUsdPerMillion: rateFromMultiplier(shortRates.cacheWriteInputUsdPerMillion, multiplier),
+      outputUsdPerMillion: rateFromMultiplier(shortRates.outputUsdPerMillion, multiplier),
+      maximumInputTokens: 272_000,
+      rateBandId: "input-lte-272k",
+    },
+    {
+      ...speed,
+      catalogId: OPENAI_PRICING_CATALOG_ID,
+      displayModel,
+      displayTier: `${label} (>272K input)`,
+      provider: "openai",
+      model,
+      inputUsdPerMillion: rateFromMultiplier(shortRates.inputUsdPerMillion, 2 * multiplier),
+      cachedInputUsdPerMillion: rateFromMultiplier(shortRates.cachedInputUsdPerMillion, 2 * multiplier),
+      cacheWriteInputUsdPerMillion: rateFromMultiplier(shortRates.cacheWriteInputUsdPerMillion, 2 * multiplier),
+      outputUsdPerMillion: rateFromMultiplier(shortRates.outputUsdPerMillion, 1.5 * multiplier),
+      minimumInputTokens: 272_001,
+      rateBandId: "input-gt-272k",
+      requiresRequestInputTokens: true,
+    },
+  ]);
+}
+
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
-  // Codex App Server reports cache-write tokens separately. They remain a
-  // subset of uncached input tokens and are charged at the write rate below.
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
+  // The App Server reports cache writes as a subset of uncached input.
+  // These rates represent the published 30-minute cache-write column.
+  ...buildOpenAiBandedPricingEntries({
+    catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.2-astra",
+    displayModel: "GPT-6.2 Astra",
+    shortRates: {
+      inputUsdPerMillion: 8,
+      cachedInputUsdPerMillion: 0.4,
+      cacheWriteInputUsdPerMillion: 10,
+      outputUsdPerMillion: 40,
+    },
+    ultrafastRates: GPT62_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildOpenAiBandedPricingEntries({
+    catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.2-sol",
+    displayModel: "GPT-6.2 Sol",
+    shortRates: {
+      inputUsdPerMillion: 2,
+      cachedInputUsdPerMillion: 0.1,
+      cacheWriteInputUsdPerMillion: 2.5,
+      outputUsdPerMillion: 10,
+    },
+    ultrafastRates: GPT62_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
     model: "gpt-6.1-sol",
     displayModel: "GPT-6.1 Sol",
-    displayTier: "Standard (<=272K input)",
-    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    cacheWriteInputUsdPerMillion: 2.5,
-    inputUsdPerMillion: 2,
-    cachedInputUsdPerMillion: 0.1,
-    outputUsdPerMillion: 10,
-    maximumInputTokens: 272_000,
-    rateBandId: "input-lte-272k",
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
-    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
-    model: "gpt-6.1-sol",
-    displayModel: "GPT-6.1 Sol",
-    displayTier: "Standard (>272K input)",
-    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    cacheWriteInputUsdPerMillion: 5,
-    inputUsdPerMillion: 4,
-    cachedInputUsdPerMillion: 0.2,
-    outputUsdPerMillion: 15,
-    minimumInputTokens: 272_001,
-    rateBandId: "input-gt-272k",
-    requiresRequestInputTokens: true,
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
-    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
-    model: "gpt-6.1-sol",
-    displayModel: "GPT-6.1 Sol",
-    displayTier: "Fast (<=272K input)",
-    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "priority",
-    cacheWriteInputUsdPerMillion: 5,
-    inputUsdPerMillion: 4,
-    cachedInputUsdPerMillion: 0.2,
-    outputUsdPerMillion: 20,
-    maximumInputTokens: 272_000,
-    rateBandId: "input-lte-272k",
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
-    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
-    model: "gpt-6.1-sol",
-    displayModel: "GPT-6.1 Sol",
-    displayTier: "Fast (>272K input)",
-    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "priority",
-    cacheWriteInputUsdPerMillion: 10,
-    inputUsdPerMillion: 8,
-    cachedInputUsdPerMillion: 0.4,
-    outputUsdPerMillion: 30,
-    minimumInputTokens: 272_001,
-    rateBandId: "input-gt-272k",
-    requiresRequestInputTokens: true,
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
+    shortRates: {
+      inputUsdPerMillion: 2,
+      cachedInputUsdPerMillion: 0.1,
+      cacheWriteInputUsdPerMillion: 2.5,
+      outputUsdPerMillion: 10,
+    },
+    ultrafastRates: GPT61_SOL_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
     model: "gpt-6-astra",
     displayModel: "GPT-6 Astra",
-    displayTier: "Standard (<=272K input)",
-    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    cacheWriteInputUsdPerMillion: 12.5,
-    inputUsdPerMillion: 10,
-    cachedInputUsdPerMillion: 1,
-    outputUsdPerMillion: 50,
-    maximumInputTokens: 272_000,
-    rateBandId: "input-lte-272k",
-  },
-  // OpenAI applies the higher band per request. Turn-wide totals above the
-  // boundary are ambiguous and must not select this rate.
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
-    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
-    model: "gpt-6-astra",
-    displayModel: "GPT-6 Astra",
-    displayTier: "Standard (>272K input)",
-    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    cacheWriteInputUsdPerMillion: 25,
-    inputUsdPerMillion: 20,
-    cachedInputUsdPerMillion: 2,
-    outputUsdPerMillion: 75,
-    minimumInputTokens: 272_001,
-    rateBandId: "input-gt-272k",
-    requiresRequestInputTokens: true,
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
-    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
-    model: "gpt-6-astra",
-    displayModel: "GPT-6 Astra",
-    displayTier: "Fast (<=272K input)",
-    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "priority",
-    cacheWriteInputUsdPerMillion: 25,
-    inputUsdPerMillion: 20,
-    cachedInputUsdPerMillion: 2,
-    outputUsdPerMillion: 100,
-    maximumInputTokens: 272_000,
-    rateBandId: "input-lte-272k",
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
-    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
-    model: "gpt-6-astra",
-    displayModel: "GPT-6 Astra",
-    displayTier: "Fast (>272K input)",
-    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "priority",
-    cacheWriteInputUsdPerMillion: 50,
-    inputUsdPerMillion: 40,
-    cachedInputUsdPerMillion: 4,
-    outputUsdPerMillion: 150,
-    minimumInputTokens: 272_001,
-    rateBandId: "input-gt-272k",
-    requiresRequestInputTokens: true,
-  },
+    shortRates: {
+      inputUsdPerMillion: 10,
+      cachedInputUsdPerMillion: 1,
+      cacheWriteInputUsdPerMillion: 12.5,
+      outputUsdPerMillion: 50,
+    },
+    ultrafastRates: GPT6_ASTRA_ULTRAFAST_RATE_INTERVALS,
+  }),
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT6_SOL_LUNA_PRICING_CATALOG_VERSION,
@@ -1050,6 +1056,7 @@ function buildCodexCreditsCatalogEntries(params: {
   fastRateMultiplier?: number;
   model: string;
   standardRates: CodexCreditsStandardRates;
+  ultrafastRates?: readonly PricingRateInterval[];
 }): CodexCreditsCatalogEntry[] {
   const standardEntry: CodexCreditsCatalogEntry = {
     catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
@@ -1063,30 +1070,100 @@ function buildCodexCreditsCatalogEntries(params: {
     serviceTier: "standard",
     ...params.standardRates,
   };
-  if (params.fastRateMultiplier === undefined) {
-    return [standardEntry];
-  }
-
-  return [
-    standardEntry,
-    {
-      ...standardEntry,
+  const entries = [standardEntry];
+  if (params.fastRateMultiplier !== undefined) {
+    entries.push({
+      ...scaleCodexCreditRate(standardEntry, params.fastRateMultiplier),
       displayTier: "Fast",
       serviceTier: "priority",
-      inputCreditsPerMillion:
-        params.standardRates.inputCreditsPerMillion
-        * params.fastRateMultiplier,
-      cachedInputCreditsPerMillion:
-        params.standardRates.cachedInputCreditsPerMillion
-        * params.fastRateMultiplier,
-      outputCreditsPerMillion:
-        params.standardRates.outputCreditsPerMillion
-        * params.fastRateMultiplier,
-    },
-  ];
+    });
+  }
+  for (const { multiplier, catalogVersion, effectiveFrom, effectiveTo } of params.ultrafastRates ?? []) {
+    entries.push({
+      ...scaleCodexCreditRate(standardEntry, multiplier),
+      catalogVersion,
+      effectiveFrom,
+      effectiveTo,
+      displayTier: "Ultrafast",
+      serviceTier: "ultrafast",
+    });
+  }
+  return entries;
 }
 
+function scaleCodexCreditRate(entry: CodexCreditsCatalogEntry, multiplier: number): CodexCreditsCatalogEntry {
+  return {
+    ...entry,
+    inputCreditsPerMillion: entry.inputCreditsPerMillion * multiplier,
+    cachedInputCreditsPerMillion: entry.cachedInputCreditsPerMillion * multiplier,
+    outputCreditsPerMillion: entry.outputCreditsPerMillion * multiplier,
+  };
+}
+
+// Purchased-credit rates. The subscription allowance is tracked by OpenAI and
+// cannot be estimated from the paid token rate card.
+// https://learn.chatgpt.com/docs/pricing#token-rates
 const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.2-astra",
+    displayModel: "GPT-6.2 Astra",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 200, cachedInputCreditsPerMillion: 10, outputCreditsPerMillion: 1000 },
+    ultrafastRates: GPT62_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.2-sol",
+    displayModel: "GPT-6.2 Sol",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 50, cachedInputCreditsPerMillion: 2.5, outputCreditsPerMillion: 250 },
+    ultrafastRates: GPT62_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.1-sol",
+    displayModel: "GPT-6.1 Sol",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 50, cachedInputCreditsPerMillion: 2.5, outputCreditsPerMillion: 250 },
+    ultrafastRates: GPT61_SOL_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: "2026-10-26",
+    effectiveFrom: OPENAI_GPT61_TERRA_CODEX_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 25, cachedInputCreditsPerMillion: 1.25, outputCreditsPerMillion: 125 },
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6-astra",
+    displayModel: "GPT-6 Astra",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 250, cachedInputCreditsPerMillion: 25, outputCreditsPerMillion: 1250 },
+    ultrafastRates: GPT6_ASTRA_ULTRAFAST_RATE_INTERVALS,
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT6_SOL_LUNA_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT6_SOL_LUNA_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6-sol",
+    displayModel: "GPT-6 Sol",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 50, cachedInputCreditsPerMillion: 5, outputCreditsPerMillion: 250 },
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT6_SOL_LUNA_PRICING_CATALOG_VERSION,
+    effectiveFrom: OPENAI_GPT6_SOL_LUNA_PRICING_EFFECTIVE_FROM,
+    model: "gpt-6-luna",
+    displayModel: "GPT-6 Luna",
+    fastRateMultiplier: 2,
+    standardRates: { inputCreditsPerMillion: 2.5, cachedInputCreditsPerMillion: 0.25, outputCreditsPerMillion: 12.5 },
+  }),
   ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
     model: "gpt-5.6-sol",
@@ -1266,10 +1343,11 @@ function estimateTokenUsageCostFromCatalog(
     return undefined;
   }
 
+  const at = params.at ?? Date.now();
   const matchingEntries = catalog.filter(
     (candidate) =>
       pricingEntryMatchesModel(candidate, model)
-      && pricingEntryAppliesAt(candidate, params.at)
+      && pricingEntryAppliesAt(candidate, at)
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
@@ -1309,7 +1387,7 @@ function estimateTokenUsageCostFromCatalog(
       candidate.model === entry.model
       && candidate.provider === entry.provider
       && candidate.serviceTier === "standard"
-      && pricingEntryAppliesAt(candidate, params.at)
+      && pricingEntryAppliesAt(candidate, at)
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
@@ -1393,6 +1471,7 @@ function estimateTokenUsageCostFromCatalog(
   };
 }
 
+/** Estimates purchased credits. Cache-write tokens use the regular uncached input rate. */
 export function estimateOpenAiCodexCreditUsage(params: {
   cachedInputTokens: number;
   at?: number;
@@ -1409,6 +1488,7 @@ export function estimateOpenAiCodexCreditUsage(params: {
     return undefined;
   }
 
+  const at = params.at ?? Date.now();
   const serviceTier = resolveOpenAiPricingServiceTier({
     fastMode: params.fastMode,
     serviceTier: params.serviceTier,
@@ -1417,7 +1497,7 @@ export function estimateOpenAiCodexCreditUsage(params: {
     (candidate) =>
       candidate.model === model &&
       candidate.serviceTier === serviceTier &&
-      pricingEntryAppliesAt(candidate, params.at),
+      pricingEntryAppliesAt(candidate, at),
   );
   if (!entry) {
     return undefined;
@@ -1469,7 +1549,7 @@ export function estimateOpenAiCodexCreditUsage(params: {
 export function resolveOpenAiPricingServiceTier(params: {
   fastMode?: boolean;
   serviceTier?: string;
-}): "standard" | "priority" | undefined {
+}): TokenUsagePricingServiceTier | undefined {
   // Prefer an explicit tier over the legacy Boolean intent so callers that can
   // observe an effective response tier can override the requested Fast mode.
   const serviceTier = params.serviceTier?.trim().toLowerCase();
@@ -1478,6 +1558,9 @@ export function resolveOpenAiPricingServiceTier(params: {
   }
   if (serviceTier === "fast" || serviceTier === "priority") {
     return "priority";
+  }
+  if (serviceTier === "ultrafast") {
+    return "ultrafast";
   }
   if (serviceTier) {
     return undefined;
@@ -1503,11 +1586,12 @@ export function resolveTokenUsagePriceUnavailableReason(params: {
     return "missing-model";
   }
 
+  const at = params.at ?? Date.now();
   const inputTokens = params.cachedInputTokens + params.uncachedInputTokens;
   const matchingEntries = TOKEN_USAGE_PRICING_CATALOG.filter(
     (candidate) =>
       pricingEntryMatchesModel(candidate, model)
-      && pricingEntryAppliesAt(candidate, params.at)
+      && pricingEntryAppliesAt(candidate, at)
       // A request scope answers only whether the token count belongs in this
       // entry's numeric band. The caller's actual scope is checked below.
       && pricingEntryMatchesInputTokens(candidate, inputTokens, "request"),
@@ -1646,11 +1730,8 @@ function toPublicRate(entry: PricingCatalogEntry): TokenUsagePricingCatalogRate 
 
 function pricingEntryAppliesAt(
   entry: Pick<PricingCatalogEntry, "effectiveFrom" | "effectiveTo">,
-  at: number | undefined,
+  at: number,
 ): boolean {
-  if (at === undefined) {
-    return entry.effectiveTo === undefined;
-  }
   return entry.effectiveFrom <= at && (entry.effectiveTo === undefined || entry.effectiveTo > at);
 }
 
