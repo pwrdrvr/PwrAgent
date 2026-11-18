@@ -236,9 +236,10 @@ describe("DesktopMessagingRuntime", () => {
               const count = notices.filter((text) => text === (
                 `Automation interrupted: Check weather · PwrAgent stopped before ${runId} finished.`
               )).length;
+              // Never twice; exactly once unless messaging was stopped.
               expect({ runId, count }).toEqual({
                 runId,
-                count: mustArrive.has(runId) ? 1 : count === 0 ? 0 : 1,
+                count: mustArrive.has(runId) ? 1 : Math.min(count, 1),
               });
             }
           } finally {

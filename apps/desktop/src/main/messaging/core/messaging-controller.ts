@@ -4493,17 +4493,20 @@ export class MessagingController {
     if (params.outputDecision?.kind === "quiet") {
       return;
     }
-    const messageText =
-      (
-        params.outputDecision?.kind === "post_card"
-          ? renderAutomationDecisionForMessaging(params.outputDecision)
-          : renderAutomationOutputForMessaging(params.finalText)
-      )
-      || params.failureNotice;
+    const outputText =
+      params.outputDecision?.kind === "post_card"
+        ? renderAutomationDecisionForMessaging(params.outputDecision)
+        : renderAutomationOutputForMessaging(params.finalText);
+    const messageText = outputText || params.failureNotice;
     if (!messageText) {
       return;
     }
-    const key = [...params.keyParts, messageText].join("\0");
+    // A run's failure notice is keyed by the run, not its wording: a later
+    // update may carry a different error message for the same failure.
+    const key = [
+      ...params.keyParts,
+      outputText ? outputText : "failure-notice",
+    ].join("\0");
     if (this.deliveredAutomationFinalKeys.has(key)) {
       return;
     }

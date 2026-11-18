@@ -12181,8 +12181,9 @@ describe("MessagingController", () => {
       failureReason: "interrupted",
       errorMessage: "PwrAgent stopped before this automation run finished. The run was not resumed.",
     });
-    // Redelivered updates do not post again.
+    // Redelivered updates do not post again, even with different wording.
     await publish({ runId: "run-1", errorMessage: "Codex exited\nwith code 1" });
+    await publish({ runId: "run-1" });
     // A run that chose to stay quiet stays quiet even when it failed.
     await publish({ runId: "run-3", outputDecision: { kind: "quiet" } });
     // A failed run that produced output posts the output, not the notice.

@@ -1872,13 +1872,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       unsubscribeRuntimeError,
     });
     this.syncRunningAdapterLists();
-    await this.replayInterruptedAutomationRuns(adapter.channel, controller);
     this.setPlatformHealth(adapter.channel, "enabled", {
       credentialMetadata: adapter.readCredentialMetadata?.(),
     });
     messagingLog.info(`${adapter.channel}: adapter started successfully`, {
       channel: adapter.channel,
     });
+    await this.replayInterruptedAutomationRuns(adapter.channel, controller);
     return "started";
   }
 
@@ -2412,17 +2412,28 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<void> {
     if (this.interruptedRunReplayedChannels.has(channel)) return;
     this.interruptedRunReplayedChannels.add(channel);
+    let events: readonly AgentEvent[];
     try {
-      for (const event of this.options.interruptedAutomationRunUpdates?.() ?? []) {
-        await controller.handleBackendEvent(event);
-      }
+      events = this.options.interruptedAutomationRunUpdates?.() ?? [];
     } catch (error) {
-      // Includes an unavailable automation service (unit harnesses, an
-      // instance with automations disabled): the channel starts regardless.
-      messagingLog.warn("interrupted automation run replay failed", {
+      // The automation service is unavailable (unit harnesses, an instance
+      // with automations disabled): the channel starts regardless.
+      messagingLog.warn("interrupted automation runs unavailable", {
         channel,
         error: error instanceof Error ? error.message : String(error),
       });
+      return;
+    }
+    // One undeliverable notice must not drop the others.
+    for (const event of events) {
+      try {
+        await controller.handleBackendEvent(event);
+      } catch (error) {
+        messagingLog.warn("interrupted automation run replay failed", {
+          channel,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
