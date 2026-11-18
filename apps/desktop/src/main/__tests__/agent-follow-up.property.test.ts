@@ -190,12 +190,12 @@ describe("agent follow-up lifecycle model", () => {
       const paused = Promise.withResolvers<void>();
       const resume = Promise.withResolvers<void>();
       const reason = new Error("Test deadline elapsed");
-      let finished: (() => Promise<void>) | undefined;
+      const onTestFinished = vi.fn<TestContext["onTestFinished"]>();
       let opened = 0;
       let closed = 0;
       const model = assertFollowUpProperty({
         signal: controller.signal,
-        onTestFinished: (hook) => { finished = async () => { await hook(context); }; },
+        onTestFinished,
       }, fc.asyncProperty(fc.constant(null), async () => {
         if (++opened === caseCount) {
           paused.resolve();
@@ -204,12 +204,21 @@ describe("agent follow-up lifecycle model", () => {
         closed += 1;
       }), caseCount + 1);
       const result = model.catch((error: unknown) => error);
-      await paused.promise;
-      controller.abort(reason);
-      const cleanup = finished?.();
-      resume.resolve();
-      await cleanup;
-      const closedBeforeNextTest = closed;
+      let closedBeforeNextTest: number;
+      try {
+        await paused.promise;
+        controller.abort(reason);
+        expect(onTestFinished).toHaveBeenCalledTimes(1);
+        const [[finish]] = onTestFinished.mock.calls;
+        const cleanup = Promise.resolve(finish(context)).then(() => closed);
+        // Leave the case paused while a finish hook that returned early could settle.
+        expect(await Promise.race([cleanup, yieldToEventLoop("paused")])).toBe("paused");
+        resume.resolve();
+        closedBeforeNextTest = await cleanup;
+      } finally {
+        resume.resolve();
+        await result;
+      }
       expect(await result).toMatchObject({ cause: reason });
       expect({ opened, closedBeforeNextTest }).toEqual({ opened: caseCount, closedBeforeNextTest: caseCount });
     }), { examples: [[1]], numRuns: 10 });
