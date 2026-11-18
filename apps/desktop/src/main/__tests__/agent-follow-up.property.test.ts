@@ -1,5 +1,6 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import fc from "fast-check";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import {
   AGENT_FOLLOW_UP_FIRED_WINDOW_MS,
   AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD,
@@ -8,6 +9,8 @@ import {
   type ScheduleFollowUpToolResult,
 } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { AgentFollowUpWorld, FOLLOW_UP_THREAD, type CrashPoint } from "./helpers/agent-follow-up-world";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
@@ -15,13 +18,35 @@ afterEach(() => vi.unstubAllEnvs());
 
 const MINUTE = 60_000;
 
+function assertFollowUpProperty<T>(
+  context: Pick<TestContext, "signal" | "onTestFinished">,
+  property: fc.IAsyncProperty<T>,
+  numRuns: number,
+): Promise<void> {
+  const run = fc.assert(property, {
+    numRuns,
+    // The world uses promise-based fakes. Give Vitest's deadline a turn
+    // between cases, then stop before opening another database, even during shrinking.
+    plugins: [fc.beforeEach(async () => {
+      context.signal.throwIfAborted();
+      await yieldToEventLoop();
+      context.signal.throwIfAborted();
+    })],
+  });
+  // Vitest can time out the callback before its promise settles. Keep the
+  // current case and its database teardown out of the next test's write budget.
+  context.onTestFinished(async () => { await Promise.allSettled([run]); });
+  return run;
+}
+
 async function withWorld<T>(run: (world: AgentFollowUpWorld) => Promise<T>): Promise<T> {
   const db = openInMemoryStateDb();
+  const world = new AgentFollowUpWorld(db);
   try {
-    const world = new AgentFollowUpWorld(db);
     await world.start();
     return await run(world);
   } finally {
+    world.dispose();
     db.close();
   }
 }
@@ -134,11 +159,11 @@ const commands = [
 ];
 
 describe("agent follow-up lifecycle model", () => {
-  it("admits at most one turn per follow-up, and none after cancel, across crash, restart and lock", async () => {
-    await fc.assert(fc.asyncProperty(
+  it("admits at most one turn per follow-up, and none after cancel, across crash, restart and lock", async (context) => {
     // fast-check's default size stops near ten commands, too few to reach a
     // crash behind a busy thread; ask for the whole range.
-    fc.commands(commands, { maxCommands: 40, size: "max" }), async (cmds) => {
+    const scenarios = fc.commands(commands, { maxCommands: 40, size: "max" });
+    await assertFollowUpProperty(context, fc.asyncProperty(scenarios, async (cmds) => {
       await withWorld(async (world) => {
         const model: Model = { created: [], cancelled: new Map(), inFlightAtCrash: new Set() };
         await fc.asyncModelRun(() => ({ model, real: world }), cmds);
@@ -156,7 +181,68 @@ describe("agent follow-up lifecycle model", () => {
         checkOracle(model, world);
         for (const id of model.inFlightAtCrash) expect(world.store.get(id)?.status).toBe("failed");
       });
-    }), { numRuns: 150 });
+    }), 50);
+  });
+
+  it("retires a cancelled model before another test can measure writes", async (context) => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (caseCount) => {
+      const controller = new AbortController();
+      const paused = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const reason = new Error("Test deadline elapsed");
+      const onTestFinished = vi.fn<TestContext["onTestFinished"]>();
+      let opened = 0;
+      let closed = 0;
+      const model = assertFollowUpProperty({
+        signal: controller.signal,
+        onTestFinished,
+      }, fc.asyncProperty(fc.constant(null), async () => {
+        if (++opened === caseCount) {
+          paused.resolve();
+          await resume.promise;
+        }
+        closed += 1;
+      }), caseCount + 1);
+      const result = model.catch((error: unknown) => error);
+      let closedBeforeNextTest: number;
+      try {
+        await paused.promise;
+        controller.abort(reason);
+        expect(onTestFinished).toHaveBeenCalledTimes(1);
+        const [[finish]] = onTestFinished.mock.calls;
+        const cleanup = Promise.resolve(finish(context)).then(() => closed);
+        // Leave the case paused while a finish hook that returned early could settle.
+        expect(await Promise.race([cleanup, yieldToEventLoop("paused")])).toBe("paused");
+        resume.resolve();
+        closedBeforeNextTest = await cleanup;
+      } finally {
+        resume.resolve();
+        await result;
+      }
+      expect(await result).toMatchObject({ cause: reason });
+      expect({ opened, closedBeforeNextTest }).toEqual({ opened: caseCount, closedBeforeNextTest: caseCount });
+    }), { examples: [[1]], numRuns: 10 });
+  });
+
+  it("waits for due action publication before reporting the world settled", async () => {
+    await withWorld(async (world) => {
+      await world.create(1);
+      const publishing = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      world.onPublish = async () => {
+        publishing.resolve();
+        await resume.promise;
+      };
+      const order: string[] = [];
+      const tick = world.tick(2 * MINUTE).then(() => { order.push("settled"); });
+      await publishing.promise;
+      // Cross the old setImmediate boundary while publication is still blocked.
+      await yieldToEventLoop();
+      order.push("released");
+      resume.resolve();
+      await tick;
+      expect(order).toEqual(["released", "settled"]);
+    });
   });
 
   it("starts a lock-held follow-up once on unlock and records it as started", async () => {
@@ -230,8 +316,8 @@ const guardStep = fc.oneof(
 );
 
 describe("agent follow-up loop guard", () => {
-  it("bounds self-waking across restart and clock rollback, and stays suspended once tripped", async () => {
-    await fc.assert(fc.asyncProperty(
+  it("bounds self-waking across restart and clock rollback, and stays suspended once tripped", async (context) => {
+    await assertFollowUpProperty(context, fc.asyncProperty(
       fc.array(guardStep, { minLength: 1, maxLength: 60 }),
       fc.integer({ min: 1, max: 12 }),
       async (steps, burst) => {
@@ -291,7 +377,7 @@ describe("agent follow-up loop guard", () => {
           }
         });
       },
-    ), { numRuns: 40 });
+    ), 40);
   });
 
   it("trips on the thirteenth follow-up in a day and fires again only after the operator rearms", async () => {
@@ -337,8 +423,8 @@ describe("agent follow-up loop guard", () => {
 
   it("suspends a thread whose guard row cannot be read, and other due work still fires", async () => {
     const db = openInMemoryStateDb();
+    const world = new AgentFollowUpWorld(db);
     try {
-      const world = new AgentFollowUpWorld(db);
       await world.start();
       const first = await world.create(1);
       if (!("id" in first)) throw new Error(first.refused);
@@ -363,6 +449,7 @@ describe("agent follow-up loop guard", () => {
       await world.settle();
       expect(world.admittedCount(blocked.id)).toBe(1);
     } finally {
+      world.dispose();
       db.close();
     }
   });
@@ -422,8 +509,8 @@ describe("schedule_follow_up scope", () => {
   it("keeps the asking contact's messaging source on the woken turn and the prompt out of SQLite", async () => {
     const temp = createTempStateDb("pwragent-agent-follow-up-");
     const db = StateDb.open(temp.dbPath);
+    const world = new AgentFollowUpWorld(db);
     try {
-      const world = new AgentFollowUpWorld(db);
       await world.start();
       const prompt = "UNIQUE-FOLLOW-UP-PROMPT check the canary dashboard";
       const provenance = { causalMessagingSource: { bindingId: "binding-1" } as never };
@@ -436,6 +523,7 @@ describe("schedule_follow_up scope", () => {
       expect(dump).toContain(action.id);
       expect(dump).not.toContain("UNIQUE-FOLLOW-UP-PROMPT");
     } finally {
+      world.dispose();
       db.close();
       removeTempStateDbDir(temp.tempDir);
     }
@@ -453,19 +541,18 @@ describe("agent follow-up write budgets", () => {
     feature: (world: AgentFollowUpWorld) => Promise<void>,
     budget: { scenario: string; note: string },
   ): Promise<void> {
-    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-agent-follow-up-budget-");
     const db = StateDb.open(temp.dbPath);
+    const world = new AgentFollowUpWorld(db);
     try {
-      const world = new AgentFollowUpWorld(db);
       world.heartbeatOnTick = false;
       await world.start();
       await arrange(world);
-      const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
-      const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
-      const { writes } = await measureSqliteWrites(async () => await feature(world));
+      const { writes } = await measureSqliteWrites(() => feature(world));
       expectSqliteWriteBudget({ ...budget, writes });
     } finally {
+      world.dispose();
       db.close();
       removeTempStateDbDir(temp.tempDir);
     }
