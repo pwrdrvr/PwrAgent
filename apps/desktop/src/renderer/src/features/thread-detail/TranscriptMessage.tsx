@@ -14,6 +14,7 @@ import {
   parseCodexAsyncQuestionReply,
   parseLinearPaste,
   parseThreadCorrespondenceMessage,
+  splitCombinedDelivery,
   stripCodexGitActionDirectives,
   summarizeThreadDependencyPrompt,
   threadTodoMessageOriginFromUnknown,
@@ -21,6 +22,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
+  CombinedDeliveryMember,
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
   AppServerThreadFilePart,
@@ -224,6 +226,22 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     [monitorOrigin?.monitorId, props.subAgents, loadedMonitor],
   );
 
+  // Several waiting messages that reached the model as this one input: one
+  // bubble, and a section per sender with that sender's own provenance.
+  const deliveryMembers = useMemo(
+    () => props.message.role === "user" && props.message.origin?.deliveredMessages
+      ? splitCombinedDelivery<AppServerThreadMessagePart>(
+          props.message.parts && props.message.parts.length > 0
+            ? props.message.parts
+            : props.message.text ? [{ type: "text", text: props.message.text }] : [],
+          props.message.origin.deliveredMessages,
+          (part) => part.type === "text" ? part.text : undefined,
+          (text) => ({ type: "text", text }),
+        )
+      : undefined,
+    [props.message.origin?.deliveredMessages, props.message.parts, props.message.role, props.message.text],
+  );
+
   const onRewind = props.onRewind;
   const rewind: MessageRewindControl | undefined = onRewind
     ? {
@@ -232,6 +250,16 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
         onActivate: () => onRewind(props.message),
       }
     : undefined;
+
+  if (deliveryMembers) {
+    return renderCombinedDelivery({
+      members: deliveryMembers,
+      props,
+      rewind,
+      text: messageCopyText,
+      threadLinks,
+    });
+  }
 
   if (voiceRequest) {
     const parts = contentParts.map((part) => part.type === "text"
@@ -1400,6 +1428,55 @@ function renderMessageHeader(params: {
         ) : null}
       </span>
     </header>
+  );
+}
+
+/**
+ * One combined delivery. The bubble keeps the delivery's own controls (copy,
+ * rewind, time); each sender's section is that sender's message as it would
+ * render alone, with its provenance chips, tooltips and summaries.
+ */
+function renderCombinedDelivery(params: {
+  members: CombinedDeliveryMember<AppServerThreadMessagePart>[];
+  props: TranscriptMessageProps;
+  rewind?: MessageRewindControl;
+  text: string;
+  threadLinks: ReturnType<typeof useThreadLinks>;
+}): ReactNode {
+  const { message } = params.props;
+  return (
+    <article className="transcript-message transcript-message--injected transcript-message--delivery">
+      {renderMessageHeader({
+        continuation: false,
+        desktopApi: params.props.desktopApi,
+        // The bubble speaks for the delivery; each section names its sender.
+        message: { ...message, origin: undefined },
+        label: `Delivered together · ${params.members.length}`,
+        rewind: params.rewind,
+        threadLinks: params.threadLinks,
+        text: params.text,
+      })}
+      <div className="transcript-delivery">
+        {params.members.map((member, index) => (
+          <div className="transcript-delivery__member" key={`${message.id}:delivered:${index}`}>
+            <TranscriptMessage
+              {...params.props}
+              message={{
+                ...message,
+                id: `${message.id}:delivered:${index}`,
+                origin: member.origin,
+                parts: member.parts,
+                text: member.parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
+                createdAt: member.receivedAt,
+              }}
+              onRewind={undefined}
+              rewindDisabledReason={undefined}
+              rewindOpen={false}
+            />
+          </div>
+        ))}
+      </div>
+    </article>
   );
 }
 

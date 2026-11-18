@@ -10,7 +10,7 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey, mergeCausalMessagingContext } from "@pwragent/shared";
+import { buildThreadIdentityKey, combinedDeliveryInput, mergeCausalMessagingContext } from "@pwragent/shared";
 import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
 
 export type ThreadTurnQueueOrigin =
@@ -299,11 +299,6 @@ function sentBy(
     && source.instanceId === sender.instanceId;
 }
 
-function describeSourceThread(source: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>): string {
-  return `${source.title ?? source.threadId} (${source.backend}, thread ${source.threadId}${
-    source.instanceId ? `, instance ${source.instanceLabel ?? source.instanceId}` : ""})`;
-}
-
 /** At most this many queued messages go out as one delivery. */
 export const COMBINED_DELIVERY_MAX_MESSAGES = 20;
 /** At most about this much text goes out as one delivery. */
@@ -423,38 +418,6 @@ export function planQueuedDeliveries(
     groups.push(run.group);
   }
   return groups;
-}
-
-function describeSender(origin: AppServerThreadMessageOrigin | undefined): string {
-  const source = origin?.sourceThread;
-  if (source) return `thread ${describeSourceThread(source)}`;
-  if (origin?.kind === "sub-agent") return "a PwrAgent monitor";
-  if (origin?.kind === "pwragent") return "PwrAgent";
-  return "another thread";
-}
-
-/**
- * One input for several queued messages: a short preamble, then each message
- * under a line naming its sender and when it arrived. A single message goes
- * as it was sent.
- */
-export function combinedDeliveryInput(
-  members: ReadonlyArray<Pick<ThreadTurnQueueEntry, "input" | "messageOrigin" | "createdAt">>,
-): AppServerTurnInputItem[] {
-  if (members.length === 1) return structuredClone(members[0]!.input);
-  return [
-    {
-      type: "text" as const,
-      text: `${members.length} messages arrived for this thread and are delivered together. Each starts with a line naming its sender.`,
-    },
-    ...members.flatMap((member, index) => [
-      {
-        type: "text" as const,
-        text: `Message ${index + 1} of ${members.length} · from ${describeSender(member.messageOrigin)} · received ${new Date(member.createdAt).toISOString()}`,
-      },
-      ...structuredClone(member.input),
-    ]),
-  ];
 }
 
 /**
