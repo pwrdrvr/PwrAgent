@@ -90,8 +90,8 @@ describe("GPT-6.2 pricing", () => {
     const params = { at: releasedAt, model, cachedInputTokens: 0, uncachedInputTokens: 1_000, outputTokens: 1_000 };
     expect(estimateOpenAiTokenUsageCost({ ...params, at: releasedAt - 1 })).toBeUndefined();
     expect(estimateOpenAiCodexCreditUsage({ ...params, at: releasedAt - 1 })).toBeUndefined();
-    expect(estimateOpenAiTokenUsageCost({ ...params, serviceTier: "ultrafast" })).toBeUndefined();
-    expect(resolveTokenUsagePriceUnavailableReason({ ...params, serviceTier: "ultrafast" }))
+    expect(estimateOpenAiTokenUsageCost({ ...params, serviceTier: "flex" })).toBeUndefined();
+    expect(resolveTokenUsagePriceUnavailableReason({ ...params, serviceTier: "flex" }))
       .toBe("unsupported-service-tier");
   });
 });

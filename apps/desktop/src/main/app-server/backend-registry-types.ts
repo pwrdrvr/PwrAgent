@@ -1312,6 +1312,7 @@ export type LiveThreadUsageEmitWork = {
   derivationKey: string;
   derivationTail: Promise<void>;
   observationSequence: number;
+  observedAt: number;
   precedingDerivation: Promise<void>;
   settleDerivation: () => void;
   settled: Promise<void>;
@@ -1332,18 +1333,19 @@ export type LiveThreadUsageAggregate = {
 
 export type LiveThreadRequestUsage = {
   cumulativeInputTokens: number;
-  requests: TaskMonitorTokenUsageBreakdown[];
+  requests: Array<{ observedAt: number; tokens: TaskMonitorTokenUsageBreakdown }>;
 };
 
 export type RequestComponentsCost = {
   cacheWriteInputCostMicros: number;
   cachedInputCostMicros: number;
   catalogId: string;
-  catalogVersion: string;
+  catalogVersion?: string;
   currency: "USD";
   outputCostMicros: number;
   provider: string;
   rateId?: string;
+  requestPricing: NonNullable<ThreadUsageLineRecord["requestPricing"]>;
   serviceTier: string;
   totalCostMicros: number;
   uncachedInputCostMicros: number;

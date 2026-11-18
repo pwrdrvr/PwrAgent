@@ -577,4 +577,39 @@ describe("ThreadUsageLedger", () => {
       db.close();
     }
   });
+
+  it("publishes the owner pricing timestamp and keeps it on a request redelivered after midnight", async () => {
+    const { registry, db } = createRegistry();
+    const cutover = Date.parse("2027-03-01T00:00:00-08:00");
+    const now = vi.spyOn(Date, "now").mockReturnValue(cutover - 1);
+    const published: Array<number | undefined> = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (event.notification.method === "thread/tokenUsage/updated") {
+        published.push(event.usagePricingAt);
+      }
+    });
+    const publishUsage = (inputTokens: number) => {
+      const last = { inputTokens: 1, outputTokens: 100_000 };
+      return registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: { threadId: "thread", turnId: "turn", model: "gpt-6.2-sol", tokenUsage: {
+            serviceTier: "ultrafast", last, total: { inputTokens, outputTokens: inputTokens * last.outputTokens },
+          } },
+        },
+      });
+    };
+    try {
+      await publishUsage(1);
+      now.mockReturnValue(cutover);
+      await publishUsage(1);
+      await publishUsage(2);
+      expect(published).toEqual([cutover - 1, cutover - 1, cutover]);
+    } finally {
+      unsubscribe();
+      await registry.close();
+      db.close();
+    }
+  });
 });

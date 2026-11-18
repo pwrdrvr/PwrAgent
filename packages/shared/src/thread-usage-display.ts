@@ -84,6 +84,7 @@ export function buildTokenUsageActivityEntry(params: {
   }
 
   const { scope, tokens } = normalized;
+  const createdAt = params.createdAt ?? Date.now();
   const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
   const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
@@ -95,7 +96,7 @@ export function buildTokenUsageActivityEntry(params: {
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
   const cost = estimateTokenUsageCost({
-    at: params.pricingAt,
+    at: params.pricingAt ?? createdAt,
     cacheWriteInputTokens,
     cachedInputTokens,
     fastMode: params.fastMode,
@@ -222,7 +223,7 @@ export function buildTokenUsageActivityEntry(params: {
   return {
     type: "activity",
     id: params.id,
-    createdAt: params.createdAt ?? Date.now(),
+    createdAt,
     summary: `${summaryPrefix}: ${summaryParts.join(" · ")}`,
     status: "completed",
     details,
@@ -437,6 +438,7 @@ function formatUnpricedModelName(params: {
   return [
     params.model,
     serviceTier === "priority" ? "Fast/Priority" : undefined,
+    serviceTier === "ultrafast" ? "Ultrafast" : undefined,
     serviceTier === undefined && params.serviceTier
       ? `service tier ${params.serviceTier}`
       : undefined,
