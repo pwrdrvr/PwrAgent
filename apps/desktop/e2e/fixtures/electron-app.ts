@@ -437,6 +437,10 @@ export async function launchElectronApp(
   const electronApp = await electron.launch({
     args: [
       ELECTRON_E2E_ENTRY,
+      // Keep Playwright's default Linux sandbox policy across profile relaunches.
+      // If Playwright inserts this switch before the app entry, its loader
+      // strips it from process.argv, which openDesktopPwrAgentProfile reuses.
+      ...(process.platform === "linux" ? ["--no-sandbox"] : []),
       // Hardware video codecs leak kernel objects inside a
       // Virtualization.framework guest (the Tart macOS VMs): every
       // VideoToolbox init creates an

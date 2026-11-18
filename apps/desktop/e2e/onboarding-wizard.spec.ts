@@ -622,10 +622,6 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("requested-profile bootstrap relaunches that profile after Skip", async () => {
-    test.skip(
-      process.platform === "linux",
-      "Native detached profile handoff is covered on macOS and Windows.",
-    );
     test.setTimeout(60_000);
     const app = await launchWizard({ PWRAGENT_PROFILE: "test2" }, "test2");
     try {
@@ -656,10 +652,6 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("Multiple-mode finish hands off from bootstrap to the first profile", async () => {
-    test.skip(
-      process.platform === "linux",
-      "Native detached profile handoff is covered on macOS and Windows.",
-    );
     test.setTimeout(60_000);
     const app = await launchWizard({}, "personal");
     try {
