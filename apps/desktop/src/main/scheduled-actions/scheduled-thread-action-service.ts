@@ -457,8 +457,11 @@ export class ScheduledThreadActionService {
 
   async evaluateDueActions(): Promise<void> {
     if (this.evaluating) return;
-    // The gate opening evaluates again.
-    if (this.options.registry.isRestartGateClosed?.()) return;
+    if (this.options.registry.isRestartGateClosed?.()) {
+      // Let the holder confirmation grace elapse while continuations resume.
+      this.orphanedLockHolds({ observeOnly: true });
+      return;
+    }
     this.evaluating = true;
     try {
       // No await without an orphan: a create that evaluates while this pass
@@ -501,7 +504,7 @@ export class ScheduledThreadActionService {
    * started from a dead holder's queue without first moving the action out of
    * `held` (see `markHeldQueued`), so this cannot run a turn twice.
    */
-  private orphanedLockHolds(): ScheduledThreadActionHold[] {
+  private orphanedLockHolds({ observeOnly = false } = {}): ScheduledThreadActionHold[] {
     const holds = this.options.store.listHeldHolds();
     const versions = new Set(holds.map(holdVersion));
     for (const version of this.notLockHolds) {
@@ -515,6 +518,7 @@ export class ScheduledThreadActionService {
         holderAlive.set(hold.holderId, alive);
         if (alive) return false;
       }
+      if (observeOnly) return false;
       // The cause lives in the payload, so read it only for an orphan, and
       // remember a row that is not a lock hold until it changes.
       const version = holdVersion(hold);

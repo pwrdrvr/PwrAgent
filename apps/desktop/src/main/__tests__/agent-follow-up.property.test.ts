@@ -207,6 +207,28 @@ describe("agent follow-up lifecycle model", () => {
     }), 50);
   });
 
+  it("starts a lock-held follow-up once after a gated restart reuses the holder's process ID", async () => {
+    await withWorld(async (world) => {
+      await world.create(1);
+      await world.setLocked(true);
+      await world.restart();
+      expect(world.actions().map((action) => action.status)).toEqual(["held"]);
+
+      const holds = world.store.listHeldHolds();
+      await world.setGateClosed(true);
+      await world.restart();
+      expect(world.store.listHeldHolds()).toEqual(holds);
+      expect(world.admissions).toHaveLength(0);
+
+      await world.setGateClosed(false);
+      await world.setLocked(false);
+
+      expect(world.actions().map((action) => action.status)).not.toContain("held");
+      expect(world.actions().map((action) => action.status)).toEqual(["started"]);
+      expect(world.admissions).toHaveLength(1);
+    }, { reuseProcessId: true });
+  });
+
   it("retires a cancelled model before another test can measure writes", async (context) => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (caseCount) => {
       const controller = new AbortController();
