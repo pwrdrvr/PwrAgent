@@ -1648,6 +1648,7 @@ export type DesktopSettingsSnapshot = {
      * ChatGPT or Codex sign-in. Absent on older builds.
      */
     openaiDecisions?: DesktopOpenAIDecisionsSettingsSnapshot;
+    audioTranscriptionEnabled?: DesktopSettingsValue<boolean>;
     /** Credential presence only. The API key stays in the owner process. */
     audioTranscriptionApiKey?: DesktopSettingsSecretState;
     codex: {
@@ -2009,6 +2010,7 @@ export type DesktopSettingsConfigPatch = {
     decisionModels?: DesktopDecisionModelSettings;
     /** Replaces the OpenAI Decisions account ids. Omit a field to clear it. */
     openaiDecisions?: DesktopOpenAIDecisionsSettings;
+    audioTranscriptionEnabled?: boolean;
     codex?: {
       path?: string;
       profile?: string;

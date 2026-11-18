@@ -389,6 +389,7 @@ export type ComposerProps = {
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   composerCovered?: boolean;
+  dictationAvailable?: boolean;
   /**
    * Surface a transient app-level toast (image attachment limit reached,
    * pasted image rejected on a non-vision model). Plumbed up to the shared
@@ -6253,7 +6254,7 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
-  const dictationApi = !props.composerCovered
+  const dictationApi = props.dictationAvailable && !props.composerCovered
     && filesystemFederationTarget?.scope !== "remote" && !isReviewComposerOpen
     ? props.desktopApi?.dictation
     : undefined;

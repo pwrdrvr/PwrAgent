@@ -1,6 +1,6 @@
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
 import { AudioDictationSession } from "../../audio-transcription";
-import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
+import { getDesktopConfigStore, getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
 import {
   DICTATION_AUDIO_CHANNEL,
   DICTATION_BATCH_SAMPLES,
@@ -13,6 +13,7 @@ import {
 import { isLocalMainWindowWebContents } from "../window-channels";
 
 type Owner = { sender: WebContents; id: string; connection?: AudioDictationSession; detach: () => void };
+const DICTATION_DISABLED = "Audio transcription is turned off in Settings → AI Providers.";
 let active: Owner | undefined;
 
 export function dictationActive(): boolean {
@@ -49,12 +50,18 @@ export function registerAudioTranscriptionIpc(voiceBusy: () => boolean): void {
       throw new Error("Dictation is available in a local PwrAgent composer.");
     }
     if (active || voiceBusy()) throw new Error("End the current microphone session before dictating.");
+    const configStore = getDesktopConfigStore();
+    if (configStore.read("models").audioTranscriptionEnabled === false) {
+      throw new Error(DICTATION_DISABLED);
+    }
 
+    let unsubscribeConfig: (() => void) | undefined;
     const stop = () => release(owner);
     const onNavigation = (_event: unknown, _url: string, _inPlace: boolean, mainFrame: boolean) => {
       if (mainFrame) stop();
     };
     const owner: Owner = { sender, id, detach: () => {
+      unsubscribeConfig?.();
       sender.removeListener("destroyed", stop);
       sender.removeListener("render-process-gone", stop);
       sender.removeListener("did-start-navigation", onNavigation);
@@ -64,6 +71,9 @@ export function registerAudioTranscriptionIpc(voiceBusy: () => boolean): void {
     sender.once("render-process-gone", stop);
     sender.on("did-start-navigation", onNavigation);
     try {
+      unsubscribeConfig = configStore.subscribe(["models"], ({ values }) => {
+        if (values.models.audioTranscriptionEnabled === false) release(owner, DICTATION_DISABLED);
+      });
       const key = await getDesktopSettingsService().resolveOpenAITranscriptionApiKey().catch(() => undefined);
       if (active !== owner) return;
       if (!key) throw new Error("Add an OpenAI project API key in Settings → AI Providers → Audio transcription.");

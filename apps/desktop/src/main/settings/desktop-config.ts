@@ -351,6 +351,7 @@ export type DesktopSettingsConfig = {
     taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     decisionModels?: DesktopDecisionModelSettings;
     openaiDecisions?: DesktopOpenAIDecisionsSettings;
+    audioTranscriptionEnabled?: boolean;
     codex?: {
       path?: string;
       profile?: string;
@@ -1865,6 +1866,9 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
+  if (patch.models?.audioTranscriptionEnabled !== undefined) {
+    set(["models", "audio_transcription_enabled"], patch.models.audioTranscriptionEnabled);
+  }
   if (patch.models?.codex?.path !== undefined) {
     set(["models", "codex", "path"], patch.models.codex.path);
   }
@@ -2700,6 +2704,7 @@ function normalizeDesktopConfig(
         organizationId: readString(openaiDecisions?.organization_id),
         projectId: readString(openaiDecisions?.project_id),
       }),
+      audioTranscriptionEnabled: readBoolean(models?.audio_transcription_enabled),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
@@ -3086,6 +3091,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
   const openaiDecisions = config.models?.openaiDecisions;
+  const audioTranscriptionEnabled = config.models?.audioTranscriptionEnabled;
   const hasHelperModels = Boolean(
     helperModels
     && (
@@ -3107,6 +3113,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
     || openaiDecisions
+    || audioTranscriptionEnabled !== undefined
   ) {
     pruned.models = {
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
@@ -3115,6 +3122,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       ...(hasTaskMonitorModels ? { taskMonitorModels } : {}),
       ...(decisionModels ? { decisionModels } : {}),
       ...(openaiDecisions ? { openaiDecisions } : {}),
+      ...(audioTranscriptionEnabled !== undefined ? { audioTranscriptionEnabled } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),

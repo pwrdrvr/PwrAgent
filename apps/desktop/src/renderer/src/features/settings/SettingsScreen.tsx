@@ -1668,6 +1668,11 @@ function SettingsSectionBody(props: {
           models: { openaiDecisions },
         });
       }}
+      onAudioTranscriptionEnabledChange={async (audioTranscriptionEnabled) => {
+        return await props.settings.writeConfig({
+          models: { audioTranscriptionEnabled },
+        });
+      }}
       onSaveCodexFastAllowed={async (allowFast) => {
         return await props.settings.writeConfig({
           models: {

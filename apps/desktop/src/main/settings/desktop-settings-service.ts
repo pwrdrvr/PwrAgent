@@ -1710,6 +1710,10 @@ export class DesktopSettingsService {
           ...(config.models?.openaiDecisions ?? {}),
           apiKey: openaiDecisionsApiKey,
         },
+        audioTranscriptionEnabled: this.resolveConfigBoolean(
+          config.models?.audioTranscriptionEnabled,
+          true,
+        ),
         audioTranscriptionApiKey,
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),

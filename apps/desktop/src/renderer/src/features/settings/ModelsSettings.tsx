@@ -196,6 +196,7 @@ export function ModelsSettings(props: {
   onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist AI Providers → OpenAI Decisions account ids. */
   onSaveOpenAIDecisions?: (settings: DesktopOpenAIDecisionsSettings) => Promise<unknown>;
+  onAudioTranscriptionEnabledChange?: (enabled: boolean) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
   /** Persist which pwrdrvr/codex track the managed runtime follows. */
@@ -228,6 +229,8 @@ export function ModelsSettings(props: {
   const catalogRefresh = useProviderCatalogRefresh(props.desktopApi);
   const catalogBusy = refreshingCatalog || catalogRefresh.running;
   const codex = props.snapshot.models.codex;
+  const audioTranscriptionEnabled = props.snapshot.models.audioTranscriptionEnabled?.value ?? true;
+  const hasAudioTranscriptionKey = Boolean(props.snapshot.models.audioTranscriptionApiKey?.configured);
   const envForced = codex.path.source === "env";
   const managedCodexProgress = useManagedRuntimeProgress(props.desktopApi, "codex");
   const managedCodexRuntime = props.snapshot.runtime.tokenMiser?.managedCodex;
@@ -708,6 +711,16 @@ export function ModelsSettings(props: {
         />
         <SettingsSection title="Connection" sectionId="audio-transcription-connection">
           <div className="settings-fields">
+            {props.onAudioTranscriptionEnabledChange ? (
+              <ToggleField
+                checked={audioTranscriptionEnabled}
+                disabled={props.saving}
+                label="Enabled"
+                switchQualifier="Audio transcription"
+                sub="Show the composer microphone when a key is saved. Turning this off keeps the saved key."
+                onChange={props.onAudioTranscriptionEnabledChange}
+              />
+            ) : null}
             <SecretField
               label="OpenAI project API key"
               sub="Use an OpenAI Platform project key with Realtime API access. Billing is separate from your ChatGPT or Codex subscription."
@@ -990,8 +1003,9 @@ export function ModelsSettings(props: {
           <SettingsIndexRow
             name="Audio transcription"
             meta="Live composer dictation with gpt-live-transcribe"
-            chip={props.snapshot.models.audioTranscriptionApiKey?.configured ? "Key saved" : "No API key"}
-            chipKind={props.snapshot.models.audioTranscriptionApiKey?.configured ? "ok" : "muted"}
+            chip={audioTranscriptionEnabled ? (hasAudioTranscriptionKey ? "Enabled" : "No API key") : "Disabled"}
+            chipKind={audioTranscriptionEnabled && hasAudioTranscriptionKey ? "ok" : "muted"}
+            off={!audioTranscriptionEnabled}
             onOpen={() => props.onFocusChange?.(AUDIO_TRANSCRIPTION_FOCUS)}
           />
           {orderedAcpEntries.length === 0 ? (

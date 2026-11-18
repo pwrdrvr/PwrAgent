@@ -7475,12 +7475,29 @@ describe("Composer", () => {
         props: {
           backends: [backendSummary("codex")],
           desktopApi: { dictation, startTurn: vi.fn() },
+          dictationAvailable: true,
           skills: [],
           thread: { id: "dictation-review", title: "Dictation", titleSource: "explicit",
             source: "codex", executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } },
         } satisfies ComponentProps<typeof ProductionComposer>,
       };
     }
+
+    it("shows the microphone only while dictation is available and cancels capture when it becomes unavailable", async () => {
+      const { dictation, props, signal } = fixture();
+      const view = (dictationAvailable: boolean) => <Composer {...props} dictationAvailable={dictationAvailable} />;
+      const { rerender } = render(view(false));
+      expect(screen.queryByRole("button", { name: "Dictate with OpenAI" })).toBeNull();
+
+      rerender(view(true));
+      await clickButton("Dictate with OpenAI");
+      await screen.findByRole("button", { name: "Stop dictation" });
+
+      rerender(view(false));
+      expect(screen.queryByRole("button", { name: /dictat/i })).toBeNull();
+      expect(signal.current?.aborted).toBe(true);
+      expect(dictation.cancel).toHaveBeenCalledTimes(1);
+    });
 
     // Covering the same mounted composer is terminal in every live phase.
     // Late start, delta and finish events cannot revive capture or edit the draft.

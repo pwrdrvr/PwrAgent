@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import type { DictationApi } from "../src/shared/audio-transcription";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -119,21 +120,53 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
     const start = page.getByRole("button", { name: "Dictate with OpenAI", exact: true });
     await expect(reply).toBeEditable();
     await reply.fill(DRAFT);
-    await start.click();
-    await expect(page.getByText("Add an OpenAI project API key", { exact: false })).toBeVisible();
+    await expect(start).toHaveCount(0);
     expect((await connection.jsonValue()).started).toBe(0);
 
-    await page.getByRole("button", { name: "Open settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "AI Providers", exact: true }).click();
-    await page.getByRole("button", { name: /Audio transcription/ }).click();
+    const openTranscriptionSettings = async (status: string) => {
+      await page.getByRole("button", { name: "Open settings", exact: true }).click();
+      await page.getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "AI Providers", exact: true }).click();
+      const detail = page.getByRole("button", { name: "Open Audio transcription settings", exact: true });
+      await expect(detail).toHaveText(new RegExp(status));
+      await detail.click();
+    };
+    const exitSettings = page.getByRole("button", { name: "Exit Settings", exact: true });
+    await openTranscriptionSettings("No API key");
     const settings = page.getByRole("region", { name: "Audio transcription settings" });
+    const enabled = settings.getByRole("switch", { name: "Enabled — Audio transcription" });
+    const clear = settings.getByRole("button", { name: "Clear", exact: true });
+    const savedKey = settings.getByText(/^Set · /);
     await expect(settings).toContainText("$0.017 per minute ($1.02 per hour)");
     const secret = settings.getByLabel("OpenAI project API key", { exact: true });
     await secret.fill(API_KEY);
     await settings.getByRole("button", { name: "Save", exact: true }).click();
     await expect(secret).toHaveValue("");
-    await page.getByRole("button", { name: "Exit Settings", exact: true }).click();
+    await expect(savedKey).toBeVisible();
+    await expect(enabled).toBeChecked();
+    await exitSettings.click();
+    await expect(start).toBeEnabled();
+
+    await openTranscriptionSettings("Enabled");
+    await enabled.click();
+    await expect(enabled).not.toBeChecked();
+    await expect(savedKey).toBeVisible();
+    await expect(clear).toBeEnabled();
+    await exitSettings.click();
+    await expect(start).toHaveCount(0);
+    await expect(page.evaluate(() => {
+      const bridge = (window as Window & { pwragent?: { dictation: DictationApi } }).pwragent;
+      if (!bridge) throw new Error("Missing PwrAgent preload bridge");
+      return bridge.dictation.start("disabled-dictation");
+    })).rejects.toThrow("Audio transcription is turned off");
+    expect((await connection.jsonValue()).started).toBe(0);
+
+    await openTranscriptionSettings("Disabled");
+    await expect(enabled).not.toBeChecked();
+    await expect(savedKey).toBeVisible();
+    await enabled.click();
+    await expect(enabled).toBeChecked();
+    await exitSettings.click();
     await expect(reply).toHaveText(DRAFT);
 
     await start.click();
