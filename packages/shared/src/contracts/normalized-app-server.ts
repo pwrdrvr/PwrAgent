@@ -19,6 +19,7 @@ import type {
 } from "./federation";
 import type {
   PrSummary,
+  NavigationIdentity,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
   ThreadLock,
@@ -2946,6 +2947,10 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
+        /** Correlates a completed explicit mount with its IPC reply. */
+        publicationId?: string;
+        /** All departing root anchors when the mount also ranks a companion. */
+        anchorChanges?: NavigationIdentity[];
         /** Complete changed-row set from a published summary refresh whose
          * membership and placement are unchanged. Absent for pin mutations,
          * discovery, archive proofs and availability transitions. Only complete

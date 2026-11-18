@@ -1,11 +1,13 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
+import { useLayoutEffect } from "react";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION, type AgentEvent, type NavigationDirectoryRow, type NavigationQueryPage, type NavigationRow, type NavigationSelectedDetailResponse, type PrSummary, type ProjectForgeAutomation } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { useHoverStableSnapshot } from "../../features/navigation/useHoverStableSnapshot";
+import { navigationIdentityKey } from "../navigation-query-state";
 
 const counts = { total: 1000, active: 40, unread: 90, review: 50 };
 const row = (id: string): NavigationRow => ({ id, source: "codex", title: id, titleSource: "fallback", ref: { backend: "codex", threadId: id },
@@ -287,6 +289,133 @@ it("uses viewer directory disclosure for page demand across owner refresh and pr
   expect(result.current.pagedNavigation.resources.get(`directory-pins:${key}`)?.state.request.query).toMatchObject({ roots: "pinned" });
   expect(result.current.pagedNavigation.resources.has(`directory:${key}`)).toBe(false);
   expect(f.legacy).not.toHaveBeenCalled();
+});
+
+it("uses one viewer membership read per admitted collection for a remote pin receipt and notice", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom(3, 6), fc.constantFrom("notice-settled", "notice-pending", "reply-first"),
+    fc.constantFrom("none", "seen", "metadata"), async (size, order, concurrent) => {
+    const f = fixture();
+    const originalRead = f.read.getMockImplementation()!;
+    const directories: NavigationDirectoryRow[] = Array.from({ length: size }, (_, index) => ({
+      key: `directory:/project-${index}`, kind: "directory", label: `Project ${index}`, path: `/project-${index}`,
+      counts, pinnedRootCount: 1, unpinnedRootCount: 1, launchpadPresent: false,
+    }));
+    const ref = { backend: "codex", threadId: "new-pin", ownerInstanceId: "peer" } as const;
+    const remote: NavigationRow = { ...row(ref.threadId), ref, pinnedRank: "1024",
+      federation: { ref: { backend: ref.backend, threadId: ref.threadId, target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer" } };
+    const publication = { backend: "codex", instanceId: "peer", threadId: ref.threadId, pinned: true, publicationId: "mount-1" } as const;
+    let mounted = false;
+    let hold: Promise<void> | undefined;
+    let listener: ((event: AgentEvent) => void) | undefined;
+    const tasks = new Set<() => void>();
+    const scheduleNavigationRefresh = (task: () => void) => {
+      tasks.add(task);
+      return () => { tasks.delete(task); };
+    };
+    const publish = () => listener?.({ backend: publication.backend, notification: {
+      method: "navigation/remoteThreadPins/changed", params: publication,
+    } });
+    const dispatch = () => { const pending = [...tasks]; tasks.clear(); pending.forEach((task) => task()); };
+    f.read.mockImplementation(async (request, consumer) => {
+      const query = request.query;
+      const observed = mounted;
+      if (observed && query.kind === "directory" && query.roots === "pinned" && query.directoryKey === directories[0]!.key) await hold;
+      const page = await originalRead(request, consumer);
+      if (query.kind === "directory-index") return { ...page, directories };
+      if (query.kind === "directory") {
+        const original = { ...row(`${query.directoryKey}/${query.roots}`), ordinaryChildCount: query.roots === "pinned" ? 2 : 0 };
+        const hasPin = observed && query.directoryKey === directories[0]!.key;
+        const entries = [original, ...(hasPin && query.roots === "pinned" ? [remote] : [])]
+          .map((row) => ({ row, placement: { kind: "root" as const }, orderKey: row.id }));
+        return { ...page, entries, complete: true, metadataDependencies: { version: 1,
+          threadKeys: [navigationIdentityKey(original.ref), ...(hasPin ? [navigationIdentityKey(ref)] : [])], prKeys: [] } };
+      }
+      if (query.kind === "children") {
+        const entries = ["older", "newer"].map((suffix, index) => ({
+          row: { ...row(`${query.parent.threadId}/${suffix}`), parentThreadId: query.parent.threadId },
+          placement: { kind: "child" as const, parent: query.parent }, orderKey: String(index),
+        }));
+        return { ...page, entries, selectionDirectory: directories.find(({ key }) => key === query.directoryKey) };
+      }
+      if (query.kind === "exact" && query.identities.some((identity) => identity.ownerInstanceId === ref.ownerInstanceId && identity.threadId === ref.threadId)) {
+        return { ...page, entries: [{ row: remote, placement: { kind: "root" }, orderKey: remote.id }], selectionDirectory: directories[0] };
+      }
+      return page;
+    });
+    f.detail.mockImplementation(async ({ ref: selected }) => ({ protocol: 2, ref: selected,
+      revision: "detail", readiness: "ready", identity: "present", thread: selected.ownerInstanceId ? remote : row(selected.threadId) }));
+    const api: DesktopApi = { ...f.api, onAgentEvent: (callback) => { listener = callback; return () => { listener = undefined; }; } };
+    const commits: string[][] = [];
+    const readChildren = (value: ReturnType<typeof useThreadNavigation>) => [...value.pagedNavigation.resources.values()]
+      .filter(({ state }) => state.request.query.kind === "children")
+      .flatMap(({ state }) => state.page?.entries.map(({ row }) => row.id) ?? []);
+    const { result, unmount } = renderHook(() => {
+      const value = useThreadNavigation(api, { scheduleNavigationRefresh });
+      useLayoutEffect(() => { commits.push(readChildren(value)); });
+      return value;
+    });
+    const resources = () => [...result.current.pagedNavigation.resources.values()].filter(({ state }) => state.request.query.kind === "directory");
+    const admitted = () => resources().length === size * 2 && resources().every(({ loading, state }) => !loading && state.page);
+    try {
+      await waitFor(() => expect(result.current.directories).toHaveLength(size));
+      act(() => {
+        result.current.setBrowseMode("directories");
+        result.current.directoryDisclosure.setExpandedByKey(Object.fromEntries(directories.map(({ key }) => [key, true])));
+      });
+      await waitFor(() => {
+        expect(admitted()).toBe(true);
+        expect(readChildren(result.current)).toHaveLength(size * 2);
+      });
+      const childOrder = readChildren(result.current);
+      commits.length = 0;
+      f.read.mockClear();
+      mounted = true;
+      let complete = false;
+      let reply!: Promise<void>;
+      let release!: () => void;
+      if (order === "notice-pending") hold = new Promise<void>((resolve) => { release = resolve; });
+      if (order !== "reply-first") {
+        await act(async () => { publish(); dispatch(); });
+        if (order === "notice-settled") await waitFor(() => expect(admitted()).toBe(true));
+      }
+      await act(async () => {
+        reply = result.current.refresh("action/remote-pin-add", publication).then(() => { complete = true; });
+      });
+      if (order === "notice-pending") {
+        expect(complete).toBe(false);
+        if (concurrent !== "none") {
+          await waitFor(() => expect(resources().filter(({ loading }) => loading)).toHaveLength(1));
+          await act(async () => {
+            if (concurrent === "seen") listener?.({ backend: "codex", federationTarget: remote.federation!.ref.target, notification: {
+              method: "navigation/invalidated", params: { sourceMethod: "navigation/thread/seen", threadId: ref.threadId },
+            } });
+            else listener?.({ backend: "codex", notification: {
+              method: "navigation/remoteThreadPins/changed", params: { instanceId: ref.ownerInstanceId, rowChanges: [ref] },
+            } });
+            dispatch();
+          });
+        }
+        await act(async () => { release(); await reply; });
+      } else {
+        await act(async () => { await reply; });
+      }
+      expect(result.current.threads.map(({ id }) => id)).toContain(ref.threadId);
+      await act(async () => { if (order === "reply-first") publish(); dispatch(); });
+      const concurrentAffectedReads = order === "notice-pending" && concurrent !== "none" ? 2 : 0;
+      expect(f.read.mock.calls.filter(([{ query }]) => query.kind === "directory")).toHaveLength(2 * size + concurrentAffectedReads);
+      expect(f.read.mock.calls.filter(([{ query }]) => query.kind === "children")).toHaveLength(size);
+      expect(commits).not.toHaveLength(0);
+      for (const children of commits) expect(children).toEqual(childOrder);
+      expect(f.legacy).not.toHaveBeenCalled();
+      act(() => result.current.selectThread(remote));
+      await waitFor(() => expect(result.current.selectedThread?.federation?.ref).toEqual(remote.federation?.ref));
+      await waitFor(() => expect(result.current.pagedNavigation.resources.get("selected-viewer-mount")?.state.page?.entries[0]?.row.ref).toEqual(ref));
+      expect(result.current.pagedNavigation.resources.get("selected-context")?.state.request.federationTarget).toEqual(remote.federation?.ref.target);
+    } finally {
+      unmount();
+    }
+  }), { numRuns: 12, examples: [[3, "notice-settled", "none"], [6, "notice-settled", "none"],
+    [3, "notice-pending", "seen"], [6, "notice-pending", "metadata"], [3, "reply-first", "none"], [6, "reply-first", "none"]] });
 });
 
 /**
