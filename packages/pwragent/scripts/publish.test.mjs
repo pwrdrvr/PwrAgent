@@ -16,7 +16,7 @@ const input = () => ({ pkg: { ...structuredClone(pkg), version: "1.3.7", publish
 const registry = () => ({ name: "pwragent", maintainers: [{ name: "huntharo" }],
   versions: { "0.0.0": {} }, "dist-tags": { latest: "0.0.0" } });
 const published = () => ({ ...registry(), "dist-tags": { latest: "1.3.7" }, versions: { "0.0.0": {}, "1.3.7": {
-  pwragentRelease: source, dist: { integrity, attestations: { provenance: { predicateType: "https://slsa.dev/provenance/v1" } } },
+  pwragentRelease: { ...source }, dist: { integrity, attestations: { provenance: { predicateType: "https://slsa.dev/provenance/v1" } } },
 } } });
 
 test("records acceptance after publishing once without any immediate registry verification", async () => {
