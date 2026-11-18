@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { publishRelease, verifyRelease } from "./publish.mjs";
+import { publishRelease, requiresReadOnlyRecovery, verifyRelease } from "./publish.mjs";
 import { registryRetryDelay } from "./release.mjs";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -25,7 +25,7 @@ test("records acceptance after publishing once without any immediate registry ve
   const result = await publishRelease(input(), {
     readRegistry: async () => {
       assert.equal(++reads, 1, "must not read after publish");
-      return registry();
+      return { document: registry() };
     },
     publish: async (filename, tag) => calls.push([filename, tag]),
   });
@@ -36,7 +36,7 @@ test("records acceptance after publishing once without any immediate registry ve
 });
 
 test("an identical published version is a verified retry without any npm mutation", async () => {
-  const result = await publishRelease(input(), { readRegistry: async () => published(),
+  const result = await publishRelease(input(), { readRegistry: async () => ({ document: published() }),
     publish: async () => assert.fail("must not republish immutable version") });
   assert.equal(result.status, "verified-existing");
 });
@@ -56,7 +56,7 @@ test("prerelease desktop versions publish to next with the exact prerelease vers
   const calls = [];
   const result = await publishRelease(request, { now: () => 0, readRegistry: async () => {
     assert.equal(++reads, 1);
-    return registry();
+    return { document: registry() };
   },
     publish: async (filename, tag) => calls.push([filename, tag]) });
   assert.deepEqual(calls, [[`pwragent-${version}.tgz`, "next"]]);
@@ -68,7 +68,7 @@ test("retry verifies an older identical version without rolling a later channel 
   const document = published();
   document.versions["1.3.8"] = {};
   document["dist-tags"].latest = "1.3.8";
-  assert.equal((await publishRelease(input(), { readRegistry: async () => document,
+  assert.equal((await publishRelease(input(), { readRegistry: async () => ({ document }),
     publish: async () => assert.fail("must not mutate channel") })).status, "verified-existing");
 });
 
@@ -77,12 +77,12 @@ test("source, artifact, ownership, channel and OIDC prerequisites fail before pu
     { desktopVersion: "1.3.8" }, { npmVersion: "11.5.0" },
     { packed: { ...input().packed, release: { ...source, commit: "b".repeat(40) } } },
     { manifest: { ...input().manifest, pwragentRelease: undefined } }]) {
-    await assert.rejects(publishRelease({ ...input(), ...change }, { readRegistry: async () => registry(),
+    await assert.rejects(publishRelease({ ...input(), ...change }, { readRegistry: async () => ({ document: registry() }),
       publish: async () => assert.fail("invalid input published") }));
   }
   for (const change of [{ maintainers: [] }, { "dist-tags": {} },
     { versions: { "0.0.0": {}, "1.3.7": { pwragentRelease: source, dist: { integrity: "wrong" } } } }]) {
-    await assert.rejects(publishRelease(input(), { readRegistry: async () => ({ ...registry(), ...change }),
+    await assert.rejects(publishRelease(input(), { readRegistry: async () => ({ document: { ...registry(), ...change } }),
       publish: async () => assert.fail("invalid registry published") }));
   }
 });
@@ -92,7 +92,7 @@ test("an occupied version with different source or no provenance is never accept
     { dist: { integrity } }, { dist: { integrity: "wrong", attestations: {} } }]) {
     const document = published();
     Object.assign(document.versions["1.3.7"], change);
-    await assert.rejects(publishRelease(input(), { readRegistry: async () => document,
+    await assert.rejects(publishRelease(input(), { readRegistry: async () => ({ document }),
       publish: async () => assert.fail("must not overwrite") }));
   }
 });
@@ -134,19 +134,43 @@ test("the first read is gated by submission time and all retained deadlines", as
   }
 });
 
-test("deferred verification waits before reading and backs off across stale full documents", async () => {
-  const harness = verifier([registry(), registry(), published()]);
-  const result = await verifyRelease(input(), receipt(), harness.deps);
-  assert.deepEqual(harness.reads, [5 * minute, 15 * minute, 35 * minute]);
+test("a stale first read persists its deadline and a fresh runner resumes when due", async () => {
+  const first = verifier([{ document: registry(), retryAfterMs: 60 * minute }]);
+  const pending = await verifyRelease(input(), receipt(), first.deps);
+  assert.deepEqual(first.reads, [30 * minute]);
+  assert.equal(pending.status, "verification-pending");
+  assert.equal(pending.publicationStatus, "accepted");
+  assert.equal(pending.integrity, integrity);
+  assert.equal(pending.nextCheckAt, 90 * minute + 1000);
+
+  const early = verifier([], 31 * minute);
+  assert.deepEqual(await verifyRelease(input(), receipt(), { ...early.deps, previousVerification: pending }), pending);
+  assert.deepEqual(early.waits, []);
+  assert.deepEqual(early.reads, []);
+
+  const due = verifier([published()], pending.nextCheckAt);
+  const result = await verifyRelease(input(), receipt(), { ...due.deps, previousVerification: pending });
   assert.equal(result.status, "verified-existing");
-  assert.equal(result.integrity, integrity);
-  assert.equal(result.verifiedAt, 35 * minute);
+  assert.equal(result.publicationStatus, "accepted");
+  assert.equal(result.verifiedAt, pending.nextCheckAt);
+  assert.deepEqual(due.waits, []);
 });
 
-test("cache lifetime and Retry-After can only postpone the verification schedule", async () => {
-  const harness = verifier([{ document: registry(), retryAfterMs: 12 * minute }, published()]);
-  assert.equal((await verifyRelease(input(), receipt(), harness.deps)).status, "verified-existing");
-  assert.deepEqual(harness.waits, [5 * minute, 12 * minute + 1000]);
+test("pre-submit cache hints survive acceptance and can postpone the first verification", async () => {
+  let time = 0;
+  const accepted = await publishRelease(input(), {
+    now: () => time,
+    readRegistry: async () => ({ document: registry(), retryAfterMs: 70 * minute }),
+    publish: async () => { time = minute; },
+  });
+  const harness = verifier([], time);
+  const pending = await verifyRelease(input(), accepted, harness.deps);
+  assert.equal(pending.nextCheckAt, 70 * minute + 1000);
+  assert.equal(pending.publicationStatus, "accepted");
+  assert.deepEqual(harness.reads, []);
+});
+
+test("registry cache lifetime and Retry-After are independent lower bounds", () => {
   const headers = (values) => new Headers(values);
   assert.equal(registryRetryDelay(headers({ "cache-control": "public, max-age=300", age: "100" })), 200_000);
   assert.equal(registryRetryDelay(headers({ "cache-control": "max-age=60, s-maxage=900", age: "100" })), 800_000);
@@ -155,40 +179,39 @@ test("cache lifetime and Retry-After can only postpone the verification schedule
   assert.equal(registryRetryDelay(headers({ "retry-after": "invalid" })), 0);
 });
 
-test("long cache hints and persistently stale metadata remain pending, never unpublished or verified", async () => {
-  for (const documents of [[registry(), registry(), registry()], [{ document: registry(), retryAfterMs: 60 * minute }]]) {
-    const harness = verifier(documents);
-    const result = await verifyRelease(input(), receipt(), harness.deps);
-    assert.equal(result.status, "verification-pending");
-    assert.ok(result.nextCheckAt >= 40 * minute);
-    assert.equal(result.integrity, integrity);
-  }
-});
-
-test("late provenance and stale channel metadata defer verification without weakening guards", async () => {
+test("missing metadata stays pending across runs until provenance and channel become visible", async () => {
   const noProvenance = published();
   delete noProvenance.versions["1.3.7"].dist.attestations;
   const oldChannel = published();
   oldChannel["dist-tags"].latest = "0.0.0";
-  const harness = verifier([noProvenance, oldChannel, published()]);
-  assert.equal((await verifyRelease(input(), receipt(), harness.deps)).status, "verified-existing");
-  assert.equal(harness.reads.length, 3);
-  const neverProvenance = verifier([noProvenance, noProvenance, noProvenance]);
-  assert.equal((await verifyRelease(input(), receipt(), neverProvenance.deps)).status, "verification-pending");
+  let pending;
+  let startedAt = 0;
+  const attempt = receipt();
+  for (const document of [registry(), noProvenance, oldChannel]) {
+    const harness = verifier([document], startedAt);
+    pending = await verifyRelease(input(), attempt, { ...harness.deps, previousVerification: pending });
+    assert.equal(pending.status, "verification-pending");
+    assert.deepEqual(harness.reads, [Math.max(startedAt, 30 * minute)]);
+    assert.equal(pending.nextCheckAt, harness.reads[0] + 20 * minute);
+    assert.equal(pending.publicationStatus, "accepted");
+    startedAt = pending.nextCheckAt;
+  }
+  const harness = verifier([published()], startedAt);
+  assert.equal((await verifyRelease(input(), attempt, { ...harness.deps, previousVerification: pending })).status, "verified-existing");
 });
 
 test("verification fails immediately for conflicting bytes/source, invalid owner or invalid provenance", async () => {
-  for (const change of [
-    (doc) => { doc.versions["1.3.7"].dist.integrity = "wrong"; },
-    (doc) => { doc.versions["1.3.7"].pwragentRelease.commit = "b".repeat(40); },
-    (doc) => { doc.maintainers = []; },
-    (doc) => { doc.versions["1.3.7"].dist.attestations.provenance.predicateType = "invalid"; },
+  for (const [change, error] of [
+    [(doc) => { doc.versions["1.3.7"].dist.integrity = "wrong"; }, /different bytes/],
+    [(doc) => { doc.versions["1.3.7"].pwragentRelease.commit = "b".repeat(40); }, /different source metadata/],
+    [(doc) => { doc.maintainers = []; }, /Expected npm owner/],
+    [(doc) => { doc.versions["1.3.7"].dist.attestations.provenance.predicateType = "invalid"; }, /missing provenance/],
   ]) {
-    const document = structuredClone(published());
+    const document = published();
     change(document);
     const harness = verifier([document]);
-    await assert.rejects(verifyRelease(input(), receipt(), harness.deps));
-    assert.equal(harness.reads.length, 1);
+    await assert.rejects(verifyRelease(input(), receipt(), harness.deps), error);
+    assert.deepEqual(harness.reads, [30 * minute]);
   }
 });
 
@@ -197,7 +220,7 @@ test("uncertain or authentication failure records intent and fails, while recove
     let saved;
     await assert.rejects(publishRelease(input(), {
       now: () => 0,
-      readRegistry: async () => registry(),
+      readRegistry: async () => ({ document: registry() }),
       recordReceipt: (value) => { saved = structuredClone(value); },
       publish: async () => {
         assert.equal(saved.status, "publish-uncertain", "intent must be retained before invoking npm");
@@ -207,22 +230,38 @@ test("uncertain or authentication failure records intent and fails, while recove
     const recovered = await publishRelease(input(), { previousReceipt: saved,
       readRegistry: async () => assert.fail("recovery must defer reads"),
       publish: async () => assert.fail("recovery must not republish") });
-    const stale = verifier([registry(), registry(), registry()]);
+    const stale = verifier([registry()]);
     assert.equal((await verifyRelease(input(), recovered, stale.deps)).status, "verification-pending");
     const visible = verifier([published()]);
     assert.equal((await verifyRelease(input(), recovered, visible.deps)).status, "verified-existing");
   }
 });
 
-test("accepted attempts and retries with a lost receipt cannot publish again", async () => {
-  for (const previousReceipt of [receipt(), undefined]) {
-    const recovered = await publishRelease(input(), { previousReceipt, resume: true, now: () => 0,
-      readRegistry: async () => assert.fail("retry must defer registry verification"),
-      publish: async () => assert.fail("retry must not republish") });
-    assert.equal(recovered.status, previousReceipt ? "accepted" : "verification-required");
-    const harness = verifier([published()]);
-    assert.equal((await verifyRelease(input(), recovered, harness.deps)).status, "verified-existing");
+test("only the first tag push attempt can PUT, even when retries and dispatches lose the receipt", async () => {
+  let writes = 0;
+  let reads = 0;
+  let saved;
+  const deps = {
+    now: () => 0,
+    readRegistry: async () => { reads++; return { document: registry() }; },
+    publish: async () => { writes++; },
+    recordReceipt: (value) => { saved = structuredClone(value); },
+  };
+  const original = await publishRelease(input(), { ...deps, resume: requiresReadOnlyRecovery("push", "1") });
+  assert.equal(original.status, "accepted");
+  for (const event of ["push", "workflow_dispatch"]) {
+    for (const attempt of [undefined, "1", "2", "3"]) {
+      if (event === "push" && attempt === "1") continue;
+      for (const previousReceipt of [original, undefined]) {
+        const recovered = await publishRelease(input(), { ...deps, previousReceipt, resume: requiresReadOnlyRecovery(event, attempt) });
+        assert.equal(saved.status, previousReceipt ? "accepted" : "verification-required");
+        const harness = verifier([published()]);
+        assert.equal((await verifyRelease(input(), recovered, harness.deps)).status, "verified-existing");
+      }
+    }
   }
+  assert.equal(writes, 1);
+  assert.equal(reads, 1);
 });
 
 test("receipt identity and channel must match the protected source and tested bytes", async () => {
@@ -238,16 +277,8 @@ test("receipt identity and channel must match the protected source and tested by
 test("registry unavailability fails closed before publishing or during verification", async () => {
   await assert.rejects(publishRelease(input(), { readRegistry: async () => { throw new Error("registry unavailable"); },
     publish: async () => assert.fail("must fail closed") }), /registry unavailable/);
-  await assert.rejects(verifyRelease(input(), receipt(), { wait: async () => {},
+  await assert.rejects(verifyRelease(input(), receipt(), { now: () => 30 * minute,
     readRegistry: async () => { throw new Error("registry unavailable"); } }), /registry unavailable/);
-});
-
-test("a verifier retry respects the prior cache deadline even when the acceptance is old", async () => {
-  const harness = verifier([published()]);
-  const previousVerification = { ...receipt(), status: "verification-pending", nextCheckAt: 25 * minute };
-  const result = await verifyRelease(input(), receipt(), { ...harness.deps, previousVerification });
-  assert.equal(result.status, "verified-existing");
-  assert.deepEqual(harness.reads, [25 * minute]);
 });
 
 test("verification-only occupied-version recovery preserves later and maintenance channels", async () => {

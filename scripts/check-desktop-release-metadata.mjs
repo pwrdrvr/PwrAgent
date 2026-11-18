@@ -495,9 +495,8 @@ for (const [jobName, dependency] of [
   ["outpost-publish", "outpost-validate"],
   ["outpost-publish", "publish-release-notes"],
   ["release-complete", "outpost-publish"],
-  ["release-complete", "outpost-verify"],
-  ["outpost-verify", "outpost-publish"],
-  ["outpost-verify", "outpost-validate"],
+  ["release-complete", "outpost-validate"],
+  ["release-complete", "release-preflight"],
   ["release-complete", "publish-release-notes"],
 ]) {
   assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, dependency);
@@ -507,10 +506,10 @@ for (const expected of ["environment: npm-pwragent", "id-token: write", "package
 }
 assertWorkflowTextOnlyInJob(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", "id-token: write");
 assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", "continue-on-error");
-assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "outpost-verify", "continue-on-error");
-assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "outpost-verify", "id-token: write");
-for (const expected of ["publish.mjs --verify", "name: outpost-publication-attempt", "name: outpost-release-receipt"]) {
-  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "outpost-verify", expected);
+assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "release-complete", "continue-on-error");
+assertWorkflowJobExcludesText(releaseWorkflow, ".github/workflows/release.yml", "release-complete", "id-token: write");
+for (const expected of ["publish.mjs --verify", "name: outpost-publication-attempt", "name: outpost-release-receipt", "outpost-release-pending-"]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "release-complete", expected);
 }
 for (const expected of ["github.run_attempt > 1", "name: outpost-publication-attempt", "actions: read"]) {
   assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "outpost-publish", expected);

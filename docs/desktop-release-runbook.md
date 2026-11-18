@@ -353,16 +353,16 @@ retained for the protected npm job; failure prevents desktop packaging.
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
-11. `Publish matching Outpost to npm`, requiring successful Outpost validation
-    and desktop assets/notes, waits for the existing `npm-pwragent` environment
-    review. It publishes the retained tarball using npm OIDC/provenance, or
-    verifies identical already-published bytes/source on a retry. Only this job
-    has `id-token: write`; Apple/Windows signing boundaries are unchanged.
+11. `Submit matching Outpost to npm` requires successful Outpost validation and
+    desktop assets/notes, then waits for the existing `npm-pwragent` review.
+    The first protected tag push can submit the retained tarball using npm
+    OIDC/provenance. Retries and manual dispatches use read-only recovery.
 12. `Verify desktop and Outpost release completion` runs even when a dependency
-    fails or skips, and requires successful desktop publication and npm
-    publication/verification. Missing trust, denied approval, or publish failure
-    is an incomplete release. Follow the [partial-failure recovery](headless-npm-release.md#partial-failures-and-retries),
-    preferring failed-job reruns of the original release run and its tested bytes.
+    fails or skips. It requires successful desktop publication and a verified
+    npm receipt. The first post-submission read waits at least 30 minutes under
+    project policy. A pending receipt gives the earliest continuation time.
+    Follow the [partial-failure recovery](headless-npm-release.md#partial-failures-and-retries)
+    to resume verification on the original run with its tested bytes.
 
 Windows signing and both publication jobs explicitly select the same Node.js
 runtime with `actions/setup-node`, with package-manager caching disabled. They

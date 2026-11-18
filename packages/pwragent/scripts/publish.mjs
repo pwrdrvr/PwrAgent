@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { currentReleaseSource } from "./release-context.mjs";
-import { checkRegistry, readPublicRegistry, readPublicRegistrySnapshot, releaseMetadata } from "./release.mjs";
+import { checkRegistry, readPublicRegistrySnapshot, releaseMetadata } from "./release.mjs";
 
 function validateArtifact(input) {
   const { pkg, desktopVersion, source, packed, bytes, manifest, expectedIntegrity, npmVersion } = input;
@@ -26,6 +26,10 @@ function validateArtifact(input) {
     receipt: { ...source, ...metadata, integrity } };
 }
 
+const minute = 60_000;
+const firstVerificationDelay = 30 * minute;
+const pendingVerificationDelay = 20 * minute;
+
 function validateReceipt(receipt, base) {
   for (const key of ["version", "tag", "commit", "branch", "integrity"]) {
     assert.equal(receipt[key], base[key], `Publication receipt ${key} must match the tested artifact/source`);
@@ -37,6 +41,13 @@ function validateReceipt(receipt, base) {
   assert.ok(["accepted", "publish-uncertain", "verification-required", "verified-existing"].includes(receipt.status),
     "Unexpected publication attempt status");
   assert.ok(Number.isFinite(receipt.attemptedAt), "Publication receipt timestamp missing");
+  assert.ok(receipt.nextCheckAt === undefined || Number.isFinite(receipt.nextCheckAt), "Invalid publication cache deadline");
+}
+
+export function requiresReadOnlyRecovery(eventName, runAttempt) {
+  // A fresh dispatch can follow an earlier run with a lost receipt. Only the
+  // first attempt of a protected tag push is eligible to submit.
+  return eventName !== "push" || runAttempt !== "1";
 }
 
 export async function publishRelease(input, { readRegistry, publish, recordReceipt = () => {},
@@ -54,15 +65,21 @@ export async function publishRelease(input, { readRegistry, publish, recordRecei
     await recordReceipt(receipt);
     return receipt;
   }
-  const before = checkRegistry(metadata, await readRegistry(), expected);
+  const { document, retryAfterMs = 0 } = await readRegistry();
+  const before = checkRegistry(metadata, document, expected);
   const receipt = { ...base, distTag: before.distTag, attemptedAt: now(),
     status: before.status === "verified-existing" ? "verified-existing" : "publish-uncertain" };
+  // A pre-submit packument read can carry a cache deadline too. Preserve it
+  // without assuming the read caused any subsequent stale response.
+  if (before.status === "unpublished" && retryAfterMs > 0) receipt.nextCheckAt = receipt.attemptedAt + retryAfterMs + 1000;
   // Persist intent before npm starts, including on an ambiguous nonzero exit.
   await recordReceipt(receipt);
   if (before.status === "verified-existing") return receipt;
   try {
     await publish(input.packed.filename, before.distTag);
   } catch (cause) {
+    receipt.attemptedAt = now();
+    await recordReceipt(receipt);
     throw new Error("npm publish did not confirm acceptance; publication is uncertain. Resume read-only verification; do not blindly republish.", { cause });
   }
   receipt.status = "accepted";
@@ -71,35 +88,31 @@ export async function publishRelease(input, { readRegistry, publish, recordRecei
   return receipt;
 }
 
-const verificationDelays = [5 * 60_000, 10 * 60_000, 20 * 60_000];
-
 export async function verifyRelease(input, receipt, { readRegistry, previousVerification, now = Date.now,
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const { metadata, expected, receipt: base } = validateArtifact(input);
   validateReceipt(receipt, base);
-  const deadline = now() + 40 * 60_000;
-  let notBefore = receipt.status === "verified-existing" ? now() : Math.max(now(), receipt.attemptedAt) + verificationDelays[0];
+  const startedAt = now();
+  const firstReadAt = receipt.status === "verified-existing" ? startedAt : receipt.attemptedAt + firstVerificationDelay;
+  let nextCheckAt = Math.max(firstReadAt, receipt.nextCheckAt ?? 0);
   if (previousVerification) {
-    validateReceipt({ ...previousVerification, status: receipt.status, attemptedAt: receipt.attemptedAt }, base);
     assert.equal(previousVerification.status, "verification-pending", "Only pending verification can postpone a retry");
+    validateReceipt({ ...previousVerification, status: receipt.status }, base);
     assert.ok(Number.isFinite(previousVerification.nextCheckAt), "Pending verification timestamp missing");
-    notBefore = Math.max(notBefore, previousVerification.nextCheckAt);
+    nextCheckAt = Math.max(nextCheckAt, previousVerification.nextCheckAt);
   }
-  let nextCheckAt = notBefore;
-  for (let attempt = 0; attempt < verificationDelays.length; attempt++) {
-    if (notBefore >= deadline) break;
-    await wait(Math.max(0, notBefore - now()));
+  // Only one observation per job. A future cache deadline outside the existing
+  // runner budget is carried forward without a read or a sleep.
+  if (nextCheckAt < startedAt + 40 * minute) {
+    while (now() < nextCheckAt) await wait(nextCheckAt - now());
     const { document, retryAfterMs = 0 } = await readRegistry();
     const result = checkRegistry(metadata, document, { ...expected, distTag: receipt.distTag }, { verification: true });
     if (result.status === "verified-existing") {
       return { ...base, distTag: result.distTag, status: "verified-existing", publicationStatus: receipt.status, verifiedAt: now() };
     }
-    // These are policy delays, not an npm consistency SLA. Cache hints can only
-    // postpone reads; neither elapsed time nor revalidation proves freshness.
-    nextCheckAt = now() + Math.max(verificationDelays[Math.min(attempt + 1, verificationDelays.length - 1)], retryAfterMs + 1000);
-    notBefore = nextCheckAt;
+    nextCheckAt = now() + Math.max(pendingVerificationDelay, retryAfterMs + 1000);
   }
-  return { ...receipt, status: "verification-pending", nextCheckAt };
+  return { ...receipt, status: "verification-pending", publicationStatus: receipt.status, nextCheckAt };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -129,21 +142,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // next-read constraint. Never use a saved success as registry evidence.
     const receipt = await verifyRelease(input, attempt, { readRegistry: readPublicRegistrySnapshot,
       previousVerification: previous?.status === "verification-pending" ? previous : undefined });
-    writeFileSync(".local/outpost-release-receipt.json", JSON.stringify(receipt, null, 2) + "\n");
+    writeFileSync(verificationPath, JSON.stringify(receipt, null, 2) + "\n");
     console.log(JSON.stringify(receipt));
-    if (receipt.status === "verification-pending") {
-      console.error("npm publication verification is pending; acceptance is not undone. Resume the failed verification job without republishing.");
-      process.exitCode = 1;
-    }
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `status=${receipt.status}\n`);
   } else {
     const receipt = await publishRelease(input, {
-      readRegistry: readPublicRegistry,
+      readRegistry: readPublicRegistrySnapshot,
       previousReceipt: existsSync(attemptPath) ? JSON.parse(readFileSync(attemptPath, "utf8")) : undefined,
-      resume: Number(process.env.GITHUB_RUN_ATTEMPT || 1) > 1,
+      resume: requiresReadOnlyRecovery(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_RUN_ATTEMPT),
       recordReceipt: (receipt) => writeFileSync(attemptPath, JSON.stringify(receipt, null, 2) + "\n"),
       publish: async (filename, distTag) => {
+        // A retryable HTTP response may arrive after the registry consumes the PUT.
         execFileSync("npm", ["publish", path.join(root, filename), "--ignore-scripts", "--access", "public", "--provenance",
-          "--registry", "https://registry.npmjs.org", "--tag", distTag], { env, stdio: "inherit" });
+          "--registry", "https://registry.npmjs.org", "--tag", distTag, "--fetch-retries=0"],
+        { env, stdio: ["ignore", "inherit", "inherit"] });
       },
     });
     console.log(JSON.stringify(receipt));

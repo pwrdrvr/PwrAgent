@@ -111,7 +111,7 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    Dispatching on `main` or another arbitrary ref is rejected. Historical release
    commits may be retried after a branch advances; current-main-tip equality is
    no longer required. Every desktop source checkout uses the event SHA.
-2. **Outpost validation**, on GitHub-hosted Ubuntu with Node **22 and 24**, runs
+2. **Outpost validation**, on GitHub-hosted Ubuntu with Node **24**, runs
    the mocked CLI/release tests and existing package checks before desktop setup.
    These bundle shared JavaScript services/notices, enforce pinned
    `node-pty@1.2.0-beta.15` plus bundled `node-addon-api`, reject additional runtime
@@ -131,20 +131,24 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    dependencies and rebuilds nothing. It rechecks the remote tag SHA, source,
    independently recorded tarball integrity, packed manifest, public ownership
    and channel state. npm **>=11.5.1**, OIDC and `--provenance --ignore-scripts
-   --access public --registry https://registry.npmjs.org` are required. There is
-   no publish path on a PR, ordinary branch push, fork or arbitrary dispatch ref.
+   --access public --registry https://registry.npmjs.org` are required. The
+   npm publish command disables its automatic fetch retries because a retryable
+   response can follow a PUT that was already received. There is
+   npm PUT is eligible only on the first attempt of a protected tag push.
+   Manual dispatches and workflow retries use read-only recovery.
 5. Submission and verification are separate jobs. Before invoking npm, the
    submission job writes `outpost-publication-attempt` with version, tag, source
    commit, tested integrity, channel and `publish-uncertain`. npm exit zero changes
    that receipt to `accepted`; it makes **no immediate registry request**. npm
    stdout/acceptance alone never completes the shared release.
-6. A read-only job verifies public npm metadata after processing time. Its
-   `outpost-release-receipt` records `verified-existing` only after integrity,
-   source, owner, SLSA provenance marker and channel checks pass. Missing version,
-   provenance or channel advancement remains `verification-pending`, retaining
-   the acceptance receipt. The always-running **Verify desktop and Outpost
-   release completion** job requires both submission and verification jobs to
-   succeed, as well as prerequisites, validation and desktop publication.
+6. After prerequisites, Outpost validation, desktop publication and submission
+   or recovery succeed, **Verify desktop and Outpost release completion** reads
+   public npm metadata without publish credentials. It uploads
+   `outpost-release-receipt` only after integrity, source, owner, SLSA provenance
+   marker and channel checks pass. A missing version, provenance or channel
+   advancement produces `verification-pending`. The job uploads
+   `outpost-release-pending-<run attempt>` and reports the release as incomplete.
+   Failed-job reruns resume this job independently of submission.
 
 ### Registry visibility and caching
 
@@ -157,15 +161,17 @@ provides a read-after-write deadline. There is no documented consistency SLA on
 which to base a short post-publish poll. Cache-busting or revalidation is not
 proof of freshness.
 
-Our verification policy waits at least five minutes before its first read, then
-at least ten and twenty minutes between subsequent reads (three reads total).
-These are conservative policy intervals, not guaranteed npm processing times.
-`Cache-Control` shared/max age minus `Age`, and `Retry-After`, can postpone the
-next read further. No random query strings or tight loops repeatedly warm an
-old full package document. A forty-minute verification window bounds each job;
-a longer cache deadline produces a pending receipt containing `nextCheckAt`.
-Retries restore that deadline. Elapsed time never substitutes for the actual
-integrity/source/provenance/channel checks.
+Our policy allows the first post-submission read at least 30 minutes after the
+attempt finished. This is a project policy interval. A pre-submit packument GET
+could populate a shared cache, but the retained release logs do not establish
+that it caused a later stale response. A known pre-submit cache deadline can
+postpone the first read. Each completion attempt makes at most one verification
+read. If the metadata is still pending, the next read is due after at least 20
+more minutes. `Cache-Control` shared/max age minus `Age` and `Retry-After` can push
+that deadline later. A deadline outside the existing 40-minute verification
+window produces a pending receipt immediately. Reruns restore the latest
+retained deadline from the original run. Elapsed time never substitutes for
+the actual integrity, source, owner, provenance and channel checks.
 
 ## Partial failures and retries
 
@@ -186,8 +192,8 @@ not automatically unpublish/delete either service's artifacts.
   Acceptance is not inferred from stdout, and no retry is attempted in that job.
 - If verification remains pending, the submission job stays successful and the
   shared release stays incomplete. Wait until the receipt's `nextCheckAt`, then
-  rerun the **failed jobs of the original release run**. Only the verifier and
-  completion job need to run again; no publish or environment approval is needed.
+  rerun the **failed jobs of the original release run**. Only the read-only
+  completion job runs again, using the retained attempt receipt and tarball.
 - When submission itself failed, a retry restores its attempt receipt from the
   same run. Every workflow retry is read-only recovery, including a retry with a
   missing/expired attempt receipt, and never calls npm publish. The verifier must
@@ -195,10 +201,10 @@ not automatically unpublish/delete either service's artifacts.
   occupied version whose original response was lost. Original successful desktop
   jobs, tested tarball and independent integrity output are preserved. Any
   applicable submission environment approval still applies.
-- If the original run never reached npm and read-only recovery cannot find the
-  version, investigate npm state before deliberately starting a new release run.
-  An absent registry read or lost artifact does not establish that submission
-  never occurred. Do not repeatedly dispatch publishes to resolve uncertainty.
+- A fresh manual dispatch also uses read-only npm recovery. If the original tag
+  push never submitted and read-only recovery cannot find the version, investigate
+  the original run and plan a new paired version. A missing receipt or absent
+  package snapshot cannot establish that submission never occurred.
 - An occupied version is accepted only if registry **SHA-512 integrity**, packed
   source tag/commit metadata and npm's **SLSA provenance marker** match the tested
   release, with a valid channel at or ahead of it. This is an authenticated public
