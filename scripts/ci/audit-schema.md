@@ -22,8 +22,11 @@ state (downloaded/expired/budget-excluded/not-selected-redundant-or-no-timings/
 unavailable/pending), sha256, members [{member,sizeBytes}]. ZIP SHA is exact.
 ZIPs stay under zips/<artifactId>.zip; no paths are extracted. The dedicated
 audit-tests.py reads bounded Vitest JSON and Playwright HTML embedded ZIPs.
-Each tests.jsonl row records run/artifact/member/platform/lane/attempt/retry/
-file/title/status/duration provenance. Rerun-ID artifact attempts stay null.
+Each tests.jsonl row records run/artifact/member/platform/lane/attempt/command/
+retry/file/title/status/duration provenance. Rerun-ID artifact attempts stay null.
+Playwright's preserved first report supplies the initial command when a retry
+was prepared. The regular report in that artifact is kept outside initial
+statistics, even when its internal retry index is zero.
 Vitest internal retry index is unavailable (null); Playwright exposes it.
 Skipped/interrupted durations are excluded from quantiles, never imputed.
 Longitudinal summaries retain distinct head counts but are descriptive only;
@@ -42,8 +45,8 @@ No deletion from name/runtime/model opinion alone. Cross-track proposals exchang
 compact candidate IDs and protected behavior, not source dumps. Each child owns
 its isolated branch/report and discovers decision tools independently.
 
-Reproduce: `python3 scripts/ci/audit-runs.py collect`, then `artifacts`, then
-`summarize`, `python3 scripts/ci/audit-tests.py`, then
+Reproduce: `python3 scripts/ci/audit-runs.py collect`, then `artifacts`,
+`python3 scripts/ci/audit-tests.py`, `python3 scripts/ci/audit-runs.py summarize`, then
 `python3 scripts/ci/audit-report.py`. Existing manifest/cache is reused; use a fresh --root for a new
 sample. Four metadata/download workers; bounded transport-only retries; 128 MiB per ZIP,
 2 GiB total default. Budget exclusion is explicit. No CI mutation/rerun, registry,

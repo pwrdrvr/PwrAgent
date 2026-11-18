@@ -32,7 +32,7 @@ def main(root):
         # Normalize hosted checkout roots, preserving repo-relative identity.
         row["file"] = re.sub(r"^.*?[/\\]PwrAg(?:e)?nt[/\\](?:PwrAg(?:e)?nt[/\\])?", "", row["file"], flags=re.I).replace("\\", "/")
         out.write(json.dumps(row) + "\n")
-        if row["attempt"] == 1 and row["retry"] in (0, None):
+        if row["attempt"] == 1 and row["command"] == "initial" and row["retry"] in (0, None):
             key = (row["kind"], row["platform"], row["lane"], row["file"], row["title"])
             groups[key].append((row["durationS"], row["status"], row["runId"], row["headSha"]))
     for artifact in inventory:
@@ -48,10 +48,24 @@ def main(root):
         count_before = count
         formats = set()
         with zipfile.ZipFile(root / "zips" / f"{artifact['artifactId']}.zip") as archive:
+            # CI copies the original HTML out of Playwright's output directory
+            # before a separate retry command, whose retry index restarts at zero.
+            members = archive.namelist()
+            has_retry_evidence = any(
+                member.endswith(("first-playwright-report/index.html", "/e2e-retry.json", "/e2e-first-last.json"))
+                for member in members
+            )
             for info in archive.infolist():
                 if info.file_size > 32 * 1024 ** 2:
                     continue
                 if info.filename.endswith("playwright-report/index.html"):
+                    report_directory = pathlib.PurePosixPath(info.filename).parent.name
+                    if report_directory == "first-playwright-report":
+                        command = "initial"
+                    elif report_directory == "playwright-report":
+                        command = "retry" if has_retry_evidence else "initial"
+                    else:
+                        command = None
                     match = re.search(rb'data:application/zip;base64,([A-Za-z0-9+/=]+)', archive.read(info))
                     if not match:
                         continue
@@ -66,7 +80,7 @@ def main(root):
                             for test in value.get("tests", []):
                                 for result in test.get("results", []):
                                     duration = result.get("duration")
-                                    add({**context, "kind": "e2e", "file": value["fileName"], "testId": test["testId"], "title": " > ".join([*test.get("path", []), test["title"]]), "project": test.get("projectName"), "retry": result.get("retry"), "status": result.get("status"), "outcome": test.get("outcome"), "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename + "!" + member.filename})
+                                    add({**context, "kind": "e2e", "command": command, "file": value["fileName"], "testId": test["testId"], "title": " > ".join([*test.get("path", []), test["title"]]), "project": test.get("projectName"), "retry": result.get("retry"), "status": result.get("status"), "outcome": test.get("outcome"), "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename + "!" + member.filename})
                 elif info.filename.endswith(".json") and "unit" in info.filename:
                     value = json.loads(archive.read(info))
                     if not isinstance(value, dict) or "testResults" not in value:
@@ -75,7 +89,7 @@ def main(root):
                     for suite in value["testResults"]:
                         for test in suite.get("assertionResults", []):
                             duration = test.get("duration")
-                            add({**context, "kind": "unit", "file": suite["name"], "title": test["fullName"], "testId": None, "project": None, "retry": None, "status": test["status"], "outcome": None, "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename})
+                            add({**context, "kind": "unit", "command": "initial", "file": suite["name"], "title": test["fullName"], "testId": None, "project": None, "retry": None, "status": test["status"], "outcome": None, "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename})
         coverage.append({**context, "formats": sorted(formats), "observations": count - count_before})
     out.close()
     summary = []

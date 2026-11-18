@@ -51,13 +51,13 @@ Per-step seconds, descriptive p50 / p95. A missing phase is not zero; multiple c
 
 | Job | Phase | n | p50 / p95 s |
 |---|---|---:|---|
-| Linux Desktop E2E (lane 1 of 4) | setup/other | 1005 | 2.0 / 21.0 |
+| Linux Desktop E2E (lane 1 of 4) | setup/other | 1407 | 2.0 / 20.0 |
 | Linux Desktop E2E (lane 1 of 4) | test-command | 204 | 460.5 / 523.9 |
 | Linux Desktop E2E (lane 1 of 4) | retry | 199 | 1.0 / 2.0 |
-| Windows desktop-main (lane 1 of 2) | setup/other | 800 | 1.0 / 58.0 |
+| Windows desktop-main (lane 1 of 2) | setup/other | 1200 | 2.0 / 56.0 |
 | Windows desktop-main (lane 1 of 2) | test-command | 200 | 632.5 / 704.0 |
 | Windows desktop-main (lane 1 of 2) | retry | 213 | 2.0 / 3.0 |
-| Windows desktop-main (lane 2 of 2) | setup/other | 800 | 1.0 / 57.0 |
+| Windows desktop-main (lane 2 of 2) | setup/other | 1200 | 2.0 / 56.0 |
 | Windows desktop-main (lane 2 of 2) | test-command | 200 | 515.5 / 654.1 |
 | Windows desktop-main (lane 2 of 2) | retry | 218 | 2.0 / 4.1 |
 
@@ -65,7 +65,7 @@ Slowest observed test-job wall duration per run (not a full DAG critical path): 
 
 ## Highest observed per-case cost
 
-Initial-attempt, first-retry-index observations only; separate platform/lane. Vitest JSON does not expose internal retry index (null), so unit observations are not claimed to be initial internal attempts. Durations omit skipped/interrupted cases; counts/statuses remain in evidence. Paths/titles are identities, not deletion evidence. Values across changed source remain descriptive.
+Rankings use the original workflow attempt and initial test command. Playwright uses internal retry index zero in that command. Results from the separate CI retry command remain in the evidence. Vitest JSON does not expose internal retry index (null), so unit observations are not claimed to be initial internal attempts. Durations omit skipped/interrupted cases; counts/statuses remain in evidence. Paths/titles are identities, not deletion evidence. Values across changed source remain descriptive.
 
 | Platform/lane | Test | n / runs | total s | p50 | p95 | max |
 |---|---|---:|---:|---:|---:|---:|
@@ -79,7 +79,7 @@ Initial-attempt, first-retry-index observations only; separate platform/lane. Vi
 | e2e/linux/1 | archive-group-dialog-layout.spec.ts: keeps the archive group confirmation usable at every window size and zoom | 152 / 152 | 1728.3 | 11.8 | 12.9 | 14.2 |
 | e2e/linux/1 | codex-environment-setup.spec.ts: thread environment Run command uses the current cwd after workspace handoff | 152 / 152 | 1583.9 | 10.4 | 10.8 | 11.2 |
 | unit/macos/1 | apps/desktop/src/main/__tests__/headless-profile.oracle.test.ts: fresh desktop and Node roots preserve one profile's native identities, titles and canon... | 69 / 69 | 1512.5 | 21.6 | 31.7 | 34.6 |
-| e2e/linux/4 | sidebar-hover-user-actions.spec.ts: sidebar commands under a resting pointer > an unpinned selected directory does not flash back to pinned under churn | 161 / 160 | 1447.0 | 9.1 | 9.7 | 10.3 |
+| e2e/linux/4 | sidebar-hover-user-actions.spec.ts: sidebar commands under a resting pointer > an unpinned selected directory does not flash back to pinned under churn | 160 / 160 | 1437.5 | 9.1 | 9.7 | 10.3 |
 | e2e/linux/4 | update-check.spec.ts: a menu check reports itself live and ends on an actionable offer | 160 / 160 | 1432.9 | 9.0 | 9.3 | 9.4 |
 | e2e/linux/4 | thread-branch-drift.spec.ts: keeps the branch drift warning open after refreshing observed checkout state | 160 / 160 | 1431.2 | 8.9 | 9.3 | 9.9 |
 | e2e/linux/1 | a11y.spec.ts: desktop renderer accessibility (WCAG2 AA, dark theme) > smoke fixture surfaces have no violations | 157 / 157 | 1411.9 | 8.9 | 12.2 | 18.9 |
@@ -90,19 +90,19 @@ Descriptive only; n≥10 and p50≥1s. Ranked by IQR/median to resist isolated o
 
 | Platform/lane | Test | n | IQR/median | MAD s | p50 / p95 / max s |
 |---|---|---:|---:|---:|---|
-| windows/4 | thread-markdown.spec.ts: renders markdown content in transcript messages (standard) | 84 | 1.55 | 0.9 | 3.1 / 7.7 / 8.7 |
 | macos/4 | packages/owner-core/src/__tests__/research-service.differential.property.test.ts: research service, validated against projections accepts, refuses and | 69 | 1.37 | 0.8 | 1.2 / 2.9 / 4.6 |
 | macos/2 | composer-draft-persistence-regression.spec.ts: keeps Tiptap launchpad and reply drafts with pasted images across switching and refresh | 10 | 1.23 | 0.9 | 6.1 / 15.6 / 16.0 |
 | macos/3 | apps/desktop/src/main/__tests__/usage-activity-cadence.test.ts: replays active and idle usage cadence: duplicate-10hz | 69 | 0.97 | 0.5 | 1.1 / 2.3 / 4.6 |
 | macos/2 | composer-draft-persistence-regression.spec.ts: keeps every pasted line inside the active Tiptap code block | 10 | 0.96 | 1.0 | 3.9 / 11.2 / 11.4 |
 | macos/1 | apps/desktop/src/main/__tests__/owner-conformance.test.ts: owner conformance: desktop and the Outpost outpost terminal failure leaves accepted new_tur | 69 | 0.91 | 0.4 | 1.5 / 4.1 / 5.0 |
+| macos/2 | composer-markdown-paste.spec.ts: pasting prose without a code block preserves paragraph separators | 68 | 0.81 | 1.0 | 3.3 / 6.5 / 12.7 |
 | linux/4 | shared-messaging-profile.spec.ts: desktop reads portable pairing and activity and hands local service mutations back to Node | 160 | 0.80 | 0.7 | 2.2 / 7.7 / 12.3 |
 | macos/3 | apps/desktop/src/main/__tests__/backend-registry.test.ts: DesktopBackendRegistry reports detached HEAD as the expected branch for new worktree forks | 69 | 0.79 | 0.9 | 2.2 / 4.7 / 5.1 |
-| macos/2 | composer-markdown-paste.spec.ts: pasting prose without a code block preserves paragraph separators | 69 | 0.79 | 1.1 | 3.4 / 6.5 / 12.7 |
 | macos/3 | apps/desktop/src/main/__tests__/usage-activity-cadence.test.ts: replays active and idle usage cadence: steady-10hz | 69 | 0.75 | 0.5 | 1.1 / 2.9 / 3.5 |
+| macos/3 | apps/desktop/src/main/__tests__/pr-auto-dispatch-limits.property.test.ts: Auto-fix repair turns with repeated enable requests (model) never lets repea | 69 | 0.74 | 0.6 | 2.1 / 4.0 / 4.3 |
 
 ## Reproduction and limits
 
-Run `python3 scripts/ci/audit-runs.py collect --before 2026-11-18T19:21:26Z`, `python3 scripts/ci/audit-runs.py artifacts`, `python3 scripts/ci/audit-runs.py summarize`, `python3 scripts/ci/audit-tests.py`, then `python3 scripts/ci/audit-report.py`. Frozen cache makes resumption deterministic; use a fresh --root to select a new sample. Four workers, transport-only bounded backoff, 128 MiB/ZIP and 2 GiB compressed download budget. No reruns or remote mutations. Raw ZIPs, manifest, SHA hashes, JSONL observations, status counts, full quantiles and phase breakdowns remain under ignored `.local/ci-audit/`.
+Run `python3 scripts/ci/audit-runs.py collect --before 2026-11-18T19:21:26Z`, `python3 scripts/ci/audit-runs.py artifacts`, `python3 scripts/ci/audit-tests.py`, `python3 scripts/ci/audit-runs.py summarize`, then `python3 scripts/ci/audit-report.py`. Frozen cache makes resumption deterministic; use a fresh --root to select a new sample. Four workers, transport-only bounded backoff, 128 MiB/ZIP and 2 GiB compressed download budget. No reruns or remote mutations. Raw ZIPs, manifest, SHA hashes, JSONL observations, status counts, full quantiles and phase breakdowns remain under ignored `.local/ci-audit/`.
 
 Unit/E2E classification reports and deletion branches are independent. Timing alone cannot establish uselessness. Every removal needs protected behavior, a surviving stronger test, source evidence, and native CI validation. No local unit/typecheck/E2E was run for this audit. Static Oxlint, typed lint, and boundaries passed (existing warnings). Expected deletion savings remain estimates until measured.

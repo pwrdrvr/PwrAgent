@@ -79,6 +79,8 @@ def seconds(start, end):
 
 def phase(name):
     name = name.lower()
+    if re.match(r"^(?:post )?checkout\b", name):
+        return "setup/other"
     if "retry" in name:
         return "retry"
     if "upload" in name or "record" in name or "verify" in name or "check" in name:
