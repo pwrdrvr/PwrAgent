@@ -424,6 +424,8 @@ function buildOpenAiBandedPricingEntries(params: {
   catalogVersion: string;
   displayModel: string;
   effectiveFrom: number;
+  effectiveTo?: number;
+  fastRateMultiplier?: number;
   model: string;
   shortRates: {
     inputUsdPerMillion: number;
@@ -431,17 +433,20 @@ function buildOpenAiBandedPricingEntries(params: {
     cacheWriteInputUsdPerMillion: number;
     outputUsdPerMillion: number;
   };
-  ultrafastRates: readonly PricingRateInterval[];
+  ultrafastRates?: readonly PricingRateInterval[];
 }): PricingCatalogEntry[] {
-  const { catalogVersion, displayModel, effectiveFrom, model, shortRates } = params;
+  const { catalogVersion, displayModel, effectiveFrom, effectiveTo, model, shortRates } = params;
   const rateFromMultiplier = (rate: number, multiplier: number) =>
     microsToCurrencyUnits(dollarsToMicros(rate * multiplier));
 
+  const standard = { catalogVersion, effectiveFrom, effectiveTo, serviceTier: "standard", label: "Standard", multiplier: 1 } as const;
   const speeds = [
-    { catalogVersion, effectiveFrom, serviceTier: "standard", label: "Standard", multiplier: 1 },
-    { catalogVersion, effectiveFrom, serviceTier: "priority", label: "Fast", multiplier: 2 },
-    ...params.ultrafastRates.map((rate) => ({ ...rate, serviceTier: "ultrafast", label: "Ultrafast" } as const)),
-  ] as const;
+    standard,
+    ...(params.fastRateMultiplier === undefined ? [] : [
+      { ...standard, serviceTier: "priority", label: "Fast", multiplier: params.fastRateMultiplier } as const,
+    ]),
+    ...(params.ultrafastRates ?? []).map((rate) => ({ ...rate, serviceTier: "ultrafast", label: "Ultrafast" } as const)),
+  ];
 
   return speeds.flatMap(({ label, multiplier, ...speed }): PricingCatalogEntry[] => [
     {
@@ -482,6 +487,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
     effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
     model: "gpt-6.2-astra",
     displayModel: "GPT-6.2 Astra",
     shortRates: {
@@ -495,6 +501,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT62_PRICING_CATALOG_VERSION,
     effectiveFrom: OPENAI_GPT62_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
     model: "gpt-6.2-sol",
     displayModel: "GPT-6.2 Sol",
     shortRates: {
@@ -508,6 +515,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION,
     effectiveFrom: OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
     model: "gpt-6.1-sol",
     displayModel: "GPT-6.1 Sol",
     shortRates: {
@@ -521,6 +529,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
     effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
     model: "gpt-6.1-terra",
     displayModel: "GPT-6.1 Terra",
     shortRates: {
@@ -529,11 +538,11 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
       cacheWriteInputUsdPerMillion: 1.25,
       outputUsdPerMillion: 5,
     },
-    ultrafastRates: [],
   }),
   ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
     effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
     model: "gpt-6-astra",
     displayModel: "GPT-6 Astra",
     shortRates: {
@@ -676,33 +685,31 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     rateBandId: "input-gt-272k",
     requiresRequestInputTokens: true,
   },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
+  ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
     model: OPENAI_DAYBREAK_BLUE_MODEL,
     displayModel: OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL,
-    displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputUsdPerMillion: 4,
-    cachedInputUsdPerMillion: 0.4,
-    outputUsdPerMillion: 20,
-  },
-  {
-    catalogId: OPENAI_PRICING_CATALOG_ID,
+    shortRates: {
+      inputUsdPerMillion: 4,
+      cachedInputUsdPerMillion: 0.4,
+      cacheWriteInputUsdPerMillion: 5,
+      outputUsdPerMillion: 20,
+    },
+  }),
+  ...buildOpenAiBandedPricingEntries({
     catalogVersion: OPENAI_DAYBREAK_BLUE_PRICING_CATALOG_VERSION,
     model: OPENAI_DAYBREAK_BLUE_MODEL,
     displayModel: OPENAI_DAYBREAK_BLUE_DISPLAY_MODEL,
-    displayTier: "Standard",
     effectiveFrom: OPENAI_DAYBREAK_BLUE_PRICING_EFFECTIVE_FROM,
     effectiveTo: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputUsdPerMillion: 5,
-    cachedInputUsdPerMillion: 0.5,
-    outputUsdPerMillion: 30,
-  },
+    shortRates: {
+      inputUsdPerMillion: 5,
+      cachedInputUsdPerMillion: 0.5,
+      cacheWriteInputUsdPerMillion: 6.25,
+      outputUsdPerMillion: 30,
+    },
+  }),
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
