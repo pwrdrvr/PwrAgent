@@ -411,7 +411,7 @@ test("keeps a bottom-pinned long transcript glued when a reply image preview res
   }
 });
 
-test("clicking jump-to-latest reaches the bottom in a single click", async () => {
+test("jump-to-latest reaches the bottom on one click and stays pinned as content grows", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -424,29 +424,18 @@ test("clicking jump-to-latest reaches the bottom in a single click", async () =>
   });
 
   try {
-    await app.window
-      .getByRole("button", { name: /Long scroll stability thread/i })
-      .first()
-      .click();
-
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Long scroll stability thread"
-      })
-    ).toBeVisible();
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    await selectLongThread(app.window, transcript);
 
     const list = app.window.locator(".transcript-list__items");
     const jumpToLatest = app.window.getByRole("button", {
       name: "Jump to latest message",
     });
 
+    // Zero distance also describes an empty/loading pane. Wait for real
+    // overflow before asserting that the hydrated transcript is bottom-pinned.
     await expect
-      .poll(async () =>
-        await list.evaluate((element) =>
-          Math.round(Math.max(element.scrollHeight - element.clientHeight, 0))
-        )
-      )
+      .poll(async () => (await readScrollMetrics(list)).maxScrollTop)
       .toBeGreaterThan(2000);
 
     await expect
@@ -483,41 +472,6 @@ test("clicking jump-to-latest reaches the bottom in a single click", async () =>
       })
       .toBeLessThanOrEqual(4);
     await expect(jumpToLatest).toHaveCount(0);
-  } finally {
-    await app.close();
-  }
-});
-
-test("jump-to-latest re-enters glue mode so later content stays pinned", async () => {
-  const app = await launchElectronApp({
-    fixturePath: path.resolve(
-      specDir,
-      "fixtures/long-thread-scroll-stability/replay.fixture.json"
-    ),
-    windowSize: {
-      width: 1280,
-      height: 720,
-    },
-  });
-
-  try {
-    const transcript = app.window.getByRole("region", { name: "Transcript" });
-    await selectLongThread(app.window, transcript);
-
-    const list = app.window.locator(".transcript-list__items");
-    const jumpToLatest = app.window.getByRole("button", {
-      name: "Jump to latest message",
-    });
-
-    // Zero distance also describes an empty/loading pane. Wait for real
-    // overflow before asserting that the hydrated transcript is bottom-pinned.
-    await expect
-      .poll(async () => (await readScrollMetrics(list)).maxScrollTop)
-      .toBeGreaterThan(2000);
-
-    await expect
-      .poll(async () => await distanceFromTranscriptBottom(list))
-      .toBeLessThanOrEqual(4);
 
     // A real upward navigation cancels pending bottom-follow frames. A bare
     // scrollTop assignment can be overwritten by the opening layout's frame.

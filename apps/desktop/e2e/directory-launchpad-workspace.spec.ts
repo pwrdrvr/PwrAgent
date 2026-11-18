@@ -926,41 +926,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
   }
 });
 
-test("opening a directory launchpad persists directory identity for future draft saves", async () => {
-  const fixture = await createDirectoryLaunchpadFixture();
-  const app = await launchElectronApp({
-    fixturePath: fixture.fixturePath,
-  });
-
-  try {
-    await app.window.getByRole("tab", { name: "directories" }).click();
-    await app.window
-      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
-      .click();
-
-    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
-
-    const rootDir = path.dirname(fixture.fixturePath);
-    const repoDir = path.join(rootDir, "FixtureRepo");
-    const directoryKey = directoryKeyFor(repoDir);
-    await expect
-      .poll(async () => {
-        const overlay = await readOverlayState(app.homeRoot);
-        return overlay.directoryLaunchpads?.[directoryKey];
-      })
-      .toMatchObject({
-        directoryKind: "directory",
-        directoryLabel: "FixtureRepo",
-        directoryPath: navigationPath(repoDir),
-        prompt: "",
-      });
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
-test("directory launchpad draft save does not leak the directory key into project labels", async () => {
+test("directory launchpad persists its identity before and after saving a draft", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -971,29 +937,32 @@ test("directory launchpad draft save does not leak the directory key into projec
     const repoDir = path.join(rootDir, "FixtureRepo");
     const directoryKey = directoryKeyFor(repoDir);
 
+    const readDraft = async () => (await readOverlayState(app.homeRoot)).directoryLaunchpads?.[directoryKey];
+
     await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
+    await expect.poll(readDraft).toMatchObject({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: navigationPath(repoDir),
+      prompt: "",
+    });
 
     await app.window
       .getByRole("textbox", { name: "New thread" })
       .fill("Keep the project identity stable");
 
-    await expect
-      .poll(async () => {
-        const overlay = await readOverlayState(app.homeRoot);
-        return overlay.directoryLaunchpads?.[directoryKey];
-      })
-      .toMatchObject({
-        directoryKey,
-        directoryKind: "directory",
-        directoryLabel: "FixtureRepo",
-        directoryPath: navigationPath(repoDir),
-        prompt: "Keep the project identity stable",
-      });
+    await expect.poll(readDraft).toMatchObject({
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: navigationPath(repoDir),
+      prompt: "Keep the project identity stable",
+    });
 
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
     await expect(app.window.getByText(/^directory:/)).toHaveCount(0);
