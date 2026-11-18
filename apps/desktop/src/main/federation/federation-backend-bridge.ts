@@ -256,7 +256,6 @@ import type {
 } from "@pwragent/shared";
 import {
   isAppServerBackendKind,
-  isThreadExecutionMode,
   normalizeNavigationSnapshotThreadKeys,
   qualifyThreadUrlsInText,
   type ThreadExecutionMode,
@@ -510,7 +509,6 @@ export type CheckIncomingAgentMessageAccess = (request: {
   backend: AppServerBackendKind;
   threadId: string;
   senderExecutionMode: ThreadExecutionMode | undefined;
-  requestedExecutionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
   sandbox?: string;
 }) => Promise<string | undefined>;
@@ -526,7 +524,6 @@ async function refuseIncomingAgentMessage(
     backend: AppServerBackendKind;
     threadId: string;
     messageOrigin: AppServerThreadMessageOrigin | undefined;
-    requestedExecutionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;
   },
@@ -538,9 +535,6 @@ async function refuseIncomingAgentMessage(
     backend: request.backend,
     threadId: request.threadId,
     senderExecutionMode: request.messageOrigin.sourceThread?.executionMode,
-    ...(isThreadExecutionMode(request.requestedExecutionMode)
-      ? { requestedExecutionMode: request.requestedExecutionMode }
-      : {}),
     ...(typeof request.approvalPolicy === "string"
       ? { approvalPolicy: request.approvalPolicy }
       : {}),
@@ -1555,7 +1549,6 @@ export function registerFederationBackendHandlers(params: {
           backend: request.backend,
           threadId: request.threadId,
           messageOrigin,
-          requestedExecutionMode: request.executionMode,
           approvalPolicy: request.approvalPolicy,
           sandbox: request.sandbox,
         },

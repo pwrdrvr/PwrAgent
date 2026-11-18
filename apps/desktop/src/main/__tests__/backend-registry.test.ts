@@ -76776,7 +76776,12 @@ describe("agent tool access ceiling", () => {
         for (const targetMode of MODES) {
           for (const executionMode of MODES) {
             for (const sandbox of SANDBOXES) {
-              const { codexClient, registry, call } = await startCaller({ callerMode, targetMode });
+              // The ceiling alone; the message-access setting has its own property.
+              const { codexClient, registry, call } = await startCaller({
+                callerMode,
+                targetMode,
+                blockMessagesToHigherAccess: false,
+              });
               const ceiling = Math.min(rank(callerMode), rank(targetMode));
               const requested = Math.max(
                 rank(executionMode),
@@ -77002,9 +77007,10 @@ describe("agent tool access ceiling", () => {
                 blockMessagesToHigherAccess,
               });
               const ceiling = Math.min(rank(callerMode), rank(targetMode));
-              const runsAt = executionMode ? rank(executionMode) : rank(targetMode);
+              // A lower named mode does not get past the block: the text stays
+              // in the target's history, read by its later turns at its own mode.
               const refused = (executionMode !== undefined && rank(executionMode) > ceiling)
-                || (blockMessagesToHigherAccess && runsAt > rank(callerMode));
+                || (blockMessagesToHigherAccess && rank(targetMode) > rank(callerMode));
               const result = await call("send_message_to_thread", {
                 backend: "codex",
                 threadId: "target-thread",
@@ -77058,6 +77064,45 @@ describe("agent tool access ceiling", () => {
       });
       expect(codexClient.startTurnCalls.filter((turn) => turn.threadId === "target-thread")).toHaveLength(0);
       await registry.close();
+    });
+
+    it("judges a running target at the higher of its live turn and its stored mode", async () => {
+      for (const callerMode of MODES) {
+        for (const liveMode of MODES) {
+          for (const storedMode of MODES) {
+            const { overlayStore, registry, call } = await startCaller({
+              callerMode,
+              targetMode: liveMode,
+            });
+            // The target's turn starts at its stored mode, which then changes:
+            // a raise reaches the turns after this one, which read the message.
+            await registry.publishLocalEvent({
+              backend: "codex",
+              notification: {
+                method: "turn/started",
+                params: { threadId: "target-thread", turnId: "target-turn", turn: { id: "target-turn" } },
+              },
+            });
+            await overlayStore.setThreadExecutionMode({
+              backend: "codex",
+              threadId: "target-thread",
+              executionMode: storedMode,
+            });
+
+            const result = await call("send_message_to_thread", {
+              backend: "codex",
+              threadId: "target-thread",
+              prompt: "Take this one.",
+            });
+
+            const scenario = { callerMode, liveMode, storedMode };
+            const refused = Math.max(rank(liveMode), rank(storedMode)) > rank(callerMode);
+            expect({ ...scenario, refused: !result.success && result.payload.code === "forbidden" })
+              .toEqual({ ...scenario, refused });
+            await registry.close();
+          }
+        }
+      }
     });
 
     it("refuses a turn in the caller's own thread before the provider", async () => {

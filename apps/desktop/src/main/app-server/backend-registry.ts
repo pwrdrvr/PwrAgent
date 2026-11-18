@@ -2858,39 +2858,34 @@ export class DesktopBackendRegistry {
    * Why an agent's message to a thread this instance owns must not go, or
    * undefined when it may. With `general.block_agent_messages_to_higher_access`
    * on, a target above the sender is refused: its agent would act on the
-   * sender's text with access the sender does not have. That access is the
-   * mode the message names when it starts a new turn, since the agent access
-   * ceiling holds a named mode at or below both threads. A running turn, or
-   * one still starting, keeps its own mode, so a message steered into one, or
-   * one naming no mode, is acted on at the target's own (live turn first). A
-   * raw approval or sandbox
-   * override counts too. An older peer sends no mode and counts as Default
-   * Access. Only agent tool calls come here; operator-typed text never does.
+   * sender's text with access the sender does not have. The target's access
+   * is the most its thread grants: its stored mode or its live turn's,
+   * whichever is higher, or a raw approval or sandbox override above both. A
+   * lower mode the message names does not lower it. The text stays in the
+   * thread's history, where every later turn at the thread's own access
+   * reads it. An older peer sends no mode and counts as Default Access. Only
+   * agent tool calls come here; operator-typed text never does.
    */
   async checkAgentMessageAccess(params: {
     backend: AppServerBackendKind;
     threadId: string;
     senderExecutionMode: ThreadExecutionMode | undefined;
-    requestedExecutionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;
   }): Promise<string | undefined> {
     if (!this.resolveBlockAgentMessagesToHigherAccessFn()) return undefined;
     const target = { backend: params.backend, threadId: params.threadId };
     const senderExecutionMode = params.senderExecutionMode ?? "default";
-    // The same occupancy the turn queue steers on: a start in flight counts.
-    const turnRunning = this.threadHasActiveTurn(params.threadId, params.backend);
-    let targetExecutionMode = params.requestedExecutionMode && !turnRunning
-      ? params.requestedExecutionMode
-      : await this.resolveHandoffSourceExecutionMode({
-          ...target,
-          turnId: this.getActiveTurnForThread(target)?.turnId,
-          overlay: await this.overlayStore.getThreadOverlayState(target),
-        });
-    const rawExecutionMode = threadExecutionModeForRawPermissions(params);
-    if (threadExecutionModeExceeds(rawExecutionMode, targetExecutionMode)) {
-      targetExecutionMode = rawExecutionMode;
-    }
+    const overlay = await this.overlayStore.getThreadOverlayState(target);
+    const turnId = this.getActiveTurnForThread(target)?.turnId;
+    const targetExecutionMode = [
+      await this.resolveHandoffSourceExecutionMode({ ...target, overlay }),
+      ...(turnId
+        ? [await this.resolveHandoffSourceExecutionMode({ ...target, turnId, overlay })]
+        : []),
+      threadExecutionModeForRawPermissions(params),
+    ].reduce((highest, mode) =>
+      threadExecutionModeExceeds(mode, highest) ? mode : highest);
     return threadExecutionModeExceeds(targetExecutionMode, senderExecutionMode)
       ? agentMessageAccessRefusalMessage({
           senderExecutionMode,
@@ -19949,7 +19944,6 @@ export class DesktopBackendRegistry {
           backend,
           threadId,
           senderExecutionMode: messageOrigin.sourceThread?.executionMode,
-          requestedExecutionMode: request.args.executionMode,
           approvalPolicy: request.args.approvalPolicy,
           sandbox: request.args.sandbox,
         });

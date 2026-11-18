@@ -898,9 +898,10 @@ export type DesktopGeneralSettingsSnapshot = {
   /**
    * Refuse an agent's send_message_to_thread or steer_thread when the target
    * would act on it with more access than the sender has, so a Default Access
-   * thread cannot get Full Access work done through a message. A new turn
-   * that names a mode at or below the sender's still runs. Operator-typed
-   * messages and to-do cards the operator approves are never affected.
+   * thread cannot get Full Access work done through a message. Naming a lower
+   * mode for the turn does not get past it: the text stays in the thread's
+   * history for its later turns. Operator-typed messages and to-do cards the
+   * operator approves are never affected.
    */
   blockAgentMessagesToHigherAccess: DesktopSettingsValue<boolean>;
   /**
