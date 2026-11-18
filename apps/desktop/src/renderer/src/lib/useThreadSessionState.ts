@@ -1807,10 +1807,13 @@ function pruneOptimisticEntries(
             )
         );
       }
-      // `replay.messages` carries no turn, so a send bound to its turn is
-      // matched against the renderable entries.
+      // Completion can promote a pending copy into the replay while its
+      // provider echo is still missing. That copy cannot acknowledge a
+      // later send with the same text. Use renderable rows for turn matches
+      // because replay.messages need not carry turn metadata.
       return !response.replay.messages.some((message) =>
         message.id !== reconciledLaunchpadMessageId
+        && !isPendingEntryId(message.id)
         && messageMatchesOptimisticEntry(message, entry, {
           allowImageUrlMismatch: true,
         })
