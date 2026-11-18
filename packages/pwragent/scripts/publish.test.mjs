@@ -100,8 +100,8 @@ test("an occupied version with different source or no provenance is never accept
 const minute = 60_000;
 const receipt = (status = "accepted") => ({ ...source, version: "1.3.7", distTag: "latest", integrity,
   status, attemptedAt: 0 });
-function verifier(documents) {
-  let time = 0;
+function verifier(documents, startedAt = 0) {
+  let time = startedAt;
   const waits = [];
   const reads = [];
   return { waits, reads, deps: {
@@ -115,6 +115,24 @@ function verifier(documents) {
     },
   } };
 }
+
+test("the first read is gated by submission time and all retained deadlines", async () => {
+  for (const status of ["accepted", "publish-uncertain", "verification-required"]) {
+    for (const elapsed of [0, 1, 29, 30, 31, 90]) {
+      for (const savedDeadline of [0, 25, 30, 37]) {
+        const startedAt = elapsed * minute;
+        const harness = verifier([published()], startedAt);
+        const attempt = receipt(status);
+        const previousVerification = { ...attempt, status: "verification-pending", nextCheckAt: savedDeadline * minute };
+        const result = await verifyRelease(input(), attempt, { ...harness.deps, previousVerification });
+        assert.deepEqual(harness.reads, [Math.max(elapsed, 30, savedDeadline) * minute],
+          JSON.stringify({ status, elapsed, savedDeadline }));
+        assert.equal(result.status, "verified-existing");
+        assert.equal(result.publicationStatus, status);
+      }
+    }
+  }
+});
 
 test("deferred verification waits before reading and backs off across stale full documents", async () => {
   const harness = verifier([registry(), registry(), published()]);
