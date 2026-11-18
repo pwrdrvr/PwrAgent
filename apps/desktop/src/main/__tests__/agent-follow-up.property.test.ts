@@ -15,10 +15,14 @@ afterEach(() => vi.unstubAllEnvs());
 
 const MINUTE = 60_000;
 
-async function withWorld<T>(run: (world: AgentFollowUpWorld) => Promise<T>): Promise<T> {
+async function withWorld<T>(
+  run: (world: AgentFollowUpWorld) => Promise<T>,
+  options: { reuseProcessId?: boolean } = {},
+): Promise<T> {
   const db = openInMemoryStateDb();
   try {
     const world = new AgentFollowUpWorld(db);
+    world.reuseProcessId = options.reuseProcessId ?? false;
     await world.start();
     return await run(world);
   } finally {
@@ -149,7 +153,7 @@ describe("agent follow-up lifecycle model", () => {
     await fc.assert(fc.asyncProperty(
     // fast-check's default size stops near ten commands, too few to reach a
     // crash behind a busy thread; ask for the whole range.
-    fc.commands(commands, { maxCommands: 40, size: "max" }), async (cmds) => {
+    fc.commands(commands, { maxCommands: 40, size: "max" }), fc.boolean(), async (cmds, reuseProcessId) => {
       await withWorld(async (world) => {
         const model: Model = { created: [], cancelled: new Map(), inFlightAtCrash: new Set() };
         await fc.asyncModelRun(() => ({ model, real: world }), cmds);
@@ -174,7 +178,7 @@ describe("agent follow-up lifecycle model", () => {
           expect(action.status, `follow-up ${action.id} never started`).toBe("started");
           expect(world.admittedCount(action.id)).toBe(1);
         }
-      });
+      }, { reuseProcessId });
     }), { numRuns: 150 });
   });
 
@@ -279,6 +283,48 @@ describe("agent follow-up lifecycle model", () => {
       expect(world.admittedCount(started)).toBe(1);
       expect(world.store.get(unreached)).toMatchObject({ status: "started" });
       expect(world.admittedCount(unreached)).toBe(1);
+    });
+  });
+
+  it("re-admits a lock hold by its stored cause after a later build rewords the refusal", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const created = await world.create(1);
+      if (!("id" in created)) throw new Error(created.refused);
+      await world.tick(2 * MINUTE);
+      expect(world.store.get(created.id)).toMatchObject({ status: "held", holdCause: "thread_lock" });
+      world.db.raw.prepare("UPDATE scheduled_thread_actions SET error_message = ? WHERE action_id = ?")
+        .run("Paused until the operator lifts the hold.", created.id);
+
+      await world.restart();
+      await world.setLocked(false);
+      expect(world.admittedCount(created.id)).toBe(1);
+      expect(world.store.get(created.id)).toMatchObject({ status: "started" });
+    });
+  });
+
+  it("re-admits a hold an older build stored with only its lock refusal, and leaves other holds to the operator", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const hold = (id: string, reason: string): void => {
+        world.store.create({
+          id, ...FOLLOW_UP_THREAD, kind: "turn", origin: "desktop", scheduledFor: world.clock + 60 * MINUTE,
+          displayText: id, turn: { input: [{ type: "text", text: id }] }, now: world.clock,
+        });
+        world.store.claim(id, { now: world.clock, ownerId: "scheduler:1:legacy", leaseExpiresAt: world.clock + 30_000 });
+        // Older builds stored neither a holder nor a cause.
+        world.store.markHeld(id, `scheduled-turn:${id}`, reason, world.clock);
+      };
+      hold("scheduled-action:legacy-lock", "This thread is locked. Unlock it to send.");
+      hold("scheduled-action:steer", "Wait for the active turn to finish before retrying this message.");
+
+      await world.restart();
+      await world.setLocked(false);
+      await world.tick(10 * MINUTE);
+      expect(world.admittedCount("scheduled-action:legacy-lock")).toBe(1);
+      expect(world.store.get("scheduled-action:legacy-lock")).toMatchObject({ status: "started" });
+      expect(world.admittedCount("scheduled-action:steer")).toBe(0);
+      expect(world.store.get("scheduled-action:steer")).toMatchObject({ status: "held" });
     });
   });
 

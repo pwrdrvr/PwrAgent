@@ -10,6 +10,7 @@ import type {
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
   ScheduledThreadActionKind,
+  ScheduledThreadActionHoldCause,
   ScheduledThreadActionOrigin,
   ScheduledThreadActionStatus,
   PendingWakeScheduledActions,
@@ -516,7 +517,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       if (!held) return undefined;
       return this.claimWith(id, params, {
         queueEntryId: undefined,
-        ...(options.readmit ? { manualReleaseRequired: false } : {}),
+        ...(options.readmit ? { manualReleaseRequired: false, holdCause: undefined } : {}),
       });
     }).immediate();
   }
@@ -525,13 +526,19 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     // A suspended thread's follow-ups cannot be claimed, so listing them
     // would only make every scheduler pass try and fail.
     const rows = this.stateDb.raw.prepare(
-      `SELECT action_id, claim_owner, error_message FROM scheduled_thread_actions
+      `SELECT action_id, claim_owner, error_message, updated_at FROM scheduled_thread_actions
        WHERE status = 'held' AND (? IS NULL OR action_id = ?)
          AND NOT ` + SUSPENDED_AGENT_FOLLOW_UP + `
        ORDER BY scheduled_for ASC, created_at ASC`,
-    ).all(id ?? null, id ?? null) as Array<{ action_id: string; claim_owner: string | null; error_message: string | null }>;
+    ).all(id ?? null, id ?? null) as Array<{
+      action_id: string;
+      claim_owner: string | null;
+      error_message: string | null;
+      updated_at: number;
+    }>;
     return rows.map((row) => ({
       id: row.action_id,
+      updatedAt: row.updated_at,
       ...(row.claim_owner ? { holderId: row.claim_owner } : {}),
       ...(row.error_message ? { errorMessage: row.error_message } : {}),
     }));
@@ -540,7 +547,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   private claimWith(
     id: string,
     params: ClaimParams,
-    patch: Pick<Partial<ScheduledThreadAction>, "manualReleaseRequired" | "queueEntryId">,
+    patch: Pick<Partial<ScheduledThreadAction>, "holdCause" | "manualReleaseRequired" | "queueEntryId">,
   ): ScheduledThreadAction | undefined {
     return this.stateDb.raw.transaction(() => {
       const row = this.stateDb.raw.prepare(
@@ -629,7 +636,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     errorMessage: string,
     now: number,
     ownerId?: string,
-    holderId?: string,
+    hold?: { holderId?: string; cause?: ScheduledThreadActionHoldCause },
   ): ScheduledThreadAction | undefined {
     return this.transition(
       id,
@@ -639,11 +646,12 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         queueEntryId,
         errorMessage,
         manualReleaseRequired: true,
+        holdCause: hold?.cause,
       },
       now,
       // The holder's in-memory queue keeps the entry. Holding is no lease:
       // nothing renews it, and only the holder's death ends it.
-      { clearClaim: true, expectedOwner: ownerId, holder: holderId },
+      { clearClaim: true, expectedOwner: ownerId, holder: hold?.holderId },
     );
   }
 
@@ -847,6 +855,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     patch: Partial<Pick<
       ScheduledThreadAction,
       | "errorMessage"
+      | "holdCause"
       | "manualReleaseRequired"
       | "queueEntryId"
       | "status"
@@ -1043,6 +1052,7 @@ function payloadFromAction(
     imageAttachments: action.imageAttachments,
     fileAttachments: action.fileAttachments,
     manualReleaseRequired: action.manualReleaseRequired,
+    holdCause: action.holdCause,
     turn: action.turn,
     review: action.review,
   };

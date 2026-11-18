@@ -159,26 +159,30 @@ describe("ScheduledThreadActionStore", () => {
     });
     create("locked-1");
     store.claim("locked-1", claim(2_000));
-    expect(store.markHeld("locked-1", "queue-1", "This thread is locked.", 2_001, "instance-1", "instance-1"))
-      .toMatchObject({ status: "held", queueEntryId: "queue-1", manualReleaseRequired: true });
+    expect(store.markHeld("locked-1", "queue-1", "This thread is locked.", 2_001, "instance-1",
+      { holderId: "instance-1", cause: "thread_lock" }))
+      .toMatchObject({ status: "held", queueEntryId: "queue-1", manualReleaseRequired: true, holdCause: "thread_lock" });
+    expect(store.get("locked-1")).toMatchObject({ holdCause: "thread_lock" });
     expect(store.listHeldHolds()).toEqual([
-      { id: "locked-1", holderId: "instance-1", errorMessage: "This thread is locked." },
+      { id: "locked-1", updatedAt: 2_001, holderId: "instance-1", errorMessage: "This thread is locked." },
     ]);
 
     // Two owners that both judged the holder dead: the first claim wins.
     const second = { ...claim(3_000), ownerId: "instance-2" };
     const third = { ...claim(3_000), ownerId: "instance-3" };
-    expect(store.claimHeld("locked-1", "instance-1", second, { readmit: true })).toMatchObject({
-      status: "dispatching", queueEntryId: undefined, manualReleaseRequired: false,
-    });
+    const readmitted = store.claimHeld("locked-1", "instance-1", second, { readmit: true });
+    expect(readmitted).toMatchObject({ status: "dispatching", queueEntryId: undefined, manualReleaseRequired: false });
+    expect(readmitted?.holdCause).toBeUndefined();
     expect(store.claimHeld("locked-1", "instance-1", third, { readmit: true })).toBeUndefined();
-    expect(store.markHeld("locked-1", "queue-1", "This thread is locked.", 3_001, "instance-2", "instance-2"))
+    expect(store.markHeld("locked-1", "queue-1", "This thread is locked.", 3_001, "instance-2",
+      { holderId: "instance-2", cause: "thread_lock" }))
       .toMatchObject({ status: "held" });
     // A stale view of the holder cannot take it from its new, live holder.
     expect(store.claimHeld("locked-1", "instance-1", third, { readmit: true })).toBeUndefined();
-    expect(store.listHeldHolds()).toEqual([
-      { id: "locked-1", holderId: "instance-2", errorMessage: "This thread is locked." },
+    expect(store.listHeldHolds("locked-1")).toEqual([
+      { id: "locked-1", updatedAt: 3_001, holderId: "instance-2", errorMessage: "This thread is locked." },
     ]);
+    expect(store.listHeldHolds("another")).toEqual([]);
 
     // An unlock's release takes a lease before the queue starts the entry.
     expect(store.markHeldQueued("locked-1", "queue-other", claim(4_000))).toBeUndefined();

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ReleaseQueuedTurnResponse } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
+import {
+  readSchedulerOwnerLiveness,
+  ScheduledThreadActionService,
+  schedulerOwnerId,
+} from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -882,5 +886,30 @@ describe("ScheduledThreadActionService", () => {
       threadId: "thread-1",
     });
     harness.service.dispose();
+  });
+});
+
+describe("readSchedulerOwnerLiveness", () => {
+  const identity = { processId: 9_100_001, instanceId: "runtime-v2-owner", startedAt: 1_700_000_000_000 };
+  const probes = (processAlive: boolean, markerLive: boolean) => ({
+    isProcessAlive: (processId: number) => processAlive && processId === identity.processId,
+    isRuntimeIdentityLive: (candidate: typeof identity) => markerLive
+      && candidate.instanceId === identity.instanceId
+      && candidate.processId === identity.processId
+      && candidate.startedAt === identity.startedAt,
+  });
+
+  it("matches the runtime identity, so a reused process ID is not the owner", () => {
+    const ownerId = schedulerOwnerId(identity);
+    expect(readSchedulerOwnerLiveness(ownerId, probes(true, true))).toBe("alive");
+    expect(readSchedulerOwnerLiveness(ownerId, probes(true, false))).toBe("unconfirmed");
+    expect(readSchedulerOwnerLiveness(ownerId, probes(false, false))).toBe("dead");
+  });
+
+  it("decides an older build's owner ID by its process ID, and a malformed one as dead", () => {
+    expect(readSchedulerOwnerLiveness(`scheduler:${identity.processId}:token`, probes(true, false))).toBe("alive");
+    expect(readSchedulerOwnerLiveness(`scheduler:${identity.processId}:token`, probes(false, false))).toBe("dead");
+    expect(readSchedulerOwnerLiveness("instance-1", probes(true, true))).toBe("dead");
+    expect(readSchedulerOwnerLiveness("scheduler:0:token", probes(true, true))).toBe("dead");
   });
 });

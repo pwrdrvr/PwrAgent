@@ -4,6 +4,7 @@ import type {
   ListScheduledThreadActionsResponse,
   PendingWakeScheduledActions,
   ScheduledThreadAction,
+  ScheduledThreadActionHoldCause,
   ScheduledThreadActionKind,
   ScheduledThreadActionOrigin,
   ScheduledThreadReviewPayload,
@@ -45,6 +46,8 @@ export type ScheduledThreadActionClaim = {
 /** A held action and the scheduler whose in-memory queue holds its entry. */
 export type ScheduledThreadActionHold = {
   id: string;
+  /** Changes whenever the row does, so a decision about it can be cached. */
+  updatedAt: number;
   /** Absent when no live queue can hold it, such as after recovery. */
   holderId?: string;
   errorMessage?: string;
@@ -121,8 +124,11 @@ export interface ScheduledThreadActionStorage {
     errorMessage: string,
     now: number,
     ownerId?: string,
-    /** The scheduler whose in-memory queue keeps the held entry. */
-    holderId?: string,
+    /**
+     * `holderId`: the scheduler whose in-memory queue keeps the held entry.
+     * `cause`: why it holds, stored so a later build need not parse text.
+     */
+    hold?: { holderId?: string; cause?: ScheduledThreadActionHoldCause },
   ): ScheduledThreadAction | undefined;
   /**
    * The queue is about to start an entry it had held, such as one an unlock

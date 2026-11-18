@@ -61,7 +61,11 @@ An action becomes `held` in three ways:
   and when a release attempt does not start the turn
   (`apps/desktop/src/main/scheduled-actions/scheduled-thread-action-service.ts`).
   It records the holder: the scheduler whose in-memory queue keeps the entry,
-  in `claim_owner` with no lease. Nothing renews it.
+  in `claim_owner` with no lease. Nothing renews it. When the hold is a
+  thread lock it also stores `holdCause: "thread_lock"` in the payload. The
+  build that wrote the refusal text classifies it, so no later build has to
+  parse that text. A row an older build held has no cause, and its refusal
+  text decides.
 - **At recovery.** `recoverExpiredClaims` returns a recoverable expired
   `dispatching` action that has `manualReleaseRequired` to `held` and clears
   its queue entry. Its release had not been attempted, so nothing started.
@@ -82,8 +86,10 @@ Two operations take an action out of `held`:
 
 A lock's hold lives in the holder's memory and dies with it. Every pass of
 the due-action evaluation, which runs at launch, on the heartbeat and when the
-restart gate opens, first looks for `held` actions whose reason is a thread
-lock and whose holder is not alive. It claims each with `claimHeld`, which
+restart gate opens, first looks for `held` actions whose cause is a thread
+lock and whose holder is not alive. It reads an action's payload only once its
+holder is found dead, and remembers a row that is not a lock hold until the
+row changes. It claims each with `claimHeld`, which
 succeeds only while the dead holder still holds it, so two instances cannot
 both take it. The claim drops `manualReleaseRequired`, and the action is
 dispatched as when it came due: a thread still locked holds it again in this
@@ -96,6 +102,19 @@ Each admitted action has a stable queue identity. Multiple scheduled reviews
 behind one active turn keep distinct pending IDs; the registry chains them
 across review terminal events instead of deduplicating or starting them
 concurrently.
+
+A scheduler's owner ID is `scheduler:<pid>:<token>:<instanceId>:<startedAt>`.
+The last two are the process's profile runtime identity, the one Research
+and automation runs record. An owner is alive while a fresh runtime marker of
+the profile carries that identity, and dead once its process ID is gone. A
+process ID that is alive with no matching fresh marker is unconfirmed: a live
+owner whose marker aged out (the machine just woke, or its main thread was
+busy), or a dead one whose process ID was reused. It counts as alive for
+`SCHEDULER_OWNER_CONFIRMATION_GRACE_MS`, twice the marker's 45-second TTL,
+from when this scheduler first saw it so, then as dead. That time is kept in
+memory, so the rule writes nothing. An owner ID from an older build,
+`scheduler:<pid>:<token>`, has no identity, and its process ID alone decides.
+The same rule protects held actions and expired claims.
 
 Only expired claims whose scheduler owner is no longer live are recovered,
 so a second live process sharing the profile cannot take another instance's
