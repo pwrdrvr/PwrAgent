@@ -10488,7 +10488,15 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
     ).map((label) => label.textContent);
     // Providers only: the Helper model row lives on the AI Providers page.
-    expect(subLabels).toEqual(["Codex", "Claude", "Grok", "Gemini CLI"]);
+    expect(subLabels).toEqual([
+      "Codex",
+      "Claude",
+      "Grok",
+      "Gemini CLI",
+      "Local decision model",
+      "TypeSafe Jev",
+      "OpenAI Decisions",
+    ]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
     });
@@ -10498,6 +10506,130 @@ describe("SettingsScreen", () => {
     expect(
       geminiButton.querySelector(".settings-nav__subdot--off"),
     ).not.toBeNull();
+  });
+
+  it("lists every AI provider in the nav under the same kind headings as the AI Providers page", () => {
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const sublist = nav.querySelector("#settings-nav-sublist-models");
+    const navGroups = Array.from(
+      sublist?.querySelectorAll<HTMLElement>(".settings-nav__subgroup") ?? [],
+    ).map((group) => {
+      // Each kind heading names its rows for a screen reader.
+      const heading = group.querySelector(".settings-nav__subgroup-label");
+      expect(group).toHaveAttribute("role", "group");
+      expect(group.getAttribute("aria-labelledby")).toBe(heading?.id);
+      return {
+        kind: heading?.textContent,
+        rows: Array.from(
+          group.querySelectorAll(".settings-nav__sublabel"),
+        ).map((label) => label.textContent),
+      };
+    });
+    // No row sits outside a kind group.
+    expect(
+      sublist?.querySelectorAll(".settings-nav__subbutton").length,
+    ).toBe(navGroups.flatMap((group) => group.rows).length);
+
+    // Oracle: the AI Providers page's own index, read in document order.
+    const index = screen.getByLabelText("Provider index");
+    const pageGroups = Array.from(index.children).map((group) => {
+      const heading = group.querySelector(".settings-index__kind");
+      expect(group).toHaveAttribute("role", "group");
+      expect(group.getAttribute("aria-labelledby")).toBe(heading?.id);
+      return {
+        kind: heading?.querySelector(".settings-index__kind-label")
+          ?.textContent,
+        rows: Array.from(
+          group.querySelectorAll(".settings-index__name"),
+        ).map((name) => name.textContent),
+      };
+    });
+    // No page row sits outside a kind group either.
+    expect(index.querySelectorAll(".settings-index__row").length)
+      .toBe(pageGroups.flatMap((group) => group.rows).length);
+    expect(navGroups).toEqual(pageGroups);
+    expect(navGroups.map((group) => group.kind)).toEqual([
+      "Harnesses",
+      "On this computer",
+      "Direct API",
+    ]);
+
+    // A provider that needs a key says so without colour.
+    const jev = within(nav).getByRole("button", { name: /TypeSafe Jev/ });
+    expect(jev.querySelector(".settings-nav__subchip")?.textContent)
+      .toBe("no key");
+    expect(jev.querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    const local = within(nav).getByRole("button", {
+      name: /Local decision model/,
+    });
+    expect(local.querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+    expect(local.querySelector(".settings-nav__subchip")).toBeNull();
+
+    // A kind row opens that provider's screen, as its Configure row does.
+    fireEvent.click(jev);
+    expect(within(nav).getByRole("button", { name: /TypeSafe Jev/ }))
+      .toHaveAttribute("aria-current", "page");
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("TypeSafe Jev");
+    fireEvent.click(
+      within(nav).getByRole("button", { name: /OpenAI Decisions/ }),
+    );
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("OpenAI Decisions");
+  });
+
+  it("marks a keyed direct API provider ready and a refused local endpoint invalid in the nav", () => {
+    const baseSnapshot = createSnapshot();
+    const configuredKey = {
+      configured: true,
+      source: "keychain" as const,
+      writable: true,
+    };
+    const snapshot = createSnapshot({
+      models: {
+        ...baseSnapshot.models,
+        // Hand-edited: the decision client accepts loopback only.
+        decisionModels: { local: { endpoint: "http://10.0.0.5:8787" } },
+        decisionSecrets: {
+          localApiKey: { configured: false, source: "unset", writable: false },
+          jevApiKey: configuredKey,
+        },
+        openaiDecisions: {
+          ...baseSnapshot.models.openaiDecisions,
+          apiKey: configuredKey,
+        },
+      },
+    } as Partial<DesktopSettingsSnapshot>);
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    for (const name of [/TypeSafe Jev/, /OpenAI Decisions/]) {
+      const row = within(nav).getByRole("button", { name });
+      expect(row.querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+      expect(row.querySelector(".settings-nav__subchip")).toBeNull();
+    }
+    const local = within(nav).getByRole("button", {
+      name: /Local decision model/,
+    });
+    expect(local.querySelector(".settings-nav__subdot--bad")).not.toBeNull();
+    expect(local.querySelector(".settings-nav__subchip")?.textContent)
+      .toBe("invalid");
   });
 
   it("updates Claude's nav status from cached installation and authentication without probing", () => {

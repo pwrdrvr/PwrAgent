@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   buildProviderPickerEntries,
   providerPickerValue,
@@ -94,10 +94,8 @@ import {
 import { SettingsSwitch } from "./SettingsSwitch";
 import {
   DECISION_PROVIDER_FOCUS,
-  DECISION_PROVIDER_NAMES,
   DecisionModelDefaults,
   DecisionProviderScreen,
-  decisionSecrets,
 } from "./DecisionModelSettings";
 import {
   OPENAI_DECISIONS_FOCUS,
@@ -105,6 +103,12 @@ import {
   openAIDecisionsKeyLabel,
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
+import {
+  modelServicesByKind,
+  PROVIDER_KINDS,
+  type ModelServiceEntry,
+  type ProviderKindEntry,
+} from "./provider-kinds";
 import {
   commandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure,
@@ -220,6 +224,9 @@ export function ModelsSettings(props: {
   );
   const claude = backends.find((backend) => backend.kind === "claude");
   const claudeStatus = claudeProviderStatus(claude?.claude);
+  const decision = resolveDecisionModelSettings(
+    props.snapshot.models.decisionModels,
+  );
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [checkingManagedCodex, setCheckingManagedCodex] = useState(false);
@@ -894,85 +901,141 @@ export function ModelsSettings(props: {
         description="Each provider has its own screen for paths, auth, and connection checks."
       >
         <div className="settings-index" aria-label="Provider index">
-          <SettingsIndexRow
-            name="Codex"
-            meta={codex.discovery.selectedCommand ?? "No executable selected"}
-            chip={codex.discovery.selectedCommand ? "Discovered" : "Not found"}
-            chipKind={codex.discovery.selectedCommand ? "ok" : "muted"}
-            onOpen={() => props.onFocusChange?.("codex")}
-          />
-          <SettingsIndexRow
-            name="Claude"
-            meta={claude?.claude?.executable
-              ?? (claude?.claude ? "Claude Code not found" : "Not checked yet")}
-            chip={claudeStatus.label}
-            chipKind={claudeStatus.tone}
-            onOpen={() => props.onFocusChange?.("claude")}
-          />
-          {orderedAcpEntries.map((entry) => {
-            const enabled = acpAgentEnabledInSnapshot(
-              props.snapshot,
-              entry.registryId,
-            );
-            // Only a legacy CLI on disk: the operator must act, and the
-            // remediation card lives on the focused screen — the hub
-            // chip is their only hint anything is wrong.
-            const legacyOnly =
-              !entry.installed && Boolean(entry.incompatibleInstances?.length);
-            return (
-              <SettingsIndexRow
-                key={entry.registryId}
-                name={entry.name}
-                meta={entry.version ? `v${entry.version}` : undefined}
-                chip={enabled ? acpStatusLabel(entry) : "Disabled"}
-                chipKind={
-                  enabled
-                    ? entry.installed
-                      ? "ok"
-                      : legacyOnly
-                        ? "warn"
-                        : "muted"
-                    : "muted"
-                }
-                off={!enabled}
-                onOpen={() => props.onFocusChange?.(entry.registryId)}
-              />
-            );
-          })}
-          {DECISION_PROVIDER_IDS.map((provider) => {
-            const decision = resolveDecisionModelSettings(props.snapshot.models.decisionModels);
-            const ready = provider === "local" || decisionSecrets(props.snapshot).jevApiKey.configured;
-            return (
-              <SettingsIndexRow
-                key={provider}
-                name={DECISION_PROVIDER_NAMES[provider]}
-                meta={provider === "local" ? decision.localEndpoint : decision.jevModel}
-                chip={decision.model === provider ? "In use" : ready ? "Decision model" : "No API key"}
-                chipKind={decision.model === provider ? "ok" : "muted"}
-                onOpen={() => props.onFocusChange?.(DECISION_PROVIDER_FOCUS[provider])}
-              />
-            );
-          })}
-          <SettingsIndexRow
-            name="OpenAI Decisions"
-            meta="Registered decisions on gpt-6-luna"
-            chip={openAIDecisionsKeyLabel(openAIDecisionsKeyState(props.snapshot))}
-            chipKind={openAIDecisionsKeyState(props.snapshot).configured ? "ok" : "muted"}
-            onOpen={() => props.onFocusChange?.(OPENAI_DECISIONS_FOCUS)}
-          />
-          {orderedAcpEntries.length === 0 ? (
-            <p className="settings-empty">
-              {acpCatalog.unavailable
-                ? "ACP registry controls are unavailable in this build."
-                : acpCatalog.error
-                  ?? (acpCatalog.loaded
-                    ? "No AI providers are available right now."
-                    : "Discovering AI providers…")}
-            </p>
-          ) : null}
+          <ProviderKindGroup kind={PROVIDER_KINDS[0]}>
+            <SettingsIndexRow
+              name="Codex"
+              meta={codex.discovery.selectedCommand ?? "No executable selected"}
+              chip={codex.discovery.selectedCommand ? "Discovered" : "Not found"}
+              chipKind={codex.discovery.selectedCommand ? "ok" : "muted"}
+              onOpen={() => props.onFocusChange?.("codex")}
+            />
+            <SettingsIndexRow
+              name="Claude"
+              meta={claude?.claude?.executable
+                ?? (claude?.claude ? "Claude Code not found" : "Not checked yet")}
+              chip={claudeStatus.label}
+              chipKind={claudeStatus.tone}
+              onOpen={() => props.onFocusChange?.("claude")}
+            />
+            {orderedAcpEntries.map((entry) => {
+              const enabled = acpAgentEnabledInSnapshot(
+                props.snapshot,
+                entry.registryId,
+              );
+              // Only a legacy CLI on disk: the operator must act, and the
+              // remediation card lives on the focused screen — the hub
+              // chip is their only hint anything is wrong.
+              const legacyOnly =
+                !entry.installed && Boolean(entry.incompatibleInstances?.length);
+              return (
+                <SettingsIndexRow
+                  key={entry.registryId}
+                  name={entry.name}
+                  meta={entry.version ? `v${entry.version}` : undefined}
+                  chip={enabled ? acpStatusLabel(entry) : "Disabled"}
+                  chipKind={
+                    enabled
+                      ? entry.installed
+                        ? "ok"
+                        : legacyOnly
+                          ? "warn"
+                          : "muted"
+                      : "muted"
+                  }
+                  off={!enabled}
+                  onOpen={() => props.onFocusChange?.(entry.registryId)}
+                />
+              );
+            })}
+            {orderedAcpEntries.length === 0 ? (
+              <p className="settings-empty">
+                {acpCatalog.unavailable
+                  ? "ACP registry controls are unavailable in this build."
+                  : acpCatalog.error
+                    ?? (acpCatalog.loaded
+                      ? "No AI providers are available right now."
+                      : "Discovering AI providers…")}
+              </p>
+            ) : null}
+          </ProviderKindGroup>
+          {modelServicesByKind(props.snapshot).map((group) => (
+            <ProviderKindGroup key={group.kind.kind} kind={group.kind}>
+              {group.services.map((service) => (
+                <ModelServiceIndexRow
+                  key={service.focus}
+                  service={service}
+                  decision={decision}
+                  snapshot={props.snapshot}
+                  onOpen={() => props.onFocusChange?.(service.focus)}
+                />
+              ))}
+            </ProviderKindGroup>
+          ))}
         </div>
       </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+/** One kind of provider in the index: a heading saying what its rows
+ *  share, which also names them as a group for a screen reader. The nav's
+ *  AI Providers sublist uses the same headings in the same order. */
+function ProviderKindGroup(props: {
+  kind: ProviderKindEntry;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+  return (
+    <div
+      aria-labelledby={headingId}
+      className="settings-index__group"
+      role="group"
+    >
+      <p className="settings-index__kind" id={headingId}>
+        <span className="settings-index__kind-label">{props.kind.label}</span>
+        <span className="settings-index__kind-description">
+          {props.kind.description}
+        </span>
+      </p>
+      {props.children}
+    </div>
+  );
+}
+
+/** An index row for a provider that runs no threads (decision models,
+ *  OpenAI Decisions). */
+function ModelServiceIndexRow(props: {
+  service: ModelServiceEntry;
+  decision: ReturnType<typeof resolveDecisionModelSettings>;
+  snapshot: DesktopSettingsSnapshot;
+  onOpen: () => void;
+}) {
+  const { decision, service } = props;
+  if (service.decisionProvider) {
+    const inUse = decision.model === service.decisionProvider;
+    return (
+      <SettingsIndexRow
+        name={service.name}
+        meta={service.decisionProvider === "local"
+          ? decision.localEndpoint
+          : decision.jevModel}
+        chip={inUse
+          ? "In use"
+          : service.keyReady ? "Decision model" : "No API key"}
+        chipKind={inUse ? "ok" : "muted"}
+        onOpen={props.onOpen}
+      />
+    );
+  }
+  const keyState = openAIDecisionsKeyState(props.snapshot);
+  return (
+    <SettingsIndexRow
+      name={service.name}
+      meta="Registered decisions on gpt-6-luna"
+      chip={openAIDecisionsKeyLabel(keyState)}
+      chipKind={keyState.configured ? "ok" : "muted"}
+      onOpen={props.onOpen}
+    />
   );
 }
 

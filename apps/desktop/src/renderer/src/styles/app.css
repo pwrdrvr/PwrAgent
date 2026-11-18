@@ -13484,8 +13484,37 @@ a.button {
   text-align: left;
 }
 
-.settings-nav__subbutton:last-child {
+/* The sublist's last row only: inside a kind group (AI Providers), a
+   group's last row is not the list's. */
+.settings-nav__sublist-clip > .settings-nav__subbutton:last-child,
+.settings-nav__subgroup:last-child > .settings-nav__subbutton:last-child {
   margin-bottom: 4px;
+}
+
+/* A run of sublist rows under a kind heading (AI Providers → Harnesses,
+   On this computer, Direct API). The heading continues the sublist's left
+   rule and starts where the rows' dots do, so it reads as part of the
+   group above it, not as a new nav category; it is the category label's
+   type one step smaller. Plain text, never a Tab stop. */
+.settings-nav__subgroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-nav__subgroup-label {
+  margin: 0 0 0 28px;
+  padding: 8px 8px 4px;
+  border-left: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.settings-nav__subgroup:first-child .settings-nav__subgroup-label {
+  padding-top: 2px;
 }
 
 .settings-nav__subbutton:hover,
@@ -13718,6 +13747,41 @@ a.button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* One kind of row in a hub index (AI Providers → Harnesses, On this
+   computer, Direct API), named for a screen reader by its heading: the
+   nav's kind label, plus a line on what the rows share. Rows keep the
+   index's 8px gap; a later group adds 8px so a break reads as a break. */
+.settings-index__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-index__group + .settings-index__group {
+  margin-top: 8px;
+}
+
+.settings-index__kind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.settings-index__kind-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-index__kind-description {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .settings-index__row {
