@@ -529,20 +529,32 @@ return to a retryable FIFO after a host confirmation failure.
 The queue also retains that acceptance when its started lifecycle publication
 rejects. Buffered native terminals still settle ownership and install failure
 holds; observer failures cannot restore accepted start or steering input.
-Ordinary authenticated agent messages without requested settings or explicit
-`new_turn` delivery use the same queue's individual `submitSteer` admission on
-both hosts. Desktop's ordinary-send and active-control callers each retain one
-queue identity per accepted message, including additional input from the same
-sender. New messages never append to an earlier accepted batch. Existing grouped
+Agent messages, monitor results and PwrAgent's own wakes
+(`isSteerableAgentTraffic`) without requested settings or explicit `new_turn`
+delivery use the same queue's individual `submitSteer` admission on both hosts.
+Each accepted message keeps one immutable queue identity, including additional
+input from the same sender, and nothing is appended to an earlier acceptance.
+Cancel, replace and pause by id therefore touch exactly one message.
+**Combined deliveries.** Combining happens at dispatch, never at admission. When
+the FIFO head is such a message, `planQueuedDeliveries` takes the contiguous run
+behind it that shares its turn terms (requested settings and operator
+approval), up to 20 messages or about 48K characters of text. The run goes out
+as one delivery: one steer into the running turn, or one new turn when the
+thread is idle or cannot steer. It stops at a human message, an explicit
+`new_turn`, a settings override, a different approval, a paused or held row, or
+the cap. Order never changes. Each member keeps its own lifecycle events and
+correspondence receipt, and the dispatched entry lists them in
+`deliveredEntryIds`. Operator, composer and messaging-app sends are never
+combined: three queued operator messages start three turns. Existing grouped
 entries retain their read, control and explicit replacement behavior.
 Claude's background-task, loop and cron hooks also admit each distinct locked
 prompt under its own immutable held identity. The existing attachment admission
 reservation deduplicates matching prompts only while they still wait; a new wake
 never changes another acceptance. Unlock preserves FIFO and independent review
 holds, and shutdown never restores these transient prompts.
-Each accepted Outpost job retains its own input and delivery fingerprint;
-accepted messages are never concatenated. At the FIFO head it joins the current
-native turn, or starts a new turn when idle. The existing steering lifecycle
+Each accepted Outpost job retains its own input and delivery fingerprint until
+dispatch, where the combined-delivery rule above applies. At the FIFO head a
+delivery joins the current native turn, or starts a new turn when idle. The existing steering lifecycle
 receives that job's exact request identity and captured native target. A durable
 starting claim precedes inference; the daemon-global dispatch slot stays held
 through acknowledgement and origin finalization. The original active job keeps

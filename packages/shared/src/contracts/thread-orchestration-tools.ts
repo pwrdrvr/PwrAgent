@@ -146,7 +146,7 @@ export type SendMessageToThreadToolArgs = {
   includeRemote?: boolean;
   /** Replace only this sender’s pending message; never enqueue on a miss. */
   replaceQueueEntryId?: string;
-  /** Default delivery groups pending guidance and prefers steering. */
+  /** Default delivery prefers steering and shares a delivery with other waiting agent messages. */
   delivery?: "new_turn";
   prompt: string;
   model?: string;

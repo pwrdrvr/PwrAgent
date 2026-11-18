@@ -604,6 +604,7 @@ import {
   CodexEnvironmentStartupError,
 } from "./codex-environment-runtime";
 import {
+  isSteerableAgentTraffic,
   replacedAgentMessageOrigin,
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
@@ -9333,7 +9334,11 @@ export class DesktopBackendRegistry {
     ].some((value) => value !== undefined);
     return await this.admitThreadAttachments(entry, (input, onAdmission) => {
       const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
-      return entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings
+      // Agent messages, monitor results and PwrAgent's own wakes join the
+      // running turn, or start one when the thread is idle, and share that
+      // delivery with whatever waits beside them. An operator's or a
+      // messaging app's send keeps its own turn.
+      return isSteerableAgentTraffic(entry.messageOrigin) && delivery !== "new_turn" && !hasTurnSettings
         ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
         : this.threadTurnQueue.submit(prepared, { onAdmission });
     });

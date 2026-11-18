@@ -4,6 +4,7 @@ import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
   AppServerThreadMessageOrigin,
+  AppServerThreadMessageOriginKind,
   AppServerTurnInputItem,
   ProjectHeldWakeupSource,
   ThreadExecutionMode,
@@ -67,6 +68,13 @@ export type ThreadTurnQueueEntry = {
    * for messages too long to show as typed. Never sent with the turn.
    */
   title?: string;
+  /**
+   * Set only on the entry handed to `startTurn` / `steerTurn` when several
+   * queued messages go out as one delivery: their own ids, in FIFO order.
+   * Each id stayed its own immutable entry until this delivery left the
+   * FIFO, and each gets its own lifecycle events.
+   */
+  deliveredEntryIds?: string[];
   createdAt: number;
 };
 
@@ -315,6 +323,195 @@ function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputIt
   });
 }
 
+/** At most this many queued messages go out as one delivery. */
+export const COMBINED_DELIVERY_MAX_MESSAGES = 20;
+/** At most about this much text goes out as one delivery. */
+export const COMBINED_DELIVERY_MAX_TEXT_CHARS = 48_000;
+
+const COMBINABLE_ORIGIN_KINDS: ReadonlySet<AppServerThreadMessageOriginKind> = new Set([
+  "agent", "sub-agent", "pwragent",
+]);
+
+/**
+ * Whether a message comes from an agent, a monitor or PwrAgent itself, and so
+ * joins a running turn instead of waiting for its own. A restart's
+ * continuation and a compaction recovery have their own delivery paths.
+ * Operator and messaging-app sends are human and keep their own turns.
+ */
+export function isSteerableAgentTraffic(origin: AppServerThreadMessageOrigin | undefined): boolean {
+  return Boolean(origin && COMBINABLE_ORIGIN_KINDS.has(origin.kind))
+    && origin?.systemReason !== "app-restart"
+    && origin?.systemReason !== "compaction-recovery";
+}
+
+/** Whether this queued entry may share a delivery with its neighbors. */
+function isCombinableEntry(entry: ThreadTurnQueueEntry): boolean {
+  return entry.delivery === "queued-steer"
+    && entry.agentMessages === undefined
+    && !entry.restartContinuation
+    && !entry.projectHold
+    && isSteerableAgentTraffic(entry.messageOrigin);
+}
+
+/** Why a queued entry does not go out with the delivery ahead of it. */
+export type QueuedDeliveryBoundary =
+  | "human"
+  | "own-turn"
+  | "settings"
+  | "approval"
+  | "paused"
+  | "held"
+  | "limit";
+
+/** One delivery the FIFO will make, in order, as it stands now. */
+export type QueuedDeliveryGroup = {
+  entryIds: string[];
+  /** Agent, monitor or PwrAgent messages: they join a running turn. */
+  steerable: boolean;
+  /** Why the first entry here does not join the group before it. */
+  boundary?: QueuedDeliveryBoundary;
+};
+
+function entryTextChars(entry: Pick<ThreadTurnQueueEntry, "input">): number {
+  return entry.input.reduce((total, item) => total + (item.type === "text" ? item.text.length : 0), 0);
+}
+
+function boundaryFor(entry: ThreadTurnQueueEntry): QueuedDeliveryBoundary | undefined {
+  if (entry.paused) return "paused";
+  if (entry.manualReleaseRequired) return "held";
+  if (isCombinableEntry(entry)) return undefined;
+  if (!isSteerableAgentTraffic(entry.messageOrigin)) return "human";
+  return TURN_SETTING_FIELDS.some((field) => entry[field] !== undefined) ? "settings" : "own-turn";
+}
+
+/**
+ * The deliveries this FIFO makes, in order: each contiguous run of agent,
+ * monitor and PwrAgent messages that share turn terms goes out together, up
+ * to the size cap. Anything else goes out alone. Paused and held rows are
+ * their own groups and end the run they interrupt; dispatch passes over a
+ * paused row and waits at a held one, as it does for a single entry.
+ *
+ * Dispatch takes its next delivery from here, and the queue view shows the
+ * same plan, so what the operator sees is what will be sent.
+ */
+export function planQueuedDeliveries(queue: readonly ThreadTurnQueueEntry[]): QueuedDeliveryGroup[] {
+  const groups: QueuedDeliveryGroup[] = [];
+  let run: { head: ThreadTurnQueueEntry; group: QueuedDeliveryGroup; chars: number } | undefined;
+  // Why the last group stood alone: a run that follows it starts for the
+  // same reason.
+  let previousBoundary: QueuedDeliveryBoundary | undefined;
+  for (const entry of queue) {
+    const boundary = boundaryFor(entry);
+    if (boundary) {
+      groups.push({ entryIds: [entry.id], steerable: isSteerableAgentTraffic(entry.messageOrigin), boundary });
+      run = undefined;
+      previousBoundary = boundary;
+      continue;
+    }
+    const chars = entryTextChars(entry);
+    const reason: QueuedDeliveryBoundary | undefined = !run
+      ? previousBoundary
+      : !sharesTurnTerms(run.head, entry)
+        ? "approval"
+        : run.group.entryIds.length >= COMBINED_DELIVERY_MAX_MESSAGES
+          || run.chars + chars > COMBINED_DELIVERY_MAX_TEXT_CHARS
+          ? "limit"
+          : undefined;
+    if (run && !reason) {
+      run.group.entryIds.push(entry.id);
+      run.chars += chars;
+      continue;
+    }
+    run = { head: entry, group: { entryIds: [entry.id], steerable: true, ...(reason ? { boundary: reason } : {}) }, chars };
+    groups.push(run.group);
+  }
+  return groups;
+}
+
+function describeSender(origin: AppServerThreadMessageOrigin | undefined): string {
+  const source = origin?.sourceThread;
+  if (source) {
+    return `thread "${source.title ?? source.threadId}" (${source.backend}, thread ${source.threadId}${
+      source.instanceId ? `, instance ${source.instanceLabel ?? source.instanceId}` : ""})`;
+  }
+  if (origin?.kind === "sub-agent") return "a PwrAgent monitor";
+  if (origin?.kind === "pwragent") return "PwrAgent";
+  return "another thread";
+}
+
+/**
+ * One input for several queued messages: a short preamble, then each message
+ * under a line naming its sender and when it arrived. A single message goes
+ * as it was sent.
+ */
+export function combinedDeliveryInput(
+  members: ReadonlyArray<Pick<ThreadTurnQueueEntry, "input" | "messageOrigin" | "createdAt">>,
+): AppServerTurnInputItem[] {
+  if (members.length === 1) return structuredClone(members[0]!.input);
+  return [
+    {
+      type: "text" as const,
+      text: `${members.length} messages arrived for this thread and are delivered together. Each starts with a line naming its sender.`,
+    },
+    ...members.flatMap((member, index) => [
+      {
+        type: "text" as const,
+        text: `Message ${index + 1} of ${members.length} · from ${describeSender(member.messageOrigin)} · received ${new Date(member.createdAt).toISOString()}`,
+      },
+      ...structuredClone(member.input),
+    ]),
+  ];
+}
+
+/**
+ * The origin a combined delivery runs under. Members share turn terms, so
+ * their approval is one value. A per-message marker (a to-do, a dependency,
+ * a correspondence id) stays on its own member's events, never on the group.
+ */
+function combinedOrigin(members: readonly ThreadTurnQueueEntry[]): AppServerThreadMessageOrigin {
+  const head = members[0]!.messageOrigin!;
+  const kinds = new Set(members.map((member) => member.messageOrigin?.kind));
+  const senders = new Set(members.map((member) => {
+    const source = member.messageOrigin?.sourceThread;
+    return source ? JSON.stringify([source.backend, source.threadId, source.instanceId]) : "";
+  }));
+  const source = senders.size === 1 ? head.sourceThread : undefined;
+  return {
+    kind: kinds.size === 1 ? head.kind : "agent",
+    ...(head.operatorApproved ? { operatorApproved: true } : {}),
+    ...(source ? {
+      sourceThread: {
+        backend: source.backend,
+        threadId: source.threadId,
+        ...(source.instanceId ? { instanceId: source.instanceId } : {}),
+        ...(source.instanceLabel ? { instanceLabel: source.instanceLabel } : {}),
+        ...(source.celestialIcon ? { celestialIcon: source.celestialIcon } : {}),
+        ...(source.title ? { title: source.title } : {}),
+      },
+    } : {}),
+    ...mergeCausalMessagingContext(members.map((member) => member.messageOrigin)),
+  };
+}
+
+/** The entry `startTurn` / `steerTurn` receives for several members. */
+function combineQueuedDelivery(members: readonly ThreadTurnQueueEntry[]): ThreadTurnQueueEntry {
+  const [head] = members;
+  if (members.length === 1) return head!;
+  const { title: _title, ...base } = head!;
+  return {
+    ...base,
+    input: combinedDeliveryInput(members),
+    messageOrigin: combinedOrigin(members),
+    agentMessages: members.map((member) => ({
+      input: structuredClone(member.input),
+      ...(member.messageOrigin ? { origin: structuredClone(member.messageOrigin) } : {}),
+      receivedAt: member.createdAt,
+    })),
+    agentMessageOrigins: members.flatMap((member) => member.messageOrigin ? [structuredClone(member.messageOrigin)] : []),
+    deliveredEntryIds: members.map((member) => member.id),
+  };
+}
+
 /** Whether the FIFO holds an entry that dispatch would start. */
 function hasWaitingEntry(queue: readonly ThreadTurnQueueEntry[]): boolean {
   return queue.some((entry) => !entry.paused);
@@ -406,6 +603,12 @@ export class ThreadTurnQueue {
     }
   }
 
+  /**
+   * @deprecated The mutable batch #2530 introduced: a sender's queue id came
+   * to cover other senders' input (#3568). No production caller remains;
+   * messages are admitted individually and combined only at dispatch
+   * (`planQueuedDeliveries`). Kept while tests still seed legacy batches.
+   */
   async submitGroupedSteer(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
@@ -482,7 +685,9 @@ export class ThreadTurnQueue {
   /**
    * Admits one message that joins the running turn once it reaches the FIFO
    * head, and otherwise starts the next turn, as a composer reply that steers
-   * would. It is its own entry, so a grouped steer never absorbs it.
+   * would. It is its own immutable entry. An agent, monitor or PwrAgent
+   * message may share its delivery with neighbors at dispatch
+   * (`planQueuedDeliveries`), never its queue identity.
    */
   async submitSteer(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery" | "agentMessages"> &
@@ -1297,27 +1502,32 @@ export class ThreadTurnQueue {
     if (!steer && (this.runningEntries.has(key)
       || (this.options.isThreadActive?.(head) ?? false))) return "none";
     const previousId = queue[index - 1]?.id;
-    const [next] = queue.splice(index, 1);
-    if (!next) return "none";
+    // The head and the agent messages waiting right behind it that can share
+    // its delivery. The head starts its own group: everything before it is
+    // paused, and a paused row ends a run.
+    const size = planQueuedDeliveries(queue.slice(index))[0]?.entryIds.length ?? 1;
+    const members = queue.splice(index, size);
+    if (members.length === 0) return "none";
+    const next = combineQueuedDelivery(members);
     if (queue.length === 0) this.queuedEntries.delete(key);
     this.dropSpentHold(key);
     const holdRevision = this.heldQueues.get(key)?.revision;
     let accepted = false;
     try {
       if (steer && this.options.steerTurn) {
-        // Shift and claim synchronously. The backend now owns this immutable
-        // batch; new senders can only append to the next queued steer.
+        // Shift and claim synchronously. The backend now owns these immutable
+        // entries; anything admitted later goes out in a later delivery.
         const attempt = Symbol("queue admission");
         this.applyAdmission(key, { type: "begin", attempt, kind: "steer" });
-        this.rememberAdmittedEntry({ entryId: next.id });
+        for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
         let delivered = false;
         try {
           const result = await this.options.steerTurn(next);
           const admission = this.admissions.get(key);
           if (admission?.phase !== "starting" || admission.attempt !== attempt) return "none";
           if (!result || result === "retry") {
-            this.recentlyAdmittedEntries.delete(next.id);
-            restoreAfter(this.queueFor(key), next, previousId);
+            for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
+            this.restoreMembers(key, members, previousId);
             // A hold that arrived while it was out covers it too.
             const reason = this.holdReasonFor(key);
             if (reason && this.heldQueues.get(key)?.revision !== holdRevision) {
@@ -1327,26 +1537,26 @@ export class ThreadTurnQueue {
             return "none";
           }
           this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
-          this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
+          for (const member of members) this.rememberAdmittedEntry({ entryId: member.id, turnId: result.turnId });
           delivered = true;
           accepted = true;
-          await this.emit({ type: "started", entry: next, turnId: result.turnId });
+          for (const member of members) await this.emit({ type: "started", entry: member, turnId: result.turnId });
           return "started";
         } finally {
           this.applyAdmission(key, { type: "settle", attempt });
           if (delivered || !(this.options.isThreadActive?.(next) ?? false)) this.scheduleDrain(key);
         }
       }
-      await this.startEntry(next, { deferFailureEvent: true });
+      await this.startEntry(next, { deferFailureEvent: true, members });
       return "started";
     } catch (error) {
       // Publication cannot put native-accepted guidance back in the FIFO.
       if (accepted) return "started";
-      this.recentlyAdmittedEntries.delete(next.id);
+      for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
       // A rejected start says nothing about whether this thread can safely
-      // accept a different queued request. Keep this entry at the FIFO head
-      // and require an explicit retry instead of looping on idle signals.
-      restoreAfter(this.queueFor(key), next, previousId);
+      // accept a different queued request. Keep these entries at the FIFO
+      // head and require an explicit retry instead of looping on idle signals.
+      this.restoreMembers(key, members, previousId);
       const normalized = error instanceof Error ? error : new Error(String(error));
       // It holds the entry it could not start and anything not yet held.
       // Entries behind it keep their own reasons: a lock's refusal must not
@@ -1382,14 +1592,33 @@ export class ThreadTurnQueue {
     this.drainTimers.set(key, timer);
   }
 
+  /** Puts a delivery's members back where they were, in their order. */
+  private restoreMembers(
+    key: string,
+    members: readonly ThreadTurnQueueEntry[],
+    previousId: string | undefined,
+  ): void {
+    const queue = this.queueFor(key);
+    let after = previousId;
+    for (const member of members) {
+      restoreAfter(queue, member, after);
+      after = member.id;
+    }
+  }
+
   private async startEntry(
     entry: ThreadTurnQueueEntry,
-    options?: { deferFailureEvent?: boolean },
+    options?: {
+      deferFailureEvent?: boolean;
+      /** The queued entries a combined `entry` delivers; each is reported. */
+      members?: readonly ThreadTurnQueueEntry[];
+    },
   ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
+    const members = options?.members ?? [entry];
     const attempt = Symbol("queue admission");
     this.applyAdmission(key, { type: "begin", attempt });
-    this.rememberAdmittedEntry({ entryId: entry.id });
+    for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
     let accepted: ThreadTurnQueueStartResult | undefined;
     try {
       const result = await this.options.startTurn(entry);
@@ -1399,12 +1628,14 @@ export class ThreadTurnQueue {
       // Completion may precede the acknowledgement. Publish start then terminal,
       // without resurrecting a running entry for the already completed turn.
       if (!admission.terminal) this.runningEntries.set(key, { entry, turnId: result.turnId });
-      this.rememberAdmittedEntry({
-        entryId: entry.id,
-        turnId: result.turnId,
-      });
+      for (const member of members) {
+        this.rememberAdmittedEntry({
+          entryId: member.id,
+          turnId: result.turnId,
+        });
+      }
       try {
-        await this.emit({ type: "started", entry, turnId: result.turnId });
+        for (const member of members) await this.emit({ type: "started", entry: member, turnId: result.turnId });
       } finally {
         // A terminal buffered during native submission/publication still owns
         // completion even when the started observer rejects.
@@ -1432,7 +1663,7 @@ export class ThreadTurnQueue {
       // Keep that accepted identity, including unknown native outcomes, so a
       // caller or queued drain cannot restore/resend its immutable input.
       if (accepted) return accepted;
-      this.recentlyAdmittedEntries.delete(entry.id);
+      for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
       if (!options?.deferFailureEvent) {
         // A rejected direct admission has no acknowledgement to match. Keep

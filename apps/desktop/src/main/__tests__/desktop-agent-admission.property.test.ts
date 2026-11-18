@@ -43,12 +43,22 @@ it("individual admission preserves legacy grouped neighbors, independent holds a
         queue.drainAll();
         await drain();
         if (close) { expect(sends).toEqual([]); return; }
-        for (const entry of waiting) {
+        // The legacy batch, the review and the lock each go out alone. The
+        // agent messages admitted behind them wait together, so they go out
+        // as one delivery that still names each immutable acceptance.
+        const ownTurns = waiting.slice(0, waiting.length - accepted.length);
+        for (const entry of ownTurns) {
           expect(sends.at(-1)).toEqual(entry);
           await queue.releaseThread({ ...ref, turnId: entry.id, status: "completed" });
           await drain();
         }
-        expect(sends).toEqual(waiting);
+        expect(sends.slice(0, ownTurns.length)).toEqual(ownTurns);
+        expect(sends).toHaveLength(ownTurns.length + 1);
+        const combined = sends.at(-1)!;
+        expect(combined.deliveredEntryIds).toEqual(accepted.map(entry => entry.id));
+        expect(combined.agentMessages?.map(message => message.input)).toEqual(accepted.map(entry => entry.input));
+        expect(events.filter(event => event.type === "started").slice(-accepted.length).map(event => event.entry.id))
+          .toEqual(accepted.map(entry => entry.id));
         expect(accepted.map(entry => entry.input)).toEqual(messages.map(([, text]) => input(text)));
       } finally { queue.close(); }
     }), { numRuns: 50 });
