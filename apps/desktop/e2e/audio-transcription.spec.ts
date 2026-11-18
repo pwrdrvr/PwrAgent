@@ -82,7 +82,7 @@ test("transcribes a synthetic recording into an editable draft through the deskt
   try {
     const desktop = app = await launchElectronApp({
       fixturePath,
-      env: { PWRAGENT_E2E_MEMORY_SECRET_STORAGE: "1" },
+      secretStorage: "memory",
     });
     const page = desktop.window;
     // Replace the native dialog and the single external destination. The app

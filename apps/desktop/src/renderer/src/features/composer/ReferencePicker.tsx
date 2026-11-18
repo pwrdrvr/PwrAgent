@@ -415,6 +415,7 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
               className="reference-picker__row reference-picker__row--action"
               onClick={props.onTranscribeAudio}
             >
+              <span aria-hidden="true" className="reference-picker__plus">+</span>
               <span className="reference-picker__row-name">Transcribe audio…</span>
             </button>
           ) : null}
