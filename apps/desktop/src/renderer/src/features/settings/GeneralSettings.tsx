@@ -294,13 +294,11 @@ export function GeneralSettings(props: {
       ? interactiveSvgSkipNotice
       : interactiveSvgAutoOpen;
   const htmlPreviewRunScripts = props.snapshot.general.htmlPreviewRunScripts;
-  // Both keys stay in the profile's [experimental] table, where earlier
-  // builds wrote them, so moving them here needs no config conversion.
   const markdownMathRendering =
-    props.snapshot.experimental.markdownMathRendering
+    props.snapshot.general.markdown?.mathRendering
     ?? { value: true, source: "default" as const };
   const incrementalMarkdownRendering =
-    props.snapshot.experimental.incrementalMarkdownRendering
+    props.snapshot.general.markdown?.incrementalRendering
     ?? { value: true, source: "default" as const };
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;

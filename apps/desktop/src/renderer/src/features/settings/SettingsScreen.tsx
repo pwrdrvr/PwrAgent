@@ -1006,12 +1006,12 @@ function SettingsSectionBody(props: {
         }}
         onMarkdownMathRenderingChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
-            experimental: { markdownMathRendering: enabled },
+            general: { markdown: { mathRendering: enabled } },
           });
         }}
         onIncrementalMarkdownRenderingChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
-            experimental: { incrementalMarkdownRendering: enabled },
+            general: { markdown: { incrementalRendering: enabled } },
           });
         }}
         onHtmlPreviewRunScriptsChange={async (htmlPreviewRunScripts) => {

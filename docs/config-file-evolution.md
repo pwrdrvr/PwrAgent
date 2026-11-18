@@ -93,7 +93,36 @@ If the marker already exists, preserve it rather than inserting duplicates.
 Do not rely on the marker to decide whether a shape is readable. Always inspect
 the actual TOML value shape.
 
-## Naming
+## Retiring Legacy Keys
+
+A legacy key is kept only for a bounded window. When a key moves, register its
+removal in the same change, in `LEGACY_SETTINGS_RETIREMENTS`
+(`apps/desktop/src/main/settings/desktop-config.ts`):
+
+```ts
+{
+  legacy: ["experimental", "markdown_math_rendering"],
+  current: ["general", "markdown", "math_rendering"],
+  keptThroughSeries: "1.5",
+}
+```
+
+`keptThroughSeries` is the last `major.minor` series that still keeps the
+legacy key. Every version in that series, prereleases included, leaves it
+alone. The first launch of any later series (`1.6.0-alpha.1`, `1.6.0`,
+`2.0.0`) runs `retireLegacyDesktopSettings` before the config store first
+reads the file:
+
+1. If the replacement key is unset, copy the legacy value to it, so a profile
+   never saved since the move keeps the operator's choice.
+2. Delete the legacy key and its `pwragent-legacy-settings` marker comment.
+3. Leave every other key and comment in place.
+
+An unparseable app version never retires anything. Pick a series that leaves a
+real downgrade window. Choose at least one full minor series after the move
+ships, since a build from the retiring series no longer writes the legacy key
+for an older client to read.
+
 
 Use clear current names even if the old key name was too narrow. Do not carry a
 bad name forward just for continuity.

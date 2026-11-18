@@ -215,10 +215,6 @@ function createSnapshot(
         value: false,
         source: "default",
       },
-      markdownMathRendering: {
-        value: true,
-        source: "default",
-      },
       threadPricingSummary: {
         value: true,
         source: "default",
@@ -3276,13 +3272,9 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("shows Markdown rendering under General, on by default, and keeps its experimental keys", async () => {
+  it("shows Markdown rendering under General, on by default, and writes [general.markdown]", async () => {
     const snapshot = createSnapshot();
-    const experimental = snapshot.experimental as Partial<
-      typeof snapshot.experimental
-    >;
-    delete experimental.markdownMathRendering;
-    delete experimental.incrementalMarkdownRendering;
+    delete snapshot.general.markdown;
     const settings = createSettingsState(snapshot);
 
     const { unmount } = render(
@@ -3305,13 +3297,13 @@ describe("SettingsScreen", () => {
     fireEvent.click(incrementalSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { incrementalMarkdownRendering: false },
+        general: { markdown: { incrementalRendering: false } },
       });
     });
     fireEvent.click(mathSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { markdownMathRendering: false },
+        general: { markdown: { mathRendering: false } },
       });
     });
 

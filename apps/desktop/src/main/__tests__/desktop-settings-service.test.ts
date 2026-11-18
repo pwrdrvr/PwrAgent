@@ -5287,55 +5287,89 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults Markdown math rendering to true and persists an explicit opt-out", async () => {
+  it("defaults Markdown rendering on and writes only [general.markdown] to a new config", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
-    const service = new DesktopSettingsService({
-      configPath,
-      env: {},
-      secretStore: new MemoryDesktopSecretStore(),
-    });
-
-    const initial = await service.readSettingsProjection();
-    expect(initial.experimental.markdownMathRendering).toEqual({
-      value: true,
-      source: "default",
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await service.readSettingsProjection()).general.markdown).toEqual({
+      incrementalRendering: { value: true, source: "default" },
+      mathRendering: { value: true, source: "default" },
     });
 
     await service.writeConfigPatchTargeted({
-      experimental: {
-        markdownMathRendering: false,
-      },
+      general: { markdown: { incrementalRendering: false, mathRendering: false } },
     });
 
-    const updated = await service.readSettingsProjection();
-    expect(updated.experimental.markdownMathRendering).toEqual({
-      value: false,
-      source: "config",
+    const reloaded = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await reloaded.readSettingsProjection()).general.markdown).toEqual({
+      incrementalRendering: { value: false, source: "config" },
+      mathRendering: { value: false, source: "config" },
     });
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "markdown_math_rendering = false",
-    );
+    const text = fs.readFileSync(configPath, "utf8");
+    expect(text).toContain("[general.markdown]");
+    expect(text).toContain("incremental_rendering = false");
+    expect(text).toContain("math_rendering = false");
+    expect(text).not.toContain("[experimental]");
+    expect(text).not.toContain("pwragent-legacy-settings");
   });
 
-  it("defaults incremental Markdown rendering to on and persists disable and enable", async () => {
+  it("reads Markdown rendering from [experimental] until [general.markdown] holds a value", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
-    fs.writeFileSync(configPath, "# Keep this comment\n[experimental]\nmarkdown_math_rendering = true\n");
+    fs.writeFileSync(configPath, [
+      "[general.markdown]",
+      'math_rendering = "yes"',
+      "",
+      "[experimental]",
+      "incremental_markdown_rendering = false",
+      "markdown_math_rendering = false",
+      "",
+    ].join("\n"));
     const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
-    expect((await service.readSettingsProjection()).experimental.incrementalMarkdownRendering).toEqual({
-      value: true, source: "default",
+    // A wrong-shaped current key falls back to the legacy one.
+    expect((await service.readSettingsProjection()).general.markdown).toEqual({
+      incrementalRendering: { value: false, source: "config" },
+      mathRendering: { value: false, source: "config" },
     });
-    for (const enabled of [false, true]) {
-      await service.writeConfigPatchTargeted({ experimental: { incrementalMarkdownRendering: enabled } });
-      const reloaded = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
-      expect((await reloaded.readSettingsProjection()).experimental.incrementalMarkdownRendering).toEqual({
-        value: enabled, source: "config",
-      });
-      expect(fs.readFileSync(configPath, "utf8")).toContain(`incremental_markdown_rendering = ${enabled}`);
+
+    fs.writeFileSync(configPath, [
+      "[general.markdown]",
+      "incremental_rendering = true",
+      "",
+      "[experimental]",
+      "incremental_markdown_rendering = false",
+      "",
+    ].join("\n"));
+    const current = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await current.readSettingsProjection()).general.markdown?.incrementalRendering)
+      .toEqual({ value: true, source: "config" });
+  });
+
+  it("keeps a legacy [experimental] Markdown key updated, marked once, for older builds", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "# Keep this comment",
+      "[experimental]",
+      "incremental_markdown_rendering = false",
+      "live_transcript_event_filtering = true",
+      "",
+    ].join("\n"));
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+
+    for (const enabled of [true, false, true]) {
+      await service.writeConfigPatchTargeted({ general: { markdown: { incrementalRendering: enabled } } });
+      const text = fs.readFileSync(configPath, "utf8");
+      expect(text).toContain(`incremental_markdown_rendering = ${enabled}`);
+      expect(text).toContain(`incremental_rendering = ${enabled}`);
     }
-    expect(fs.readFileSync(configPath, "utf8")).toContain("# Keep this comment");
-    expect(fs.readFileSync(configPath, "utf8")).toContain("markdown_math_rendering = true");
+    const text = fs.readFileSync(configPath, "utf8");
+    expect(text.match(/pwragent-legacy-settings key=incremental_markdown_rendering /g)).toHaveLength(1);
+    expect(text).toContain("used_through=1.4.10");
+    // The math key was never set here, so saving incremental does not add it.
+    expect(text).not.toContain("markdown_math_rendering");
+    expect(text).toContain("# Keep this comment");
+    expect(text).toContain("live_transcript_event_filtering = true");
   });
 
   it("defaults Git background PR polling to on and persists an explicit opt-out", async () => {
