@@ -206,6 +206,8 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The research delivery projection and its two indexes, the three item indexes for versions,
     // worker slots and worker threads, and the delivery-failure index add seven more.
     // The Harness state and source-record indexes add two more VACUUM pages.
+    // Main's thread_agent_follow_up_guards table and primary-key index add two more.
+    // Each change separately budgeted 360 frames; their combined schema requires 362.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));
