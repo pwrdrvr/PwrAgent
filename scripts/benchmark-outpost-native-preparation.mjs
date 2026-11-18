@@ -37,7 +37,7 @@ try {
   };
   writeFileSync(path.join(directory, `${phase}-environment.json`), JSON.stringify(environment, null, 2));
   const cases = {
-    helper: [process.execPath, ["--input-type=module", "-e", `import { buildMcpIpcRelay } from './apps/desktop/scripts/build-mcp-ipc-relay.mjs'; buildMcpIpcRelay({outputRoot:${JSON.stringify(path.join(root, "packages/pwragent"))},packaged:true});`]],
+    helper: [process.execPath, ["--input-type=module", "-e", `import { buildMcpIpcRelay } from './apps/desktop/scripts/build-mcp-ipc-relay.mjs'; buildMcpIpcRelay({outputRoot:${JSON.stringify(path.join(root, "packages/pwragent"))},packaged:true,reuse:${args.includes("--native-reuse")}});`]],
     package: [process.execPath, ["packages/pwragent/scripts/build.mjs"]],
     owner: ["pnpm", ["test", "apps/desktop/src/main/__tests__/headless-host.boot.oracle.test.ts", "apps/desktop/src/main/__tests__/headless-concurrency.oracle.test.ts"]],
   };
