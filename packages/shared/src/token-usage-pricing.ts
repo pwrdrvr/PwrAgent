@@ -344,6 +344,10 @@ const OPENAI_GPT6_SOL_LUNA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 22);
 // https://developers.openai.com/api/docs/models/gpt-6.1-sol
 const OPENAI_GPT61_SOL_PRICING_CATALOG_VERSION = "2026-09-29";
 const OPENAI_GPT61_SOL_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 29);
+// https://developers.openai.com/api/docs/changelog (October 26 launch)
+// https://developers.openai.com/api/docs/models/gpt-6.1-terra (30-minute cache writes)
+const OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION = "2026-10-26";
+const OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 9, 26);
 // https://developers.openai.com/api/docs/pricing
 // https://learn.chatgpt.com/docs/pricing (Codex credit rates, Fast at 2x).
 const OPENAI_GPT62_PRICING_CATALOG_VERSION = "2026-11-17";
@@ -575,6 +579,72 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     inputUsdPerMillion: 8,
     cachedInputUsdPerMillion: 0.4,
     outputUsdPerMillion: 30,
+    minimumInputTokens: 272_001,
+    rateBandId: "input-gt-272k",
+    requiresRequestInputTokens: true,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    displayTier: "Standard (<=272K input)",
+    effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 1.25,
+    inputUsdPerMillion: 1,
+    cachedInputUsdPerMillion: 0.05,
+    outputUsdPerMillion: 5,
+    maximumInputTokens: 272_000,
+    rateBandId: "input-lte-272k",
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    displayTier: "Standard (>272K input)",
+    effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 2.5,
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 7.5,
+    minimumInputTokens: 272_001,
+    rateBandId: "input-gt-272k",
+    requiresRequestInputTokens: true,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    displayTier: "Fast (<=272K input)",
+    effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    cacheWriteInputUsdPerMillion: 2.5,
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    maximumInputTokens: 272_000,
+    rateBandId: "input-lte-272k",
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT61_TERRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6.1-terra",
+    displayModel: "GPT-6.1 Terra",
+    displayTier: "Fast (>272K input)",
+    effectiveFrom: OPENAI_GPT61_TERRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    cacheWriteInputUsdPerMillion: 5,
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 15,
     minimumInputTokens: 272_001,
     rateBandId: "input-gt-272k",
     requiresRequestInputTokens: true,
