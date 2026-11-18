@@ -5,12 +5,6 @@ on:
     tags:
       - "v*.*.*"
       - "v*.*.*-*" # pre-release tags like v1.0.0-alpha.0
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing desktop tag. Select this same tag as the workflow ref; branch dispatches are rejected."
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -42,12 +36,12 @@ jobs:
           package-manager-cache: false
       - name: Verify source before inspecting operator prerequisites
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: node packages/pwragent/scripts/release-context.mjs
       - name: Check operator migration and existing environment protections
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           OUTPOST_NPM_RELEASE_READY: ${{ vars.OUTPOST_NPM_RELEASE_READY }}
         run: |
           set -euo pipefail
@@ -65,6 +59,10 @@ jobs:
     needs:
       - release-preflight
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: none
     outputs:
       integrity: ${{ steps.package.outputs.integrity }}
     strategy:
@@ -81,30 +79,55 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      - name: Locate retained tested package evidence on the original run
+        id: retained
+        if: github.run_attempt > 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packages/pwragent/scripts/tested-package.mjs --locate
+      - name: Restore the independent tested integrity
+        if: steps.retained.outputs.integrity != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.retained.outputs.integrity }}
+          path: .local/headless-integrity
+      - name: Restore the original tested package
+        if: steps.retained.outputs.package != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.retained.outputs.package }}
+          path: .local/headless-package
       - name: Install pinned build dependencies without lifecycle scripts
+        if: steps.retained.outputs.package == ''
         run: |
           corepack enable
           pnpm --filter pwragent... install --frozen-lockfile --ignore-scripts
       - name: Outpost and release tests
+        if: steps.retained.outputs.package == ''
         run: pnpm --filter pwragent test
       - name: Pack, validate and smoke-test a clean installation
+        if: steps.retained.outputs.package == ''
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression
         run: |
           mkdir -p "$TMPDIR"
           node packages/pwragent/scripts/pack-check.mjs .local/headless-package
       - name: Record tested tarball integrity
         id: package
-        if: matrix.node == '24'
-        run: |
-          node --input-type=module <<'JS'
-          import fs from "node:fs";
-          const p = JSON.parse(fs.readFileSync(".local/headless-package/pack.json"));
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${p.integrity}\n`);
-          JS
+        env:
+          RETAINED_INTEGRITY_ID: ${{ steps.retained.outputs.integrity }}
+        run: node packages/pwragent/scripts/tested-package.mjs
+      - name: Retain the independent tested integrity
+        if: steps.retained.outputs.integrity == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: headless-npm-integrity
+          path: .local/headless-integrity/integrity.txt
+          if-no-files-found: error
+          retention-days: 90
       - name: Retain tested tarball and notices
-        if: matrix.node == '24'
+        if: steps.retained.outputs.package == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: headless-npm-package
@@ -166,7 +189,7 @@ jobs:
 
       - name: Check release metadata
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: pnpm release:check
 
       - name: Compare authoritative Homebrew and Winget channels
@@ -280,7 +303,7 @@ jobs:
 
       - name: Prepare release stage
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only
 
@@ -303,7 +326,7 @@ jobs:
 
       - name: Prepare Apple Silicon release stage
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only --mac-arch=arm64
 
@@ -468,7 +491,7 @@ jobs:
 
       - name: Check release metadata
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: pnpm release:check
 
       - name: Stage pinned Grok ACP runtime
@@ -481,7 +504,7 @@ jobs:
 
       - name: Package Linux
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --linux --no-publish
@@ -549,7 +572,7 @@ jobs:
 
       - name: Prepare Windows release stage
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --win --prepare-only
 
@@ -754,7 +777,7 @@ jobs:
       - name: Verify debug artifact targets, identities, and checksums
         timeout-minutes: 2
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           node apps/desktop/scripts/desktop-debug-artifacts.mjs verify-release \
@@ -763,7 +786,7 @@ jobs:
       - name: Verify Linux packages and generate checksums
         timeout-minutes: 3
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           node apps/desktop/scripts/linux-release-artifacts.mjs linux-dist "${RELEASE_TAG#v}"
@@ -783,7 +806,7 @@ jobs:
       - name: Verify updater channel files
         timeout-minutes: 2
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${RELEASE_TAG:?}"
@@ -800,7 +823,7 @@ jobs:
         timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${RELEASE_TAG:?}"
@@ -908,7 +931,7 @@ jobs:
       - name: Publish changelog notes to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${RELEASE_TAG:?}"
@@ -939,7 +962,7 @@ jobs:
     needs:
       - outpost-validate
       - publish-release-notes
-    if: github.repository == 'pwrdrvr/PwrAgent' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'pwrdrvr/PwrAgent' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: npm-pwragent
@@ -978,7 +1001,7 @@ jobs:
           fi
       - name: Submit exact tested bytes with npm OIDC and provenance, or resume verification
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
@@ -1052,7 +1075,7 @@ jobs:
       - name: Verify immutable npm bytes, source, owner, provenance and channel without publishing
         id: verify
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""

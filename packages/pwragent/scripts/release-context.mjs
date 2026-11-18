@@ -5,21 +5,20 @@ import { fileURLToPath } from "node:url";
 import { checkEnvironment, releaseMetadata } from "./release.mjs";
 
 export function requiresReadOnlyRecovery(eventName, runAttempt) {
-  // A fresh dispatch can follow an earlier run with a lost receipt. Only the
-  // first attempt of a protected tag push is eligible to submit.
+  // Only the first attempt of a protected tag push is eligible to submit.
   return eventName !== "push" || runAttempt !== "1";
 }
 
 export function releaseSource(context, ancestors) {
   assert.equal(context.repository, "pwrdrvr/PwrAgent", "Only the upstream repository may publish");
-  assert.ok(["push", "workflow_dispatch"].includes(context.eventName), "Only desktop release events may publish");
+  assert.equal(context.eventName, "push", "Only protected tag pushes may release. Resume verification on the original run.");
   const tag = `v${context.version}`;
   assert.match(tag, /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc|prerelease)\.(0|[1-9]\d*))?$/);
-  assert.equal(context.ref, `refs/tags/${tag}`, "Dispatch release.yml on the exact desktop tag, never a branch or arbitrary ref");
+  assert.equal(context.ref, `refs/tags/${tag}`, "Release must run on the exact desktop tag");
   assert.equal(context.refProtected, "true", "Desktop release tags must be protected against unauthorized creation/replacement/deletion");
   assert.equal(context.workflowRef, `pwrdrvr/PwrAgent/.github/workflows/release.yml@refs/tags/${tag}`,
     "npm provenance must identify release.yml at the exact desktop tag");
-  if (context.tag !== undefined && context.tag !== "") assert.equal(context.tag, tag, "Dispatch input must match its tag ref");
+  if (context.tag !== undefined && context.tag !== "") assert.equal(context.tag, tag, "Release tag input must match its tag ref");
   assert.match(context.sha, /^[0-9a-f]{40}$/);
   assert.equal(context.workflowSha, context.sha, "Release workflow source must match the tagged application source SHA");
   assert.equal(context.head, context.sha, "Checkout must match the event's source SHA");

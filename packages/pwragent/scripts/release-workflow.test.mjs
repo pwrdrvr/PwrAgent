@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { checkedTarballIntegrity, retainedPackageArtifacts } from "./tested-package.mjs";
 
 const workflow = readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8");
 const validation = readFileSync(new URL("../../../.github/workflows/publish-headless.yml", import.meta.url), "utf8");
@@ -12,8 +14,8 @@ const job = (name) => workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [\w-]+:\n/
 
 test("ordinary pushes and PR/fork checks have no npm publication path", () => {
   assert.doesNotMatch(validation, /workflow_dispatch:|id-token: write|environment: npm-pwragent|npm publish/);
-  assert.doesNotMatch(workflow, /^  pull_request(?:_target)?:|^  workflow_run:/m);
-  const trigger = workflow.split("\n  push:\n")[1].split("\n  workflow_dispatch:")[0];
+  assert.doesNotMatch(workflow, /^  (?:pull_request(?:_target)?|workflow_run|workflow_dispatch):/m);
+  const trigger = workflow.split("\n  push:\n")[1].split("\npermissions:")[0];
   assert.match(trigger, /tags:/);
   assert.doesNotMatch(trigger, /branches:/);
   const expression = job("outpost-publish").match(/^    if: (.+)$/m)?.[1];
@@ -22,7 +24,7 @@ test("ordinary pushes and PR/fork checks have no npm publication path", () => {
     github: { event_name: event, ref, repository }, startsWith: (a, b) => a.startsWith(b),
   });
   assert.equal(evaluate("push", "refs/tags/v1.3.7"), true);
-  assert.equal(evaluate("workflow_dispatch", "refs/tags/v1.3.7"), true);
+  assert.equal(evaluate("workflow_dispatch", "refs/tags/v1.3.7"), false);
   for (const event of ["pull_request", "pull_request_target", "workflow_run"]) assert.equal(evaluate(event, "refs/tags/v1.3.7"), false);
   assert.equal(evaluate("push", "refs/heads/main"), false);
   assert.equal(evaluate("push", "refs/tags/v1.3.7", "fork/PwrAgent"), false);
@@ -52,7 +54,7 @@ test("desktop packaging requires Outpost validation and final success requires n
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(job("outpost-publish"), /group: pwragent-npm-publication\n      queue: max\n      cancel-in-progress: false/);
   // Only the protected npm job may obtain an OIDC token. All source checkouts
-  // use the event's immutable SHA, including workflow_dispatch retries.
+  // use the event's immutable SHA, including reruns of the original tag push.
   assert.equal(workflow.match(/id-token: write/g)?.length, 1);
   assert.doesNotMatch(workflow, /ref: \$\{\{ github.event.inputs.tag \|\| github.ref \}\}/);
 });
@@ -63,6 +65,36 @@ test("packaging recovery leaves registry reads to completion and cannot replace 
   const validate = job("outpost-validate");
   assert.match(validate, /name: headless-npm-package/);
   assert.doesNotMatch(validate, /overwrite: true/);
+});
+
+test("the original run restores both retained artifacts and preserves the independent byte identity", () => {
+  const pkg = { name: "headless-npm-package", id: 17, expired: false };
+  const digest = { name: "headless-npm-integrity", id: 16, expired: false };
+  const unrelated = { name: "signing-evidence", id: 18, expired: true };
+  assert.deepEqual(retainedPackageArtifacts([unrelated]), {});
+  assert.deepEqual(retainedPackageArtifacts([digest]), { integrity: "16" });
+  assert.deepEqual(retainedPackageArtifacts([pkg, unrelated, digest]), { package: "17", integrity: "16" });
+  for (const evidence of [[pkg], [pkg, { ...digest, expired: true }], [{ ...pkg, expired: true }, digest], [pkg, pkg, digest]]) {
+    assert.throws(() => retainedPackageArtifacts(evidence));
+  }
+
+  const integrityOf = (bytes) => `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+  const original = Buffer.from("tested");
+  const changed = Buffer.from("rebuilt");
+  assert.equal(checkedTarballIntegrity({ integrity: integrityOf(original) }, original, integrityOf(original)), integrityOf(original));
+  assert.throws(() => checkedTarballIntegrity({ integrity: integrityOf(changed) }, changed, integrityOf(original)), /retained integrity/);
+  assert.throws(() => checkedTarballIntegrity({ integrity: integrityOf(original) }, changed, integrityOf(original)), /pack manifest/);
+
+  const steps = job("outpost-validate").split(/\n      - /);
+  for (const name of ["Install pinned build dependencies", "Outpost and release tests", "Pack, validate and smoke-test", "Retain tested tarball"]) {
+    assert.match(steps.find((step) => step.startsWith(`name: ${name}`)), /if: steps.retained.outputs.package == ''/);
+  }
+  assert.match(steps.find((step) => step.startsWith("name: Restore the original tested package")),
+    /artifact-ids: \$\{\{ steps.retained.outputs.package \}\}/);
+  assert.match(steps.find((step) => step.startsWith("name: Restore the independent tested integrity")),
+    /artifact-ids: \$\{\{ steps.retained.outputs.integrity \}\}/);
+  assert.match(steps.find((step) => step.startsWith("name: Retain the independent tested integrity")),
+    /if: steps.retained.outputs.integrity == ''/);
 });
 
 test("actual workflow steps gate verification on prerequisites and completion on verified npm evidence", (t) => {

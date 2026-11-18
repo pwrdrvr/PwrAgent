@@ -105,12 +105,10 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
 1. **Preflight**, without npm credentials or OIDC permission, requires the
    upstream repository, a protected desktop tag, event SHA = checkout SHA = tag
    commit, matching package versions, approved release-branch ancestry and the
-   operator prerequisites. Manual desktop recovery dispatches must select the
-   **same tag as the workflow ref**, e.g.
-   `gh workflow run release.yml --ref v1.4.0-alpha.1 -f tag=v1.4.0-alpha.1`.
-   Dispatching on `main` or another arbitrary ref is rejected. Historical release
-   commits may be retried after a branch advances; current-main-tip equality is
-   no longer required. Every desktop source checkout uses the event SHA.
+   operator prerequisites. Only protected tag pushes start this workflow. Resume
+   a release by rerunning failed jobs on the original run. Historical release
+   commits can be retried after a branch advances. Every desktop source
+   checkout uses the event SHA.
 2. **Outpost validation**, on GitHub-hosted Ubuntu with Node **24**, runs
    the mocked CLI/release tests and existing package checks before desktop setup.
    These bundle shared JavaScript services/notices, enforce pinned
@@ -119,9 +117,9 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    and scripts disabled. The installed native PTY and mocked Codex/federation
    flows are exercised without credentials or model requests. Generated notices
    remain in the tested tarball; desktop notices retain their own dependency
-   scope. Node 24's exact tarball/`pack.json` are retained for **90 days** and its
-   SHA-512 integrity is exported independently as a job output. The staged npm
-   manifest contains `pwragentRelease: { tag, commit }` for source verification.
+   scope. Node 24's exact tarball and `pack.json` are retained for **90 days**.
+   The validation job exports the SHA-512 integrity and retains it separately
+   for the same period. The staged npm manifest contains `pwragentRelease: { tag, commit }` for source verification.
 3. Existing **desktop build/test/signing and publication** jobs run with their
    existing environment approvals and permissions. Outpost cannot publish before
    all-platform desktop assets and changelog notes have been published.
@@ -133,9 +131,9 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    and channel state. npm **>=11.5.1**, OIDC and `--provenance --ignore-scripts
    --access public --registry https://registry.npmjs.org` are required. The
    npm publish command disables its automatic fetch retries because a retryable
-   response can follow a PUT that was already received. There is
+   response can follow a PUT that was already received. An
    npm PUT is eligible only on the first attempt of a protected tag push.
-   Manual dispatches and workflow retries use read-only recovery.
+   Workflow retries are read-only for npm.
 5. Submission and verification are separate jobs. Before invoking npm, the
    submission job writes `outpost-publication-attempt` with version, tag, source
    commit, tested integrity, channel and `publish-uncertain`. npm exit zero changes
@@ -201,9 +199,8 @@ not automatically unpublish/delete either service's artifacts.
   occupied version whose original response was lost. Original successful desktop
   jobs, tested tarball and independent integrity output are preserved. Any
   applicable submission environment approval still applies.
-- A fresh manual dispatch also uses read-only npm recovery. If the original tag
-  push never submitted and read-only recovery cannot find the version, investigate
-  the original run and plan a new paired version. A missing receipt or absent
+- If the original tag push never submitted and read-only recovery cannot find
+  the version, investigate the original run and plan a new paired version. A missing receipt or absent
   package snapshot cannot establish that submission never occurred.
 - An occupied version is accepted only if registry **SHA-512 integrity**, packed
   source tag/commit metadata and npm's **SLSA provenance marker** match the tested
@@ -218,10 +215,12 @@ not automatically unpublish/delete either service's artifacts.
   otherwise cut a new **desktop and Outpost** version together. Never overwrite
   an immutable npm version, move the release tag, delete a published version,
   rebuild-and-assume equivalence, change trust or use a token as automatic recovery.
-  A full rerun cannot replace the original tested artifact in the same run. A
-  fresh recovery dispatch has separate artifacts and passes only if its tested
-  bytes match the already occupied version. Artifact expiry is not permission
-  to relax integrity checks. Same-tag runs and all npm publish jobs use
+  When package validation reruns, it restores the retained tarball and separate
+  `headless-npm-integrity` artifact from the same run and checks the bytes against
+  both records. Once desktop publication succeeds, rerun failed jobs only. See
+  the [desktop recovery runbook](desktop-release-runbook.md#recovery-proposal-when-assets-were-published-before-a-job-timeout)
+  if desktop assets exist but their publication job did not succeed. Same-tag
+  runs and all npm publish jobs use
   [queued concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
   (`queue: max`, no cancellation), preventing workflow publishes from racing npm
   channel guards. Authorize versions in order: a newer version published first
