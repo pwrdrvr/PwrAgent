@@ -1,7 +1,8 @@
 # Agent Tool Contract Guidance
 
-Moved verbatim from [apps/desktop/src/main/agent-tools/AGENTS.md](../src/main/agent-tools/AGENTS.md),
-which keeps a summary and says when to read this document.
+Moved from [apps/desktop/src/main/agent-tools/AGENTS.md](../src/main/agent-tools/AGENTS.md),
+which keeps a summary and says when to read this document. Relative links
+were updated for this location.
 
 PwrAgent dynamic tools are service contracts for existing Agent turns. Treat
 the advertised namespace, name, input schema, argument semantics, and response

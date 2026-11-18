@@ -1,7 +1,16 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,16 +27,16 @@ import {
 const CODEX_PROJECT_DOC_DEFAULT_MAX_BYTES = 32 * 1024;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Deterministic PRNG so a failing sweep reproduces.
-function mulberry32(seed) {
-  let state = seed;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// An instruction file somewhere in a small tree, so generated paths share
+// ancestors and name prefixes (`a` beside `ab`).
+const instructionPath = fc
+  .tuple(
+    fc.array(fc.constantFrom("apps", "desktop", "a", "ab", "src"), {
+      maxLength: 4,
+    }),
+    fc.constantFrom("AGENTS.md", "AGENTS.override.md"),
+  )
+  .map(([dirs, name]) => [...dirs, name].join("/"));
 
 describe("checkAgentInstructionsSize", () => {
   it("keeps the limit under Codex's default project-doc budget", () => {
@@ -64,39 +73,35 @@ describe("checkAgentInstructionsSize", () => {
 });
 
 describe("agentInstructionChain", () => {
-  // Oracle: a file is in the chain exactly when its directory is the root or
-  // an ancestor of (or equal to) the nested file's directory, ordered by depth.
+  // Oracle: for the root and each ancestor of the file's directory, shallowest
+  // first, Codex reads that directory's AGENTS.override.md if it exists, else
+  // its AGENTS.md.
   function oracleChain(file, files) {
-    const dir = file.split("/").slice(0, -1);
-    return files
-      .map((candidate) => candidate.split("/").slice(0, -1))
-      .filter((cdir) => cdir.every((part, index) => dir[index] === part))
-      .filter((cdir) => cdir.length <= dir.length)
-      .sort((a, b) => a.length - b.length)
-      .map((cdir) => [...cdir, "AGENTS.md"].join("/"));
+    const dirs = file.split("/").slice(0, -1);
+    const chain = [];
+    for (let depth = 0; depth <= dirs.length; depth += 1) {
+      const prefix = dirs.slice(0, depth);
+      const pick = ["AGENTS.override.md", "AGENTS.md"]
+        .map((name) => [...prefix, name].join("/"))
+        .find((candidate) => files.includes(candidate));
+      if (pick) chain.push(pick);
+    }
+    return chain;
   }
 
-  it("matches the ancestor oracle for random trees", () => {
-    const random = mulberry32(3920);
-    const names = ["apps", "desktop", "src", "a", "ab", "b", "main"];
-    for (let run = 0; run < 300; run += 1) {
-      const files = new Set(["AGENTS.md"]);
-      const count = 1 + Math.floor(random() * 6);
-      for (let index = 0; index < count; index += 1) {
-        const depth = 1 + Math.floor(random() * 4);
-        const parts = Array.from(
-          { length: depth },
-          () => names[Math.floor(random() * names.length)],
-        );
-        files.add([...parts, "AGENTS.md"].join("/"));
-      }
-      const list = [...files];
-      for (const file of list) {
-        expect(agentInstructionChain(file, list)).toEqual(
-          oracleChain(file, list),
-        );
-      }
-    }
+  it("matches the ancestor oracle", () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(instructionPath, { minLength: 1, maxLength: 12 }),
+        (files) => {
+          for (const file of files) {
+            expect(agentInstructionChain(file, files)).toEqual(
+              oracleChain(file, files),
+            );
+          }
+        },
+      ),
+    );
   });
 
   it("does not treat a sibling with a shared name prefix as an ancestor", () => {
@@ -108,14 +113,25 @@ describe("agentInstructionChain", () => {
       ]),
     ).toEqual(["AGENTS.md", "apps/desktop-x/AGENTS.md"]);
   });
+
+  it("reads a directory's AGENTS.override.md in place of its AGENTS.md", () => {
+    expect(
+      agentInstructionChain("apps/desktop/AGENTS.md", [
+        "AGENTS.md",
+        "apps/desktop/AGENTS.md",
+        "apps/desktop/AGENTS.override.md",
+      ]),
+    ).toEqual(["AGENTS.md", "apps/desktop/AGENTS.override.md"]);
+  });
 });
 
 describe("checkAgentInstructionLimits", () => {
-  it("checks the root and desktop files and every nested chain", () => {
+  it("checks the root and desktop files and every nested chain once", () => {
     const limits = agentInstructionLimits([
       "AGENTS.md",
       "apps/desktop/AGENTS.md",
       "apps/desktop/src/main/claude/AGENTS.md",
+      "apps/desktop/src/main/claude/AGENTS.override.md",
       "packages/shared/AGENTS.md",
     ]);
     expect(limits).toEqual([
@@ -137,11 +153,11 @@ describe("checkAgentInstructionLimits", () => {
       {
         label:
           "AGENTS.md + apps/desktop/AGENTS.md"
-          + " + apps/desktop/src/main/claude/AGENTS.md",
+          + " + apps/desktop/src/main/claude/AGENTS.override.md",
         paths: [
           "AGENTS.md",
           "apps/desktop/AGENTS.md",
-          "apps/desktop/src/main/claude/AGENTS.md",
+          "apps/desktop/src/main/claude/AGENTS.override.md",
         ],
         maxBytes: CODEX_PROJECT_DOC_MAX_BYTES,
       },
@@ -154,40 +170,44 @@ describe("checkAgentInstructionLimits", () => {
   });
 
   // Oracle: the check fails exactly when the root or desktop file is over its
-  // own limit, or some nested file's chain sums past Codex's budget.
+  // own limit, or some nested file's chain sums past Codex's budget. Sizes
+  // range past every limit so each bound is crossed.
   it("fails exactly when a file or any chain is over", () => {
-    const random = mulberry32(32768);
+    const nested = [
+      "apps/desktop/src/main/claude/AGENTS.md",
+      "apps/desktop/src/renderer/src/features/update/AGENTS.md",
+    ];
     const files = [
       "AGENTS.md",
       "apps/desktop/AGENTS.md",
-      "apps/desktop/src/main/claude/AGENTS.md",
-      "apps/desktop/src/renderer/src/features/update/AGENTS.md",
+      ...nested,
       "packages/messaging/AGENTS.md",
     ];
     const limits = agentInstructionLimits(files);
-    for (let run = 0; run < 500; run += 1) {
-      const sizes = Object.fromEntries(
-        files.map((file) => [file, Math.floor(random() * 20 * 1024)]),
-      );
-      const results = checkAgentInstructionLimits(
-        (path) => sizes[path],
-        limits,
-      );
-      const root = sizes["AGENTS.md"];
-      const desktop = sizes["apps/desktop/AGENTS.md"];
-      const expected =
-        root <= ROOT_AGENTS_MD_MAX_BYTES
-        && desktop <= DESKTOP_AGENTS_MD_MAX_BYTES
-        && root + desktop <= CODEX_PROJECT_DOC_MAX_BYTES
-        && root + desktop + sizes["apps/desktop/src/main/claude/AGENTS.md"]
-          <= CODEX_PROJECT_DOC_MAX_BYTES
-        && root + desktop
-          + sizes["apps/desktop/src/renderer/src/features/update/AGENTS.md"]
-          <= CODEX_PROJECT_DOC_MAX_BYTES
-        && root + sizes["packages/messaging/AGENTS.md"]
-          <= CODEX_PROJECT_DOC_MAX_BYTES;
-      expect(results.every((result) => result.ok)).toBe(expected);
-    }
+    const size = fc.integer({ min: 0, max: 26 * 1024 });
+    fc.assert(
+      fc.property(fc.tuple(...files.map(() => size)), (values) => {
+        const sizes = Object.fromEntries(
+          files.map((file, index) => [file, values[index]]),
+        );
+        const root = sizes["AGENTS.md"];
+        const desktop = sizes["apps/desktop/AGENTS.md"];
+        const chains = [
+          root + desktop,
+          ...nested.map((file) => root + desktop + sizes[file]),
+          root + sizes["packages/messaging/AGENTS.md"],
+        ];
+        const expected =
+          root <= ROOT_AGENTS_MD_MAX_BYTES
+          && desktop <= DESKTOP_AGENTS_MD_MAX_BYTES
+          && chains.every((bytes) => bytes <= CODEX_PROJECT_DOC_MAX_BYTES);
+        const results = checkAgentInstructionLimits(
+          (path) => sizes[path],
+          limits,
+        );
+        expect(results.every((result) => result.ok)).toBe(expected);
+      }),
+    );
   });
 
   it("fails a chain when each file is under its own limit", () => {
@@ -221,6 +241,49 @@ describe("checkAgentInstructionLimits", () => {
     for (const result of results) {
       expect(result.message).toBeUndefined();
       expect(result.ok).toBe(true);
+    }
+  });
+});
+
+describe("listAgentInstructionFiles", () => {
+  // Oracle: real git in a temporary repository owned by the test.
+  it("lists untracked files and skips tracked files deleted locally", () => {
+    const repo = mkdtempSync(join(tmpdir(), "agent-instructions-"));
+    try {
+      const git = (...args) =>
+        execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+      git("init", "-q");
+      const write = (path) => {
+        mkdirSync(dirname(join(repo, path)), { recursive: true });
+        writeFileSync(join(repo, path), "rules\n");
+      };
+      write("AGENTS.md");
+      write("a/AGENTS.md");
+      write("b/AGENTS.md");
+      git("add", ".");
+      git(
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+      );
+      write("a/new/AGENTS.md");
+      write("a/AGENTS.override.md");
+      write("ignored/AGENTS.md");
+      writeFileSync(join(repo, ".gitignore"), "ignored/\n");
+      rmSync(join(repo, "b/AGENTS.md"));
+      expect(listAgentInstructionFiles(repo)).toEqual([
+        "AGENTS.md",
+        "a/AGENTS.md",
+        "a/AGENTS.override.md",
+        "a/new/AGENTS.md",
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
     }
   });
 });

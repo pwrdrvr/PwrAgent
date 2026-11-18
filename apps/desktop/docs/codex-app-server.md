@@ -1,7 +1,8 @@
 # Codex App Server Adapter Guidance
 
-Moved verbatim from [apps/desktop/src/main/codex-app-server/AGENTS.md](../src/main/codex-app-server/AGENTS.md),
-which keeps a summary and says when to read this document.
+Moved from [apps/desktop/src/main/codex-app-server/AGENTS.md](../src/main/codex-app-server/AGENTS.md),
+which keeps a summary and says when to read this document. Relative links
+were updated for this location.
 
 The Codex App Server wire protocol types come from `@pwrdrvr/codex-app-server-protocol`. Do not add desktop-local protocol mirrors here.
 

@@ -1,7 +1,8 @@
 # Pwr-Family Title Strip
 
-Moved verbatim from [apps/desktop/src/renderer/src/features/chrome/AGENTS.md](../src/renderer/src/features/chrome/AGENTS.md),
-which keeps a summary and says when to read this document.
+Moved from [apps/desktop/src/renderer/src/features/chrome/AGENTS.md](../src/renderer/src/features/chrome/AGENTS.md),
+which keeps a summary and says when to read this document. Relative links
+were updated for this location.
 
 ## The Pwr-family title strip
 

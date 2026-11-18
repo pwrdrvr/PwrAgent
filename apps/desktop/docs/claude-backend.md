@@ -1,7 +1,8 @@
 # Claude Backend Guidance
 
-Moved verbatim from [apps/desktop/src/main/claude/AGENTS.md](../src/main/claude/AGENTS.md),
-which keeps a summary and says when to read this document.
+Moved from [apps/desktop/src/main/claude/AGENTS.md](../src/main/claude/AGENTS.md),
+which keeps a summary and says when to read this document. Relative links
+were updated for this location.
 
 ## CLI environment
 

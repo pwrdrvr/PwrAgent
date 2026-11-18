@@ -1,7 +1,7 @@
 # Third-Party Brand Assets
 
-Moved verbatim from [apps/desktop/AGENTS.md](../AGENTS.md), which keeps
-a summary and says when to read this document.
+Moved from [apps/desktop/AGENTS.md](../AGENTS.md), which keeps a summary and
+says when to read this document. Relative links were updated for this location.
 
 ## Third-Party Brand Assets
 

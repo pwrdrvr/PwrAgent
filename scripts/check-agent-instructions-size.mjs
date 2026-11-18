@@ -44,21 +44,29 @@ export function checkAgentInstructionsSize(
   };
 }
 
-// The AGENTS.md files Codex concatenates for a working directory inside
-// `file`'s directory: one per ancestor directory, root first.
+const INSTRUCTION_FILE_NAMES = ["AGENTS.override.md", "AGENTS.md"];
+
+// The instruction files Codex concatenates for a working directory inside
+// `file`'s directory: one per ancestor directory, root first. Codex reads a
+// directory's AGENTS.override.md in place of its AGENTS.md.
 export function agentInstructionChain(file, files) {
   const present = new Set(files);
   const chain = [];
   let dir = posix.dirname(file);
   for (;;) {
-    const candidate = dir === "." ? "AGENTS.md" : `${dir}/AGENTS.md`;
-    if (present.has(candidate)) chain.unshift(candidate);
+    for (const name of INSTRUCTION_FILE_NAMES) {
+      const candidate = dir === "." ? name : `${dir}/${name}`;
+      if (present.has(candidate)) {
+        chain.unshift(candidate);
+        break;
+      }
+    }
     if (dir === ".") return chain;
     dir = posix.dirname(dir);
   }
 }
 
-// `files` are repository-relative AGENTS.md paths.
+// `files` are repository-relative instruction file paths.
 export function agentInstructionLimits(files) {
   const limits = FILE_LIMITS
     .filter((limit) => files.includes(limit.path))
@@ -67,11 +75,14 @@ export function agentInstructionLimits(files) {
       paths: [limit.path],
       maxBytes: limit.maxBytes,
     }));
+  const seen = new Set();
   for (const file of [...files].sort()) {
     const chain = agentInstructionChain(file, files);
-    if (chain.length < 2) continue;
+    const label = chain.join(" + ");
+    if (chain.length < 2 || seen.has(label)) continue;
+    seen.add(label);
     limits.push({
-      label: chain.join(" + "),
+      label,
       paths: chain,
       maxBytes: CODEX_PROJECT_DOC_MAX_BYTES,
     });
@@ -87,14 +98,27 @@ export function checkAgentInstructionLimits(readBytes, limits) {
   });
 }
 
+const INSTRUCTION_PATHSPECS = INSTRUCTION_FILE_NAMES.flatMap((name) => [
+  name,
+  `:(glob)**/${name}`,
+]);
+
+// Tracked and untracked (not ignored) instruction files, so a new file is
+// checked before it is committed, minus tracked files deleted from the
+// working tree. A sparse checkout's skipped files are not "deleted", so a
+// checkout that omits one fails loudly when it is read.
 export function listAgentInstructionFiles(repoRoot) {
-  return execFileSync(
-    "git",
-    ["ls-files", "-z", "--", "AGENTS.md", ":(glob)**/AGENTS.md"],
-    { cwd: repoRoot, encoding: "utf8" },
-  )
-    .split("\0")
-    .filter(Boolean);
+  const gitList = (args) =>
+    execFileSync(
+      "git",
+      ["ls-files", "-z", ...args, "--", ...INSTRUCTION_PATHSPECS],
+      { cwd: repoRoot, encoding: "utf8" },
+    )
+      .split("\0")
+      .filter(Boolean);
+  const deleted = new Set(gitList(["--deleted"]));
+  const files = gitList(["--cached", "--others", "--exclude-standard"]);
+  return [...new Set(files)].filter((file) => !deleted.has(file)).sort();
 }
 
 function main() {

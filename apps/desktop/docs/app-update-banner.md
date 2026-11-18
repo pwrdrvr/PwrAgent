@@ -1,7 +1,8 @@
 # App Update Banner
 
-Moved verbatim from [apps/desktop/src/renderer/src/features/update/AGENTS.md](../src/renderer/src/features/update/AGENTS.md),
-which keeps a summary and says when to read this document.
+Moved from [apps/desktop/src/renderer/src/features/update/AGENTS.md](../src/renderer/src/features/update/AGENTS.md),
+which keeps a summary and says when to read this document. Relative links
+were updated for this location.
 
 ## Two channels, and they are not redundant
 

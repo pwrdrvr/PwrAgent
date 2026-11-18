@@ -57,9 +57,10 @@ jobs:
         timeout-minutes: 5
         with:
           # Non-cone patterns match at any depth, so this checks out every
-          # nested AGENTS.md the size guard reads.
+          # nested AGENTS.md and AGENTS.override.md the size guard reads.
           sparse-checkout: |
             AGENTS.md
+            AGENTS.override.md
             scripts/check-agent-instructions-size.mjs
           sparse-checkout-cone-mode: false
 
