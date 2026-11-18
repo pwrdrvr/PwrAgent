@@ -33,12 +33,13 @@ export function graduatedProfileOwnerArg(homeRoot: string): string {
 export async function killGraduatedProfileInstances(
   profile: string,
   homeRoot: string,
+  deadline: number,
 ): Promise<void> {
-  const pids = selectGraduatedProfilePids(await readProcessTable() ?? [], profile, homeRoot);
+  const pids = selectGraduatedProfilePids(await readProcessTable(deadline) ?? [], profile, homeRoot);
   for (const pid of pids) {
     try {
       if (process.platform === "win32") {
-        await run("taskkill", ["/pid", String(pid), "/T", "/F"]);
+        await run("taskkill", ["/pid", String(pid), "/T", "/F"], deadline);
       } else {
         process.kill(pid, "SIGKILL");
       }
@@ -47,7 +48,7 @@ export async function killGraduatedProfileInstances(
     }
   }
   if (pids.length > 0) {
-    await waitForProfileInstancesToExit(profile, homeRoot);
+    await waitForProfileInstancesToExit(profile, homeRoot, deadline);
   }
 }
 
@@ -67,19 +68,22 @@ export async function killGraduatedProfileInstances(
  * best-effort — the caller deletes either way, and throwing here would swap one
  * cleanup-shaped failure for another.
  */
-async function waitForProfileInstancesToExit(profile: string, homeRoot: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+async function waitForProfileInstancesToExit(
+  profile: string,
+  homeRoot: string,
+  deadline: number,
+): Promise<void> {
+  while (performance.now() < deadline) {
     // A read that FAILED must not end the wait. `readProcessTable` answers
     // `undefined` for "I could not look", which is the one state that is
     // otherwise indistinguishable from "nothing is running" — and taking the
     // empty list at face value would return straight into the `EBUSY: unlink`
     // this wait exists to prevent, now with the wait hiding it.
-    const rows = await readProcessTable();
+    const rows = await readProcessTable(deadline);
     if (rows && selectGraduatedProfilePids(rows, profile, homeRoot).length === 0) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - performance.now()))));
   }
 }
 
@@ -120,7 +124,7 @@ export function selectGraduatedProfilePids(
 }
 
 /** `undefined` means the table could not be read, never "nothing is running". */
-async function readProcessTable(): Promise<
+async function readProcessTable(deadline: number): Promise<
   Array<{ pid: number; commandLine: string }> | undefined
 > {
   try {
@@ -134,10 +138,10 @@ async function readProcessTable(): Promise<
         "Get-CimInstance Win32_Process"
           + " | Where-Object { $_.CommandLine }"
           + " | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
-      ]);
+      ], deadline);
       return parseProcessTable(stdout, "\t");
     }
-    const stdout = await run("ps", ["-axo", "pid=,command="]);
+    const stdout = await run("ps", ["-axo", "pid=,command="], deadline);
     return parseProcessTable(stdout, " ");
   } catch {
     return undefined;
@@ -171,14 +175,16 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function run(command: string, args: string[]): Promise<string> {
+async function run(command: string, args: string[], deadline: number): Promise<string> {
+  const timeout = Math.floor(deadline - performance.now());
+  if (timeout <= 0) throw new Error("Detached profile cleanup budget exhausted");
   return await new Promise<string>((resolve, reject) => {
     execFile(
       command,
       args,
-      { timeout: 15_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true },
+      { timeout, maxBuffer: 32 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
-        if (error && !stdout) {
+        if (error) {
           reject(error);
           return;
         }

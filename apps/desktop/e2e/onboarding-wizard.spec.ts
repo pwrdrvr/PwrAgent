@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { findLiveProfileRuntimeMarkers, isProcessAlive } from "../src/main/profile";
-import { PROFILES_OPEN_CHANNEL } from "../src/shared/ipc";
+import { APP_QUIT_CHANNEL, PROFILES_OPEN_CHANNEL } from "../src/shared/ipc";
 import { expect, test } from "./fixtures/electron-test";
 import {
   graduatedProfileOwnerArg,
@@ -116,8 +116,8 @@ async function launchWizard(
     ...(graduatedProfile
       ? {
           extraArgs: [graduatedProfileOwnerArg(homeRoot)],
-          cleanupDetachedProcesses: () =>
-            killGraduatedProfileInstances(graduatedProfile, homeRoot),
+          cleanupDetachedProcesses: (deadline) =>
+            killGraduatedProfileInstances(graduatedProfile, homeRoot, deadline),
         }
       : {}),
     env: {
@@ -622,6 +622,10 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("requested-profile bootstrap relaunches that profile after Skip", async () => {
+    test.skip(
+      process.platform === "linux",
+      "Detached Linux handoff requires a sandbox-enabled CI launch.",
+    );
     test.setTimeout(60_000);
     const app = await launchWizard({ PWRAGENT_PROFILE: "test2" }, "test2");
     try {
@@ -652,6 +656,10 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("Multiple-mode finish hands off from bootstrap to the first profile", async () => {
+    test.skip(
+      process.platform === "linux",
+      "Detached Linux handoff requires a sandbox-enabled CI launch.",
+    );
     test.setTimeout(60_000);
     const app = await launchWizard({}, "personal");
     try {
@@ -678,15 +686,18 @@ test.describe("Onboarding wizard", () => {
       const bootstrap = await observeBootstrap(app);
       // Model an accepted launch whose process never publishes a heartbeat.
       // Leave the real readiness IPC and wizard fallback in place.
-      const launchRequests = await app.electronApp.evaluateHandle(({ ipcMain }, channel) => {
-        const profiles: string[] = [];
-        ipcMain.removeHandler(channel);
-        ipcMain.handle(channel, (_event, { profile }: { profile: string }) => {
-          profiles.push(profile);
+      await app.window.clock.install();
+      const requests = await app.electronApp.evaluateHandle(({ ipcMain }, { open, quit }) => {
+        const calls = { profiles: [] as string[], quit: 0 };
+        ipcMain.removeHandler(quit);
+        ipcMain.handle(quit, () => { calls.quit += 1; });
+        ipcMain.removeHandler(open);
+        ipcMain.handle(open, (_event, { profile }: { profile: string }) => {
+          calls.profiles.push(profile);
           return { opened: true, profile };
         });
-        return profiles;
-      }, PROFILES_OPEN_CHANNEL);
+        return calls;
+      }, { open: PROFILES_OPEN_CHANNEL, quit: APP_QUIT_CHANNEL });
       await Promise.all([
         app.window.waitForEvent("console", {
           predicate: (message) =>
@@ -696,7 +707,14 @@ test.describe("Onboarding wizard", () => {
         app.window.getByRole("button", { name: /Open my workspace/i }).click(),
       ]);
 
-      expect(await launchRequests.jsonValue()).toEqual(["personal"]);
+      // Flush the post-heartbeat grace timer and round-trip through main IPC
+      // before checking that the timeout branch never requested a quit.
+      await app.window.clock.runFor(2_500);
+      await app.window.evaluate(() => {
+        const api = Reflect.get(window, "pwragent") as { getBootInfo(): Promise<unknown> };
+        return api.getBootInfo();
+      });
+      expect(await requests.jsonValue()).toEqual({ profiles: ["personal"], quit: 0 });
       expect(await app.electronApp.evaluate(() => process.pid)).toBe(bootstrap.pid);
       await expect(app.window.getByRole("dialog", { name: "First-run setup" })).toBeHidden();
       expectMultipleProfilesPersisted(app);
