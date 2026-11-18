@@ -15,6 +15,8 @@ import {
   type ThreadExecutionMode,
   isAcpBackendId,
   modelMenuEntryProviderId,
+  navigationLaunchpadProviderKey,
+  parseProviderPickerValue,
 } from "@pwragent/shared";
 import {
   acpRuntimeValueLooksPrivileged,
@@ -816,7 +818,14 @@ export function resolveModelSettingsFromOptions(
   options: BackendLaunchpadOptions | undefined,
   settings: ModelSettings,
 ): ModelSettings {
-  const models = options?.models ?? [];
+  const providerKey = navigationLaunchpadProviderKey({ backend, ...settings });
+  const providerId = parseProviderPickerValue(providerKey).codexModelProviderId;
+  const models = (options?.models ?? []).filter((model) =>
+    backend !== "codex" || modelMenuEntryProviderId(model) === providerId,
+  );
+  if (backend === "codex" && providerId && models.length === 0) {
+    return { model: settings.model, reasoningEffort: settings.reasoningEffort };
+  }
   if (backend === "claude" && settings.model && !models.some((model) => model.id === settings.model)) {
     // A saved explicit model can outlive this process's catalog or belong to
     // the user's CLI configuration. Let the CLI validate it, never silently
@@ -833,12 +842,12 @@ export function resolveModelSettingsFromOptions(
   }
   const selectedModel =
     models.find((model) => model.id === settings.model) ??
-    getDefaultModelOption(backend, options);
+    getDefaultModelOption(backend, { ...options, models });
   const supportsReasoning = Boolean(selectedModel?.supportsReasoning);
   const reasoningEfforts = getReasoningEffortsForModel(options, selectedModel);
   const rememberedReasoningEffort = selectedModel
     ? settings.reasoningEffortsByModel?.[selectedModel.id] ??
-      settings.providerSettings?.[backend]?.reasoningEffortsByModel?.[
+      settings.providerSettings?.[providerKey]?.reasoningEffortsByModel?.[
         selectedModel.id
       ]
     : undefined;
@@ -1006,6 +1015,7 @@ export function launchpadDefaultsEqual(
 ): boolean {
   return (
     left.backend === right.backend &&
+    left.codexModelProviderId === right.codexModelProviderId &&
     left.executionMode === right.executionMode &&
     left.workMode === right.workMode &&
     left.model === right.model &&

@@ -29,7 +29,7 @@ import type {
   SetMcpConnectionEnabledRequest,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
-import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
+import { buildProviderPickerEntries, GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
@@ -1028,7 +1028,22 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
   });
 
-  it("lists default models the way the composer does: current first, superseded under Other models", async () => {
+  it.each([
+    {
+      models: codexCatalogModels(),
+      sections: [
+        { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
+        { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
+      ],
+      count: 8,
+    },
+    {
+      // The property's smallest counterexample: one model per provider.
+      models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }, PROVIDER_MODEL],
+      sections: [{ labels: ["Provider advertised default", "GPT-6.1-Sol"] }],
+      count: 1,
+    },
+  ])("keeps OpenAI defaults scoped like the launchpad provider picker ($count models)", async ({ models, sections, count }) => {
     const cachedBackends = [{
       kind: "codex",
       label: "OpenAI",
@@ -1036,7 +1051,7 @@ describe("SettingsScreen", () => {
       methods: [],
       capabilities: { createThread: true },
       executionModes: [],
-      launchpadOptions: { models: codexCatalogModels() },
+      launchpadOptions: { models },
     }] as unknown as BackendSummary[];
     const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
       async () => ({ fetchedAt: 1, entries: [] }),
@@ -1054,17 +1069,15 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual([
-      { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
-      { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
-      { group: PROVIDER_MODEL.providerLabel, labels: [PROVIDER_MODEL.label] },
-    ]);
+    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual(sections);
+    const field = screen.getByLabelText("OpenAI default model").closest(".settings-field") as HTMLElement;
+    expect(within(field).getByText(`${count} discovered model${count === 1 ? "" : "s"}`)).toBeInTheDocument();
     // Let the mount's agent read land inside act.
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
   });
 
-  it("lists any Codex catalog as a default model by the shared model menu rule", async () => {
+  it("offers exactly the launchpad's OpenAI models as defaults for any Codex catalog", async () => {
     await fc.assert(fc.asyncProperty(codexCatalogArbitrary, async (models) => {
       const cachedBackends = [{
         kind: "codex",
@@ -1095,7 +1108,8 @@ describe("SettingsScreen", () => {
           selectSections(screen.getByLabelText("OpenAI default model")),
         ).toEqual(expectedModelSelectSections({
           kind: "codex",
-          models,
+          models: buildProviderPickerEntries(cachedBackends)
+            .find((entry) => entry.value === "codex")!.models,
           leading: ["Provider advertised default"],
         }));
         await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
@@ -1154,6 +1168,54 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
+    await act(async () => undefined);
+  });
+
+  it("saves an endpoint's model, reasoning, and access under its own provider identity", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: { model: "gpt-test", reasoningEffortsByModel: { "gpt-test": "high" }, executionMode: "full-access" },
+      "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "low" } },
+    };
+    const settings = createSettingsState(snapshot);
+    const cachedBackends = [{
+      kind: "codex", label: "OpenAI", available: true, methods: [], capabilities: { createThread: true },
+      executionModes: (["auto", "default", "full-access"] as const).map((mode) => ({ mode, label: mode, available: true })),
+      launchpadOptions: { models: [
+        { id: "gpt-test", label: "GPT test" },
+        { id: "@mathos/one", label: "Math one", providerId: "mathos", providerLabel: "MathOS", reasoningEfforts: ["low", "high"] },
+        { id: "@mathos/two", label: "Math two", providerId: "mathos", providerLabel: "MathOS", defaultReasoningEffort: "high" },
+      ] },
+    }] as unknown as BackendSummary[];
+    const listAcpAgents = vi.fn(async () => ({ fetchedAt: 1, entries: [] }));
+    render(<SettingsScreen
+      cachedBackends={cachedBackends}
+      desktopApi={{ listAcpAgents, listBackends: async () => await new Promise<never>(() => undefined) }}
+      initialSection="models" settings={settings} onClose={() => undefined}
+    />);
+    expect(selectOptionLabels(screen.getByLabelText("MathOS default model"))).toEqual([
+      "Provider advertised default", "Math one", "Math two",
+    ]);
+    chooseSelectOption(screen.getByLabelText("MathOS default model"), "Math two");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": {
+        model: "@mathos/two", reasoningEffortsByModel: { "@mathos/one": "low", "@mathos/two": "high" },
+      },
+    } } }));
+    chooseSelectOption(screen.getByLabelText("MathOS default reasoning"), "high");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "high" } },
+    } } }));
+    chooseSelectOption(screen.getByLabelText("MathOS access for new threads"), "Default Access");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
+      ...snapshot.models.providerDefaults,
+      "codex-provider:mathos": {
+        model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "low" }, executionMode: "default",
+      },
+    } } }));
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
     await act(async () => undefined);
   });

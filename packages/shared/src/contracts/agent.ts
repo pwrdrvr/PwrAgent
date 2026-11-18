@@ -1113,6 +1113,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "prompt"
       | "editorDocument"
       | "backend"
+      | "codexModelProviderId"
       | "executionMode"
       | "model"
       | "reasoningEffort"

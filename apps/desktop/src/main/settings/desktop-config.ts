@@ -9,6 +9,8 @@ import {
   normalizeForgeAgentToolRules,
   normalizeForgeRuleRepository,
   normalizeTaskMonitorModelChoice,
+  normalizeModelProviderDefaults,
+  providerPickerValue,
   validateCodexModelProviders,
   validateForgeAgentToolRule,
   validateLocalModelIds,
@@ -456,6 +458,8 @@ type TomlScalar = TomlValue;
 
 const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
 const LEGACY_SETTINGS_MARKER = "pwragent-legacy-settings";
+const LEGACY_PROVIDER_DEFAULTS_LAST_VERSION = "1.4.10";
+const LEGACY_PROVIDER_DEFAULTS_SHAPE = "backend-table-array";
 const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
 const LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION = "1.0.0-beta.50";
 const LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION = "1.0.0-beta.50";
@@ -2014,7 +2018,7 @@ export function desktopSettingsPatchToEdits(
     const providerDefaults = normalizeProviderModelDefaults(
       patch.models.providerDefaults,
     );
-    const entries = Object.entries(providerDefaults)
+    const toEntries = (defaultsByProvider: Record<string, DesktopProviderModelDefaults>) => Object.entries(defaultsByProvider)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([provider, defaults]) => ({
         provider,
@@ -2024,17 +2028,44 @@ export function desktopSettingsPatchToEdits(
           ? { execution_mode: defaults.executionMode }
           : {}),
       }));
+    const entries = toEntries(providerDefaults);
     if (entries.length > 0) {
+      edits.push({ op: "delete", path: ["models", "model_provider_defaults"] });
       edits.push({
         op: "setTableArray",
-        path: ["models", "provider_defaults"],
+        path: ["models", "model_provider_defaults"],
         value: entries,
       });
     } else {
       edits.push({
         op: "deleteTableArray",
-        path: ["models", "provider_defaults"],
+        path: ["models", "model_provider_defaults"],
       });
+      edits.push({ op: "delete", path: ["models", "model_provider_defaults"] });
+    }
+    const legacyDefaults = readProviderModelDefaults(currentTables.models?.provider_defaults);
+    if (legacyDefaults) {
+      const legacyProjection = Object.fromEntries(Object.entries(providerDefaults)
+        .filter(([key]) => !key.startsWith("codex-provider:")));
+      const oldModel = legacyDefaults.codex?.model
+        ?? Object.values(legacyDefaults).find((entry) => entry.model?.startsWith("@"))?.model;
+      const oldProviderKey = oldModel ? providerPickerValue("codex", oldModel) : "codex";
+      const codex = providerDefaults.codex;
+      const compatibleModel = codex?.model ?? providerDefaults[oldProviderKey]?.model;
+      const codexEntries = Object.entries(providerDefaults).filter(([key]) => key === "codex" || key.startsWith("codex-provider:"));
+      if (codexEntries.length > 0) {
+        legacyProjection.codex = {
+          ...(compatibleModel ? { model: compatibleModel } : {}),
+          reasoningEffortsByModel: Object.assign({}, ...codexEntries.map(([, entry]) => entry.reasoningEffortsByModel)),
+          ...(codex?.executionMode ? { executionMode: codex.executionMode }
+            : providerDefaults[oldProviderKey]?.executionMode ? { executionMode: providerDefaults[oldProviderKey].executionMode } : {}),
+        };
+      }
+      const legacyEntries = toEntries(legacyProjection);
+      edits.push(legacyEntries.length > 0 ? {
+        op: "setTableArray", path: ["models", "provider_defaults"], value: legacyEntries,
+        comment: `# ${LEGACY_SETTINGS_MARKER} key=provider_defaults shape=${LEGACY_PROVIDER_DEFAULTS_SHAPE} used_through=${LEGACY_PROVIDER_DEFAULTS_LAST_VERSION} kept_for_older_clients`,
+      } : { op: "deleteTableArray", path: ["models", "provider_defaults"] });
     }
   }
   if (patch.models?.usageAccountGroups !== undefined) {
@@ -2798,7 +2829,8 @@ function normalizeDesktopConfig(
     models: {
       usageAccountGroups: readUsageAccountGroups(models?.usage_account_groups),
       usageAccountNames: readUsageAccountNames(models?.usage_account_names),
-      providerDefaults: readProviderModelDefaults(models?.provider_defaults),
+      providerDefaults: readProviderModelDefaults(models?.model_provider_defaults)
+        ?? readProviderModelDefaults(models?.provider_defaults),
       providerThreadMigrations: readProviderThreadModelMigrations(
         models?.provider_thread_migrations,
       ),
@@ -4055,7 +4087,7 @@ function readTaskMonitorModels(
 function normalizeProviderModelDefaults(
   value: Record<string, DesktopProviderModelDefaults>,
 ): Record<string, DesktopProviderModelDefaults> {
-  return Object.fromEntries(
+  return normalizeModelProviderDefaults(Object.fromEntries(
     Object.entries(value).flatMap(([provider, defaults]) => {
       const normalizedProvider = provider.trim();
       if (!normalizedProvider) return [];
@@ -4088,7 +4120,7 @@ function normalizeProviderModelDefaults(
         },
       ]];
     }),
-  );
+  ));
 }
 
 /** Unknown or misspelled values read as unset, so the built-in default applies. */
@@ -4104,6 +4136,7 @@ function readProviderModelDefaults(
   value: TomlScalar | undefined,
 ): Record<string, DesktopProviderModelDefaults> | undefined {
   if (!Array.isArray(value)) return undefined;
+  if (value.some((item) => typeof item !== "object" || item === null || Array.isArray(item) || typeof item.provider !== "string")) return undefined;
   const defaults: Record<string, DesktopProviderModelDefaults> = {};
   for (const item of value) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) {
@@ -4143,7 +4176,7 @@ function readProviderModelDefaults(
       };
     }
   }
-  return defaults;
+  return normalizeModelProviderDefaults(defaults);
 }
 
 function normalizeProviderThreadModelMigrations(
@@ -4167,7 +4200,7 @@ function normalizeProviderThreadModelMigrations(
         return [];
       }
       return [[
-        normalizedProvider,
+        normalizedProvider === "codex" ? providerPickerValue("codex", model) : normalizedProvider,
         {
           revision,
           model,
@@ -4213,7 +4246,7 @@ function readProviderThreadModelMigrations(
     if (!provider || !revision || !model || createdAt === undefined) {
       continue;
     }
-    migrations[provider] = {
+    migrations[provider === "codex" ? providerPickerValue("codex", model) : provider] = {
       revision,
       model,
       ...(reasoningEffort ? { reasoningEffort } : {}),

@@ -950,6 +950,7 @@ export type CodexDiscoveryObserver = {
 };
 
 export type ModelSettings = {
+  codexModelProviderId?: string;
   model?: string;
   reasoningEffort?: string;
   reasoningEffortsByModel?: Record<string, string>;

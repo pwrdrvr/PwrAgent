@@ -41,6 +41,34 @@ function readDefaultValue(key: string): unknown {
 }
 
 describe("SqliteOverlayStore - launchpad defaults", () => {
+  it("persists endpoint defaults without replacing another Codex provider's draft", async () => {
+    const base: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/mathos", directoryKind: "directory", directoryLabel: "MathOS",
+      backend: "codex", model: "@mathos/one", reasoningEffort: "low", executionMode: "default",
+      prompt: "unsent", workMode: "local", createdAt: 1, updatedAt: 1,
+    };
+    await store.upsertDirectoryLaunchpad(base);
+    await store.upsertDirectoryLaunchpad({ ...base, directoryKey: "directory:/openai", model: "gpt-old", executionMode: "auto" });
+    await store.setLaunchpadDefaults(base);
+    const openAI = { model: "gpt-new", reasoningEffortsByModel: { "gpt-new": "high" }, executionMode: "full-access" as const };
+    store.applyProviderModelDefaults({}, { codex: openAI });
+    const reopened = new SqliteOverlayStore(stateDb);
+    expect(await reopened.getDirectoryLaunchpad({ directoryKey: base.directoryKey })).toMatchObject({
+      backend: "codex", model: "@mathos/one", reasoningEffort: "low", executionMode: "default", prompt: "unsent",
+    });
+    expect(await reopened.getLaunchpadDefaults()).toMatchObject({ model: "@mathos/one", executionMode: "default" });
+    expect(await reopened.getDirectoryLaunchpad({ directoryKey: "directory:/openai" })).toMatchObject({ model: "gpt-new", executionMode: "full-access" });
+    const mathos = { model: "@mathos/two", reasoningEffortsByModel: { "@mathos/two": "high" }, executionMode: "auto" as const };
+    reopened.applyProviderModelDefaults({
+      codex: openAI,
+      "codex-provider:mathos": { reasoningEffortsByModel: {}, executionMode: "default" },
+    }, { codex: openAI, "codex-provider:mathos": mathos });
+    expect(await reopened.getDirectoryLaunchpad({ directoryKey: base.directoryKey })).toMatchObject({
+      model: "@mathos/two", reasoningEffort: "high", executionMode: "auto", prompt: "unsent",
+    });
+    expect(await reopened.getDirectoryLaunchpad({ directoryKey: "directory:/openai" })).toMatchObject({ model: "gpt-new", executionMode: "full-access" });
+  });
+
   it("replaces directory and learned model choices, including an inactive provider", async () => {
     const codex = { model: "gpt-6-sol", reasoningEffortsByModel: { "gpt-6-sol": "high" } };
     const next = { model: "gpt-6.1-sol", reasoningEffortsByModel: { "gpt-6.1-sol": "low" } };

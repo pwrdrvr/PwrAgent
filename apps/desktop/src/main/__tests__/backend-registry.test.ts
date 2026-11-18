@@ -24324,6 +24324,26 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("refuses to start an endpoint with no model instead of falling back to OpenAI", async () => {
+    const client = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] }, models: [{ id: "gpt-test" }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.materializeDirectoryLaunchpad({
+        directoryKey: "directory:/fixture",
+        launchpad: {
+          directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+          backend: "codex", codexModelProviderId: "mathos", executionMode: "auto",
+          prompt: "fixture", workMode: "local", createdAt: 1, updatedAt: 1,
+        },
+      })).rejects.toThrow("No model is available for mathos");
+      expect(client.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("keeps learned provider choices ahead of the profile baseline", async () => {
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
@@ -24691,6 +24711,35 @@ script = "echo setup"
     });
 
     await registry.close();
+  });
+
+  it("never applies or acknowledges a migration from a different Codex model provider", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("gpt-old", "@mathos/old", "@bonsai/old"),
+      fc.constantFrom("codex", "codex-provider:mathos", "codex-provider:bonsai"),
+      async (source, targetKey) => {
+        const sourceKey = source.startsWith("@mathos/") ? "codex-provider:mathos"
+          : source.startsWith("@bonsai/") ? "codex-provider:bonsai" : "codex";
+        fc.pre(sourceKey !== targetKey);
+        const target = targetKey === "codex" ? "gpt-new" : `@${targetKey.slice("codex-provider:".length)}/new`;
+        const overlayStore = createOverlayStoreMock();
+        const registry = createDesktopBackendRegistry({
+          codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
+          overlayStore,
+          resolveProviderThreadModelMigrations: () => ({
+            [targetKey]: { revision: "isolated", model: target, createdAt: 100 },
+          }),
+        });
+        try {
+          await expect(registry.applyThreadModelMigration({
+            backend: "codex", threadId: "fixture", threadModel: source, threadCreatedAt: 1,
+          })).resolves.toMatchObject({ status: "none" });
+          expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "fixture" })).toBeUndefined();
+        } finally {
+          await registry.close();
+        }
+      },
+    ), { numRuns: 25 });
   });
 
   it("applies each provider thread migration once and lets a later revision supersede it", async () => {

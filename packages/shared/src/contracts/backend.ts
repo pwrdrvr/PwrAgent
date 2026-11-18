@@ -335,6 +335,8 @@ export type BackendSummary = {
   tokenMiser?: { enabled: boolean; defaultEnabled: boolean };
   /** Owner preferences used by federated composer controls. */
   modelDefaults?: DesktopProviderModelDefaults;
+  /** Owner defaults keyed by provider-picker identity, including Codex endpoints. */
+  modelProviderDefaults?: Record<string, DesktopProviderModelDefaults>;
   codexFastAllowed?: boolean;
   /**
    * The Codex model providers this owner registered, with each one's
