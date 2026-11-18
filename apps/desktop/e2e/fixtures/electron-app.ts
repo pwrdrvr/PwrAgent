@@ -661,13 +661,26 @@ async function finishElectronLaunch(args: {
   };
 
   async function teardown(): Promise<void> {
+    const cleanupDetachedProcesses = params.cleanupDetachedProcesses;
+    const mainProcess = electronMainProcesses.get(electronApp);
+    // On Windows a detached replacement can keep the launcher's pipes open
+    // after native Electron exits. Once the original main is gone it cannot
+    // start another replacement, so reap the owned child before waiting for
+    // Playwright's close handshake.
+    const reapBeforeClose = cleanupDetachedProcesses
+      && mainProcess
+      && !isPidAlive(mainProcess.pid);
+    if (reapBeforeClose) {
+      await cleanupDetachedProcesses();
+    }
     await finalizeElectronFixtureTeardown({
       closeApplication: closeApplicationOnce,
-      // The wizard's graduation path can spawn a detached child Electron
-      // process for the operator's chosen profile. Sweep it only after the
-      // Playwright-owned tree has completed its bounded graceful/forced close.
+      // A live main can still launch a replacement. Sweep after closing it
+      // so that teardown also covers children started late in the test.
       cleanupProfileProcesses: async () => {
-        await params.cleanupDetachedProcesses?.();
+        if (!reapBeforeClose) {
+          await cleanupDetachedProcesses?.();
+        }
         await killSpawnedProfileProcessesUnder(homeRoot);
       },
       removeHomeRoot: async () => {
