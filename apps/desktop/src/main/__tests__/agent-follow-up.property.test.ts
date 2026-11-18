@@ -110,8 +110,9 @@ const commands = [
     if (!world.alive) return;
     await world.setLocked(locked);
     // An unlock on an idle, open thread starts every follow-up a lock held,
-    // whichever process the lock held it in.
-    if (!locked && !world.busy && !world.gateClosed && !followUpsSuspended(world)) {
+    // whichever process the lock held it in. A crash during the unlock leaves
+    // the rest for the next launch, which the final phase checks.
+    if (!locked && world.alive && !world.busy && !world.gateClosed && !followUpsSuspended(world)) {
       for (const action of world.actions()) {
         expect(action.status, `follow-up ${action.id} is still held after unlock`).not.toBe("held");
       }
@@ -254,6 +255,30 @@ describe("agent follow-up lifecycle model", () => {
       await world.tick(10 * MINUTE);
       expect(world.store.get(created.id)).toMatchObject({ status: "failed" });
       expect(world.admittedCount(created.id)).toBe(1);
+    });
+  });
+
+  it("leaves a follow-up an unlock never reached for the next launch when the process dies mid-unlock", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const first = await world.create(1);
+      const second = await world.create(1);
+      if (!("id" in first) || !("id" in second)) throw new Error("create refused");
+      await world.tick(MINUTE);
+      expect(world.actions().map((action) => action.status)).toEqual(["held", "held"]);
+      world.armedCrash = "after_queue_start";
+      await world.setLocked(false);
+      expect(world.alive).toBe(false);
+
+      await world.restart();
+      await world.tick(10 * MINUTE);
+      // The start the crash interrupted fails visibly; the hold it never
+      // reached starts once.
+      const [started, unreached] = world.admittedCount(first.id) === 1 ? [first.id, second.id] : [second.id, first.id];
+      expect(world.store.get(started)).toMatchObject({ status: "failed" });
+      expect(world.admittedCount(started)).toBe(1);
+      expect(world.store.get(unreached)).toMatchObject({ status: "started" });
+      expect(world.admittedCount(unreached)).toBe(1);
     });
   });
 
