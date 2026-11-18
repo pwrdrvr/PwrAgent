@@ -12059,19 +12059,6 @@ export class DesktopBackendRegistry {
         error: { code: PROJECT_PAUSED_ERROR_CODE, message: projectRefusal },
       };
     }
-    // A steer delivers its text to the running turn, at that turn's access.
-    const accessRefusal = request.operation === "steer"
-      ? await this.checkAgentMessageAccess(request)
-      : undefined;
-    if (accessRefusal) {
-      return {
-        ok: false,
-        backend: request.backend,
-        threadId: request.threadId,
-        requestId: request.requestId,
-        error: { code: "forbidden", message: accessRefusal },
-      };
-    }
     const requestKey = [
       request.backend,
       request.threadId,
@@ -12114,7 +12101,23 @@ export class DesktopBackendRegistry {
         : response;
     }
 
-    const promise = this.submitActiveTurnControl(request);
+    // A steer delivers its text to the running turn, at that turn's access.
+    // The check runs inside the accepted request, so an accepted steer's
+    // retry replays above and a concurrent duplicate still waits on this one.
+    const promise = (async (): Promise<ControlActiveTurnResponse> => {
+      const accessRefusal = request.operation === "steer"
+        ? await this.checkAgentMessageAccess(request)
+        : undefined;
+      return accessRefusal
+        ? {
+            ok: false,
+            backend: request.backend,
+            threadId: request.threadId,
+            requestId: request.requestId,
+            error: { code: "forbidden", message: accessRefusal },
+          }
+        : await this.submitActiveTurnControl(request);
+    })();
     if (
       this.acceptedActiveTurnControlRequests.size
       >= MAX_ACCEPTED_THREAD_CONTROL_REQUESTS

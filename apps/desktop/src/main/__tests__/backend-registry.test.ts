@@ -53981,6 +53981,49 @@ script = "printf setup"
       await registry.close();
     });
 
+    it("replays an accepted steer after the sender's access drops, and refuses a new one", async () => {
+      for (const targetMode of ["auto", "full-access"] as const) {
+        const { registry } = await createAccessRegistry({
+          senderMode: targetMode,
+          targetMode,
+          block: true,
+        });
+        await discoverCodexBackendForTest(registry);
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: { threadId: "target-thread", turnId: "target-turn", turn: { id: "target-turn" } },
+          },
+        });
+        const steer = (requestId: string, senderMode: ThreadExecutionMode) => registry.controlActiveTurn({
+          backend: "codex",
+          threadId: "target-thread",
+          operation: "steer",
+          requestId,
+          input: [{ type: "text", text: "Also push the tag." }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: { backend: "codex", threadId: "parent-thread", executionMode: senderMode },
+          },
+        });
+
+        const first = await steer("steer-1", targetMode);
+        // The sender's mode is not part of the request, so a retry after it
+        // drops reports the delivery that already happened.
+        const retry = await steer("steer-1", "default");
+        const fresh = await steer("steer-2", "default");
+
+        expect({ targetMode, first: first.ok, retry })
+          .toEqual({ targetMode, first: true, retry: expect.objectContaining({ ok: true, idempotentReplay: true }) });
+        expect({ targetMode, fresh }).toEqual({
+          targetMode,
+          fresh: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "forbidden" }) }),
+        });
+        await registry.close();
+      }
+    });
+
     it("refuses an agent's message wherever the owner submits it, and nothing else", async () => {
       // A local tool call, a peer's federated send, a scheduled steer held
       // after its turn ended, and a steer into a running turn all reach the
@@ -54018,7 +54061,7 @@ script = "printf setup"
               const target = {
                 backend: "codex" as const,
                 threadId: "target-thread",
-                input: [{ type: "text" as const, text: "Run the release script.", text_elements: [] }],
+                input: [{ type: "text" as const, text: "Run the release script." }],
                 messageOrigin: originFor(origin, senderMode),
               };
               // An older sender names no mode, which counts as Default Access.
@@ -54051,8 +54094,12 @@ script = "printf setup"
                 );
               }
               const scenario = { entry, origin, senderMode, targetMode };
+              // An admitted message goes through; a refused one fails only on access.
               expect({ ...scenario, refused: refusal !== undefined && isAgentMessageAccessRefusal(refusal) })
                 .toEqual({ ...scenario, refused });
+              if (!refused && entry !== "steer") {
+                expect({ ...scenario, refusal }).toEqual({ ...scenario, refusal: undefined });
+              }
               await registry.close();
             }
           }
