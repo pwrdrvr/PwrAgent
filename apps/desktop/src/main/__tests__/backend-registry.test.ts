@@ -5143,7 +5143,7 @@ describe("DesktopBackendRegistry", () => {
       const payloads = () => (db.raw.prepare(
         "SELECT payload FROM restart_continuations ORDER BY created_at, entry_id",
       ).all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as StoredRestartContinuation);
-      return { payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
+      return { db, payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false, scheduledActions: new ScheduledThreadActionStore(db) }) };
     };
     const launch = (
       store: RestartContinuationStore,
@@ -5374,6 +5374,73 @@ describe("DesktopBackendRegistry", () => {
         writes,
       });
     });
+
+    it.each(["checkpoint", "legacy receipt", "reused PID"] as const)(
+      "recovers a lock-held follow-up from its scheduled action exactly once (%s)",
+      async (scenario) => {
+        const { db, store, payloads } = durableStore();
+        const actions = new ScheduledThreadActionStore(db);
+        const thread = { backend: "codex" as const, threadId: "manager" };
+        const origin = { source: "operator" as const };
+        let now = Date.now();
+        const first = launch(store, "instance-a");
+        await first.registry.setThreadLock({ ...thread, locked: true }, origin);
+        const previous = new ScheduledThreadActionService({
+          registry: first.registry, store: actions, now: () => now, ownerId: "instance-a",
+        });
+        const followUp = await previous.createAgentFollowUp({
+          ...thread, scheduledFor: now + 60_000, prompt: "Check the deployment.",
+        });
+        now += 60_000;
+        await previous.evaluateDueActions();
+        const held = actions.get(followUp.id);
+        expect(held).toMatchObject({ status: "held", holdCause: "thread_lock", queueEntryId: expect.any(String) });
+        expect(first.codexClient.startTurnCallCount).toBe(0);
+        const queueEntryId = held!.queueEntryId!;
+
+        if (scenario === "checkpoint") {
+          first.registry.saveRestartContinuations(first.registry.beginQuietRestart(), now, true);
+          expect(payloads()).toEqual([]);
+        } else {
+          // Older builds checkpointed a lock hold as a plain paused entry.
+          store.saveAll("instance-a", [{
+            ...thread, id: queueEntryId, kind: "queued", input: text("Check the deployment."),
+            createdAt: now, queued: { origin: "scheduled", paused: true },
+          }]);
+          expect(payloads()).toHaveLength(1);
+        }
+        await first.registry.close();
+
+        const restartStore = scenario === "reused PID"
+          ? new RestartContinuationStore(db.raw, { processId: 4_243, processAlive: (pid) => pid === 4_242, scheduledActions: actions })
+          : store;
+        const second = launch(restartStore, "instance-b");
+        expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([]);
+        await second.registry.setThreadLock({ ...thread, locked: true }, origin);
+        const scheduler = new ScheduledThreadActionService({
+          registry: second.registry, store: actions, now: () => now, ownerId: "instance-b",
+          isOwnerAlive: () => false,
+        });
+        onTestFinished(() => scheduler.dispose());
+        scheduler.start();
+        await vi.waitFor(() => expect(actions.listHeldHolds(followUp.id)).toEqual([
+          expect.objectContaining({ holderId: "instance-b" }),
+        ]));
+        expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([
+          expect.objectContaining({ queueEntryId, manualReleaseRequired: true }),
+        ]);
+        await second.registry.setThreadLock({ ...thread, locked: false }, origin);
+        await vi.waitFor(() => expect(actions.get(followUp.id)?.status).toBe("started"));
+        expect(second.codexClient.startTurnCallCount).toBe(1);
+
+        // Even if a reused PID delayed receipt recovery, a later launch must
+        // never restore a paused copy of a turn that has already run.
+        const third = launch(store, "instance-c");
+        expect(third.registry.getQueuedTurnsForThread(thread)).toEqual([]);
+        expect(payloads()).toEqual([]);
+        expect(third.codexClient.startTurnCallCount).toBe(0);
+      },
+    );
 
     it("opens the gate when a continuation is discarded", async () => {
       const { rows, store } = durableStore();

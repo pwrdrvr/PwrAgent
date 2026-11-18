@@ -7,6 +7,11 @@ import {
   type AppServerTurnInputItem,
 } from "@pwragent/shared";
 import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
+import {
+  isScheduledThreadLockHold,
+  scheduledActionIdFromTurnQueueEntry,
+  type ScheduledThreadActionStorage,
+} from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { storageProcessAlive } from "./storage-maintenance";
 
 /**
@@ -91,7 +96,8 @@ export class RestartContinuationStore {
   constructor(private readonly db: Database.Database, private readonly options: {
     processId?: number;
     processAlive?: (pid: number) => boolean;
-  } = {}) {}
+    scheduledActions: Pick<ScheduledThreadActionStorage, "get">;
+  }) {}
 
   /**
    * Records what one quiet restart carries, in one commit. A thread that
@@ -184,7 +190,7 @@ export class RestartContinuationStore {
       const drop = this.db.prepare("DELETE FROM restart_continuations WHERE entry_id = ?");
       for (const row of candidates()) {
         const continuation = parseContinuation(row);
-        if (!continuation) {
+        if (!continuation || this.isObsoleteScheduledReceipt(continuation)) {
           drop.run(row.entry_id);
           continue;
         }
@@ -193,5 +199,19 @@ export class RestartContinuationStore {
       }
       return claimed;
     }).immediate();
+  }
+
+  private isObsoleteScheduledReceipt(continuation: StoredRestartContinuation): boolean {
+    if (continuation.kind !== "queued") return false;
+    const id = scheduledActionIdFromTurnQueueEntry(continuation.id);
+    if (!id) return false;
+    // This read and the receipt claim share an immediate transaction. The
+    // scheduler owns lock recovery even when its original FIFO is gone.
+    const action = this.options.scheduledActions.get(id);
+    return !action
+      || action.backend !== continuation.backend || action.threadId !== continuation.threadId
+      || action.status === "started" || action.status === "cancelled" || action.status === "failed"
+      || isScheduledThreadLockHold(action)
+      || (action.status === "queued" && action.manualReleaseRequired === true);
   }
 }

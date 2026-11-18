@@ -22,6 +22,7 @@ import type {
   ScheduledThreadActionStorage,
   UpdateScheduledThreadActionRecord,
 } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import { scheduledTurnQueueEntryId } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import type { StateDb } from "./state-db.js";
 import {
   FileScheduledThreadActionPayloadStore,
@@ -515,10 +516,21 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
         "SELECT 1 FROM scheduled_thread_actions WHERE action_id = ? AND status = 'held' AND claim_owner IS ?",
       ).get(id, holderId ?? null);
       if (!held) return undefined;
-      return this.claimWith(id, params, {
+      const claimed = this.claimWith(id, params, {
         queueEntryId: undefined,
         ...(options.readmit ? { manualReleaseRequired: false, holdCause: undefined } : {}),
       });
+      if (claimed && options.readmit) {
+        // Discard a legacy quiet-restart copy with the claim, even if its
+        // old PID has been reused and the restart store cannot claim it.
+        const queueEntryId = scheduledTurnQueueEntryId(id);
+        const receipt = this.stateDb.raw.prepare("SELECT 1 FROM restart_continuations WHERE entry_id = ?")
+          .get(queueEntryId);
+        if (receipt) {
+          this.stateDb.raw.prepare("DELETE FROM restart_continuations WHERE entry_id = ?").run(queueEntryId);
+        }
+      }
+      return claimed;
     }).immediate();
   }
 

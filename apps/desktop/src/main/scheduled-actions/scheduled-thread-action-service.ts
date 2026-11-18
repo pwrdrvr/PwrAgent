@@ -23,9 +23,12 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
-import type {
-  ScheduledThreadActionHold,
-  ScheduledThreadActionStorage,
+import {
+  isScheduledThreadLockHold,
+  scheduledActionIdFromTurnQueueEntry,
+  scheduledTurnQueueEntryId,
+  type ScheduledThreadActionHold,
+  type ScheduledThreadActionStorage,
 } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { PROFILE_RUNTIME_HEARTBEAT_TTL_MS } from "../storage/desktop-profile-runtime-storage.js";
 import {
@@ -490,7 +493,7 @@ export class ScheduledThreadActionService {
       throw new Error("Another PwrAgent instance on this profile holds this action. Send it from there.");
     }
     return this.options.store.claimHeld(id, hold.holderId, params, {
-      readmit: isLockHold(this.options.store.get(id)),
+      readmit: isScheduledThreadLockHold(this.options.store.get(id)),
     });
   }
 
@@ -519,7 +522,7 @@ export class ScheduledThreadActionService {
       // remember a row that is not a lock hold until it changes.
       const version = holdVersion(hold);
       if (this.notLockHolds.has(version)) return false;
-      if (isLockHold(this.options.store.get(hold.id))) return true;
+      if (isScheduledThreadLockHold(this.options.store.get(hold.id))) return true;
       this.notLockHolds.add(version);
       return false;
     });
@@ -577,7 +580,7 @@ export class ScheduledThreadActionService {
         throw new Error("Scheduled turn payload is missing.");
       }
       const queueEntryId =
-        action.queueEntryId ?? queueEntryIdForAction(action.id);
+        action.queueEntryId ?? scheduledTurnQueueEntryId(action.id);
       const turn = {
         ...action.turn,
         backend: action.backend,
@@ -700,7 +703,7 @@ export class ScheduledThreadActionService {
       manualReleaseRequired?: unknown;
     };
     if (typeof params.queueEntryId !== "string") return;
-    const actionId = actionIdFromQueueEntryId(params.queueEntryId);
+    const actionId = scheduledActionIdFromTurnQueueEntry(params.queueEntryId);
     if (!actionId) return;
     let updated: ScheduledThreadAction | undefined;
     if (params.status === "queued") {
@@ -1069,22 +1072,8 @@ export function readSchedulerOwnerLiveness(
     : "unconfirmed";
 }
 
-/**
- * A thread lock's hold. A row from an older build has no cause, only the
- * refusal text that build wrote.
- */
-function isLockHold(action: ScheduledThreadAction | undefined): boolean {
-  if (!action) return false;
-  if (action.holdCause !== undefined) return action.holdCause === "thread_lock";
-  return action.errorMessage !== undefined && isThreadLockRefusal(action.errorMessage);
-}
-
 function holdVersion(hold: ScheduledThreadActionHold): string {
   return `${hold.id}@${hold.updatedAt}`;
-}
-
-function queueEntryIdForAction(actionId: string): string {
-  return `scheduled-turn:${actionId}`;
 }
 
 function matchesCreateRequest(
@@ -1117,13 +1106,6 @@ function reviewAdmissionIdentity(
     cwd: incoming?.cwd ? review.cwd : undefined,
     target: { type: "pullRequest", url: review.target.url },
   };
-}
-
-function actionIdFromQueueEntryId(queueEntryId: string): string | undefined {
-  const prefix = "scheduled-turn:";
-  return queueEntryId.startsWith(prefix)
-    ? queueEntryId.slice(prefix.length)
-    : undefined;
 }
 
 export function getScheduledThreadActionService(): ScheduledThreadActionService {

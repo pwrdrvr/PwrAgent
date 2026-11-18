@@ -52,7 +52,7 @@ export function createProjectHeldWakeupStorage(): ProjectHeldWakeupStorage {
   return new ProjectHeldWakeupStore(getAppStateDb().raw);
 }
 export function createRestartContinuationStorage(): RestartContinuationStorage {
-  return new RestartContinuationStore(getAppStateDb().raw);
+  return new RestartContinuationStore(getAppStateDb().raw, { scheduledActions: getScheduledThreadActionStore() });
 }
 export function createThreadDependencyStorage(): ThreadDependencyStorage {
   return new ThreadDependencyStore(getAppStateDb().raw);

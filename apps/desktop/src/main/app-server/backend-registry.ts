@@ -858,6 +858,7 @@ import {
   retainPendingStartedThreadWorkspace,
   toForwardSlashes,
 } from "./linked-directory-identity";
+import { scheduledActionIdFromTurnQueueEntry } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import {
   QUIET_RESTART_STEER_TEXT,
   QUIET_RESTART_STEER_TIMEOUT_MS,
@@ -10097,10 +10098,12 @@ export class DesktopBackendRegistry {
 
   /** The queued messages a quiet restart carries, in the order they wait. */
   private restartQueuedSnapshot(): StoredRestartContinuation[] {
-    // A project-held wake-up already has its own durable copy, and a
-    // restored continuation keeps the row it has.
+    // The scheduler recovers its own lock holds. Saving them as paused
+    // queue entries would give the same turn a second recovery path.
     return this.threadTurnQueue.getAllQueuedEntries()
-      .filter((entry) => !entry.restartContinuation && !entry.projectHold)
+      .filter((entry) => !entry.restartContinuation && !entry.projectHold
+        && !(entry.holdReason && isThreadLockRefusal(entry.holdReason)
+          && scheduledActionIdFromTurnQueueEntry(entry.id)))
       .map((entry, position) => {
         const verification = this.durableRestartContinuations.get(entry.id)?.upgradeVerification;
         return { ...storedRestartQueuedEntry(entry, position), ...(verification ? { upgradeVerification: verification } : {}) };
