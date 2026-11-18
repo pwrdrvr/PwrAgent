@@ -218,9 +218,10 @@ not automatically unpublish/delete either service's artifacts.
   otherwise cut a new **desktop and Outpost** version together. Never overwrite
   an immutable npm version, move the release tag, delete a published version,
   rebuild-and-assume equivalence, change trust or use a token as automatic recovery.
-  A full rerun/recovery dispatch may rebuild and passes only if those bytes still
-  match an already occupied version. Artifact expiry is not permission to relax
-  integrity checks. Same-tag runs and all npm publish jobs use
+  A full rerun cannot replace the original tested artifact in the same run. A
+  fresh recovery dispatch has separate artifacts and passes only if its tested
+  bytes match the already occupied version. Artifact expiry is not permission
+  to relax integrity checks. Same-tag runs and all npm publish jobs use
   [queued concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
   (`queue: max`, no cancellation), preventing workflow publishes from racing npm
   channel guards. Authorize versions in order: a newer version published first

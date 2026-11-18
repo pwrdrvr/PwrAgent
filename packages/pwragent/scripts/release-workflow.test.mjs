@@ -57,6 +57,14 @@ test("desktop packaging requires Outpost validation and final success requires n
   assert.doesNotMatch(workflow, /ref: \$\{\{ github.event.inputs.tag \|\| github.ref \}\}/);
 });
 
+test("packaging recovery leaves registry reads to completion and cannot replace the tested artifact", () => {
+  const packing = readFileSync(new URL("./pack-check.mjs", import.meta.url), "utf8");
+  assert.match(packing, /if \(!requiresReadOnlyRecovery\(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_RUN_ATTEMPT\)\) \{\s*await checkPublicRegistry\(/);
+  const validate = job("outpost-validate");
+  assert.match(validate, /name: headless-npm-package/);
+  assert.doesNotMatch(validate, /overwrite: true/);
+});
+
 test("actual workflow steps gate verification on prerequisites and completion on verified npm evidence", (t) => {
   const steps = job("release-complete").split(/\n      - /);
   const shellFor = (name) => steps.find((step) => step.startsWith(`name: ${name}\n`)).split("        run: |\n")[1]

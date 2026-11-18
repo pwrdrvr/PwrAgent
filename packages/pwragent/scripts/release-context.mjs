@@ -4,6 +4,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { checkEnvironment, releaseMetadata } from "./release.mjs";
 
+export function requiresReadOnlyRecovery(eventName, runAttempt) {
+  // A fresh dispatch can follow an earlier run with a lost receipt. Only the
+  // first attempt of a protected tag push is eligible to submit.
+  return eventName !== "push" || runAttempt !== "1";
+}
+
 export function releaseSource(context, ancestors) {
   assert.equal(context.repository, "pwrdrvr/PwrAgent", "Only the upstream repository may publish");
   assert.ok(["push", "workflow_dispatch"].includes(context.eventName), "Only desktop release events may publish");

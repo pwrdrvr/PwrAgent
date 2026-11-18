@@ -110,7 +110,6 @@ jobs:
           name: headless-npm-package
           path: .local/headless-package/
           if-no-files-found: error
-          overwrite: true
           retention-days: 90
 
   install-deps:

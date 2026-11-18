@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { publishRelease, requiresReadOnlyRecovery, verifyRelease } from "./publish.mjs";
+import { publishRelease, verifyRelease } from "./publish.mjs";
+import { requiresReadOnlyRecovery } from "./release-context.mjs";
 import { registryRetryDelay } from "./release.mjs";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));

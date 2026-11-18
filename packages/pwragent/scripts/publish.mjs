@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { currentReleaseSource } from "./release-context.mjs";
+import { currentReleaseSource, requiresReadOnlyRecovery } from "./release-context.mjs";
 import { checkRegistry, readPublicRegistrySnapshot, releaseMetadata } from "./release.mjs";
 
 function validateArtifact(input) {
@@ -42,12 +42,6 @@ function validateReceipt(receipt, base) {
     "Unexpected publication attempt status");
   assert.ok(Number.isFinite(receipt.attemptedAt), "Publication receipt timestamp missing");
   assert.ok(receipt.nextCheckAt === undefined || Number.isFinite(receipt.nextCheckAt), "Invalid publication cache deadline");
-}
-
-export function requiresReadOnlyRecovery(eventName, runAttempt) {
-  // A fresh dispatch can follow an earlier run with a lost receipt. Only the
-  // first attempt of a protected tag push is eligible to submit.
-  return eventName !== "push" || runAttempt !== "1";
 }
 
 export async function publishRelease(input, { readRegistry, publish, recordReceipt = () => {},
