@@ -4868,7 +4868,8 @@ function DesktopAppShell(props: {
             ) : ThreadViewComponent ? (
               <MarkdownRenderingOptionsProvider
                 incrementalEnabled={
-                  settings.snapshot?.general.markdown?.incrementalRendering.value ?? true
+                  // The settings owner resolves the default and any saved opt-out.
+                  settings.snapshot?.general.markdown?.incrementalRendering.value ?? false
                 }
                 mathEnabled={
                   settings.snapshot?.general.markdown?.mathRendering.value ?? true

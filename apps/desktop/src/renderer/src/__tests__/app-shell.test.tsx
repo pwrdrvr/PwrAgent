@@ -2995,7 +2995,10 @@ describe("App", () => {
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
   });
 
-  it("starts loading navigation without waiting for settings discovery", async () => {
+  it.each([
+    { incremental: false, source: "config" },
+    { incremental: true, source: "default" },
+  ] as const)("starts navigation before adopting the $source Markdown setting", async ({ incremental, source }) => {
     const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
     const backends = createDeferred<{
       fetchedAt: number;
@@ -3046,18 +3049,27 @@ describe("App", () => {
       }),
     });
 
-    await renderApp();
+    await renderThreadApp();
 
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(await screen.findByText("Checking providers…")).toBeInTheDocument();
+    const threadView = document.querySelector(".thread-view");
+    expect(threadView).toBeInTheDocument();
+    // Keep the settings read pending until any startup renderer import settles.
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(threadView).toHaveAttribute("data-markdown-renderer-available", "standard");
 
     await act(async () => {
       settings.resolve({
         snapshot: {
           general: {
+            markdown: {
+              incrementalRendering: { value: incremental, source },
+              mathRendering: { value: true, source: "default" },
+            },
             appearance: {
               theme: { value: "system", source: "default" },
               darkTheme: { value: "tangerine-dark", source: "default" },
@@ -3086,6 +3098,11 @@ describe("App", () => {
       });
     });
 
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(document.querySelector(".thread-view")).toHaveAttribute(
+      "data-markdown-renderer-available",
+      incremental ? "incremental" : "standard",
+    );
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
