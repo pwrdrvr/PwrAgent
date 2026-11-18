@@ -340,6 +340,46 @@ describe("Codex selection changes with app server generations", () => {
     }
   });
 
+  it("does not prepare Token Miser or report a failure when shutdown lands during a switch", async () => {
+    for (const outcome of [
+      { kind: "promoted" as const, generation: 2 },
+      { kind: "failed" as const, error: "the Codex app server pool closed during the rollover" },
+    ]) {
+      let finish!: (value: typeof outcome) => void;
+      const rolloverAppServer = vi.fn(() => new Promise<typeof outcome>((resolve) => { finish = resolve; }));
+      const lifecycle = { closed: false };
+      const prepare = vi.fn(async () => {});
+      const ledger = vi.fn(async () => {});
+      const complete = vi.fn();
+      const service = supervisor({
+        lifecycle,
+        codex: { close: vi.fn(), resetAppServerRestarts: vi.fn(), rolloverAppServer },
+        host: {
+          nativeVoiceLeases: 0,
+          tokenMiserServerCapabilities: new WeakMap(),
+          tokenMiserStore: {},
+          resolveTokenMiserEnabledFn: () => true,
+          prepareTokenMiserRuntime: prepare,
+        },
+        dependencies: {
+          markManagedCodexRuntimeSwitchCompleteFn: complete,
+          threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
+        },
+      });
+      service.setRuntimeRestartPending(true);
+      service.setManagedRuntimeSwitchPending(true);
+      const switching = service.maybeRestartCodexForManagedRuntimeChange();
+      lifecycle.closed = true;
+      finish(outcome);
+      expect(await switching).toBe(false);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(ledger).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      // Nothing is left requested for a registry that is gone.
+      expect(service.runtimeRestartPending).toBe(false);
+    }
+  });
+
   it("runs a selection requested during a switch as soon as that switch settles", async () => {
     let finishFirst!: (outcome: { kind: "promoted"; generation: number }) => void;
     const rolloverAppServer = vi.fn()

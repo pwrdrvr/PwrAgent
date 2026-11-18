@@ -540,6 +540,54 @@ describe("DesktopSettingsService", () => {
     expect(discovery.discovery.candidates[0]).toEqual(expect.objectContaining({ command: shim, version: "0.170.0" }));
   });
 
+  it("launches the executable a path change selects, even when Codex starts during the write", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "", "utf8");
+    const { dbPath, tempDir } = createTempStateDb("pwragent-settings-db-");
+    tempRoots.push(tempDir);
+    const db = StateDb.open(dbPath);
+    const configStore = new DesktopConfigStore({ configPath, storage: new DurableConfigSnapshotStore(db) });
+    const automatic = path.join(root, "auto-codex");
+    const standalone = path.join(root, "standalone-codex");
+    const coordinator = new CodexDiscoveryCoordinator({
+      resolveEnv: async () => ({}),
+      discover: async (params) => {
+        const command = params?.configuredCommand || automatic;
+        const source = params?.configuredCommand ? "config" : "path";
+        return {
+          candidates: [{ command, source, executable: true, selected: true, version: "0.150.0" }],
+          selectedCommand: command,
+          selectedSource: source,
+        };
+      },
+    });
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: coordinator,
+    });
+    const permit = issueProviderDiscoveryPermit("settings-user-action");
+    try {
+      await service.refreshCodexDiscovery(permit);
+      // A running session retains this selection.
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: automatic });
+      // The write's providers publication starts a new app server at once, as
+      // the registry's subscription does; it resolves its command right then.
+      let launched: Promise<{ command: string }> | undefined;
+      const stop = configStore.subscribe(["providers"], () => {
+        launched ??= service.resolveCodexCommand();
+      });
+      await service.writeConfigPatchTargeted({ models: { codex: { path: standalone } } }, permit);
+      stop();
+      expect(launched).toBeDefined();
+      await expect(launched).resolves.toMatchObject({ command: standalone });
+    } finally {
+      configStore.dispose();
+      db.close();
+    }
+  });
+
   it("refreshes the saved Codex path, version, rejection, and auto selection before returning", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

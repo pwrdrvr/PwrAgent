@@ -1153,6 +1153,9 @@ export class CodexRuntimeSupervisor {
         this.codexRuntimeRestartPending = false;
         this.managedCodexRuntimeSwitchPending = false;
         const outcome = await rollover({ selection });
+        // Shut down meanwhile: preparing Token Miser below would start Codex
+        // again, and a rollover the shutdown abandoned is not a failure.
+        if (this.context.lifecycle.closed) return false;
         if (outcome.kind === "failed" || outcome.kind === "deferred") {
           // The running generation keeps serving; ask again later. A newer
           // selection that arrived meanwhile is already requested.
