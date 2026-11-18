@@ -596,7 +596,7 @@ Decision tree:
    - Add a `README.md` to the asset directory documenting the source URL, the usage rules, and the procedure for re-fetching on update. See [`apps/desktop/src/renderer/src/assets/mattermost/README.md`](../apps/desktop/src/renderer/src/assets/mattermost/README.md) as the template — the minimum content is: source links (brand guidelines + kit zip), the specific usage restrictions ("do not modify color/shape/etc."), and a copy-pasteable update procedure. Future maintainers should be able to update the assets without re-reading this guide.
 3. **Wire the icon** into the four usage sites: the icon-map in `MessagingStatusBar.tsx`, the icon-map in `ThreadRow.tsx`, the conditional in `MessagingActivityScreen.tsx`'s `ActivityRow`, and the connection-test row in `MessagingSettings.tsx`. The status-chip dot communicates platform health; the icon stays a brand identity mark.
 
-Boundary rule (also captured in [`apps/desktop/AGENTS.md`](../apps/desktop/AGENTS.md#third-party-brand-assets)): **never hand-redraw a vendor's mark from memory or training data, and never modify SVG path data inside a brand-asset file.** If the asset needs updating, re-download from the source.
+Boundary rule (also captured in [`apps/desktop/docs/brand-assets.md`](../apps/desktop/docs/brand-assets.md#third-party-brand-assets)): **never hand-redraw a vendor's mark from memory or training data, and never modify SVG path data inside a brand-asset file.** If the asset needs updating, re-download from the source.
 
 ## Step 9 — Tests
 

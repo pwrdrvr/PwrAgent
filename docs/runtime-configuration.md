@@ -112,7 +112,7 @@ These variables are for development only.
 - `StateDb.open` installs the metrics wrapper after schema setup.
 - Set `PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE=<path>` to select an output file.
 - The metrics file gets one JSON line of totals for each source.
-- Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](../apps/desktop/AGENTS.md#sqlite-write-volume-instrumentation).
+- Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/docs/sqlite-write-volume.md](../apps/desktop/docs/sqlite-write-volume.md#sqlite-write-volume-instrumentation).
 
 `PWRAGENT_DEV_REACT_DEVTOOLS=1`
 
@@ -130,7 +130,7 @@ These variables are for development only.
 - Use this variable only when an absolute millisecond number must be trustworthy.
 - The dev server already serves a profilable `react-dom`, so this variable is a no-op there.
 - Use the dev build to find re-render storms. It carries richer render attribution.
-- Read "Profiling the Renderer with React DevTools" in [apps/desktop/AGENTS.md](../apps/desktop/AGENTS.md#profiling-the-renderer-with-react-devtools).
+- Read "Profiling the Renderer with React DevTools" in [apps/desktop/docs/react-devtools-profiling.md](../apps/desktop/docs/react-devtools-profiling.md#profiling-the-renderer-with-react-devtools).
 
 `PWRAGENT_DEV_FAKE_UPDATE=1`
 
@@ -146,5 +146,5 @@ These variables are for development only.
 - Set `PWRAGENT_DEV_FAKE_UPDATE_STEP_MS=<ms>` to pace the walk. The default is
   300 ms per step. `e2e/update-check.spec.ts` slows it so the mid-download
   Cancel button is a target rather than a race.
-- Read the [update feature guidance](../apps/desktop/src/renderer/src/features/update/AGENTS.md)
+- Read the [update feature guidance](../apps/desktop/docs/app-update-banner.md#the-dev-fake-is-the-only-way-to-see-any-of-this)
   for why the fake is opt-in here and not in PwrGit.

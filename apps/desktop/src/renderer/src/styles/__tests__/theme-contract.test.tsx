@@ -2097,7 +2097,7 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("draws one brand lockup on the Pwr-family title-strip spec", () => {
-    // Family spec (PwrGit/PwrAgent/PwrSnap, features/chrome/AGENTS.md): the
+    // Family spec (PwrGit/PwrAgent/PwrSnap, docs/chrome-title-strip.md): the
     // app-icon mark in `--accent`, 8px to the wordmark, `700 17px/1` at
     // -0.01em. The lockup carries the accent so the mark's `currentColor` is
     // the UI orange, never the icon's #e8743a.

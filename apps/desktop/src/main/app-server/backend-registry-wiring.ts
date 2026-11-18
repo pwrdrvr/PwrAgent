@@ -1553,7 +1553,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const monitorObservers = subAgentMonitorService.turnEventObservers();
   const usageObservers = threadUsageLedger.turnEventObservers();
   const runtimeObservers = codexRuntimeSupervisor.turnEventObservers();
-  // Thread-State Update Bus (apps/desktop/AGENTS.md): persist before fan-out;
+  // Thread-State Update Bus (apps/desktop/docs/thread-state-update-bus.md):
+  // persist before fan-out;
   // executionMode/updated precedes executionMode/queueCleared on application.
   // Preserve domain interleaving: review forwarding precedes attribution;
   // terminal usage is durable before review/activity cleanup; review and

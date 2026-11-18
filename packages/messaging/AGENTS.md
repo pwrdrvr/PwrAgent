@@ -65,7 +65,7 @@ For binding-local mutations (`cycleToolUpdateMode`,
 `syncConversationName`) keep the inline render — there's no bus event
 for binding-scoped preferences.
 
-See `apps/desktop/AGENTS.md` for the registry-side emit pattern and
+See [`apps/desktop/docs/thread-state-update-bus.md`](../../apps/desktop/docs/thread-state-update-bus.md#thread-state-update-bus) for the registry-side emit pattern and
 the renderer-side subscription branches.
 
 ## Dependency Boundary Enforcement

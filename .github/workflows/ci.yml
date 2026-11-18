@@ -56,12 +56,15 @@ jobs:
         uses: actions/checkout@v7
         timeout-minutes: 5
         with:
+          # Non-cone patterns match at any depth, so this checks out every
+          # nested AGENTS.md and AGENTS.override.md the size guard reads.
           sparse-checkout: |
             AGENTS.md
+            AGENTS.override.md
             scripts/check-agent-instructions-size.mjs
           sparse-checkout-cone-mode: false
 
-      - name: Check root AGENTS.md size
+      - name: Check AGENTS.md sizes
         run: node ./scripts/check-agent-instructions-size.mjs
 
       - name: Classify changed files
@@ -214,7 +217,7 @@ jobs:
     timeout-minutes: 15
     needs: [changes, install-deps]
     # Branch protection counts a skipped required check as satisfied. When
-    # the classifier fails (for example, its root AGENTS.md size check),
+    # the classifier fails (for example, its AGENTS.md size check),
     # every job that needs it would skip, so Lint runs instead and fails
     # on its own copy of the check.
     if: >-
@@ -233,7 +236,7 @@ jobs:
           node-version: "^24.22.1"
           cache-electron: "true"
 
-      - name: Root AGENTS.md size
+      - name: AGENTS.md sizes
         timeout-minutes: 1
         run: pnpm lint:agent-instructions
 

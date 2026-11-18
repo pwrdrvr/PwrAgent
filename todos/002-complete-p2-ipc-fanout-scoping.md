@@ -83,7 +83,7 @@ dependencies: []
 
 - **PR:** #198
 - **Reviewer:** architecture-strategist — C1
-- **Current guidance:** `apps/desktop/AGENTS.md` — Thread-State Update Bus
+- **Current guidance:** `apps/desktop/docs/thread-state-update-bus.md` — Thread-State Update Bus
 
 ## Acceptance Criteria
 
