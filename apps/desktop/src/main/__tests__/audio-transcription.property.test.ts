@@ -91,3 +91,15 @@ it("settles startup and finish when canceled before the socket opens", async () 
   await expect(session.finish()).resolves.toBe("");
   expect(SocketFixture.last.sent).toEqual([]);
 });
+
+it("reports a rejected key without forwarding the provider error body", async () => {
+  vi.stubGlobal("WebSocket", SocketFixture);
+  const session = new AudioDictationSession("fixture-key", { delta: vi.fn(), close: vi.fn() });
+  SocketFixture.last.receive({ type: "error", error: {
+    code: "invalid_api_key",
+    message: "Rejected credential fixture-key",
+  } });
+  await expect(session.waitUntilReady()).rejects.toThrow(
+    "OpenAI rejected the saved API key. Replace it in Settings → AI Providers → Audio transcription.",
+  );
+});

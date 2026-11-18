@@ -27,11 +27,6 @@ declare module "*.png" {
   export default url;
 }
 
-declare module "*.worklet.js?url&no-inline" {
-  const url: string;
-  export default url;
-}
-
 // Vite bundles the module, and everything it imports, into a blob-URL worker.
 declare module "*?worker&inline" {
   const WorkerConstructor: new () => Worker;

@@ -119,7 +119,14 @@ export class AudioDictationSession {
 
   private onMessage(raw: unknown): void {
     if (this.state === "closed" || typeof raw !== "string") return;
-    let event: { type?: string; session?: { type?: string }; item_id?: string; delta?: string; transcript?: string } | null;
+    let event: {
+      type?: string;
+      session?: { type?: string };
+      item_id?: string;
+      delta?: string;
+      transcript?: string;
+      error?: { code?: string };
+    } | null;
     try {
       event = JSON.parse(raw);
     } catch {
@@ -149,6 +156,10 @@ export class AudioDictationSession {
       case "conversation.item.input_audio_transcription.failed":
       case "error":
         // OpenAI error bodies can contain request data.
+        if (event.error?.code === "invalid_api_key") {
+          this.close("OpenAI rejected the saved API key. Replace it in Settings → AI Providers → Audio transcription.");
+          break;
+        }
         this.close(this.state === "connecting"
           ? `OpenAI refused the live transcription session. ${SETTINGS_HINT}`
           : "OpenAI could not transcribe this recording.");

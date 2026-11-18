@@ -1,8 +1,8 @@
 // The AudioContext supplies mono 24 kHz frames. Batch 100 ms of PCM16 per IPC.
 class DictationCapture extends AudioWorkletProcessor {
-  constructor() {
+  constructor({ processorOptions }) {
     super();
-    this.samples = new ArrayBuffer(4800);
+    this.samples = new ArrayBuffer(processorOptions.batchSamples * 2);
     this.view = new DataView(this.samples);
     this.size = 0;
     this.port.onmessage = () => {

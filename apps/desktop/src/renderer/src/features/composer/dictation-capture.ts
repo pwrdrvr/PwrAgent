@@ -1,5 +1,4 @@
-import { DICTATION_RATE } from "../../../../shared/audio-transcription";
-import workletUrl from "./dictation-capture.worklet.js?url&no-inline";
+import { DICTATION_BATCH_SAMPLES, DICTATION_RATE } from "../../../../shared/audio-transcription";
 
 export async function startDictationCapture(
   signal: AbortSignal,
@@ -23,11 +22,12 @@ export async function startDictationCapture(
   try {
     signal.throwIfAborted();
     context = new AudioContext({ sampleRate: DICTATION_RATE });
-    await context.audioWorklet.addModule(workletUrl);
+    await context.audioWorklet.addModule(new URL("./dictation-capture.worklet.js?no-inline", import.meta.url).href);
     signal.throwIfAborted();
     const capture = new AudioWorkletNode(context, "pwragent-dictation", {
       channelCount: 1,
       channelCountMode: "explicit",
+      processorOptions: { batchSamples: DICTATION_BATCH_SAMPLES },
     });
     const flushed = Promise.withResolvers<void>();
     capture.port.onmessage = ({ data }: MessageEvent<ArrayBuffer | string>) => {
