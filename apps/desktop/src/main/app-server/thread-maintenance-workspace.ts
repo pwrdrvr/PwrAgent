@@ -30,8 +30,11 @@ export async function inspectMaintenanceWorkspace(
     throw error;
   }
   const git = async (args: string[]) => (await runGitCommand(cwd, args, { signal: options.signal, timeout: 15_000 })).stdout;
+  let metadata: string;
   try {
-    await git(["rev-parse", "--is-inside-work-tree"]);
+    // One Git invocation observes this checkout's layout. This value belongs
+    // only to this inspection, never a later review/admission/removal boundary.
+    metadata = await git(["rev-parse", "--path-format=absolute", "--is-inside-work-tree", "--absolute-git-dir", "--git-common-dir"]);
   } catch (error) {
     // Archive leaves a folder with no repository at or above it in place.
     // A broken worktree link reports a different message and fails closed.
@@ -40,10 +43,16 @@ export async function inspectMaintenanceWorkspace(
   }
   // Archive removes only linked worktrees. A primary checkout stays where it
   // is, so its changes and ignored files are never at risk.
-  const [gitDirectory, commonDirectory] = await Promise.all([
-    git(["rev-parse", "--absolute-git-dir"]),
-    git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-  ]);
+  const fields = metadata.trimEnd().split("\n");
+  // rev-parse separates path answers with newlines, not NULs. A legal path
+  // containing a newline needs the original separate answers to avoid using
+  // one checkout's admin directory as its common directory (or vice versa).
+  const [gitDirectory, commonDirectory] = fields.length === 3
+    ? [fields[1]!, fields[2]!]
+    : await Promise.all([
+        git(["rev-parse", "--absolute-git-dir"]),
+        git(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+      ]);
   if (path.resolve(gitDirectory.trim()) === path.resolve(commonDirectory.trim())) return { workspace: { kind: "inPlace" } };
   try {
     await git(["rev-parse", "--verify", "--quiet", "HEAD"]);
