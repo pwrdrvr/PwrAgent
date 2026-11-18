@@ -22,6 +22,8 @@ const operation = fc.record({
 });
 type Operation = typeof operation extends fc.Arbitrary<infer T> ? T : never;
 
+const releasedHoldMessage =
+  "PwrAgent stopped while this held action was being released. It was not sent again, because it may already have started. Check the thread before scheduling it again.";
 const expiredDispatchMessage =
   "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again.";
 
@@ -88,7 +90,9 @@ class LifecycleCommand implements fc.AsyncCommand<Model, ScheduledThreadActionSt
         actual = storage.recoverExpiredClaims(now, protectedOwners);
         expected = [];
         if (expired && !protectedOwners.has(model.claim!.ownerId)) {
-          expected = [action.manualReleaseRequired
+          expected = [action.manualReleaseRequired && action.status === "queued"
+            ? transition({ status: "failed", queueEntryId: undefined, errorMessage: releasedHoldMessage }, true)
+            : action.manualReleaseRequired
             ? transition({ status: "held", queueEntryId: undefined }, true)
             : action.status === "queued"
               ? transition({ status: "scheduled", queueEntryId: undefined }, true)

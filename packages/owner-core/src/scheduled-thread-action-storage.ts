@@ -4,6 +4,7 @@ import type {
   ListScheduledThreadActionsResponse,
   PendingWakeScheduledActions,
   ScheduledThreadAction,
+  ScheduledThreadActionHoldCause,
   ScheduledThreadActionKind,
   ScheduledThreadActionOrigin,
   ScheduledThreadReviewPayload,
@@ -40,6 +41,16 @@ export type ScheduledThreadActionClaim = {
   now: number;
   ownerId: string;
   leaseExpiresAt: number;
+};
+
+/** A held action and the scheduler whose in-memory queue holds its entry. */
+export type ScheduledThreadActionHold = {
+  id: string;
+  /** Changes whenever the row does, so a decision about it can be cached. */
+  updatedAt: number;
+  /** Absent when no live queue can hold it, such as after recovery. */
+  holderId?: string;
+  errorMessage?: string;
 };
 
 /** Scheduled-action persistence without host database or payload-file handles. */
@@ -79,6 +90,22 @@ export interface ScheduledThreadActionStorage {
   dismissFailed(id: string, now: number): ScheduledThreadAction | undefined;
   claim(id: string, params: ScheduledThreadActionClaim): ScheduledThreadAction | undefined;
   claimNextDue(params: ScheduledThreadActionClaim): ScheduledThreadAction | undefined;
+  /**
+   * Claims a held action only while `holderId` still holds it, forgetting its
+   * queue entry. `readmit` drops the manual release, so the action is
+   * dispatched as when it came due.
+   */
+  claimHeld(
+    id: string,
+    holderId: string | undefined,
+    params: ScheduledThreadActionClaim,
+    options: { readmit: boolean },
+  ): ScheduledThreadAction | undefined;
+  /**
+   * Held actions a claim could take, or the one with `id`. A suspended
+   * thread's agent follow-ups are left out.
+   */
+  listHeldHolds(id?: string): ScheduledThreadActionHold[];
   markQueued(
     id: string,
     queueEntryId: string,
@@ -97,6 +124,21 @@ export interface ScheduledThreadActionStorage {
     errorMessage: string,
     now: number,
     ownerId?: string,
+    /**
+     * `holderId`: the scheduler whose in-memory queue keeps the held entry.
+     * `cause`: why it holds, stored so a later build need not parse text.
+     */
+    hold?: { holderId?: string; cause?: ScheduledThreadActionHoldCause },
+  ): ScheduledThreadAction | undefined;
+  /**
+   * The queue is about to start an entry it had held, such as one an unlock
+   * released. Taking a lease first means a crash before the start is recorded
+   * fails the action instead of leaving it held after it ran.
+   */
+  markHeldQueued(
+    id: string,
+    queueEntryId: string,
+    params: ScheduledThreadActionClaim,
   ): ScheduledThreadAction | undefined;
   /**
    * The queue started an entry it had held, such as one a lock released. The

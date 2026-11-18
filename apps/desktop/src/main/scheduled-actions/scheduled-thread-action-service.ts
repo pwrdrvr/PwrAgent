@@ -7,6 +7,7 @@ import type {
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
+  ScheduledThreadActionHoldCause,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
@@ -22,7 +23,17 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
-import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
+import type {
+  ScheduledThreadActionHold,
+  ScheduledThreadActionStorage,
+} from "@pwragent/owner-core/scheduled-thread-action-storage";
+import { PROFILE_RUNTIME_HEARTBEAT_TTL_MS } from "../storage/desktop-profile-runtime-storage.js";
+import {
+  getProcessRuntimeIdentity,
+  isProcessAlive,
+  isProfileRuntimeIdentityLive,
+  resolveActiveProfileName,
+} from "../profile.js";
 import { AgentFollowUpRefusal } from "./agent-follow-up-refusal.js";
 import { buildAgentFollowUpToolHandler, type FollowUpThread } from "./agent-follow-up-tool.js";
 
@@ -32,6 +43,13 @@ const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_CLAIM_HEARTBEAT_MS = 10_000;
 const HISTORY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * How long an owner whose process ID is alive, but whose runtime marker has
+ * gone stale, still counts as alive. A live owner whose marker aged out
+ * (the machine just woke, or its main thread was busy) rewrites it within
+ * one heartbeat; a process that merely reused a dead owner's ID never does.
+ */
+export const SCHEDULER_OWNER_CONFIRMATION_GRACE_MS = 2 * PROFILE_RUNTIME_HEARTBEAT_TTL_MS;
 // A wall-clock lease can expire while macOS suspends every app instance. Keep
 // exact same-process ownership available so a sibling service cannot recover
 // work from a scheduler that is still active after resume.
@@ -48,7 +66,10 @@ export type ScheduledThreadActionServiceOptions = {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
   ownerId?: string;
   claimLeaseMs?: number;
+  /** Replaces the whole liveness rule, grace included. */
   isOwnerAlive?: (ownerId: string) => boolean;
+  /** What the default liveness rule asks of the host. */
+  ownerProbes?: SchedulerOwnerProbes;
   setLeaseTimer?: (
     callback: () => void,
     delayMs: number,
@@ -92,12 +113,19 @@ export class ScheduledThreadActionService {
   private leaseTimer: ReturnType<typeof setInterval> | null = null;
   private readonly ownerId: string;
   private lastHistoryCleanupAt = 0;
+  /** When each unconfirmed owner was first seen so; nothing is written. */
+  private readonly unconfirmedOwnersSince = new Map<string, number>();
+  /** Held rows already found not to be lock holds, keyed by id and version. */
+  private readonly notLockHolds = new Set<string>();
   private projectionObservationError?: string;
   private unsubscribeRegistryEvents?: () => void;
   private unsubscribeRestartGate?: () => void;
 
   constructor(private readonly options: ScheduledThreadActionServiceOptions) {
-    this.ownerId = options.ownerId ?? `scheduler:${process.pid}:${randomUUID()}`;
+    this.ownerId = options.ownerId ?? schedulerOwnerId({
+      ...getProcessRuntimeIdentity(),
+      processId: process.pid,
+    });
   }
 
   start(): void {
@@ -406,7 +434,7 @@ export class ScheduledThreadActionService {
   async sendNow(
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
-    const claimed = this.options.store.claim(request.id, this.claimParams());
+    const claimed = this.claimForSendNow(request.id);
     await this.publishSuspendedFollowUpThreads();
     if (!claimed) {
       const current = this.options.store.get(request.id);
@@ -433,6 +461,9 @@ export class ScheduledThreadActionService {
     if (this.options.registry.isRestartGateClosed?.()) return;
     this.evaluating = true;
     try {
+      // No await without an orphan: a create that evaluates while this pass
+      // runs is dropped by the guard above, so the pass must stay short.
+      for (const hold of this.orphanedLockHolds()) await this.readmitOrphanedLockHold(hold);
       while (true) {
         const action = this.options.store.claimNextDue(this.claimParams());
         await this.publishSuspendedFollowUpThreads();
@@ -444,6 +475,62 @@ export class ScheduledThreadActionService {
       this.evaluating = false;
       this.scheduleNextTimer();
     }
+  }
+
+  /**
+   * A held action's queue entry lives in its holder's memory. Send Now from
+   * the holder releases that entry. When the holder has died, the entry is
+   * gone, so the claim forgets it and the action is admitted again.
+   */
+  private claimForSendNow(id: string): ScheduledThreadAction | undefined {
+    const params = this.claimParams();
+    const [hold] = this.options.store.listHeldHolds(id);
+    if (!hold || hold.holderId === this.ownerId) return this.options.store.claim(id, params);
+    if (hold.holderId && this.isOwnerAlive(hold.holderId)) {
+      throw new Error("Another PwrAgent instance on this profile holds this action. Send it from there.");
+    }
+    return this.options.store.claimHeld(id, hold.holderId, params, {
+      readmit: isLockHold(this.options.store.get(id)),
+    });
+  }
+
+  /**
+   * A lock's hold lives in the holder's in-memory queue, which dies with its
+   * process. Admit such an action again here, as when it came due: a locked
+   * thread holds it in this queue, and an unlocked one starts it. Nothing was
+   * started from a dead holder's queue without first moving the action out of
+   * `held` (see `markHeldQueued`), so this cannot run a turn twice.
+   */
+  private orphanedLockHolds(): ScheduledThreadActionHold[] {
+    const holds = this.options.store.listHeldHolds();
+    const versions = new Set(holds.map(holdVersion));
+    for (const version of this.notLockHolds) {
+      if (!versions.has(version)) this.notLockHolds.delete(version);
+    }
+    const holderAlive = new Map<string, boolean>();
+    return holds.filter((hold) => {
+      if (hold.holderId === this.ownerId) return false;
+      if (hold.holderId) {
+        const alive = holderAlive.get(hold.holderId) ?? this.isOwnerAlive(hold.holderId);
+        holderAlive.set(hold.holderId, alive);
+        if (alive) return false;
+      }
+      // The cause lives in the payload, so read it only for an orphan, and
+      // remember a row that is not a lock hold until it changes.
+      const version = holdVersion(hold);
+      if (this.notLockHolds.has(version)) return false;
+      if (isLockHold(this.options.store.get(hold.id))) return true;
+      this.notLockHolds.add(version);
+      return false;
+    });
+  }
+
+  private async readmitOrphanedLockHold(hold: ScheduledThreadActionHold): Promise<void> {
+    const claimed = this.options.store.claimHeld(hold.id, hold.holderId, this.claimParams(), { readmit: true });
+    await this.publishSuspendedFollowUpThreads();
+    if (!claimed) return;
+    await this.publish(claimed);
+    await this.dispatch(claimed);
   }
 
   private async dispatch(action: ScheduledThreadAction): Promise<void> {
@@ -539,6 +626,7 @@ export class ScheduledThreadActionService {
             reason,
             this.now(),
             this.ownerId,
+            this.holdFor(reason),
           );
           if (stillHeld) await this.publish(stillHeld);
         }
@@ -559,6 +647,7 @@ export class ScheduledThreadActionService {
             response.entry.holdReason,
             this.now(),
             this.ownerId,
+            this.holdFor(response.entry.holdReason),
           )
         : response.status === "queued"
         ? this.options.store.markQueued(
@@ -608,6 +697,7 @@ export class ScheduledThreadActionService {
       status?: unknown;
       turnId?: unknown;
       errorMessage?: unknown;
+      manualReleaseRequired?: unknown;
     };
     if (typeof params.queueEntryId !== "string") return;
     const actionId = actionIdFromQueueEntryId(params.queueEntryId);
@@ -618,15 +708,29 @@ export class ScheduledThreadActionService {
         actionId,
         params.queueEntryId,
         this.now(),
-      );
+      )
+        // An unlock announces each entry it releases before the queue starts
+        // it. The lease taken here is what a crash before the start leaves.
+        // An entry the queue still holds, as at its admission, is no release.
+        ?? (params.manualReleaseRequired === true
+          ? undefined
+          : this.options.store.markHeldQueued(actionId, params.queueEntryId, this.claimParams()));
+      if (!updated && this.options.store.get(actionId)?.status === "cancelled") {
+        // Cancelled where this queue could not reach the entry, such as from
+        // another instance on the profile. It must not start here.
+        this.options.registry.cancelQueuedTurn(params.queueEntryId, "Scheduled action cancelled.");
+      }
     } else if (params.status === "held") {
+      const reason = typeof params.errorMessage === "string"
+        ? params.errorMessage
+        : "The queued turn is held for manual retry.";
       updated = this.options.store.markHeld(
         actionId,
         params.queueEntryId,
-        typeof params.errorMessage === "string"
-          ? params.errorMessage
-          : "The queued turn is held for manual retry.",
+        reason,
         this.now(),
+        undefined,
+        this.holdFor(reason),
       );
     } else if (params.status === "started") {
       const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
@@ -819,12 +923,30 @@ export class ScheduledThreadActionService {
     this.leaseTimer.unref?.();
   }
 
+  /**
+   * This queue holds the entry. The cause is classified now, by the build
+   * that produced the refusal text, so no later build has to parse it.
+   */
+  private holdFor(reason: string): { holderId: string; cause?: ScheduledThreadActionHoldCause } {
+    return { holderId: this.ownerId, ...(isThreadLockRefusal(reason) ? { cause: "thread_lock" as const } : {}) };
+  }
+
+  private isOwnerAlive(ownerId: string): boolean {
+    if (this.options.isOwnerAlive) return this.options.isOwnerAlive(ownerId);
+    const liveness = readSchedulerOwnerLiveness(ownerId, this.options.ownerProbes ?? DEFAULT_OWNER_PROBES);
+    if (liveness !== "unconfirmed") {
+      this.unconfirmedOwnersSince.delete(ownerId);
+      return liveness === "alive";
+    }
+    const now = this.now();
+    const since = this.unconfirmedOwnersSince.get(ownerId) ?? now;
+    this.unconfirmedOwnersSince.set(ownerId, since);
+    return now - since < SCHEDULER_OWNER_CONFIRMATION_GRACE_MS;
+  }
+
   private recoverExpiredClaims(now: number): void {
     const protectedOwnerIds = new Set(
-      this.options.store.expiredClaimOwnerIds(now).filter((ownerId) =>
-        this.options.isOwnerAlive?.(ownerId)
-          ?? isSchedulerOwnerAlive(ownerId)
-      ),
+      this.options.store.expiredClaimOwnerIds(now).filter((ownerId) => this.isOwnerAlive(ownerId)),
     );
     const recovered = this.options.store.recoverExpiredClaims(
       now,
@@ -898,20 +1020,63 @@ function mutationResponseForAction(
   return { action };
 }
 
-function isSchedulerOwnerAlive(ownerId: string): boolean {
-  const match = /^scheduler:(\d+):/.exec(ownerId);
-  if (!match) return false;
-  const pid = Number(match[1]);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+export type SchedulerOwnerProbes = {
+  isProcessAlive: (processId: number) => boolean;
+  /** Whether a fresh profile runtime marker carries this exact identity. */
+  isRuntimeIdentityLive: (identity: { instanceId: string; processId: number; startedAt: number }) => boolean;
+};
+
+const DEFAULT_OWNER_PROBES: SchedulerOwnerProbes = {
+  isProcessAlive,
+  isRuntimeIdentityLive: (identity) => isProfileRuntimeIdentityLive(resolveActiveProfileName(), identity),
+};
+
+/**
+ * `scheduler:<pid>:<token>:<instanceId>:<startedAt>`. The token tells apart
+ * two schedulers of one process. The runtime identity lets another process
+ * tell this one from a later process that reused its ID. A build that parses
+ * only `scheduler:<pid>:` still reads it.
+ */
+export function schedulerOwnerId(identity: { processId: number; instanceId: string; startedAt: number }): string {
+  return `scheduler:${identity.processId}:${randomUUID()}:${identity.instanceId}:${identity.startedAt}`;
+}
+
+/**
+ * `unconfirmed`: the process ID is alive, but no fresh runtime marker carries
+ * the owner's identity. That is a live owner whose marker aged out, or a dead
+ * one whose process ID was reused; only time tells them apart. An owner ID
+ * from an older build has no identity, so its process ID alone decides.
+ */
+export function readSchedulerOwnerLiveness(
+  ownerId: string,
+  probes: SchedulerOwnerProbes,
+): "alive" | "dead" | "unconfirmed" {
+  const match = /^scheduler:(\d+):[^:]+(?::([^:]+):(\d+))?$/.exec(ownerId);
+  if (!match) return "dead";
+  const processId = Number(match[1]);
+  if (!Number.isSafeInteger(processId) || processId <= 0) return "dead";
   // A process can create a replacement scheduler without exiting. For the
-  // current process, require the exact owner token instead of PID alone.
-  if (pid === process.pid) return activeSchedulerOwnerIds.has(ownerId);
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
+  // current process, require the exact owner token instead of its ID alone.
+  if (processId === process.pid) return activeSchedulerOwnerIds.has(ownerId) ? "alive" : "dead";
+  if (!probes.isProcessAlive(processId)) return "dead";
+  if (match[2] === undefined) return "alive";
+  return probes.isRuntimeIdentityLive({ instanceId: match[2], processId, startedAt: Number(match[3]) })
+    ? "alive"
+    : "unconfirmed";
+}
+
+/**
+ * A thread lock's hold. A row from an older build has no cause, only the
+ * refusal text that build wrote.
+ */
+function isLockHold(action: ScheduledThreadAction | undefined): boolean {
+  if (!action) return false;
+  if (action.holdCause !== undefined) return action.holdCause === "thread_lock";
+  return action.errorMessage !== undefined && isThreadLockRefusal(action.errorMessage);
+}
+
+function holdVersion(hold: ScheduledThreadActionHold): string {
+  return `${hold.id}@${hold.updatedAt}`;
 }
 
 function queueEntryIdForAction(actionId: string): string {

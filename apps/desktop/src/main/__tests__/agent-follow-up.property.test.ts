@@ -39,10 +39,14 @@ function assertFollowUpProperty<T>(
   return run;
 }
 
-async function withWorld<T>(run: (world: AgentFollowUpWorld) => Promise<T>): Promise<T> {
+async function withWorld<T>(
+  run: (world: AgentFollowUpWorld) => Promise<T>,
+  options: { reuseProcessId?: boolean } = {},
+): Promise<T> {
   const db = openInMemoryStateDb();
   const world = new AgentFollowUpWorld(db);
   try {
+    world.reuseProcessId = options.reuseProcessId ?? false;
     await world.start();
     return await run(world);
   } finally {
@@ -56,7 +60,8 @@ async function withWorld<T>(run: (world: AgentFollowUpWorld) => Promise<T>): Pro
 //
 // Oracle: the provider's own record of accepted turns (`world.admissions`),
 // which no crash erases. Admitted turns never exceed follow-ups, no follow-up
-// is admitted twice, and none is admitted once a cancel has succeeded.
+// is admitted twice, a cancelled follow-up never ran, and a held follow-up
+// starts exactly once after unlock, including across a restart.
 // ---------------------------------------------------------------------------
 
 type Model = {
@@ -78,6 +83,11 @@ function checkOracle(model: Model, world: AgentFollowUpWorld): void {
   for (const [actionId, admittedAtCancel] of model.cancelled) {
     expect(world.admittedCount(actionId), `follow-up ${actionId} was admitted after its cancel`).toBe(admittedAtCancel);
   }
+}
+
+/** A tripped loop guard keeps the thread's follow-ups waiting until a rearm. */
+function followUpsSuspended(world: AgentFollowUpWorld): boolean {
+  return world.service.agentFollowUpProtection(FOLLOW_UP_THREAD).suspendedAt !== undefined;
 }
 
 type Command = fc.AsyncCommand<Model, AgentFollowUpWorld>;
@@ -121,16 +131,21 @@ const commands = [
           );
       await world.settle();
       if (!ok) return;
-      // One window lets a cancel succeed after a start: a lock held the
-      // follow-up, the unlock started it, and the process died before the
-      // start was recorded, so the row still reads held. Nothing is admitted
-      // twice there, and nothing may be admitted from here on.
-      if (admittedBefore > 0) expect(world.store.get(id)?.manualReleaseRequired).toBe(true);
+      expect(admittedBefore, `follow-up ${id} was reported cancelled after it ran`).toBe(0);
       if (!model.cancelled.has(id)) model.cancelled.set(id, admittedBefore);
     },
   )),
   fc.boolean().map((locked) => command(locked ? "lock" : "unlock", async (_model, world) => {
-    if (world.alive) await world.setLocked(locked);
+    if (!world.alive) return;
+    await world.setLocked(locked);
+    // An unlock on an idle, open thread starts every follow-up a lock held,
+    // whichever process the lock held it in. A crash during the unlock leaves
+    // the rest for the next launch, which the final phase checks.
+    if (!locked && world.alive && !world.busy && !world.gateClosed && !followUpsSuspended(world)) {
+      for (const action of world.actions()) {
+        expect(action.status, `follow-up ${action.id} is still held after unlock`).not.toBe("held");
+      }
+    }
   })),
   fc.boolean().map((busy) => command(busy ? "turnStarts" : "turnEnds", async (_model, world) => {
     if (world.alive) await world.setBusy(busy);
@@ -159,11 +174,11 @@ const commands = [
 ];
 
 describe("agent follow-up lifecycle model", () => {
-  it("admits at most one turn per follow-up, and none after cancel, across crash, restart and lock", async (context) => {
+  it("admits each follow-up at most once, never after a cancel, and once after a lock releases it, across crash and restart", async (context) => {
     // fast-check's default size stops near ten commands, too few to reach a
     // crash behind a busy thread; ask for the whole range.
     const scenarios = fc.commands(commands, { maxCommands: 40, size: "max" });
-    await assertFollowUpProperty(context, fc.asyncProperty(scenarios, async (cmds) => {
+    await assertFollowUpProperty(context, fc.asyncProperty(scenarios, fc.boolean(), async (cmds, reuseProcessId) => {
       await withWorld(async (world) => {
         const model: Model = { created: [], cancelled: new Map(), inFlightAtCrash: new Set() };
         await fc.asyncModelRun(() => ({ model, real: world }), cmds);
@@ -180,7 +195,15 @@ describe("agent follow-up lifecycle model", () => {
         await world.tick(10 * MINUTE);
         checkOracle(model, world);
         for (const id of model.inFlightAtCrash) expect(world.store.get(id)?.status).toBe("failed");
-      });
+        // Unlocked and idle: everything that was neither cancelled nor failed
+        // ran exactly once, wherever a lock had held it.
+        if (followUpsSuspended(world)) return;
+        for (const action of world.actions()) {
+          if (action.status === "cancelled" || action.status === "failed") continue;
+          expect(action.status, `follow-up ${action.id} never started`).toBe("started");
+          expect(world.admittedCount(action.id)).toBe(1);
+        }
+      }, { reuseProcessId });
     }), 50);
   });
 
@@ -260,6 +283,134 @@ describe("agent follow-up lifecycle model", () => {
       await world.restart();
       await world.tick(10 * MINUTE);
       expect(world.admittedCount(created.id)).toBe(1);
+    });
+  });
+
+  it.each([true, false])("starts a lock-held follow-up once after a restart, unlocked before the restart: %s", async (unlockFirst) => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const created = await world.create(1);
+      if (!("id" in created)) throw new Error(created.refused);
+      await world.tick(2 * MINUTE);
+      expect(world.store.get(created.id)).toMatchObject({ status: "held" });
+
+      // The hold lived in the dead process's queue. Unlocking while no
+      // process runs is a write the next launch reads.
+      world.crash();
+      if (unlockFirst) world.locked = false;
+      await world.restart();
+      await world.setLocked(false);
+      await world.tick(MINUTE);
+      expect(world.admittedCount(created.id)).toBe(1);
+      expect(world.store.get(created.id)).toMatchObject({ status: "started" });
+      await world.restart();
+      await world.tick(10 * MINUTE);
+      expect(world.admittedCount(created.id)).toBe(1);
+    });
+  });
+
+  it("sends a lock-held operator action with Send Now after a restart and unlock", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const operator = await world.service.create({
+        ...FOLLOW_UP_THREAD, kind: "turn", origin: "desktop", scheduledFor: world.clock + MINUTE,
+        displayText: "Operator message", turn: { input: [{ type: "text", text: "Operator message" }] },
+      });
+      await world.tick(2 * MINUTE);
+      expect(world.store.get(operator.action.id)).toMatchObject({ status: "held" });
+      await world.restart();
+      // Still locked: Send Now keeps it held behind the lock instead of failing.
+      await world.service.sendNow({ id: operator.action.id });
+      await world.settle();
+      expect(world.store.get(operator.action.id)).toMatchObject({ status: "held" });
+      expect(world.admittedCount(operator.action.id)).toBe(0);
+      await world.setLocked(false);
+      expect(world.admittedCount(operator.action.id)).toBe(1);
+      expect(world.store.get(operator.action.id)).toMatchObject({ status: "started" });
+    });
+  });
+
+  it("fails a lock-held follow-up whose unlock started it just before a crash, and never sends it again", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const created = await world.create(1);
+      if (!("id" in created)) throw new Error(created.refused);
+      await world.tick(2 * MINUTE);
+      world.armedCrash = "after_queue_start";
+      await world.setLocked(false);
+      expect(world.alive).toBe(false);
+      expect(world.admittedCount(created.id)).toBe(1);
+
+      await world.restart();
+      await world.tick(10 * MINUTE);
+      expect(world.store.get(created.id)).toMatchObject({ status: "failed" });
+      expect(world.admittedCount(created.id)).toBe(1);
+    });
+  });
+
+  it("leaves a follow-up an unlock never reached for the next launch when the process dies mid-unlock", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const first = await world.create(1);
+      const second = await world.create(1);
+      if (!("id" in first) || !("id" in second)) throw new Error("create refused");
+      await world.tick(MINUTE);
+      expect(world.actions().map((action) => action.status)).toEqual(["held", "held"]);
+      world.armedCrash = "after_queue_start";
+      await world.setLocked(false);
+      expect(world.alive).toBe(false);
+
+      await world.restart();
+      await world.tick(10 * MINUTE);
+      // The start the crash interrupted fails visibly; the hold it never
+      // reached starts once.
+      const [started, unreached] = world.admittedCount(first.id) === 1 ? [first.id, second.id] : [second.id, first.id];
+      expect(world.store.get(started)).toMatchObject({ status: "failed" });
+      expect(world.admittedCount(started)).toBe(1);
+      expect(world.store.get(unreached)).toMatchObject({ status: "started" });
+      expect(world.admittedCount(unreached)).toBe(1);
+    });
+  });
+
+  it("re-admits a lock hold by its stored cause after a later build rewords the refusal", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const created = await world.create(1);
+      if (!("id" in created)) throw new Error(created.refused);
+      await world.tick(2 * MINUTE);
+      expect(world.store.get(created.id)).toMatchObject({ status: "held", holdCause: "thread_lock" });
+      world.db.raw.prepare("UPDATE scheduled_thread_actions SET error_message = ? WHERE action_id = ?")
+        .run("Paused until the operator lifts the hold.", created.id);
+
+      await world.restart();
+      await world.setLocked(false);
+      expect(world.admittedCount(created.id)).toBe(1);
+      expect(world.store.get(created.id)).toMatchObject({ status: "started" });
+    });
+  });
+
+  it("re-admits a hold an older build stored with only its lock refusal, and leaves other holds to the operator", async () => {
+    await withWorld(async (world) => {
+      await world.setLocked(true);
+      const hold = (id: string, reason: string): void => {
+        world.store.create({
+          id, ...FOLLOW_UP_THREAD, kind: "turn", origin: "desktop", scheduledFor: world.clock + 60 * MINUTE,
+          displayText: id, turn: { input: [{ type: "text", text: id }] }, now: world.clock,
+        });
+        world.store.claim(id, { now: world.clock, ownerId: "scheduler:1:legacy", leaseExpiresAt: world.clock + 30_000 });
+        // Older builds stored neither a holder nor a cause.
+        world.store.markHeld(id, `scheduled-turn:${id}`, reason, world.clock);
+      };
+      hold("scheduled-action:legacy-lock", "This thread is locked. Unlock it to send.");
+      hold("scheduled-action:steer", "Wait for the active turn to finish before retrying this message.");
+
+      await world.restart();
+      await world.setLocked(false);
+      await world.tick(10 * MINUTE);
+      expect(world.admittedCount("scheduled-action:legacy-lock")).toBe(1);
+      expect(world.store.get("scheduled-action:legacy-lock")).toMatchObject({ status: "started" });
+      expect(world.admittedCount("scheduled-action:steer")).toBe(0);
+      expect(world.store.get("scheduled-action:steer")).toMatchObject({ status: "held" });
     });
   });
 
@@ -587,6 +738,24 @@ describe("agent follow-up write budgets", () => {
       note: "one agent follow-up that comes due behind an active turn: create, claim with guard reservation, "
         + "queued, started: four commits, the most one follow-up costs. Measured about 70 KB of WAL: 3.5 MB/day "
         + "if all 50 follow-ups a day waited behind a turn.",
+    });
+  });
+
+  it("holds a lock-held follow-up, through a restart and the unlock, to its budget", async () => {
+    await measured(async (world) => await world.setLocked(true), async (world) => {
+      const created = await world.create(1);
+      if (!("id" in created)) throw new Error(created.refused);
+      await world.tick(2 * MINUTE);
+      expect(world.store.get(created.id)).toMatchObject({ status: "held" });
+      await world.restart();
+      await world.setLocked(false);
+      expect(world.store.get(created.id)).toMatchObject({ status: "started" });
+    }, {
+      scenario: "agent-follow-up-lock-held-restart",
+      note: "one agent follow-up a lock holds across a restart: create, claim, held (recording its holder); the "
+        + "next launch claims it from the dead holder and holds it again (two commits); the unlock queues it under "
+        + "a lease before the start, then started. The restart costs two commits per held action and the unlock one "
+        + "more than a direct start.",
     });
   });
 

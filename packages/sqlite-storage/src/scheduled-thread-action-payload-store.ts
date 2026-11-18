@@ -7,6 +7,7 @@ export type ScheduledThreadActionPayload = Pick<
   ScheduledThreadAction,
   | "displayText"
   | "fileAttachments"
+  | "holdCause"
   | "imageAttachments"
   | "manualReleaseRequired"
   | "review"

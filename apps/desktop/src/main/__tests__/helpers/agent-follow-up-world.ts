@@ -8,13 +8,19 @@ import {
 import { MemoryScheduledThreadActionPayloadStore } from "@pwragent/sqlite-storage/scheduled-thread-action-payload-store";
 import type { DesktopBackendRegistry } from "../../app-server/backend-registry";
 import { buildAgentFollowUpToolHandler } from "../../scheduled-actions/agent-follow-up-tool";
-import { ScheduledThreadActionService } from "../../scheduled-actions/scheduled-thread-action-service";
+import {
+  SCHEDULER_OWNER_CONFIRMATION_GRACE_MS,
+  ScheduledThreadActionService,
+  schedulerOwnerId,
+} from "../../scheduled-actions/scheduled-thread-action-service";
 import type { StateDb } from "../../state/state-db";
 import { ScheduledThreadActionStore } from "../../storage/scheduled-thread-action-store";
 
 export const FOLLOW_UP_THREAD = { backend: "codex" as const, threadId: "thread-follow-up" };
 const LOCK_REFUSAL = "This thread is locked. Unlock it to send.";
 const LEASE_MS = 30_000;
+/** Above every platform's process ID range, so never this test's own. */
+const FIRST_PROCESS_ID = 9_000_000;
 
 /**
  * Where the owning process dies during one dispatch:
@@ -54,6 +60,12 @@ export class AgentFollowUpWorld {
    * statement would be counted against them.
    */
   heartbeatOnTick = true;
+  /**
+   * Every launch gets the process ID the dead one had, as an operating system
+   * may hand out. Only the runtime marker tells the two apart, and the new
+   * process trusts that only after the confirmation grace.
+   */
+  reuseProcessId = false;
   readonly admissions: Array<{ actionId: string; trueTime: number }> = [];
   service!: ScheduledThreadActionService;
   store!: ScheduledThreadActionStore;
@@ -70,7 +82,7 @@ export class AgentFollowUpWorld {
   onPublish: (() => Promise<void>) | undefined;
   private wakes: string[] = [];
 
-  constructor(private readonly db: StateDb) {}
+  constructor(readonly db: StateDb) {}
 
   admittedCount(actionId: string): number {
     return this.admissions.filter((admission) => admission.actionId === actionId).length;
@@ -79,9 +91,11 @@ export class AgentFollowUpWorld {
   /** A new process on the same profile. Clears nothing durable. */
   async start(): Promise<void> {
     const generation = ++this.generation;
+    const processId = this.reuseProcessId ? FIRST_PROCESS_ID : FIRST_PROCESS_ID + generation;
+    const instanceId = `runtime-v2-world-${generation}`;
+    const live = (): boolean => this.alive && this.generation === generation;
     const work: ProcessWork = { evaluations: [], stopped: Promise.withResolvers<void>() };
     this.work = work;
-    const ownerId = `scheduler:test:${generation}`;
     this.queue = [];
     this.listeners = new Set();
     this.gateListeners = new Set();
@@ -90,8 +104,12 @@ export class AgentFollowUpWorld {
       registry: this.registry(generation),
       store: this.store,
       now: () => this.clock,
-      ownerId,
-      isOwnerAlive: (candidate) => candidate === ownerId && this.generation === generation,
+      ownerId: schedulerOwnerId({ processId, instanceId, startedAt: this.clock }),
+      // Only this launch's process runs. Its marker carries only its identity.
+      ownerProbes: {
+        isProcessAlive: (candidate) => live() && candidate === processId,
+        isRuntimeIdentityLive: (identity) => live() && identity.instanceId === instanceId,
+      },
       setTimer: () => ({}) as ReturnType<typeof setTimeout>,
       clearTimer: () => undefined,
       setLeaseTimer: (callback) => {
@@ -137,6 +155,9 @@ export class AgentFollowUpWorld {
     if (this.alive) this.crash();
     this.advanceClock(LEASE_MS + 1);
     await this.start();
+    // A reused process ID keeps the dead owner unconfirmed, not dead, until
+    // the grace runs out; the scheduler's next passes then act on it.
+    if (this.reuseProcessId) await this.tick(SCHEDULER_OWNER_CONFIRMATION_GRACE_MS);
   }
 
   advanceClock(ms: number): void {
@@ -209,9 +230,16 @@ export class AgentFollowUpWorld {
   /** The queue starts what it can once the thread is free and unlocked. */
   private async drain(): Promise<void> {
     while (this.alive && !this.busy && !this.locked && this.queue.length > 0) {
+      const head = this.queue[0]!;
+      if (head.held) {
+        // The real queue announces a released hold as queued, while the entry
+        // is still in it, before it starts it.
+        head.held = false;
+        await this.emit(head.id, "queued");
+        if (!this.alive) return;
+        continue;
+      }
       const entry = this.queue.shift()!;
-      // The real queue announces a released hold as queued before it starts it.
-      if (entry.held) await this.emit(entry.id, "queued");
       this.admit(entry.actionId);
       if (this.armedCrash === "after_queue_start") {
         this.crash();

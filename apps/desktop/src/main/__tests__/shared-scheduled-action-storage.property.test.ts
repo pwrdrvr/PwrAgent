@@ -20,6 +20,8 @@ import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./
 afterEach(() => vi.unstubAllEnvs());
 const bindings = [SharedStore, DesktopStore];
 const backends = ["codex", "acp:kimi"] as const;
+const releasedHoldMessage =
+  "PwrAgent stopped while this held action was being released. It was not sent again, because it may already have started. Check the thread before scheduling it again.";
 const expiredDispatchMessage = "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again.";
 const byId = (rows: ScheduledThreadAction[]) => rows.sort((a, b) => a.id.localeCompare(b.id));
 const pending = (action: ScheduledThreadAction) => action.status === "held" || action.status === "scheduled";
@@ -99,7 +101,9 @@ it("matches an independent multi-owner claim model across portable and desktop W
           for (const candidate of model.values()) {
             const current = candidate.action;
             if (!inFlight(current) || candidate.expires! > now || (command.protect && candidate.owner === command.owner)) continue;
-            candidate.action = { ...current, updatedAt: now, ...(current.manualReleaseRequired
+            candidate.action = { ...current, updatedAt: now, ...(current.manualReleaseRequired && current.status === "queued"
+              ? { status: "failed", queueEntryId: undefined, errorMessage: releasedHoldMessage }
+              : current.manualReleaseRequired
               ? { status: "held", queueEntryId: undefined }
               : current.status === "queued" ? { status: "scheduled", queueEntryId: undefined }
                 : { status: "failed", errorMessage: expiredDispatchMessage }) };

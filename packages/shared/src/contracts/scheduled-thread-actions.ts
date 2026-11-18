@@ -144,9 +144,18 @@ export type ScheduledThreadAction = {
   turnId?: string;
   errorMessage?: string;
   manualReleaseRequired?: boolean;
+  /**
+   * Why a held action waits, when the queue that held it said so. A thread
+   * lock's hold lives in its holder's memory, and a later launch admits it
+   * again once that holder is gone. Rows from older builds have none; their
+   * `errorMessage` is the refusal text instead.
+   */
+  holdCause?: ScheduledThreadActionHoldCause;
   createdAt: number;
   updatedAt: number;
 };
+
+export type ScheduledThreadActionHoldCause = "thread_lock";
 
 export type CreateScheduledThreadActionRequest = {
   backend: AppServerBackendKind;
