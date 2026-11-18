@@ -7,7 +7,7 @@ const input = (text: string) => [{ type: "text" as const, text }];
 const origin = (threadId: string) => ({ kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId } });
 const drain = async () => { for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve)); };
 
-it("individual admission preserves legacy grouped neighbors, independent holds and every accepted input", async () => {
+it("individual admission preserves earlier agent neighbors, independent holds and every accepted input", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.tuple(fc.boolean(), fc.string({ maxLength: 40 })), { minLength: 2, maxLength: 8 }),
     fc.boolean(), fc.boolean(), async (messages, paused, close) => {
       let busy = true;
@@ -16,10 +16,9 @@ it("individual admission preserves legacy grouped neighbors, independent holds a
         startTurn: async entry => { sends.push(entry); return { ...ref, turnId: entry.id }; },
         onLifecycle: event => { events.push(event); } });
       try {
-        // A pre-existing grouped acceptance still needs replacement/read/control
-        // compatibility. New desktop input uses individual admission directly.
-        const group = await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input("Legacy Alice"), messageOrigin: origin("alice") });
-        await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input("Legacy Bob"), messageOrigin: origin("bob") });
+        // Two earlier agent messages, each its own acceptance.
+        const group = await queue.submitSteer({ ...ref, origin: "manual", input: input("Legacy Alice"), messageOrigin: origin("alice") });
+        await queue.submitSteer({ ...ref, origin: "manual", input: input("Legacy Bob"), messageOrigin: origin("bob") });
         if (paused) await queue.setEntryPaused(group.entry.id, true);
         await queue.submitHeld({ ...ref, id: "review", origin: "scheduled", input: input("Review") }, "Independent review");
         await queue.submitHeld({ ...ref, id: "lock", origin: "scheduled", input: input("Lock") }, "Independent lock");
@@ -43,22 +42,26 @@ it("individual admission preserves legacy grouped neighbors, independent holds a
         queue.drainAll();
         await drain();
         if (close) { expect(sends).toEqual([]); return; }
-        // The legacy batch, the review and the lock each go out alone. The
-        // agent messages admitted behind them wait together, so they go out
-        // as one delivery that still names each immutable acceptance.
-        const ownTurns = waiting.slice(0, waiting.length - accepted.length);
-        for (const entry of ownTurns) {
-          expect(sends.at(-1)).toEqual(entry);
-          await queue.releaseThread({ ...ref, turnId: entry.id, status: "completed" });
+        // Agent messages that wait next to each other share a delivery; the
+        // review and the lock are not agent messages and go out alone. Every
+        // delivery still names each immutable acceptance it carries.
+        const expected: string[][] = [];
+        waiting.forEach((entry, index) => {
+          const agent = entry.messageOrigin?.kind === "agent";
+          if (agent && index > 0 && waiting[index - 1]!.messageOrigin?.kind === "agent") expected.at(-1)!.push(entry.id);
+          else expected.push([entry.id]);
+        });
+        expect(expected.at(-1)).toEqual(accepted.map(entry => entry.id));
+        for (const ids of expected) {
+          const sent = sends.at(-1)!;
+          expect(sent.deliveredEntryIds ?? [sent.id]).toEqual(ids);
+          await queue.releaseThread({ ...ref, turnId: sent.id, status: "completed" });
           await drain();
         }
-        expect(sends.slice(0, ownTurns.length)).toEqual(ownTurns);
-        expect(sends).toHaveLength(ownTurns.length + 1);
+        expect(sends).toHaveLength(expected.length);
         const combined = sends.at(-1)!;
-        expect(combined.deliveredEntryIds).toEqual(accepted.map(entry => entry.id));
         expect(combined.agentMessages?.map(message => message.input)).toEqual(accepted.map(entry => entry.input));
-        expect(events.filter(event => event.type === "started").slice(-accepted.length).map(event => event.entry.id))
-          .toEqual(accepted.map(entry => entry.id));
+        expect(events.filter(event => event.type === "started").map(event => event.entry.id)).toEqual(expected.flat());
         expect(accepted.map(entry => entry.input)).toEqual(messages.map(([, text]) => input(text)));
       } finally { queue.close(); }
     }), { numRuns: 50 });

@@ -456,7 +456,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "alice" } } };
       await registry.submitHeldTurn(request);
       const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
-      await queue.submitGroupedSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Legacy grouped neighbor" }],
+      await queue.submitSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Legacy grouped neighbor" }],
         messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
       const durable: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
         request: { ...identity, delivery: "new_turn", input: [{ type: "text", text: "Durable neighbor" }] } };
@@ -569,7 +569,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await host.client.startTurn(request);
       await host.client.setQueuedTurnPaused({ queueEntryId: request.queueEntryId, paused: true });
       const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
-      await queue.submitGroupedSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Legacy Bob input" }],
+      await queue.submitSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Legacy Bob input" }],
         messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
       await registry.submitHeldTurn({ ...identity, queueEntryId: "independent-review", input: [{ type: "text", text: "Review first" }], holdReason: "Independent review" });
       const receiptRequest: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
@@ -812,7 +812,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const prompt = `Concurrent wake ${suffix}`;
         await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
         // An unrelated sender with the same text must retain its own acceptance.
-        const sender = await queue.submitGroupedSteer({ ...ref, origin: "manual", input: [{ type: "text", text: prompt }],
+        const sender = await queue.submitSteer({ ...ref, origin: "manual", input: [{ type: "text", text: prompt }],
           messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "other-sender" } } });
         if (paused) expect(await host.client.setQueuedTurnPaused({ queueEntryId: sender.entry.id, paused: true })).toMatchObject({ disposition: "updated" });
         await registry.submitHeldTurn({ ...ref, queueEntryId: `review:${ref.threadId}`, input: [{ type: "text", text: "Review" }], holdReason: "Independent review" });
@@ -2911,7 +2911,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   }, 120_000);
 });
 
-it("the actual desktop federated caller retains untouched senders' original replacement handles", async () => {
+it("the actual desktop federated caller keeps untouched senders' own queue ids through peer replacements", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob"), { minLength: 2, maxLength: 6 }), async edits => {
     const host = await startDesktopOwner();
@@ -2927,15 +2927,15 @@ it("the actual desktop federated caller retains untouched senders' original repl
         input: [{ type: "text" as const, text }], ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}),
         messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: sender } } });
       const handles = new Map<string, string>();
-      // Seed a legacy batch; new production messages have individual identities.
+      // Each sender's message waits as its own entry under its own id.
       const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
       for (const sender of ["alice", "bob"]) {
-        const accepted = await queue.submitGroupedSteer({ ...identity, origin: "manual",
+        const accepted = await queue.submitSteer({ ...identity, origin: "manual",
           input: [{ type: "text", text: `Original ${sender}` }], messageOrigin: authenticateMessageOrigin({
             messageOrigin: request(sender, "").messageOrigin, sourceInstanceId: "viewer" }) });
         handles.set(sender, accepted.entry.id);
       }
-      expect(handles.get("alice")).toBe(handles.get("bob"));
+      expect(handles.get("alice")).not.toBe(handles.get("bob"));
       const { writes } = await measureSqliteWrites(async () => {
         for (const [index, sender] of edits.entries()) {
           const oldId = handles.get(sender)!;

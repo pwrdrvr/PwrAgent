@@ -605,7 +605,6 @@ import {
 } from "./codex-environment-runtime";
 import {
   isSteerableAgentTraffic,
-  replacedAgentMessageOrigin,
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
@@ -10431,23 +10430,22 @@ export class DesktopBackendRegistry {
     // after earlier FIFO controls settle, then cancels before fresh admission.
     const sender = request.messageOrigin?.sourceThread;
     const entry = this.threadTurnQueue.getQueuedEntries(request)
-      .find((candidate) => candidate.id === request.queueEntryId || (sender && candidate.agentMessages?.some(message => {
-        const source = message.origin?.sourceThread;
-        return message.replacementHandle === request.queueEntryId && source?.backend === sender.backend
-          && source.threadId === sender.threadId && source.instanceId === sender.instanceId;
-      })));
+      .find((candidate) => candidate.id === request.queueEntryId);
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
-    if (entry.agentMessageOrigins && !entry.agentMessages) {
-      throw new Error("The operator edited this batch; sender replacement would overwrite those edits.");
+    // Only an older build's restart save can still hold a batch: one entry
+    // carrying several senders' messages. Its id covers other senders' input.
+    if (entry.agentMessageOrigins) {
+      throw new Error("This message waits in a batch with other senders' messages and cannot be replaced. Send a new message instead.");
     }
-    const owners = entry.agentMessages?.map((message) => message.origin?.sourceThread)
-      ?? [entry.messageOrigin?.sourceThread];
+    const owner = entry.messageOrigin?.sourceThread;
     if (
       entry.messageOrigin?.kind !== "agent"
       || request.messageOrigin?.kind !== "agent"
       || !sender
-      || !owners.some((owner) => owner && owner.backend === sender.backend
-        && owner.threadId === sender.threadId && owner.instanceId === sender.instanceId)
+      || !owner
+      || owner.backend !== sender.backend
+      || owner.threadId !== sender.threadId
+      || owner.instanceId !== sender.instanceId
     ) {
       throw new Error("Only the sending thread can replace its own queued agent message.");
     }
@@ -10457,7 +10455,7 @@ export class DesktopBackendRegistry {
     // The operator approved the text they saw, so its approval stays with it.
     if (
       Boolean(request.messageOrigin.operatorApproved)
-      !== Boolean(replacedAgentMessageOrigin(entry, sender)?.operatorApproved)
+      !== Boolean(entry.messageOrigin.operatorApproved)
     ) {
       throw new Error(
         "A replacement cannot change whether the operator approved the queued message. Send a new message instead.",

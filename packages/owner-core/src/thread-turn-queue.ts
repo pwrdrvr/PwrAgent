@@ -291,18 +291,6 @@ function sharesTurnTerms(
     && Boolean(batch.messageOrigin?.operatorApproved) === Boolean(message.messageOrigin?.operatorApproved);
 }
 
-/**
- * The origin of the queued message a sender's replacement would replace in
- * this entry: the sender's first message in a batch, else the entry's own.
- */
-export function replacedAgentMessageOrigin(
-  entry: Pick<ThreadTurnQueueEntry, "agentMessages" | "messageOrigin">,
-  sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
-): AppServerThreadMessageOrigin | undefined {
-  if (!entry.agentMessages) return entry.messageOrigin;
-  return entry.agentMessages.find(message => sentBy(message.origin?.sourceThread, sender))?.origin;
-}
-
 function sentBy(
   source: AppServerThreadMessageOrigin["sourceThread"],
   sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
@@ -314,18 +302,6 @@ function sentBy(
 function describeSourceThread(source: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>): string {
   return `${source.title ?? source.threadId} (${source.backend}, thread ${source.threadId}${
     source.instanceId ? `, instance ${source.instanceLabel ?? source.instanceId}` : ""})`;
-}
-
-function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputItem[] {
-  if (messages.length === 1) return structuredClone(messages[0]!.input);
-  return messages.flatMap((message, index) => {
-    const source = message.origin?.sourceThread;
-    const context = source ? describeSourceThread(source) : "Operator-edited guidance";
-    return [
-      { type: "text" as const, text: `Message ${index + 1} from ${context}\nReceived: ${new Date(message.receivedAt).toISOString()}` },
-      ...structuredClone(message.input),
-    ];
-  });
 }
 
 /** At most this many queued messages go out as one delivery. */
@@ -618,85 +594,6 @@ export class ThreadTurnQueue {
         this.scheduleDrain(key);
       }
     }
-  }
-
-  /**
-   * @deprecated The mutable batch #2530 introduced: a sender's queue id came
-   * to cover other senders' input (#3568). No production caller remains;
-   * messages are admitted individually and combined only at dispatch
-   * (`planQueuedDeliveries`). Kept while tests still seed legacy batches.
-   */
-  async submitGroupedSteer(
-    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-    options?: { deferStart?: boolean; onAdmission?: () => void },
-  ): Promise<ThreadTurnQueueSubmissionResult> {
-    const message: QueuedAgentMessage = {
-      input: structuredClone(input.input),
-      origin: structuredClone(input.messageOrigin),
-      receivedAt: this.now(),
-    };
-    return await this.withDispatchSuspended(input, async () => {
-      this.assertAdmission();
-      const key = this.keyFor(input);
-      const queue = this.queueFor(key);
-      // A paused batch keeps the messages it has; a new one starts beside it.
-      // So does the newest open batch when its turn settings or operator
-      // approval differ: the owner checked each message's override as it was
-      // submitted, and no message may run under another's override or
-      // approval. Joining an older batch would run this message ahead of
-      // ones its sender sent before it.
-      const open = queue.findLastIndex((entry) =>
-        entry.delivery === "queued-steer" && entry.agentMessages !== undefined && !entry.paused
-      );
-      const index = open >= 0 && sharesTurnTerms(queue[open]!, input) ? open : -1;
-      const current = index >= 0 ? queue[index] : undefined;
-      const messages = [...(current?.agentMessages ?? []), message];
-      const holdReason = this.holdReasonFor(key);
-      // A title named the batch before this message joined it.
-      const { title: _staleTitle, ...base } = current ?? input;
-      // A to-do marker labels one message. A batch keeps each message's own
-      // origin in agentMessages, so the batch origin must not claim it.
-      const { threadTodo: _threadTodo, ...batchOrigin }: Partial<AppServerThreadMessageOrigin> =
-        input.messageOrigin ?? {};
-      const entry: ThreadTurnQueueEntry = {
-        ...base,
-        id: current?.id ?? input.id ?? `thread-turn:${randomUUID()}`,
-        createdAt: current?.createdAt ?? input.createdAt ?? message.receivedAt,
-        delivery: "queued-steer",
-        agentMessages: messages,
-        agentMessageOrigins: [
-          ...(current?.agentMessageOrigins ?? []),
-          ...(message.origin ? [message.origin] : []),
-        ],
-        input: groupedAgentInput(messages),
-        messageOrigin: { ...(messages.length > 1 ? batchOrigin : input.messageOrigin), kind: "agent",
-          ...mergeCausalMessagingContext(current ? [current.messageOrigin, message.origin] : [message.origin]) },
-        ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
-      };
-      if (
-        !options?.deferStart
-        && !current
-        && !hasWaitingEntry(queue)
-        && this.dispatchSuspensions.get(key) === 1
-        && !this.admissions.has(key)
-        && !this.runningEntries.has(key)
-        && !this.heldQueues.has(key)
-        && !(this.options.isThreadActive?.(entry) ?? false)
-        && !this.isDispatchHeld(entry)
-      ) {
-        const starting = this.startEntry(entry);
-        options?.onAdmission?.();
-        const started = await starting;
-        return { status: "started", entry, turnId: started.turnId };
-      }
-      if (current) queue[index] = entry;
-      else queue.push(entry);
-      options?.onAdmission?.();
-      const position = current ? index + 1 : queue.length;
-      await this.emit({ type: "queued", entry, position, ...(current ? { inputUpdated: true } : {}) });
-      return { status: "queued", entry, position };
-    });
   }
 
   /**
@@ -1246,34 +1143,21 @@ export class ThreadTurnQueue {
     return await this.withDispatchSuspended(found.entry, async () => {
       this.assertAdmission();
       const current = this.findQueuedEntry(entryId, sender);
-      if (!current || this.closed || (current.entry.agentMessageOrigins && !current.entry.agentMessages)) return undefined;
-      const owns = (source: AppServerThreadMessageOrigin["sourceThread"]) => sentBy(source, sender);
+      // A batch restored from an older build's restart save (#2530) reads
+      // and dispatches as it was, but no sender edits it: its id covers
+      // other senders' input (#3568).
+      if (!current || this.closed || current.entry.agentMessageOrigins) return undefined;
       const entry = current.entry;
-      if (entry.messageOrigin?.kind !== "agent") return undefined;
+      if (entry.messageOrigin?.kind !== "agent" || !sentBy(entry.messageOrigin.sourceThread, sender)) return undefined;
       // The operator approved the text they saw. A replacement can neither
-      // take that approval nor drop it from the batch it shares.
-      if (origin && Boolean(origin.operatorApproved)
-        !== Boolean(replacedAgentMessageOrigin(entry, sender)?.operatorApproved)) return undefined;
-      const replacementId = `thread-turn:${randomUUID()}`;
-      let replaced = false;
-      const messages = entry.agentMessages?.flatMap((message) => {
-        if (!owns(message.origin?.sourceThread)) return [{ ...message, replacementHandle: message.replacementHandle ?? entry.id }];
-        if (replaced) return [];
-        replaced = true;
-        return [{ ...message, replacementHandle: replacementId, input: structuredClone(input), receivedAt: this.now(), ...(origin ? { origin: structuredClone(origin) } : {}) }];
-      });
-      if (messages ? !replaced : !owns(entry.messageOrigin.sourceThread)) return undefined;
+      // take that approval nor add it.
+      if (origin && Boolean(origin.operatorApproved) !== Boolean(entry.messageOrigin.operatorApproved)) return undefined;
       const { id: _oldId, createdAt: _oldCreatedAt, title: _staleTitle, ...rest } = entry;
-      const messageOrigin = structuredClone(origin && owns(entry.messageOrigin.sourceThread) ? origin : entry.messageOrigin);
       const replacement = {
         ...rest,
-        id: replacementId,
-        input: messages ? groupedAgentInput(messages) : structuredClone(input),
-        messageOrigin: messages ? { ...messageOrigin, kind: "agent" as const,
-          causalMessagingSource: undefined, causalMessagingAmbiguous: undefined,
-          ...mergeCausalMessagingContext(messages.map(message => message.origin)) } : messageOrigin,
-        ...(messages ? { agentMessages: messages,
-          agentMessageOrigins: messages.flatMap(message => message.origin ? [message.origin] : []) } : {}),
+        id: `thread-turn:${randomUUID()}`,
+        input: structuredClone(input),
+        messageOrigin: structuredClone(origin ?? entry.messageOrigin),
       };
       // Retire the immutable acceptance before admitting changed input. Keep
       // the FIFO's independent holds through this synchronous empty boundary.

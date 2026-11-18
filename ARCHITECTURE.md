@@ -545,8 +545,10 @@ thread is idle or cannot steer. It stops at a human message, an explicit
 the cap. Order never changes. Each member keeps its own lifecycle events and
 correspondence receipt, and the dispatched entry lists them in
 `deliveredEntryIds`. Operator, composer and messaging-app sends are never
-combined: three queued operator messages start three turns. Existing grouped
-entries retain their read, control and explicit replacement behavior.
+combined: three queued operator messages start three turns. A mutable batch
+from an older build (#2530) can still come back through a quiet restart's
+saved queue. It reads and dispatches as before, but no sender can replace part
+of it: its id covers other senders' input.
 Claude's background-task, loop and cron hooks also admit each distinct locked
 prompt under its own immutable held identity. The existing attachment admission
 reservation deduplicates matching prompts only while they still wait; a new wake

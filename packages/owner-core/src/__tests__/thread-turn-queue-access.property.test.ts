@@ -102,7 +102,7 @@ async function runModel(initialMode: ThreadExecutionMode, steps: Step[]): Promis
         if (!withinCeiling(message, mode)) continue;
         const text = `message-${order}`;
         waiting.set(text, message);
-        await queue.submitGroupedSteer({
+        await queue.submitSteer({
           ...THREAD,
           origin: "manual",
           input: [{ type: "text", text }],
