@@ -5,12 +5,15 @@ import type { StateDb } from "./state-db.js";
 const MESSAGING_LEASE_KEY = "profile-messaging";
 const FEDERATION_LEASE_KEY = "profile-federation";
 const MCP_CONNECTIONS_LEASE_KEY = "profile-mcp-connections";
+const AUTOMATIONS_LEASE_KEY = "profile-automations";
 const PID_OWNED_LEASE_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
 export { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import type {
   AppRuntimeInstanceRecord,
   AppRuntimeMessagingDisabledReason,
+  AutomationsLeaseAcquireResult,
+  AutomationsRuntimeLeaseRecord,
   FederationLeaseAcquireResult,
   FederationRuntimeLeaseRecord,
   McpConnectionsLeaseAcquireResult,
@@ -22,6 +25,8 @@ import type {
 export type {
   AppRuntimeInstanceRecord,
   AppRuntimeMessagingDisabledReason,
+  AutomationsLeaseAcquireResult,
+  AutomationsRuntimeLeaseRecord,
   FederationLeaseAcquireResult,
   FederationRuntimeLeaseRecord,
   McpConnectionsLeaseAcquireResult,
@@ -181,6 +186,15 @@ export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
     return this.acquireLease({ leaseKey: MCP_CONNECTIONS_LEASE_KEY, ...params });
   }
 
+  acquireAutomationsLease(params: {
+    instanceId: string;
+    isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+    canReclaimOwnerImmediately?: (owner: AppRuntimeInstanceRecord) => boolean;
+    now: number;
+  }): AutomationsLeaseAcquireResult {
+    return this.acquireLease({ leaseKey: AUTOMATIONS_LEASE_KEY, ...params });
+  }
+
   releaseMessagingLease(params: { instanceId: string; now: number }): boolean {
     return this.releaseLease({
       leaseKey: MESSAGING_LEASE_KEY,
@@ -207,6 +221,10 @@ export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
     return this.releaseLease({ leaseKey: MCP_CONNECTIONS_LEASE_KEY, ...params });
   }
 
+  releaseAutomationsLease(params: { instanceId: string; now: number }): boolean {
+    return this.releaseLease({ leaseKey: AUTOMATIONS_LEASE_KEY, ...params });
+  }
+
   getMessagingLease(): MessagingRuntimeLeaseRecord | undefined {
     return this.readLease(MESSAGING_LEASE_KEY);
   }
@@ -217,6 +235,10 @@ export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
 
   getMcpConnectionsLease(): McpConnectionsRuntimeLeaseRecord | undefined {
     return this.readLease(MCP_CONNECTIONS_LEASE_KEY);
+  }
+
+  getAutomationsLease(): AutomationsRuntimeLeaseRecord | undefined {
+    return this.readLease(AUTOMATIONS_LEASE_KEY);
   }
 
   private acquireLease(params: {

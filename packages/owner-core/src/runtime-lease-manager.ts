@@ -3,12 +3,14 @@ import type {
   AppRuntimeInstanceRecord,
   RuntimeLeaseStorage,
   AppRuntimeMessagingDisabledReason,
+  MessagingLeaseAcquireResult,
   MessagingRuntimeLeaseRecord,
+  RuntimeLeaseAcquisition,
 } from "./runtime-lease-storage";
 
 const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
 
-export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections";
+export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections" | "automations";
 export type RuntimeLeaseClaim = "runtime" | "thread_owner";
 
 export type RuntimeLeaseHolder = {
@@ -147,11 +149,7 @@ export class RuntimeLeaseManager {
         this.ownerIsConclusivelyGone(owner),
       now: this.now(),
     };
-    const result = kind === "messaging"
-      ? this.store.acquireMessagingLease(params)
-      : kind === "federation"
-        ? this.store.acquireFederationLease(params)
-        : this.store.acquireMcpConnectionsLease(params);
+    const result = this.acquireStoredLease(kind, params);
     if (result.acquired) {
       this.heldLeases.add(kind);
       this.addClaim(kind, claim);
@@ -174,11 +172,7 @@ export class RuntimeLeaseManager {
     }
     const now = this.now();
     const params = { instanceId: this.instanceId, now };
-    const released = kind === "messaging"
-      ? this.store.releaseMessagingLease(params)
-      : kind === "federation"
-        ? this.store.releaseFederationLease(params)
-        : this.store.releaseMcpConnectionsLease(params);
+    const released = this.releaseStoredLease(kind, params);
     this.heldLeases.delete(kind);
     this.claims.delete(kind);
     return released;
@@ -275,12 +269,37 @@ export class RuntimeLeaseManager {
       || owner.startedAt < this.systemBootedAt - RUNTIME_BOOT_TIME_TOLERANCE_MS;
   }
 
+  private acquireStoredLease(
+    kind: RuntimeLeaseKind,
+    params: RuntimeLeaseAcquisition,
+  ): MessagingLeaseAcquireResult {
+    switch (kind) {
+      case "messaging": return this.store.acquireMessagingLease(params);
+      case "federation": return this.store.acquireFederationLease(params);
+      case "mcp_connections": return this.store.acquireMcpConnectionsLease(params);
+      case "automations": return this.store.acquireAutomationsLease(params);
+    }
+  }
+
+  private releaseStoredLease(
+    kind: RuntimeLeaseKind,
+    params: { instanceId: string; now: number },
+  ): boolean {
+    switch (kind) {
+      case "messaging": return this.store.releaseMessagingLease(params);
+      case "federation": return this.store.releaseFederationLease(params);
+      case "mcp_connections": return this.store.releaseMcpConnectionsLease(params);
+      case "automations": return this.store.releaseAutomationsLease(params);
+    }
+  }
+
   private readLease(kind: RuntimeLeaseKind): MessagingRuntimeLeaseRecord | undefined {
-    return kind === "messaging"
-      ? this.store.getMessagingLease()
-      : kind === "federation"
-        ? this.store.getFederationLease()
-        : this.store.getMcpConnectionsLease();
+    switch (kind) {
+      case "messaging": return this.store.getMessagingLease();
+      case "federation": return this.store.getFederationLease();
+      case "mcp_connections": return this.store.getMcpConnectionsLease();
+      case "automations": return this.store.getAutomationsLease();
+    }
   }
 
   private describeLeaseHolder(

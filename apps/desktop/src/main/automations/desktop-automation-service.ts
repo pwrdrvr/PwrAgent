@@ -49,6 +49,11 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAutomationStorage } from "../storage/desktop-automation-storage.js";
+import {
+  getExistingRuntimeLeaseManager,
+  type RuntimeLeaseManager,
+} from "../runtime-lease-manager.js";
+import { RuntimeLeaseRetry } from "../runtime-lease-retry.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
 import {
   readAutomationRunOwnerLiveness,
@@ -62,7 +67,7 @@ import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
-import { AutomationScheduler } from "./automation-scheduler.js";
+import { AutomationScheduler, type AutomationSchedulerOptions } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
 import {
   anyAutomationInboundMatch,
@@ -192,6 +197,15 @@ export class DesktopAutomationService {
   /** Runs already handed to a report pass in this process. */
   private readonly reportingInterruptedRunIds = new Set<string>();
   private pendingRunUsageTimer: NodeJS.Timeout | undefined;
+  /**
+   * Only the instance holding the profile `automations` lease evaluates
+   * schedules, reconciles startup runs and resumes queued runs, so one
+   * trigger window produces at most one run however many instances share
+   * the profile. Inbound-message runs already come from one instance: only
+   * the messaging lease holder receives them.
+   */
+  private schedulingLeaseHeld = false;
+  private readonly schedulingLeaseRetry = new RuntimeLeaseRetry();
   private readonly pendingRunTranscriptEvents = new Map<
     string,
     Map<string, AutomationRunTranscriptEvent>
@@ -208,13 +222,21 @@ export class DesktopAutomationService {
       runOwnerLiveness?: (owner: AutomationRunOwner) => AutomationRunOwnerLiveness;
       /** How long an unconfirmed owner has to refresh its marker. */
       runOwnerRecheckDelayMs?: number;
+      /** Defaults to the process owner's lease manager, when one exists. */
+      leaseManager?: RuntimeLeaseManager;
+      now?: () => number;
+      /** Test seams for the scheduler's timers and runner. */
+      scheduler?: Pick<AutomationSchedulerOptions, "setTimer" | "clearTimer" | "runner">;
       store: AutomationStorage;
     },
   ) {
     this.scheduler = new AutomationScheduler({
       store: options.store,
-      runner: new HeadlessAutomationRunner(options.registry),
+      runner: options.scheduler?.runner ?? new HeadlessAutomationRunner(options.registry),
       gateRunner: new ShellAutomationGateRunner(),
+      now: options.now,
+      setTimer: options.scheduler?.setTimer,
+      clearTimer: options.scheduler?.clearTimer,
     });
     this.inspectionBus = new AutomationInspectionBus(options.store, {
       readRunArtifact: (runId) => this.readRunArtifactSnapshot(runId),
@@ -265,7 +287,6 @@ export class DesktopAutomationService {
         this.handleRegistryEvent(event),
       );
     }
-    this.reconcileStartupRuns();
     // Before the scheduler starts, so a restored restart holds it at once.
     if (!this.unsubscribeRestartGate) {
       this.syncRestartGateHold(this.options.registry.isRestartGateClosed?.() ?? false);
@@ -273,7 +294,38 @@ export class DesktopAutomationService {
         (closed) => this.syncRestartGateHold(closed),
       );
     }
+    this.startSchedulingIfLeaseAcquired();
+  }
+
+  private startSchedulingIfLeaseAcquired(): void {
+    const generation = this.schedulingLeaseRetry.cancel();
+    if (!this.schedulingLeaseHeld) {
+      const leaseManager = this.schedulingLeaseManager();
+      if (leaseManager) {
+        const result = leaseManager.acquire("automations");
+        if (!result.acquired) {
+          automationServiceLog.info("automation scheduling is active in another PwrAgent instance for this profile", {
+            holderInstanceId: result.holder.instanceId,
+            holderProcessId: result.holder.processId,
+          });
+          this.schedulingLeaseRetry.schedule(leaseManager, "automations", generation, async () => {
+            this.startSchedulingIfLeaseAcquired();
+          });
+          return;
+        }
+        automationServiceLog.info("automation scheduling lease acquired", {
+          instanceId: leaseManager.id,
+        });
+      }
+      this.schedulingLeaseHeld = true;
+    }
+    this.reconcileStartupRuns();
     this.scheduler.start();
+  }
+
+  /** Without a process owner (unit tests), this instance schedules alone. */
+  private schedulingLeaseManager(): RuntimeLeaseManager | null {
+    return this.options.leaseManager ?? getExistingRuntimeLeaseManager();
   }
 
   private syncRestartGateHold(closed: boolean): void {
@@ -295,6 +347,11 @@ export class DesktopAutomationService {
 
   dispose(): void {
     this.scheduler.stop();
+    this.schedulingLeaseRetry.cancel();
+    if (this.schedulingLeaseHeld) {
+      this.schedulingLeaseHeld = false;
+      this.schedulingLeaseManager()?.release("automations");
+    }
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
     this.unsubscribeRestartGate?.();
@@ -1476,7 +1533,7 @@ export class DesktopAutomationService {
   }
 
   private reconcileStartupRuns(): void {
-    const now = Date.now();
+    const now = this.options.now?.() ?? Date.now();
     const nextRunAtByAutomationId = Object.fromEntries(
       this.options.store
         .listAutomations()
@@ -1601,9 +1658,10 @@ export class DesktopAutomationService {
   }
 
   private startSchedulerIfEnabled(): void {
-    if (!this.options.runtime?.disabled) {
-      this.scheduler.start();
-    }
+    if (this.options.runtime?.disabled) return;
+    // Another instance holds scheduling; its timer reads the same rows.
+    if (!this.schedulingLeaseHeld && this.schedulingLeaseManager()) return;
+    this.scheduler.start();
   }
 
   private async cancelPendingRunsForAutomation(
