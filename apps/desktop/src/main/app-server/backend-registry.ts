@@ -438,6 +438,7 @@ import {
   type CodexAppServerRecycleStatus,
 } from "../codex-app-server/app-server-recycle-policy";
 import { isCodexInvalidResponseMessageIdError } from "../codex-app-server/invalid-response-message-id-recovery";
+import type { CodexAppServerGenerationPromotion } from "../codex-app-server/app-server-generation-pool";
 import { codexVersionFromUserAgent } from "../codex-app-server/protocol-compatibility";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { OwnerContentSearch } from "../thread-search/owner-content-search";
@@ -1945,6 +1946,9 @@ export class DesktopBackendRegistry {
       get codexBackendSummary() { return current().codexBackendSummary; },
       get codexBackgroundTerminals() { return current().codexRuntimeSupervisor.backgroundTerminalRecords; },
       get codexClient() { return current().codexClient; },
+      codexThreadBoundToAppServer: (threadId: string) => current().codexRuntimeSupervisor.codexThreadBoundToAppServer(threadId),
+      codexThreadNeedsLiveEvents: (threadId: string) => current().codexRuntimeSupervisor.codexThreadNeedsLiveEvents(threadId),
+      handleCodexAppServerGenerationPromoted: (...args: Parameters<typeof this.handleCodexAppServerGenerationPromoted>) => this.handleCodexAppServerGenerationPromoted(...args),
       get codexEnvironmentCommandEnv() { return current().codexEnvironmentCommandEnv; },
       get codexModelProviderCatalog() { return current().codexModelProviderCatalog; },
       get codexModelProviderKeysRead() { return current().codexModelProviderKeysRead; },
@@ -17387,6 +17391,28 @@ export class DesktopBackendRegistry {
    * guessing at the vendor executable taking over — the next discovery names
    * it, and until then silence beats the wrong publisher.
    */
+  /**
+   * A new Codex app server generation took over new work after the
+   * installation under the old one changed (`app-server-generation-pool.ts`).
+   * Describe the version it reported, and forget what was read from the old
+   * process: its models and server capabilities.
+   */
+  private handleCodexAppServerGenerationPromoted(
+    event: CodexAppServerGenerationPromotion,
+  ): void {
+    this.modelCatalog.invalidate("codex");
+    this.tokenMiserServerCapabilities.delete(this.codexClient);
+    const version = event.current?.version;
+    if (this.codexBackendSummary && version) {
+      // Capabilities are derived from the version; describe both for the new server.
+      this.codexBackendSummary = {
+        ...this.codexBackendSummary,
+        serverVersion: version,
+        capabilities: buildCapabilities(this.codexBackendSummary.methods ?? [], "codex", version),
+      };
+    }
+  }
+
   private redescribeCachedCodexRuntime(
     runtime?: ManagedCodexSelectionChange["runtime"],
   ): void {

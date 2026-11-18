@@ -17222,6 +17222,111 @@ describe("CodexAppServerClient", () => {
   });
 
 
+  describe("replaced app server generation", () => {
+    async function generationFixture() {
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const sent = () => transport.sentMessages.map((message) => JSON.parse(message) as { method?: string; params?: { threadId?: string } });
+      return { client, transport, sent };
+    }
+
+    it("reports the file it was launched from with the version the server reported", async () => {
+      const { client, transport } = await generationFixture();
+      transport.processInfo = {
+        pid: 4242,
+        startedAt: 0,
+        executable: { command: "/opt/homebrew/bin/codex", realPath: "/opt/homebrew/Caskroom/codex/0.160.0/codex", ino: 7, version: "0.160.0" },
+      } as typeof transport.processInfo;
+      expect(client.readAppServerExecutable()).toEqual(expect.objectContaining({
+        command: "/opt/homebrew/bin/codex",
+        realPath: "/opt/homebrew/Caskroom/codex/0.160.0/codex",
+        version: MockTransport.serverVersion,
+      }));
+      await client.close();
+      expect(client.readAppServerExecutable()).toBeUndefined();
+    });
+
+    it("retires only once nothing depends on the process, and never starts Codex again", async () => {
+      const { client, transport } = await generationFixture();
+      const idle = { isThreadBusy: () => false };
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "inProgress" },
+      } });
+      await vi.waitFor(async () => expect(await client.retireAppServerWhenIdle(idle))
+        .toEqual({ kind: "busy", blocker: "running-turn" }));
+      expect(client.threadDependsOnAppServer("thread-busy")).toBe(true);
+      transport.emitInbound({ method: "turn/completed", params: {
+        threadId: "thread-busy", turn: { id: "turn-busy", status: "completed" },
+      } });
+      await vi.waitFor(() => expect(client.threadDependsOnAppServer("thread-busy")).toBe(false));
+
+      expect(await client.retireAppServerWhenIdle({ ...idle, blocker: () => "pool-request" }))
+        .toEqual({ kind: "busy", blocker: "pool-request" });
+      transport.loadedThreads.add("thread-codex-active");
+      MockTransport.threadStatusByThreadId.set("thread-codex-active", { type: "active" });
+      try {
+        expect(await client.retireAppServerWhenIdle(idle))
+          .toEqual({ kind: "busy", blocker: "codex-active-thread" });
+      } finally {
+        MockTransport.threadStatusByThreadId.delete("thread-codex-active");
+        transport.loadedThreads.delete("thread-codex-active");
+      }
+      expect(transport.closeCount).toBe(0);
+
+      expect(await client.retireAppServerWhenIdle(idle)).toEqual({ kind: "retired" });
+      expect(transport.closeCount).toBe(1);
+      const connects = transport.connectCount;
+      await expect(client.getInitializeResult()).rejects.toThrow(/retired/);
+      await expect(client.listThreads()).rejects.toThrow(/retired/);
+      expect(transport.connectCount).toBe(connects);
+      expect(await client.retireAppServerWhenIdle(idle)).toEqual({ kind: "retired" });
+    });
+
+    it("waits for owner work on a thread this process has loaded", async () => {
+      const { client, transport } = await generationFixture();
+      await client.startTurn({ threadId: "thread-queued", input: [] });
+      transport.emitInbound({ method: "turn/completed", params: {
+        threadId: "thread-queued", turn: { id: "turn-1", status: "completed" },
+      } });
+      await vi.waitFor(() => expect(client.threadDependsOnAppServer("thread-queued")).toBe(false));
+      let busy = true;
+      expect(await client.retireAppServerWhenIdle({ isThreadBusy: (threadId) => busy && threadId === "thread-queued" }))
+        .toEqual({ kind: "busy", blocker: "registry-work" });
+      busy = false;
+      expect(await client.retireAppServerWhenIdle({ isThreadBusy: () => busy }))
+        .toEqual({ kind: "retired" });
+      await client.close();
+    });
+
+    it("releases a thread to another generation only when no work holds it here", async () => {
+      const { client, transport, sent } = await generationFixture();
+      await client.startTurn({ threadId: "thread-moving", input: [] });
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "thread-moving", turn: { id: "turn-moving", status: "inProgress" },
+      } });
+      await vi.waitFor(() => expect(client.threadDependsOnAppServer("thread-moving")).toBe(true));
+      expect(await client.releaseThread("thread-moving")).toBe(false);
+      expect(sent().some((message) => message.method === "thread/unsubscribe")).toBe(false);
+
+      transport.emitInbound({ method: "turn/completed", params: {
+        threadId: "thread-moving", turn: { id: "turn-moving", status: "completed" },
+      } });
+      await vi.waitFor(() => expect(client.threadDependsOnAppServer("thread-moving")).toBe(false));
+      const subscribed = client.getSubscribedThreadCount();
+      expect(await client.releaseThread("thread-moving")).toBe(true);
+      expect(sent()).toContainEqual(expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-moving" },
+      }));
+      expect(client.getSubscribedThreadCount()).toBe(subscribed - 1);
+      // Nothing subscribed, nothing to release.
+      expect(await client.releaseThread("thread-moving")).toBe(false);
+      await client.close();
+    });
+  });
+
   describe("idle app server recycle", () => {
     const MINUTE = 60_000;
     const settings = {

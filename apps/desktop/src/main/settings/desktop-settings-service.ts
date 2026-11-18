@@ -3266,6 +3266,24 @@ export class DesktopSettingsService {
     };
   }
 
+  /**
+   * The Codex this process runs was replaced in place (a package manager
+   * repointed or rewrote the same command) and a new app server generation
+   * reported `version`. The retained selection keeps its command and source;
+   * only the version it describes moves, so Settings stops naming the build
+   * that was removed. Never probes the machine.
+   */
+  noteRunningCodexVersion(command: string, version: string): void {
+    const session = this.sessionCodexCommand;
+    if (!session || session.command !== command || session.version === version) return;
+    settingsLog.info("retained Codex selection now runs a new version", {
+      source: session.source,
+      ...(session.version ? { previousVersion: session.version } : {}),
+      version,
+    });
+    this.sessionCodexCommand = { ...session, version };
+  }
+
   /** A retained executable can serve this process while discovery checks the next launch. */
   isCodexDiscoveryPending(): boolean {
     if (this.sessionCodexCommand) return false;

@@ -29,6 +29,7 @@ import {
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
+import { readCodexExecutableIdentity, type CodexExecutableIdentity } from "./executable-identity";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
 
@@ -55,7 +56,12 @@ export type CodexAppServerExit = {
 };
 
 /** The running app-server process, for diagnostics and the idle recycle. */
-export type CodexAppServerProcessInfo = { pid: number; startedAt: number };
+export type CodexAppServerProcessInfo = {
+  pid: number;
+  startedAt: number;
+  /** The file it was launched from, read just before the spawn. */
+  executable?: CodexExecutableIdentity;
+};
 
 /** What the last `close()` found below the app server. */
 export type CodexAppServerStopReport = {
@@ -92,6 +98,8 @@ export type StdioJsonRpcTransportOptions = {
   readProcessTable?: ProcessTableReader;
   /** Test seam for signalling surviving descendants and the process group. */
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  /** Test seam for reading the launched executable's identity. */
+  readExecutableIdentity?: (command: string, version?: string) => Promise<CodexExecutableIdentity>;
 };
 
 export { compareCodexCliVersions };
@@ -120,6 +128,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private unsubscribeAuth?: () => void;
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private childStartedAt = 0;
+  private childExecutable?: CodexExecutableIdentity;
   private lastStopReport?: CodexAppServerStopReport;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -233,10 +242,19 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       env: childEnv,
       platform: this.options.platform,
     });
+    // Read before the spawn: a later read could already see a replacement.
+    const executable = await (this.options.readExecutableIdentity ?? readCodexExecutableIdentity)(
+      command.command,
+      command.version,
+    ).catch(() => undefined);
+    this.assertCurrentGeneration(generation);
     codexTransportLog.info("launch app-server", {
       command: command.command,
       source: command.source,
       version: command.version ?? null,
+      ...(executable?.realPath && executable.realPath !== command.command
+        ? { realPath: executable.realPath }
+        : {}),
     });
 
     const child = spawn(invocation.command, invocation.args, {
@@ -248,6 +266,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
     this.childProcess = child;
     this.childStartedAt = Date.now();
+    this.childExecutable = executable;
 
     if (!child.stdin || !child.stdout || !child.stderr) {
       await terminateOwnedProcessTree(child, {
@@ -401,7 +420,13 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   /** The running app server, or `undefined` when none is running. */
   getProcessInfo(): CodexAppServerProcessInfo | undefined {
     const pid = this.childProcess?.pid;
-    return pid ? { pid, startedAt: this.childStartedAt } : undefined;
+    return pid
+      ? {
+        pid,
+        startedAt: this.childStartedAt,
+        ...(this.childExecutable ? { executable: this.childExecutable } : {}),
+      }
+      : undefined;
   }
 
   /** What the most recent `close()` found and reaped, once. */

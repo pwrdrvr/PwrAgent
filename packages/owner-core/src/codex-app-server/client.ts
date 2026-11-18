@@ -186,10 +186,15 @@ import {
   type CodexAppServerRecycleStatus,
 } from "./app-server-recycle-policy";
 import type {
+  CodexAppServerRetirementOutcome,
+  CodexExecutableIdentity,
+} from "./app-server-installation";
+import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
 } from "../thread-title-generation-service";
 import {
+  codexVersionFromUserAgent,
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
   serializeCompatibleDynamicTools,
@@ -7903,6 +7908,8 @@ export class CodexAppServerClient {
   /** Requests from Codex (approvals, user input, tool calls) not yet answered. */
   private pendingServerRequests = 0;
   private recycleStatus: CodexAppServerRecycleStatus = { recycleCount: 0 };
+  /** A newer app server generation replaced this one; it never starts again. */
+  private retired = false;
   /**
    * Threads this connection subscribed to with thread/start, thread/fork or
    * thread/resume, and when each last saw a request or an event. Codex keeps
@@ -8778,6 +8785,121 @@ export class CodexAppServerClient {
       this.host.logger.info("Codex app server recycled while idle", record);
       return { kind: "recycled", record };
     });
+  }
+
+  /**
+   * The file this app server was launched from, with the version it reported,
+   * while it runs. A generation pool compares it with what a launch would use
+   * now (`decideCodexInstallationChange`). It never starts Codex.
+   */
+  readAppServerExecutable(): CodexExecutableIdentity | undefined {
+    if (!this.initialized || this.pendingCloses > 0 || this.retired) return undefined;
+    const executable = this.transport.getProcessInfo?.()?.executable;
+    if (!executable) return undefined;
+    const version = codexVersionFromUserAgent(this.initializeResult?.userAgent) ?? executable.version;
+    return { ...executable, ...(version ? { version } : {}) };
+  }
+
+  /**
+   * Whether the thread has work only this process can finish: a turn, an
+   * unanswered request from Codex, a helper turn, a voice session, or a
+   * first turn whose history exists only here. The owner adds the work it
+   * tracks (queued input, background terminals, reviews).
+   */
+  threadDependsOnAppServer(threadId: string): boolean {
+    return this.threadKeepsSubscription(threadId);
+  }
+
+  /**
+   * Another app server generation now serves this thread. End this
+   * connection's subscription so this process sends nothing more for it and
+   * Codex can unload it here. Best effort: a stopped or retired process holds
+   * nothing, and work that arrived in the meantime keeps the subscription.
+   */
+  async releaseThread(threadId: string): Promise<boolean> {
+    if (!this.initialized || this.pendingCloses > 0 || this.retired) return false;
+    const serverGeneration = this.serverGeneration;
+    return await this.runLifecycle(async () => {
+      if (!this.initialized || serverGeneration !== this.serverGeneration
+        || !this.subscribedThreads.has(threadId)
+        || this.threadKeepsSubscription(threadId)) {
+        return false;
+      }
+      this.subscribedThreads.delete(threadId);
+      this.keptSubAgentThreads.delete(threadId);
+      this.noteThreadUnloaded(threadId);
+      if (this.threadUnsubscribeUnsupported) return false;
+      try {
+        await this.rawConnection.request(
+          "thread/unsubscribe",
+          { threadId },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        );
+        return true;
+      } catch (error) {
+        if (isMethodUnavailableError(error, "thread/unsubscribe")) this.threadUnsubscribeUnsupported = true;
+        else this.host.logger.warn("Codex thread release from a replaced app server failed", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+    });
+  }
+
+  /**
+   * Stop this app server for good once nothing depends on it, after a newer
+   * generation replaced it. Busy means a turn, request, helper turn, voice
+   * session or unstarted first turn here, an in-flight RPC, owner work on a
+   * thread it has loaded (`isThreadBusy`), or Codex reporting a thread of this
+   * process active. The last two are checked again under the lifecycle
+   * barrier, where no new RPC can start. A retired client refuses to start
+   * Codex again, so a late caller cannot revive an obsolete installation.
+   */
+  async retireAppServerWhenIdle(params: {
+    isThreadBusy: (threadId: string) => boolean;
+    /** The caller's own work on this process, such as calls not yet admitted. */
+    blocker?: () => string | undefined;
+  }): Promise<CodexAppServerRetirementOutcome> {
+    if (this.retired) return { kind: "retired" };
+    const blocker = (includeRequests: boolean): string | undefined => {
+      if (this.initializationPromise && !this.initialized) return "starting";
+      const owner = params.blocker?.();
+      if (owner) return owner;
+      const local = this.appServerRecycleBlocker(includeRequests);
+      if (local && local !== "not-running") return local;
+      if (this.pendingHelperThreadStarts.size > 0 || this.helperTurnWaiters.size > 0) return "helper-turn";
+      for (const threadId of this.subscribedThreads.keys()) {
+        if (params.isThreadBusy(threadId)) return "registry-work";
+      }
+      return undefined;
+    };
+    const early = blocker(true);
+    if (early) return { kind: "busy", blocker: early };
+    try {
+      return await this.runLifecycle<CodexAppServerRetirementOutcome>(async () => {
+        if (this.retired) return { kind: "retired" };
+        let late = blocker(false);
+        if (!late && this.initialized && this.pendingCloses === 0) {
+          late = (await this.listTurnsBlockingProcessStop()).length > 0
+            ? "codex-active-thread"
+            : blocker(false);
+        }
+        if (late) return { kind: "busy", blocker: late };
+        this.retired = true;
+        const info = this.transport.getProcessInfo?.();
+        await this.closeConnection();
+        this.host.logger.info("replaced Codex app server retired", {
+          ...(info ? { pid: info.pid, uptimeMs: Math.max(0, this.now() - info.startedAt) } : {}),
+        });
+        return { kind: "retired" };
+      });
+    } catch (error) {
+      this.host.logger.warn("replaced Codex app server retirement check failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { kind: "busy", blocker: "error" };
+    }
   }
 
   /** Work on this process that a stop would cut short, by name. */
@@ -12579,6 +12701,7 @@ export class CodexAppServerClient {
   }
 
   private async ensureInitialized(): Promise<void> {
+    if (this.retired) throw new Error("codex app server generation retired");
     if (this.rejectedCodexHome && !this.options.authenticationRecovery) {
       this.host.authState.assertAvailable(this.rejectedCodexHome);
     }

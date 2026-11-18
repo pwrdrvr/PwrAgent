@@ -1,9 +1,12 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
 import type { CodexAppServerClient } from "./desktop-client";
 
-type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
+export type CodexClientRoute =
+  "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
+type Route = CodexClientRoute;
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
-const ROUTES: Record<keyof CodexAppServerClient, Route> = {
+// The app server generation pool routes by the same table.
+export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   close: "all",
   getAppServerRestartStatus: "primary",
   onAppServerRestartStatusChanged: "primary",
@@ -12,6 +15,11 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   resetAppServerRestarts: "all",
   readAppServerProcessSample: "primary",
   getAppServerRecycleStatus: "primary",
+  // A generation pool's own lifecycle; each runtime has one.
+  readAppServerExecutable: "primary",
+  threadDependsOnAppServer: "primary",
+  releaseThread: "primary",
+  retireAppServerWhenIdle: "primary",
   // Each runtime owns a process; each decides from its own sample.
   maybeRecycleIdleAppServer: "all",
   getSubscribedThreadCount: "primary",
@@ -94,6 +102,7 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   steerTurn: "thread",
   isAuthenticationRequired: "primary",
 };
+const ROUTES = CODEX_CLIENT_ROUTES;
 
 type Method = keyof CodexAppServerClient;
 type Callback = (...args: unknown[]) => unknown;
@@ -134,11 +143,8 @@ export function createProviderRuntimeClient(
       ?? primary.reportedModelProviderForThread?.(threadId)
       ?? [...runtimes.values()].map((client) => client.reportedModelProviderForThread?.(threadId)).find(Boolean);
   const observe = (value: unknown, runtimeProvider?: string): void => {
-    const fields = record(value);
-    if (!fields) return;
-    const thread = record(fields.thread);
-    const id = typeof fields.threadId === "string" ? fields.threadId : thread?.id;
-    if (typeof id === "string") owners.set(id, runtimeProvider ?? providerForThread(id));
+    const id = threadIdOf(value);
+    if (id) owners.set(id, runtimeProvider ?? providerForThread(id));
   };
   const attach = (client: CodexAppServerClient, provider?: string): void => {
     client.onNotification((notification) => observe(notification.params, provider));
@@ -153,9 +159,13 @@ export function createProviderRuntimeClient(
         if ((owner ? runtimes.get(owner) : undefined) !== (client === primary ? undefined : client)) return;
       }
       return callback(...values);
-    }] : subscription.method === "onAppServerUnexpectedExit" ? [() => {
-      const affected = new Set([...owners].filter(([, owner]) =>
-        provider ? owner === provider : !owner || !runtimes.has(owner)).map(([id]) => id));
+    }] : subscription.method === "onAppServerUnexpectedExit" ? [(threadIds?: ReadonlySet<string>) => {
+      const ownedHere = (owner: string | undefined): boolean =>
+        provider ? owner === provider : !owner || !runtimes.has(owner);
+      // A generation pool names the threads of the one process that exited.
+      const affected = threadIds
+        ? new Set([...threadIds].filter((id) => ownedHere(owners.get(id))))
+        : new Set([...owners].filter(([, owner]) => ownedHere(owner)).map(([id]) => id));
       return callback(affected);
     }] : subscription.method === "onRequest" && provider ? [(value: unknown) => {
       const request = record(value);
@@ -262,7 +272,14 @@ export function createProviderRuntimeClient(
   });
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
+/** The thread a notification, request or result names, as `threadId` or `thread.id`. */
+export function threadIdOf(value: unknown): string | undefined {
+  const fields = record(value);
+  const id = fields?.threadId ?? record(fields?.thread)?.id;
+  return typeof id === "string" ? id : undefined;
+}
+
+export function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
 }

@@ -502,6 +502,44 @@ describe("DesktopSettingsService", () => {
       .toBeUndefined();
   });
 
+  it("credits an in-place upgrade once a new app server generation runs it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "", "utf8");
+    const cellarBin = path.join(root, "opt", "Cellar", "codex", "0.152.0", "bin");
+    fs.mkdirSync(cellarBin, { recursive: true });
+    fs.writeFileSync(path.join(cellarBin, "codex"), "");
+    const shim = path.join(root, "bin-codex");
+    fs.symlinkSync(path.join(cellarBin, "codex"), shim);
+    const service = new DesktopSettingsService({
+      configPath, env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: new CodexDiscoveryCoordinator({
+        resolveEnv: async () => ({}),
+        discover: async () => ({
+          candidates: [{ command: shim, source: "path", executable: true, selected: true, version: "0.152.0" }],
+          selectedCommand: shim,
+          selectedSource: "path",
+        }),
+      }),
+    });
+    await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
+    // The running session keeps this selection.
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: shim, version: "0.152.0" });
+    expect((await service.readSettingsProjection()).models.codex.versionAdvisory)
+      .toEqual(expect.objectContaining({ version: "0.152.0" }));
+
+    // Another command's report is not this selection's.
+    service.noteRunningCodexVersion("/elsewhere/codex", "0.170.0");
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({ version: "0.152.0" });
+
+    service.noteRunningCodexVersion(shim, "0.170.0");
+    await expect(service.resolveCodexCommand()).resolves.toEqual({ command: shim, source: "path", version: "0.170.0" });
+    const discovery = (await service.readSettingsProjection()).models.codex;
+    expect(discovery.versionAdvisory).toBeUndefined();
+    expect(discovery.discovery.candidates[0]).toEqual(expect.objectContaining({ command: shim, version: "0.170.0" }));
+  });
+
   it("refreshes the saved Codex path, version, rejection, and auto selection before returning", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
