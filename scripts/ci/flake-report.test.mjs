@@ -31,11 +31,11 @@ test("E2E identifies first unexpected outcomes and matches retry results by ID",
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
   const expected = expectedSlices(3);
-  assert.equal(expected.length, 32);
+  assert.equal(expected.length, 36);
   const slice = createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 2, first: null, retries: [] });
   const report = aggregateSlices({ slices: [slice], samples: 3, runId: "123", attempt: "2" });
   assert.equal(report.slices.length, 1);
-  assert.equal(report.missingSlices.length, 31);
+  assert.equal(report.missingSlices.length, 35);
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
@@ -84,6 +84,35 @@ test("the expected slice inventory follows every configured workflow matrix", as
   assert.match(workflow, /sample: \$\{\{ fromJSON\(contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:windows-shutdown-diagnostics'\) && '\[1, 2, 3\]' \|\| '\[1\]'\) \}\}/);
 });
 
+test("macOS starts eight distinct first attempts and still gates on completion", async () => {
+  const { readFileSync } = await import("node:fs");
+  const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+  const macos = workflow.split("\n  desktop-e2e-macos:\n")[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+  const steps = macos.split("\n      - name: ");
+  const first = steps.find((step) => step.includes("id: e2e-tests"));
+  const verify = steps.find((step) => step.startsWith("Verify the E2E slice completed\n"));
+  const retry = steps.find((step) => step.includes("id: e2e-retry"));
+  assert.match(macos, /lane: \[1, 2, 3, 4, 5, 6, 7, 8\]/);
+  assert.doesNotMatch(macos, /PWTEST_SHARD_WEIGHTS/);
+  assert.doesNotMatch(steps[0], /continue-on-error:/);
+  assert.match(first, /test:e2e\n\s+--shard=\$\{\{ matrix\.lane \}\}\/\$\{\{ strategy\.job-total \}\}\n\s+--retries=0\s*$/);
+  assert.match(verify, /if: steps\.e2e-tests\.outcome == 'success'\n\s+run: node scripts\/ci\/run-retry-failures\.mjs e2e-first-verify\s*$/);
+  assert.match(retry, /--last-failed --retries=0 --trace=retain-on-failure\s*$/);
+  assert.doesNotMatch(retry, /--shard/);
+  assert.match(macos, /name: desktop-e2e-macos-lane-\$\{\{ matrix\.lane \}\}-artifacts/);
+});
+
+test("every added macOS E2E lane is required in the retry inventory", () => {
+  const inventory = expectedSlices();
+  for (const lane of [5, 6, 7, 8]) {
+    const key = `e2e-macos-lane-${lane}-sample-1`;
+    const slices = inventory.filter((slice) => slice.key !== key)
+      .map((slice) => createSlice({ ...slice, first: null, retries: [] }));
+    const report = aggregateSlices({ slices });
+    assert.deepEqual(report.missingSlices.map((slice) => slice.key), [key]);
+  }
+});
+
 test("the CLI produces a consolidated report including incomplete and absent slices", async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -106,8 +135,8 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const aggregate = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1" }, encoding: "utf8" });
       assert.equal(aggregate.status, 0, aggregate.stderr);
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(result.expectedSlices, 24);
-      assert.equal(result.missingSlices.length, 23);
+      assert.equal(result.expectedSlices, 28);
+      assert.equal(result.missingSlices.length, 27);
       const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
       assert.equal(skipped.status, 0, skipped.stderr);
       assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);
@@ -149,7 +178,7 @@ test("the job summary counts every unavailable or incomplete first report even w
       const result = spawnSync(process.execPath, [script, "aggregate"], { cwd, encoding: "utf8", env: { ...process.env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: String(incomplete + 1), GITHUB_STEP_SUMMARY: summary } });
       assert.equal(result.status, 0, result.stderr);
       const content = readFileSync(summary, "utf8");
-      assert.match(content, /Slices received: 24\/24; missing: 0/);
+      assert.match(content, /Slices received: 28\/28; missing: 0/);
       assert.ok(content.includes(`Download the \`ci-flake-report-${incomplete + 1}\` artifact`));
       assert.match(content, new RegExp(`First reports unavailable or incomplete: ${incomplete}\\.`));
       if (incomplete > 0) assert.match(content, /failure counts may be incomplete/i);

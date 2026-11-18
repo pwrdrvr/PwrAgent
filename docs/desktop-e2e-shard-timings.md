@@ -1,7 +1,11 @@
 # Desktop E2E shard allocation
 
-The shared `PWTEST_SHARD_WEIGHTS` changes from `9:12:12:14` to `83:82:67:88`.
-The current suite collects 320 tests in 168 groups: 68 individual a11y groups
+This records the historical four-lane fit. Linux and Windows retain the refit
+weights. For the macOS eight-lane allocation, see the
+[macOS timing study](macos-desktop-e2e-timings.md#november-18-eight-lane-allocation).
+
+The shared `PWTEST_SHARD_WEIGHTS` changed from `9:12:12:14` to `83:82:67:88`.
+The measured suite collected 320 tests in 168 groups: 68 individual a11y groups
 and 100 other spec-file groups. The old allocation collects 62/85/79/94 tests;
 the refit collects 83/82/67/88 on every platform, including platform skips.
 

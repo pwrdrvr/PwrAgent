@@ -1,6 +1,21 @@
 # macOS Desktop E2E timing study
 
-Measurements use GitHub-hosted `macos-26` VMs. The studies below retain the 15-minute limit, one Playwright worker, existing retry policy, four lanes, software rendering, and shutdown circuit. The older Spotlight study used `9:12:12:14` shard weights; the November investigation used `83:82:67:88`.
+Measurements use GitHub-hosted `macos-26` VMs. The four-lane studies retain the 15-minute limit, one Playwright worker, existing retry policy, software rendering, and shutdown circuit. The older Spotlight study used `9:12:12:14` shard weights, and the November investigations used `83:82:67:88`.
+
+## November 18: eight-lane allocation
+
+[Lane 1 of run 44374979692, attempt 1](https://github.com/pwrdrvr/PwrAgent/actions/runs/44374979692/job/135051840603) ran for 15:08, with 1:49 before the test step. It reported 100 passed, one interrupted and four did not run. `a11y.spec.ts` accounted for about 10.4 minutes. The [required Desktop E2E check](https://github.com/pwrdrvr/PwrAgent/actions/runs/44374979692/job/135061530385) failed because the macOS matrix was cancelled. This is one deadline failure on the four-lane setup.
+
+The macOS matrix now runs eight default count shards. With global `fullyParallel: false`, sequential files still form indivisible groups. `a11y.spec.ts` already opts into Playwright's per-test grouping, and each audit owns its Electron launch. The existing grouping allows several VMs to share that file while each VM still uses one worker. CI compares the union of all eight Playwright collections with the unsharded test IDs, including platform skips, and requires the accessibility tests to span multiple lanes.
+
+Applying Playwright's count-and-group allocator to the [older 320-test timing input](desktop-e2e-shard-durations.json) yields the following model. Figures sum median test durations and exclude queue, setup, build, bootstrap and reporting. The eight-lane model assigns 40 and 28 accessibility tests to the first two lanes respectively.
+
+| Plan | Modeled test time by lane (seconds) | Longest lane |
+| --- | --- | ---: |
+| Four lanes, `83:82:67:88` | 329.6 / 333.6 / 351.6 / 344.0 | 351.6s |
+| Eight lanes, equal count weights | 174.6 / 148.8 / 154.7 / 179.3 / 165.7 / 227.2 / 171.2 / 137.3 | 227.2s |
+
+More runners reduce the serial work on the critical path when capacity is available. Eight jobs repeat checkout, install, build and the Electron canary eight times. With four free runners, the rest queue for another wave. A single large sequential file or long audit test still sets a floor on its lane, and count-based allocation can leave unequal runtimes. The model estimates test load for a historical inventory. Hosted job timings include the current inventory and runner variability.
 
 ## November 15: lane 2 deadline investigation
 
