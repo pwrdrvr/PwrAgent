@@ -3,7 +3,7 @@ import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchI
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
-import { approachTitle, excerpt, formatClock, RESEARCH_FOCUSED_CHILD_PREFIX, researchApproachStateLabel, researchItemText, researchLabel, researchReviewStatusLabel, type ResearchRunView } from "./research-view-model";
+import { approachTitle, excerpt, formatClock, RESEARCH_FOCUSED_CHILD_PREFIX, researchApproachStateLabel, researchItemText, researchLabel, researchReviewStatusLabel, researchSourceLabel, type ResearchRunView } from "./research-view-model";
 
 const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> = {
   open: "Release / reopen", claimed: "Claim", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancel item",
@@ -91,6 +91,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
         {item.work.state !== "open" && <span className={`research-chip${["in_progress", "claimed", "assigned"].includes(item.work.state) ? " research-chip--live" : ""}`}>Progress: {researchLabel(item.work.state)}</span>}
       </div>
       <p className="research-detail__text">{item.type === "approach" ? item.record.task : item.record.text}</p>
+      {run.harness && item.type !== "approach" && <p className="research-muted">{researchSourceLabel(run, item.id)}</p>}
       {item.work.note && <p className="research-muted">{item.work.note}</p>}
       {related && "relation" in record && <button type="button" className="research-link" onClick={() => onOpenItem(related.id)}>{researchLabel(record.relation ?? "related")}: {excerpt(researchItemText(related), 80)}</button>}
       {source && <button type="button" className="research-link" onClick={() => onOpenItem(source.id)}>Investigates: {excerpt(researchItemText(source), 80)}</button>}

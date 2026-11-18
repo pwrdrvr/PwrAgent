@@ -44,7 +44,11 @@ export interface ResearchStorage {
   changes(id: string, sinceRevision?: number, after?: ResearchChangesCursor, limit?: number): ResearchChangePage | undefined;
   search(id: string, query: ResearchSearchQuery): ResearchSearchPage;
   findCommand(id: string, commandId: string): ResearchEvent | undefined;
+  /** The immutable receipt of one source record, read by its source sequence. */
+  harnessRecord(id: string, seq: number): ResearchEvent | undefined;
   create(id: string, startKey: string, event: ResearchEvent): void;
   /** Compare-and-append atomically. False when the command was already recorded; a conflicting duplicate is refused. */
   append(id: string, revision: number, event: ResearchEvent): boolean;
+  /** A bounded service-record page and its cursor commit together. */
+  appendBatch(id: string, revision: number, events: ResearchEvent[]): void;
 }

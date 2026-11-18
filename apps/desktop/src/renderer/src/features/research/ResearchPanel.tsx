@@ -4,6 +4,8 @@ import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { ResearchItemDetail } from "./ResearchItemDetail";
+import { ResearchHarnessForm } from "./ResearchHarnessForm";
+import { ResearchDiscoveryPanel } from "./ResearchDiscoveryPanel";
 import { EMPTY_RESEARCH_ITEMS_QUERY, ResearchItemsPanel, type ResearchItemsQuery } from "./ResearchItemsPanel";
 import { ResearchReviewView } from "./ResearchReviewView";
 import { ResearchRunCard } from "./ResearchRunCard";
@@ -17,7 +19,8 @@ const VIEWS = [
   { id: "map", label: "Map" }, { id: "findings", label: "Findings" }, { id: "review", label: "Review" },
   { id: "items", label: "Items" }, { id: "activity", label: "Activity" },
 ] as const;
-type View = typeof VIEWS[number]["id"];
+const DISCOVERY_VIEWS = [{ id: "discovery", label: "Discovery" }, { id: "activity", label: "Activity" }] as const;
+type View = typeof VIEWS[number]["id"] | typeof DISCOVERY_VIEWS[number]["id"];
 
 /** Wall-clock time for countdowns, ticking only while something on screen is live. */
 function useNow(live: boolean): number {
@@ -43,6 +46,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [harnessForm, setHarnessForm] = useState(false);
   const [openItemId, setOpenItemId] = useState<string>();
   const [returnFocusId, setReturnFocusId] = useState<string>();
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
@@ -61,6 +65,8 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
   const writable = Boolean(run && state.writableRunIds.includes(run.id));
   const live = Boolean(run && isResearchRunLive(run));
+  const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : VIEWS;
+  const currentView: View = views.some((entry) => entry.id === view) ? view : views[0]!.id;
 
   function selectRun(id: string) {
     setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError("");
@@ -124,13 +130,13 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     } catch (failure) { setError(message(failure)); }
   }
   function onTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const index = VIEWS.findIndex((entry) => entry.id === view);
-    const next = event.key === "ArrowRight" ? (index + 1) % VIEWS.length : event.key === "ArrowLeft" ? (index - 1 + VIEWS.length) % VIEWS.length
-      : event.key === "Home" ? 0 : event.key === "End" ? VIEWS.length - 1 : -1;
+    const index = views.findIndex((entry) => entry.id === currentView);
+    const next = event.key === "ArrowRight" ? (index + 1) % views.length : event.key === "ArrowLeft" ? (index - 1 + views.length) % views.length
+      : event.key === "Home" ? 0 : event.key === "End" ? views.length - 1 : -1;
     if (next < 0) return;
     event.preventDefault();
-    chooseView(VIEWS[next]!.id);
-    document.getElementById(`${tabsId}-${VIEWS[next]!.id}`)?.focus();
+    chooseView(views[next]!.id);
+    document.getElementById(`${tabsId}-${views[next]!.id}`)?.focus();
   }
 
   if (remote) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Open this thread on its owning instance to inspect its research runs.</p></section>;
@@ -143,8 +149,10 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   return <section className="context-panel__section research-panel" aria-label="Research">
     <div className="research-heading">
       <h3>Research</h3>
+      {api.startResearchHarness && <button type="button" className="research-button" onClick={() => setHarnessForm(!harnessForm)} aria-expanded={harnessForm}>Harness…</button>}
       {!firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
     </div>
+    {harnessForm && <ResearchHarnessForm api={api} thread={identity} onStarted={() => setHarnessForm(false)} />}
     {showForm && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
       onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
@@ -161,26 +169,27 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }} />
       <div className="research-tabs" role="tablist" aria-label="Research views" onKeyDown={onTabKeyDown}>
-        {VIEWS.map((entry) => <button type="button" role="tab" key={entry.id} id={`${tabsId}-${entry.id}`} aria-selected={view === entry.id}
-          aria-controls={`${tabsId}-panel`} tabIndex={view === entry.id ? 0 : -1} onClick={() => chooseView(entry.id)}>
+        {views.map((entry) => <button type="button" role="tab" key={entry.id} id={`${tabsId}-${entry.id}`} aria-selected={currentView === entry.id}
+          aria-controls={`${tabsId}-panel`} tabIndex={currentView === entry.id ? 0 : -1} onClick={() => chooseView(entry.id)}>
           {entry.label}{entry.id === "review" && reviewCount > 0 && <><span className="research-sr-only">,</span>{" "}<span className="research-tab-count">{reviewCount}</span>{" "}<span className="research-sr-only">to review</span></>}
         </button>)}
       </div>
-      <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${view}`} className="research-tabpanel">
-        {(view === "map" || view === "findings" || view === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"
-          placeholder={view === "map" ? "Filter approaches and findings" : view === "findings" ? "Filter findings" : "Filter activity"} value={filter} onChange={(event) => setFilter(event.target.value)} />}
-        {view === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={openItem}
+      <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">
+        {(currentView === "map" || currentView === "findings" || currentView === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"
+          placeholder={currentView === "map" ? "Filter approaches and findings" : currentView === "findings" ? "Filter findings" : "Filter activity"} value={filter} onChange={(event) => setFilter(event.target.value)} />}
+        {currentView === "discovery" && run.harness?.discovery && <ResearchDiscoveryPanel key={run.id} snapshot={run.harness.discovery} />}
+        {currentView === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={openItem}
           onShowApproachItems={(approachId) => { setItemsQuery({ ...EMPTY_RESEARCH_ITEMS_QUERY, approachId }); setOpenItemId(undefined); setView("items"); }} />}
-        {view === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
-        {view === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={Boolean(api.openResearchEvidence)}
+        {currentView === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
+        {currentView === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={Boolean(api.openResearchEvidence)}
           onReview={(submissionId, decision, reason) => update({ action: "review", submissionId, decision, reason })}
           onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
-        {view === "items" && (openItemId
-          ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable} coordinator={coordinator}
+        {currentView === "items" && (openItemId
+          ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable && !run.harness} coordinator={coordinator}
             onBack={() => { setReturnFocusId(openItemId); setOpenItemId(undefined); }} onOpenItem={openItem} />
           : <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run}
             query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} onFocusReturned={() => setReturnFocusId(undefined)} />)}
-        {view === "activity" && <ResearchActivityView key={run.id} api={api} thread={identity} run={run} filter={filter} onOpenItem={openItem} />}
+        {currentView === "activity" && <ResearchActivityView key={run.id} api={api} thread={identity} run={run} filter={filter} onOpenItem={openItem} />}
       </div>
     </>}
   </section>;

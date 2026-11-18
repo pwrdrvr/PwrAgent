@@ -1,14 +1,61 @@
 import { ResearchService, type ResearchPorts } from "@pwragent/owner-core/research-service";
-import { RESEARCH_BOARD_PAGE, type ResearchActor, type ResearchCommand, type StartResearchRequest, type ResearchAssignRequest, type ResearchSearchQuery, type ResearchItem } from "@pwragent/shared";
+import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-service";
+import { probeResearchModel, researchModelRequest } from "@pwragent/owner-core/research-model-adapter";
+import { getDesktopConfigStore } from "../settings/config-store/desktop-config-store-singleton";
+import { readResearchHarnessConfig } from "../settings/config-store/research-runtime-config";
+import { openResearchHarnessProcess } from "./research-harness-process";
+import { createHarnessModelTransport, selectHarnessModel } from "./research-harness-model";
+import type { ResearchHarnessStatus } from "@pwragent/shared";
+import { RESEARCH_BOARD_PAGE } from "@pwragent/shared";
+import type { ResearchActor, ResearchCommand, StartResearchRequest, ResearchAssignRequest, ResearchSearchQuery, ResearchItem } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
 import { createResearchStorage } from "../storage/desktop-runtime-storage";
 
 let service: ResearchService | undefined;
+let harness: ResearchHarnessService | undefined;
+
+export function researchHarnessStatus(): ResearchHarnessStatus {
+  const config = readResearchHarnessConfig(getDesktopConfigStore());
+  let endpointOrigin: string | undefined;
+  try { if (config?.endpoint) endpointOrigin = new URL(config.endpoint).origin; } catch { /* Execution validation reports invalid endpoints; observation stays available. */ }
+  return { configured: Boolean(config?.command), model: config?.model, endpointOrigin };
+}
+export function getResearchHarnessService(): ResearchHarnessService {
+  if (!harness) throw new Error("Research Harness owner has not started");
+  return harness;
+}
 
 export function initializeResearchRuntime(ports: ResearchPorts): ResearchService {
   if (service) return service;
-  service = new ResearchService(createResearchStorage(), ports);
+  const storage = createResearchStorage();
+  const models = new Map<string, { model: string; complete: ReturnType<typeof createHarnessModelTransport> }>();
+  harness = new ResearchHarnessService(storage, {
+    ...ports,
+    open: (workspace, id, mode) => {
+      const config = readResearchHarnessConfig(getDesktopConfigStore());
+      if (!config?.command) throw new Error("Configure research.harness in this profile's config.toml");
+      const selectedModel = selectHarnessModel(config, mode);
+      let modelBusy = false;
+      const connection = openResearchHarnessProcess(config, workspace, async (method, params, signal) => {
+        const run = storage.header(id);
+        const model = models.get(id);
+        if (method !== "model_complete" || !model || modelBusy || ports.enabled?.() === false || run?.status !== "running" || run.harness?.state !== "running" || Date.now() >= run.deadlineAt) throw new Error("Research model admission unavailable");
+        modelBusy = true;
+        try { return await model.complete(researchModelRequest(model.model, params.messages), signal); }
+        finally { modelBusy = false; }
+      }, ports.onError);
+      if (selectedModel) models.set(id, selectedModel);
+      return { ...(selectedModel ? { model: { model: selectedModel.model, endpointOrigin: selectedModel.endpointOrigin } } : {}),
+        request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
+    },
+    probe: async (id, signal) => {
+      const model = models.get(id);
+      if (!model) throw new Error("Configure an explicit hosted model endpoint before Harness execution");
+      await probeResearchModel(model.complete, model.model, signal);
+    },
+  });
+  service = new ResearchService(storage, { ...ports, stopHarness: (id, actor, outcome, reason) => getResearchHarnessService().stop(id, actor, outcome, reason) });
   service.initialize();
   return service;
 }
@@ -16,10 +63,13 @@ export function getResearchService(): ResearchService {
   if (!service) throw new Error("Research owner has not started");
   return service;
 }
-export function closeResearchRuntime(): void {
+export async function closeResearchRuntime(): Promise<void> {
   const current = service;
   service = undefined;
+  const closing = harness?.close();
+  harness = undefined;
   current?.close();
+  await closing;
 }
 
 export function createResearchAgentHandler(current: ResearchService, isLive: (context: AgentToolCallContext) => boolean, enabled: () => boolean = () => false): ResearchAgentHandler {
