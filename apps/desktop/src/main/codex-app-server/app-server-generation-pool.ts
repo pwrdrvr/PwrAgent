@@ -5,7 +5,7 @@ import {
 } from "@pwragent/owner-core/codex-app-server/app-server-installation";
 import type { CodexAppServerClient } from "./desktop-client";
 import { readCodexExecutableIdentity } from "./executable-identity";
-import { CODEX_CLIENT_ROUTES } from "./provider-runtime-client";
+import { CODEX_CLIENT_ROUTES, record, threadIdOf } from "./provider-runtime-client";
 
 /**
  * Codex app server generations: replace the process when the installation
@@ -139,11 +139,11 @@ export function createCodexAppServerGenerationPool(
   const live = (): Generation[] => generations.filter((generation) => generation.state !== "retired");
   // Clients a call may reach: an exited one would start its process again.
   const serving = (): Generation[] => live().filter((generation) => generation.state !== "exited");
-  const threadIdOf = (value: unknown): string | undefined => {
-    const fields = record(value);
-    const id = fields?.threadId ?? record(fields?.thread)?.id;
-    return typeof id === "string" ? id : undefined;
-  };
+  // Each generation numbers its own requests from Codex; later ones are prefixed.
+  const requestIdIn = (generation: Generation, requestId: unknown): unknown =>
+    generation.id === 1 || requestId === undefined || requestId === null
+      ? requestId
+      : `g${generation.id}:${String(requestId)}`;
   const ownedThreads = (generation: Generation): string[] =>
     [...owners].filter(([, owner]) => owner === generation).map(([threadId]) => threadId);
 
@@ -207,6 +207,15 @@ export function createCodexAppServerGenerationPool(
         const params = record(notification)?.params;
         if (generation !== current && TERMINAL_EVENTS.has(method)) scheduleRetirement(generation, retireSettleMs);
         if (!accept(generation, method, params)) return;
+        // A resolution names the request as Codex numbered it; match the ID the
+        // request was delivered under, or its pending entry never clears.
+        const resolved = method === "serverRequest/resolved" ? record(params) : undefined;
+        if (resolved && "requestId" in resolved && generation.id !== 1) {
+          return callback({
+            ...record(notification),
+            params: { ...resolved, requestId: requestIdIn(generation, resolved.requestId) },
+          });
+        }
         return callback(notification);
       }];
     } else if (subscription.method === "onRequest") {
@@ -217,7 +226,7 @@ export function createCodexAppServerGenerationPool(
         const threadId = threadIdOf(params);
         if (threadId && !owners.has(threadId)) owners.set(threadId, generation);
         if (!request || !params || generation.id === 1) return callback(value);
-        const copy = { ...request, params: { ...params, requestId: `g${generation.id}:${String(params.requestId)}` } };
+        const copy = { ...request, params: { ...params, requestId: requestIdIn(generation, params.requestId) } };
         const flushed = (request as { responseFlushed?: unknown }).responseFlushed;
         if (flushed) Object.defineProperty(copy, "responseFlushed", { value: flushed });
         return callback(copy);
@@ -358,6 +367,12 @@ export function createCodexAppServerGenerationPool(
         if (startedEpoch !== epoch || from !== current || (candidate.state as GenerationState) === "retired") {
           finalize(candidate, "closed");
           return;
+        }
+        // A misread (a transient stat failure) can report a change that is
+        // not there. A candidate running the very same file replaces nothing.
+        const started = candidate.client.readAppServerExecutable?.();
+        if (started && !decideCodexInstallationChange(launched, { ...started, command: launched.command })) {
+          throw new Error("the new app server runs the same executable as the one it would replace");
         }
         promote(candidate, reason, launched);
       } catch (error) {
@@ -526,12 +541,11 @@ export function createCodexAppServerGenerationPool(
         return dispatch(method, typeof threadId === "string" ? threadId : undefined, args);
       };
       if (route === "model" || NEW_WORK.has(method)) return (...args: unknown[]) => dispatch(method, undefined, args);
-      return (...args: unknown[]) => invoke(current.client, method, args);
+      return (...args: unknown[]) => {
+        // Startup discovery and listings start Codex too; look after them as well.
+        ensureTimer();
+        return invoke(current.client, method, args);
+      };
     },
   }) as CodexAppServerClient & CodexAppServerGenerationControls;
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown> : undefined;
 }

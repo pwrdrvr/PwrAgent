@@ -103,8 +103,6 @@ export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   isAuthenticationRequired: "primary",
 };
 const ROUTES = CODEX_CLIENT_ROUTES;
-// Generation pool controls (`app-server-generation-pool.ts`): every runtime's pool acts.
-const POOL_CONTROLS = new Set(["checkAppServerInstallation"]);
 
 type Method = keyof CodexAppServerClient;
 type Callback = (...args: unknown[]) => unknown;
@@ -145,11 +143,8 @@ export function createProviderRuntimeClient(
       ?? primary.reportedModelProviderForThread?.(threadId)
       ?? [...runtimes.values()].map((client) => client.reportedModelProviderForThread?.(threadId)).find(Boolean);
   const observe = (value: unknown, runtimeProvider?: string): void => {
-    const fields = record(value);
-    if (!fields) return;
-    const thread = record(fields.thread);
-    const id = typeof fields.threadId === "string" ? fields.threadId : thread?.id;
-    if (typeof id === "string") owners.set(id, runtimeProvider ?? providerForThread(id));
+    const id = threadIdOf(value);
+    if (id) owners.set(id, runtimeProvider ?? providerForThread(id));
   };
   const attach = (client: CodexAppServerClient, provider?: string): void => {
     client.onNotification((notification) => observe(notification.params, provider));
@@ -236,16 +231,6 @@ export function createProviderRuntimeClient(
   attach(primary);
   return new Proxy(primary, {
     get(target, property) {
-      if (typeof property === "string" && POOL_CONTROLS.has(property)) {
-        const control = Reflect.get(target, property, target);
-        if (typeof control !== "function") return control;
-        return async () => {
-          await Promise.allSettled([primary, ...runtimes.values()].map((client) => {
-            const run = Reflect.get(client, property, client);
-            return typeof run === "function" ? (run as Callback).call(client) : undefined;
-          }));
-        };
-      }
       if (typeof property !== "string" || !Object.hasOwn(ROUTES, property)
         || typeof Reflect.get(target, property, target) !== "function") return Reflect.get(target, property, target);
       const method = property as Method;
@@ -287,7 +272,14 @@ export function createProviderRuntimeClient(
   });
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
+/** The thread a notification, request or result names, as `threadId` or `thread.id`. */
+export function threadIdOf(value: unknown): string | undefined {
+  const fields = record(value);
+  const id = fields?.threadId ?? record(fields?.thread)?.id;
+  return typeof id === "string" ? id : undefined;
+}
+
+export function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
 }

@@ -17404,7 +17404,12 @@ export class DesktopBackendRegistry {
     this.tokenMiserServerCapabilities.delete(this.codexClient);
     const version = event.current?.version;
     if (this.codexBackendSummary && version) {
-      this.codexBackendSummary = { ...this.codexBackendSummary, serverVersion: version };
+      // Capabilities are derived from the version; describe both for the new server.
+      this.codexBackendSummary = {
+        ...this.codexBackendSummary,
+        serverVersion: version,
+        capabilities: buildCapabilities(this.codexBackendSummary.methods ?? [], "codex", version),
+      };
     }
   }
 

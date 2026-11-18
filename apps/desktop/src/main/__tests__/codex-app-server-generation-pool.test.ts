@@ -444,11 +444,43 @@ describe("Codex app server generations", () => {
       seen.push(String((request.params as { requestId?: string }).requestId));
       return { decision: "accept" };
     });
-    await fixture.pool.startThread({});
+    const first = (await fixture.pool.startThread({})).threadId;
+    // A turn keeps the first generation draining, so it still speaks.
+    await fixture.pool.startTurn({ threadId: first, input: [] });
     fixture.upgrade("0.161.0");
     const { threadId } = await fixture.pool.startThread({});
     await fixture.gen(2).request({ threadId, requestId: "0" });
     expect(seen).toEqual(["g2:0"]);
+    // Its resolution must name the same ID, or the pending entry never clears.
+    const resolutions: unknown[] = [];
+    fixture.pool.onNotification((event) => {
+      if (event.method === "serverRequest/resolved") resolutions.push((event.params as { requestId?: unknown }).requestId);
+    });
+    fixture.gen(2).emit("serverRequest/resolved", { threadId, requestId: "0" });
+    fixture.gen(1).emit("serverRequest/resolved", { threadId: "g1-thread-1", requestId: "0" });
+    expect(resolutions).toEqual(["g2:0", "0"]);
+  });
+
+  it("does not replace a process with one running the very same file", async () => {
+    let misread = false;
+    const fixture = poolFixture({
+      readExecutable: async (launched) => misread ? { command: launched.command } : launched,
+    });
+    await fixture.pool.startThread({});
+    // A transient stat failure looks like a deleted executable.
+    misread = true;
+    const during = await fixture.pool.startThread({});
+    expect(fixture.generations).toHaveLength(2);
+    expect(fixture.gen(2).state.closed).toBe(true);
+    expect(during.threadId).toBe("g1-thread-2");
+    expect(fixture.promotions).toEqual([]);
+    expect(fixture.pool.readAppServerGenerationStatus()).toEqual(expect.objectContaining({
+      current: 1,
+      lastFailure: expect.objectContaining({ reason: "executable-missing" }),
+    }));
+    // The backoff keeps a persistent misread from launching on every call.
+    await fixture.pool.startThread({});
+    expect(fixture.generations).toHaveLength(2);
   });
 
   it("closes replaced generations and abandons a rollover still starting", async () => {
