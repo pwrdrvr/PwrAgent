@@ -13,6 +13,7 @@ import statistics
 import subprocess
 import time
 import zipfile
+from urllib.parse import quote
 
 REPO = "repos/pwrdrvr/PwrAgent"
 SCHEMA = 1
@@ -20,6 +21,14 @@ SCHEMA = 1
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def file_digest(path):
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
 
 
 def save(path, value):
@@ -44,7 +53,7 @@ def api(endpoint, path, binary=False):
             return result.stdout if binary else json.loads(result.stdout)
         error = result.stderr.decode(errors="replace")
         # Retry transport/temporary server/rate-limit failures only, never CI.
-        if not re.search(r"HTTP 50[234]|HTTP 429|rate limit|connection|TLS|timeout", error, re.I):
+        if not re.search(r"HTTP 50[234]|HTTP 429|rate limit|connection|TLS|timeout|stream error", error, re.I):
             raise RuntimeError(error[:400])
         if attempt == 3:
             raise RuntimeError(error[:400])
@@ -81,7 +90,7 @@ def phase(name):
     return "setup/other"
 
 
-def collect(root):
+def collect(root, before=None):
     cache = root / "cache"
     workflow = api(f"{REPO}/actions/workflows/ci.yml", cache / "workflow.json")
     manifest_path = root / "manifest.json"
@@ -90,7 +99,8 @@ def collect(root):
     else:
         runs = []
         for page in range(1, 4):
-            data = api(f"{REPO}/actions/workflows/{workflow['id']}/runs?per_page=100&page={page}", cache / f"runs-{page}.json")
+            query = f"&created={quote('<=' + before)}" if before else ""
+            data = api(f"{REPO}/actions/workflows/{workflow['id']}/runs?per_page=100&page={page}{query}", cache / f"runs-{digest(query.encode())[:8]}-{page}.json")
             runs.extend(data["workflow_runs"])
             if len({r['id'] for r in runs}) >= 200:
                 break
@@ -119,9 +129,9 @@ def collect(root):
 
 
 def artifacts(root, budget_mb):
-    # Deterministic newest-run/name order; explicit budget exclusions, not silent sampling.
+    # Reserve space in manifest order before parallel downloads. Cached ZIPs count.
     used = sum(p.stat().st_size for p in (root / "zips").glob("*.zip"))
-    inventory = []
+    inventory, pending = [], []
     manifest = json.loads((root / "manifest.json").read_text())
     for run in manifest["runs"]:
         path = root / "runs" / f"{run['id']}.json"
@@ -130,41 +140,39 @@ def artifacts(root, budget_mb):
         for artifact in sorted(json.loads(path.read_text())["artifacts"], key=lambda a: a["name"]):
             row = {"runId": run["id"], "artifactId": artifact["id"], "name": artifact["name"], "sizeBytes": artifact["size_in_bytes"], "expired": artifact["expired"], "createdAt": artifact["created_at"]}
             inventory.append(row)
-            if not re.search(r"unit-timings|unit-retry|e2e.*artifacts|flake-report|flake-slice", artifact["name"]):
-                row["state"] = "not-timing-artifact"
+            if not re.search(r"unit-timings|e2e.*artifacts|ci-flake-report", artifact["name"]):
+                row["state"] = "not-selected-redundant-or-no-timings"
                 continue
             destination = root / "zips" / f"{artifact['id']}.zip"
             if artifact["expired"]:
                 row["state"] = "expired"
-                continue
-            if not destination.exists() and (artifact["size_in_bytes"] > 128 * 1024 ** 2 or used + artifact["size_in_bytes"] > budget_mb * 1024 ** 2):
+            elif not destination.exists() and (artifact["size_in_bytes"] > 128 * 1024 ** 2 or used + artifact["size_in_bytes"] > budget_mb * 1024 ** 2):
                 row["state"] = "budget-excluded"
-                continue
-            try:
-                existed = destination.exists()
-                data = api(f"{REPO}/actions/artifacts/{artifact['id']}/zip", destination, True)
-                if not existed:
-                    used += len(data)
-                row.update(state="downloaded", sha256=digest(data))
-                with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                    members = []
-                    for info in archive.infolist():
-                        # Never extract paths, traces, screenshots, or private logs.
-                        if info.file_size > 32 * 1024 ** 2 or not info.filename.endswith(".json"):
-                            continue
-                        payload = archive.read(info)
-                        try:
-                            value = json.loads(payload)
-                        except (ValueError, UnicodeDecodeError):
-                            continue
-                        member = digest(info.filename.encode())[:16] + ".json"
-                        save(root / "evidence" / str(artifact["id"]) / member, value)
-                        members.append({"member": info.filename, "path": f"evidence/{artifact['id']}/{member}", "sha256": digest(payload)})
-                    row["members"] = members
-            except (RuntimeError, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
-                row.update(state="unavailable", error=str(error)[:400])
-        save(root / "artifact-manifest.json", inventory)
-    print(json.dumps({"artifacts": len(inventory), "downloaded": sum(r["state"] == "downloaded" for r in inventory), "bytes": used}))
+            else:
+                if not destination.exists():
+                    used += artifact["size_in_bytes"]
+                row["state"] = "pending"
+                pending.append(row)
+
+    def download(row):
+        destination = root / "zips" / f"{row['artifactId']}.zip"
+        try:
+            data = api(f"{REPO}/actions/artifacts/{row['artifactId']}/zip", destination, True)
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                # Keep paths/sizes only. Dedicated normalizer reads bounded timing fields.
+                members = [{"member": i.filename, "sizeBytes": i.file_size} for i in archive.infolist() if i.filename.endswith((".json", "playwright-report/index.html"))]
+            row.update(state="downloaded", sha256=digest(data), members=members)
+        except (RuntimeError, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
+            row.update(state="unavailable", error=str(error)[:400])
+        return row
+
+    save(root / "artifact-manifest.json", inventory)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        for index, _row in enumerate(pool.map(download, pending)):
+            if index % 20 == 0:
+                save(root / "artifact-manifest.json", inventory)
+    save(root / "artifact-manifest.json", inventory)
+    print(json.dumps({"artifacts": len(inventory), "downloaded": sum(r["state"] == "downloaded" for r in inventory), "reservedBytes": used}))
 
 
 def stats(values):
@@ -212,10 +220,23 @@ def summarize(root):
         for row in samples:
             name = str(row["conclusion"])
             conclusions[name] = conclusions.get(name, 0) + 1
-        report["jobs"].append({"group": json.loads(key), "duration": stats([r["durationS"] for r in samples if r["conclusion"] != "skipped"]), "queueAndDependency": stats([r["queueAndDependencyS"] for r in samples if r["conclusion"] != "skipped"]), "conclusions": conclusions})
+        report["jobs"].append({"group": json.loads(key), "duration": stats([r["durationS"] for r in samples if r["conclusion"] != "skipped"]), "queueAndDependency": stats([r["queueAndDependencyS"] for r in samples if r["conclusion"] != "skipped"]), "successfulDuration": stats([r["durationS"] for r in samples if r["conclusion"] == "success"]), "conclusions": conclusions, "rates": {name: conclusions.get(name, 0) / len(samples) for name in ["failure", "cancelled", "timed_out"]}})
     report["jobs"].sort(key=lambda j: j["duration"].get("totalS", 0), reverse=True)
+    phase_groups = {}
+    for row in steps:
+        key = json.dumps([row["job"], row["labels"], row["phase"]])
+        phase_groups.setdefault(key, []).append(row)
+    report["phases"] = [{"group": json.loads(key), "duration": stats([r["durationS"] for r in values if r["conclusion"] != "skipped"])} for key, values in phase_groups.items()]
+    critical = {}
+    for row in rows:
+        if row["durationS"] is None or row["conclusion"] == "skipped" or not re.search(r"lane|unit tests", row["job"], re.I):
+            continue
+        key = str(row["runId"])
+        if key not in critical or row["durationS"] > critical[key]["durationS"]:
+            critical[key] = row
+    report["slowestTestJobByRun"] = list(critical.values())
     save(root / "summary.json", report)
-    hashes = {str(p.relative_to(root)): digest(p.read_bytes()) for p in sorted(root.rglob("*.json")) if "cache" not in p.parts and p.name != "hashes.json"}
+    hashes = {str(p.relative_to(root)): file_digest(p) for p in sorted(root.rglob("*")) if p.suffix in (".json", ".jsonl") and "cache" not in p.parts and "evidence" not in p.parts and p.name != "hashes.json"}
     save(root / "hashes.json", hashes)
     print(json.dumps(report["coverage"]))
 
@@ -224,10 +245,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["collect", "artifacts", "summarize"])
     parser.add_argument("--root", type=pathlib.Path, default=pathlib.Path(".local/ci-audit"))
+    parser.add_argument("--before", help="Inclusive UTC created_at cutoff for replaying a historical sample")
     parser.add_argument("--budget-mb", type=int, default=2048)
     args = parser.parse_args()
     args.root.mkdir(parents=True, exist_ok=True)
-    {"collect": lambda: collect(args.root), "artifacts": lambda: artifacts(args.root, args.budget_mb), "summarize": lambda: summarize(args.root)}[args.command]()
+    {"collect": lambda: collect(args.root, args.before), "artifacts": lambda: artifacts(args.root, args.budget_mb), "summarize": lambda: summarize(args.root)}[args.command]()
 
 
 if __name__ == "__main__":

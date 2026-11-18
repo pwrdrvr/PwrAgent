@@ -17,7 +17,24 @@ spec.loader.exec_module(audit)
 
 def main(root):
     inventory = json.loads((root / "artifact-manifest.json").read_text())
-    rows, coverage = [], []
+    coverage = []
+    groups = collections.defaultdict(list)
+    observed_runs = set()
+    unknown_attempts = 0
+    count = 0
+    out = (root / "tests.jsonl").open("w")
+
+    def add(row):
+        nonlocal count, unknown_attempts
+        count += 1
+        observed_runs.add(row["runId"])
+        unknown_attempts += row["attempt"] is None
+        # Normalize hosted checkout roots, preserving repo-relative identity.
+        row["file"] = re.sub(r"^.*?[/\\]PwrAg(?:e)?nt[/\\](?:PwrAg(?:e)?nt[/\\])?", "", row["file"], flags=re.I).replace("\\", "/")
+        out.write(json.dumps(row) + "\n")
+        if row["attempt"] == 1 and row["retry"] in (0, None):
+            key = (row["kind"], row["platform"], row["lane"], row["file"], row["title"])
+            groups[key].append((row["durationS"], row["status"], row["runId"], row["headSha"]))
     for artifact in inventory:
         if artifact["state"] != "downloaded":
             continue
@@ -28,7 +45,7 @@ def main(root):
         # Run-scoped artifact endpoint can contain later attempts. Never assume initial.
         attempt = 1 if run["latest"]["run_attempt"] == 1 else None
         context = {"runId": artifact["runId"], "artifactId": artifact["artifactId"], "artifact": name, "attempt": attempt, "headSha": run["run"]["head_sha"], "platform": platform, "lane": int(lane[1]) if lane else None, "runnerImageVersion": None}
-        count_before = len(rows)
+        count_before = count
         formats = set()
         with zipfile.ZipFile(root / "zips" / f"{artifact['artifactId']}.zip") as archive:
             for info in archive.infolist():
@@ -49,7 +66,7 @@ def main(root):
                             for test in value.get("tests", []):
                                 for result in test.get("results", []):
                                     duration = result.get("duration")
-                                    rows.append({**context, "kind": "e2e", "file": value["fileName"], "testId": test["testId"], "title": " > ".join([*test.get("path", []), test["title"]]), "project": test.get("projectName"), "retry": result.get("retry"), "status": result.get("status"), "outcome": test.get("outcome"), "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename + "!" + member.filename})
+                                    add({**context, "kind": "e2e", "file": value["fileName"], "testId": test["testId"], "title": " > ".join([*test.get("path", []), test["title"]]), "project": test.get("projectName"), "retry": result.get("retry"), "status": result.get("status"), "outcome": test.get("outcome"), "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename + "!" + member.filename})
                 elif info.filename.endswith(".json") and "unit" in info.filename:
                     value = json.loads(archive.read(info))
                     if not isinstance(value, dict) or "testResults" not in value:
@@ -58,22 +75,16 @@ def main(root):
                     for suite in value["testResults"]:
                         for test in suite.get("assertionResults", []):
                             duration = test.get("duration")
-                            rows.append({**context, "kind": "unit", "file": suite["name"], "title": test["fullName"], "testId": None, "project": None, "retry": None, "status": test["status"], "outcome": None, "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename})
-        coverage.append({**context, "formats": sorted(formats), "observations": len(rows) - count_before})
-    with (root / "tests.jsonl").open("w") as out:
-        for row in rows:
-            out.write(json.dumps(row) + "\n")
-    groups = collections.defaultdict(list)
-    for row in rows:
-        if row["attempt"] == 1 and (row["retry"] in (0, None)):
-            groups[(row["kind"], row["platform"], row["lane"], row["file"], row["title"])].append(row)
+                            add({**context, "kind": "unit", "file": suite["name"], "title": test["fullName"], "testId": None, "project": None, "retry": None, "status": test["status"], "outcome": None, "durationS": duration / 1000 if isinstance(duration, (int, float)) else None, "member": info.filename})
+        coverage.append({**context, "formats": sorted(formats), "observations": count - count_before})
+    out.close()
     summary = []
     for group, values in groups.items():
-        summary.append({"group": group, "duration": audit.stats([v["durationS"] for v in values]), "observedRuns": len({v["runId"] for v in values}), "heads": len({v["headSha"] for v in values}), "statuses": dict(collections.Counter(str(v["status"]) for v in values))})
+        summary.append({"group": group, "duration": audit.stats([v[0] for v in values if v[1] not in ("skipped", "interrupted")]), "observedRuns": len({v[2] for v in values}), "heads": len({v[3] for v in values}), "statuses": dict(collections.Counter(str(v[1]) for v in values))})
     summary.sort(key=lambda g: g["duration"].get("totalS", 0), reverse=True)
     audit.save(root / "test-summary.json", summary)
     audit.save(root / "timing-coverage.json", coverage)
-    print(json.dumps({"observations": len(rows), "groups": len(groups), "formats": dict(collections.Counter(f for c in coverage for f in c["formats"])), "runsWithTimings": len({r["runId"] for r in rows}), "unknownAttemptObservations": sum(r["attempt"] is None for r in rows)}))
+    print(json.dumps({"observations": count, "groups": len(groups), "formats": dict(collections.Counter(f for c in coverage for f in c["formats"])), "runsWithTimings": len(observed_runs), "unknownAttemptObservations": unknown_attempts}))
 
 
 if __name__ == "__main__":
