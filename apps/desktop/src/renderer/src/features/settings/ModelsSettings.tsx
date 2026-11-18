@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  buildProviderPickerEntries,
   DECISION_PROVIDER_IDS,
   formatFilesystemPath,
   isValidatedDiscoveryCandidate,
@@ -1634,7 +1635,9 @@ function ProviderModelDefaultField(props: {
 }) {
   const { pending: fastAllowPending, track: trackFastAllow } =
     useSettingsFieldPending();
-  const models = props.backend.launchpadOptions?.models ?? [];
+  // Defaults belong to the same provider choice as a launchpad. Codex's
+  // runtime catalog also contains other endpoints; those are not OpenAI.
+  const models = buildProviderPickerEntries([props.backend])[0].models;
   const modelRows = modelSelectOptions({ kind: props.backend.kind, models });
   const selectedModel = props.defaults?.model ?? "";
   const modelOption = models.find((model) => model.id === selectedModel);
