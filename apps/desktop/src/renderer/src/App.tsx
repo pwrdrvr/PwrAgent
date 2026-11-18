@@ -4106,8 +4106,8 @@ function DesktopAppShell(props: {
           ),
         composerImplementation: settings.composerImplementation,
         composerCovered: layerView !== undefined,
-        dictationAvailable: Boolean(settings.snapshot?.models.audioTranscriptionApiKey?.configured)
-          && settings.snapshot?.models.audioTranscriptionEnabled?.value !== false,
+        dictationAvailable: Boolean(settings.snapshot?.models?.audioTranscriptionApiKey?.configured)
+          && settings.snapshot?.models?.audioTranscriptionEnabled?.value !== false,
         composerDraftStore,
         desktopApi: remoteReadsSuspended ? undefined : threadDesktopApi,
         launchpadError: navigation.launchpadError,
