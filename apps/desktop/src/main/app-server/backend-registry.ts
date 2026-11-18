@@ -3680,9 +3680,11 @@ export class DesktopBackendRegistry {
     }
     if (!params.codex) return;
     // A settings write is authority to stop using the obsolete executable,
-    // not to discover or launch its replacement. The reconnectable client
-    // resolves the new command only when the next permitted discovery or
-    // ordinary provider operation initializes it.
+    // not to discover its replacement. With nothing running, the
+    // reconnectable client resolves the new command only when the next
+    // permitted discovery or ordinary provider operation initializes it. A
+    // running app server is replaced by a new generation from the selected
+    // command, and drains what it is still running.
     this.codexBackendGeneration += 1;
     this.codexBackendSummary = undefined;
     this.planLimits.forget("codex");

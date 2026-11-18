@@ -1,5 +1,6 @@
 import {
   decideCodexInstallationChange,
+  type CodexAppServerRolloverOutcome,
   type CodexExecutableIdentity,
   type CodexInstallationChangeReason,
 } from "@pwragent/owner-core/codex-app-server/app-server-installation";
@@ -23,6 +24,11 @@ import { CODEX_CLIENT_ROUTES, record, threadIdOf } from "./provider-runtime-clie
  * - On a change, a new generation starts and must finish its handshake.
  *   Only then does it become current; a failed start leaves the old one in
  *   service and is retried after a growing delay.
+ * - A selection change (`rolloverAppServer`: a Settings path, or a managed
+ *   runtime switched on, off or updated) takes the same path for the command
+ *   now selected, without the installation comparison. With no process
+ *   running, the current client just closes and starts the new selection on
+ *   its next request, as before.
  * - New threads and every thread without work bound to its process go to the
  *   current generation. A thread stays on a replaced generation only while
  *   that process holds work for it (`isThreadPinned`): a running turn, an
@@ -66,9 +72,12 @@ export type CodexAppServerGenerationPoolOptions = {
   now?: () => number;
 };
 
+/** Why a new generation replaced the current one. */
+export type CodexAppServerRolloverReason = CodexInstallationChangeReason | "selection-changed";
+
 export type CodexAppServerGenerationPromotion = {
   generation: number;
-  reason: CodexInstallationChangeReason;
+  reason: CodexAppServerRolloverReason;
   previous?: CodexExecutableIdentity;
   current?: CodexExecutableIdentity;
 };
@@ -76,13 +85,20 @@ export type CodexAppServerGenerationPromotion = {
 export type CodexAppServerGenerationStatus = {
   current: number;
   draining: Array<{ generation: number; threads: number }>;
-  lastRollover?: { at: number; generation: number; reason: CodexInstallationChangeReason };
-  lastFailure?: { at: number; reason: CodexInstallationChangeReason; error: string; retryAt: number };
+  lastRollover?: { at: number; generation: number; reason: CodexAppServerRolloverReason };
+  lastFailure?: { at: number; reason: CodexAppServerRolloverReason; error: string; retryAt: number };
 };
 
 export type CodexAppServerGenerationControls = {
   /** Start a new generation when the running installation changed. Never throws. */
   checkAppServerInstallation(): Promise<void>;
+  /**
+   * Move new work onto the Codex now selected. `selection` increases with
+   * each selection change; a request this pool already applied is `current`,
+   * and one that failed recently is `deferred` until its backoff ends. A newer
+   * selection is tried at once. Never throws.
+   */
+  rolloverAppServer(params: { selection: number }): Promise<CodexAppServerRolloverOutcome>;
   readAppServerGenerationStatus(): CodexAppServerGenerationStatus;
 };
 
@@ -129,9 +145,12 @@ export function createCodexAppServerGenerationPool(
   let epoch = 0;
   let checkedAt = Number.NEGATIVE_INFINITY;
   let check: Promise<void> | undefined;
-  let rollover: Promise<void> | undefined;
+  let rollover: Promise<CodexAppServerRolloverOutcome> | undefined;
   let failures = 0;
   let retryAt = 0;
+  // The newest selection this pool serves, and the one whose start failed.
+  let appliedSelection = 0;
+  let failedSelection: number | undefined;
   let status: Omit<CodexAppServerGenerationStatus, "current" | "draining"> = {};
 
   const invoke = (client: CodexAppServerClient, method: Method, args: unknown[]): unknown =>
@@ -326,7 +345,7 @@ export function createCodexAppServerGenerationPool(
     }
   };
 
-  const promote = (candidate: Generation, reason: CodexInstallationChangeReason, previous?: CodexExecutableIdentity): void => {
+  const promote = (candidate: Generation, reason: CodexAppServerRolloverReason, previous?: CodexExecutableIdentity): void => {
     const replaced = current;
     replaced.state = "draining";
     candidate.state = "current";
@@ -356,8 +375,13 @@ export function createCodexAppServerGenerationPool(
     void tryRetire(replaced);
   };
 
-  const startRollover = (reason: CodexInstallationChangeReason, from: Generation, launched: CodexExecutableIdentity): Promise<void> => {
-    rollover ??= (async () => {
+  const startRollover = (
+    reason: CodexAppServerRolloverReason,
+    from: Generation,
+    launched: CodexExecutableIdentity | undefined,
+    selection?: number,
+  ): Promise<CodexAppServerRolloverOutcome> => {
+    rollover ??= (async (): Promise<CodexAppServerRolloverOutcome> => {
       const startedEpoch = epoch;
       const candidate = makeGeneration();
       // Not current until it proves it can start; it owns nothing yet.
@@ -366,28 +390,38 @@ export function createCodexAppServerGenerationPool(
         await candidate.client.getInitializeResult();
         if (startedEpoch !== epoch || from !== current || (candidate.state as GenerationState) === "retired") {
           finalize(candidate, "closed");
-          return;
+          return { kind: "failed", error: "the Codex app server pool closed during the rollover" };
         }
         // A misread (a transient stat failure) can report a change that is
         // not there. A candidate running the very same file replaces nothing.
+        // A selection change is its own evidence: the same file may now run
+        // with other arguments, environment or model providers.
         const started = candidate.client.readAppServerExecutable?.();
-        if (started && !decideCodexInstallationChange(launched, { ...started, command: launched.command })) {
+        if (selection === undefined && launched && started
+          && !decideCodexInstallationChange(launched, { ...started, command: launched.command })) {
           throw new Error("the new app server runs the same executable as the one it would replace");
         }
         promote(candidate, reason, launched);
+        if (selection !== undefined) {
+          appliedSelection = Math.max(appliedSelection, selection);
+          failedSelection = undefined;
+        }
+        return { kind: "promoted", generation: candidate.id };
       } catch (error) {
         finalize(candidate, "closed");
-        if (startedEpoch !== epoch) return;
+        const message = error instanceof Error ? error.message : String(error);
+        if (startedEpoch !== epoch) return { kind: "failed", error: message };
+        if (selection !== undefined) failedSelection = selection;
         failures += 1;
         const delayMs = Math.min(backoff.max, backoff.initial * 2 ** (failures - 1));
         retryAt = now() + delayMs;
-        const message = error instanceof Error ? error.message : String(error);
         status = { ...status, lastFailure: { at: now(), reason, error: message, retryAt } };
         options.logger?.warn("Codex app server generation failed to start; the running one stays in service", {
           reason,
           error: message,
           retryInMs: delayMs,
         });
+        return { kind: "failed", error: message };
       }
     })().finally(() => {
       rollover = undefined;
@@ -395,8 +429,32 @@ export function createCodexAppServerGenerationPool(
     return rollover;
   };
 
+  const rolloverAppServer = async ({ selection }: { selection: number }): Promise<CodexAppServerRolloverOutcome> => {
+    try {
+      // A rollover already starting may have resolved the previous selection.
+      while (rollover) await rollover;
+      if (selection <= appliedSelection) return { kind: "current" };
+      if (failedSelection === selection && now() < retryAt) return { kind: "deferred", retryAt };
+      const generation = current;
+      if (!generation.client.hasAppServerProcess?.()) {
+        // Nothing to drain: start the new selection lazily, as a close always
+        // has. A process that starts meanwhile is a fresh launch of it.
+        await generation.client.close();
+        appliedSelection = selection;
+        failedSelection = undefined;
+        return { kind: "restarted-lazily" };
+      }
+      return await startRollover("selection-changed", generation, generation.client.readAppServerExecutable?.(), selection);
+    } catch (error) {
+      return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
   const checkInstallation = async (): Promise<void> => {
-    if (rollover) return await rollover;
+    if (rollover) {
+      await rollover;
+      return;
+    }
     if (now() < retryAt) return;
     const generation = current;
     const launched = generation.client.readAppServerExecutable?.();
@@ -423,7 +481,10 @@ export function createCodexAppServerGenerationPool(
   };
 
   const beforeNewWork = async (): Promise<void> => {
-    if (rollover) return await rollover;
+    if (rollover) {
+      await rollover;
+      return;
+    }
     if (check) return await check;
     if (now() - checkedAt < minCheckIntervalMs) return;
     await checkAppServerInstallation();
@@ -486,6 +547,7 @@ export function createCodexAppServerGenerationPool(
 
   const controls: CodexAppServerGenerationControls = {
     checkAppServerInstallation,
+    rolloverAppServer,
     readAppServerGenerationStatus: () => ({
       current: current.id,
       draining: live().filter((generation) => generation !== current)
@@ -496,7 +558,8 @@ export function createCodexAppServerGenerationPool(
 
   return new Proxy(current.client, {
     get(_target, property) {
-      if (property === "checkAppServerInstallation" || property === "readAppServerGenerationStatus") {
+      if (property === "checkAppServerInstallation" || property === "rolloverAppServer"
+        || property === "readAppServerGenerationStatus") {
         return controls[property];
       }
       const target = current.client;

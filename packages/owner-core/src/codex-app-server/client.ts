@@ -8801,6 +8801,17 @@ export class CodexAppServerClient {
   }
 
   /**
+   * Whether this client has a Codex process running or starting. A selection
+   * change replaces such a process with a new generation; one with none just
+   * starts the new selection on its next request. It never starts Codex.
+   */
+  hasAppServerProcess(): boolean {
+    return (this.initialized || this.initializationPromise !== null)
+      && this.pendingCloses === 0
+      && !this.retired;
+  }
+
+  /**
    * Whether the thread has work only this process can finish: a turn, an
    * unanswered request from Codex, a helper turn, a voice session, or a
    * first turn whose history exists only here. The owner adds the work it

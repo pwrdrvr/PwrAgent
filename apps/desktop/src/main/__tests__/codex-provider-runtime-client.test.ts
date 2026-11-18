@@ -302,6 +302,24 @@ describe("provider-specific Codex runtimes", () => {
     expect(exits).toHaveBeenLastCalledWith(new Set(["openai-thread"]));
   });
 
+  it("moves every runtime to a new selection and applies it only when all moved", async () => {
+    const { primary, local, client: proxy } = setup();
+    const client = proxy as typeof proxy & {
+      rolloverAppServer(params: { selection: number }): Promise<unknown>;
+    };
+    const rollover = (outcome: unknown) => vi.fn(async () => outcome);
+    const primaryRollover = rollover({ kind: "promoted", generation: 2 });
+    const localRollover = rollover({ kind: "failed", error: "provider bridge failed" });
+    Object.assign(primary.raw, { rolloverAppServer: primaryRollover });
+    Object.assign(local.raw, { rolloverAppServer: localRollover });
+    // Without a runtime yet, only the primary takes part.
+    expect(await client.rolloverAppServer({ selection: 1 })).toEqual({ kind: "promoted", generation: 2 });
+    await client.startThread({ model: "@bonsai/Bonsai.gguf" });
+    expect(await client.rolloverAppServer({ selection: 2 })).toEqual({ kind: "failed", error: "provider bridge failed" });
+    expect(primaryRollover).toHaveBeenLastCalledWith({ selection: 2 });
+    expect(localRollover).toHaveBeenCalledWith({ selection: 2 });
+  });
+
   it("limits an exit to the threads of the one generation that exited", async () => {
     const { primary, client } = setup();
     primary.raw.startThread

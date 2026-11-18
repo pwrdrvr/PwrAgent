@@ -125,6 +125,7 @@ import {
   type CodexAppServerRecycleSettings,
   type CodexAppServerRecycleStatus,
 } from "../codex-app-server/app-server-recycle-policy";
+import type { CodexAppServerRolloverOutcome } from "@pwragent/owner-core/codex-app-server/app-server-installation";
 import {
   type CodexInvalidResponseMessageIdRecoveryResult,
   type CodexRecoveryBlockingTurn,
@@ -410,6 +411,12 @@ export type BackendClient = {
   resetAppServerRestarts?(reason: string): void;
   readAppServerProcessSample?(): Promise<CodexAppServerProcessSample | undefined>;
   getAppServerRecycleStatus?(): CodexAppServerRecycleStatus;
+  /**
+   * Move new work onto the Codex now selected, draining the old process
+   * (`app-server-generation-pool.ts`). Absent on clients without generations,
+   * which restart at an idle boundary instead.
+   */
+  rolloverAppServer?(params: { selection: number }): Promise<CodexAppServerRolloverOutcome>;
   maybeRecycleIdleAppServer?(params: {
     settings: CodexAppServerRecycleSettings;
     isQuiescent: () => boolean;

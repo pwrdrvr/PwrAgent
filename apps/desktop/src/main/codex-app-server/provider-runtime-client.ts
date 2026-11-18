@@ -1,5 +1,9 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
 import type { CodexAppServerClient } from "./desktop-client";
+import {
+  combineCodexAppServerRolloverOutcomes,
+  type CodexAppServerRolloverOutcome,
+} from "@pwragent/owner-core/codex-app-server/app-server-installation";
 
 export type CodexClientRoute =
   "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "reportedProvider";
@@ -17,6 +21,7 @@ export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   getAppServerRecycleStatus: "primary",
   // A generation pool's own lifecycle; each runtime has one.
   readAppServerExecutable: "primary",
+  hasAppServerProcess: "primary",
   threadDependsOnAppServer: "primary",
   releaseThread: "primary",
   retireAppServerWhenIdle: "primary",
@@ -231,6 +236,20 @@ export function createProviderRuntimeClient(
   attach(primary);
   return new Proxy(primary, {
     get(target, property) {
+      // A selection change moves every runtime's new work onto the selected
+      // Codex (`app-server-generation-pool.ts`); it is applied once all have.
+      if (property === "rolloverAppServer") {
+        if (typeof Reflect.get(target, property, target) !== "function") return undefined;
+        return async (params: { selection: number }): Promise<CodexAppServerRolloverOutcome> => {
+          const outcomes = await Promise.all([primary, ...runtimes.values()].map((client) => {
+            const rollover = Reflect.get(client, property, client) as
+              | ((params: { selection: number }) => Promise<CodexAppServerRolloverOutcome>)
+              | undefined;
+            return rollover ? rollover.call(client, params) : Promise.resolve<CodexAppServerRolloverOutcome>({ kind: "current" });
+          }));
+          return combineCodexAppServerRolloverOutcomes(outcomes);
+        };
+      }
       if (typeof property !== "string" || !Object.hasOwn(ROUTES, property)
         || typeof Reflect.get(target, property, target) !== "function") return Reflect.get(target, property, target);
       const method = property as Method;
