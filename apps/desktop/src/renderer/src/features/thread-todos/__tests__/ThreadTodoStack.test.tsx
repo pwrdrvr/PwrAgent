@@ -1099,8 +1099,11 @@ describe("ThreadTodosPanel", () => {
     fireEvent.click(screen.getByRole("tab", { name: /All/ }));
     const groups = screen.getAllByRole("heading", { level: 4 });
     expect(groups.map((group) => group.textContent)).toEqual(["PwrAgent1", "PwrGit2"]);
-    expect(screen.getByText("Beta · PwrGit → PwrAgent")).toBeTruthy();
-    expect(screen.getByText("Beta · PwrGit → PwrSnap")).toBeTruthy();
+    // The thread is named once, in its heading; the row keeps the route.
+    expect(screen.getAllByRole("heading", { level: 5 }).map((heading) => heading.textContent))
+      .toEqual(["AlphaThis thread", "Beta"]);
+    expect(screen.getByText("PwrGit → PwrAgent")).toBeTruthy();
+    expect(screen.getByText("PwrGit → PwrSnap")).toBeTruthy();
   });
 });
 

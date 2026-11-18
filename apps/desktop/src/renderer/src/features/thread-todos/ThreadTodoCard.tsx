@@ -132,6 +132,8 @@ export type ThreadTodoCardHandlers = {
   ) => void | Promise<unknown>;
   /** Ticks or unticks one step. */
   onSetItemChecked: (todo: ThreadTodo, item: ThreadTodoItem, checked: boolean) => void;
+  /** Shows a review card's review in its thread's transcript. */
+  onShowReview?: (todo: ThreadTodo) => void;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -394,6 +396,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         titleId={titleId}
         copying={copying}
         onCollapse={props.onCollapse}
+        onOpen={props.onShowReview ? () => props.onShowReview?.(todo) : undefined}
+        openLabel="Show review in transcript"
         dismissLabel="Dismiss review"
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
@@ -522,6 +526,9 @@ function ThreadTodoCardHead(props: {
   titleId: string;
   copying: TodoCopying;
   onCollapse?: () => void;
+  /** Makes the title a link to what the card stands for. */
+  onOpen?: () => void;
+  openLabel?: string;
   dismissLabel: string;
   onDismiss: () => void;
 }) {
@@ -532,7 +539,19 @@ function ThreadTodoCardHead(props: {
       <span className="thread-todo-card__kind" aria-hidden="true">
         {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
       </span>
-      <h3 id={props.titleId} className="thread-todo-card__title">{todo.title}</h3>
+      <h3 id={props.titleId} className="thread-todo-card__title">
+        {props.onOpen ? (
+          <button
+            type="button"
+            className="thread-todo-card__title-link tooltip-target"
+            data-tooltip={props.openLabel}
+            aria-label={`${props.openLabel}: ${todo.title}`}
+            onClick={props.onOpen}
+          >
+            {todo.title}
+          </button>
+        ) : todo.title}
+      </h3>
       <div className="thread-todo-card__tools">
         <button
           ref={copying.buttonRef}

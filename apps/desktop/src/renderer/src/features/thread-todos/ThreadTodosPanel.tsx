@@ -1,5 +1,6 @@
 import { threadTodoThreadKey } from "@pwragent/shared";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -88,6 +89,8 @@ type PanelItem =
 type TodoGroup = {
   key: string;
   title: string;
+  /** The project's owner, in All; absent for this instance. */
+  ownerInstanceId?: string;
   items: PanelItem[];
   /** A wait in the group pauses a turn. */
   paused: boolean;
@@ -432,6 +435,9 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                     >
                       <span className="live-work-rail__chevron" aria-hidden="true" />
                       <span className="thread-todos-panel__group-name">{group.title}</span>
+                      {activeScope !== "all" && group.key === threadKey ? (
+                        <span className="thread-todos-panel__thread-here">This thread</span>
+                      ) : null}
                       <span className="thread-todos-panel__group-count">{count}</span>
                       {unread > 0 ? (
                         <span className="thread-todos-panel__unread-count">{unread}</span>
@@ -443,7 +449,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                   </h4>
                   {folded ? null : (
                     <ul className="thread-todos-panel__list" id={listId}>
-                      {group.items.map((item) => {
+                      {(activeScope === "all" ? threadRuns(group.items, threadKey) : [{ key: group.key, items: group.items }]).map((run) => {
+                        const rows = run.items.map((item) => {
                         if (item.type === "wait") {
                           const { wait } = item;
                           const mine = wait.threadKey === threadKey;
@@ -473,9 +480,6 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                                 wait={wait}
                                 current={mine}
                                 unread={isUnread(item.key)}
-                                threadName={activeScope === "all" && !mine
-                                  ? view.threadTitleForKey(wait.threadKey)
-                                  : undefined}
                                 respond={view.respond}
                                 dismissQuestion={(target) => {
                                   const question = target.question;
@@ -517,6 +521,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                                   });
                                 }}
                                 onStartReview={props.onStartReview}
+                                onShowReview={view.openReview}
                                 onDoHere={props.onDoHere}
                                 onSetItemChecked={(target, item, checked) => {
                                   setActionError(undefined);
@@ -537,6 +542,39 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                                 view={view}
                               />
                             )}
+                          </li>
+                        );
+                        });
+                        if (activeScope !== "all") return <Fragment key={run.key}>{rows}</Fragment>;
+                        // All groups by project; each thread in it gets a
+                        // heading that holds the top under the project's.
+                        const current = run.key === threadKey;
+                        const first = run.items[0]!;
+                        const runTitle = first.type === "wait"
+                          ? view.threadTitleForKey(first.wait.threadKey)
+                          : view.threadTitle(first.todo);
+                        return (
+                          <li key={`thread:${run.key}`} className="thread-todos-panel__thread">
+                            <h5 className="thread-todos-panel__thread-title">
+                              {current ? (
+                                <span className="thread-todos-panel__thread-heading">
+                                  <span className="thread-todos-panel__thread-name">{runTitle}</span>
+                                  <span className="thread-todos-panel__thread-here">This thread</span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="thread-todos-panel__thread-heading"
+                                  aria-label={`Open thread: ${runTitle}`}
+                                  onClick={() => (first.type === "wait"
+                                    ? view.openWait(first.wait)
+                                    : view.openThread(first.todo))}
+                                >
+                                  <span className="thread-todos-panel__thread-name">{runTitle}</span>
+                                </button>
+                              )}
+                            </h5>
+                            <ul className="thread-todos-panel__list">{rows}</ul>
                           </li>
                         );
                       })}
@@ -646,8 +684,7 @@ function TodoRow(props: {
   const progress = todo.status !== "open" && (todo.action?.type === "start_thread" || todo.action?.type === "send_message")
     ? undefined
     : threadTodoItemProgress(todo);
-  // Grouped by project, the thread is not in the heading: say it here.
-  const threadName = props.scope === "all" && !props.current ? view.threadTitle(todo) : undefined;
+  const openReview = todo.reviewId ? view.openReview : undefined;
   const main = (
     <>
       <span className="thread-todo-card__kind" aria-hidden="true">
@@ -664,7 +701,7 @@ function TodoRow(props: {
       </span>
     </>
   );
-  const meta = [threadName, route].filter(Boolean).join(" · ");
+  const meta = route;
   return (
     <div
       className="thread-todos-panel__row"
@@ -672,16 +709,16 @@ function TodoRow(props: {
       data-unread={props.unread ? "true" : undefined}
     >
       {props.unread ? <span className="thread-todos-panel__unread" aria-hidden="true" /> : null}
-      {props.current ? (
+      {props.current && !openReview ? (
         <div className="thread-todos-panel__row-main">{main}</div>
       ) : (
         <button
           type="button"
           className="thread-todos-panel__row-main"
-          aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}${
+          aria-label={`${openReview ? "Show review" : "Open thread"}: ${todo.title}, in ${view.threadTitle(todo)}${
             progress ? `, ${progress.checked} of ${progress.total} ${progress.noun} checked` : ""
           }${props.unread ? ", unread" : ""}`}
-          onClick={() => view.openThread(todo)}
+          onClick={() => (openReview ? openReview(todo) : view.openThread(todo))}
         >
           {main}
         </button>
@@ -767,6 +804,9 @@ function groupItems(
     // thread, since one project's threads are what the operator moves between.
     let key: string;
     let title: string;
+    const ownerInstanceId = item.type === "wait"
+      ? item.wait.federationTarget?.instanceId
+      : item.todo.federationTarget?.instanceId;
     if (item.type === "wait") {
       const project = view.threadProjectForKey(item.wait.threadKey);
       key = scope === "all" ? projectGroupKey(project?.key, item.wait.federationTarget) : item.wait.threadKey;
@@ -788,16 +828,51 @@ function groupItems(
       group.items.push(item);
       group.paused ||= paused;
     } else {
-      groups.set(key, { key, title, items: [item], paused });
+      groups.set(key, { key, title, ...(ownerInstanceId ? { ownerInstanceId } : {}), items: [item], paused });
     }
   }
   const first = scope === "all"
     ? props.projectKey === undefined ? undefined : projectGroupKey(props.projectKey, props.projectOwner)
     : props.threadKey;
   const ordered = [...groups.values()];
+  if (scope === "all") nameMachinesOnSharedTitles(ordered, view);
   const current = ordered.findIndex((group) => group.key === first);
   if (current > 0) {
     ordered.unshift(...ordered.splice(current, 1));
   }
+  return ordered;
+}
+
+/**
+ * Two projects can share a label, such as one repository on this machine and
+ * on a peer. Their headings name the machine, so neither reads as the other.
+ */
+function nameMachinesOnSharedTitles(groups: TodoGroup[], view: ThreadTodosView): void {
+  const counts = new Map<string, number>();
+  for (const group of groups) counts.set(group.title, (counts.get(group.title) ?? 0) + 1);
+  for (const group of groups) {
+    if ((counts.get(group.title) ?? 0) < 2) continue;
+    const machine = group.ownerInstanceId
+      ? view.instances.find((instance) => instance.instanceId === group.ownerInstanceId)?.label
+      : view.localMachine?.label;
+    if (machine) group.title = `${group.title} · ${machine}`;
+  }
+}
+
+/**
+ * A project group's items as one run per thread, in first-seen order with
+ * the thread on screen first, so each thread's heading appears once.
+ */
+function threadRuns(items: PanelItem[], threadKey: string): Array<{ key: string; items: PanelItem[] }> {
+  const runs = new Map<string, PanelItem[]>();
+  for (const item of items) {
+    const key = item.type === "wait" ? item.wait.threadKey : threadTodoThreadKey(item.todo);
+    const run = runs.get(key);
+    if (run) run.push(item);
+    else runs.set(key, [item]);
+  }
+  const ordered = [...runs].map(([key, runItems]) => ({ key, items: runItems }));
+  const current = ordered.findIndex((run) => run.key === threadKey);
+  if (current > 0) ordered.unshift(...ordered.splice(current, 1));
   return ordered;
 }
