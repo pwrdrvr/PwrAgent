@@ -188,6 +188,7 @@ export function navigationQueryFixture(
     protocol: 2, queryKey: JSON.stringify(query), generation: "fixture", ownerEpoch: "fixture", countsRevision: "fixture",
     coverage: { state: "complete" }, counts: counts(query.kind === "directory-index" ? all : threads), complete: !next, nextCursor: next,
     ...(lensRootCount !== undefined ? { collectionSize: lensRootCount } : {}),
+    ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
     ...(scopedDirectory ? { selectionDirectory: descriptors.find((directory) => directory.key === scopedDirectory.key) } : {}),
     directories: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.slice(offset, offset + size) : [],
     entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread, index) => {

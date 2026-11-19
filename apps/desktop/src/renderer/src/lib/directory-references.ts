@@ -54,7 +54,7 @@ export type ReferenceDirectory = Pick<NavigationDirectorySummary,
   "key" | "kind" | "label" | "path" | "latestUpdatedAt"
 >;
 
-/** Also filter cached candidates while the owner's new query is pending. */
+/** Filter a stale page or a page from an older owner. */
 export function filterDirectoryReferenceCandidates<T extends ReferenceDirectory>(
   directories: readonly T[],
   query: string,

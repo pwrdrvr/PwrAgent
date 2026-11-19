@@ -13,6 +13,7 @@ import type {
   NavigationQuery,
   NavigationQueryCoverage,
   NavigationQueryEntry,
+  NavigationQueryPage,
   NavigationModelInventoryRow,
   NavigationQueryRequest,
   NavigationRow,
@@ -45,6 +46,7 @@ export type NavigationQueryMaterialization = {
   coverage: NavigationQueryCoverage;
   counts: NavigationCounts;
   collectionSize?: number;
+  directoryMatch?: NavigationQueryPage["directoryMatch"];
   selectionDirectory?: NavigationDirectoryRow;
   metadataDependencies?: NavigationMetadataDependencies;
   facets?: NavigationStarMapFacetCounts;
@@ -1381,6 +1383,7 @@ export function projectNavigationQuery(params: {
       ),
     } : {}),
     ...(includeDirectories ? { collectionKind: "directories" as const } : {}),
+    ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
     directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
       : query.kind === "directory-index" ? buildDirectoryRows({
         snapshot: { ...params.index, directories: selectIndexedDirectories(params.index.directories, query) },

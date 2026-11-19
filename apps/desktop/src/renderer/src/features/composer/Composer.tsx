@@ -5898,8 +5898,9 @@ function useComposerController(props: ComposerProps) {
       mentionNavigation.directories,
       mentionNavigation.instances,
       directoryRefTrigger.query,
+      mentionNavigation.ownerRankedDirectoryQuery,
     );
-  }, [mentionNavigation.directories, mentionNavigation.instances, directoryRefTrigger]);
+  }, [mentionNavigation.directories, mentionNavigation.instances, mentionNavigation.ownerRankedDirectoryQuery, directoryRefTrigger]);
   const filteredHashReferenceOptions = useMemo(() => {
     if (!hashReferenceTrigger) {
       return [];

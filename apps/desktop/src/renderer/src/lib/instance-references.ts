@@ -91,8 +91,12 @@ export function filterAtReferenceCandidates(
   directories: readonly ReferenceDirectory[],
   instances: readonly InstanceReference[],
   query: string,
+  ownerRankedDirectoryQuery?: string,
 ): AtReference[] {
   const normalized = query.trim().toLowerCase();
+  // A ranked page may match paths abbreviated relative to the owner's home.
+  const directoryMatches = ownerRankedDirectoryQuery === normalized
+    ? directories : filterDirectoryReferenceCandidates(directories, query);
   const names = (instance: InstanceReference): string[] =>
     [instance.label, instance.shortLabel ?? ""].filter(Boolean);
   const startsWith = (instance: InstanceReference): number =>
@@ -109,5 +113,5 @@ export function filterAtReferenceCandidates(
     || shown(left).localeCompare(shown(right))
     || left.instanceId.localeCompare(right.instanceId),
   ).slice(0, 10);
-  return [...filterDirectoryReferenceCandidates(directories, query), ...matches];
+  return [...directoryMatches, ...matches];
 }

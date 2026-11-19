@@ -14,6 +14,7 @@ const MAX_CACHED_QUERIES = 8;
 
 type NavigationPopulation = {
   directories: readonly NavigationDirectoryRow[];
+  ownerRankedDirectories?: boolean;
   threads: readonly NavigationRow[];
 };
 type CachedPopulation = {
@@ -38,6 +39,7 @@ export function useComposerMentionSources(params: {
   instances: readonly InstanceReference[];
   release: () => void;
   loading: boolean;
+  ownerRankedDirectoryQuery?: string;
   settledQuery?: string;
   threads: readonly NavigationRow[];
 } {
@@ -142,6 +144,7 @@ export function useComposerMentionSources(params: {
       if (cancelled) return;
       const population: NavigationPopulation = {
         directories: directories.directories ?? [],
+        ownerRankedDirectories: directories.directoryMatch === "mention",
         threads: threads.entries.map((entry) => entry.row),
       };
       cache.set(cacheKey, { population, revision, fetchedAt: Date.now() });
@@ -163,5 +166,9 @@ export function useComposerMentionSources(params: {
   // Effects run after render: never expose the old owner's rows in that gap.
   const visibleState = state.ownerKey === ownerKey ? state
     : { population: EMPTY_POPULATION, loading: demand !== undefined, settledQuery: undefined };
-  return { ...visibleState.population, instances, ensureLoaded, release, loading: visibleState.loading, settledQuery: visibleState.settledQuery };
+  const { directories, ownerRankedDirectories, threads } = visibleState.population;
+  return {
+    directories, threads, instances, ensureLoaded, release, loading: visibleState.loading, settledQuery: visibleState.settledQuery,
+    ownerRankedDirectoryQuery: ownerRankedDirectories ? visibleState.settledQuery : undefined,
+  };
 }

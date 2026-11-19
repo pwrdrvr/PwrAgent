@@ -2540,6 +2540,8 @@ export type NavigationQueryPage = {
   counts: NavigationCounts;
   /** Exact item count for the queried collection, distinct from thread facet counts. */
   collectionSize?: number;
+  /** The owner applied directory mention filtering and ranking before paging. */
+  directoryMatch?: "mention";
   selectionDirectory?: NavigationDirectoryRow;
   /** Complete viewer projection dependencies, before pagination. Omitted when
    * coverage or the bounded metadata budget cannot establish an exclusion. */

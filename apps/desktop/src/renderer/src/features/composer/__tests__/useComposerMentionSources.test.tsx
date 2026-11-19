@@ -93,6 +93,7 @@ describe("bounded composer mention sources", () => {
     expect(getNavigationQueryPage).not.toHaveBeenCalled();
     act(() => result.current.ensureLoaded(query));
     await waitFor(() => expect(result.current.settledQuery).toBe(query));
+    expect(result.current.ownerRankedDirectoryQuery).toBe(query);
     expect(result.current.directories.map((row) => row.path)).toEqual(["/m2-max/microapps"]);
     expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
@@ -105,6 +106,7 @@ describe("bounded composer mention sources", () => {
     act(() => result.current.release());
     act(() => result.current.ensureLoaded(query));
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    expect(result.current.ownerRankedDirectoryQuery).toBe(query);
   });
 
   it("isolates local and remote caches even when the bridge and query are identical", async () => {

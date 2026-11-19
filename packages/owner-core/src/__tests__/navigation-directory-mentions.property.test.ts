@@ -22,6 +22,7 @@ it("includes git in the first @git page when ten projects match via the github p
   const pathMatches = Array.from({ length: 10 }, (_, index) => directory(`project-${index}`, index + 2));
   const page = await readFirstPage([...pathMatches, directory("git", 1)], "git");
 
+  expect(page).toMatchObject({ directoryMatch: "mention" });
   expect(page.directories?.map((row) => row.label)).toEqual([
     "git", ...pathMatches.slice(1).reverse().map((row) => row.label),
   ]);
