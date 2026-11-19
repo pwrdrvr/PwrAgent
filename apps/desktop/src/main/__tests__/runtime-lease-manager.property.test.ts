@@ -30,7 +30,7 @@ it("starts a messaging owner when macOS denies uv_uptime", () => {
 it("preserves identity and the full dead-owner grace when OS uptime is denied", () => {
   fc.assert(fc.property(
     fc.integer({ min: -2_000_000_000_000, max: 2_000_000_000_000 }),
-    fc.constantFrom<RuntimeLeaseKind>("messaging", "federation", "mcp_connections"),
+    fc.constantFrom<RuntimeLeaseKind>("messaging", "federation", "mcp_connections", "automations"),
     fc.integer({ min: 0, max: RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1 }),
     (startedAt, kind, elapsed) => {
       const db = openInMemoryStateDb({ profileName: "fixture" });

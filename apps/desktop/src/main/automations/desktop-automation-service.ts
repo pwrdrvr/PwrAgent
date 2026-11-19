@@ -206,6 +206,8 @@ export class DesktopAutomationService {
    */
   private schedulingLeaseHeld = false;
   private readonly schedulingLeaseRetry = new RuntimeLeaseRetry();
+  /** Dead owners' runs are ended once per launch, not per lease retry. */
+  private startupRunsReconciled = false;
   private readonly pendingRunTranscriptEvents = new Map<
     string,
     Map<string, AutomationRunTranscriptEvent>
@@ -303,18 +305,29 @@ export class DesktopAutomationService {
     if (!this.schedulingLeaseHeld) {
       const leaseManager = this.schedulingLeaseManager();
       if (leaseManager) {
-        const result = leaseManager.acquire("automations");
-        if (!result.acquired) {
-          automationServiceLog.info("automation scheduling is active in another PwrAgent instance for this profile", {
-            holderInstanceId: result.holder.instanceId,
-            holderProcessId: result.holder.processId,
+        let acquired = false;
+        try {
+          const result = leaseManager.acquire("automations");
+          acquired = result.acquired;
+          if (!result.acquired) {
+            automationServiceLog.info("automation scheduling is active in another PwrAgent instance for this profile", {
+              holderInstanceId: result.holder.instanceId,
+              holderProcessId: result.holder.processId,
+            });
+          }
+        } catch (error) {
+          // A busy database must not stop the owner from starting.
+          automationServiceLog.warn("automation scheduling lease acquisition failed", {
+            error: error instanceof Error ? error.message : String(error),
           });
+        }
+        if (!acquired) {
           this.schedulingLeaseRetry.schedule(leaseManager, "automations", generation, async () => {
             this.startSchedulingIfLeaseAcquired();
           });
           // Any instance may end a dead owner's runs; only the holder
           // reschedules missed windows, which its own timer then runs.
-          this.reconcileStartupRuns({ reschedule: false });
+          if (!this.startupRunsReconciled) this.reconcileStartupRuns({ reschedule: false });
           return;
         }
         automationServiceLog.info("automation scheduling lease acquired", {
@@ -1537,6 +1550,7 @@ export class DesktopAutomationService {
   }
 
   private reconcileStartupRuns(options: { reschedule: boolean }): void {
+    this.startupRunsReconciled = true;
     const freedAutomationIds = this.releaseDeadOwnerRuns({ ...options, startup: true });
     for (const automationId of freedAutomationIds) {
       void this.scheduler.startNextQueuedRun(automationId).catch((error: unknown) => {

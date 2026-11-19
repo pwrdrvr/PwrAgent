@@ -3,7 +3,10 @@ import {
   HeadlessAutomationRunner,
   type HeadlessAutomationLauncher,
 } from "../automations/automation-runner";
-import { AutomationScheduler } from "../automations/automation-scheduler";
+import {
+  AUTOMATION_EVALUATION_RETRY_MS,
+  AutomationScheduler,
+} from "../automations/automation-scheduler";
 import { AutomationStore } from "../storage/automation-store";
 import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
@@ -388,6 +391,32 @@ describe("AutomationScheduler", () => {
       lastRunStatus: "skipped",
       nextRunAt: 15 * 60 * 1000,
     });
+  });
+
+  it("waits before retrying a schedule evaluation that failed", async () => {
+    createIntervalAutomation();
+    const delays: number[] = [];
+    const scheduler = new AutomationScheduler({
+      store,
+      runner: new HeadlessAutomationRunner(launcher),
+      now: () => now,
+      setTimer: ((_callback: () => void, delayMs: number) => {
+        delays.push(delayMs);
+        return 0;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+    scheduler.start();
+    store.findActiveRunForAutomation = () => {
+      throw new Error("database is locked");
+    };
+    now = 5 * 60 * 1000;
+
+    await expect(scheduler.evaluateDueAutomations()).resolves.toBeUndefined();
+
+    // The window stays due; re-arming at it would fire again at once.
+    expect(store.getAutomation("automation-1")?.nextRunAt).toBe(5 * 60 * 1000);
+    expect(delays.at(-1)).toBe(AUTOMATION_EVALUATION_RETRY_MS);
   });
 
   it("records one skipped summary when many drop_missed windows are due", async () => {
