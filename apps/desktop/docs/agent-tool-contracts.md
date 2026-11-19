@@ -21,6 +21,13 @@ shape as backwards-compatible API surfaces.
 - Envelope metadata such as `threadId`, `turnId`, and `callId` may be forwarded
   through `AgentToolCallContext`, but must not become required tool input.
 
+The desktop MCP server requires a negotiated `Mcp-Session-Id` for mutations
+that use the call ID for admission or receipts: `handoff_task`,
+`move_thread_workspace`, `research_assign`, `research_start`, `research_update`,
+and `start_review`. Within the same turn, retransmit with the original session
+and JSON-RPC ID to preserve the call identity. Codex dynamic tools supply their
+own call IDs.
+
 ## Frozen Legacy Dynamic Namespaces
 
 Codex persists dynamic tool definitions when a thread is created. PwrAgent

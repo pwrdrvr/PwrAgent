@@ -5,9 +5,16 @@ import {
   type NavigationThreadSummary,
   type ReviewRunMode,
 } from "@pwragent/shared";
+import { prefersClaudeCodeReview } from "../../../shared/review-command";
 import { formatBackendLabel } from "./backend-label";
 
+export { prefersClaudeCodeReview };
+
 export type ReviewRunModeDecision = {
+  /** The thread is a Claude thread, so the mode menu offers Claude Code. */
+  claudeCodeReviewOffered?: boolean;
+  /** Claude Code is offered but this thread's owner cannot run it. */
+  claudeCodeReviewDisabled?: boolean;
   controlDisabled: boolean;
   explicitRunModeSupported: boolean;
   helpText?: string;
@@ -39,14 +46,42 @@ function backendLabel(
   return formatBackendLabel(backend, summary ? [summary] : undefined);
 }
 
+export const PULL_REQUEST_SET_RUN_MODE_REASON =
+  "PwrAgent Sub Agent is required because a combined review covers several pull requests, and Codex's own reviewer takes one.";
+
 export function resolveReviewRunMode(params: {
   ownerSummary?: BackendSummary;
+  /** Several pull requests reviewed together, which only a managed reviewer or Claude Code takes. */
+  pullRequestSet?: boolean;
   requestedRunMode?: ReviewRunMode;
+  /** The operator picked a reviewer, which is not Claude Code reviewing its own thread. */
+  reviewerChosen?: boolean;
   reviewerBackend?: AppServerBackendKind;
   reviewerSummary?: BackendSummary;
   thread: NavigationThreadSummary;
   workspaceCwd?: string;
 }): ReviewRunModeDecision {
+  const claudeCodeReviewOffered = params.thread.source === "claude";
+  const claudeCodeReviewDisabled = claudeCodeReviewOffered
+    && params.ownerSummary?.capabilities.reviewClaudeCodeReview !== true;
+  const explicitRunModeSupportedByOwner =
+    params.ownerSummary?.capabilities.reviewRunMode === true;
+  if (prefersClaudeCodeReview(params)) {
+    return {
+      claudeCodeReviewOffered,
+      claudeCodeReviewDisabled: false,
+      controlDisabled: !explicitRunModeSupportedByOwner,
+      explicitRunModeSupported: explicitRunModeSupportedByOwner,
+      runMode: "claude-code-review",
+      subagentDisabled: params.reviewerSummary?.capabilities.reviewRunner !== true,
+      nativeDisabled: true,
+      submissionUnavailable: !explicitRunModeSupportedByOwner,
+    };
+  }
+  // A Claude Code request this owner cannot honor falls back to the usual rules.
+  const requestedRunMode = params.requestedRunMode === "claude-code-review"
+    ? undefined
+    : params.requestedRunMode;
   const reviewerBackend = params.reviewerBackend ?? params.thread.source;
   const reviewerLabel = backendLabel(reviewerBackend, params.reviewerSummary);
   const explicitRunModeSupported =
@@ -65,14 +100,16 @@ export function resolveReviewRunMode(params: {
   } else if (params.thread.source.startsWith("acp:")) {
     forcedReason =
       `PwrAgent Sub Agent is required because ${reviewerLabel} runs reviews in a managed subagent.`;
+  } else if (params.pullRequestSet) {
+    forcedReason = PULL_REQUEST_SET_RUN_MODE_REASON;
   }
 
   const nativeDisabled = params.ownerSummary?.capabilities.reviewCodexSubAgent !== true;
   const runMode: ReviewRunMode = forcedReason
     ? "pwragent-sub-agent"
-    : params.requestedRunMode ?? "codex-sub-agent";
+    : requestedRunMode ?? "codex-sub-agent";
   const submissionUnavailable = !explicitRunModeSupported
-    ? params.requestedRunMode !== undefined
+    ? requestedRunMode !== undefined || Boolean(params.pullRequestSet)
     : runMode === "pwragent-sub-agent"
       ? !subagentSupported
       : nativeDisabled;
@@ -84,7 +121,10 @@ export function resolveReviewRunMode(params: {
     submissionUnavailable ? "The selected review mode is unavailable on this provider." : undefined,
   ].filter(Boolean).join(" ") || undefined;
   return {
-    controlDisabled: Boolean(forcedReason) || !explicitRunModeSupported,
+    claudeCodeReviewOffered,
+    claudeCodeReviewDisabled,
+    // A Claude thread can still switch back to Claude Code.
+    controlDisabled: (Boolean(forcedReason) && !claudeCodeReviewOffered) || !explicitRunModeSupported,
     explicitRunModeSupported,
     helpText,
     runMode,

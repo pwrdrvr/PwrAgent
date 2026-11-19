@@ -5,6 +5,7 @@ import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragen
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  federationReviewRoute,
   type FederationBackendMethod,
 } from "@pwragent/federation/federation-backend-methods";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
@@ -544,6 +545,25 @@ export type FederationListProjectHeldWakeupsRequest =
 export type FederationResolveProjectHeldWakeupsRequest =
   Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">;
 
+/** What a viewer hears when the owning instance predates the extended review routes. */
+export const EXTENDED_REVIEW_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to review several pull requests together or run Claude Code's /code-review.";
+
+/** An owner without the extended review routes says so plainly. */
+async function withExtendedReviewOwner<T>(
+  route: ReturnType<typeof federationReviewRoute>,
+  request: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    if (route === "extended" && hasFederationErrorCode(error, "method_not_found")) {
+      throw new Error(EXTENDED_REVIEW_UNSUPPORTED_MESSAGE, { cause: error });
+    }
+    throw error;
+  }
+}
+
 /** What a viewer hears when the owning instance cannot pause its queue. */
 export const QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to pause its queued messages.";
@@ -576,7 +596,8 @@ export function additionalFederationBackendCapabilities(
   const required: FederationCapability[] = [];
   const payload = envelope.params as { messageOrigin?: { kind?: string; causalMessagingSource?: unknown }; request?: { messageOrigin?: { kind?: string; causalMessagingSource?: unknown } } } | undefined;
   const origin = envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest ? payload?.request?.messageOrigin : payload?.messageOrigin;
-  if (origin?.kind === "messaging" || origin?.causalMessagingSource) required.push("messaging_route");
+  if (origin?.kind === "messaging" || origin?.causalMessagingSource
+    || envelope.method === FEDERATION_BACKEND_METHODS.startMessagingClaudeReview) required.push("messaging_route");
   if (envelope.method === FEDERATION_BACKEND_METHODS.updateSubthreadOrder
     && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) required.push("archive_subthread_promotion_v1");
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
@@ -1574,19 +1595,30 @@ export function registerFederationBackendHandlers(params: {
         ),
     );
   }
+  for (const method of [FEDERATION_BACKEND_METHODS.startReview, FEDERATION_BACKEND_METHODS.startPullRequestReview,
+    FEDERATION_BACKEND_METHODS.startExtendedReview]) {
+    params.router.registerHandler(method, async (envelope) => {
+      const request = envelope.params as StartReviewRequest;
+      if (request.messagingSource !== undefined) throw new Error("Use the messaging Claude review route to preserve the contact's permissions.");
+      return await params.backend.startReview(request);
+    });
+  }
   params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.startReview,
-    async (envelope) =>
-      await params.backend.startReview(
-        envelope.params as StartReviewRequest,
-      ),
-  );
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.startPullRequestReview,
-    async (envelope) =>
-      await params.backend.startReview(
-        envelope.params as StartReviewRequest,
-      ),
+    FEDERATION_BACKEND_METHODS.startMessagingClaudeReview,
+    async (envelope) => {
+      const request = envelope.params as StartReviewRequest;
+      const source = request.messagingSource;
+      if (request.backend !== "claude" || request.runMode !== "claude-code-review"
+        || typeof source?.ownerId !== "string" || !source.ownerId
+        || typeof source.requestId !== "string" || !source.requestId
+        || (source.instanceId !== undefined && source.instanceId !== envelope.sourceInstanceId)) {
+        throw new Error("The messaging contact's permissions could not be preserved for this review.");
+      }
+      return await params.backend.startReview({
+        ...request,
+        messagingSource: { ...source, instanceId: envelope.sourceInstanceId },
+      });
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
@@ -1609,19 +1641,24 @@ export function registerFederationBackendHandlers(params: {
       );
     },
   );
-  params.router.registerHandler(
+  for (const method of [
     FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview,
-    async (envelope) => {
-      const request = envelope.params as CreateScheduledThreadActionRequest;
-      return await params.backend.createScheduledThreadAction(
-        authenticateScheduledTurnOrigin({
-          request,
-          resolveSourceInstance: params.resolveSourceInstance,
-          sourceInstanceId: envelope.sourceInstanceId,
-        }),
-      );
-    },
-  );
+    FEDERATION_BACKEND_METHODS.createScheduledExtendedReview,
+  ]) {
+    params.router.registerHandler(
+      method,
+      async (envelope) => {
+        const request = envelope.params as CreateScheduledThreadActionRequest;
+        return await params.backend.createScheduledThreadAction(
+          authenticateScheduledTurnOrigin({
+            request,
+            resolveSourceInstance: params.resolveSourceInstance,
+            sourceInstanceId: envelope.sourceInstanceId,
+          }),
+        );
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
     async (envelope) => {
@@ -1635,19 +1672,24 @@ export function registerFederationBackendHandlers(params: {
       );
     },
   );
-  params.router.registerHandler(
+  for (const method of [
     FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview,
-    async (envelope) => {
-      const request = envelope.params as UpdateScheduledThreadActionRequest;
-      return await params.backend.updateScheduledThreadAction(
-        authenticateScheduledTurnOrigin({
-          request,
-          resolveSourceInstance: params.resolveSourceInstance,
-          sourceInstanceId: envelope.sourceInstanceId,
-        }),
-      );
-    },
-  );
+    FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview,
+  ]) {
+    params.router.registerHandler(
+      method,
+      async (envelope) => {
+        const request = envelope.params as UpdateScheduledThreadActionRequest;
+        return await params.backend.updateScheduledThreadAction(
+          authenticateScheduledTurnOrigin({
+            request,
+            resolveSourceInstance: params.resolveSourceInstance,
+            sourceInstanceId: envelope.sourceInstanceId,
+          }),
+        );
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction,
     async (envelope) =>
@@ -2232,7 +2274,11 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSelectedDetailResponse> {
     return await this.rpc.request<NavigationSelectedDetailResponse>({
-      method: FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
+      // Older peers must report an unsupported method instead of interpreting
+      // a hover-card request as an ordinary selected-thread read.
+      method: request.lookup === "thread-link"
+        ? FEDERATION_BACKEND_METHODS.getNavigationThreadLinkDetail
+        : FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
       params: request,
       ...rpcOptions,
     });
@@ -2827,14 +2873,27 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
     if (request.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
-    return await this.rpc.request<StartReviewResponse>({
+    if (request.messagingSource) {
+      try {
+        return await this.rpc.request<StartReviewResponse>({ method: FEDERATION_BACKEND_METHODS.startMessagingClaudeReview, params: request });
+      } catch (error) {
+        if (hasFederationErrorCode(error, "method_not_found")) {
+          throw new Error("Update PwrAgent on the owning instance to preserve the messaging contact's permissions in Claude reviews.", { cause: error });
+        }
+        throw error;
+      }
+    }
+    const route = federationReviewRoute(request);
+    return await withExtendedReviewOwner(route, async () => await this.rpc.request<StartReviewResponse>({
       // A distinct route makes older owners fail closed instead of treating
       // the new target as a generic/custom review.
-      method: request.target.type === "pullRequest"
-        ? FEDERATION_BACKEND_METHODS.startPullRequestReview
-        : FEDERATION_BACKEND_METHODS.startReview,
+      method: {
+        review: FEDERATION_BACKEND_METHODS.startReview,
+        pullRequest: FEDERATION_BACKEND_METHODS.startPullRequestReview,
+        extended: FEDERATION_BACKEND_METHODS.startExtendedReview,
+      }[route],
       params: request,
-    });
+    }));
   }
 
   async readQueuedTurn(
@@ -2911,14 +2970,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: CreateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     if (request.review?.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
-    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+    const route = request.review ? federationReviewRoute(request.review) : "review";
+    return await withExtendedReviewOwner(route, async () => await this.rpc.request<ScheduledThreadActionMutationResponse>({
       // A distinct route makes older owners fail closed instead of treating
       // the new target as a generic/custom review.
-      method: request.review?.target.type === "pullRequest"
-        ? FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview
-        : FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+      method: {
+        review: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+        pullRequest: FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview,
+        extended: FEDERATION_BACKEND_METHODS.createScheduledExtendedReview,
+      }[route],
       params: request,
-    });
+    }));
   }
 
   async updateScheduledThreadAction(
@@ -2938,14 +3000,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       if (!backend) throw new Error("Scheduled review action was not found; refresh scheduled actions before updating it.");
       await this.assertReviewModeOwner(backend);
     }
-    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+    const route = request.review ? federationReviewRoute(request.review) : "review";
+    return await withExtendedReviewOwner(route, async () => await this.rpc.request<ScheduledThreadActionMutationResponse>({
       // A distinct route makes older owners fail closed instead of treating
       // the new target as a generic/custom review.
-      method: request.review?.target.type === "pullRequest"
-        ? FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview
-        : FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
+      method: {
+        review: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
+        pullRequest: FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview,
+        extended: FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview,
+      }[route],
       params: request,
-    });
+    }));
   }
 
   async cancelScheduledThreadAction(

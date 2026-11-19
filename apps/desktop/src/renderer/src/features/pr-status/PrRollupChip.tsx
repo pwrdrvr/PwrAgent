@@ -16,6 +16,7 @@ import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { statusPulseRef } from "../../lib/status-pulse";
+import { useThreadPullRequestAttachments, type PullRequestAttachmentThread } from "../../lib/useThreadPullRequestAttachments";
 import {
   resolvePrChipWatch,
   type ThreadPrWatches,
@@ -45,6 +46,9 @@ type PrRollupChipProps = {
   threadTitle: string;
   /** Newline-joined URLs of the PRs that need their org/repo prefix. */
   repoPrefixedUrls: string;
+  /** Owner identity for a compact row whose attached PRs were truncated. */
+  attachmentThread?: PullRequestAttachmentThread;
+  needsRepoPrefix?: (pr: PrSummary, prs: PrSummary[]) => boolean;
   onOpen: (url: string) => void;
   onOpenContextMenu?: (
     pr: PrSummary,
@@ -124,21 +128,38 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
 });
 
 function MultiPrRollupChip(props: PrRollupChipProps) {
+  const [openMode, setOpenMode] = useState<OpenMode | null>(null);
+  const open = openMode !== null;
+  const attachments = useThreadPullRequestAttachments(open ? props.attachmentThread : undefined);
+  const incomplete = Boolean(props.attachmentThread?.prsTruncated && !attachments.prs);
+  const listPrs = attachments.prs ?? props.prs;
+  const count = attachments.prs?.length ?? props.attachmentThread?.prCount ?? props.prs.length;
+  const countUnknown = incomplete && props.attachmentThread?.prCount === undefined;
+  const countLabel = `${count}${countUnknown ? "+" : ""}`;
+  const moreCount = Math.max(0, count - 1);
   const rollup = resolvePrRollup(props.prs)!;
+  const listRollup = listPrs === props.prs ? rollup : resolvePrRollup(listPrs);
+  const ordered = listRollup?.ordered ?? [];
   const overflow = props.variant === "overflow" ? resolvePrOverflow(props.prs) : undefined;
+  const overflowLabel = countUnknown ? "More PRs" : prOverflowLabel(moreCount);
   // The PRs the chip itself speaks for: all of them, or the ones the lead
   // chip beside it leaves out. The list always holds every PR.
-  const chipRollup = overflow?.restRollup ?? rollup;
+  const chipRollup = overflow
+    ? (attachments.prs && resolvePrRollup(ordered.filter((pr) => pr.url !== overflow.lead.url)))
+      || overflow.restRollup
+    : listRollup ?? rollup;
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
+  const summaryText = incomplete ? (attachments.failed ? "Couldn’t load all PRs" : "Loading PRs…")
+    : listRollup?.summary;
   const presentation = resolvePrChipPresentation(chipRollup.representative);
-  const leadLabel = rollup.lead && !overflow
-    ? prNumberLabel(rollup.lead, repoPrefixed.has(rollup.lead.url))
+  const lead = listRollup?.lead;
+  const leadLabel = lead && !overflow
+    ? prNumberLabel(lead, repoPrefixed.has(lead.url) || props.needsRepoPrefix?.(lead, listPrs) === true)
     : undefined;
   const triggerRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
   const popoverId = useId();
-  const [openMode, setOpenMode] = useState<OpenMode | null>(null);
   const [position, setPosition] = useState<{
     top: number;
     left: number;
@@ -146,7 +167,6 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     /** The side the chip that opened the list is on: each row's PR chip sits there. */
     chipSide: "left" | "right";
   }>();
-  const open = openMode !== null;
   const {
     show: showCard,
     showAfterDelay: showCardAfterDelay,
@@ -170,7 +190,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const watchStopHint = Boolean(props.onOpenContextMenu);
   const waitingForCi = chipRollup.ordered.some((pr) => watchFor(pr)?.ci);
   // Read from the live list, so a status update reaches an open card.
-  const cardPr = rollup.ordered.find((pr) => pr.url === cardUrl);
+  const cardPr = ordered.find((pr) => pr.url === cardUrl);
   const cardDrift = props.branchDrift?.url === cardUrl ? props.branchDrift : undefined;
 
   useEffect(() => {
@@ -266,7 +286,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       && current.chipSide === next.chipSide
         ? current
         : next);
-  }, [open, rollup.ordered.length]);
+  }, [open, ordered.length, incomplete]);
 
   // An outside press or a scroll of the chip's ancestors closes it: the
   // popover is fixed to where the chip was. Sibling panes (including the
@@ -377,7 +397,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       focusRow(index + (event.key === "ArrowDown" ? 1 : -1));
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      focusRow(event.key === "Home" ? 0 : rollup.ordered.length - 1);
+      focusRow(event.key === "Home" ? 0 : ordered.length - 1);
     } else if (event.key === "Tab") {
       // Tab steps from the rows to Detach all, when there is one.
       const detachAll = popoverRef.current?.querySelector<HTMLButtonElement>(
@@ -449,12 +469,12 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         aria-expanded={open}
         // The visible `+N PRs` leads the name (WCAG 2.5.3, label in name).
         aria-label={overflow
-          ? `${prOverflowLabel(overflow.rest.length)}: ${overflow.rest.length} more ${
-            overflow.rest.length === 1 ? "pull request" : "pull requests"
-          }, ${chipRollup.summary}${waitingForCi ? ", waiting for CI" : ""}`
-          : `${props.prs.length} pull requests, ${
-            leadLabel ? `${leadLabel} open, ` : ""
-          }${rollup.summary}${waitingForCi ? ", waiting for CI" : ""}`}
+          ? `${overflowLabel}: ${moreCount}${countUnknown ? "+" : ""} more ${
+            moreCount === 1 ? "pull request" : "pull requests"
+          }${props.attachmentThread ? "" : `, ${chipRollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`
+          : `${countLabel} pull requests${
+            leadLabel ? `, ${leadLabel} open` : ""
+          }${props.attachmentThread ? "" : `, ${rollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`}
         className={className}
         data-pr-rollup=""
         draggable={false}
@@ -490,7 +510,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 ? <span className="pr-chip__draft-bar" aria-hidden="true" />
                 : null}
             </span>
-            <span className="pr-chip__more">+{props.prs.length - 1}</span>
+            <span className="pr-chip__more">+{moreCount}{countUnknown ? "+" : ""}</span>
             {waitingForCi ? (
               <span className="pr-chip__watch" aria-hidden="true">
                 <EyeIcon size={12} />
@@ -501,7 +521,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           <>
             <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
             <span className="pr-chip__label">
-              {overflow ? prOverflowLabel(overflow.rest.length) : prRollupLabel(props.prs)}
+              {overflow ? overflowLabel : incomplete ? `${countLabel} PRs` : prRollupLabel(listPrs)}
             </span>
             {waitingForCi ? (
               <span className="pr-chip__watch" aria-hidden="true">
@@ -547,14 +567,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           >
             <div className="pr-rollup-popover__head">
               <span className="pr-rollup-popover__eyebrow">
-                {props.prs.length} pull requests
+                {countLabel} pull requests
               </span>
-              <span className="pr-rollup-popover__summary">{rollup.summary}</span>
+              <span className="pr-rollup-popover__summary" role={incomplete ? "status" : undefined}>{summaryText}</span>
             </div>
             {/* A scrolled list moves the row out from under its card. */}
             <ul className="pr-rollup-popover__list" onScroll={hideRowCard}>
-              {rollup.ordered.map((pr, index) => {
-                const label = prNumberLabel(pr, repoPrefixed.has(pr.url));
+              {ordered.map((pr, index) => {
+                const label = prNumberLabel(pr, repoPrefixed.has(pr.url)
+                  || props.needsRepoPrefix?.(pr, listPrs) === true);
                 const behind = props.branchDrift?.url === pr.url
                   ? prBranchBehindLabel(props.branchDrift)
                   : undefined;
@@ -656,7 +677,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 );
               })}
             </ul>
-            {props.onDetachAll ? (
+            {props.onDetachAll && !incomplete && ordered.length ? (
               <div className="pr-rollup-popover__foot">
                 <button
                   type="button"
@@ -666,13 +687,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                     if (event.key !== "Tab") return;
                     if (event.shiftKey) {
                       event.preventDefault();
-                      focusRow(rollup.ordered.length - 1);
+                      focusRow(ordered.length - 1);
                       return;
                     }
                     leavePopover(false, event);
                   }}
                   onClick={() => {
-                    const prs = rollup.ordered;
+                    const prs = ordered;
                     // The chip outlives the list, so the confirmation returns
                     // focus there rather than to an unmounted button.
                     triggerRef.current?.focus();

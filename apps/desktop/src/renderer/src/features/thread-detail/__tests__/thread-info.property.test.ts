@@ -1,9 +1,35 @@
-import type { NavigationQueryPage, NavigationRow } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationRow, NavigationThreadSummary } from "@pwragent/shared";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { readThreadInfoRow } from "../thread-info";
-import { observeThreadLinkRows } from "../../../lib/thread-link-rows";
+import { readThreadInfoRow, threadInfoFacts } from "../thread-info";
+import { observeThreadLinkRows, readThreadLinkRow } from "../../../lib/thread-link-rows";
+
+it("uses the same owner's archive identity as the viewer, even without an archive timestamp", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("codex" as const, "claude" as const),
+    fc.uuid(), fc.option(fc.uuid(), { nil: undefined }), async (backend, threadId, instanceId) => {
+      const target = { backend, threadId, instanceId };
+      const owner = instanceId ? { scope: "remote" as const, instanceId } : undefined;
+      const api = {
+        getNavigationQueryPage: vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () =>
+          ({ entries: [], complete: true, coverage: { state: "complete" } }) as unknown as NavigationQueryPage),
+        getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+          expect(request.federationTarget).toEqual(owner);
+          expect(request.ref).toMatchObject({ backend, threadId });
+          expect(request.lookup).toBe("thread-link");
+          return { protocol: 2, lookup: request.lookup, ref: { ...request.ref, ownerInstanceId: instanceId },
+            revision: "archived", readiness: "ready", identity: "archived",
+            thread: { id: threadId, source: backend, title: "Archived owner thread" } as NavigationThreadSummary };
+        }),
+      };
+      expect(await readThreadLinkRow(api, target, undefined)).toBeUndefined();
+      expect(api.getNavigationSelectedDetail).not.toHaveBeenCalled();
+      const row = await readThreadInfoRow(api, target, undefined);
+      expect(row && threadInfoFacts(row)).toMatchObject({ title: "Archived owner thread", archived: true });
+      expect(await readThreadInfoRow(api, target, undefined)).toBe(row);
+      expect(api.getNavigationSelectedDetail).toHaveBeenCalledTimes(1);
+    }), { numRuns: 25 });
+});
 
 // The owner, rather than a viewer's possibly cold peer cache, is the oracle.
 it("resolves an owner's thread independently of which window encounters it", async () => {

@@ -8,7 +8,7 @@ import { prNumberLabel, resolvePrRollup } from "../pr-status/pr-rollup";
 import { ContextMenuCascade } from "./ContextMenuCascade";
 import { needsRepoPrefix } from "./ThreadRow";
 
-/** The flyout lists this many PRs; Copy All covers the rest. */
+/** The flyout lists this many PRs; Copy All is available for a complete list. */
 export const PR_COPY_MENU_LIMIT = 10;
 
 /**
@@ -19,6 +19,7 @@ export const PR_COPY_MENU_LIMIT = 10;
 export function PullRequestCopyMenuItems(props: {
   thread: NavigationThreadSummary;
   prs: readonly PrSummary[];
+  preview?: boolean;
   onCopy: (value: string) => void;
 }) {
   const ordered = resolvePrRollup(props.prs)?.ordered ?? [];
@@ -40,7 +41,7 @@ export function PullRequestCopyMenuItems(props: {
   return (
     <ContextMenuCascade
       label="Copy Pull Request URL"
-      groupLabel={`${ordered.length} pull requests`}
+      groupLabel={props.preview ? "Available pull requests" : `${ordered.length} pull requests`}
     >
       {ordered.slice(0, PR_COPY_MENU_LIMIT).map((pr) => {
         const label = prNumberLabel(pr, needsRepoPrefix(props.thread, pr, all));
@@ -74,14 +75,18 @@ export function PullRequestCopyMenuItems(props: {
           </button>
         );
       })}
-      <div className="thread-context-menu__separator" role="separator" />
-      <button
-        role="menuitem"
-        type="button"
-        onClick={() => props.onCopy(ordered.map((pr) => pr.url).join("\n"))}
-      >
-        Copy All {ordered.length} URLs
-      </button>
+      {props.preview ? null : (
+        <>
+          <div className="thread-context-menu__separator" role="separator" />
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => props.onCopy(ordered.map((pr) => pr.url).join("\n"))}
+          >
+            Copy All {ordered.length} URLs
+          </button>
+        </>
+      )}
     </ContextMenuCascade>
   );
 }

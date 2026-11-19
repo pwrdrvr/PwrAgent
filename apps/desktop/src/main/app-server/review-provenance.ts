@@ -9,6 +9,7 @@ import {
   normalizeFullRef,
   type NamedReviewPullRequest,
 } from "../../shared/review-command";
+import { orderedPullRequestSetSnapshots } from "../../shared/pull-request-review";
 import { runGitCommand } from "./git-executable";
 import {
   normalizeWorkspacePath,
@@ -372,6 +373,21 @@ export async function resolveReviewProvenance(params: {
       pullRequest: snapshot.pullRequest,
       pullRequestSnapshot: snapshot,
     };
+  }
+  if (params.target.type === "pullRequests") {
+    // Several diffs have no one branch or commit, so the card names the pull
+    // requests, in the order the reviewer read them, with each snapshot.
+    const { snapshots } = orderedPullRequestSetSnapshots(params.target);
+    return {
+      ...context,
+      pullRequest: snapshots[0]!.pullRequest,
+      pullRequests: snapshots.map((snapshot) => snapshot.pullRequest),
+      pullRequestSnapshots: snapshots,
+    };
+  }
+  if (params.target.type === "branch") {
+    // A branch target reviews that branch, whatever is checked out.
+    return { ...context, gitBranch: params.target.branch };
   }
   if (params.target.type === "baseBranch") {
     context.baseBranch = params.target.branch;

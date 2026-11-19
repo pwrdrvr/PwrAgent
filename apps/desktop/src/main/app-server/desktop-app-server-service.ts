@@ -2040,7 +2040,8 @@ class DesktopAppServerService {
       return await navigationQueryPool.readExact({ kind: "detail", consumerId: token,
         owner: request.federationTarget, ref: request.ref,
         identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
-        operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true, request.includeWorkspaceConfiguration === true, request.collection ?? null]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true,
+          request.includeWorkspaceConfiguration === true, request.collection ?? null, request.lookup ?? null]),
         load: async (options) => {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);

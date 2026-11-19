@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentEvent,
   AgentFollowUpProtection,
+  AppServerReviewTarget,
   AppServerThreadMessageOrigin,
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
@@ -10,8 +11,10 @@ import type {
   ScheduledThreadActionHoldCause,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
+  ScheduledThreadReviewPayload,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
+import { pullRequestSetLabel, samePullRequestSet } from "@pwragent/shared/pull-request-review";
 import {
   AGENT_FOLLOW_UP_MAX_ACTIVE_PER_THREAD,
   AGENT_FOLLOW_UP_MAX_DELAY_MS,
@@ -296,13 +299,13 @@ export class ScheduledThreadActionService {
       }
       return mutationResponseForAction(existing);
     }
-    if (request.review?.target.type === "pullRequest") {
+    if (capturesReviewSnapshot(request.review)) {
       const prepared = await this.options.registry.prepareReviewRequest({
         ...request.review, backend: request.backend, threadId: request.threadId,
       });
       request = {
         ...request,
-        displayText: `Review ${prepared.target.type === "pullRequest" ? prepared.target.url : "pull request"} at ${prepared.target.type === "pullRequest" ? prepared.target.snapshot!.headCommit.slice(0, 10) : ""}`,
+        displayText: capturedReviewLabel(prepared.target),
         review: { ...request.review, target: prepared.target, cwd: prepared.cwd },
       };
     }
@@ -331,10 +334,8 @@ export class ScheduledThreadActionService {
       ...request,
     };
     validateScheduledActionRequest(candidate);
-    if (request.review?.target.type === "pullRequest") {
-      const samePullRequest = current.review?.target.type === "pullRequest"
-        && current.review.target.url === request.review.target.url
-        && (!request.review.cwd || request.review.cwd === current.review.cwd);
+    if (capturesReviewSnapshot(request.review)) {
+      const samePullRequest = keepsCapturedReview(current.review, request.review);
       const review = samePullRequest
         ? { ...current.review, ...request.review, runMode: request.review.runMode ?? current.review?.runMode }
         : request.review;
@@ -344,7 +345,7 @@ export class ScheduledThreadActionService {
       }, samePullRequest);
       request = {
         ...request,
-        displayText: `Review ${request.review.target.url} at ${prepared.target.type === "pullRequest" ? prepared.target.snapshot!.headCommit.slice(0, 10) : ""}`,
+        displayText: capturedReviewLabel(prepared.target),
         review: { ...review, target: prepared.target, cwd: prepared.cwd },
       };
     }
@@ -1086,7 +1087,7 @@ function matchesCreateRequest(
     && action.origin === (request.origin ?? "desktop")
     && action.manualReleaseRequired === request.manualReleaseRequired
     && (action.displayText === request.displayText
-      || (action.review?.target.type === "pullRequest" && request.review?.target.type === "pullRequest"))
+      || (capturesReviewSnapshot(action.review) && capturesReviewSnapshot(request.review)))
     && JSON.stringify(action.imageAttachments)
       === JSON.stringify(request.imageAttachments)
     && JSON.stringify(action.fileAttachments)
@@ -1100,12 +1101,56 @@ function reviewAdmissionIdentity(
   review: ScheduledThreadAction["review"],
   incoming: ScheduledThreadAction["review"],
 ): ScheduledThreadAction["review"] {
-  if (review?.target.type !== "pullRequest") return review;
+  if (!review || !capturesReviewSnapshot(review)) return review;
   return {
     ...review,
     cwd: incoming?.cwd ? review.cwd : undefined,
-    target: { type: "pullRequest", url: review.target.url },
+    target: review.target.type === "pullRequests"
+      ? { type: "pullRequests", pullRequests: review.target.pullRequests.map((member) => ({ url: member.url })) }
+      : { type: "pullRequest", url: review.target.type === "pullRequest" ? review.target.url : "" },
   };
+}
+
+/**
+ * A queued pull request review whose commits the owner captures when it is
+ * queued. Claude Code's `/code-review` reads each pull request when it starts,
+ * so it captures nothing.
+ */
+export function capturesReviewSnapshot(
+  review: ScheduledThreadReviewPayload | undefined,
+): review is ScheduledThreadReviewPayload & {
+  target: Extract<AppServerReviewTarget, { type: "pullRequest" | "pullRequests" }>;
+} {
+  return Boolean(review)
+    && review!.runMode !== "claude-code-review"
+    && (review!.target.type === "pullRequest" || review!.target.type === "pullRequests");
+}
+
+/**
+ * Whether rescheduling keeps the captured commits: the same pull requests in
+ * the same order, in the same workspace. Anything else is a new review, and
+ * captures new ones.
+ */
+export function keepsCapturedReview(
+  current: ScheduledThreadReviewPayload | undefined,
+  incoming: ScheduledThreadReviewPayload,
+): boolean {
+  if (!capturesReviewSnapshot(current) || !capturesReviewSnapshot(incoming)) return false;
+  if (incoming.cwd && incoming.cwd !== current.cwd) return false;
+  if (current.target.type === "pullRequest" && incoming.target.type === "pullRequest") {
+    return current.target.url === incoming.target.url;
+  }
+  return current.target.type === "pullRequests"
+    && incoming.target.type === "pullRequests"
+    && samePullRequestSet(current.target.pullRequests, incoming.target.pullRequests);
+}
+
+/** "Review <url> at <head>", or "Review PRs #1, #2" for a combined review. */
+function capturedReviewLabel(target: AppServerReviewTarget): string {
+  if (target.type === "pullRequests") return `Review ${pullRequestSetLabel(target.pullRequests)}`;
+  return target.type === "pullRequest"
+    ? `Review ${target.url} at ${target.snapshot!.headCommit.slice(0, 10)}`
+    : "Review";
 }
 
 export function getScheduledThreadActionService(): ScheduledThreadActionService {

@@ -311,6 +311,7 @@ it("agrees with Git about archive eligibility across layouts and late registrati
         await expect(readFile(path.join(checkout, "preserved.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         const reason = mutation === "primary" ? /primary checkout/ : mutation === "late-head" ? /HEAD changed/
+          : mutation === "subdirectory" ? /\.git entry is missing/
           : mutation.includes("lock") ? /locked worktree/ : /registered with Git/;
         await expect(archive).rejects.toThrow(reason);
         expect(await readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("snapshot me");

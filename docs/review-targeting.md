@@ -78,3 +78,82 @@ review queue: the first starts when the thread is free and each of the rest
 runs after the one before it, each with its own captured snapshot. Such a
 batch never auto-fixes, because the fixes would all land in this checkout,
 which is on at most one of the PRs' branches. A launchpad offers radios.
+
+## Reviewing several pull requests together
+
+Once two or more PRs are checked, **Review them** offers **Separately** (the
+default, one review per PR as above) or **Together**: one review of a
+`pullRequests` target, `{ type: "pullRequests", pullRequests: { url, snapshot? }[] }`.
+It takes two to eight distinct GitHub.com PRs of one repository, all attached
+to the thread.
+
+The owner resolves each PR exactly as it resolves one, and if any one fails the
+whole review fails: a combined review that silently dropped a PR would read as
+covering it. Each snapshot also records `changedPaths`, the paths its
+merge-base-to-head diff changes (renames as a deletion and an addition), up to
+500; beyond that the field is absent, which means unknown. Incoming snapshots,
+changed paths included, are replaced; only internal scheduler release reuses
+them. Rescheduling keeps the captured snapshots only for the same PRs in the
+same order and the same workspace.
+
+Codex's native `review/start` takes one target, so a combined review runs on the
+PwrAgent Sub Agent: an omitted run mode selects it and an explicit
+`codex-sub-agent` is refused. The panel switches the mode and says why. The
+reviewer reads the PRs bottom first when they form a stack (each one's base
+branch is another's head branch), otherwise in list order, each with its own
+pinned range, and is asked to report each finding once, on the PR that
+introduces it.
+
+The review lands as one card and one record. Provenance holds
+`pullRequests` and `pullRequestSnapshots` in reading order, with `pullRequest`
+the first and no single branch or commit. Each finding is tagged with the
+reviewed PRs whose `changedPaths` include its file
+(`reviewFindingPullRequests`): one tag, the finding's PR; two, both changed the
+file; none, no reviewed PR did. The tag comes from the diffs, not the reviewer,
+and the review is never split by guess. Fix and Auto-fix messages name each
+finding's PRs. Auto-fix is off for a combined review, as for a batch.
+
+The owner advertises `reviewPullRequestSet`. Combined, branch and path targets
+and Claude Code's run mode travel on separate extended-review Federation routes
+(`backend.startExtendedReview`, `backend.createScheduledExtendedReview`,
+`backend.updateScheduledExtendedReview`), so an older owner answers
+`method_not_found` and the viewer says to update it, instead of reviewing one PR.
+
+From a bound messaging conversation, use `/review --pr 12 13` or pass full
+GitHub.com PR URLs after `--pr`. Separate entries with spaces or commas. A number
+must identify exactly one PR attached to the thread. `/review --pr <url>` still
+starts a single-PR review.
+
+For the `start_review` agent tool, pass a target such as
+`{"type":"pullRequests","pullRequests":[{"url":"https://github.com/org/repo/pull/12"},{"url":"https://github.com/org/repo/pull/13"}]}`.
+It schedules one review after the calling turn completes successfully. Both
+surfaces require two to eight distinct, attached PRs from one repository for
+a combined review. They default to the PwrAgent Sub Agent, or to Claude Code
+on a Claude thread when reviewing in its own workspace with an owner that
+supports `/code-review`. Claude Code uses the panel's default `high` effort.
+Messaging requires reply permission and also requires remote control for a
+peer's thread. Claude Code review turns retain the initiating contact's tool
+permissions, including when queued or sent to a peer. A messaging connection
+or peer must support retained contact provenance to run the review.
+
+## Claude Code's `/code-review`
+
+On a Claude thread whose owner advertises `reviewClaudeCodeReview`, the panel's
+run mode defaults to **Claude Code**, which sends `/code-review` as the thread's
+own turn (`runMode: "claude-code-review"`). The panel offers the targets the
+command takes: Current changes, Attached PR, Branch and Path. An effort row
+(low to max; `ultra` is left out because it runs a billed cloud review whose
+findings do not return to the thread) carries the level as `reasoningEffort`,
+and the panel shows the exact command. Several PRs Together are one
+comma-separated argument, which Claude Code reviews as one report; Separately
+queues one command per PR.
+
+`claudeCodeReviewCommand` builds the command on the owner. A PR is its bare
+number when the checkout has exactly one GitHub remote and the PR is that
+repository's, otherwise its URL, so the review card's parser
+(`parseClaudeCodeReviewPullRequests`) names exactly the PRs sent. A relative
+path is written with `./` so it cannot read as a PR, and a branch that looks
+like a PR number is refused. `/code-review` takes no commit, so Claude reads
+each PR when its review starts; nothing is pinned or captured. The review runs
+in the thread's own workspace; another project needs the PwrAgent Sub Agent.
+

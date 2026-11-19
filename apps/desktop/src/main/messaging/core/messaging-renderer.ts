@@ -357,6 +357,12 @@ export function messagingReviewStartTarget(
   switch (target.type) {
     case "pullRequest":
       return { type: "pullRequest", url: target.url, headCommit: target.snapshot?.headCommit };
+    case "pullRequests":
+      return { type: "pullRequests", urls: target.pullRequests.map((member) => member.url) };
+    case "branch":
+      return { type: "branch", branch: target.branch };
+    case "path":
+      return { type: "path", path: target.path };
     case "uncommittedChanges":
       return { type: "uncommittedChanges" };
     case "baseBranch":
@@ -372,6 +378,12 @@ function formatReviewStartTarget(target: MessagingReviewStartTarget): string {
   switch (target.type) {
     case "pullRequest":
       return `Review ${target.url}${target.headCommit ? ` at ${target.headCommit.slice(0, 10)}` : ""}`;
+    case "pullRequests":
+      return `Combined review of ${target.urls.join(", ")}`;
+    case "branch":
+      return `Review of branch ${target.branch}`;
+    case "path":
+      return `Review of ${target.path}`;
     case "uncommittedChanges":
       return "Current changes review";
     case "baseBranch":
