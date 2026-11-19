@@ -6,11 +6,40 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { requiresReadOnlyRecovery } from "./release-context.mjs";
 import { checkedTarballIntegrity, retainedPackageArtifacts } from "./tested-package.mjs";
 
 const workflow = readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8");
 const validation = readFileSync(new URL("../../../.github/workflows/publish-headless.yml", import.meta.url), "utf8");
 const job = (name) => workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0] || "";
+
+test("a failed history lookup leaves the rerun eligible for read-only verification", (t) => {
+  const restore = job("outpost-publish").split(/\n      - /)
+    .find((step) => /^name: Restore any prior npm publication attempt/m.test(step));
+  const shell = restore.split("        run: |\n")[1].split("\n")
+    .filter((line) => line.startsWith("          ")).map((line) => line.slice(10)).join("\n");
+  const root = mkdtempSync(path.join(tmpdir(), "npm-history-recovery-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const scripts = path.join(root, "packages/pwragent/scripts");
+  mkdirSync(scripts, { recursive: true });
+  const output = path.join(root, "output");
+  const history = path.join(scripts, "check-npm-submission-history.mjs");
+  writeFileSync(path.join(scripts, "restore-publication-receipt.mjs"), "");
+
+  for (const exitCode of [0, 1, 2, 127]) {
+    writeFileSync(output, "");
+    writeFileSync(history, exitCode === 0
+      ? 'import { appendFileSync } from "node:fs";\nappendFileSync(process.env.GITHUB_OUTPUT, "prior-submissions-skipped=true\\n");'
+      : `process.exit(${exitCode});`);
+    const result = spawnSync("bash", ["-c", shell], {
+      cwd: root, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: output },
+    });
+    assert.equal(result.status, 0, `history command exit ${exitCode}`);
+    const proof = readFileSync(output, "utf8").includes("prior-submissions-skipped=true");
+    assert.equal(requiresReadOnlyRecovery("push", "2", proof), exitCode !== 0);
+    if (exitCode !== 0) assert.match(result.stdout, /warning.*read-only recovery/i);
+  }
+});
 
 test("ordinary pushes and PR/fork checks have no npm publication path", () => {
   assert.doesNotMatch(validation, /workflow_dispatch:|id-token: write|environment: npm-pwragent|npm publish/);
@@ -49,7 +78,6 @@ test("desktop packaging requires Outpost validation and final success requires n
   assert.match(job("release-complete"), /permissions:\n      contents: read\n      actions: read\n      id-token: none/);
   assert.match(job("release-complete"), /node packages\/pwragent\/scripts\/publish.mjs --verify/);
   assert.match(job("outpost-publish"), /EXPECTED_INTEGRITY: \$\{\{ needs.outpost-validate.outputs.integrity \}\}/);
-  assert.match(job("outpost-publish"), /else\n\s+node packages\/pwragent\/scripts\/check-npm-submission-history.mjs/);
   assert.match(job("outpost-publish"), /PRIOR_NPM_SUBMISSIONS_SKIPPED: \$\{\{ steps.restore-submission.outputs.prior-submissions-skipped \}\}/);
   assert.match(job("release-complete"), /EXPECTED_INTEGRITY: \$\{\{ needs.outpost-validate.outputs.integrity \}\}/);
   assert.match(job("release-preflight"), /OUTPOST_NPM_RELEASE_READY/);

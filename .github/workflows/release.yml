@@ -1018,8 +1018,9 @@ jobs:
           node packages/pwragent/scripts/restore-publication-receipt.mjs outpost-publication-attempt
           if test -f .local/outpost-publication-attempt.json; then
             echo 'restored=true' >> "$GITHUB_OUTPUT"
-          else
-            node packages/pwragent/scripts/check-npm-submission-history.mjs
+          elif ! node packages/pwragent/scripts/check-npm-submission-history.mjs; then
+            echo '::warning::Could not check prior npm submission jobs. Continuing with read-only recovery.'
+            echo 'prior-submissions-skipped=false' >> "$GITHUB_OUTPUT"
           fi
       - name: Submit exact tested bytes with npm OIDC and provenance, or resume verification
         env:
