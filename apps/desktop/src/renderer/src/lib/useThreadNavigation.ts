@@ -47,6 +47,7 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
+  RestoreThreadResponse,
   NavigationBrowseMode,
   NavigationResumeState,
   NavigationDirectoryGitStatus,
@@ -3284,7 +3285,7 @@ export function useThreadNavigation(
     reopenKey?: string,
     /** rethrow: hand the failure back instead of the shared archive error. */
     options?: { rethrow?: boolean },
-  ) => Promise<void>;
+  ) => Promise<RestoreThreadResponse[]>;
   archiveWorktree: (
     thread: NavigationThreadSummary,
     directory: LinkedDirectorySummary
@@ -9067,18 +9068,19 @@ export function useThreadNavigation(
       threads: readonly ArchivedThreadRef[],
       reopenKey?: string,
       options?: { rethrow?: boolean },
-    ): Promise<void> => {
+    ): Promise<RestoreThreadResponse[]> => {
       const restoreThreadRequest = desktopApi?.restoreThread;
       if (!restoreThreadRequest) {
         if (options?.rethrow) throw new Error("Desktop bridge is missing restoreThread().");
         setArchiveThreadError("Desktop bridge is missing restoreThread().");
-        return;
+        return [];
       }
       setArchiveThreadError(undefined);
+      const responses: RestoreThreadResponse[] = [];
       try {
         for (const thread of threads) {
           if (thread.remote) continue;
-          await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId });
+          responses.push(await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId }));
           updateArchivedThreadKey(buildThreadIdentityKey(thread.backend, thread.threadId), false);
           // The `thread/unarchived` event lifts this too; a backend that
           // does not send one would otherwise keep the row hidden.
@@ -9095,6 +9097,7 @@ export function useThreadNavigation(
         await refresh();
         if (options?.rethrow) throw error;
       }
+      return responses;
     },
     [desktopApi, refresh, updateArchivedThreadKey],
   );

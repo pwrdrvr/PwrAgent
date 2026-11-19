@@ -204,6 +204,7 @@ import {
   type SubthreadLaunchpadDraft,
 } from "./lib/useThreadNavigation";
 import { ArchiveGroupConfirmation, useArchiveGroupConfirmation } from "./features/navigation/ArchiveGroupConfirmation";
+import { detachedRestoreNotices } from "./features/workspace-recovery/detached-restore-notice";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -3702,7 +3703,9 @@ function DesktopAppShell(props: {
         label: "Undo",
         onClick: () => {
           dismissAppNotice(id);
-          void restoreArchivedThreads(restorable, details.reopenKey);
+          void restoreArchivedThreads(restorable, details.reopenKey).then((responses) => {
+            for (const notice of detachedRestoreNotices(responses, restorable.length === 1 ? details.title : undefined)) showAppNotice(notice);
+          });
         },
       }],
     });
@@ -4060,11 +4063,12 @@ function DesktopAppShell(props: {
   const handleRestoreArchivedThread = useEventCallback(async () => {
     const thread = navigation.selectedThread;
     if (!thread) throw new Error("Select the thread again, then try once more.");
-    await navigation.restoreArchivedThreads(
+    const responses = await navigation.restoreArchivedThreads(
       [{ backend: thread.source, threadId: thread.id, remote: false }],
       threadSummaryIdentityKey(thread),
       { rethrow: true },
     );
+    for (const notice of detachedRestoreNotices(responses, thread.title)) showAppNotice(notice);
   });
   const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
     const thread = navigation.selectedThread;

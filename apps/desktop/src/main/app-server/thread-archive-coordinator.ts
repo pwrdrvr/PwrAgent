@@ -4154,9 +4154,10 @@ export class ThreadArchiveCoordinator {
                   snapshotCommit: snapshot.snapshotCommit,
                   snapshot,
                   allowDetachedFallback: params.backend !== "claude" && !isAcpBackendId(params.backend),
-                  // A hibernated checkout goes back on its own branch.
-                  ...(params.backend === "claude" || isAcpBackendId(params.backend) || snapshot.state === "hibernated"
-                    ? { restoreSourceCheckout: true } : {}),
+                  // Every checkout goes back on its own branch with its saved
+                  // edits as working-tree changes. A branch now checked out
+                  // elsewhere, moved or deleted gets the saved HEAD detached.
+                  restoreSourceCheckout: true,
                 }))
               : await this.withArchiveWorkspaceWrite([candidate.worktreePath], async () => await this.host().worktreeArchiveService.restoreDetached({
                   backend: params.backend,
