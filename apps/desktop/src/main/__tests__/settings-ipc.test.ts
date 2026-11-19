@@ -446,6 +446,19 @@ describe("settings ipc", () => {
     });
     expect(readSettings).not.toHaveBeenCalled();
     expect(readUsage).not.toHaveBeenCalled();
+    const general = desktopConfigStoreMock.read("general");
+    if (!("settings" in general) || !general.settings) {
+      throw new Error("Missing general settings fixture");
+    }
+    desktopConfigStoreMock.read.mockReturnValueOnce({
+      ...general,
+      settings: {
+        ...general.settings,
+        markdown: { ...general.settings.markdown, incrementalRendering: false },
+      },
+    } as typeof general);
+    await expect(handlers.get(SETTINGS_READ_BOOTSTRAP_CHANNEL)?.({}))
+      .resolves.toMatchObject({ snapshot: { markdown: { incrementalRendering: false } } });
     await expect(handlers.get(TOKEN_MISER_READ_USAGE_CHANNEL)?.({}))
       .resolves.toMatchObject({ interceptionCount: 0 });
     expect(readUsage).toHaveBeenCalledTimes(1);

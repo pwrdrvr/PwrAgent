@@ -52,10 +52,7 @@ import {
   seedPrWatchAuditState,
 } from "./fixtures/pr-watch-state-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
-import {
-  buildAuditSubAgents,
-  seedThreadSubAgents,
-} from "./fixtures/sub-agent-state-seeding";
+import { buildAuditSubAgents } from "./fixtures/sub-agent-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { seedResearchState, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun, seedLongResearchRun, LONG_RESEARCH_OBJECTIVE } from "./fixtures/research-state-seeding";
@@ -702,16 +699,22 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     // does need from the smoke fixture — a thread that exists and opens — is
     // exactly what that fixture guarantees for every other block here.
     test("active sub-agents strip has no violations", async () => {
-      const app = await launchAuditApp(appearance);
+      const app = await launchAuditApp({
+        ...appearance,
+        preLaunchHook: async (homeRoot) => {
+          const stateDb = StateDb.open(stateDbPathForHomeRoot(homeRoot), { profileName: "default" });
+          try {
+            await new SqliteOverlayStore(stateDb).upsertThreadSubAgents({
+              backend: "codex",
+              subAgents: buildAuditSubAgents(),
+              threadId: "thread-smoke",
+            });
+          } finally {
+            stateDb.close();
+          }
+        },
+      });
       try {
-        seedThreadSubAgents({
-          stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
-          subAgents: buildAuditSubAgents(),
-          threadId: "thread-smoke",
-        });
-        // The renderer does not re-poll on a direct sqlite mutation.
-        await app.window.reload();
-
         const smokeThread = app.window
           .getByRole("button", { name: /Replay smoke thread/i })
           .first();

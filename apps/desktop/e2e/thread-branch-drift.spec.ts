@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { expect, test } from "./fixtures/electron-test";
 import { createBranchDriftFixture, readThreadPayload } from "./fixtures/branch-drift-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -38,15 +39,25 @@ test("keeps the branch drift warning after refresh and retains the indicator on 
       1,
     );
 
-    await app.window.waitForTimeout(7_000);
-
-    await expect(dialog).toBeVisible();
+    const refreshedBranch = "codex/refreshed-branch";
+    execFileSync("git", ["checkout", "-b", refreshedBranch], {
+      cwd: fixture.repoDir,
+      stdio: "ignore",
+    });
+    await app.electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send("window:focus-sync", {
+        focusedAt: Date.now(),
+      });
+    });
+    // The changed branch name proves the renderer handled a fresh Git
+    // observation while the warning was open.
+    await expect(dialog).toContainText(refreshedBranch);
 
     await expect(app.window.getByText(/Branch warning:/)).toBeVisible();
 
     expect(readThreadPayload(fixture.homeDir)).toMatchObject({
       gitBranch: "codex/expected-branch",
-      observedGitBranch: "codex/current-branch",
+      observedGitBranch: refreshedBranch,
     });
 
     await app.window
@@ -59,11 +70,11 @@ test("keeps the branch drift warning after refresh and retains the indicator on 
     await expect(app.window.getByText(/Branch warning:/)).toBeVisible();
     expect(readThreadPayload(fixture.homeDir)).toMatchObject({
       gitBranch: "codex/expected-branch",
-      observedGitBranch: "codex/current-branch",
+      observedGitBranch: refreshedBranch,
       retainedBranchDriftPairs: [
         {
           expectedBranch: "codex/expected-branch",
-          observedBranch: "codex/current-branch",
+          observedBranch: refreshedBranch,
         },
       ],
     });

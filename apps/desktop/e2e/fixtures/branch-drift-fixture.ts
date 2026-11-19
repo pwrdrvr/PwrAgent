@@ -14,6 +14,7 @@ export async function createBranchDriftFixture(options: {
   env: Record<string, string>;
   fixturePath: string;
   homeDir: string;
+  repoDir: string;
 }> {
   const expectedBranch = options.expectedBranch ?? "codex/expected-branch";
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-drift-"));
@@ -154,6 +155,7 @@ export async function createBranchDriftFixture(options: {
     env: { HOME: rootDir },
     fixturePath,
     homeDir: rootDir,
+    repoDir,
   };
 }
 
