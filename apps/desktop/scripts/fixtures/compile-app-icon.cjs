@@ -2,6 +2,11 @@ const { writeFile } = require("node:fs/promises");
 const { createRequire } = require("node:module");
 const { join } = require("node:path");
 
+// The detached group survives Ctrl-C. Its IPC channel closes when the
+// Vitest worker exits, even if its deadline never gets a chance to run.
+process.once("disconnect", () => process.kill(-process.pid, "SIGKILL"));
+process.channel?.unref();
+
 async function main() {
   const [iconPackage, outputDir] = process.argv.slice(2);
   const fromElectronBuilder = createRequire(require.resolve("electron-builder"));

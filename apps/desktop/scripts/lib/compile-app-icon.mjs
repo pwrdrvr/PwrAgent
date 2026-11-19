@@ -10,7 +10,7 @@ export function compileAppIcon(iconPackage, outputDir, timeoutMs) {
     const child = spawn(process.execPath, [helper, iconPackage, outputDir], {
       detached: true,
       env: { ...process.env, TMPDIR: outputDir },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     let stderr = "";
     let timedOut = false;
