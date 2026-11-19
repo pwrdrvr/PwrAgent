@@ -175,8 +175,20 @@ describe("Harness members come from the source", () => {
     expect(store.get(run.id)).toMatchObject({ status: "exhausted", harness: { members: swarm.names } });
   });
 
+  it.each([0, RESEARCH_MAX_WORKERS + 1, 2.5, "eight"])("refuses a malformed member count %s before any intent, even on an import", async (workers) => {
+    const { service, store } = setup(cleanPages([]));
+    await expect(service.start({ ...harnessRequest("import", 0), workers: workers as number }, fixture.tempDir)).rejects.toThrow(`Choose 1–${RESEARCH_MAX_WORKERS} members`);
+    expect(store.activeRuns()).toEqual([]);
+  });
+
+  it("refuses execution without a member limit", async () => {
+    const { service } = setup(cleanPages([]));
+    const { workers: _omitted, ...request } = harnessRequest("execute", 2);
+    await expect(service.start(request, fixture.tempDir)).rejects.toThrow(`Choose 1–${RESEARCH_MAX_WORKERS} members`);
+  });
+
   /** A run that has read nothing yet: `slots` declared at creation, within `workerLimit`. */
-  const unread = (workerLimit: number, slots: number) => ({ objective: "Contrived Harness objective", workerLimit,
+  const unread = (workerLimit: number, slots: number) => ({ workerLimit,
     approaches: Array.from({ length: slots }, (_, i) => ({ id: `a${i + 1}`, title: `Harness member ${i + 1}`, task: "Contrived", state: "unknown" as const })),
     harness: { version: 1 as const, mode: "import" as const, project: "fixture-project", session: "fixture-session", swarm: SWARM,
       workspace: fixture.tempDir, upstreamRevision: RESEARCH_HARNESS_REVISION, state: "running" as const, cursor: 0, members: [], cancelSupported: false, note: "" } });

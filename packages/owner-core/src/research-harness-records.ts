@@ -9,8 +9,13 @@ export function harnessRecordDigest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
 
+/** One Harness member's approach slot, `a1` onward. A source direction later replaces its title and task. */
+export function harnessMemberSlot(index: number, title: string, task: string): ResearchApproach {
+  return { id: `a${index}`, title, task, state: "unknown" };
+}
+
 /** Reads the public swarm record contract at the pinned revision. No source verdict is a local review. */
-export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "workerLimit" | "approaches" | "objective"> & { events?: ResearchEvent[] }, records: unknown[], readRecord?: (seq: number) => ResearchEvent | undefined): { events: Normalized[]; state: ResearchHarnessState; ended: boolean } {
+export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "workerLimit" | "approaches"> & { events?: ResearchEvent[] }, records: unknown[], readRecord?: (seq: number) => ResearchEvent | undefined): { events: Normalized[]; state: ResearchHarnessState; ended: boolean } {
   if (!run.harness) throw new Error("Not a Harness run");
   if (!Array.isArray(records) || records.length > 50 || JSON.stringify(records).length > 256_000) throw new Error("Harness page exceeds its bound");
   const state = structuredClone(run.harness);
@@ -48,7 +53,8 @@ export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "work
       state.members = r.members.map((m) => text(m, 64));
       if (new Set(state.members).size !== state.members.length) throw new Error("Duplicate Harness member");
       const declared = approaches.length;
-      const admitted = state.members.slice(declared).map((member, i): ResearchApproach => ({ id: `a${declared + i + 1}`, title: `Harness member ${member}`, task: run.objective, state: "unknown" }));
+      // A placeholder task, not the objective: the run already holds that, and up to 64 copies would ride in this page's commit.
+      const admitted = state.members.slice(declared).map((member, i) => harnessMemberSlot(declared + i + 1, `Harness member ${member}`, "Awaiting a source direction"));
       if (admitted.length) { add({ type: "members", approaches: admitted }); approaches.push(...admitted); }
       // Slots declared before the source named its members, and left over, never run.
       for (let i = state.members.length; i < declared; i++) add({ type: "worker", approachId: `a${i + 1}`, state: "stopped" });
