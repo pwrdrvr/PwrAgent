@@ -6094,11 +6094,14 @@ export function useThreadSessionState(params: {
             }
           }
 
-          // Recover missed readings from the owner, while a live reading
-          // received during this read takes precedence over its snapshot.
+          // Recovery can use a revalidated page: an earlier read may have
+          // cached the owner's newer reading while a racing event took
+          // precedence on screen. Live readings still win during this read.
+          const recoveringStream = (current.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion;
           const snapshotContextWindow =
             liveContextWindowVersion === liveContextWindowVersionsRef.current.get(targetThreadKey)
-            && (!currentAfterStaleThinking.contextWindow || (response.backend === "claude" && !fetchedResponse.unchanged))
+            && (!currentAfterStaleThinking.contextWindow
+              || (response.backend === "claude" && (!fetchedResponse.unchanged || recoveringStream)))
               ? readContextWindowFill(response.replay.contextWindow)
               : undefined;
           return {
