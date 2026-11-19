@@ -855,6 +855,29 @@ export class MessagingStore {
     return await this.withReadData((data) => cloneOptional(data.deliveries[id]));
   }
 
+  async listDeliveriesWithIdPrefix(
+    prefix: string,
+  ): Promise<MessagingDeliveryRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.deliveries)
+        .filter((delivery) => delivery.id.startsWith(prefix))
+        .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+        .map((delivery) => structuredClone(delivery))
+    );
+  }
+
+  async settleDelivery(params: {
+    openId: string;
+    delivery: MessagingDeliveryRecord;
+  }): Promise<MessagingDeliveryRecord> {
+    const sanitized = sanitizeDelivery(params.delivery);
+    return await this.withData((data) => {
+      delete data.deliveries[params.openId];
+      data.deliveries[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
+  }
+
   async readSnapshot(): Promise<MessagingStoreData> {
     return await this.withReadData((data) => structuredClone(data));
   }

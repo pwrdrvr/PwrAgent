@@ -9,7 +9,7 @@ import { messagingStreamingResponsesEnabled, resolveMessagingStreamingResponseMo
 export interface MessagingAssistantStreamHost {
   readonly isTerminalPrivateResponseTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string | undefined) => boolean;
   readonly turnProseKey: (bindingId: string, turnId: string) => string;
-  readonly deliverAssistantMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord, images?: MessagingImagePart[], identity?: AssistantMessageDeliveryIdentity, deliveryClaimed?: boolean) => Promise<void>;
+  readonly deliverAssistantMessage: (text: string, event: AgentEvent, binding: MessagingBindingRecord, images?: MessagingImagePart[], identity?: AssistantMessageDeliveryIdentity, deliveryClaimed?: boolean, finalReply?: boolean) => Promise<void>;
   readonly responseAttributionForBinding: (binding: MessagingBindingRecord) => Promise<{ label: string }>;
   readonly newIntentId: (prefix: string) => string;
   readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard) => Promise<MessagingDeliveryResult>;

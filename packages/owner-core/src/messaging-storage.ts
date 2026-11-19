@@ -275,6 +275,18 @@ export interface MessagingStorage<Records extends MessagingStorageRecords> {
 
   getDelivery(id: string): Promise<Records["delivery"] | undefined>;
 
+  /** Delivery rows whose id starts with `prefix`, such as open receipts. */
+  listDeliveriesWithIdPrefix(prefix: string): Promise<Records["delivery"][]>;
+
+  /**
+   * Replaces the row `openId` with `delivery` in one commit, so a settled
+   * receipt never leaves its open marker behind.
+   */
+  settleDelivery(params: {
+    openId: string;
+    delivery: Records["delivery"];
+  }): Promise<Records["delivery"]>;
+
   readSnapshot(): Promise<Records["snapshot"]>;
 }
 
@@ -336,5 +348,7 @@ export type MessagingStoreLike<Records extends MessagingStorageRecords> = Pick<
   | "readSnapshot"
 > & Partial<Pick<
   MessagingStorage<Records>,
-  "upsertObservedSurface"
+  | "upsertObservedSurface"
+  | "listDeliveriesWithIdPrefix"
+  | "settleDelivery"
 >>;

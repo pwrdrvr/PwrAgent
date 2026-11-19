@@ -1,4 +1,5 @@
 {
+  "messaging-final-reply-receipt": {"commits": 10, "note": "Five final replies to one binding: per reply, a pending marker and one settle commit that replaces the delivery row every send already wrote; no message text.", "observedWalBytes": 123600, "rowsChanged": 15, "statements": 15},
   "research-bounds-withdraw-resumes": {"commits": 3, "note": "One operator change lowers the per-worker limit past two workers whose resume messages are queued: one commit records the bounds, then one per worker records its message withdrawn and why it stopped.", "observedWalBytes": 65920, "rowsChanged": 5, "statements": 5},
   "research-turn-limit-stop": {"commits": 2, "note": "A worker's per-worker time limit passes: one commit records it stopped and why, then one marks the run exhausted because no worker is left and nothing was submitted.", "observedWalBytes": 45320, "rowsChanged": 4, "statements": 4},
   "research-bounds-change": {"commits": 1, "note": "One operator change of a live run's bounds, all four at once: one commit records the bounds event.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},

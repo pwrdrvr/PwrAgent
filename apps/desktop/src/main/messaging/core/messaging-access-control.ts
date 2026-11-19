@@ -373,6 +373,15 @@ export class MessagingAccessControl {
     return this.authorizedActorIds.has(platformUserId);
   }
 
+  /**
+   * Whether the actor allowlist still admits one of these actors. An empty
+   * allowlist leaves admission to the provider's conversation allowlists.
+   */
+  admitsAnyActor(actorIds: readonly string[]): boolean {
+    return this.authorizedActorIds.size === 0
+      || actorIds.some((actorId) => this.authorizedActorIds.has(actorId));
+  }
+
   // -------------------------------------------------------------------------
   // RBAC — capability layer (issue #260). Composes with, never replaces, the
   // provider admission gate. In legacy-compatible mode (no policy provider, or

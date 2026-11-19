@@ -79,6 +79,7 @@ function fixture(deliver: DeliveryOptions["adapter"]["deliver"]) {
     desktopActivityLog: () => undefined,
     recordBindingTransition: async (action) => { trace.push(action); },
     notifyBindingChanged: () => { trace.push("binding-changed"); },
+    flagDeliveryCheck: async () => {},
   });
   return { owner, options, trace, now };
 }
