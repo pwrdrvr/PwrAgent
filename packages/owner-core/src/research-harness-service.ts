@@ -56,7 +56,9 @@ export class ResearchHarnessService {
     this.storage.create(id, key, { seq: 1, commandId: "start", signature, at: now, actor, data: { type: "created", objective: request.objective,
       coordinator: { backend: actor.backend, threadId: actor.threadId }, ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
       ownerStartedAt: this.ports.ownerStartedAt, ...(request.minutes !== undefined ? { deadlineAt: now + request.minutes * 60_000 } : {}), workspaceMode: "none", harness: state,
-      approaches: Array.from({ length: request.workers }, (_, i) => ({ id: `a${i + 1}`, title: `Harness member ${i + 1}`, task: request.objective, state: "unknown" })) } });
+      // Execution declares the operator's member slots before dispatch. An import has read nothing yet: it admits the members its source names.
+      approaches: Array.from({ length: request.mode === "execute" ? request.workers ?? 0 : 0 }, (_, i) => ({ id: `a${i + 1}`, title: `Harness member ${i + 1}`, task: request.objective, state: "unknown" })),
+      ...(request.mode === "import" ? { workerLimit: RESEARCH_MAX_WORKERS } : {}) } });
     this.changed(id);
     this.scheduleDeadline(id);
     const promise = this.connect(id, request);
@@ -73,7 +75,9 @@ export class ResearchHarnessService {
     if (request.problem !== undefined) text(request.problem, 64);
     text(request.objective, 8000);
     if (!["import", "execute"].includes(request.mode)) throw new Error("Unsupported Harness operation");
-    if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} members`);
+    // Only execution has a member limit to choose. An import's members come from its source, so a count sent with one is not a limit.
+    const workers = request.workers ?? 0;
+    if (request.mode === "execute" && (!Number.isInteger(workers) || workers < 1 || workers > RESEARCH_MAX_WORKERS)) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} members`);
     if (!validResearchMinutes(request.minutes)) throw new Error("A time limit is a whole number of minutes, at least 1");
     // The bridge binds a deadline before it admits a swarm, so execution needs one. An import only reads.
     if (request.mode === "execute" && request.minutes === undefined) throw new Error("Set a deadline for the swarm; the bridge requires one before it starts");
@@ -388,10 +392,16 @@ export class ResearchHarnessService {
   private changed(id: string): void { const run = this.run(id); this.ports.changed({ ...run.coordinator, runId: id, revision: run.revision }); }
   private actor(run: ResearchRunHeader): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
   private run(id: string): ResearchRunHeader { const run = this.storage.header(id); if (!run?.harness) throw new Error("Harness run not found"); return run; }
+  /** The declared member slots, `a1` onward. An import declares them as its source names members, so it may hold fewer than its limit. */
   private approaches(id: string) {
     const run = this.run(id);
-    return Array.from({ length: run.workerLimit }, (_, index) => this.storage.readItem(id, `a${index + 1}`))
-      .flatMap((item) => item?.type === "approach" ? [item.record] : []);
+    const approaches = [];
+    for (let index = 1; index <= run.workerLimit; index++) {
+      const item = this.storage.readItem(id, `a${index}`);
+      if (item?.type !== "approach") break;
+      approaches.push(item.record);
+    }
+    return approaches;
   }
   private now(): number { return this.ports.now?.() ?? Date.now(); }
 }

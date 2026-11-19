@@ -94,9 +94,13 @@ export type ResearchCommand =
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
 export type ResearchEventData =
-  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt?: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
+  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt?: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState;
+    /** How many approaches the run may hold, when that is not the number it starts with: a Harness import starts with none and admits its source's members. */
+    workerLimit?: number }
   | { type: "harness"; state: ResearchHarnessState }
   | { type: "harness_observation"; event: string; text: string }
+  /** A Harness source named these members; each takes the next approach slot, within the run's worker limit. */
+  | { type: "members"; approaches: ResearchApproach[] }
   | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string; interrupted?: true }
   /** A later process took over a live run whose process ended. The approaches named were mid-flight and ended with it. */
   | { type: "adopted"; ownerId: string; ownerPid: number; ownerStartedAt?: number; approachIds: string[] }
@@ -293,7 +297,7 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
     ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...(initial.deadlineAt !== undefined ? { deadlineAt: initial.deadlineAt } : {}),
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
-    findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [], harness: initial.harness,
+    findings: [], submissions: [], events, deliveries: [], workerLimit: researchWorkerLimit(initial), activeWorkers: 0, items: [], harness: initial.harness,
   };
   const items = new Map<string, ResearchItem>();
   for (const item of applyResearchItemEvent((key) => items.get(key), first)) items.set(item.id, item);
@@ -311,6 +315,7 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     } else if (data.type === "resumed") {
       for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchWorkerState(approach, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
     } else if (data.type === "assignment") run.approaches.push({ ...data.approach });
+    else if (data.type === "members") run.approaches.push(...data.approaches.map((a) => ({ ...a })));
     else if (data.type === "finding") run.findings.push(data.finding);
     else if (data.type === "submission") run.submissions.push({ ...data.submission });
     else if (data.type === "review") {
@@ -343,6 +348,11 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   run.items = [...items.values()];
   run.activeWorkers = run.approaches.filter(researchApproachOccupiesSlot).length;
   return run;
+}
+
+/** A run's worker limit, from its creation event. Replay and the indexed header both read it here. */
+export function researchWorkerLimit(created: Pick<Extract<ResearchEventData, { type: "created" }>, "approaches" | "workerLimit">): number {
+  return created.workerLimit ?? created.approaches.length;
 }
 
 export const RESEARCH_CUT_OFF_NOTE = "PwrAgent closed during this worker's turn. Resume it to continue in the same thread.";
@@ -386,7 +396,7 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
   } as ResearchItem);
   const require = (id: string) => { const item = read(id); if (!item) throw new Error("Unknown research item"); return item; };
   const touch = (item: ResearchItem): ResearchItem => ({ ...item, version: event.seq, updatedAt: event.at });
-  if (data.type === "created") return data.approaches.map((record) => create({ id: record.id, approachId: record.id, type: "approach", record: { ...record } }));
+  if (data.type === "created" || data.type === "members") return data.approaches.map((record) => create({ id: record.id, approachId: record.id, type: "approach", record: { ...record } }));
   if (data.type === "finding" || data.type === "submission") {
     const record = data.type === "finding" ? data.finding : data.submission;
     return [create({ id: record.id, approachId: record.approachId, type: data.type, record: { ...record } })];

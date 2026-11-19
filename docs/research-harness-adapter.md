@@ -146,8 +146,22 @@ or ended execution. Completing an import does not request source cancellation.
 A service page is at most fifty records and 256,000 JSON characters, with a
 16,000-character record bound. The complete page is validated before one atomic
 append of its normalized events and cursor. Gaps, conflicting duplicate records,
-foreign origins, unknown members and escaping paths are refused. Exact duplicate
-pages write nothing. A continuation cursor must match the observed prefix. The
+foreign origins, members the `started` record did not name, and escaping paths
+are refused. Exact duplicate pages write nothing.
+
+Members come from the source. The `started` record, always sequence 1, names every
+member of the swarm, so the existing `records` reply carries the count and the
+protocol version is unchanged. Execution declares the operator's member slots
+before dispatch, because the bridge binds that limit, and refuses a `started`
+record that names more. An import has read nothing when it is created, so it
+declares no slots and a limit of `RESEARCH_MAX_WORKERS` (64). When `started`
+arrives, each named member takes the next slot, `a1` onward, through one
+`members` event in that page's commit; a source naming more than 64 is refused.
+An import created before this rule declared eight slots and keeps that limit;
+its unused slots are marked stopped, as before. Run summaries and replay read a
+run's limit from its creation event through `researchWorkerLimit`. The run card
+shows an import's member count without a limit, and execution's against the
+operator's. A continuation cursor must match the observed prefix. The
 native 100,000-event guard stops a runaway journal; receipts and cancellation remain
 available at that guard. Empty polling does not persist state.
 
@@ -218,6 +232,13 @@ are contrived fixtures, not evidence of a deployed Open Math OS service or a pai
 hosted-model run. Electron fixtures show source provenance, unconfirmed cancellation
 and a source-accepted candidate still awaiting local review.
 
+`research-harness-members.property.test.ts` generates source swarms of 1 to 64
+members over real SQLite. An import admits exactly the members its source names
+and attributes each record to its member's slot; execution keeps the operator's
+limit; gaps, conflicting duplicates, foreign origins, escaping paths and unnamed
+members are refused at every size. Before this rule it failed on its first run,
+shrunk to a nine-member import.
+
 The adapter follows the native incremental research contracts. Run summaries omit
 source state; the selected run receives it with its change pages, and source item
 provenance travels on the changed item. Admission, cancellation, model callbacks
@@ -235,14 +256,15 @@ The checked-in SQLite budgets measure the feature after database setup:
 
 | Boundary | Commits | Observed WAL bytes |
 | --- | ---: | ---: |
-| Eleven-record completed import | 4 | 185,432 |
+| Eleven-record completed import | 4 | 156,592 |
+| Sixty-four-member import: two pages and the ended boundary | 5 | 486,192 |
 | Six-record source page and cursor | 1 | 70,040 |
 | Fifty repeated pages | 0 | 0 |
 | Confirmed cancellation | 2 | 78,280 |
 | Execution admission with model provenance and an initial source page | 4 | 185,432 |
 | Changed Harness configuration revision | 1 | 4,120 |
 | One thousand adapter configuration reads | 0 | 0 |
-| Discovery status/problems/three-node tree import | 3 | 131,872 |
+| Discovery status/problems/three-node tree import | 3 | 98,912 |
 | Repeated discovery request identity | 0 | 0 |
 | Reconcile: intent, one seven-record page with cursor, settled outcome | 3 | 131,840 |
 | Bridge capability check (`hello` only) | 0 | 0 |
@@ -255,12 +277,17 @@ Their two extra pages also add 8,240 bytes to the daily compaction fixture
 (1,483,232 bytes total), with the same two commits: approximately 0.00824 MB/day
 of additional maintenance WAL at one compaction per day.
 Idle polling and token streaming add zero writes. Four imports/hour at the measured
-size add approximately 17.80 MB/day. WAL bytes vary with payload/page layout and
+size add approximately 15.03 MB/day. Declaring members adds rows, not commits:
+the `members` event and one item per member ride in the page that carries
+`started`. An eleven-record import has one more row than when it pre-declared its
+slots, and a discovery snapshot one fewer, since it no longer declares an unused
+slot. A 64-member import is 5 commits and 394 rows; four of those an hour add
+`4 × 24 × 486,192 bytes ≈ 46.67 MB/day`. WAL bytes vary with payload/page layout and
 are recorded, not asserted; commit/statement/row budgets fail in either direction.
 Configuration reads add zero MB/day. One configuration edit/hour at the measured
 commit size adds approximately 0.10 MB/day through the existing config snapshot.
 Four explicit discovery imports/hour at the measured three-node fixture size add
-approximately 12.66 MB/day; there is no background discovery polling or per-node
+approximately 9.50 MB/day; there is no background discovery polling or per-node
 commit. Larger bounded snapshots cost more WAL bytes in the same three commits.
 Reconcile is an operator action, not a timer: four per hour at the measured size
 add `4 × 24 × 131,840 bytes ≈ 12.66 MB/day`, and each additional page adds one

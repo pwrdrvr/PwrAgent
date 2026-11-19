@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ResearchEvent, ResearchEventData, ResearchRun, ResearchProvenance, ResearchHarnessState } from "@pwragent/shared";
+import type { ResearchApproach, ResearchEvent, ResearchEventData, ResearchRun, ResearchProvenance, ResearchHarnessState } from "@pwragent/shared";
 import { RESEARCH_HARNESS_REVISION } from "@pwragent/shared";
 
 type Normalized = { data: ResearchEventData; provenance: ResearchProvenance };
@@ -10,11 +10,13 @@ export function harnessRecordDigest(value: unknown): string {
 }
 
 /** Reads the public swarm record contract at the pinned revision. No source verdict is a local review. */
-export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "workerLimit" | "approaches"> & { events?: ResearchEvent[] }, records: unknown[], readRecord?: (seq: number) => ResearchEvent | undefined): { events: Normalized[]; state: ResearchHarnessState; ended: boolean } {
+export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "workerLimit" | "approaches" | "objective"> & { events?: ResearchEvent[] }, records: unknown[], readRecord?: (seq: number) => ResearchEvent | undefined): { events: Normalized[]; state: ResearchHarnessState; ended: boolean } {
   if (!run.harness) throw new Error("Not a Harness run");
   if (!Array.isArray(records) || records.length > 50 || JSON.stringify(records).length > 256_000) throw new Error("Harness page exceeds its bound");
   const state = structuredClone(run.harness);
   const events: Normalized[] = [];
+  // Slots `a1` onward. Members this page admits join them, so later records in the same page can name them.
+  const approaches: Pick<ResearchApproach, "id">[] = [...run.approaches];
   let ended = state.state === "ended";
   for (const input of records) {
     const r = object(input);
@@ -40,17 +42,23 @@ export function normalizeHarnessRecords(run: Pick<ResearchRun, "harness" | "work
     add({ type: "harness_observation", event: kind, text: JSON.stringify(r) });
     if (kind === "started") {
       if (seq !== 1 || r.project !== state.project || r.session !== state.session) throw new Error("Harness origin does not match the requested project/session");
-      if (!Array.isArray(r.members) || !r.members.length || r.members.length > run.workerLimit) throw new Error("Harness member count exceeds the operator's limit");
+      if (!Array.isArray(r.members) || !r.members.length) throw new Error("Harness started record names no members");
+      // The run's limit: the operator's for execution, which the bridge bound before admission; RESEARCH_MAX_WORKERS for an import.
+      if (r.members.length > run.workerLimit) throw new Error(state.mode === "execute" ? "Harness member count exceeds the operator's limit" : `Harness swarm names more than the ${run.workerLimit} members an import admits`);
       state.members = r.members.map((m) => text(m, 64));
       if (new Set(state.members).size !== state.members.length) throw new Error("Duplicate Harness member");
-      for (let i = state.members.length; i < run.workerLimit; i++) add({ type: "worker", approachId: `a${i + 1}`, state: "stopped" });
+      const declared = approaches.length;
+      const admitted = state.members.slice(declared).map((member, i): ResearchApproach => ({ id: `a${declared + i + 1}`, title: `Harness member ${member}`, task: run.objective, state: "unknown" }));
+      if (admitted.length) { add({ type: "members", approaches: admitted }); approaches.push(...admitted); }
+      // Slots declared before the source named its members, and left over, never run.
+      for (let i = state.members.length; i < declared; i++) add({ type: "worker", approachId: `a${i + 1}`, state: "stopped" });
     } else if (kind === "usage") state.calls = integer(r.calls, true);
     else if (kind === "ended") {
       state.calls = integer(r.calls, true);
       state.state = "ended";
       ended = true;
       // A terminal service receipt settles execution only, never a PwrAgent review.
-      for (const approach of run.approaches) add({ type: "worker", approachId: approach.id, state: "ended", note: `Source outcome: ${text(r.outcome, 80)}` });
+      for (const approach of approaches) add({ type: "worker", approachId: approach.id, state: "ended", note: `Source outcome: ${text(r.outcome, 80)}` });
     } else if (kind === "resumed") {
       if (!Array.isArray(r.members) || r.members.some((m) => typeof m !== "string" || !state.members.includes(m))) throw new Error("Unknown resumed Harness member");
       state.calls = integer(r.calls, true);

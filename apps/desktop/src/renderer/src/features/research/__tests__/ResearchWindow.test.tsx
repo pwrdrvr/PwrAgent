@@ -91,6 +91,14 @@ it("lists every run by what it needs, and reads the selected run as its own coor
   expect(mocks.openThreadInMainWindow).toHaveBeenCalledWith({ backend: "codex", threadId: "other-thread" });
 });
 
+// An import admits the members its source names, so it has no limit of its own to show; execution counts against the operator's.
+it.each([["imported", "1"], ["unknown", "1 of 2"]] as const)("counts a %s Harness run's members as %s", async (state, members) => {
+  const { api } = owner([harnessRun(state)]);
+  render(<ResearchWindow desktopApi={api} />);
+  const summary = await screen.findByRole("region", { name: "Research run summary" });
+  expect(within(summary).getByText("Members").nextElementSibling).toHaveTextContent(new RegExp(`^${members}$`));
+});
+
 it("opens an item in the inspector beside the board, with a candidate's decision in it", async () => {
   const run = harnessRun("imported");
   const { api, mocks } = owner([run]);
