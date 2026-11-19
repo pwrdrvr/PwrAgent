@@ -143,6 +143,26 @@ export class ResearchService {
     return stopped;
   }
 
+  /**
+   * Withdraw each queued resume message whose worker's turn has reached the per-worker limit, so it never starts
+   * another model turn of that turn. A message still being sent is checked by `resume` once the send returns.
+   */
+  private async withdrawResumesPastTurnLimit(id: string, actor: ResearchActor): Promise<boolean> {
+    let withdrawn = false;
+    for (const approachId of [...this.queuedResumes.get(id)?.keys() ?? []]) {
+      const note = this.turnLimitReachedNote(this.requireHeader(id), this.requireApproach(id, approachId));
+      if (!note) continue;
+      await this.withdrawResume(id, approachId, actor, note);
+      withdrawn = true;
+    }
+    return withdrawn;
+  }
+
+  /** Why the worker must stop, when its turn has reached the run's per-worker limit; undefined while it has not. */
+  private turnLimitReachedNote(run: ResearchRunHeader, approach: ResearchApproach): string | undefined {
+    return run.turnMinutes !== undefined && researchTurnElapsed(approach, this.now()) >= run.turnMinutes * MINUTE ? researchTurnLimitNote(run.turnMinutes) : undefined;
+  }
+
   /** The run as this process may record on it, taking over an open run whose process is gone. */
   private hold(run: ResearchRunHeader): ResearchRunHeader {
     if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
@@ -529,7 +549,7 @@ export class ResearchService {
     if (command.action === "bounds") {
       // A run's bounds are the operator's. The coordinator proposes work within them and cannot change them.
       if (actor.kind !== "operator") throw new Error("Only the operator can change a run's bounds");
-      return this.changeBounds(run, requestId, signature, command, actor);
+      return await this.changeBounds(run, requestId, signature, command, actor);
     }
     const coordinator = actor.kind === "operator" || sameResearchThread(actor, run.coordinator);
     if ((command.action === "review" || command.action === "stop" || command.action === "finish") && !coordinator) throw new Error("Only the coordinator or operator may review or stop a run");
@@ -634,7 +654,7 @@ export class ResearchService {
    * The operator's new bounds for a running run, in one journal event. A lowered worker count stops nobody;
    * a time limit counts from the run's start. A time limit or total already passed is refused: Stop ends a run.
    */
-  private changeBounds(run: ResearchRunHeader, requestId: string, signature: string, command: ResearchBoundsCommand, actor: ResearchActor): ResearchRunHeader {
+  private async changeBounds(run: ResearchRunHeader, requestId: string, signature: string, command: ResearchBoundsCommand, actor: ResearchActor): Promise<ResearchRunHeader> {
     if (!this.canDispatch(run)) throw new Error("Only a running run's bounds can be changed");
     if (command.workers === undefined && command.minutes === undefined && command.turnMinutes === undefined && command.totalWorkerMinutes === undefined) throw new Error("Choose a bound to change");
     if (command.workers !== undefined && (!Number.isInteger(command.workers) || command.workers < 1 || command.workers > RESEARCH_MAX_WORKERS)) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} workers`);
@@ -660,7 +680,12 @@ export class ResearchService {
       this.deadlines.delete(run.id);
       this.scheduleDeadline(this.requireHeader(run.id));
     }
-    if (turnMinutes !== run.turnMinutes && this.stopCutOffPastTurnLimit(run.id)) this.finishExploration(this.requireHeader(run.id));
+    if (turnMinutes !== run.turnMinutes) {
+      // Workers already past a lowered limit: those waiting to be resumed, and those whose resume waits in their queue.
+      const stopped = this.stopCutOffPastTurnLimit(run.id);
+      const withdrawn = await this.withdrawResumesPastTurnLimit(run.id, actor);
+      if (stopped || withdrawn) this.finishExploration(this.requireHeader(run.id));
+    }
     return this.requireHeader(run.id);
   }
 
@@ -936,7 +961,9 @@ export class ResearchService {
           this.queuedResumes.set(id, queued.set(approach.id, receipt.queueEntryId));
         }
         // A stop or a closed item can win while the message is in flight, as it can for a start.
-        if (!this.canAdmitApproach(this.requireHeader(id), approach)) await this.withdrawResume(id, approach.id, actor);
+        // The per-worker limit may have been lowered past this worker's turn while the message was sent.
+        const limitNote = this.turnLimitReachedNote(this.requireHeader(id), this.requireApproach(id, approach.id));
+        if (limitNote || !this.canAdmitApproach(this.requireHeader(id), approach)) await this.withdrawResume(id, approach.id, actor, limitNote);
       } catch (error) {
         const current = this.requireApproach(id, approach.id);
         // Nothing was seen to start, so the worker is cut off as before and can be resumed again.
@@ -958,7 +985,7 @@ export class ResearchService {
    * Take back a resume the run no longer admits: cancel its queued message, or stop the turn it started.
    * An outcome the queue cannot confirm is recorded as unknown and keeps the worker's slot.
    */
-  private async withdrawResume(id: string, approachId: string, actor: ResearchActor): Promise<void> {
+  private async withdrawResume(id: string, approachId: string, actor: ResearchActor, note?: string): Promise<void> {
     const entry = this.queuedResumes.get(id)?.get(approachId);
     if (entry !== undefined) {
       this.forgetQueuedResume(id, approachId);
@@ -966,7 +993,7 @@ export class ResearchService {
         const receipt = await this.ports.cancelQueued(entry);
         const current = this.requireApproach(id, approachId);
         if (!receipt.turnId) {
-          if (current.state === "starting") this.append(this.requireHeader(id), `resume-withdrawn:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "stopped", note: "The resume message was withdrawn before it started." });
+          if (current.state === "starting") this.append(this.requireHeader(id), `resume-withdrawn:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "stopped", note: note ?? "The resume message was withdrawn before it started." });
           return;
         }
         if (current.worker?.turnId !== receipt.turnId) this.append(this.requireHeader(id), `resume-started:${approachId}:${receipt.turnId}`, actor,
@@ -976,7 +1003,7 @@ export class ResearchService {
         return;
       }
     }
-    if (this.requireApproach(id, approachId).state === "running") await this.stopWorker(id, approachId, actor);
+    if (this.requireApproach(id, approachId).state === "running") await this.stopWorker(id, approachId, actor, note);
   }
 
   private forgetQueuedResume(id: string, approachId: string): void {
