@@ -49,7 +49,11 @@ const mocks = vi.hoisted(() => {
     openApplication,
     readApplications,
     resolveTranscriptFiles: vi.fn(async () => ({ files: [{ reference: "notes.md", path: "/owner/notes.md", previewable: true }] })),
-    resolveThread: vi.fn(async () => ({ projectKey: "/owner", linkedDirectories: [] })),
+    pullMarkdownFile: vi.fn(async () => ({ path: "/owner/page.html", content: "<script></script>", threadWorkspace: true })),
+    resolveThread: vi.fn(async (): Promise<{ projectKey: string; linkedDirectories: never[] } | undefined> => ({
+      projectKey: "/owner",
+      linkedDirectories: [],
+    })),
     discoverDesktopApplications: vi.fn(async () => remoteApplications),
     openDesktopApplication: vi.fn(
       async (): Promise<OpenDesktopApplicationResponse> => ({ opened: true }),
@@ -88,6 +92,7 @@ vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => ({
     remoteBackend: mocks.remoteBackendForTarget,
     resolveTranscriptFiles: mocks.resolveTranscriptFiles,
+    pullMarkdownFile: mocks.pullMarkdownFile,
   }),
 }));
 
@@ -183,6 +188,35 @@ describe("application IPC", () => {
       await writeFile(htmlPath, Buffer.alloc(24 * 1024 * 1024 + 1, "a"));
       expect(await read(htmlPath)).toMatchObject({ error: "File is too large to preview." });
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a local HTML page as the thread's own work only inside its live thread, and never a peer's", async () => {
+    registerApplicationIpcHandlers();
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-html-own-"));
+    const thread = { backend: "codex", threadId: "thread-1" };
+    const read = (filePath: string, extra: object = {}) =>
+      mocks.handlers.get(MARKDOWN_FILE_READ_CHANNEL)?.({}, { path: filePath, thread, ...extra });
+    try {
+      const project = path.join(root, "project");
+      await mkdir(project);
+      const own = path.join(project, "review.html");
+      const data = path.join(project, "rows.json");
+      const outside = path.join(root, "elsewhere.html");
+      for (const file of [own, data, outside]) await writeFile(file, "x");
+      mocks.resolveThread.mockResolvedValue({ projectKey: project, linkedDirectories: [] });
+      expect(await read(own)).toEqual({ path: own, content: "x", threadWorkspace: true });
+      expect(await read(data)).toEqual({ path: data, content: "x" });
+      expect(await read(outside)).toEqual({ path: outside, content: "x" });
+      expect(await mocks.handlers.get(MARKDOWN_FILE_READ_CHANNEL)?.({}, { path: own })).toEqual({ path: own, content: "x" });
+      mocks.resolveThread.mockResolvedValue(undefined);
+      expect(await read(own)).toEqual({ path: own, content: "x" });
+      expect(await read("/owner/page.html", { federationTarget: { scope: "remote", instanceId: "owner" } }))
+        .toEqual({ path: "/owner/page.html", content: "<script></script>" });
+    } finally {
+      mocks.resolveThread.mockReset();
+      mocks.resolveThread.mockResolvedValue({ projectKey: "/owner", linkedDirectories: [] });
       await rm(root, { recursive: true, force: true });
     }
   });

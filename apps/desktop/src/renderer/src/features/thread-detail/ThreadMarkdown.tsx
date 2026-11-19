@@ -332,26 +332,36 @@ function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
       <span className="thread-markdown__file-link">
         {canPreview || markdownProps.desktopApi?.openPath ? (
           // A resolved file is actionable; unresolved inline code still copies.
-          <a
-            className="thread-markdown__file-chip tooltip-target"
-            href={`file://${encodeURI(target.path)}`}
-            data-tooltip={`${canPreview ? "Preview" : "Open"} ${tildifyPath(target.path)}`}
-            onClick={(event) => {
-              event.preventDefault();
-              if (canPreview) {
-                viewLocalFile({ ...target, label: props.text });
-              } else {
-                openLocalFileWithOsDefault(markdownProps.desktopApi, target.path);
-              }
-            }}
-          >
-            {/* The word joiner keeps the glyph on the line with the name. */}
-            <span aria-hidden="true">
-              <FileIcon className="thread-markdown__file-chip-icon" size={12} />
-              {"\u2060"}
-            </span>
-            <code className="thread-markdown__file-chip-code">{props.children}</code>
-          </a>
+          // The chip previews or opens, so the path copies from its own button.
+          <>
+            <a
+              className="thread-markdown__file-chip tooltip-target"
+              href={`file://${encodeURI(target.path)}`}
+              data-tooltip={`${canPreview ? "Preview" : "Open"} ${tildifyPath(target.path)}`}
+              onClick={(event) => {
+                event.preventDefault();
+                if (canPreview) {
+                  viewLocalFile({ ...target, label: props.text });
+                } else {
+                  openLocalFileWithOsDefault(markdownProps.desktopApi, target.path);
+                }
+              }}
+            >
+              {/* The word joiner keeps the glyph on the line with the name. */}
+              <span aria-hidden="true">
+                <FileIcon className="thread-markdown__file-chip-icon" size={12} />
+                {"\u2060"}
+              </span>
+              <code className="thread-markdown__file-chip-code">{props.children}</code>
+            </a>
+            <TranscriptCopyButton
+              className="thread-markdown__file-copy"
+              copiedLabel="Copied path"
+              desktopApi={markdownProps.desktopApi}
+              label={`Copy path ${tildifyPath(target.path)}`}
+              text={target.path}
+            />
+          </>
         ) : (
           <TranscriptCopyButton
             as="span"
@@ -1186,6 +1196,7 @@ function MarkdownDocumentModal(props: {
               federationTarget={federationTarget}
               label={props.target.label}
               path={props.target.path}
+              threadWorkspace={loadState.threadWorkspace}
               controlsContainer={headerControls}
               onOpenLocalFile={openLinkedFile}
             />
