@@ -51,6 +51,7 @@ import type {
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { reviewStartFailureFingerprint } from "../app-server/thread-orchestration-prompts";
+import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -667,6 +668,79 @@ describe("DesktopBackendRegistry", () => {
       await registry.close();
     }
   });
+
+  it("runs a Claude Code review as the thread's own /code-review turn and arms Auto-fix on that turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-code-review-"));
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        getSessionInfo: vi.fn().mockResolvedValue(undefined),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
+        query: ({ options = {} }) => {
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            await finished;
+            yield { type: "result", subtype: "success", is_error: false, result: "Reviewed" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    try {
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      // A Codex-only target and an unknown effort are refused before anything starts.
+      await expect(registry.startReview({ backend: "claude", threadId, runMode: "claude-code-review",
+        target: { type: "commit", sha: "a".repeat(40), title: null } })).rejects.toThrow(/no form/);
+      await expect(registry.startReview({ backend: "claude", threadId, runMode: "claude-code-review",
+        target: { type: "uncommittedChanges" }, reasoningEffort: "ultra" })).rejects.toThrow(/effort/);
+
+      const response = await registry.startReview({
+        backend: "claude", threadId, runMode: "claude-code-review", afterReview: "auto-fix",
+        target: { type: "uncommittedChanges" }, reasoningEffort: "high",
+      });
+      expect(response).toMatchObject({ backend: "claude", threadId, reviewThreadId: threadId });
+      expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: response.turnId });
+      // Auto-fix waits on the turn that sent the command, where ReportFindings lands.
+      expect(getReviewAutoFixArming().armedTurnIds({ backend: "claude", threadId })).toEqual([response.turnId]);
+      expect(JSON.stringify((await registry.readThread({ backend: "claude", threadId })).replay))
+        .toContain("/code-review high");
+      finish();
+    } finally {
+      finish();
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a combined review on Codex's own reviewer, and a branch target off Claude Code, before fetching", async () => {
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start", "review/start"] } }),
+      overlayStore: createOverlayStoreMock(),
+      resolveManagedReviewEnabled: () => false,
+    });
+    try {
+      await expect(registry.startReview({ backend: "codex", threadId: "thread-parent", runMode: "codex-sub-agent",
+        target: { type: "pullRequests", pullRequests: [
+          { url: "https://github.com/fixture/project/pull/1" },
+          { url: "https://github.com/fixture/project/pull/2" },
+        ] },
+      })).rejects.toThrow("PwrAgent Sub Agent is required for a review of several pull requests.");
+      await expect(registry.startReview({ backend: "codex", threadId: "thread-parent",
+        target: { type: "branch", branch: "feature" } })).rejects.toThrow(/only as Claude Code/);
+    } finally {
+      await registry.close();
+    }
+  });
+
 
   it("advertises codex as a reviewer override target", async () => {
     const codexClient = new MockBackendClient({

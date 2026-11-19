@@ -260,6 +260,7 @@ import {
   listMentionedSkills,
 } from "../../lib/skill-mentions";
 import {
+  type ClaudeCodeReviewLevel,
   formatReviewCommand,
   parseReviewCommand,
 } from "../../../../shared/review-command";
@@ -941,9 +942,18 @@ type ReviewTargetChoice = AppServerReviewTarget["type"];
 type ReviewConfigState = {
   /**
    * The checked attached pull requests, in list order. Each gets its own
-   * review; more than one queues them behind each other.
+   * review, queued behind each other, unless `pullRequestsTogether` reviews
+   * them as one.
    */
   pullRequestUrls?: string[];
+  /** Several checked pull requests are one combined review. */
+  pullRequestsTogether?: boolean;
+  /** Claude Code's `/code-review` effort; unset is the panel's default. */
+  codeReviewLevel?: ClaudeCodeReviewLevel;
+  /** The branch Claude Code's Branch target reviews; unset is the checkout's. */
+  codeReviewBranch?: string;
+  /** The file or folder Claude Code's Path target reviews. */
+  codeReviewPath?: string;
   branch: string;
   branchSource?: "auto" | "user";
   commit: string;
@@ -1442,6 +1452,20 @@ function createReviewConfig(params: {
   }
   if (target.type === "pullRequest") {
     return { ...config, target: "pullRequest", pullRequestUrls: [target.url] };
+  }
+  if (target.type === "pullRequests") {
+    return {
+      ...config,
+      pullRequestUrls: target.pullRequests.map((member) => member.url),
+      pullRequestsTogether: true,
+      target: "pullRequest",
+    };
+  }
+  if (target.type === "branch") {
+    return { ...config, codeReviewBranch: target.branch, target: "branch" };
+  }
+  if (target.type === "path") {
+    return { ...config, codeReviewPath: target.path, target: "path" };
   }
   if (target.type === "uncommittedChanges") {
     return { ...config, target: "uncommittedChanges" };

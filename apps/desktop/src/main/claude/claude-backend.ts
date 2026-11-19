@@ -697,10 +697,12 @@ export class ClaudeBackend {
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: true,
-        // Claude runs no reviews itself, but this owner accepts a run mode
-        // for a Claude thread whose review runs on another provider.
+        // A Claude thread's review runs either on another provider or as
+        // Claude Code's own /code-review in the thread.
         reviewRunMode: true,
         reviewAutoFix: true,
+        reviewPullRequestSet: true,
+        reviewClaudeCodeReview: true,
         // File checkpoints restore what Edit, Write, and NotebookEdit changed.
         threadRewind: { files: true, undo: true },
       },

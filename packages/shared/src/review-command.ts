@@ -1,4 +1,10 @@
-import { nativeReviewTarget, pullRequestReviewPromptUrl } from "./pull-request-review";
+import {
+  nativeReviewTarget,
+  normalizePullRequestUrl,
+  pullRequestRepositoryKey,
+  pullRequestReviewPromptUrl,
+  pullRequestSetReviewInstructions,
+} from "./pull-request-review";
 import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
 import { normalizeReviewConfidenceScore } from "./review-output";
 
@@ -35,6 +41,15 @@ export function shortReviewSha(sha: string): string {
 export function formatReviewCommand(target: AppServerReviewTarget): string {
   if (target.type === "pullRequest") {
     return `/review --pr ${target.url}`;
+  }
+  if (target.type === "pullRequests") {
+    return `/review --pr ${target.pullRequests.map((member) => member.url).join(" ")}`;
+  }
+  if (target.type === "branch") {
+    return `/code-review ${target.branch}`;
+  }
+  if (target.type === "path") {
+    return `/code-review ${target.path}`;
   }
   if (target.type === "uncommittedChanges") {
     return "/review";
@@ -292,6 +307,12 @@ export function reviewTargetInstructions(target: AppServerReviewTarget): string 
   switch (target.type) {
     case "pullRequest":
       return reviewTargetInstructions(nativeReviewTarget(target));
+    case "pullRequests":
+      return pullRequestSetReviewInstructions(target);
+    case "branch":
+      return `Review the changes on branch '${target.branch}'.`;
+    case "path":
+      return `Review the file or folder '${target.path}'.`;
     case "baseBranch":
       return `Review the current checkout against base branch '${target.branch}'. Find the merge base and inspect the resulting diff.`;
     case "commit":
@@ -301,4 +322,100 @@ export function reviewTargetInstructions(target: AppServerReviewTarget): string 
     case "uncommittedChanges":
       return "Review all staged, unstaged, and untracked changes in the current checkout.";
   }
+}
+
+/**
+ * The effort levels the review panel offers for Claude Code's `/code-review`.
+ * `ultra` is left out: it launches a billed, multi-agent review in the cloud
+ * whose findings do not come back to the thread. It can still be typed.
+ */
+export const CLAUDE_CODE_REVIEW_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ClaudeCodeReviewLevel = (typeof CLAUDE_CODE_REVIEW_LEVELS)[number];
+
+export function isClaudeCodeReviewLevel(value: unknown): value is ClaudeCodeReviewLevel {
+  return typeof value === "string"
+    && (CLAUDE_CODE_REVIEW_LEVELS as readonly string[]).includes(value);
+}
+
+/** Whether Claude Code's `/code-review` has a form for this target. */
+export function claudeCodeReviewTakesTarget(target: AppServerReviewTarget): boolean {
+  return target.type === "uncommittedChanges"
+    || target.type === "pullRequest"
+    || target.type === "pullRequests"
+    || target.type === "branch"
+    || target.type === "path";
+}
+
+function claudeCodeReviewPullRequest(url: string, repository: string | undefined): string {
+  const normalized = normalizePullRequestUrl(url);
+  const match = /\/pull\/([1-9][0-9]*)$/.exec(normalized);
+  if (!match || !pullRequestRepositoryKey({ url: normalized })) {
+    throw new Error("Claude Code reviews GitHub pull requests by number or URL.");
+  }
+  // A bare number is the checkout's own repository's; any other is named in full.
+  return repository && pullRequestRepositoryKey({ url: normalized }) === repository.trim().toLowerCase()
+    ? match[1]!
+    : normalized;
+}
+
+/**
+ * The `/code-review` command that reviews a panel target in a Claude thread:
+ * the effort level, then the target. Several pull requests are one
+ * comma-separated argument, which Claude Code reviews as one combined report.
+ * A pull request of `repository` (the checkout's `host/owner/repo`) is its
+ * bare number; any other is its URL. Throws for a target `/code-review` has
+ * no form for, and for an argument it would read as something else.
+ */
+export function claudeCodeReviewCommand(params: {
+  target: AppServerReviewTarget;
+  level?: string;
+  repository?: string;
+}): string {
+  const { target } = params;
+  if (params.level !== undefined && !isClaudeCodeReviewLevel(params.level)) {
+    throw new Error(`Unknown Claude Code review effort: ${params.level}`);
+  }
+  let argument: string | undefined;
+  switch (target.type) {
+    case "uncommittedChanges":
+      argument = undefined;
+      break;
+    case "pullRequest":
+      argument = claudeCodeReviewPullRequest(target.url, params.repository);
+      break;
+    case "pullRequests":
+      if (target.pullRequests.length === 0) {
+        throw new Error("Choose at least one pull request to review.");
+      }
+      argument = target.pullRequests
+        .map((member) => claudeCodeReviewPullRequest(member.url, params.repository))
+        .join(",");
+      break;
+    case "branch": {
+      const branch = target.branch.trim();
+      // No whitespace, and no leading dash, which would read as a flag.
+      if (!branch || /\s/.test(branch) || branch.startsWith("-")) {
+        throw new Error("Enter a branch name without spaces.");
+      }
+      // `/code-review 12` and `/code-review #12` review pull request 12.
+      if (/^#?[0-9]+$/.test(branch)) {
+        throw new Error("This branch name reads as a pull request number.");
+      }
+      argument = branch;
+      break;
+    }
+    case "path": {
+      const path = target.path.trim();
+      if (!path || /[\r\n"]/.test(path) || path.startsWith("-")) {
+        throw new Error("Enter a path on one line, without quotes or a leading dash.");
+      }
+      // "./" keeps a relative path from reading as a pull request or branch.
+      const explicit = /^(?:\/|\.{1,2}\/|[a-zA-Z]:[\\/])/.test(path) ? path : `./${path}`;
+      argument = /\s/.test(explicit) ? `"${explicit}"` : explicit;
+      break;
+    }
+    default:
+      throw new Error("Claude Code's /code-review has no form for this review target.");
+  }
+  return ["/code-review", params.level, argument].filter(Boolean).join(" ");
 }

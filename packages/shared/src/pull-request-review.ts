@@ -1,4 +1,9 @@
-import type { AppServerReviewTarget } from "./contracts/normalized-app-server";
+import type {
+  AppServerReviewContext,
+  AppServerReviewPullRequest,
+  AppServerReviewPullRequestSnapshot,
+  AppServerReviewTarget,
+} from "./contracts/normalized-app-server";
 import type { NavigationThreadSummary, PrSummary } from "./contracts/navigation";
 import { isGitObjectId } from "./git-object-id";
 import { findPrimaryReviewWorkspaceCwd } from "./review-branches";
@@ -137,16 +142,36 @@ export function reviewThreadForWorkspace(
   return secondary;
 }
 
-/** Translate only at the engine boundary; retain the original target in state. */
-export function nativeReviewTarget(
-  target: AppServerReviewTarget,
-): Exclude<AppServerReviewTarget, { type: "pullRequest" }> {
-  if (target.type !== "pullRequest") return target;
-  const snapshot = target.snapshot;
+/** The targets Codex's native `review/start` takes after translation. */
+export type NativeReviewTarget = Extract<
+  AppServerReviewTarget,
+  { type: "uncommittedChanges" | "baseBranch" | "commit" | "custom" }
+>;
+
+function assertResolvedSnapshot(
+  snapshot: AppServerReviewPullRequestSnapshot | undefined,
+): asserts snapshot is AppServerReviewPullRequestSnapshot {
   if (!snapshot || ![snapshot.baseCommit, snapshot.headCommit, snapshot.mergeBaseCommit]
     .every(isGitObjectId)) {
     throw new Error("Pull request review requires an owner-resolved commit snapshot.");
   }
+}
+
+/**
+ * Translate only at the engine boundary; retain the original target in state.
+ * A target only a managed reviewer or Claude Code can run never reaches here:
+ * the owner selects that engine first, so arriving here is a routing defect.
+ */
+export function nativeReviewTarget(target: AppServerReviewTarget): NativeReviewTarget {
+  if (target.type === "pullRequests") {
+    throw new Error("A review of several pull requests runs only on the PwrAgent Sub Agent.");
+  }
+  if (target.type === "branch" || target.type === "path") {
+    throw new Error("A branch or path review runs only as Claude Code's /code-review.");
+  }
+  if (target.type !== "pullRequest") return target;
+  const snapshot = target.snapshot;
+  assertResolvedSnapshot(snapshot);
   return {
     type: "custom",
     instructions: [
@@ -316,4 +341,195 @@ export function findCheckedOutPullRequest(params: {
       pr.lifecycleState === "open"
       && describeAttachedPullRequestLocalSync({ ...params, pr }).matches,
   );
+}
+
+/** The fewest pull requests a `pullRequests` target takes; one is a `pullRequest`. */
+export const PULL_REQUEST_SET_MIN = 2;
+/** The most pull requests one combined review takes. */
+export const PULL_REQUEST_SET_MAX = 8;
+/** Beyond this many changed paths, a snapshot records none (unknown). */
+export const PULL_REQUEST_SET_CHANGED_PATHS_MAX = 500;
+
+/** A pull request URL as targets compare it: without a trailing slash. */
+export function normalizePullRequestUrl(url: string): string {
+  return url.trim().replace(/\/$/, "");
+}
+
+/**
+ * Why a list of URLs cannot be one `pullRequests` target, or undefined when it
+ * can: two to eight distinct GitHub.com pull requests of one repository.
+ */
+export function pullRequestSetProblem(urls: readonly string[]): string | undefined {
+  const normalized = urls.map(normalizePullRequestUrl);
+  if (normalized.length < PULL_REQUEST_SET_MIN) {
+    return "A combined review needs at least two pull requests.";
+  }
+  if (normalized.length > PULL_REQUEST_SET_MAX) {
+    return `A combined review takes at most ${PULL_REQUEST_SET_MAX} pull requests.`;
+  }
+  if (new Set(normalized).size !== normalized.length) {
+    return "A combined review names each pull request once.";
+  }
+  const repositories = new Set<string>();
+  for (const url of normalized) {
+    if (!EXPLICIT_REVIEW_PULL_REQUEST_URL.test(url)) {
+      return "A combined review takes GitHub.com pull requests.";
+    }
+    repositories.add(pullRequestRepositoryKey({ url }));
+  }
+  if (repositories.size !== 1) {
+    return "A combined review takes pull requests of one repository.";
+  }
+  return undefined;
+}
+
+/** The same pull requests in the same order: what lets a reschedule keep its snapshots. */
+export function samePullRequestSet(
+  left: readonly { url: string }[],
+  right: readonly { url: string }[],
+): boolean {
+  return left.length === right.length
+    && left.every((member, index) =>
+      normalizePullRequestUrl(member.url) === normalizePullRequestUrl(right[index]!.url));
+}
+
+type StackRefs = { headRefName?: string; baseRefName?: string };
+
+function refName(value: string | undefined): string {
+  return value?.trim().replace(/^refs\/heads\//, "") ?? "";
+}
+
+/**
+ * The members bottom first when they form one stack: every head branch is
+ * distinct, exactly one member's base is not another member's head, and
+ * following "the member based on this head" from it visits every member.
+ * Undefined otherwise, including a fork (two members on one base) and a
+ * member with an unknown branch.
+ */
+export function pullRequestStackOrder<T>(
+  members: readonly T[],
+  refs: (member: T) => StackRefs,
+): T[] | undefined {
+  if (members.length < 2) return undefined;
+  const heads = members.map((member) => refName(refs(member).headRefName));
+  const bases = members.map((member) => refName(refs(member).baseRefName));
+  if (heads.some((head) => !head) || bases.some((base) => !base)) return undefined;
+  if (new Set(heads).size !== heads.length) return undefined;
+  const bottoms = members.flatMap((_, index) => heads.includes(bases[index]!) ? [] : [index]);
+  if (bottoms.length !== 1) return undefined;
+  const ordered: T[] = [];
+  const visited = new Set<number>();
+  let current: number | undefined = bottoms[0];
+  while (current !== undefined) {
+    if (visited.has(current)) return undefined;
+    visited.add(current);
+    ordered.push(members[current]!);
+    const head: string = heads[current]!;
+    const above: number[] = bases.flatMap((base, index) => base === head ? [index] : []);
+    if (above.length > 1) return undefined;
+    current = above[0];
+  }
+  return ordered.length === members.length ? ordered : undefined;
+}
+
+/**
+ * The order a combined review reads its pull requests in: bottom first when
+ * they form a stack, otherwise the order given.
+ */
+export function orderPullRequestSet<T>(
+  members: readonly T[],
+  refs: (member: T) => StackRefs,
+): { ordered: T[]; stacked: boolean } {
+  const stack = pullRequestStackOrder(members, refs);
+  return stack ? { ordered: stack, stacked: true } : { ordered: [...members], stacked: false };
+}
+
+/** The snapshots of a resolved `pullRequests` target, in reading order. */
+export function orderedPullRequestSetSnapshots(
+  target: Extract<AppServerReviewTarget, { type: "pullRequests" }>,
+): { snapshots: AppServerReviewPullRequestSnapshot[]; stacked: boolean } {
+  const snapshots = target.pullRequests.map((member) => {
+    assertResolvedSnapshot(member.snapshot);
+    return member.snapshot;
+  });
+  const { ordered, stacked } = orderPullRequestSet(snapshots, (snapshot) => snapshot.pullRequest);
+  return { snapshots: ordered, stacked };
+}
+
+/** Managed-review instructions for several pinned pull requests read together. */
+export function pullRequestSetReviewInstructions(
+  target: Extract<AppServerReviewTarget, { type: "pullRequests" }>,
+): string {
+  const { snapshots, stacked } = orderedPullRequestSetSnapshots(target);
+  return [
+    `Review these ${snapshots.length} pull requests together at the following immutable commits.`
+      + (stacked
+        ? " They form a stack, listed bottom first: each one's base branch is the head branch of the one before it."
+        : "")
+      + " Report each finding once, on the pull request whose diff introduces the problem.",
+    ...snapshots.map((snapshot, index) => [
+      `${index + 1}. Pull request: ${snapshot.pullRequest.url}; base branch: ${snapshot.pullRequest.baseRefName}; head branch: ${snapshot.pullRequest.headRefName}; captured at: ${snapshot.capturedAt}.`,
+      `   Base tip: ${snapshot.baseCommit}; head: ${snapshot.headCommit}; merge base: ${snapshot.mergeBaseCommit}.`,
+      `   Inspect git diff --no-ext-diff ${snapshot.mergeBaseCommit} ${snapshot.headCommit} --`,
+    ].join("\n")),
+    "Read a pull request's files and their surrounding context at its own head, using git show '<head>:path/to/file' (substitute that pull request's head and the actual path).",
+    "The active checkout may contain another pull request and uncommitted work. Do not read working-tree files as the reviewed version, compare against HEAD, or include later commits or local changes.",
+    "Do not checkout, switch, reset, stash, or modify the workspace. If an object is unavailable, report that the review cannot proceed; do not substitute another revision.",
+    "Report findings against the file paths and line numbers at the head of the pull request each finding belongs to.",
+  ].join("\n");
+}
+
+function normalizeFindingPath(value: string): string {
+  return value.trim().replace(/\\/g, "/");
+}
+
+function relativeTo(path: string, root: string | undefined): string | undefined {
+  const base = root ? normalizeFindingPath(root).replace(/\/+$/, "") : "";
+  if (!base) return undefined;
+  const fold = /^[a-z]:\//i.test(base);
+  const comparablePath = fold ? path.toLowerCase() : path;
+  const comparableBase = fold ? base.toLowerCase() : base;
+  return comparablePath.startsWith(`${comparableBase}/`) ? path.slice(base.length + 1) : undefined;
+}
+
+/**
+ * The pull requests of a combined review whose diff changed a finding's file,
+ * in the review's reading order. Undefined when the review was not of several
+ * pull requests, or when no pull request matched and at least one snapshot's
+ * changed paths are unknown, since "none" cannot then be told apart from
+ * "not recorded". An empty list means no reviewed pull request changed it.
+ *
+ * A finding's path is absolute in the reviewed workspace, or relative. One
+ * outside both the workspace and its repository is matched by its trailing
+ * path components.
+ */
+export function reviewFindingPullRequests(
+  filePath: string,
+  context: Pick<AppServerReviewContext, "workspacePath" | "repositoryPath" | "pullRequestSnapshots"> | undefined,
+): AppServerReviewPullRequest[] | undefined {
+  const snapshots = context?.pullRequestSnapshots;
+  if (!snapshots || snapshots.length < PULL_REQUEST_SET_MIN) return undefined;
+  const path = normalizeFindingPath(filePath);
+  if (!path) return undefined;
+  const absolute = path.startsWith("/") || /^[a-z]:\//i.test(path);
+  const relative = absolute
+    ? relativeTo(path, context.workspacePath) ?? relativeTo(path, context.repositoryPath)
+    : path.replace(/^\.\//, "");
+  const changes = (changed: string): boolean => relative !== undefined
+    ? changed === relative
+    : path.endsWith(`/${changed}`);
+  const matched = snapshots.filter((snapshot) => snapshot.changedPaths?.some(changes));
+  if (matched.length === 0 && snapshots.some((snapshot) => !snapshot.changedPaths)) return undefined;
+  return matched.map((snapshot) => snapshot.pullRequest);
+}
+
+/**
+ * "PRs #4010, #4011" for a set of pull request URLs, as the review card's
+ * title names several. A URL without a number is named in full.
+ */
+export function pullRequestSetLabel(members: readonly { url: string }[]): string {
+  return `PRs ${members.map((member) => {
+    const match = /\/pull\/([1-9][0-9]*)\/?$/.exec(member.url.trim());
+    return match ? `#${match[1]}` : member.url;
+  }).join(", ")}`;
 }

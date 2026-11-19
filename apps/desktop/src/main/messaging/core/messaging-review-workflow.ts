@@ -1390,6 +1390,12 @@ function formatMessagingReviewScope(target: AppServerReviewTarget): string {
   switch (target.type) {
     case "pullRequest":
       return "Attached Pull Request";
+    case "pullRequests":
+      return "Attached Pull Requests";
+    case "branch":
+      return "Branch";
+    case "path":
+      return "Path";
     case "uncommittedChanges":
       return "Current Changes";
     case "baseBranch":

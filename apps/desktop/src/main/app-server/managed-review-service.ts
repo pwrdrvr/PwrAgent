@@ -57,7 +57,8 @@ import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt } from "./managed-review";
-import { resolvePullRequestReview } from "./pull-request-review";
+import { prepareClaudeCodeReview } from "./claude-code-review-start";
+import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import { refreshReviewBaseBranch } from "./review-base-branch";
 import { resolveReviewProvenance } from "./review-provenance";
@@ -106,7 +107,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   | "invalidateThreadListCache" | "isLiveDynamicToolCall" | "readCodexDefaultModelsOnce"
   | "readDelegatedTurnAncestry" | "readThread" | "resolveCodexThreadExecutionModeForActiveTurn"
   | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "startAcpSession"
-  | "startAcpTurn" | "submitTurn" | "threadHasActiveTurn"
+  | "startAcpTurn" | "startTurn" | "submitTurn" | "threadHasActiveTurn"
   | "withArchiveWorkspaceWrite" | "withCodexThreadClient"
   | "prepareTokenMiserRuntime"
 > {
@@ -335,7 +336,9 @@ export class ManagedReviewService {
     params: StartReviewRequest,
     trustedSnapshot = false,
   ): Promise<StartReviewRequest> {
-    if (params.target.type !== "pullRequest") return params;
+    // Claude Code reads each pull request when its turn starts; nothing is pinned.
+    if (params.runMode === "claude-code-review") return params;
+    if (params.target.type !== "pullRequest" && params.target.type !== "pullRequests") return params;
     const overlay = await this.context.stores.threads.getThreadOverlayState({
       backend: params.backend, threadId: params.threadId,
     });
@@ -343,13 +346,15 @@ export class ManagedReviewService {
       params.backend, params.threadId, overlay,
     );
     if (!cwd) throw new Error("Select a repository workspace for the pull request review.");
-    const target = await resolvePullRequestReview({
-      target: params.target,
+    const resolution = {
       cwd,
       prs: overlay?.prs ?? [],
       executionTarget: overlay?.codexEnvironmentRuntime?.executionTarget,
       trustedSnapshot,
-    });
+    };
+    const target = params.target.type === "pullRequests"
+      ? await resolvePullRequestSetReview({ ...resolution, target: params.target })
+      : await resolvePullRequestReview({ ...resolution, target: params.target });
     return { ...params, cwd, target };
   }
 
@@ -367,7 +372,9 @@ export class ManagedReviewService {
       params.afterReview,
     );
     try {
-      const response = await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
+      const response = params.runMode === "claude-code-review"
+        ? await this.startClaudeCodeReview(params)
+        : await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
       autoFix.accepted(response.turnId);
       return response;
     } catch (error) {
@@ -378,6 +385,39 @@ export class ManagedReviewService {
     }
   }
 
+  /**
+   * Claude Code's `/code-review`, sent as the Claude thread's own turn. Its
+   * `ReportFindings` call lands in that turn, which is what Auto-fix matches.
+   */
+  private async startClaudeCodeReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+    this.host().assertNotBootstrap("startReview");
+    await this.host().assertThreadNotLocked(params.backend, params.threadId);
+    await this.host().ensureCheckoutAwake(params);
+    const overlay = await this.context.stores.threads.getThreadOverlayState({
+      backend: params.backend, threadId: params.threadId,
+    });
+    const command = await prepareClaudeCodeReview({
+      request: params,
+      threadCwd: await this.host().resolveThreadEnvironmentCwd(params.backend, params.threadId, overlay),
+      prs: overlay?.prs ?? [],
+    });
+    const started = await this.host().startTurn({
+      backend: params.backend,
+      threadId: params.threadId,
+      input: [{ type: "text", text: command }],
+    });
+    backendRegistryLog.info("code review started", {
+      mode: "claude-code-review", parentBackend: params.backend,
+      parentThreadId: params.threadId, turnId: started.turnId,
+    });
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      reviewThreadId: params.threadId,
+      turnId: started.turnId,
+    };
+  }
+
   private async startReviewWithTerminalEvidence(
     params: StartReviewRequest,
     terminals: object,
@@ -386,6 +426,13 @@ export class ManagedReviewService {
   ): Promise<StartReviewResponse> {
     this.host().assertNotBootstrap("startReview");
     await this.host().assertThreadNotLocked(params.backend, params.threadId);
+    // Refused before anything fetches: no engine but Claude Code takes these.
+    if (params.target.type === "branch" || params.target.type === "path") {
+      throw new Error("A branch or path review runs only as Claude Code's /code-review.");
+    }
+    if (params.target.type === "pullRequests" && params.runMode === "codex-sub-agent") {
+      throw new Error("PwrAgent Sub Agent is required for a review of several pull requests.");
+    }
     // A review reads the checkout, so a hibernated one comes back first.
     await this.host().ensureCheckoutAwake(params);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
@@ -415,7 +462,8 @@ export class ManagedReviewService {
     if (params.runMode && params.delivery === "detached") {
       throw new Error("Explicit review modes do not support detached delivery.");
     }
-    const requiresManaged = acpManagedMode || reviewBackendDiffers;
+    const pullRequestSet = params.target.type === "pullRequests";
+    const requiresManaged = acpManagedMode || reviewBackendDiffers || pullRequestSet;
     if (requiresManaged && params.runMode && params.runMode !== "pwragent-sub-agent") {
       throw new Error("PwrAgent Sub Agent is required for ACP or cross-provider reviews.");
     }
