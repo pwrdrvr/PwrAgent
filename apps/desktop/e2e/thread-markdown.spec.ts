@@ -22,14 +22,22 @@ test("renders transcript Markdown in both modes through one Electron launch", as
   });
 
   try {
-    const parsedScripts = new Set<string>();
-    const cdp = await app.window.context().newCDPSession(app.window);
-    cdp.on("Debugger.scriptParsed", ({ url }) => parsedScripts.add(url));
-    // Resource Timing omits file:// modules. Debugger.enable also reports
-    // scripts parsed before attachment, including an already-loaded renderer.
-    await cdp.send("Debugger.enable");
-    const hasIncrementalChunk = () => [...parsedScripts].some((url) =>
-      url.includes("/IncrementalMarkdown-"));
+    const observeIncrementalChunk = async () => {
+      const cdp = await app.window.context().newCDPSession(app.window);
+      let parsed = false;
+      cdp.on("Debugger.scriptParsed", ({ url }) => {
+        if (url.includes("/IncrementalMarkdown-")) parsed = true;
+      });
+      // Resource Timing omits file:// modules. Debugger.enable also reports
+      // scripts parsed before attachment in the current document.
+      await cdp.send("Debugger.enable");
+      return { cdp, hasChunk: () => parsed };
+    };
+    const initial = await observeIncrementalChunk();
+    const readBootstrapPreference = () => app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return (await api.readConfigBootstrap!()).snapshot?.markdown?.incrementalRendering;
+    });
 
     const assertMode = async (mode: "incremental" | "standard") => {
       // Leave the thread first. Settled documents keep their renderer until
@@ -47,13 +55,9 @@ test("renders transcript Markdown in both modes through one Electron launch", as
     };
 
     await test.step("saved opt-out keeps the packaged chunk unloaded at cold start", async () => {
-      const bootstrapMarkdown = await app.window.evaluate(async () => {
-        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
-        return (await api.readConfigBootstrap!()).snapshot?.markdown;
-      });
-      expect(bootstrapMarkdown?.incrementalRendering).toBe(false);
+      expect(await readBootstrapPreference()).toBe(false);
       await assertMode("standard");
-      expect(hasIncrementalChunk()).toBe(false);
+      expect(initial.hasChunk()).toBe(false);
     });
 
     await test.step("enabling incremental mode loads the packaged chunk", async () => {
@@ -63,13 +67,22 @@ test("renders transcript Markdown in both modes through one Electron launch", as
       const toggle = app.window.getByRole("region", { name: "Markdown rendering", exact: true })
         .getByRole("switch", { name: "Incremental rendering", exact: true });
       await expect(toggle).not.toBeChecked();
-      expect(hasIncrementalChunk()).toBe(false);
+      expect(initial.hasChunk()).toBe(false);
       await toggle.click();
       await expect(toggle).toBeChecked();
       await nav.getByRole("button", { name: /Exit Settings/i }).click();
       await expect(nav).toBeHidden();
       await assertMode("incremental");
-      await expect.poll(hasIncrementalChunk).toBe(true);
+      await expect.poll(initial.hasChunk).toBe(true);
+    });
+
+    await test.step("saved opt-in loads the packaged chunk in a fresh renderer", async () => {
+      await expect.poll(readBootstrapPreference).toBe(true);
+      await initial.cdp.detach();
+      await app.window.reload();
+      const restarted = await observeIncrementalChunk();
+      await assertMode("incremental");
+      await expect.poll(restarted.hasChunk).toBe(true);
     });
   } finally {
     await app.close();
