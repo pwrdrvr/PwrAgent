@@ -133,12 +133,14 @@ every local thread. Codex threads are offered the five ordinary functions
 `research_assign` only while Codex Tool Discovery is on, so they stay deferred
 and are discovered on demand there; they have no eager exemption. Claude and
 ACP threads receive them from the PwrAgent MCP server like every other
-PwrAgent tool. `researchToolsOffered` holds both rules, and a call is accepted
-only from a live turn on a surface that offers the tools. Turning Codex Tool
-Discovery off removes the tools from Codex threads and refuses their stale
-calls; it does not stop runs. Disabling the feature fences admissions
-immediately and stops owned active runs through the existing cancellation
-lifecycle.
+PwrAgent tool. Providers without native tool search can use the existing
+portable discovery transport. `researchToolsOffered` holds both rules, and a
+call is accepted only from a live turn on a surface that offers the tools; a
+Codex thread cannot prepare a run without them. Turning Codex Tool Discovery
+off removes the tools from Codex threads, refuses their stale calls and stops
+the owned native runs a Codex thread coordinates; runs coordinated from Claude
+or ACP continue. Disabling the feature fences admissions immediately and stops
+owned active runs through the existing cancellation lifecycle.
 Retained evidence is preserved for re-enabling. Missing or malformed flags
 remain off, and stale loaded schemas cannot bypass the live gate.
 Disabling a three-worker run uses the existing five-commit stop budget,

@@ -78,6 +78,28 @@ it("a live Experimental settings transition disables admissions and stops owned 
   } finally { stop.mockRestore(); }
 });
 
+it("turning Codex Tool Discovery off stops only the native runs a Codex thread coordinates", async () => {
+  const stop = vi.spyOn(researchRuntime.getResearchService(), "stopOwnedRuns").mockResolvedValue();
+  const settings = getDesktopSettingsService();
+  try {
+    await settings.writeConfigPatchTargeted({ experimental: { researchEnabled: true, codexToolDiscovery: true } });
+    expect(stop).not.toHaveBeenCalled();
+    await settings.writeConfigPatchTargeted({ experimental: { codexToolDiscovery: false } });
+    expect(researchPorts.enabled?.()).toBe(true);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+    const [reason, include] = stop.mock.calls[0]!;
+    expect(reason).toContain("Codex Tool Discovery");
+    const header = (backend: "codex" | "claude" | "acp:kimi", harness: boolean) => ({ coordinator: { backend, threadId: "coordinator" }, ...(harness ? { harness: {} } : {}) }) as unknown as Parameters<NonNullable<typeof include>>[0];
+    expect([header("codex", false), header("claude", false), header("acp:kimi", false), header("codex", true)].map((run) => include!(run))).toEqual([true, false, false, false]);
+    // Turning it back on, with Research still on, stops nothing.
+    await settings.writeConfigPatchTargeted({ experimental: { codexToolDiscovery: true } });
+    expect(stop).toHaveBeenCalledOnce();
+  } finally {
+    await settings.writeConfigPatchTargeted({ experimental: { researchEnabled: false, codexToolDiscovery: true } });
+    stop.mockRestore();
+  }
+});
+
 afterAll(async () => {
   const context = getDesktopBackendRegistry().context;
   prepareOwnerShutdown();

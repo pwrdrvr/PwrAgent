@@ -127,6 +127,24 @@ describe("research lifecycle model", () => {
     }), { numRuns: 60 });
   });
 
+  it("stopping the runs a filter selects leaves every other owned run running", async () => {
+    const backends = fc.array(fc.constantFrom("codex" as const, "claude" as const, "acp:kimi" as const), { minLength: 1, maxLength: 4 });
+    await fc.assert(fc.asyncProperty(backends, async (coordinators) => {
+      const { service } = fixture();
+      const ids: string[] = [];
+      for (const [index, backend] of coordinators.entries()) {
+        const actor = { ...context, backend, threadId: `coordinator-${index}`, callId: `start-${index}` };
+        ids.push((await service.start({ ...request, approaches: [request.approaches[0]!] }, actor)).id);
+      }
+      await service.stopOwnedRuns("Codex lost its tools", (run) => run.coordinator.backend === "codex");
+      for (const [index, backend] of coordinators.entries()) {
+        const run = service.read(ids[index]!, { ...context, backend, threadId: `coordinator-${index}` });
+        expect(["stopping", "stopped"].includes(run.status)).toBe(backend === "codex");
+      }
+      service.close();
+    }), { numRuns: 25 });
+  });
+
   it("ambiguous start errors retain the worker reservation and deadline", async () => {
     const cancelTimer = vi.fn();
     let deadline!: () => void;

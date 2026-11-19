@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, shell } from "electron";
 import { isAppServerBackendKind, type ResearchThread, type ResearchSnapshotRequest, type ResearchChangesRequest, type ResearchUpdateReceipt, type ResearchEventsRequest, type ResearchUpdateRequest, type ResearchEvidenceRequest, type PrepareResearchRequest, type ResearchSearchRequest, type ResearchItemReadRequest, type ResearchWorkRequest } from "@pwragent/shared";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../../../shared/ipc";
 import { getResearchService } from "../../research/research-runtime";
+import { researchToolsOffered, researchToolSurface } from "../../agent-tools/pwragent-research-agent-tools";
 import { resolveHarnessEvidencePath, resolveResearchEvidencePath } from "../../research/research-evidence-path";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { isLocalMainWindowWebContents, isLocalResearchWebContents } from "../window-channels";
@@ -92,6 +93,11 @@ export function registerResearchIpcHandlers(): void {
   ipcMain.handle(RESEARCH_PREPARE_CHANNEL, (event, request: PrepareResearchRequest) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
+    // The coordinator must be offered research_start, or the request would only expire.
+    const settings = getDesktopSettingsService();
+    if (!researchToolsOffered(researchToolSurface(request.backend), { enabled: true, codexToolDiscovery: () => settings.resolveCodexToolDiscovery?.() !== false })) {
+      throw new Error("Codex threads need Codex Tool Discovery to start research. Turn it on in Settings → Experimental.");
+    }
     return getResearchService().prepare(request);
   });
   ipcMain.handle(RESEARCH_WITHDRAW_CHANNEL, (event, request: ResearchThread) => {

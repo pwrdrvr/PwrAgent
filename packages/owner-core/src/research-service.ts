@@ -902,8 +902,9 @@ export class ResearchService {
     if (queued && !queued.size) this.queuedResumes.delete(id);
   }
 
-  async stopOwnedRuns(reason: string): Promise<void> {
-    await Promise.all(this.storage.activeRuns().filter((run) => run.ownerId === this.ports.ownerId)
+  /** Stops this process's live runs, or only those `include` selects. */
+  async stopOwnedRuns(reason: string, include: (run: ResearchRunHeader) => boolean = () => true): Promise<void> {
+    await Promise.all(this.storage.activeRuns().filter((run) => run.ownerId === this.ports.ownerId && include(run))
       .map(async (run) => await this.stop(run.id, this.operator(run), "stopped", reason)));
   }
 

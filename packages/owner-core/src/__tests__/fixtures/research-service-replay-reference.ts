@@ -781,8 +781,8 @@ export class ReplayResearchService {
     if (now().state === "running") await this.stopWorker(id, approachId, actor);
   }
 
-  async stopOwnedRuns(reason: string): Promise<void> {
-    await Promise.all(this.storage.list().filter((run) => run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status))
+  async stopOwnedRuns(reason: string, include: (run: ResearchRunHeader) => boolean = () => true): Promise<void> {
+    await Promise.all(this.storage.list().filter((run) => run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status) && include(run))
       .map(async (run) => await this.stop(run.id, this.operator(run), "stopped", reason)));
   }
 

@@ -2721,7 +2721,7 @@ export class DesktopBackendRegistry {
   }
 
   private researchOffered(surface: ResearchToolSurface): boolean {
-    return researchToolsOffered(surface, { enabled: this.researchEnabled(), codexToolDiscovery: this.resolveCodexToolDiscoveryFn() });
+    return researchToolsOffered(surface, { enabled: this.researchEnabled(), codexToolDiscovery: this.resolveCodexToolDiscoveryFn });
   }
 
   /** The handler for Codex's own dynamic tools. */

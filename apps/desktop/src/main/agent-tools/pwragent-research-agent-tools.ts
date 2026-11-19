@@ -20,8 +20,8 @@ export function researchToolSurface(backend: AgentToolCallContext["backend"]): R
  * offers the tools only through Codex Tool Discovery, so they stay deferred
  * there. That setting is Codex's and does not affect Claude or ACP threads.
  */
-export function researchToolsOffered(surface: ResearchToolSurface, gates: { enabled: boolean; codexToolDiscovery: boolean }): boolean {
-  return gates.enabled && (surface === "mcp" || gates.codexToolDiscovery);
+export function researchToolsOffered(surface: ResearchToolSurface, gates: { enabled: boolean; codexToolDiscovery: () => boolean }): boolean {
+  return gates.enabled && (surface === "mcp" || gates.codexToolDiscovery());
 }
 
 /** Research schemas are discovered on demand after the experiment is enabled. */
