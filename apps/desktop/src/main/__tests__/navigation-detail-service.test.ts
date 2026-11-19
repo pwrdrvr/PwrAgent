@@ -9,7 +9,7 @@ import type {
   ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import * as backendRegistry from "../app-server/backend-registry";
 import * as navigationDetail from "../app-server/navigation-detail-service";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
@@ -454,19 +454,19 @@ describe("NavigationDetailService", () => {
     const liveAgents = new Map([[live.monitorId, live]]);
     mocks.cards = persisted;
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+    const ledger = usageLedgerStandIn({
+      subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
+      subAgents: new Map([[selected.id, liveAgents]]),
+    });
     const registry = {
       getThreadInfo: () => undefined,
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
       hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
-      threadUsageLedger: usageLedgerStandIn({
-        subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
-        subAgents: new Map([[selected.id, liveAgents]]),
-      }),
-      mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
-      listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
-      readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
+      mergeLiveTokenMiserSubAgents: ledger.mergeLiveTokenMiserSubAgents.bind(ledger),
+      listLiveTokenMiserSubAgents: ledger.listLiveTokenMiserSubAgents.bind(ledger),
+      readLiveSubAgentRevisionSource: ledger.readLiveSubAgentRevisionSource.bind(ledger),
       readCheckoutHibernation: () => ({ restoring: false }),
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
