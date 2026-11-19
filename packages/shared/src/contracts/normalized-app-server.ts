@@ -168,6 +168,22 @@ export type AppServerReviewPullRequestSnapshot = {
   headCommit: string;
   mergeBaseCommit: string;
   capturedAt: number;
+  /**
+   * Repository-relative paths the merge-base-to-head diff changes, renames
+   * listed as a deletion and an addition. Captured only for a review of
+   * several pull requests, where it says which of them changed a finding's
+   * file. Absent when it was not captured or the diff changes more paths than
+   * `PULL_REQUEST_SET_CHANGED_PATHS_MAX`; absent is unknown, never "none".
+   */
+  changedPaths?: string[];
+};
+
+/** One pull request of a `pullRequests` review target. */
+export type AppServerReviewPullRequestSetMember = {
+  /** Attached PR URL, resolved on the owning instance at submission. */
+  url: string;
+  /** Owner-captured provenance. Incoming snapshots are never trusted. */
+  snapshot?: AppServerReviewPullRequestSnapshot;
 };
 
 export type AppServerReviewTarget =
@@ -177,6 +193,25 @@ export type AppServerReviewTarget =
       url: string;
       /** Owner-captured provenance. Incoming snapshots are never trusted. */
       snapshot?: AppServerReviewPullRequestSnapshot;
+    }
+  | {
+      /**
+       * Several attached pull requests of one repository, reviewed together
+       * in one review. Only a PwrAgent-managed reviewer or Claude Code's
+       * `/code-review` can take it: Codex's `review/start` takes one target.
+       */
+      type: "pullRequests";
+      pullRequests: AppServerReviewPullRequestSetMember[];
+    }
+  | {
+      /** A branch's changes, as Claude Code's `/code-review <branch>` reads them. */
+      type: "branch";
+      branch: string;
+    }
+  | {
+      /** One file or folder, as Claude Code's `/code-review <path>` reads it. */
+      type: "path";
+      path: string;
     }
   | {
       type: "uncommittedChanges";
@@ -319,6 +354,13 @@ export type AppServerReviewContext = {
    * card names them together rather than splitting the findings by guess.
    */
   pullRequests?: AppServerReviewPullRequest[];
+  /**
+   * The captured snapshot of each pull request a `pullRequests` target
+   * reviewed, in the order the reviewer read them. A snapshot's
+   * `changedPaths` tag each finding with the pull requests that changed its
+   * file (`reviewFindingPullRequests`).
+   */
+  pullRequestSnapshots?: AppServerReviewPullRequestSnapshot[];
 };
 
 export type LinkedDirectorySummary = {

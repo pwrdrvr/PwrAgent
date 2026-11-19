@@ -87,6 +87,12 @@ export const FEDERATION_BACKEND_METHODS = {
   createScheduledPullRequestReview: "backend.createScheduledPullRequestReview",
   updateScheduledThreadAction: "backend.updateScheduledThreadAction",
   updateScheduledPullRequestReview: "backend.updateScheduledPullRequestReview",
+  // A combined pull request target, a branch or path target, or Claude Code's
+  // run mode. Separate routes make an owner that predates them answer
+  // method_not_found instead of reviewing something else.
+  startExtendedReview: "backend.startExtendedReview",
+  createScheduledExtendedReview: "backend.createScheduledExtendedReview",
+  updateScheduledExtendedReview: "backend.updateScheduledExtendedReview",
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
@@ -251,6 +257,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.updateScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview]: "scheduled_actions",
+  [FEDERATION_BACKEND_METHODS.startExtendedReview]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.createScheduledExtendedReview]: "scheduled_actions",
+  [FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
@@ -413,6 +422,9 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
   [FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview]: "deny",
   [FEDERATION_BACKEND_METHODS.updateScheduledThreadAction]: "deny",
   [FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview]: "deny",
+  [FEDERATION_BACKEND_METHODS.startExtendedReview]: "deny",
+  [FEDERATION_BACKEND_METHODS.createScheduledExtendedReview]: "deny",
+  [FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview]: "deny",
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "deny",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "deny",
   [FEDERATION_BACKEND_METHODS.compactThread]: "deny",
@@ -514,4 +526,23 @@ export function containedFederationNotificationAllowed(method: string): boolean 
     // instance's operator can still change a peer's role, and a contained
     // gateway can still tell its member.
     FEDERATION_PEER_ROLE_CHANGED_METHOD].includes(method);
+}
+
+/**
+ * Which review route family a request travels on. Each family exists so an
+ * owner that predates its targets fails closed (method_not_found) instead of
+ * running them as an older target: a pull request as a generic review, or a
+ * combined review as one pull request.
+ */
+export function federationReviewRoute(review: {
+  target: { type: string };
+  runMode?: string;
+}): "review" | "pullRequest" | "extended" {
+  if (review.runMode === "claude-code-review"
+    || review.target.type === "pullRequests"
+    || review.target.type === "branch"
+    || review.target.type === "path") {
+    return "extended";
+  }
+  return review.target.type === "pullRequest" ? "pullRequest" : "review";
 }

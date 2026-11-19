@@ -247,7 +247,7 @@ export function reviewAutoFixMessage(review: ThreadReview): {
   if (open.length === 0) return undefined;
   const title = threadReviewDisplayTitle(review);
   return {
-    text: autoFixReviewFindingsPrompt(title, open),
+    text: autoFixReviewFindingsPrompt(title, open, review.context),
     messageOrigin: {
       kind: "pwragent",
       reviewAutoFix: { reviewId: review.id, title, findingCount: open.length },

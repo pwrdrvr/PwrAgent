@@ -35096,6 +35096,13 @@ div.composer-error-row__toggle {
   flex: none;
 }
 
+/* A combined review's finding: which reviewed pull requests changed its file. */
+.transcript-review__finding-prs {
+  flex: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
 .transcript-review__empty {
   padding-top: 2px;
   color: var(--success-text);
@@ -48730,6 +48737,140 @@ button.composer__subthread-source-parent:hover {
    two different questions sharing one row of identical pills. The rule is
    what says so; without it the row reads "Codex … Codex Sub Agent" as one
    list. Drawn only where reviewer chips precede the mode chip. */
+/* "Review them": several checked pull requests, one review each or one
+   together. Two option cards like the targets above, each a real radio. */
+.composer__review-mode-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.composer__review-mode-legend {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer__review-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.composer__review-mode-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  cursor: pointer;
+}
+
+.composer__review-mode-option:hover,
+.composer__review-mode-option.is-active {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.composer__review-mode-option.is-disabled {
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+  cursor: default;
+}
+
+.composer__review-mode-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer__review-mode-text > span {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.composer__review-mode-option.is-disabled .composer__review-mode-text > span {
+  color: var(--text-muted);
+}
+
+.composer__review-mode-text small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+/* Claude Code's /code-review effort: one segmented row in the reviewer row. */
+.composer__review-effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer__review-effort-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.composer__review-effort-levels {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.composer__review-effort-levels button {
+  min-height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.composer__review-effort-levels button:last-child {
+  border-right: 0;
+}
+
+.composer__review-effort-levels button:hover {
+  color: var(--text-primary);
+}
+
+.composer__review-effort-levels button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer__review-effort-levels button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* The exact command a Claude Code review sends. */
+.composer__review-command {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.composer__review-command code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .composer__review-reviewer-rule {
   width: 1px;
   height: 16px;

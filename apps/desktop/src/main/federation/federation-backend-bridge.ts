@@ -5,6 +5,7 @@ import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragen
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  federationReviewRoute,
   type FederationBackendMethod,
 } from "@pwragent/federation/federation-backend-methods";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
@@ -543,6 +544,25 @@ export type FederationListProjectHeldWakeupsRequest =
   Omit<ListProjectHeldWakeupsRequest, "federationTarget">;
 export type FederationResolveProjectHeldWakeupsRequest =
   Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">;
+
+/** What a viewer hears when the owning instance predates the extended review routes. */
+export const EXTENDED_REVIEW_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to review several pull requests together or run Claude Code's /code-review.";
+
+/** An owner without the extended review routes says so plainly. */
+async function withExtendedReviewOwner<T>(
+  route: ReturnType<typeof federationReviewRoute>,
+  request: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    if (route === "extended" && hasFederationErrorCode(error, "method_not_found")) {
+      throw new Error(EXTENDED_REVIEW_UNSUPPORTED_MESSAGE, { cause: error });
+    }
+    throw error;
+  }
+}
 
 /** What a viewer hears when the owning instance cannot pause its queue. */
 export const QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE =
@@ -1589,6 +1609,13 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.startExtendedReview,
+    async (envelope) =>
+      await params.backend.startReview(
+        envelope.params as StartReviewRequest,
+      ),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
     async (envelope) =>
       await params.backend.listScheduledThreadActions(
@@ -1609,19 +1636,24 @@ export function registerFederationBackendHandlers(params: {
       );
     },
   );
-  params.router.registerHandler(
+  for (const method of [
     FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview,
-    async (envelope) => {
-      const request = envelope.params as CreateScheduledThreadActionRequest;
-      return await params.backend.createScheduledThreadAction(
-        authenticateScheduledTurnOrigin({
-          request,
-          resolveSourceInstance: params.resolveSourceInstance,
-          sourceInstanceId: envelope.sourceInstanceId,
-        }),
-      );
-    },
-  );
+    FEDERATION_BACKEND_METHODS.createScheduledExtendedReview,
+  ]) {
+    params.router.registerHandler(
+      method,
+      async (envelope) => {
+        const request = envelope.params as CreateScheduledThreadActionRequest;
+        return await params.backend.createScheduledThreadAction(
+          authenticateScheduledTurnOrigin({
+            request,
+            resolveSourceInstance: params.resolveSourceInstance,
+            sourceInstanceId: envelope.sourceInstanceId,
+          }),
+        );
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
     async (envelope) => {
@@ -1635,19 +1667,24 @@ export function registerFederationBackendHandlers(params: {
       );
     },
   );
-  params.router.registerHandler(
+  for (const method of [
     FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview,
-    async (envelope) => {
-      const request = envelope.params as UpdateScheduledThreadActionRequest;
-      return await params.backend.updateScheduledThreadAction(
-        authenticateScheduledTurnOrigin({
-          request,
-          resolveSourceInstance: params.resolveSourceInstance,
-          sourceInstanceId: envelope.sourceInstanceId,
-        }),
-      );
-    },
-  );
+    FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview,
+  ]) {
+    params.router.registerHandler(
+      method,
+      async (envelope) => {
+        const request = envelope.params as UpdateScheduledThreadActionRequest;
+        return await params.backend.updateScheduledThreadAction(
+          authenticateScheduledTurnOrigin({
+            request,
+            resolveSourceInstance: params.resolveSourceInstance,
+            sourceInstanceId: envelope.sourceInstanceId,
+          }),
+        );
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction,
     async (envelope) =>
@@ -2827,14 +2864,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
     if (request.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
-    return await this.rpc.request<StartReviewResponse>({
+    const route = federationReviewRoute(request);
+    return await withExtendedReviewOwner(route, async () => await this.rpc.request<StartReviewResponse>({
       // A distinct route makes older owners fail closed instead of treating
       // the new target as a generic/custom review.
-      method: request.target.type === "pullRequest"
-        ? FEDERATION_BACKEND_METHODS.startPullRequestReview
-        : FEDERATION_BACKEND_METHODS.startReview,
+      method: {
+        review: FEDERATION_BACKEND_METHODS.startReview,
+        pullRequest: FEDERATION_BACKEND_METHODS.startPullRequestReview,
+        extended: FEDERATION_BACKEND_METHODS.startExtendedReview,
+      }[route],
       params: request,
-    });
+    }));
   }
 
   async readQueuedTurn(
@@ -2911,14 +2951,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: CreateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
     if (request.review?.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
-    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+    const route = request.review ? federationReviewRoute(request.review) : "review";
+    return await withExtendedReviewOwner(route, async () => await this.rpc.request<ScheduledThreadActionMutationResponse>({
       // A distinct route makes older owners fail closed instead of treating
       // the new target as a generic/custom review.
-      method: request.review?.target.type === "pullRequest"
-        ? FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview
-        : FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+      method: {
+        review: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+        pullRequest: FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview,
+        extended: FEDERATION_BACKEND_METHODS.createScheduledExtendedReview,
+      }[route],
       params: request,
-    });
+    }));
   }
 
   async updateScheduledThreadAction(
@@ -2938,14 +2981,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       if (!backend) throw new Error("Scheduled review action was not found; refresh scheduled actions before updating it.");
       await this.assertReviewModeOwner(backend);
     }
-    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+    const route = request.review ? federationReviewRoute(request.review) : "review";
+    return await withExtendedReviewOwner(route, async () => await this.rpc.request<ScheduledThreadActionMutationResponse>({
       // A distinct route makes older owners fail closed instead of treating
       // the new target as a generic/custom review.
-      method: request.review?.target.type === "pullRequest"
-        ? FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview
-        : FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
+      method: {
+        review: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
+        pullRequest: FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview,
+        extended: FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview,
+      }[route],
       params: request,
-    });
+    }));
   }
 
   async cancelScheduledThreadAction(

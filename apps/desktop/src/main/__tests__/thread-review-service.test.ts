@@ -345,6 +345,22 @@ describe("persistent thread reviews", () => {
     expect(service.list({ status: "dismissed" })[0]?.id).toBe(review.id);
   });
 
+  it("presents automatic work on several pull requests while any one of them is attached", () => {
+    const pr = (number: number) => ({ provider: "github.com", org: "example", repo: "atlas", number,
+      url: `https://github.com/example/atlas/pull/${number}` });
+    const entry = { type: "review" as const, id: "managed-review:set:result", review: "Inspect these results.", createdAt: clock,
+      context: { workspacePath: "/repo", pullRequest: pr(1), pullRequests: [pr(1), pr(2)] } };
+    const review = service.importEntry(THREAD, entry)!;
+    // Every subset of #1, #2 and an unrelated #3: shown exactly when #1 or #2 is attached.
+    for (let mask = 0; mask < 8; mask++) {
+      const attached = [1, 2, 3].filter((_, bit) => mask & (1 << bit)).map(pr);
+      db.raw.prepare("INSERT OR REPLACE INTO threads (thread_id, payload) VALUES (?, ?)")
+        .run(`codex:${THREAD.threadId}`, JSON.stringify({ ...THREAD, prs: attached }));
+      const expected = attached.some((candidate) => candidate.number === 1 || candidate.number === 2);
+      expect(service.list()).toEqual(expected ? [review] : []);
+    }
+  });
+
   it("keeps partial resolutions and remaining controls available to full status reads after detachment", () => {
     const pr = { provider: "github.com", org: "example", repo: "atlas", number: 7, url: "https://github.com/example/atlas/pull/7" };
     const review = service.record(THREAD, { ...INPUT, context: { workspacePath: "/repo", pullRequest: pr } }, "automatic");

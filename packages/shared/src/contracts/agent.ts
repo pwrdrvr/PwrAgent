@@ -436,8 +436,12 @@ export type ReleaseQueuedTurnResponse = {
   errorMessage?: string;
 };
 
-/** Product execution modes; independent of native protocol delivery. */
-export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent";
+/**
+ * Product execution modes; independent of native protocol delivery.
+ * `claude-code-review` sends Claude Code's `/code-review` as a turn of the
+ * Claude thread itself; its effort level travels as `reasoningEffort`.
+ */
+export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent" | "claude-code-review";
 
 /**
  * What the thread does once the review lands. `auto-fix` sends the review's

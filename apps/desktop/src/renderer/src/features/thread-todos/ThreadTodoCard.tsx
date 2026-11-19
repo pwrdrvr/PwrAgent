@@ -284,8 +284,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         void (async () => {
           try {
             const prompt = mode === "auto-fix"
-              ? autoFixReviewFindingsPrompt(todo.title, findings)
-              : fixReviewFindingsPrompt(todo.title, findings);
+              ? autoFixReviewFindingsPrompt(todo.title, findings, review?.context)
+              : fixReviewFindingsPrompt(todo.title, findings, review?.context);
             const failureAt = autoFixRun?.phase === "failed" ? autoFixRun.at : undefined;
             const sent = await onDoHere(todo, { prompt });
             if (sent === false) {

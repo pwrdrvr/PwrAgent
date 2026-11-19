@@ -26,12 +26,32 @@ const REVIEW_LOCATION_OPTIONS: Array<{
     value: "pwragent-sub-agent",
     description: "A separate child thread. Works across providers.",
   },
+  {
+    label: "Claude Code",
+    value: "claude-code-review",
+    description: "Claude Code's /code-review, in this thread.",
+  },
 ];
+
+/**
+ * Claude Code is offered only on a Claude thread, where Codex's own reviewer
+ * never is: each belongs to its own provider's threads.
+ */
+function offeredOptions(decision: ReviewRunModeDecision): typeof REVIEW_LOCATION_OPTIONS {
+  return REVIEW_LOCATION_OPTIONS.filter((option) => decision.claudeCodeReviewOffered
+    ? option.value !== "codex-sub-agent"
+    : option.value !== "claude-code-review");
+}
 
 function optionState(
   decision: ReviewRunModeDecision,
   value: ReviewRunMode,
 ): { disabled: boolean; reason?: string } {
+  if (value === "claude-code-review") {
+    return decision.claudeCodeReviewDisabled
+      ? { disabled: true, reason: "Update PwrAgent on this thread's owner to run Claude Code's /code-review." }
+      : { disabled: false };
+  }
   if (value === "pwragent-sub-agent") {
     return decision.subagentDisabled
       ? {
@@ -114,7 +134,7 @@ export function ReviewLocationDropdown(props: {
           setMenuOpen(open);
           if (open) hideTooltip();
         }}
-        options={REVIEW_LOCATION_OPTIONS.map((option) => {
+        options={offeredOptions(props.decision).map((option) => {
           const state = optionState(props.decision, option.value);
           return {
             // ComposerDropdown draws its trigger from the selected option's
