@@ -84,6 +84,16 @@ export type DecisionsRailSnapshot = {
   now: number;
 };
 
+/**
+ * The strip above the composer: the thread's batches that are running or
+ * waiting, and those an error stopped, until the operator dismisses them.
+ * Read from owner memory only.
+ */
+export type DecisionsRailActiveBatches = {
+  batches: DecisionsRailBatch[];
+  now: number;
+};
+
 export type DecisionsRailAnswer = {
   name?: string;
   type: "predicate" | "choice" | "score" | "refusal" | "unavailable" | "other";

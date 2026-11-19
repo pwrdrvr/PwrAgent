@@ -48,7 +48,11 @@ it("costs one commit per registry change and one per 50 invoked requests", async
         await service.flushUsage();
       }],
       ["openai-decisions-delete", "one decisions_delete tool call (every version soft-deleted in one statement): ~0.8 MB/day at 100 deletes/day.", () => service.delete(caller, { name: "budget_rule" })],
+      ["openai-decisions-settings-delete", "one confirmed Delete in Settings → AI Providers → Decisions (the same soft-delete statement): operator-initiated, never per turn or timer.", () =>
+        service.deleteProfileDecision(profileDecision.decisionId)],
     ];
+    // Registered before measuring, so the Settings delete scenario counts only itself.
+    const profileDecision = await service.register(caller, { ...definition, name: "budget_profile_rule" }) as { decisionId: string };
     for (const [scenario, note, run] of scenarios) {
       const { writes } = await measureSqliteWrites(run);
       expect(writes.commits).toBe(scenario === "openai-decisions-invoke-batched" ? 3 : 1);
@@ -60,16 +64,16 @@ it("costs one commit per registry change and one per 50 invoked requests", async
   }
 });
 
-// A batch's card on its thread is the one write a batch adds. It is
-// rewritten at start, at each further tenth of its items, and at the end,
-// so it costs at most 11 commits whatever the batch's size.
-it("costs at most 11 card commits per batch, not one per item", async () => {
+// A batch writes nothing. Its thread hears of it by announcement (start,
+// each tenth, end), which earlier versions wrote as a sub-agent card at 11
+// commits a batch; the Decisions tab and the strip read the batch itself.
+it("writes nothing for a batch: its moves are announced, not stored", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const fixture = createTempStateDb("openai-decisions-card-writes-");
   const db = StateDb.open(fixture.dbPath);
   try {
-    const overlay = new SqliteOverlayStore(db);
     let wakes = 0;
+    let announcements = 0;
     const service = new OpenAIDecisionsService({
       store: new OpenAIDecisionStore(db),
       readApiKey: async () => undefined,
@@ -77,22 +81,8 @@ it("costs at most 11 card commits per batch, not one per item", async () => {
       readAccountSettings: () => ({}),
       profileId: () => "test-profile",
       recordUsageLines: async () => undefined,
-      // The registry's publishDecisionBatchCard writes the same row.
-      reportBatch: async (report) => {
-        await overlay.upsertThreadSubAgent({
-          backend: "codex",
-          threadId: report.caller.threadId,
-          subAgent: {
-            monitorId: `system:decision-batch:${report.batchId}`,
-            task: report.task,
-            status: report.status,
-            createdAt: report.createdAt,
-            updatedAt: report.updatedAt,
-            agentName: "PwrAgent",
-            lastMessage: report.message,
-          },
-        });
-      },
+      // The registry's publishDecisionBatchUpdate only emits an event.
+      announceBatch: async () => { announcements += 1; },
       wakeThread: async () => { wakes += 1; },
       fetch: async () => new Response(JSON.stringify({ answers: { q1: { noul: 0.5 } } }), { status: 200 }),
     });
@@ -103,11 +93,12 @@ it("costs at most 11 card commits per batch, not one per item", async () => {
         inputs: Array.from({ length: 500 }, (_, index) => `Server down ${index}`),
       });
     });
-    expect(writes.commits).toBe(11);
+    expect(writes.commits).toBe(0);
+    expect(announcements).toBe(11);
     expect(wakes).toBe(0);
     expectSqliteWriteBudget({
-      scenario: "openai-decisions-batch-card",
-      note: "one 500-item decisions_invoke batch: its thread card written at start, at each tenth, and at the end. Item results stay in memory. 11 commits (~0.23 MB WAL) per batch whatever its size; ~1.2 MB/day at 5 large batches/day, ~12 MB/day at 50.",
+      scenario: "openai-decisions-batch-announce",
+      note: "one 500-item decisions_invoke batch: announced at start, at each tenth, and at the end as events, never written. Item results stay in memory and the result file. 0 commits per batch (was 11 for the sub-agent card).",
       writes,
     });
   } finally {

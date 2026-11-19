@@ -2777,6 +2777,19 @@ export type AppServerNotification =
     }
   | {
       /**
+       * A decisions_invoke batch on this thread started, finished another
+       * tenth of its items, or ended. Local windows read the batch from the
+       * owner's decisions service; nothing about it is persisted.
+       */
+      method: "thread/decisionBatches/updated";
+      params: {
+        threadId: string;
+        batchId: string;
+        status: "running" | "success" | "failed" | "cancelled";
+      };
+    }
+  | {
+      /**
        * The full set of commands and sub-agents a backend reports running for
        * the thread. Replaces the previous set. Claude publishes its task set.
        * Codex has no such event, so the desktop registry publishes a Codex

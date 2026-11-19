@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { DecisionsRailBatch } from "@pwragent/shared";
 import {
   decisionBatchStatusLabel,
-  decisionBatchOpenStep,
   decisionBatchTimingLine,
   decisionBatchTone,
   decisionInputSchemaSummary,
@@ -110,31 +109,5 @@ describe("decisions format", () => {
     expect(decisionsRailPollDelayMs({ now: NOW, decisions: [], batches: [batch] })).toBe(10_000);
     expect(decisionsRailHasContent({ now: NOW, decisions: [], batches: [] })).toBe(false);
     expect(decisionsRailHasContent({ now: NOW, decisions: [], batches: [batch] })).toBe(true);
-  });
-
-  // Rule: a Sub-agents card's request opens its batch as soon as a snapshot
-  // lists it, gives up only on a snapshot taken after the request that
-  // still lacks it, and otherwise waits for the next read.
-  // Oracle: membership of the batch id and the two clocks, stated directly.
-  it("opens, drops, or waits on a batch request by the snapshot it sees", () => {
-    fc.assert(fc.property(
-      fc.uniqueArray(fc.constantFrom("batch_a", "batch_b", "batch_c", "batch_d"), { maxLength: 4 }),
-      fc.constantFrom("batch_a", "batch_b", "batch_c", "batch_d"),
-      fc.integer({ min: 0, max: 100 }),
-      fc.integer({ min: 0, max: 100 }),
-      fc.boolean(),
-      (ids, wanted, requestedAt, snapshotAt, hasSnapshot) => {
-        const snapshot = hasSnapshot
-          ? { now: snapshotAt, batches: ids.map((batchId) => ({ ...batch, batchId })) }
-          : undefined;
-        const step = decisionBatchOpenStep({ batchId: wanted, requestedAt }, snapshot);
-        const expected = !hasSnapshot
-          ? "wait"
-          : ids.includes(wanted)
-            ? "open"
-            : snapshotAt >= requestedAt ? "drop" : "wait";
-        expect(step).toBe(expected);
-      },
-    ));
   });
 });

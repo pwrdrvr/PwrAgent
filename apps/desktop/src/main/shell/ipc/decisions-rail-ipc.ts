@@ -5,6 +5,7 @@ import {
   type DecisionsProfileDeleteRequest,
   type DecisionsProfileDeleteResult,
   type DecisionsProfileList,
+  type DecisionsRailActiveBatches,
   type DecisionsRailBatchActionRequest,
   type DecisionsRailBatchActionResult,
   type DecisionsRailBatchPage,
@@ -17,6 +18,7 @@ import {
 import {
   DECISIONS_PROFILE_DELETE_CHANNEL,
   DECISIONS_PROFILE_LIST_CHANNEL,
+  DECISIONS_RAIL_ACTIVE_CHANNEL,
   DECISIONS_RAIL_BATCH_ACTION_CHANNEL,
   DECISIONS_RAIL_BATCH_CHANNEL,
   DECISIONS_RAIL_OPEN_RESULTS_CHANNEL,
@@ -28,6 +30,7 @@ import { isLocalMainWindowWebContents } from "../window-channels";
 
 const CHANNELS = [
   DECISIONS_RAIL_SNAPSHOT_CHANNEL,
+  DECISIONS_RAIL_ACTIVE_CHANNEL,
   DECISIONS_RAIL_BATCH_CHANNEL,
   DECISIONS_RAIL_BATCH_ACTION_CHANNEL,
   DECISIONS_RAIL_OPEN_RESULTS_CHANNEL,
@@ -48,6 +51,9 @@ export function registerDecisionsRailIpcHandlers(): void {
   ipcMain.handle(DECISIONS_RAIL_SNAPSHOT_CHANNEL, async (event, request: DecisionsRailThreadRequest): Promise<DecisionsRailSnapshot> => {
     const rail = localRail(event.sender);
     return await rail.railSnapshot(threadCaller(request));
+  });
+  ipcMain.handle(DECISIONS_RAIL_ACTIVE_CHANNEL, (event, request: DecisionsRailThreadRequest): DecisionsRailActiveBatches => {
+    return localRail(event.sender).railActiveBatches(threadCaller(request));
   });
   ipcMain.handle(DECISIONS_RAIL_BATCH_CHANNEL, async (event, request: DecisionsRailBatchRequest): Promise<DecisionsRailBatchPage> => {
     const rail = localRail(event.sender);

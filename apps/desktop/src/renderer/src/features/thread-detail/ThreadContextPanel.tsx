@@ -58,7 +58,6 @@ import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { useEventCallback } from "../../lib/useEventCallback";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
 import { ResearchPanel } from "../research/ResearchPanel";
@@ -82,7 +81,7 @@ import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
 import { ToolCallsPanel } from "./context-panels/ToolCallsPanel";
 import { DecisionsPanel } from "./context-panels/DecisionsPanel";
-import { decisionsRailHasContent, type DecisionBatchOpenRequest } from "./context-panels/decisions-format";
+import { decisionsRailHasContent } from "./context-panels/decisions-format";
 import { useDecisionsRail } from "./context-panels/useDecisionsRail";
 import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
 import { ConnectionsPanel } from "./context-panels/ConnectionsPanel";
@@ -340,14 +339,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const decisionsVisible = decisionsRail.available
     && (decisionsRailHasContent(decisionsRail.snapshot)
       || (props.activeTab === "decisions" && decisionsRail.snapshot === undefined));
-  // A Sub-agents batch card's "Open in Decisions": the tab opens that
-  // batch's dialog once its snapshot lists it. Keyed by thread, so a
-  // request never opens on the thread switched to.
-  const decisionsThreadKey = props.thread ? `${props.thread.source}:${props.thread.id}` : undefined;
-  const [decisionBatchRequest, setDecisionBatchRequest] = useState<
-    DecisionBatchOpenRequest & { threadKey: string }
-  >();
-  const settleDecisionBatchRequest = useCallback(() => setDecisionBatchRequest(undefined), []);
 
   // The launchpad picks its own tab and never persists it: the stored tab
   // belongs to threads, and a launchpad visit should not reset it.
@@ -376,18 +367,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : props.activeTab === "decisions" && !decisionsVisible
         ? "info"
       : props.activeTab;
-  // Leaving the Decisions tab, or the thread, before a batch request
-  // settles drops it, so it never opens a dialog on a later visit.
-  const previousActiveTabRef = useRef(activeTab);
-  useEffect(() => {
-    if (previousActiveTabRef.current === "decisions" && activeTab !== "decisions") {
-      setDecisionBatchRequest(undefined);
-    }
-    previousActiveTabRef.current = activeTab;
-  }, [activeTab]);
-  useEffect(() => {
-    setDecisionBatchRequest((current) => current?.threadKey === decisionsThreadKey ? current : undefined);
-  }, [decisionsThreadKey]);
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
   const pendingWakeCount = pendingWakes.state.status === "ready"
     ? pendingWakes.state.wakes.filter(isThreadPendingWakeLive).length
@@ -670,11 +649,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       revealRail();
     }
   };
-  const openDecisionBatch = useEventCallback((batchId: string): void => {
-    if (!decisionsThreadKey) return;
-    setDecisionBatchRequest({ batchId, requestedAt: Date.now(), threadKey: decisionsThreadKey });
-    selectTab("decisions");
-  });
 
   const resizeRail = (nextWidth: number): void => {
     const clampedWidth = Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, nextWidth));
@@ -1043,10 +1017,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             error={decisionsRail.error}
             onRefresh={decisionsRail.refresh}
             onDetailsModalOpenChange={handlePortaledInteractionChange}
-            openBatchRequest={
-              decisionBatchRequest?.threadKey === decisionsThreadKey ? decisionBatchRequest : undefined
-            }
-            onOpenBatchRequestSettled={settleDecisionBatchRequest}
           />
         );
       case "actions":
@@ -1076,7 +1046,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             pricingDisplayOptions={props.pricingDisplayOptions}
             thread={{ ...props.thread, subAgents: displayResource.data?.subAgents ?? props.thread.subAgents }}
             onDetailsModalOpenChange={handlePortaledInteractionChange}
-            onOpenDecisionBatch={decisionsRail.available ? openDecisionBatch : undefined}
           />
         );
       case "automations":

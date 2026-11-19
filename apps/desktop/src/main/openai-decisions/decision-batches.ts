@@ -425,8 +425,8 @@ export function batchUsage(results: ReadonlyArray<DecisionBatchItem | undefined>
   };
 }
 
-/** The thread card's one-line label, which the live strip shows. */
-export function batchCardTask(record: DecisionBatchRecord): string {
+/** One line on a batch's progress, sent as MCP progress while the call waits. */
+export function batchProgressLine(record: DecisionBatchRecord): string {
   const done = finishedItems(record);
   const failed = record.failed > 0 ? `, ${record.failed} failed` : "";
   return `Decision batch ${record.name}: ${done} of ${record.count} done${failed}`;
@@ -437,22 +437,6 @@ export function batchCardTask(record: DecisionBatchRecord): string {
  * nothing more starts, and the requests in flight finish.
  */
 export const OPERATOR_STOP_CODE = DECISIONS_OPERATOR_STOP_CODE;
-
-/** The thread card's detail line. */
-export function batchCardMessage(record: DecisionBatchRecord): string {
-  const state = record.state === "queued"
-    ? "Waiting for another call on this decision."
-    : record.state === "running"
-      ? `${record.succeeded} answered, ${record.failed} failed, ${record.count - finishedItems(record)} to go.`
-      : record.state === "completed"
-        ? `Finished: ${record.succeeded} answered, ${record.failed} failed.`
-        : record.state === "stopped" && record.stoppedBy?.code === OPERATOR_STOP_CODE
-          ? `Stopped from the thread after ${finishedItems(record) - record.skipped} items; ${record.skipped} skipped.`
-        : record.state === "stopped"
-          ? `Stopped by ${record.stoppedBy?.code ?? "an error"} after ${finishedItems(record) - record.skipped} items; ${record.skipped} skipped.`
-          : `Cancelled after ${finishedItems(record) - record.skipped} items (${record.cancelReason ?? "cancelled"}); ${record.skipped} skipped.`;
-  return `${state} Batch ${record.batchId}.`;
-}
 
 /**
  * The text of the turn that wakes a thread when its background batch ends.

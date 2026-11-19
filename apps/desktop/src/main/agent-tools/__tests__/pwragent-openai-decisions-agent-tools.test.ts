@@ -38,7 +38,6 @@ beforeEach(() => {
     delete: (caller, args) => service.delete(caller, args),
     batchResults: async (caller, args) => await service.batchResults(caller, args),
     cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
-    stopBatch: async (caller, batchId) => await service.stopBatch(caller, batchId),
   };
 });
 afterEach(() => db.close());

@@ -105,7 +105,7 @@ import {
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
-import { decisionBatchIdFromSubAgentId, decisionBatchSubAgentId, isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
+import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import {
   buildProjectPausedThreadMessageRefusal,
@@ -2763,44 +2763,22 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Writes a decisions_invoke batch's card on its calling thread, beside the
-   * system helpers, and tells every surface. Its usage is already on the
-   * thread as openai_decisions ledger lines, so the card carries none.
+   * Tells the thread's windows a decisions_invoke batch moved, so its
+   * Decisions tab and the strip above its composer read it again. A batch
+   * lives in the owner's decisions service, not on the thread: nothing is
+   * written, and it is not a sub-agent card. Its usage is already on the
+   * thread as openai_decisions ledger lines.
    */
-  async publishDecisionBatchCard(report: {
+  async publishDecisionBatchUpdate(update: {
     caller: { backend: string; threadId: string };
     batchId: string;
-    task: string;
-    message: string;
     status: "running" | "success" | "failed" | "cancelled";
-    createdAt: number;
-    updatedAt: number;
-    completedAt?: number;
   }): Promise<void> {
-    const backend = report.caller.backend as AppServerBackendKind;
-    const outcome = report.status === "success"
-      ? "success"
-      : report.status === "failed"
-        ? "failure"
-        : report.status === "cancelled"
-          ? "cancelled"
-          : undefined;
-    await this.writeSystemHelperSubAgent({
-      backend,
-      threadId: report.caller.threadId,
-      subAgent: {
-        monitorId: decisionBatchSubAgentId(report.batchId),
-        task: report.task,
-        status: report.status,
-        createdAt: report.createdAt,
-        updatedAt: report.updatedAt,
-        ownerRuntimeInstanceId: this.runtimeInstanceId,
-        ownerRegistrySessionId: this.registrySessionId,
-        backend,
-        agentName: "PwrAgent",
-        lastMessage: report.message,
-        ...(outcome ? { outcome } : {}),
-        ...(report.completedAt !== undefined ? { completedAt: report.completedAt } : {}),
+    await this.emit({
+      backend: update.caller.backend as AppServerBackendKind,
+      notification: {
+        method: "thread/decisionBatches/updated",
+        params: { threadId: update.caller.threadId, batchId: update.batchId, status: update.status },
       },
     });
   }
@@ -12598,25 +12576,7 @@ export class DesktopBackendRegistry {
   }
 
   stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {
-    const batchId = decisionBatchIdFromSubAgentId(params.monitorId);
-    // Other cards stay a plain facade over the monitor module's result.
-    if (batchId === undefined) return this.subAgentMonitorService.stopSubAgent(params);
-    return this.stopDecisionBatchSubAgent(params, batchId);
-  }
-
-  private async stopDecisionBatchSubAgent(
-    params: StopSubAgentRequest,
-    batchId: string,
-  ): Promise<StopSubAgentResponse> {
-    // A decision batch runs in this owner's decisions service, not in a
-    // thread turn. The card's own thread is the batch's caller, so a stop
-    // can reach only that thread's batch.
-    const stopped = await this.openAIDecisionsHandler?.stopBatch(
-      { backend: params.backend, threadId: params.threadId },
-      batchId,
-    );
-    if (stopped !== "stopped") throw new Error("Sub-agent is no longer running.");
-    return { backend: params.backend, threadId: params.threadId, monitorId: params.monitorId, stoppedAt: Date.now() };
+    return this.subAgentMonitorService.stopSubAgent(params);
   }
 
   async compactThread(params: {

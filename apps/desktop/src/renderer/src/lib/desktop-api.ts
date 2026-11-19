@@ -2,7 +2,7 @@ import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
 import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
-import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
+import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailActiveBatches, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
@@ -1063,6 +1063,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getPrActivity?: () => Promise<PrActivitySnapshot>;
   /** Decisions visible to a local thread, and the batches it ran. */
   readDecisionsRail?: (request: DecisionsRailThreadRequest) => Promise<DecisionsRailSnapshot>;
+  /** A local thread's running and error-stopped batches, for the strip above the composer. */
+  readActiveDecisionBatches?: (request: DecisionsRailThreadRequest) => Promise<DecisionsRailActiveBatches>;
   /** One page of a batch's finished items. */
   readDecisionsRailBatch?: (request: DecisionsRailBatchRequest) => Promise<DecisionsRailBatchPage>;
   /** Stop (requests in flight finish) or Cancel (they are aborted) a running batch. */

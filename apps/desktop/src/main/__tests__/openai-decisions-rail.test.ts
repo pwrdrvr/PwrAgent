@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   OpenAIDecisionsError,
   OpenAIDecisionsService,
-  type DecisionBatchCardReport,
+  type DecisionBatchUpdate,
 } from "../openai-decisions/openai-decisions-service";
 import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
 import { OpenAIDecisionStore } from "../storage/openai-decision-store";
@@ -22,13 +22,13 @@ const JEV = { provider: "jev", ...PREDICATE };
 
 let db: StateDb;
 let dir: string;
-let cards: DecisionBatchCardReport[];
+let updates: DecisionBatchUpdate[];
 let wakes: string[];
 
 beforeEach(async () => {
   db = openInMemoryStateDb();
   dir = await mkdtemp(path.join(os.tmpdir(), "decision-rail-service-"));
-  cards = [];
+  updates = [];
   wakes = [];
 });
 afterEach(async () => {
@@ -49,7 +49,7 @@ function makeService(
     readAccountSettings: () => ({}),
     profileId: () => "test-profile",
     recordUsageLines: async () => undefined,
-    reportBatch: async (report) => { cards.push(report); },
+    announceBatch: async (update) => { updates.push(update); },
     wakeThread: async (_caller, wake) => { wakes.push(wake.batchId); },
     newBatchId: () => `${options.idPrefix ?? "rail"}-${(batch += 1)}`,
     batchResultsDirectory: (caller) => path.join(dir, caller.threadId),
@@ -101,14 +101,15 @@ describe("Decisions tab: Stop and Cancel", () => {
 
     for (const gate of gates) gate.release();
     await expect.poll(async () => (await service.railSnapshot(CALLER)).batches[0]!.state).toBe("stopped");
-    // The card's last write follows the state change. An operator's Stop
-    // is not a failure, so the Sub-agents card does not read as one.
-    await expect.poll(() => cards.at(-1)?.status).toBe("cancelled");
+    // The last announcement follows the state change. An operator's Stop
+    // is not a failure, so it is not announced as one.
+    await expect.poll(() => updates.at(-1)?.status).toBe("cancelled");
     const batch = (await service.railSnapshot(CALLER)).batches[0]!;
     expect(gates.every((gate) => !gate.aborted)).toBe(true);
     expect(gates).toHaveLength(2);
     expect(batch).toMatchObject({ succeeded: 2, failed: 0, skipped: 8, stopping: false, stoppedBy: { code: "stopped_by_operator" } });
-    expect(cards.at(-1)!.message).toContain("Stopped from the thread after 2 items; 8 skipped.");
+    // An operator's Stop leaves the strip above the composer.
+    expect(service.railActiveBatches(CALLER).batches).toEqual([]);
     expect(wakes).toEqual([]);
   });
 
@@ -143,7 +144,9 @@ describe("Decisions tab: Stop and Cancel", () => {
     for (const release of releases) release();
     await expect.poll(() => wakes).toEqual([started.batchId]);
     expect((await service.railSnapshot(CALLER)).batches[0]).toMatchObject({ state: "stopped", stoppedBy: { code: "credential_rejected" } });
-    await expect.poll(() => cards.at(-1)?.status).toBe("failed");
+    // A batch an error stopped stays on the strip above the composer.
+    expect(service.railActiveBatches(CALLER).batches.map((batch) => batch.batchId)).toEqual([started.batchId]);
+    await expect.poll(() => updates.at(-1)?.status).toBe("failed");
   });
 
   it("a Stop after every item started stopped nothing: the batch completes and wakes its thread", async () => {
@@ -156,6 +159,41 @@ describe("Decisions tab: Stop and Cancel", () => {
     await expect.poll(() => wakes).toEqual([started.batchId]);
     expect((await service.railSnapshot(CALLER)).batches[0]).toMatchObject({ state: "completed", succeeded: 2 });
     expect((await service.railSnapshot(CALLER)).batches[0]!.stoppedBy).toBeUndefined();
+  });
+});
+
+describe("strip above the composer", () => {
+  // Rule: the strip shows a thread's announced batches (background, or
+  // bigger than one wave) while they run, and those an error stopped; a
+  // clean finish, a Cancel, or a small blocking batch never shows, and a
+  // thread sees only its own.
+  it("lists announced batches while they run and leaves out the rest", async () => {
+    const { fetch, gates } = gatedFetch();
+    const service = makeService(fetch);
+    const background = await service.invoke(CALLER, { definition: JEV, inputs: inputs(3), concurrency: 1, background: true }) as { batchId: string };
+    await expect.poll(() => gates.length).toBe(1);
+    expect(service.railActiveBatches(CALLER).batches).toMatchObject([{ batchId: background.batchId, state: "running" }]);
+    expect(service.railActiveBatches(OTHER).batches).toEqual([]);
+    expect(updates.filter((update) => update.batchId === background.batchId)[0]).toMatchObject({ status: "running", finished: 0, count: 3 });
+
+    // A small blocking batch ends inside its call: not on the strip even
+    // while it runs, and never announced.
+    const smallGates = gatedFetch();
+    const small = makeService(smallGates.fetch, { idPrefix: "small" });
+    const before = updates.length;
+    const smallCall = small.invoke(CALLER, { definition: JEV, inputs: inputs(2) });
+    await expect.poll(() => smallGates.gates.length).toBe(2);
+    expect(small.railActiveBatches(CALLER).batches).toEqual([]);
+    for (const gate of smallGates.gates) gate.release();
+    await smallCall;
+    expect(updates).toHaveLength(before);
+
+    // Release each request as it arrives until the batch has left the strip.
+    await expect.poll(() => {
+      for (const gate of gates.splice(0)) gate.release();
+      return service.railActiveBatches(CALLER).batches;
+    }).toEqual([]);
+    expect(updates.at(-1)).toMatchObject({ batchId: background.batchId, status: "success", finished: 3 });
   });
 });
 

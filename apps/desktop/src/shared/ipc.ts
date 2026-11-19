@@ -242,6 +242,8 @@ export const RESEARCH_WITHDRAW_CHANNEL = "research:withdraw";
 export const RESEARCH_EVENTS_CHANNEL = "research:events";
 export const RESEARCH_CHANGES_CHANNEL = "research:changes";
 export const DECISIONS_RAIL_SNAPSHOT_CHANNEL = "decisions-rail:snapshot";
+/** The strip above the composer: a thread's running and error-stopped batches, from memory. */
+export const DECISIONS_RAIL_ACTIVE_CHANNEL = "decisions-rail:active";
 export const DECISIONS_RAIL_BATCH_CHANNEL = "decisions-rail:batch";
 export const DECISIONS_RAIL_BATCH_ACTION_CHANNEL = "decisions-rail:batch-action";
 export const DECISIONS_RAIL_OPEN_RESULTS_CHANNEL = "decisions-rail:open-results";

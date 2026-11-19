@@ -79,6 +79,7 @@ import {
 } from "../thread-detail/thread-image-gallery";
 import { TranscriptList } from "../thread-detail/TranscriptList";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
+import { ActiveDecisionBatchesStrip } from "../thread-detail/ActiveDecisionBatchesStrip";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
@@ -200,6 +201,7 @@ function queuedTurnPreview(queued: ComposerQueuedTurnSnapshot): string {
  */
 const MemoizedCompactComposer = memo(CompactComposer);
 const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
+const MemoizedActiveDecisionBatchesStrip = memo(ActiveDecisionBatchesStrip);
 
 /** Monotonic across every card this renderer mounts; see `data-card-mount`. */
 let starMapCardMounts = 0;
@@ -2121,6 +2123,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             onRefreshNavigation={props.onRefreshNavigation}
             thread={thread}
           />
+          <MemoizedActiveDecisionBatchesStrip desktopApi={desktopApi} thread={thread} />
 
           {sendError || attachmentError || readinessError ? (
             <p className="star-map-chat-card__error" role="alert">

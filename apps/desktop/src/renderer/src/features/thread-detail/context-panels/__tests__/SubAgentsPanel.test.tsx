@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decisionBatchSubAgentId, type NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../../lib/desktop-api";
 import * as subAgentFormatting from "../subagent-format";
 import * as railFormatting from "../context-rail-shared";
@@ -589,40 +589,4 @@ it("updates live timing without rendering the sub-agent list or completed timing
   timestamp.mockClear();
   view.rerender(<SubAgentsPanel thread={thread} />);
   expect(timestamp).not.toHaveBeenCalled();
-});
-
-// Rule: a decision batch's card leads to the Decisions tab, which holds
-// its items; where that tab is not offered, the card keeps its Details.
-describe("SubAgentsPanel decision batch cards", () => {
-  const batchThread: NavigationThreadSummary = {
-    ...thread,
-    subAgents: [{
-      monitorId: decisionBatchSubAgentId("batch_run-1"),
-      task: "triage_relevance v2 · 1000 items",
-      status: "running",
-      createdAt: 1_800_000_000_000,
-      updatedAt: 1_800_000_000_000,
-      backend: "codex",
-      agentName: "PwrAgent",
-    }],
-  };
-
-  it("opens the batch in the Decisions tab", () => {
-    const onOpenDecisionBatch = vi.fn();
-    render(<SubAgentsPanel thread={batchThread} onOpenDecisionBatch={onOpenDecisionBatch} />);
-    expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open in Decisions" }));
-    expect(onOpenDecisionBatch).toHaveBeenCalledWith("batch_run-1");
-  });
-
-  it("keeps Details where the Decisions tab is not offered", () => {
-    render(<SubAgentsPanel thread={batchThread} />);
-    expect(screen.queryByRole("button", { name: "Open in Decisions" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument();
-  });
-
-  it("never offers the link on a card that is not a decision batch", () => {
-    render(<SubAgentsPanel thread={thread} onOpenDecisionBatch={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: "Open in Decisions" })).not.toBeInTheDocument();
-  });
 });
