@@ -4056,6 +4056,16 @@ function DesktopAppShell(props: {
     if (!thread || !navigation.setThreadCheckoutHibernation) throw new Error("Select the thread again, then try once more.");
     return await navigation.setThreadCheckoutHibernation(thread, change);
   });
+  // The archived card shows a refused restore itself, so it asks for the error back.
+  const handleRestoreArchivedThread = useEventCallback(async () => {
+    const thread = navigation.selectedThread;
+    if (!thread) throw new Error("Select the thread again, then try once more.");
+    await navigation.restoreArchivedThreads(
+      [{ backend: thread.source, threadId: thread.id, remote: false }],
+      threadSummaryIdentityKey(thread),
+      { rethrow: true },
+    );
+  });
   const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
     const thread = navigation.selectedThread;
     if (!thread) throw new Error("Select the thread again, then try once more.");
@@ -4348,6 +4358,12 @@ function DesktopAppShell(props: {
           ? handleMoveThreadToMainCheckout : undefined,
         onSetThreadCheckoutHibernation: navigation.selectedThread && navigation.setThreadCheckoutHibernation
           ? handleSetThreadCheckoutHibernation : undefined,
+        selectedThreadArchived: navigation.selectedThreadArchived,
+        // A peer's archived thread is restored on that peer, not from here.
+        onRestoreArchivedThread: navigation.selectedThread
+          && navigation.selectedThread.federation?.ref.target.scope !== "remote"
+          && !activeFederationTarget
+          ? handleRestoreArchivedThread : undefined,
         onLoadOlder: session.loadOlder,
         onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
         onCancelLaunchpad: handleCancelLaunchpad,
