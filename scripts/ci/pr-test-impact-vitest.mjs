@@ -28,7 +28,11 @@ async function findUnresolvedStaticImport(projects) {
         if (!module.file || !deps?.length) continue;
         const linked = new Set([...module.importedModules].flatMap(({ id, url }) => [id, url]));
         for (const specifier of deps) {
-          if ((!specifier.startsWith(".") && linked.has(specifier)) || isBuiltin(specifier) || /^(?:https?:|data:)/.test(specifier)) continue;
+          // Vite can wrap external Node IDs in a browser URL. The wrapper
+          // is not a filesystem import and node: builtins need no graph edge.
+          const builtinId = specifier.replace(/^\/@id\//, "");
+          if ((!specifier.startsWith(".") && linked.has(specifier)) || isBuiltin(builtinId)
+            || /^(?:https?:|data:)/.test(specifier)) continue;
           // SSR can preserve an unresolved static specifier without throwing.
           // External dependencies also lack an edge, so ask Vite to resolve
           // only the specifiers that the transform did not link.

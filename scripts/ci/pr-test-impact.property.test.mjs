@@ -109,7 +109,9 @@ it("checks native Node failures against the Vitest graph and widens for disk-onl
     write(files.disk, "1");
     write(files.dynamic, "export default 1;");
     const assertion = 'import assert from "node:assert/strict";';
-    write(files.owner, `${assertion} const value = (await import("./barrel.mjs")).default; assert.equal(value, 1);`);
+    write(files.owner, `// @vitest-environment jsdom
+${assertion} import { AsyncLocalStorage } from "node:async_hooks";
+const value = (await import("./barrel.mjs")).default; assert.equal(new AsyncLocalStorage().run(1, () => value), 1);`);
     write(files.diskOwner, `${assertion} import { readFileSync } from "node:fs"; assert.equal(readFileSync(new URL("./fixtures/value.txt", import.meta.url), "utf8"), "1");`);
     write(files.computedOwner, `${assertion} const modulePath = "./computed.mjs"; const {default: value} = await import(modulePath); assert.equal(value, 1);`);
     write(files.mixedOwner, `${assertion} const modulePath = "./dependency.mjs"; const {default: value} = await import(modulePath); assert.equal(value, 1);`);
