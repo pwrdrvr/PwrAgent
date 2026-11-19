@@ -196,7 +196,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ?? (async () => {
       // A worktree folder adds its root; the home root stays managed so
       // worktrees created before the folder was chosen still age out.
-      const folder = getDesktopSettingsService().resolveWorktreeFolder();
+      let folder: ReturnType<ReturnType<typeof getDesktopSettingsService>["resolveWorktreeFolder"]>;
+      try { folder = getDesktopSettingsService().resolveWorktreeFolder(); }
+      catch { folder = undefined; }
       return [
         userHomeWorktreesRoot(),
         ...(folder ? [userHomeWorktreesRoot(folder.directory)] : []),
