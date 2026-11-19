@@ -5143,7 +5143,7 @@ describe("DesktopBackendRegistry", () => {
       const payloads = () => (db.raw.prepare(
         "SELECT payload FROM restart_continuations ORDER BY created_at, entry_id",
       ).all() as { payload: string }[]).map((row) => JSON.parse(row.payload) as StoredRestartContinuation);
-      return { db, payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false, scheduledActions: new ScheduledThreadActionStore(db) }) };
+      return { db, payloads, rows, store: new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false }) };
     };
     const launch = (
       store: RestartContinuationStore,
@@ -5412,7 +5412,7 @@ describe("DesktopBackendRegistry", () => {
         await first.registry.close();
 
         const restartStore = scenario === "reused PID"
-          ? new RestartContinuationStore(db.raw, { processId: 4_243, processAlive: (pid) => pid === 4_242, scheduledActions: actions })
+          ? new RestartContinuationStore(db.raw, { processId: 4_243, processAlive: (pid) => pid === 4_242 })
           : store;
         const second = launch(restartStore, "instance-b");
         expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([]);
@@ -5441,6 +5441,98 @@ describe("DesktopBackendRegistry", () => {
         expect(third.codexClient.startTurnCallCount).toBe(0);
       },
     );
+
+    it.each([true, false])("restores checkpointed scheduled work while preserving its explicit pause (%s)", async (paused) => {
+      const { db, store, payloads } = durableStore();
+      const actions = new ScheduledThreadActionStore(db);
+      const thread = { backend: "codex" as const, threadId: "manager" };
+      const operator = { source: "operator" as const };
+      let now = Date.now();
+      const first = launch(store, "instance-a", [], {}, true);
+      await startRunningTurn(first.registry, thread.threadId);
+      const scheduler = (registry: DesktopBackendRegistry, ownerId: string) => {
+        const service = new ScheduledThreadActionService({
+          registry, store: actions, now: () => now, ownerId, isOwnerAlive: () => false,
+          setTimer: () => ({}) as ReturnType<typeof setTimeout>, clearTimer: () => undefined,
+        });
+        onTestFinished(() => service.dispose());
+        service.start();
+        return service;
+      };
+      const previous = scheduler(first.registry, "instance-a");
+      const followUp = await previous.createAgentFollowUp({
+        ...thread, scheduledFor: now + 60_000, prompt: "Check the deployment.",
+      });
+      now += 60_000;
+      await previous.evaluateDueActions();
+      const queueEntryId = actions.get(followUp.id)!.queueEntryId!;
+      if (paused) {
+        await first.registry.setQueuedTurnPaused({ queueEntryId, paused: true });
+      }
+      await first.registry.setThreadLock({ ...thread, locked: true }, operator);
+      // A lock-held submission covers the waiting FIFO, including an
+      // independently paused entry.
+      const blocker = "lock-hold-for-test";
+      await first.registry.submitHeldTurn({
+        ...thread, queueEntryId: blocker, input: text("Other lock-held work"),
+        holdReason: "This thread is locked. Unlock it to send.",
+      });
+      first.registry.cancelQueuedTurn(blocker);
+      expect(actions.get(followUp.id)?.status).toBe("held");
+      if (!paused) await first.registry.setThreadLock({ ...thread, locked: false }, operator);
+      expect(actions.get(followUp.id)?.status).toBe(paused ? "held" : "queued");
+      first.registry.beginQuietRestart();
+      await emitCompletedTurn(first.registry, "codex", thread.threadId, "turn-1");
+      first.registry.saveRestartContinuations([], now, true);
+      expect(payloads().map((entry) => entry.id)).toEqual([queueEntryId]);
+      previous.dispose();
+      await first.registry.close();
+
+      now += 60_000;
+      const second = launch(store, "instance-b");
+      if (paused) await second.registry.setThreadLock({ ...thread, locked: true }, operator);
+      const next = scheduler(second.registry, "instance-b");
+      expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([
+        expect.objectContaining({ queueEntryId, ...(paused ? { paused: true } : {}) }),
+      ]);
+      expect(actions.get(followUp.id)?.status).toBe(paused ? "held" : "queued");
+      if (paused) {
+        await expect(second.registry.setQueuedTurnPaused({ queueEntryId, paused: false }))
+          .rejects.toThrow("This thread is locked");
+        await second.registry.setThreadLock({ ...thread, locked: false }, operator);
+        await next.evaluateDueActions();
+        expect(second.registry.getQueuedTurnsForThread(thread)).toEqual([
+          expect.objectContaining({ queueEntryId, paused: true }),
+        ]);
+        expect(second.codexClient.startTurnCallCount).toBe(0);
+        await second.registry.setQueuedTurnPaused({ queueEntryId, paused: false });
+      }
+      second.registry.beginRestartContinuationDispatch();
+      await vi.waitFor(() => expect(actions.get(followUp.id)?.status).toBe("started"));
+      expect(second.codexClient.startTurnCallCount).toBe(1);
+      expect(payloads()).toEqual([]);
+    });
+
+    it("claims unrelated restart work when a scheduled payload is unreadable", () => {
+      const { db, store } = durableStore();
+      const actions = new ScheduledThreadActionStore(db);
+      const thread = { backend: "codex" as const, threadId: "manager" };
+      const id = "scheduled-action:unreadable";
+      const now = Date.now();
+      actions.create({
+        ...thread, id, kind: "turn", origin: "desktop", scheduledFor: now,
+        displayText: "Scheduled prompt", turn: { input: text("Scheduled prompt") }, now,
+      });
+      db.raw.prepare("UPDATE scheduled_thread_actions SET payload_ref = ? WHERE action_id = ?").run("missing.json", id);
+      const continuation = { ...thread, id: "unrelated-restart", input: text("Continue work"), createdAt: now };
+      const pending = { ...thread, id: "unrelated-queued", kind: "queued" as const, input: text("Later"), createdAt: now };
+      store.saveAll("instance-a", [
+        { ...thread, id: `scheduled-turn:${id}`, kind: "queued", input: text("Scheduled prompt"), createdAt: now },
+        continuation,
+        pending,
+      ]);
+      expect(store.claimOrphaned("instance-b", () => [])).toEqual([pending, continuation]);
+    });
 
     it("opens the gate when a continuation is discarded", async () => {
       const { rows, store } = durableStore();

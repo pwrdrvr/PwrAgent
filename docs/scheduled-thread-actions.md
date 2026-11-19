@@ -96,12 +96,13 @@ dispatched as when it came due: a thread still locked holds it again in this
 queue, and an unlocked one starts it. Other held actions, such as a stale
 steering message, wait for the operator as before. This cannot start a turn
 twice, because nothing leaves a holder's queue while its action is still
-`held`. This also applies to a quiet restart. Its queue checkpoint omits
-scheduled lock holds, so they come back through the scheduler with their
-lock cause intact. When an older checkpoint contains a paused copy, the
-restart store checks the durable action before restoring it. A recovery
-claim also removes a legacy copy in the same transaction, even when a
-reused PID prevents the restart store from claiming that copy.
+`held`. A quiet restart leaves ordinary scheduled lock holds to the scheduler.
+When an operator separately paused a held entry, the checkpoint owns the
+pause and unlock leaves it waiting for Resume. The checkpoint also owns
+released entries still waiting in the FIFO, even if their old scheduler
+lease has expired. Restore checks SQLite metadata without opening scheduled
+payload files. A scheduler recovery claim removes a legacy lock-hold copy
+in the same transaction, even when a reused PID blocks receipt recovery.
 
 Each admitted action has a stable queue identity. Multiple scheduled reviews
 behind one active turn keep distinct pending IDs; the registry chains them

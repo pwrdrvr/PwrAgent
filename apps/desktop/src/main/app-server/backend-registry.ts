@@ -3479,7 +3479,9 @@ export class DesktopBackendRegistry {
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
     this.trackDurableProjectHeldWakeup(event);
-    this.trackRestartContinuation(event);
+    const scheduledReceipt = this.durableRestartContinuations.get(event.entry.id)?.kind === "queued"
+      && scheduledActionIdFromTurnQueueEntry(event.entry.id);
+    if (!scheduledReceipt) this.trackRestartContinuation(event);
     if (event.type === "queued" || event.type === "held") {
       // Re-queued entries (a release that put the queue back) keep the
       // title they already have. A grouped steer that took another message
@@ -3578,6 +3580,9 @@ export class DesktopBackendRegistry {
                         },
       },
     });
+    // Keep the receipt's ownership while the scheduled action records its
+    // terminal queue event. A sibling scheduler can run recovery meanwhile.
+    if (scheduledReceipt) this.trackRestartContinuation(event);
   }
 
   getLatestCodexConfigWarning(): LatestCodexConfigWarningResponse {
@@ -10098,11 +10103,11 @@ export class DesktopBackendRegistry {
 
   /** The queued messages a quiet restart carries, in the order they wait. */
   private restartQueuedSnapshot(): StoredRestartContinuation[] {
-    // The scheduler recovers its own lock holds. Saving them as paused
-    // queue entries would give the same turn a second recovery path.
+    // The scheduler recovers lock holds unless the operator separately
+    // paused the entry. The checkpoint owns that explicit pause.
     return this.threadTurnQueue.getAllQueuedEntries()
       .filter((entry) => !entry.restartContinuation && !entry.projectHold
-        && !(entry.holdReason && isThreadLockRefusal(entry.holdReason)
+        && !(!entry.paused && entry.holdReason && isThreadLockRefusal(entry.holdReason)
           && scheduledActionIdFromTurnQueueEntry(entry.id)))
       .map((entry, position) => {
         const verification = this.durableRestartContinuations.get(entry.id)?.upgradeVerification;
@@ -10369,6 +10374,10 @@ export class DesktopBackendRegistry {
   async setQueuedTurnPaused(
     request: Omit<SetQueuedTurnPausedRequest, "federationTarget">,
   ): Promise<SetQueuedTurnPausedResponse> {
+    const saved = this.durableRestartContinuations.get(request.queueEntryId);
+    if (!request.paused && saved?.ownsScheduledTurn) {
+      await this.assertThreadNotLocked(saved.backend, saved.threadId);
+    }
     const result = await this.threadTurnQueue.setEntryPaused(
       request.queueEntryId,
       request.paused,
@@ -11148,6 +11157,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startTurnNow(params: {
+    id?: string;
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -11166,6 +11176,10 @@ export class DesktopBackendRegistry {
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
+      && this.durableRestartContinuations.has(params.id)) {
+      await this.assertThreadNotLocked(params.backend, params.threadId);
+    }
     return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
   }
 

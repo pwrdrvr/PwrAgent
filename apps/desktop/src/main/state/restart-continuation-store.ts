@@ -1,17 +1,14 @@
 import type Database from "better-sqlite3";
 import {
   isAppServerBackendKind,
+  isThreadLockRefusal,
   isPwrAgentUpdateVersion,
   type AppServerBackendKind,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
 } from "@pwragent/shared";
 import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
-import {
-  isScheduledThreadLockHold,
-  scheduledActionIdFromTurnQueueEntry,
-  type ScheduledThreadActionStorage,
-} from "@pwragent/owner-core/scheduled-thread-action-storage";
+import { scheduledActionIdFromTurnQueueEntry } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { storageProcessAlive } from "./storage-maintenance";
 
 /**
@@ -48,6 +45,8 @@ export type StoredRestartContinuation = {
   createdAt: number;
   /** Absent: the thread's continuation. `queued`: a message from its queue. */
   kind?: "queued";
+  /** This checkpoint owns a released scheduled turn or an explicit pause. */
+  ownsScheduledTurn?: true;
   queued?: StoredRestartQueuedFields;
   upgradeVerification?: { operationId: string; expectedVersion: string; previousRuntimeId: string; cancelled?: true };
 };
@@ -96,8 +95,7 @@ export class RestartContinuationStore {
   constructor(private readonly db: Database.Database, private readonly options: {
     processId?: number;
     processAlive?: (pid: number) => boolean;
-    scheduledActions: Pick<ScheduledThreadActionStorage, "get">;
-  }) {}
+  } = {}) {}
 
   /**
    * Records what one quiet restart carries, in one commit. A thread that
@@ -205,13 +203,16 @@ export class RestartContinuationStore {
     if (continuation.kind !== "queued") return false;
     const id = scheduledActionIdFromTurnQueueEntry(continuation.id);
     if (!id) return false;
-    // This read and the receipt claim share an immediate transaction. The
-    // scheduler owns lock recovery even when its original FIFO is gone.
-    const action = this.options.scheduledActions.get(id);
-    return !action
-      || action.backend !== continuation.backend || action.threadId !== continuation.threadId
-      || action.status === "started" || action.status === "cancelled" || action.status === "failed"
-      || isScheduledThreadLockHold(action)
-      || (action.status === "queued" && action.manualReleaseRequired === true);
+    // Read only SQLite metadata. A damaged scheduled payload should not
+    // stop another thread's continuation from being claimed.
+    const action = this.db.prepare(
+      "SELECT status, error_message FROM scheduled_thread_actions WHERE action_id = ? AND backend = ? AND thread_id = ? AND kind = 'turn'",
+    ).get(id, continuation.backend, continuation.threadId) as { status: string; error_message: string | null } | undefined;
+    if (action?.status === "queued") return false;
+    if (action?.status !== "held") return true;
+    // Older checkpoints collapsed explicit pause and lock hold into one
+    // flag. Recover those lock holds from the scheduled action as before.
+    return continuation.ownsScheduledTurn !== true
+      && action.error_message !== null && isThreadLockRefusal(action.error_message);
   }
 }
