@@ -3,8 +3,8 @@ import { NAVIGATION_QUERY_PROTOCOL_VERSION, type AppServerBackendKind,
 import type { DesktopApi } from "./desktop-api";
 
 type Target = { backend: AppServerBackendKind; threadId: string; instanceId?: string };
-type Api = Pick<DesktopApi, "getNavigationQueryPage">;
-export type ThreadLinkRow = NavigationRow | NavigationThreadSummary;
+type Api = Pick<DesktopApi, "getNavigationQueryPage" | "getNavigationSelectedDetail">;
+export type ThreadLinkRow = (NavigationRow | NavigationThreadSummary) & { archiveIdentity?: "present" | "archived" };
 type Entry = { expiresAt: number; promise: Promise<ThreadLinkRow | undefined> };
 const caches = new WeakMap<Api, Map<string, Entry>>();
 const MAX_ROWS = 256;
@@ -13,6 +13,28 @@ const FACTS_TTL_MS = 30_000;
 
 function rowKey(target: Target, owner: FederationRemoteTarget | undefined): string {
   return JSON.stringify([owner?.instanceId ?? null, target.backend, target.threadId]);
+}
+
+async function readOwnerDetail(
+  api: Api,
+  { backend, threadId }: Target,
+  owner: FederationRemoteTarget | undefined,
+): Promise<ThreadLinkRow | undefined> {
+  if (!api.getNavigationSelectedDetail) return undefined;
+  const detail = await api.getNavigationSelectedDetail({
+    protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+    ref: { backend, threadId },
+    ...(owner ? { federationTarget: owner } : {}),
+  });
+  if (detail.readiness === "ready" && detail.ref.backend === backend && detail.ref.threadId === threadId
+    && detail.ref.ownerInstanceId === owner?.instanceId) {
+    if (detail.identity === "unresolved" || detail.identity === "deleted") return undefined;
+    if ((detail.identity === "archived" || detail.identity === "present")
+      && detail.thread?.id === threadId && detail.thread.source === backend) {
+      return { ...detail.thread, archiveIdentity: detail.identity };
+    }
+  }
+  throw new Error("The thread's owner did not return its detail.");
 }
 
 /** New owner observations supersede both cached facts and reads still in flight. */
@@ -70,7 +92,9 @@ export function readThreadLinkRow(
     if (!row && (!page.complete || page.coverage.state !== "complete")) {
       throw new Error("The thread's owner has not finished resolving its navigation rows.");
     }
-    return row;
+    // A complete active inventory can still omit an archived thread. Ask
+    // the same owner through the detail path used to open the link.
+    return row ?? readOwnerDetail(api, target, owner);
   }).catch(async (error: unknown) => {
     if (owner) {
       try {

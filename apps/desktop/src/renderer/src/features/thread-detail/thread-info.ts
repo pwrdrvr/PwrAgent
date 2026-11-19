@@ -1,12 +1,11 @@
 import {
   type AppServerBackendKind,
   type FederationRemoteTarget,
-  type NavigationRow,
-  type NavigationThreadSummary,
   type ReadThreadFamilyPricingResponse,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkRow } from "../../lib/thread-link-rows";
 export { readThreadLinkRow as readThreadInfoRow } from "../../lib/thread-link-rows";
 
 /** What a thread's hover card shows, from a loaded row or an owner's row. */
@@ -14,7 +13,7 @@ export type ThreadInfoFacts = {
   title?: string;
   createdAt?: number;
   updatedAt?: number;
-  archivedAt?: number;
+  archived: boolean;
   running: boolean;
   subAgentWorking: boolean;
   gitBranch?: string;
@@ -45,13 +44,13 @@ export type ThreadInfoTarget = {
 
 const OFFLINE_PEER_STATES = new Set(["disabled", "rejected", "revoked", "disconnected"]);
 
-export function threadInfoFacts(row: NavigationThreadSummary | NavigationRow): ThreadInfoFacts {
+export function threadInfoFacts(row: ThreadLinkRow): ThreadInfoFacts {
   const peerStatus = row.federation?.peerStatus;
   return {
     ...(row.title.trim() ? { title: row.title } : {}),
     ...(row.createdAt ? { createdAt: row.createdAt } : {}),
     ...(row.updatedAt ? { updatedAt: row.updatedAt } : {}),
-    ...(row.archivedAt ? { archivedAt: row.archivedAt } : {}),
+    archived: row.archiveIdentity ? row.archiveIdentity === "archived" : Boolean(row.archivedAt),
     running: row.threadStatus === "active"
       || row.hasActiveSubAgent === true
       || row.hasBackgroundTasks === true,

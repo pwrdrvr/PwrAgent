@@ -57,9 +57,11 @@ function family(members: ThreadFamilyPricingMember[]): ReadThreadFamilyPricingRe
 
 type ReadFamily = NonNullable<DesktopApi["readThreadFamilyPricing"]>;
 type QueryPage = NonNullable<DesktopApi["getNavigationQueryPage"]>;
+type SelectedDetail = NonNullable<DesktopApi["getNavigationSelectedDetail"]>;
 let api: {
   readThreadFamilyPricing: ReturnType<typeof vi.fn<ReadFamily>>;
   getNavigationQueryPage: ReturnType<typeof vi.fn<QueryPage>>;
+  getNavigationSelectedDetail: ReturnType<typeof vi.fn<SelectedDetail>>;
 };
 
 beforeEach(() => {
@@ -73,6 +75,9 @@ beforeEach(() => {
     getNavigationQueryPage: vi.fn<QueryPage>(async (_request: NavigationQueryRequest): Promise<NavigationQueryPage> => ({
       entries: [], complete: true, coverage: { state: "complete" },
     }) as unknown as NavigationQueryPage),
+    getNavigationSelectedDetail: vi.fn<SelectedDetail>(async ({ ref }) => ({
+      protocol: 2, ref, revision: "missing", readiness: "ready", identity: "unresolved",
+    })),
   };
   (window as Window & { pwragent?: unknown }).pwragent = api;
 });
@@ -280,12 +285,25 @@ describe("thread chip hover card", () => {
     expect(card).toHaveTextContent("this thread");
   });
 
-  it("says when no machine reports the thread", async () => {
+  it("shows a local archived thread that is absent from the active inventory", async () => {
+    api.getNavigationSelectedDetail.mockImplementation(async ({ ref }) => ({
+      protocol: 2, ref, revision: "archived", readiness: "ready", identity: "archived", thread: summary(),
+    }));
+    renderChip({}, []);
+    const card = await openCard();
+
+    expect(card).toHaveTextContent("This machine");
+    expect(card).toHaveTextContent("Archived");
+    expect(card).toHaveTextContent("Provider");
+    expect(card).not.toHaveTextContent("not found");
+  });
+
+  it("says when the local owner cannot find the thread", async () => {
     renderChip({}, []);
     const card = await openCard();
 
     expect(card).toHaveTextContent("not found");
-    expect(card).toHaveTextContent("No connected machine reports this thread.");
+    expect(card).toHaveTextContent("Thread not found on this machine.");
     expect(card).not.toHaveTextContent("Provider");
   });
 
