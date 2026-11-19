@@ -79,6 +79,7 @@ import {
 import {
   GitDirectoryService,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+  WorktreeBranchAlreadyCheckedOutError,
 } from "./git-directory-service";
 import type {
   GitWorkspaceInspection,
@@ -2232,6 +2233,13 @@ export class ThreadWorkspaceService {
       request.args.workspaceMode === "same"
         ? "same_workspace"
         : (request.args.workspaceMode ?? "new_worktree");
+    const { worktreeBranchMode } = request.args;
+    if (worktreeBranchMode && workspaceMode !== "new_worktree") {
+      return threadOrchestrationFailure("invalid_arguments", "worktreeBranchMode requires workspaceMode=new_worktree.");
+    }
+    if (worktreeBranchMode === "attached" && !request.args.branchName) {
+      return threadOrchestrationFailure("invalid_arguments", "worktreeBranchMode=attached requires branchName to name an existing local branch.");
+    }
     if (workspaceMode === "same_workspace" && requestedGroupingMode !== "subthread") {
       return threadOrchestrationFailure(
         "invalid_arguments",
@@ -2574,6 +2582,7 @@ export class ThreadWorkspaceService {
           directoryPath: cwdForChild,
           workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
           branchName: request.args.branchName,
+          ...(worktreeBranchMode ? { worktreeBranchMode, rejectOccupiedBranch: true } : {}),
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
           serviceTier: inheritedSettings.serviceTier,
@@ -2603,6 +2612,7 @@ export class ThreadWorkspaceService {
           cwd: cwdForChild,
           workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
           branchName: request.args.branchName,
+          ...(worktreeBranchMode ? { worktreeBranchMode } : {}),
           requiredWorkMode: workspaceMode === "new_worktree" ? "worktree" : undefined,
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
@@ -2650,13 +2660,25 @@ export class ThreadWorkspaceService {
         },
       );
     } catch (error) {
+      if (error instanceof WorktreeBranchAlreadyCheckedOutError) {
+        const message = error.message
+          + ` Retry with worktreeBranchMode=detached and branchName=${JSON.stringify(`refs/heads/${error.branch}`)} for a detached HEAD, or ask the operator how to free the existing checkout and wait for their instructions.`;
+        this.failPendingThreadHandoff(handoffId, new Error(message));
+        return threadOrchestrationFailure("branch_already_checked_out", message, {
+          branchName: error.branch,
+          worktreePath: error.worktreePath,
+        });
+      }
       const baseMessage = error instanceof Error ? error.message : String(error);
       const message = workspaceMode === "new_worktree"
         ? baseMessage
           + (!requestedCwd
             ? " cwd was omitted. If the user named a different project, retry with cwd set to that project path."
             : "")
-          + " Keep workspaceMode=new_worktree on retry. Omit branchName to use the default base, or pass an existing ref."
+          + " Keep workspaceMode=new_worktree on retry."
+          + (worktreeBranchMode === "attached"
+            ? " Pass an existing local branch for attached mode."
+            : " Omit branchName to use the default base, or pass an existing ref.")
           + " Do not switch to a shared checkout or ask the child to create a worktree."
         : baseMessage;
       this.failPendingThreadHandoff(handoffId, new Error(message));

@@ -17,6 +17,7 @@ Its hibernate list frees idle checkouts without archiving: each thread stays, an
 Use list_federation_instances to find a machine.
 Keep the returned instanceId for remote calls.
 Use handoff_task for local child work.
+For an existing branch checkout, use handoff_task with worktreeBranchMode=attached and branchName. If occupied, use a detached HEAD or wait for the operator to free the branch.
 Use create_instance_thread for work on a selected machine.
 Pass environment to either tool to pick the child's environment by id or name, or none.
 Those tools create threads immediately. For an operator-dispatched follow-up, use add_todo with action.type=start_thread.

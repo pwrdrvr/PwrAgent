@@ -29,6 +29,7 @@ import type {
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type {
   BackendClient,
+  BackendRegistryForkThreadRequest,
   ModelSettings,
   TaskMonitorDelegationRecord,
   ThreadListCallerReason,
@@ -205,6 +206,7 @@ export interface RegistryHostPorts {
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    worktreeBranchMode?: BackendRegistryForkThreadRequest["worktreeBranchMode"];
     /** Base for a new worktree when `branchName` is unset. */
     worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];

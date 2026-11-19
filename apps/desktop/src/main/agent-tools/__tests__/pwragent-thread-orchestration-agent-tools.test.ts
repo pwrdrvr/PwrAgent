@@ -116,7 +116,10 @@ describe("pwragent thread orchestration agent tools", () => {
                   description: expect.stringContaining("list_instance_projects backends[].modelOptions"),
                 }),
                 branchName: expect.objectContaining({
-                  description: expect.stringContaining("resolves this ref in cwd"),
+                  description: expect.stringContaining("existing local branch for attached mode"),
+                }),
+                worktreeBranchMode: expect.objectContaining({
+                  enum: ["attached", "detached"],
                 }),
               }),
             }),

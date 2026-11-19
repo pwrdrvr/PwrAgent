@@ -19,6 +19,7 @@ import {
   computeWorktreePath,
   inspectGitWorkspace,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+  WorktreeBranchAlreadyCheckedOutError,
 } from "../app-server/git-directory-service";
 
 // The service forward-slashes the directory/worktree identifiers it returns
@@ -971,6 +972,33 @@ describe("GitDirectoryService", () => {
       repositoryPath: workspace.repositoryPath,
       workMode: workspace.workMode,
     });
+  });
+
+  it("preserves a competing checkout created after the branch inventory read", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const competingPath = path.join(repoDir, "competing worktree");
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: async (cwd, args) => {
+        if (args[0] === "worktree" && args[1] === "add") {
+          runGit(repoDir, ["worktree", "add", competingPath, "release"]);
+        }
+        return runGit(cwd, args);
+      },
+    });
+
+    await expect(service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "release",
+      worktreeBranchMode: "attached",
+      rejectOccupiedBranch: true,
+    })).rejects.toBeInstanceOf(WorktreeBranchAlreadyCheckedOutError);
+    expect(runGit(competingPath, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(".worktrees");
   });
 
   it("does not reuse an excluded source worktree when creating an attached branch worktree", async () => {

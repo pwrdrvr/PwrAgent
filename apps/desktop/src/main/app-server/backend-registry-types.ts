@@ -477,6 +477,7 @@ export type BackendClient = {
 
 export type BackendRegistryForkThreadRequest = ForkThreadRequest & {
   importedWorktree?: { repositoryPath: string; worktreePath: string };
+  rejectOccupiedBranch?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   /** Run the environment's setup even when the fork is not a new worktree. */
   rerunCodexEnvironmentSetup?: boolean;

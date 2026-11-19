@@ -48979,7 +48979,19 @@ script = "printf setup"
     }
   });
 
-  it("creates new-worktree handoffs from an explicit cwd in another project", async () => {
+  it.each([
+    { seedMode: "clean", branchName: "develop", branchMode: undefined, occupied: false },
+    { seedMode: "clean", branchName: "develop", branchMode: "attached", occupied: false },
+    { seedMode: "fork", branchName: "develop", branchMode: "attached", occupied: false },
+    { seedMode: "clean", branchName: "main", branchMode: "attached", occupied: true },
+    { seedMode: "fork", branchName: "main", branchMode: "attached", occupied: true },
+    { seedMode: "clean", branchName: "main", branchMode: "detached", occupied: true },
+    { seedMode: "clean", branchName: "feature/agent@ops", branchMode: "attached", occupied: false },
+    { seedMode: "clean", branchName: "sibling", branchMode: "attached", occupied: true },
+    { seedMode: "clean", branchName: "refs/heads/sibling", branchMode: "detached", occupied: true },
+  ])("creates new-worktree handoffs from an explicit cwd in another project ($seedMode, $branchName, $branchMode)", async ({
+    seedMode, branchName, branchMode, occupied,
+  }) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-explicit-cwd-"));
     const scratchPath = path.join(root, "scratch-workspace");
     const repoPath = path.join(root, "other-project");
@@ -48996,6 +49008,9 @@ script = "printf setup"
       await git(repoPath, ["add", "README.md"]);
       await git(repoPath, ["commit", "-m", "initial"]);
       await git(repoPath, ["branch", "develop"]);
+      await git(repoPath, ["branch", "feature/agent@ops"]);
+      const siblingPath = path.join(root, "sibling checkout");
+      await git(repoPath, ["worktree", "add", "-b", "sibling", siblingPath]);
 
       const scratchDirectory = {
         id: expectedDir(scratchPath),
@@ -49052,6 +49067,7 @@ script = "printf setup"
         },
       });
 
+      const before = await git(repoPath, ["worktree", "list", "--porcelain"]);
       const response = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -49066,25 +49082,47 @@ script = "printf setup"
             title: "Other project export failure",
             workspaceMode: "new_worktree",
             cwd: repoPath,
-            branchName: "develop",
+            seedMode,
+            branchName,
+            ...(branchMode ? { worktreeBranchMode: branchMode } : {}),
           },
         },
       } as AppServerPendingRequestNotification);
 
-      expect(response).toMatchObject({ success: true });
-      const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
+      const payload = JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      const shouldRefuse = occupied && branchMode === "attached";
+      expect(response).toMatchObject({ success: !shouldRefuse });
+      expect(await git(repoPath, ["branch", "--show-current"])).toBe("main");
+      if (shouldRefuse) {
+        expect(payload).toMatchObject({
+          code: "branch_already_checked_out",
+          message: expect.stringMatching(/already checked out.*worktreeBranchMode=detached.*operator/i),
+          data: {
+            branchName,
+            worktreePath: expectedDir(await realpath(branchName === "main" ? repoPath : siblingPath)),
+          },
+        });
+        expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toBe(before);
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+        expect(codexClient.lastForkThreadParams).toBeUndefined();
+        await registry.close();
+        return;
+      }
+      const started = seedMode === "fork" ? codexClient.lastForkThreadParams : codexClient.lastStartThreadParams;
+      const handoffCwd = expectedDir(started?.cwd ?? "");
       expect(handoffCwd).toContain(
         expectedDir(await realpath(path.join(repoPath, ".worktrees"))),
       );
       expect(handoffCwd).not.toContain(expectedDir(scratchPath));
       expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toBeUndefined();
-      const payload = JSON.parse(
-        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
-      );
+      expect(await git(handoffCwd, ["branch", "--show-current"])).toBe(branchMode === "attached" ? branchName : "");
+      expect(await git(handoffCwd, ["rev-parse", "HEAD"])).toBe(await git(repoPath, ["rev-parse", branchName]));
       expect(payload.workspace).toMatchObject({
         mode: "new_worktree",
         cwd: handoffCwd,
-        branch: "HEAD",
+        branch: branchMode === "attached" ? branchName : "HEAD",
         linkedDirectory: {
           kind: "worktree",
           label: "other-project",

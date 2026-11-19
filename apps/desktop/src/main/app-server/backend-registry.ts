@@ -8430,6 +8430,7 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    worktreeBranchMode?: BackendRegistryForkThreadRequest["worktreeBranchMode"];
     /** Base for a new worktree when `branchName` is unset. */
     worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
@@ -8468,6 +8469,7 @@ export class DesktopBackendRegistry {
       linkedDirectories,
       workMode,
       branchName,
+      worktreeBranchMode,
       worktreeBase,
       requiredWorkMode,
       parentThreadId,
@@ -8506,6 +8508,7 @@ export class DesktopBackendRegistry {
           directoryLabel: path.basename(request.cwd) || request.cwd,
           directoryPath: request.cwd,
           workMode: "worktree",
+          ...(worktreeBranchMode ? { worktreeBranchMode, rejectOccupiedBranch: true } : {}),
           ...(worktreeBase ? { worktreeBase } : {}),
         });
       resources.setWorkspaceRollback(preparedWorkspace.rollback);
@@ -8997,6 +9000,7 @@ export class DesktopBackendRegistry {
             ? { excludedWorktreePaths: request.excludedWorktreePaths }
             : {}),
           worktreeBranchMode: request.worktreeBranchMode,
+          ...(request.rejectOccupiedBranch ? { rejectOccupiedBranch: true } : {}),
           workMode: request.workMode ?? "local",
         });
     if (request.workMode === "worktree" && preparedWorkspace.workMode !== "worktree") {
