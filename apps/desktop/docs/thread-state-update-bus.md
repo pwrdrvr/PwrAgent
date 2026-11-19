@@ -32,7 +32,7 @@ thread-state fields. Instead:
 4. Add a method-name branch in `MessagingController.handleBackendEvent`
    that routes to `refreshStatusSurfacesForThread`.
 
-Mutation handlers in `MessagingController` (e.g. `togglePermissionsMode`)
+Messaging mutation handlers (e.g. `MessagingThreadSettings.setBindingPermissionsMode`)
 should NOT call `renderBindingStatus` inline for state that flows through
 the bus — the bus is the single source of refresh, and an inline render
 would be redundant. Update binding-local preferences before the registry
