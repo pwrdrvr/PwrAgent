@@ -153,7 +153,8 @@ export class ReplayResearchService {
       this.stops.set(run.id, stopping);
       void stopping.finally(() => { if (this.stops.get(run.id) === stopping) this.stops.delete(run.id); }).catch(this.ports.onError);
     }
-    return current;
+    // Exhausting the run, or finishing its stop, appended after `current` was read.
+    return this.requireRun(run.id);
   }
 
   /** A worker waiting to be resumed whose turn already ran the per-worker limit is stopped for that reason. */
@@ -395,9 +396,10 @@ export class ReplayResearchService {
     const run = this.requireRun(id);
     // An approach not yet started holds its slot only within the worker count: a lowered count starts no new worker.
     const overCount = run.activeWorkers > run.workerLimit;
-    if (overCount || !this.canAdmitApproach(run, approach)) {
+    const admissible = this.canAdmitApproach(run, approach);
+    if (overCount || !admissible) {
       this.append(run, `unadmitted:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "stopped",
-        ...(overCount && this.canAdmitApproach(run, approach) ? { note: "Not started: the run already had as many workers as its worker count." } : {}) });
+        ...(overCount && admissible ? { note: "Not started: the run already had as many workers as its worker count." } : {}) });
       this.settleItemCancellation(id, approach.id);
       return;
     }

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { RESEARCH_MAX_WORKERS, type ResearchBoundsCommand } from "@pwragent/shared";
 import { ResearchLimitField, researchLimitDraft, researchLimitMinutes, type ResearchLimitDraft } from "./ResearchLimitField";
-import { formatClock, formatResearchDuration, formatRunWhen, plural, researchWorkerMinutesUsed, type ResearchRunView } from "./research-view-model";
+import { formatResearchDuration, formatRunMoment, plural, researchWorkerMinutesUsed, type ResearchRunView } from "./research-view-model";
 
 export type ResearchBoundsChange = Omit<ResearchBoundsCommand, "action">;
 
@@ -43,18 +43,17 @@ export function ResearchBoundsEditor({ run, now, busy, onSave, onCancel }: {
   const newTotal = change?.totalWorkerMinutes ?? undefined;
   const passed = typeof change?.minutes === "number" && endsAt !== undefined && endsAt <= now ? `That time limit has already passed: the run started ${formatResearchDuration(Math.floor((now - run.createdAt) / 60_000))} ago.`
     : newTotal !== undefined && newTotal <= used ? `Workers have already used ${formatResearchDuration(used)}.` : undefined;
-  const at = (when: number) => formatRunWhen(when, now) === formatClock(when) ? formatClock(when) : `${formatRunWhen(when, now)}, ${formatClock(when)}`;
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (change && !passed && await onSave(change)) onCancel();
   }
   return <form className="research-form research-bounds" aria-label="Change the run's bounds" onSubmit={(event) => { void submit(event); }}>
     <label>Workers at once<input type="number" min={1} max={RESEARCH_MAX_WORKERS} required value={workers} onChange={(event) => setWorkers(Number(event.target.value))} /></label>
-    <ResearchLimitField label={`Time limit, from the start at ${at(run.createdAt)}`} draft={time} onChange={setTime} />
+    <ResearchLimitField label={`Time limit, from the start at ${formatRunMoment(run.createdAt, now)}`} draft={time} onChange={setTime} />
     <ResearchLimitField label="Per-worker time limit" draft={turn} onChange={setTurn} />
     <ResearchLimitField label="Total worker time" draft={total} onChange={setTotal} />
     <p className="research-muted">{passed ?? <>
-      {endsAt === undefined ? "The run has no time limit." : `The run ends at ${at(endsAt)}.`}
+      {endsAt === undefined ? "The run has no time limit." : `The run ends at ${formatRunMoment(endsAt, now)}.`}
       {workers < run.activeWorkers && ` Lowering the worker count stops no one: the ${plural(run.activeWorkers, "running worker")} finish their turns, and no new one starts until fewer than ${workers} are running.`}
       {typeof change?.turnMinutes === "number" && " A worker already past the new per-worker limit is stopped."}
       {(run.totalWorkerMinutes !== undefined || totalWorkerMinutes !== undefined) && ` Workers have used ${formatResearchDuration(used)} so far.`}

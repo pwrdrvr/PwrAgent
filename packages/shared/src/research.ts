@@ -324,10 +324,9 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   const initial = first.data;
   const run: ResearchRun = {
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
-    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...(initial.deadlineAt !== undefined ? { deadlineAt: initial.deadlineAt } : {}),
+    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...researchCreatedBounds(initial),
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
-    findings: [], submissions: [], events, deliveries: [], workerLimit: researchWorkerLimit(initial), activeWorkers: 0, items: [], harness: initial.harness,
-    ...(initial.turnMinutes !== undefined ? { turnMinutes: initial.turnMinutes } : {}), ...(initial.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: initial.totalWorkerMinutes } : {}),
+    findings: [], submissions: [], events, deliveries: [], activeWorkers: 0, items: [], harness: initial.harness,
   };
   const items = new Map<string, ResearchItem>();
   for (const item of applyResearchItemEvent((key) => items.get(key), first)) items.set(item.id, item);
@@ -387,6 +386,10 @@ export function researchWorkerLimit(created: Pick<Extract<ResearchEventData, { t
 }
 
 export type ResearchBounds = Pick<ResearchRun, "workerLimit" | "deadlineAt" | "turnMinutes" | "totalWorkerMinutes">;
+/** The bounds a run starts with, from its creation event. Replay and the indexed header both read them here. */
+export function researchCreatedBounds(created: Extract<ResearchEventData, { type: "created" }>): ResearchBounds {
+  return researchBoundsOf({ ...created, workerLimit: researchWorkerLimit(created) });
+}
 /** Just the bounds of a run or header, with no key for a bound that is not set. */
 export function researchBoundsOf(run: ResearchBounds): ResearchBounds {
   return { workerLimit: run.workerLimit, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}),
@@ -757,9 +760,8 @@ export function researchBoardPage(run: ResearchRun, range: ResearchBoardRange): 
 /** The in-memory oracle for a stored run summary. */
 export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
-    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}), workspaceMode: run.workspaceMode, status: run.status,
-    ...(run.reason !== undefined ? { reason: run.reason } : {}), workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
-    ...(run.turnMinutes !== undefined ? { turnMinutes: run.turnMinutes } : {}), ...(run.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: run.totalWorkerMinutes } : {}),
+    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, workspaceMode: run.workspaceMode, status: run.status,
+    ...(run.reason !== undefined ? { reason: run.reason } : {}), ...researchBoundsOf(run), activeWorkers: run.activeWorkers,
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     ...(run.harness ? { harness: researchHarnessPhase(run.harness) } : {}) };
 }

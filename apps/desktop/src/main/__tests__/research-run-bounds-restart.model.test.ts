@@ -23,7 +23,7 @@ type World = { now: number; generation: number; spawned: number; stopped: string
 const world = (): World => ({ now: 1_000_000, generation: 0, spawned: 0, stopped: [], timers: [], errors: [] });
 
 /** One PwrAgent process. Only the current generation is alive; every earlier one has quit or crashed. */
-function launch(store: ResearchStore, shared: World, overrides: Partial<ResearchPorts> = {}): ResearchService {
+function launch(store: ResearchStore, shared: World, overrides: Partial<ResearchPorts> = {}, options: { initialize?: boolean } = {}): ResearchService {
   const generation = ++shared.generation;
   const ports: ResearchPorts = {
     ownerId: `process-${generation}`, ownerPid: 100 + generation, ownerStartedAt: shared.now,
@@ -42,7 +42,7 @@ function launch(store: ResearchStore, shared: World, overrides: Partial<Research
     ...overrides,
   };
   const service = new ResearchService(store, ports);
-  service.initialize();
+  if (options.initialize !== false) service.initialize();
   return service;
 }
 
@@ -175,6 +175,39 @@ it("ends a run at its total worker time across a restart", async () => {
       expect(shared.errors).toEqual([]);
       service.close();
     }), { numRuns: 80 });
+  } finally { db.close(); }
+});
+
+/**
+ * A process that takes a run over to answer a command answers it on the run as it now stands. Taking it over
+ * can end the run: when every cut-off worker is past its limit and nothing was submitted, the run is exhausted.
+ * The command then saw the header from before that, and recorded at a revision that no longer existed.
+ */
+it("answers a command that takes a run over on the run as the takeover left it", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const scenario = fc.record({ limit: fc.integer({ min: 1, max: 120 }), over: fc.integer({ min: 0, max: 600 }), command: fc.constantFrom("stop" as const, "finding" as const, "bounds" as const) });
+    await fc.assert(fc.asyncProperty(scenario, async ({ limit, over, command }) => {
+      const store = reset(db);
+      const shared = world();
+      const first = launch(store, shared);
+      const id = (await first.start(request(1, { turnMinutes: limit }), agent)).id;
+      first.close();
+      for (const timer of shared.timers) timer.live = false;
+      shared.now += (limit + over) * MINUTE;
+      // A second process that has not launched its startup recovery: the command itself takes the run over.
+      const service = launch(store, shared, {}, { initialize: false });
+      const attempt = command === "stop" ? service.update(id, "stop", { action: "stop", reason: "Stopped by the operator" }, operator)
+        : command === "bounds" ? service.update(id, "bounds", { action: "bounds", workers: 2 }, operator)
+          : service.update(id, "finding", { action: "finding", approachId: "a1", kind: "note", text: "Invented finding", paths: [] }, agent);
+      const outcome = await attempt.then(() => "ok", (error: unknown) => error instanceof Error ? error.message : String(error));
+      expect(outcome).not.toMatch(/Research run changed/);
+      // The worker was past its limit, so the takeover stopped it, and with nothing submitted the run is exhausted.
+      expect(store.header(id)!.status).toBe("exhausted");
+      expect(store.readItem(id, "a1")).toMatchObject({ record: { state: "stopped", note: expect.stringMatching(/per-worker time limit/) } });
+      expect(shared.errors).toEqual([]);
+      service.close();
+    }), { numRuns: 30 });
   } finally { db.close(); }
 });
 

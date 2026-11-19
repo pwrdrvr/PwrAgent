@@ -1,5 +1,5 @@
 import type { ResearchStorage } from "@pwragent/owner-core/research-storage";
-import { applyResearchBounds, applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchApproachOccupiesSlot, researchWorkerLimit,
+import { applyResearchBounds, applyResearchItemEvent, researchCreatedBounds, normalizeResearchChangesCursor, normalizeResearchEventRange, normalizeResearchSearch, projectResearchRun, researchApproachOccupiesSlot,
   researchItemSearchText, researchSearchHit, RESEARCH_BOARD_DELIVERIES, RESEARCH_BOARD_FAILURES, RESEARCH_BOARD_PAGE, RESEARCH_CHANGES_PAGE, RESEARCH_MAP_LEAVES,
   type ResearchEvent, type ResearchRun, type ResearchThread, type ResearchRunHeader, type ResearchItem, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchRunSummary, type ResearchEventRange, type ResearchEventPage, type ResearchApproach, type ResearchDelivery, type ResearchSubmission,
@@ -498,9 +498,7 @@ function headerFromRow(row: HeaderRow): ResearchRunHeader {
 /** The bounds as the operator last set them, or as the run started: the latest bounds event over the creation event. */
 function researchRowBounds(created: ResearchEvent, bounds: string | null): ResearchBounds {
   if (created.data.type !== "created") throw new Error("Invalid research header");
-  const data = created.data;
-  const initial: ResearchBounds = { workerLimit: researchWorkerLimit(data), ...(data.deadlineAt !== undefined ? { deadlineAt: data.deadlineAt } : {}),
-    ...(data.turnMinutes !== undefined ? { turnMinutes: data.turnMinutes } : {}), ...(data.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: data.totalWorkerMinutes } : {}) };
+  const initial = researchCreatedBounds(created.data);
   return bounds ? applyResearchBounds(initial, JSON.parse(bounds) as Extract<ResearchEventData, { type: "bounds" }>) : initial;
 }
 

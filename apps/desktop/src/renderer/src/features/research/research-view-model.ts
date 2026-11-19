@@ -152,7 +152,7 @@ export function researchWorkerMinutesUsed(run: Pick<ResearchRunView, "approaches
 /** Remaining time for a live run, or when its time limit fell for a finished one. A run may have no limit. */
 export function researchTimeLeft(run: Pick<ResearchRun, "status" | "deadlineAt">, now: number): string {
   if (run.deadlineAt === undefined) return "No time limit";
-  const at = formatRunWhen(run.deadlineAt, now) === formatClock(run.deadlineAt) ? formatClock(run.deadlineAt) : `${formatRunWhen(run.deadlineAt, now)}, ${formatClock(run.deadlineAt)}`;
+  const at = formatRunMoment(run.deadlineAt, now);
   if (!isResearchRunLive(run)) return `Deadline ${at}`;
   const remaining = run.deadlineAt - now;
   if (remaining <= 0) return "Deadline passed";
@@ -165,6 +165,12 @@ export function formatRunWhen(at: number, now: number): string {
   const then = new Date(at), today = new Date(now);
   const sameDay = then.getFullYear() === today.getFullYear() && then.getMonth() === today.getMonth() && then.getDate() === today.getDate();
   return sameDay ? formatClock(at) : then.toLocaleDateString([], { month: "short", day: "numeric", ...(then.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }) });
+}
+
+/** A moment in a run: the clock time today, otherwise the date and the clock time. */
+export function formatRunMoment(at: number, now: number): string {
+  const when = formatRunWhen(at, now);
+  return when === formatClock(at) ? when : `${when}, ${formatClock(at)}`;
 }
 
 export function formatClock(at: number): string {
