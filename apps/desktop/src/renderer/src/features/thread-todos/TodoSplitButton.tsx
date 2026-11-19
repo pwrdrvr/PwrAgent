@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -6,6 +7,7 @@ import {
   useState,
   type ComponentType,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -14,6 +16,7 @@ import {
   type IconProps,
 } from "../../icons";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { placeTodoModelMenu } from "./todo-model-menu-placement";
 
 export type TodoSplitMenuEntry =
   | {
@@ -49,6 +52,11 @@ export type TodoSplitButtonProps = {
  * alternatives and the label runs the default. The menu swaps a submenu in
  * place rather than flying out, since a card sits against the transcript's
  * right edge with nowhere to fly to.
+ *
+ * The menu is a portal on the body, placed against the window: inside the
+ * To-dos rail its scroller would clip it and the sticky group headings would
+ * paint over it. It opens below the pill when it fits and above otherwise,
+ * so a toast on the window's bottom edge opens it upward.
  */
 export function TodoSplitButton(props: TodoSplitButtonProps) {
   const [open, setOpen] = useState(false);
@@ -57,19 +65,26 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
+  const [position, setPosition] = useState<{ left: number; top: number; maxHeight: number }>();
   const close = (): void => {
     setOpen(false);
     setSubmenuId(undefined);
+    // The next open measures again before it shows.
+    setPosition(undefined);
   };
 
-  useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
+  // The menu measures itself hidden before it is placed; it can take focus
+  // only once it is visible.
+  const placed = open && position !== undefined;
+  useMenuNavigation({ open: placed, menuRef, triggerRef, onClose: close });
 
   // The keyboard hook leaves the pointer to the menu: any press outside
   // the pill closes it.
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: PointerEvent): void => {
-      if (!wrapperRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!wrapperRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         close();
       }
     };
@@ -77,13 +92,43 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [open]);
 
+  // Right edges line up, as the menu hung under the pill before it floated.
+  const place = useCallback(() => {
+    const pill = wrapperRef.current?.getBoundingClientRect();
+    const menu = menuRef.current;
+    if (!pill || !menu) return;
+    const menuWidth = menu.offsetWidth;
+    const next = placeTodoModelMenu({
+      trigger: { left: pill.right - menuWidth, top: pill.top, bottom: pill.bottom },
+      menuHeight: menu.scrollHeight + menu.offsetHeight - menu.clientHeight,
+      menuWidth,
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+    });
+    setPosition((current) => current?.left === next.left && current.top === next.top
+      && current.maxHeight === next.maxHeight ? current : next);
+  }, []);
+  // A submenu swap can change the menu's size.
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, submenuId, place]);
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+
   // A swapped list starts on its first row, as a freshly opened menu does.
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!placed) return;
     menuRef.current
       ?.querySelector<HTMLElement>('[role="menuitem"],[role="menuitemradio"]')
       ?.focus();
-  }, [open, submenuId]);
+  }, [placed, submenuId]);
 
   const submenu = submenuId
     ? props.entries.find(
@@ -117,11 +162,12 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
           {props.label}
         </button>
       </div>
-      {open ? (
+      {open ? createPortal(
         <div
           ref={menuRef}
           id={menuId}
-          className="todo-split__menu"
+          className="todo-split__menu todo-split__menu--floating"
+          style={position ?? { visibility: "hidden" }}
           role="menu"
           aria-label={submenu ? submenu.label : props.menuLabel}
           tabIndex={-1}
@@ -184,7 +230,8 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

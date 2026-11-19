@@ -92,6 +92,11 @@ export type ThreadTodosView = {
   ) => Promise<ThreadTodo | undefined>;
   /** Shows the card's own thread. */
   openThread: (todo: ThreadTodo) => void;
+  /**
+   * Shows a review card's thread scrolled to its review entry. A review with
+   * no transcript entry opens the thread only.
+   */
+  openReview?: (todo: ThreadTodo) => void;
   /** Shows a thread a handoff card started. */
   openStartedThread: (todo: ThreadTodo) => void;
   /**

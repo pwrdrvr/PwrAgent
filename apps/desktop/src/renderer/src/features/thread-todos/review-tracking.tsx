@@ -6,6 +6,7 @@ import type {
   ThreadReviewIdentity,
   ThreadReviewItem,
   ThreadReviewResolution,
+  ThreadTodo,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
 import { BanIcon, CheckIcon, ClockIcon, TodoIcon } from "../../icons";
@@ -14,6 +15,33 @@ import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
 const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<unknown>>>();
+
+/**
+ * The transcript entry a review was imported from. Native, managed, and
+ * Claude Code reviews are keyed by their review entry; one an agent recorded
+ * with `record_review` is keyed by an outside artifact and has no entry. A
+ * record from before origins were kept could be either, so it has none: a
+ * key that names no entry would page the transcript's whole history.
+ */
+export function reviewTranscriptEntryId(review: Pick<ThreadReview, "origin" | "sourceKey">): string | undefined {
+  return review.origin === "automatic" ? review.sourceKey : undefined;
+}
+
+/** The review entry a review to-do card stands for, read from its owner. */
+export async function readReviewTranscriptEntryId(
+  api: DesktopApi | undefined,
+  todo: ThreadTodo,
+): Promise<string | undefined> {
+  if (!todo.reviewId || !api?.listThreadReviews) return undefined;
+  const instanceId = todo.federationTarget?.instanceId ?? readRendererFederationTarget()?.instanceId;
+  const reviews = await readReviews(api, {
+    backend: todo.backend,
+    threadId: todo.threadId,
+    ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+  });
+  const review = reviews.find((entry) => entry.id === todo.reviewId);
+  return review ? reviewTranscriptEntryId(review) : undefined;
+}
 
 /**
  * One read per thread at a time, shared by every surface that asks, such as

@@ -222,6 +222,7 @@ import {
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
 import { newestResolvedFirst } from "./features/thread-todos/busy-thread-todos";
+import { readReviewTranscriptEntryId } from "./features/thread-todos/review-tracking";
 import {
   ThreadTodoRevealContext,
   type ThreadTodoRevealRequest,
@@ -2658,6 +2659,32 @@ function DesktopAppShell(props: {
       ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
     });
   }, [queueMessageLinkRequest, setMainView, showThreadFromLink]);
+  const openTodoReview = useCallback((todo: ThreadTodo) => {
+    const threadKey = threadTodoThreadKey(todo);
+    const instanceId = todo.federationTarget?.instanceId;
+    const selectedAtClick = selectedThreadKeyRef.current;
+    void readReviewTranscriptEntryId(desktopApi, todo)
+      .catch(() => undefined)
+      .then((messageId) => {
+        // The operator went elsewhere while the owner answered.
+        if (selectedThreadKeyRef.current !== selectedAtClick) return;
+        // On screen already: never select it again, which would refresh its
+        // git status and clear its errors. Scroll when there is an entry.
+        if (threadKey === selectedThreadKeyRef.current) {
+          if (messageId) {
+            queueMessageLinkRequest({ backend: todo.backend, threadId: todo.threadId, messageId, instanceId });
+          }
+          setMainView("thread");
+          return;
+        }
+        showThreadFromLink({
+          backend: todo.backend,
+          threadId: todo.threadId,
+          ...(messageId ? { messageId } : {}),
+          ...(instanceId ? { instanceId } : {}),
+        });
+      });
+  }, [desktopApi, queueMessageLinkRequest, setMainView, showThreadFromLink]);
   const operatorWaitsContext = useMemo(
     () => operatorRequests.ready ? {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
@@ -2724,6 +2751,7 @@ function DesktopAppShell(props: {
         return gateTodoRun(todo, options, runAndMount);
       },
       openThread: (todo) => showTodoThread(todo),
+      openReview: openTodoReview,
       openStartedThread: (todo) => {
         const started = todo.startedThread;
         if (!started) return;
@@ -2771,6 +2799,7 @@ function DesktopAppShell(props: {
     localThreadTitles,
     offscreenQuestionAnswers,
     openOperatorWait,
+    openTodoReview,
     operatorRequests,
     respondToOperatorWait,
     showThreadFromLink,

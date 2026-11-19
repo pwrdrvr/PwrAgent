@@ -208,6 +208,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             onResolve={resolve}
             onRun={run}
             onStartReview={props.onStartReview}
+            onShowReview={view.openReview}
             onDoHere={doHere}
             onSetItemChecked={(target, item, checked) => {
               void view.setItemChecked(target, item.id, checked).catch((error: unknown) => {
