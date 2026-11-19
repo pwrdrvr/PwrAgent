@@ -4,6 +4,7 @@ import type { DecisionsRailBatch } from "@pwragent/shared";
 import {
   decisionBatchStatusLabel,
   decisionBatchTimingLine,
+  decisionBatchTone,
   decisionInputSchemaSummary,
   decisionsRailHasContent,
   decisionsRailPollDelayMs,
@@ -93,6 +94,12 @@ describe("decisions format", () => {
     // An operator's Stop reads like any finished batch.
     expect(decisionBatchTimingLine({ ...batch, state: "stopped", stoppedBy: { code: "stopped_by_operator", message: "Stopped." } }, NOW))
       .toContain("mean 95 ms");
+  });
+
+  // Rule: an operator's Stop is not a failure; an error's stop is.
+  it("tones an operator's Stop as neutral and an error's as an error", () => {
+    expect(decisionBatchTone({ ...batch, state: "stopped", stoppedBy: { code: "stopped_by_operator", message: "Stopped." } })).toBe("neutral");
+    expect(decisionBatchTone({ ...batch, state: "stopped", stoppedBy: { code: "credential_rejected", message: "rejected" } })).toBe("error");
   });
 
   it("labels a stopping batch and polls fast only while one can move", () => {

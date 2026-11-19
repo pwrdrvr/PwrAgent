@@ -54,13 +54,13 @@ const outcomeArb: fc.Arbitrary<Outcome> = fc.oneof(
     durationMs: fc.integer({ min: 0, max: 30_000 }),
     probability: fc.double({ min: 0, max: 1, noNaN: true }),
     model: fc.option(fc.constantFrom("gpt-6-luna", "jev-latest"), { nil: undefined }),
-    preview: fc.string({ maxLength: 40 }),
+    preview: fc.string({ unit: "grapheme", maxLength: 40 }),
   }),
   fc.record({
     ok: fc.constant(false as const),
     code: fc.constantFrom("rate_limited", "timeout", "invalid_response"),
     durationMs: fc.integer({ min: 0, max: 30_000 }),
-    preview: fc.string({ maxLength: 40 }),
+    preview: fc.string({ unit: "grapheme", maxLength: 40 }),
   }),
 );
 
@@ -143,6 +143,12 @@ function readAll(record: DecisionBatchRecord, status: DecisionsRailItemFilter, l
   while (from !== undefined) {
     const page = railBatchPage(record, { status, from, limit, now, maxBytes });
     expect(page.items.length).toBeLessThanOrEqual(limit);
+    // The bound is UTF-8 bytes, what crosses IPC, so non-ASCII previews
+    // count for what they weigh. A lone item may exceed it.
+    if (page.items.length > 1) {
+      const bytes = page.items.reduce((total, item) => total + Buffer.byteLength(JSON.stringify(item)), 0);
+      expect(bytes).toBeLessThanOrEqual(maxBytes);
+    }
     if (page.nextFrom !== undefined) {
       expect(page.items.length).toBeGreaterThan(0);
       expect(page.nextFrom).toBeGreaterThan(from);

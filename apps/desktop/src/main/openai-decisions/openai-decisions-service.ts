@@ -598,7 +598,8 @@ export class OpenAIDecisionsService {
    * more items and lets the requests in flight finish, so answers already
    * paid for are kept; Cancel aborts those requests too. A batch still
    * waiting for its lane has nothing in flight, so Stop cancels it. Like
-   * the Sub-agents card's Stop, neither wakes the thread.
+   * the Sub-agents card's Stop, neither wakes the thread, except that Stop
+   * on a batch an error is already stopping leaves that error's wake-up.
    */
   async operatorBatchAction(
     caller: OpenAIDecisionCaller,
@@ -607,14 +608,18 @@ export class OpenAIDecisionsService {
   ): Promise<DecisionsRailBatchActionResult> {
     const batch = this.batches.get(caller, batchId);
     if (!batch || isFinishedBatch(batch)) return { outcome: "not_running" };
-    this.silentBatches.add(batch.batchId);
     if (action === "cancel" || batch.state === "queued") {
+      this.silentBatches.add(batch.batchId);
       batch.cancelReason ??= "cancelled from the thread";
       batch.controller.abort();
       await this.runs.get(batch.batchId);
       return { outcome: "cancelled" };
     }
-    batch.stoppedBy ??= { code: OPERATOR_STOP_CODE, message: "Stopped from the thread." };
+    // A batch an error is already stopping keeps that cause and its
+    // wake-up: the agent waiting on it needs to hear why it ended.
+    if (batch.stoppedBy) return { outcome: "stopped" };
+    batch.stoppedBy = { code: OPERATOR_STOP_CODE, message: "Stopped from the thread." };
+    this.silentBatches.add(batch.batchId);
     return { outcome: "stopped" };
   }
 
@@ -1090,7 +1095,8 @@ export class OpenAIDecisionsService {
           ? "running"
           : batch.state === "completed"
             ? "success"
-            : batch.state === "stopped"
+            // An operator's Stop is not a failure; an error's is.
+            : batch.state === "stopped" && batch.stoppedBy?.code !== OPERATOR_STOP_CODE
               ? "failed"
               : "cancelled",
         createdAt: batch.createdAt,

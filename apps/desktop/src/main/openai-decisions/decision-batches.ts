@@ -1,3 +1,4 @@
+import { DECISIONS_OPERATOR_STOP_CODE } from "@pwragent/shared";
 import {
   looksLikeCredentialText,
   type RegisteredDecisionProvider,
@@ -435,7 +436,7 @@ export function batchCardTask(record: DecisionBatchRecord): string {
  * `stoppedBy.code` when the operator pressed Stop in the Decisions tab:
  * nothing more starts, and the requests in flight finish.
  */
-export const OPERATOR_STOP_CODE = "stopped_by_operator";
+export const OPERATOR_STOP_CODE = DECISIONS_OPERATOR_STOP_CODE;
 
 /** The thread card's detail line. */
 export function batchCardMessage(record: DecisionBatchRecord): string {

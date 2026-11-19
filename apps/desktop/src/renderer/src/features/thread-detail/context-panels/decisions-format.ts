@@ -1,10 +1,11 @@
-import type {
-  DecisionsRailAnswer,
-  DecisionsRailBatch,
-  DecisionsRailDecision,
-  DecisionsRailProvider,
-  DecisionsRailQuestion,
-  DecisionsRailSnapshot,
+import {
+  DECISIONS_OPERATOR_STOP_CODE,
+  type DecisionsRailAnswer,
+  type DecisionsRailBatch,
+  type DecisionsRailDecision,
+  type DecisionsRailProvider,
+  type DecisionsRailQuestion,
+  type DecisionsRailSnapshot,
 } from "@pwragent/shared";
 import type { RailChipTone } from "./RailStatusChip";
 
@@ -77,7 +78,12 @@ export function decisionBatchStatusLabel(batch: Pick<DecisionsRailBatch, "state"
   }
 }
 
-export function decisionBatchTone(batch: Pick<DecisionsRailBatch, "state" | "failed">): RailChipTone {
+/** A batch the operator stopped, not one an error stopped. */
+export function isOperatorStoppedBatch(batch: Pick<DecisionsRailBatch, "state" | "stoppedBy">): boolean {
+  return batch.state === "stopped" && batch.stoppedBy?.code === DECISIONS_OPERATOR_STOP_CODE;
+}
+
+export function decisionBatchTone(batch: Pick<DecisionsRailBatch, "state" | "failed" | "stoppedBy">): RailChipTone {
   switch (batch.state) {
     case "queued":
     case "running":
@@ -85,7 +91,7 @@ export function decisionBatchTone(batch: Pick<DecisionsRailBatch, "state" | "fai
     case "completed":
       return batch.failed > 0 ? "warning" : "ok";
     case "stopped":
-      return "error";
+      return isOperatorStoppedBatch(batch) ? "neutral" : "error";
     case "cancelled":
       return "neutral";
   }
@@ -107,7 +113,7 @@ export function decisionBatchTimingLine(batch: DecisionsRailBatch, now: number):
   if (batch.state === "queued") {
     return `queued ${formatDecisionClock(batch.createdAt, now)} · waiting for another call on this decision`;
   }
-  if (batch.state === "stopped" && batch.stoppedBy && batch.stoppedBy.code !== "stopped_by_operator") {
+  if (batch.state === "stopped" && batch.stoppedBy && !isOperatorStoppedBatch(batch)) {
     return `${started} · ${batch.stoppedBy.code} after ${ran} ${ran === 1 ? "item" : "items"}`;
   }
   const parts = [started];

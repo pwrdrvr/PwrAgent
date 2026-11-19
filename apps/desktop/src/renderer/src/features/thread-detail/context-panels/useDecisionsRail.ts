@@ -19,8 +19,8 @@ export type DecisionsRailState = {
 
 /**
  * The selected thread's decisions and batches. It reads once when the
- * thread changes or shows new activity (a turn ending, a batch card
- * moving), which is enough to decide whether the tab shows at all. While
+ * thread changes or shows new activity (a turn starting or ending, a
+ * batch card moving), which is enough to decide whether the tab shows at all. While
  * the tab is open it also polls: every 2 s while a batch can still move,
  * every 10 s otherwise. Nothing here is persisted.
  */
@@ -40,10 +40,12 @@ export function useDecisionsRail(params: {
   const backend = thread?.source;
   const threadId = thread?.id;
   const threadKey = backend && threadId ? `${backend}:${threadId}` : undefined;
-  // A batch card changing state is the cheapest signal that a batch
-  // started or ended while the tab is closed.
+  // A turn starting or ending (a decision registered) and a batch card
+  // changing state (a batch started or ended) are the cheap signals that
+  // the tab's content moved while it is closed. updatedAt is not: it moves
+  // on every summary update of a busy thread.
   const activityKey = [
-    thread?.updatedAt ?? "",
+    thread?.threadStatus ?? "",
     ...(thread?.subAgents ?? [])
       .filter((subAgent) => decisionBatchIdFromSubAgentId(subAgent.monitorId) !== undefined)
       .map((subAgent) => `${subAgent.monitorId}:${subAgent.status}`),

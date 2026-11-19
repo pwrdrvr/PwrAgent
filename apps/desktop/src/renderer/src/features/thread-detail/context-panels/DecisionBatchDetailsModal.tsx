@@ -62,7 +62,6 @@ export function DecisionBatchDetailsModal(props: DecisionBatchDetailsModalProps)
   const read = props.desktopApi?.readDecisionsRailBatch;
   const { backend, threadId } = props.thread;
   const batchId = props.batch.batchId;
-  const pageKey = `${filter}:${limit}`;
   const batch = page?.batch ?? props.batch;
   const running = isDecisionBatchRunning(batch);
 
@@ -70,8 +69,11 @@ export function DecisionBatchDetailsModal(props: DecisionBatchDetailsModalProps)
     if (!read) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const pageKey = `${filter}:${limit}`;
+    // Until a read says otherwise, the batch is as running as the tab last
+    // saw it, so a failed read retries instead of freezing the dialog.
+    let stillRunning = isDecisionBatchRunning(props.batch);
     const load = async (): Promise<void> => {
-      let stillRunning = false;
       try {
         const next = await read({ backend, threadId, batchId, status: filter, from: 0, limit });
         stillRunning = isDecisionBatchRunning(next.batch);
@@ -90,7 +92,9 @@ export function DecisionBatchDetailsModal(props: DecisionBatchDetailsModalProps)
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [backend, batchId, filter, limit, pageKey, read, refreshToken, threadId]);
+    // props.batch seeds the first poll only; the dialog's own reads take over.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backend, batchId, filter, limit, read, refreshToken, threadId]);
 
   const act = async (action: "stop" | "cancel"): Promise<void> => {
     const run = props.desktopApi?.actOnDecisionsRailBatch;

@@ -95,7 +95,7 @@ export function railBatchPage(
     const item = record.results[index];
     if (!item || !matchesRailFilter(item, params.status)) continue;
     const view = railItem(item);
-    const size = JSON.stringify(view).length;
+    const size = Buffer.byteLength(JSON.stringify(view));
     if (items.length >= limit || (items.length > 0 && bytes + size > maxBytes)) {
       return { batch: railBatch(record, params.now), items, nextFrom: index };
     }

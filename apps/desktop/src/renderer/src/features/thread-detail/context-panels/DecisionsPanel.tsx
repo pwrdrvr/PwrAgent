@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   DecisionsRailBatch,
   DecisionsRailDecision,
@@ -46,6 +46,21 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
   const snapshot = props.snapshot;
   const now = snapshot?.now ?? Date.now();
   const detailsBatch = detailsFor ? snapshot?.batches.find((batch) => batch.batchId === detailsFor) : undefined;
+  const onDetailsModalOpenChange = props.onDetailsModalOpenChange;
+
+  useEffect(() => {
+    return () => onDetailsModalOpenChange?.(false);
+  }, [onDetailsModalOpenChange]);
+
+  // The open batch can leave the snapshot under the dialog (a thread
+  // switch, the tab hiding). Release the rail's pinned-open state rather
+  // than stranding it.
+  const detailsMissing = detailsFor !== undefined && detailsBatch === undefined;
+  useEffect(() => {
+    if (!detailsMissing) return;
+    setDetailsFor(undefined);
+    onDetailsModalOpenChange?.(false);
+  }, [detailsMissing, onDetailsModalOpenChange]);
 
   const toggle = (decisionId: string): void => {
     setExpanded((current) => {
@@ -57,11 +72,11 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
   };
   const openDetails = (batchId: string): void => {
     setDetailsFor(batchId);
-    props.onDetailsModalOpenChange?.(true);
+    onDetailsModalOpenChange?.(true);
   };
   const closeDetails = (): void => {
     setDetailsFor(undefined);
-    props.onDetailsModalOpenChange?.(false);
+    onDetailsModalOpenChange?.(false);
   };
   const stop = async (batch: DecisionsRailBatch): Promise<void> => {
     const act = props.desktopApi?.actOnDecisionsRailBatch;

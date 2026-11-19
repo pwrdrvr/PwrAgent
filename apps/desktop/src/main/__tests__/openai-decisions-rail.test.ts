@@ -101,8 +101,9 @@ describe("Decisions tab: Stop and Cancel", () => {
 
     for (const gate of gates) gate.release();
     await expect.poll(async () => (await service.railSnapshot(CALLER)).batches[0]!.state).toBe("stopped");
-    // The card's last write follows the state change.
-    await expect.poll(() => cards.at(-1)?.status).toBe("failed");
+    // The card's last write follows the state change. An operator's Stop
+    // is not a failure, so the Sub-agents card does not read as one.
+    await expect.poll(() => cards.at(-1)?.status).toBe("cancelled");
     const batch = (await service.railSnapshot(CALLER)).batches[0]!;
     expect(gates.every((gate) => !gate.aborted)).toBe(true);
     expect(gates).toHaveLength(2);
@@ -122,6 +123,27 @@ describe("Decisions tab: Stop and Cancel", () => {
     expect(batch).toMatchObject({ state: "cancelled", succeeded: 0, cancelReason: "cancelled from the thread" });
     expect(await service.operatorBatchAction(CALLER, started.batchId, "cancel")).toEqual({ outcome: "not_running" });
     expect(wakes).toEqual([]);
+  });
+
+  // Rule: Stop is silent only when it is what stopped the batch. A batch an
+  // error is already stopping keeps that error and its wake-up, because the
+  // agent that ended its turn waiting on it must hear why it ended.
+  it("a Stop on a batch an error is already stopping keeps the error and the wake-up", async () => {
+    const releases: Array<() => void> = [];
+    const fetch: typeof globalThis.fetch = async (_url, init) => {
+      if (jevIndex(init) === 0) return json({ detail: "bad key" }, 401);
+      await new Promise<void>((resolve) => { releases.push(resolve); });
+      return json({ model: "jev-latest", answers: { bar: { noul: 0.9 } } });
+    };
+    const service = makeService(fetch);
+    const started = await service.invoke(CALLER, { definition: JEV, inputs: inputs(10), concurrency: 2, background: true }) as { batchId: string };
+    await expect.poll(async () => (await service.railSnapshot(CALLER)).batches[0]!.stoppedBy?.code).toBe("credential_rejected");
+    await expect.poll(() => releases.length).toBe(1);
+    expect(await service.operatorBatchAction(CALLER, started.batchId, "stop")).toEqual({ outcome: "stopped" });
+    for (const release of releases) release();
+    await expect.poll(() => wakes).toEqual([started.batchId]);
+    expect((await service.railSnapshot(CALLER)).batches[0]).toMatchObject({ state: "stopped", stoppedBy: { code: "credential_rejected" } });
+    await expect.poll(() => cards.at(-1)?.status).toBe("failed");
   });
 
   it("a Stop after every item started stopped nothing: the batch completes and wakes its thread", async () => {

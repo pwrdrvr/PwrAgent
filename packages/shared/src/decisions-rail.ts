@@ -139,5 +139,8 @@ export type DecisionsRailOpenResultsRequest = DecisionsRailThreadRequest & { bat
 
 export type DecisionsRailOpenResultsResult = { opened: boolean; error?: string };
 
+/** stoppedBy.code of a batch the operator stopped from the thread, as opposed to one an error stopped. */
+export const DECISIONS_OPERATOR_STOP_CODE = "stopped_by_operator";
+
 /** Items in one Decisions tab page. */
 export const DECISIONS_RAIL_PAGE_MAX_ITEMS = 500;

@@ -105,23 +105,28 @@ function page(request: DecisionsRailBatchRequest): DecisionsRailBatchPage {
   };
 }
 
-function renderPanel(overrides: { snapshot?: DecisionsRailSnapshot } = {}) {
-  const readDecisionsRailBatch = vi.fn(async (request: DecisionsRailBatchRequest) => page(request));
+function renderPanel(overrides: {
+  snapshot?: DecisionsRailSnapshot;
+  readDecisionsRailBatch?: (request: DecisionsRailBatchRequest) => Promise<DecisionsRailBatchPage>;
+} = {}) {
+  const readDecisionsRailBatch = vi.fn(overrides.readDecisionsRailBatch ?? (async (request: DecisionsRailBatchRequest) => page(request)));
   const actOnDecisionsRailBatch = vi.fn(async () => ({ outcome: "stopped" as const }));
   const openDecisionsRailResults = vi.fn(async () => ({ opened: true }));
   const onRefresh = vi.fn();
   const onDetailsModalOpenChange = vi.fn();
-  render(
+  const panel = (next: DecisionsRailSnapshot | undefined) => (
     <DecisionsPanel
       desktopApi={{ readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults }}
       thread={THREAD}
-      snapshot={overrides.snapshot ?? snapshot}
+      snapshot={next}
       error={false}
       onRefresh={onRefresh}
       onDetailsModalOpenChange={onDetailsModalOpenChange}
-    />,
+    />
   );
-  return { readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults, onRefresh, onDetailsModalOpenChange };
+  const view = render(panel(overrides.snapshot ?? snapshot));
+  const rerender = (next: DecisionsRailSnapshot | undefined) => view.rerender(panel(next));
+  return { readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults, onRefresh, onDetailsModalOpenChange, rerender, unmount: view.unmount };
 }
 
 it("lists registered decisions and marks one whose provider is off", () => {
@@ -197,3 +202,41 @@ it("says so when the thread has no decisions and no batches", () => {
   expect(screen.getByText(/No decisions are visible to this thread/)).toBeInTheDocument();
   expect(screen.getByText("This thread has not run a decision batch.")).toBeInTheDocument();
 });
+
+// Rule: whenever the batch dialog is gone, the rail hears it closed, or the
+// hover rail stays pinned open with nothing on it.
+it("releases the rail when the open batch leaves the snapshot or the panel unmounts", async () => {
+  const api = renderPanel();
+  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  await screen.findByRole("dialog");
+  expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(true);
+
+  // A thread switch: the new thread's snapshot has not arrived yet.
+  api.rerender(undefined);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
+
+  api.rerender(snapshot);
+  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  await screen.findByRole("dialog");
+  api.onDetailsModalOpenChange.mockClear();
+  api.unmount();
+  expect(api.onDetailsModalOpenChange).toHaveBeenCalledWith(false);
+});
+
+// Rule: one failed read does not freeze a running batch's dialog; the next
+// poll reads again.
+it("keeps polling a running batch after a failed read", async () => {
+  let calls = 0;
+  const api = renderPanel({
+    readDecisionsRailBatch: async (request) => {
+      calls += 1;
+      if (calls === 1) throw new Error("ipc hiccup");
+      return page(request);
+    },
+  });
+  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("{\"title\":\"Sidebar flickers when a thread finishes\"}", undefined, { timeout: 4_000 });
+  expect(api.readDecisionsRailBatch).toHaveBeenCalledTimes(2);
+}, 10_000);
