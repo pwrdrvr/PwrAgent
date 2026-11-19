@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { compareFailures, getPrDiff, listE2eFiles, planImpact } from "./pr-test-impact.mjs";
+import { compareFailures, describeLinuxEvidence, getPrDiff, listE2eFiles, planImpact } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const directory = ".local/ci/pr-test-impact";
@@ -15,7 +15,7 @@ try {
 } catch (error) {
   diff = { fallback: "could not read or verify PR diff", detail: error.message };
 }
-const e2eFiles = listE2eFiles(root);
+const e2eFiles = () => listE2eFiles(root);
 const wallMs = (since) => Math.round(performance.now() - since);
 const configure = (unit) => ({ unit, e2eFiles });
 let plan;
@@ -72,7 +72,7 @@ const rows = [
   "",
   `- Linux Vitest: ${size(plan.unit)}`,
   `- Linux Desktop E2E: ${size(plan.e2e)}`,
-  `- Observed Linux failures covered/missed/unknown: ${observed.unavailable ? "evidence unavailable" : `${observed.covered}/${observed.missed}/${observed.unknown}`}`,
+  `- Observed Linux failures covered/missed/unknown: ${describeLinuxEvidence(observed)}`,
   ...samples.map((sample) => `- Replay #${sample.pr} on this checkout: ${size(sample.unit)} (${sample.plannerWallMs} ms)`),
   ...historical.map((sample) => `- Red run ${sample.runId}: ${sample.observed.covered}/${sample.observed.cases.length} observed Linux failures covered`),
   "",

@@ -1,4 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 
 const sourcePath = /^(?:apps\/desktop\/src|packages\/.+\/src)\/.+\.[cm]?[jt]sx?$/;
 const e2eDirectory = "apps/desktop/e2e/";
@@ -68,16 +72,24 @@ export function wholeSuiteReason(files) {
   return undefined;
 }
 
-export async function planImpact(files, { fallback, unit, e2eFiles }) {
+export async function planImpact(files, { fallback, unit, e2eFiles = listE2eFiles }) {
   const reason = fallback ?? wholeSuiteReason(files);
   if (reason) return { unit: full(reason), e2e: full(reason) };
 
   const changed = files.map(({ file }) => file).sort();
-  const e2e = changed.every((file) => e2eSpec.test(file) && e2eFiles.includes(file))
-    ? { mode: "selected", total: e2eFiles.length, selected: changed.map((file) => ({ file, reasons: ["edited spec"] })) }
-    : full(changed.some((file) => !file.startsWith(e2eDirectory))
-      ? "application impact has no explicit Playwright spec owner"
-      : "non-spec Playwright input or unrecognized spec");
+  let e2e = full(changed.some((file) => !file.startsWith(e2eDirectory))
+    ? "application impact has no explicit Playwright spec owner"
+    : "non-spec Playwright input or unrecognized spec");
+  if (changed.every((file) => e2eSpec.test(file))) {
+    try {
+      const inventory = await e2eFiles();
+      e2e = changed.every((file) => inventory.includes(file))
+        ? { mode: "selected", total: inventory.length, selected: changed.map((file) => ({ file, reasons: ["edited spec"] })) }
+        : full("edited spec is absent from Playwright collection");
+    } catch (error) {
+      e2e = { ...full("Playwright collection failed"), detail: error.message };
+    }
+  }
 
   if (changed.some((file) => !sourcePath.test(file)) || changed.length > 6) {
     return { e2e, unit: full("unsupported unit input or more than six changed source files") };
@@ -89,9 +101,33 @@ export async function planImpact(files, { fallback, unit, e2eFiles }) {
   }
 }
 
-export function listE2eFiles(root) {
-  return git(root, "ls-tree", "-rz", "--name-only", "HEAD", "--", e2eDirectory)
-    .split("\0").filter((file) => e2eSpec.test(file)).sort();
+export function listE2eFiles(root = process.cwd(), config = "apps/desktop/playwright.config.ts") {
+  const cli = createRequire(new URL("../../apps/desktop/package.json", import.meta.url)).resolve("@playwright/test/cli");
+  const configFile = path.resolve(root, config);
+  const directory = mkdtempSync(path.join(os.tmpdir(), "pr-impact-playwright-"));
+  const output = path.join(directory, "collected.json");
+  try {
+    execFileSync(process.execPath, [cli, "test", "--list", "--reporter=json", "--config", configFile], {
+      cwd: path.dirname(configFile), env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_FILE: output },
+      timeout: 60_000, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const { config: { rootDir }, suites, errors } = JSON.parse(readFileSync(output, "utf8"));
+    if (errors.length || !suites.length || !path.isAbsolute(rootDir)) throw new Error("Missing or incomplete Playwright collection");
+    return [...new Set(suites.map(({ file }) => path.relative(root, path.resolve(rootDir, file)).split(path.sep).join("/")))].sort();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+export function describeLinuxEvidence(observed) {
+  if (observed.unavailable) return "evidence unavailable";
+  const counts = `${observed.covered}/${observed.missed}/${observed.unknown}`;
+  const missing = observed.missingLinuxSlices;
+  const incomplete = observed.incompleteLinuxSlices.length;
+  const errors = observed.linuxSlicesWithErrors.length;
+  return missing || incomplete || errors
+    ? `${counts} (partial evidence: ${missing} missing, ${incomplete} incomplete, ${errors} with errors)`
+    : counts;
 }
 
 const testKey = ({ project, file }) => JSON.stringify([project, file]);

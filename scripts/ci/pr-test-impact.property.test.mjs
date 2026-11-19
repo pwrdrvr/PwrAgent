@@ -1,9 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { compareFailures, getPrDiff, planImpact } from "./pr-test-impact.mjs";
+import { compareFailures, describeLinuxEvidence, getPrDiff, listE2eFiles, planImpact } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const source = "packages/shared/src/";
@@ -79,12 +80,12 @@ it("treats unsupported changes as full suite even alongside a recognizable chang
     { file: `${source}dependency.mjs`, status: "T" },
   ];
   for (const change of inputs) {
-    const result = await planImpact([...changes(spec), change], { e2eFiles: [spec] });
+    const result = await planImpact([...changes(spec), change], { e2eFiles: () => [spec] });
     expect([result.unit.mode, result.e2e.mode], JSON.stringify(change)).toEqual(["full", "full"]);
   }
-  const edited = await planImpact(changes(spec), { e2eFiles: [spec, "apps/desktop/e2e/unrelated.spec.ts"] });
+  const edited = await planImpact(changes(spec), { e2eFiles: () => [spec, "apps/desktop/e2e/unrelated.spec.ts"] });
   expect(edited.e2e.selected.map(({ file }) => file)).toEqual([spec]);
-  const application = await planImpact(changes(`${source}dependency.mjs`), { e2eFiles: [spec], unit: () => { throw new Error("broken"); } });
+  const application = await planImpact(changes(`${source}dependency.mjs`), { unit: () => { throw new Error("broken"); } });
   expect(application.e2e.mode).toBe("full");
   expect(application.unit.reason).toBe("Vitest planner error");
 });
@@ -126,7 +127,7 @@ it("checks native Node failures against the Vitest graph and widens for disk-onl
     expect(observed).toEqual([files.owner, files.mixedOwner]);
 
     await withVitestImpact(root, async (unit) => {
-      const options = { unit, e2eFiles: [spec] };
+      const options = { unit };
       const staticPlan = await planImpact(changes(files.changed), options);
       expect(staticPlan.unit.selected?.map(({ file }) => file)).toEqual([files.owner]);
       expect(staticPlan.unit.total).toBe(5);
@@ -150,6 +151,61 @@ it("checks native Node failures against the Vitest graph and widens for disk-onl
   });
 }, 30_000);
 
+it("widens when native execution fails to resolve a static import despite another test owning the changed file", async () => {
+  await temporaryTree(async (root, write) => {
+    const changed = `${source}dependency.mjs`;
+    const broken = `${source}broken.test.mjs`;
+    write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
+    write(changed, "export default 1;");
+    write(`${source}owner.test.mjs`, 'import "./dependency.mjs";');
+    write(broken, 'import "./missing.mjs";');
+    const actual = spawnSync(process.execPath, [broken], { cwd: root, encoding: "utf8" });
+    expect(actual.status).not.toBe(0);
+    expect(actual.stderr).toContain("ERR_MODULE_NOT_FOUND");
+    await withVitestImpact(root, async (unit) => {
+      const plan = await planImpact(changes(changed), { unit });
+      expect(plan.unit).toMatchObject({
+        mode: "full", reason: "unresolved static import in Vitest graph", specifier: "./missing.mjs",
+      });
+    }, "fixture.config.mjs");
+  });
+}, 30_000);
+
+it("widens for an aliased createRequire loader with a computed specifier", async () => {
+  await temporaryTree(async (root, write) => {
+    const changed = `${source}loader.mjs`;
+    write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
+    write(`${source}value.cjs`, "module.exports = 1;");
+    write(changed, 'import { createRequire as makeLoader } from "node:module"; const load = makeLoader(import.meta.url); export const value = (name) => load(name);');
+    const owner = `${source}owner.test.mjs`;
+    write(owner, 'import assert from "node:assert/strict"; import { value } from "./loader.mjs"; assert.equal(value("./value.cjs"), 1);');
+    expect(spawnSync(process.execPath, [owner], { cwd: root }).status).toBe(0);
+    await withVitestImpact(root, async (unit) => {
+      expect((await planImpact(changes(changed), { unit })).unit).toMatchObject({
+        mode: "full", reason: "computed import in changed source", file: changed,
+      });
+    }, "fixture.config.mjs");
+  });
+}, 30_000);
+
+it("uses Playwright's collected specs and widens when registration is absent or collection fails", async () => {
+  await temporaryTree(async (root, write) => {
+    const config = "apps/desktop/playwright.config.cjs";
+    const playwright = createRequire(new URL("../../apps/desktop/package.json", import.meta.url)).resolve("@playwright/test");
+    const other = "apps/desktop/e2e/other.spec.ts";
+    const register = `const { test } = require(${JSON.stringify(playwright)}); test("collected", () => {});`;
+    write(config, 'module.exports = { testDir: "./e2e" };');
+    write(spec, register);
+    write(other, register);
+    const e2eFiles = () => listE2eFiles(root, config);
+    expect((await planImpact(changes(spec), { e2eFiles })).e2e).toMatchObject({ mode: "selected", total: 2, selected: [{ file: spec }] });
+    write(spec, "export {};");
+    expect((await planImpact(changes(spec), { e2eFiles })).e2e).toMatchObject({ mode: "full", reason: "edited spec is absent from Playwright collection" });
+    write(spec, 'throw new Error("failed while collecting");');
+    expect((await planImpact(changes(spec), { e2eFiles })).e2e).toMatchObject({ mode: "full", reason: "Playwright collection failed" });
+  });
+}, 30_000);
+
 it("counts omitted failures by exact project/file and leaves missing evidence visible", () => {
   const result = compareFailures({
     unit: { mode: "selected", selected: [{ project: "shared", file: "a.test.ts" }] },
@@ -167,4 +223,10 @@ it("counts omitted failures by exact project/file and leaves missing evidence vi
   });
   expect(result).toMatchObject({ covered: 2, missed: 2, unknown: 1, missingLinuxSlices: 1,
     incompleteLinuxSlices: ["e2e-linux-1"], linuxSlicesWithErrors: ["e2e-linux-1"] });
+  expect(describeLinuxEvidence({ ...result, covered: 0, missed: 0, unknown: 0 }))
+    .toBe("0/0/0 (partial evidence: 1 missing, 1 incomplete, 1 with errors)");
+  expect(describeLinuxEvidence({
+    ...result, covered: 0, missed: 0, unknown: 0, missingLinuxSlices: 0,
+    incompleteLinuxSlices: [], linuxSlicesWithErrors: [],
+  })).toBe("0/0/0");
 });

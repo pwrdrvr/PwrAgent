@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import path from "node:path";
 import ts from "typescript";
 import { createVitest } from "vitest/node";
 
 function hasOpaqueImport(source) {
   function visit(node) {
+    // A createRequire loader can escape, be aliased, or load a literal that
+    // Vite will never see. Widen as soon as changed code references it.
+    if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === "createRequire") return true;
     if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const isImport = callee.kind === ts.SyntaxKind.ImportKeyword
@@ -14,6 +18,26 @@ function hasOpaqueImport(source) {
     return ts.forEachChild(node, visit);
   }
   return visit(source);
+}
+
+async function findUnresolvedStaticImport(projects) {
+  for (const project of projects) {
+    for (const environment of Object.values(project.vite.environments)) {
+      for (const module of environment.moduleGraph.idToModuleMap.values()) {
+        const deps = module.transformResult?.deps;
+        if (!module.file || !deps?.length) continue;
+        const linked = new Set([...module.importedModules].flatMap(({ id, url }) => [id, url]));
+        for (const specifier of deps) {
+          if ((!specifier.startsWith(".") && linked.has(specifier)) || isBuiltin(specifier) || /^(?:https?:|data:)/.test(specifier)) continue;
+          // SSR can preserve an unresolved static specifier without throwing.
+          // External dependencies also lack an edge, so ask Vite to resolve
+          // only the specifiers that the transform did not link.
+          const resolved = await environment.pluginContainer.resolveId(specifier, module.id);
+          if (!resolved || resolved.meta?.["vite:alias"]?.noResolved) return { specifier, importer: module.file };
+        }
+      }
+    }
+  }
 }
 
 export async function withVitestImpact(root, callback, config = "vitest.linux-ci.ts") {
@@ -35,6 +59,7 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
     // The pinned Vitest considers transform errors affected even when no real
     // source is related. Never count those tests as evidence of graph coverage.
     let baseline;
+    let unresolved;
     const select = async (changed) => {
       if (!specs.length || new Set(specs.map(keyOf)).size !== specs.length) {
         return { mode: "full", reason: "missing or ambiguous Vitest test inventory" };
@@ -43,8 +68,12 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
         const source = ts.createSourceFile(file, readFileSync(path.join(root, file), "utf8"), ts.ScriptTarget.Latest, true);
         if (hasOpaqueImport(source)) return { mode: "full", reason: "computed import in changed source", file };
       }
-      baseline ??= await related(".local/ci/nonexistent-impact-graph-control");
+      if (!baseline) {
+        baseline = await related(".local/ci/nonexistent-impact-graph-control");
+        if (!baseline.length) unresolved = await findUnresolvedStaticImport(ctx.projects);
+      }
       if (baseline.length) return { mode: "full", reason: "Vitest graph has unrelated transform or resolution errors", tests: baseline.length };
+      if (unresolved) return { mode: "full", reason: "unresolved static import in Vitest graph", ...unresolved };
 
       const selected = new Map();
       for (const file of changed) {

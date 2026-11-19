@@ -15,11 +15,14 @@ though the PR file list omits it.
 
 Linux Vitest uses the pinned runner's static related-file graph and records
 why each project and file was selected. It requires a graph witness for every
-supported changed path. An empty result, unresolved transform, or opaque
-import in changed source falls back to the full suite. Other full-suite inputs
+supported changed path. An empty result, unresolved static import or transform,
+or opaque import in changed source falls back to the full suite. References
+to Node's `createRequire` also widen the plan. Other full-suite inputs
 include deletes and renames, configuration, dependencies, fixtures, snapshots,
 generated inputs, platform-specific paths, and large or unfamiliar diffs.
-Playwright reports a narrower plan only for recognized edits to active specs.
+For spec-only diffs, Playwright lists tests using the desktop CI config.
+An edited spec must contain at least one collected test to enter a narrower
+plan. Collection errors also trigger the full plan.
 Product code has no complete map to Playwright spec owners, so those changes
 keep the full E2E plan.
 
