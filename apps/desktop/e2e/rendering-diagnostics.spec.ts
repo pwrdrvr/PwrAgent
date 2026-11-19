@@ -384,7 +384,7 @@ test("production usage warning settles without sustaining compositor frames", as
 });
 
 test("status dots dip from one shared timer and leave offscreen dots still", async () => {
-  // Four captures, 22 seconds of tracing in all.
+  // Five captures, 25 seconds of tracing in all.
   test.setTimeout(90_000);
   const app = await launchElectronApp({
     fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
@@ -483,18 +483,21 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
     });
     await expect.poll(() => dots.evaluateAll((elements) =>
       elements.every((element) => element.getBoundingClientRect().bottom < 0))).toBe(true);
+    const formerOffscreen = await capture(3);
     await app.window.evaluate(() => document.getElementById("former-blink")!.remove());
     const pulsesOffscreen = await capture(5);
 
     console.log(JSON.stringify({ statusPulseFramesPerSecond: {
-      still, pulses, formerLoop, pulsesOffscreen,
+      still, pulses, formerLoop, formerOffscreen, pulsesOffscreen,
     } }, (key, value) => key === "animations" ? undefined : value));
 
     // The dips draw, and the compositor sleeps between them.
     expect(pulses.drawFrames).toBeGreaterThan(still.drawFrames + 5);
     expect(formerLoop.beginFrames).toBeGreaterThan(pulses.beginFrames * 1.6);
-    // Offscreen dots stay within the resting compositor budget and never
-    // start their pulse animation.
+    // Offscreen, the former loop drew nothing and still woke every refresh;
+    // the shared timer starts no animation there at all.
+    expect(formerOffscreen.beginFrames).toBeGreaterThan(30);
+    expect(formerOffscreen.beginFrames).toBeGreaterThan(pulsesOffscreen.beginFrames * 4);
     expect(pulsesOffscreen.beginFrames).toBeLessThanOrEqual(still.beginFrames + 3);
     expect(pulsesOffscreen.animations.some(([name]) => name === "status-blink")).toBe(false);
   } finally {
