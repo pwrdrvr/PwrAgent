@@ -4264,6 +4264,7 @@ export class DesktopBackendRegistry {
   }
 
   async accessAgentMemorySettings(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
+    this.assertNotBootstrap("accessAgentMemorySettings");
     const { operation } = request;
     if (!isAgentMemoryRead(operation) && !(operation && typeof operation === "object" && "revision" in operation && operation.revision)) {
       throw new AgentMemoryError("invalid_arguments", "Read the file before saving Agent memory.");

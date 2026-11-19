@@ -578,6 +578,34 @@ describe("federation backend bridge", () => {
     }
   });
 
+  it.each([true, false])("keeps Agent memory read and write grants separate (%s)", async (canWrite) => {
+    const accessAgentMemory = vi.fn(async () => ({ content: "fixture", revision: "revision", exists: true }));
+    const router = new FederationRouter({
+      localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); },
+    });
+    router.registerConnection({
+      peerId: "viewer", capabilities: canWrite ? ["thread_detail", "turn_control"] : ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: { accessAgentMemory } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    const identity = { backend: "codex", threadId: "agent" } as const;
+    const read = { ...identity, operation: { action: "read_index" } } as const;
+    const write = { ...identity, operation: { action: "write_index", content: "update", revision: "revision" } } as const;
+    await expect(client.accessAgentMemory(read)).resolves.toMatchObject({ content: "fixture" });
+    await expect(rpc.request({ method: FEDERATION_BACKEND_METHODS.readAgentMemory, params: write })).rejects.toThrow();
+    if (canWrite) {
+      await expect(client.accessAgentMemory(write)).resolves.toMatchObject({ content: "fixture" });
+    } else {
+      await expect(client.accessAgentMemory(write)).rejects.toThrow();
+    }
+    expect(accessAgentMemory.mock.calls).toEqual(canWrite ? [[read], [write]] : [[read]]);
+  });
+
   it("fails closed with an actionable explanation on older owners", async () => {
     const request = vi.fn(async () => { throw Object.assign(new Error("No handler"), { code: "method_not_found" }); });
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);

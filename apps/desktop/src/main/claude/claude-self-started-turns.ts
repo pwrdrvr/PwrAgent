@@ -51,6 +51,7 @@ export function claudeSelfStartedTurn(
  */
 export function claudeSelfStartedTurnHooks(
   hold: (input: UserPromptSubmitHookInput) => Promise<boolean>,
+  readAgentMemory?: () => Promise<string | undefined>,
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
   return {
     UserPromptSubmit: [{
@@ -62,13 +63,15 @@ export function claudeSelfStartedTurnHooks(
         } catch {
           held = false;
         }
-        return held
-          ? {
-              decision: "block" as const,
-              reason: CLAUDE_SELF_STARTED_TURN_HELD_REASON,
-              hookSpecificOutput: { hookEventName: "UserPromptSubmit" as const, suppressOriginalPrompt: true },
-            }
-          : {};
+        if (held) {
+          return {
+            decision: "block" as const,
+            reason: CLAUDE_SELF_STARTED_TURN_HELD_REASON,
+            hookSpecificOutput: { hookEventName: "UserPromptSubmit" as const, suppressOriginalPrompt: true },
+          };
+        }
+        const context = readAgentMemory ? await readAgentMemory() : undefined;
+        return context ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } } : {};
       }],
     }],
   };

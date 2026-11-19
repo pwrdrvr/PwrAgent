@@ -1219,13 +1219,10 @@ export class ClaudeBackend {
         // Claude's own wake-ups and crons keep this process, which runs them, open.
         // A lock holds a turn Claude starts on its own until the thread is unlocked.
         hooks: mergeClaudeHooks(
-          claudeSelfStartedTurnHooks(async (input) => await this.holdSelfStartedTurn(current, input)),
-          { UserPromptSubmit: [{
-            hooks: [async () => {
-              const context = await params.readAgentMemory?.();
-              return context ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } } : {};
-            }],
-          }] },
+          claudeSelfStartedTurnHooks(
+            async (input) => await this.holdSelfStartedTurn(current, input),
+            params.readAgentMemory,
+          ),
           claudeReportFindingsHooks(),
           claudeMonitorSuggestionHooks(async (request) => {
             const turnId = current.turn?.turnId;

@@ -2250,7 +2250,7 @@ export class AcpAgentClient {
           this.options.backendId,
           params.sessionId,
         )?.agentInstructionsDigest;
-      const memory = await params.readAgentMemory?.();
+      const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
       if (activeTurn && memory) activeTurn.sentAgentMemory = true;
       const result = await this.options.transport.request(
         "session/prompt",
