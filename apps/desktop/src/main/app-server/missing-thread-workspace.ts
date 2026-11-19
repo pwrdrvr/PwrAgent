@@ -1,10 +1,11 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import type {
-  AppServerThreadSummary,
-  LinkedDirectorySummary,
-  ThreadHibernatedWorkspace,
-  ThreadMissingWorkspace,
+import {
+  isWorkspaceHandoffDirectory,
+  type AppServerThreadSummary,
+  type LinkedDirectorySummary,
+  type ThreadHibernatedWorkspace,
+  type ThreadMissingWorkspace,
 } from "@pwragent/shared";
 
 export type MissingThreadWorkspaceProbe = {
@@ -36,8 +37,11 @@ function samePath(left: string, right: string): boolean {
 export function primaryThreadWorktree(
   thread: Pick<AppServerThreadSummary, "linkedDirectories">,
 ): (LinkedDirectorySummary & { worktreePath: string }) | undefined {
-  const directory = thread.linkedDirectories.find((candidate) => candidate.kind === "worktree");
-  return directory?.worktreePath ? { ...directory, worktreePath: directory.worktreePath } : undefined;
+  const directory = thread.linkedDirectories.find(isWorkspaceHandoffDirectory)
+    ?? thread.linkedDirectories.find((candidate) => candidate.kind === "worktree");
+  return directory?.kind === "worktree" && directory.worktreePath
+    ? { ...directory, worktreePath: directory.worktreePath }
+    : undefined;
 }
 
 /**

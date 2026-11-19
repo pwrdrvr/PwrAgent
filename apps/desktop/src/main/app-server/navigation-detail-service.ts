@@ -24,7 +24,8 @@ import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
-import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace } from "./missing-thread-workspace";
+import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
+import { normalizeWorktreePathForComparison } from "./linked-directory-identity";
 import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -311,12 +312,15 @@ export class NavigationDetailService {
     const activePrWatchesRead = getDesktopOverlayStore().listActiveThreadPrStatusWatches({ backend: summary.source, threadId: summary.id });
     // A hibernated checkout is not missing until a restore of it has failed.
     const checkoutHibernation = this.registry.readCheckoutHibernation({ backend: summary.source, threadId: summary.id });
+    const worktreePath = primaryThreadWorktree(thread)?.worktreePath;
+    const failedRestorePath = checkoutHibernation.restoreFailure?.worktreePath;
     const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
       detectMissingThreadWorkspace(thread, {
         readBranch: async (repositoryPath) =>
           (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
-        includeHibernated: checkoutHibernation.restoreFailure !== undefined,
+        includeHibernated: Boolean(worktreePath && failedRestorePath
+          && normalizeWorktreePathForComparison(worktreePath) === normalizeWorktreePathForComparison(failedRestorePath)),
       }),
       getDesktopOverlayStore().listActiveThreadSubAgents({ backend: summary.source, threadId: summary.id }),
       activePrWatchesRead,

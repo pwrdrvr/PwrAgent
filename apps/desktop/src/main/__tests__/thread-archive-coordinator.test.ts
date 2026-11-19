@@ -6,6 +6,7 @@ import {
   type AgentEvent,
   type AppServerBackendKind,
   type AppServerThreadSummary,
+  type LinkedDirectorySummary,
   type ThreadOverlayState,
   type WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -46,10 +47,15 @@ function snapshot(state: "hibernated" | "restored"): WorktreeSnapshotSummary {
  */
 function hibernationFixture(outcomes: Array<string | undefined>, restoreOn: "send" | "open" = "send") {
   let hibernated = true;
+  let handoff: LinkedDirectorySummary | undefined;
+  const originalDirectory: LinkedDirectorySummary = {
+    id: "original", kind: "worktree", label: "repository", path: "/contrived/repository", worktreePath,
+  };
   const attempts: number[] = [];
   const store = {
     getThreadOverlayState: async (): Promise<ThreadOverlayState> => ({
       backend: identity.backend, threadId: identity.threadId,
+      extraLinkedDirectories: handoff ? [handoff] : [],
       worktreeSnapshots: [snapshot(hibernated ? "hibernated" : "restored")],
     } as ThreadOverlayState),
     upsertWorktreeSnapshot: async (params: { snapshot: WorktreeSnapshotSummary }) => {
@@ -59,7 +65,7 @@ function hibernationFixture(outcomes: Array<string | undefined>, restoreOn: "sen
   let gate: Promise<void> = Promise.resolve();
   const host = {
     runtimeInstanceId: "runtime-test",
-    getCachedThreadSummary: () => undefined,
+    getCachedThreadSummary: () => ({ linkedDirectories: [originalDirectory] }),
     invalidateThreadListCache: () => {},
     publishLocalEvent: async () => {},
     threadInfoStore: { invalidateSummaries: () => {} },
@@ -82,6 +88,7 @@ function hibernationFixture(outcomes: Array<string | undefined>, restoreOn: "sen
     coordinator,
     attempts: () => attempts.length,
     hibernated: () => hibernated,
+    move(directory: LinkedDirectorySummary) { handoff = directory; },
     hold(): () => void {
       let release!: () => void;
       gate = new Promise<void>((resolve) => { release = resolve; });
@@ -99,6 +106,43 @@ async function settleRestore(coordinator: ThreadArchiveCoordinator): Promise<voi
 type Operation = "send" | "wake" | "open" | "restoreNow";
 
 describe("hibernated checkout restore", () => {
+  // A workspace move leaves the former checkout's checkpoint available for
+  // recovery, but only the current working checkout can gate a turn.
+  it("ignores a former checkout on every auto-restore entry point after a move (property)", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("local", "worktree"),
+      fc.boolean(),
+      fc.shuffledSubarray(["send", "wake", "open", "restoreNow"] as const, { minLength: 4 }),
+      async (kind, failedBeforeMove, operations) => {
+        const failure = "The old branch no longer exists.";
+        const fixture = hibernationFixture([failure, failure, failure, failure, failure], "open");
+        if (failedBeforeMove) {
+          expect(await fixture.coordinator.wakeHibernatedCheckout(identity)).toBe(true);
+          await settleRestore(fixture.coordinator);
+        }
+        fixture.move({
+          id: `pwragent-handoff:codex:${identity.threadId}`,
+          kind, label: "repository", path: "/contrived/repository",
+          ...(kind === "worktree" ? { worktreePath: "/contrived/worktrees/replacement" } : {}),
+        });
+
+        for (const operation of operations) {
+          if (operation === "send") await fixture.coordinator.ensureCheckoutAwake(identity);
+          if (operation === "wake") expect(await fixture.coordinator.wakeHibernatedCheckout(identity)).toBe(false);
+          if (operation === "open") expect(await fixture.coordinator.wakeHibernatedCheckoutOnOpen(identity)).toBe(false);
+          if (operation === "restoreNow") {
+            const result = await fixture.coordinator.setThreadCheckoutHibernation({ ...identity, restore: true });
+            expect(result.hibernated).toBe(false);
+            expect(result.restoreError).toBeUndefined();
+          }
+          await settleRestore(fixture.coordinator);
+        }
+        expect(fixture.attempts()).toBe(failedBeforeMove ? 1 : 0);
+        expect(fixture.hibernated()).toBe(true);
+      },
+    ));
+  });
+
   // Rule: a failed restore is reported once to the next send, without another
   // attempt, and only an operator request (wake, Restore now) retries it.
   // Opening the thread never retries a recorded failure. A success clears it.

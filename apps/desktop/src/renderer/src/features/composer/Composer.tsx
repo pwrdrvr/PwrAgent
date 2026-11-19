@@ -12327,9 +12327,8 @@ function useComposerController(props: ComposerProps) {
         props.thread.workspaceHandoff?.available !== false &&
         !sending &&
         !activeTurnId &&
-        !queuedTurns.some((queued) =>
-          Boolean(queued.backendQueuePending || queued.queueEntryId)
-        ) &&
+        !queuedTurns.some((queued) => queued.backendQueuePending
+          || (queued.queueEntryId && !queued.manualReleaseRequired && !queued.paused)) &&
         !props.pendingRequestActive &&
         !props.pendingUserInputActive &&
         !handoffSubmitting
