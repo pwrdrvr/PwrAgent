@@ -293,6 +293,7 @@ export class OpenAIDecisionsService {
         version: record.version,
         scope: record.scope,
         provider: record.provider,
+        ...(this.options.isProviderEnabled?.(record.provider) === false ? { providerDisabled: true } : {}),
         questions: record.questions.map((question) => summarizeQuestion(question, includeInstructions)),
         inputSchema: record.inputSchema,
         hasPrefix: record.prefix !== undefined,
@@ -756,6 +757,20 @@ export class OpenAIDecisionsService {
   }
 
   private async untimedItemRunner(
+    caller: OpenAIDecisionCaller,
+    record: OpenAIDecisionVersionRecord,
+    signal: AbortSignal | undefined,
+  ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
+    const run = await this.ungatedItemRunner(caller, record, signal);
+    // Checked again per item: turning a provider off stops a batch that is
+    // running and a call waiting in its lane. The error stops the batch.
+    return async (input) => {
+      this.assertProviderEnabled(record.provider);
+      return await run(input);
+    };
+  }
+
+  private async ungatedItemRunner(
     caller: OpenAIDecisionCaller,
     record: OpenAIDecisionVersionRecord,
     signal: AbortSignal | undefined,

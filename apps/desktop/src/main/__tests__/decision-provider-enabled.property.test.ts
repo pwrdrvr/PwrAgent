@@ -136,6 +136,10 @@ describe("a decision provider that is off is never used", () => {
           }
 
           const current = (movedTo === registeredOn || on[movedTo]) ? movedTo : registeredOn;
+          // decisions_list tells the agent which decisions cannot run now.
+          for (const listed of service.list(caller, {}).decisions) {
+            expect(listed.providerDisabled === true).toBe(!on[listed.provider]);
+          }
           const before = sent.length;
           const invoke = service.invoke(caller, { name: "is_question", input: "why?" });
           if (on[current]) {
@@ -150,6 +154,46 @@ describe("a decision provider that is off is never used", () => {
         },
       ), { numRuns: 60 });
     });
+  });
+});
+
+describe("turning a provider off mid-batch", () => {
+  let db: StateDb;
+  beforeEach(() => { db = openInMemoryStateDb(); });
+  afterEach(() => { db.close(); });
+
+  it.each(["jev", "local"] as const)("sends no later %s item once the switch is off", async (provider) => {
+    const state = { openai: true, jev: true, local: true };
+    const sentStates = new Set<unknown>();
+    const service = new OpenAIDecisionsService({
+      store: new OpenAIDecisionStore(db),
+      readApiKey: async () => "sk-test-openai",
+      readSystemOneTarget: async () => ({ endpoint: "http://127.0.0.1:9", model: "m", apiKey: "k" }),
+      isProviderEnabled: (name) => state[name],
+      readAccountSettings: () => ({}),
+      profileId: () => "test-profile",
+      recordUsageLines: async () => {},
+      newDecisionId: () => "decision-1",
+      fetch: async (_url, init) => {
+        sentStates.add((JSON.parse(String(init?.body)) as { state: unknown }).state);
+        // The operator turns the provider off while the first item is in flight.
+        state[provider] = false;
+        throw new Error("no network in this test");
+      },
+      sleep: async () => {},
+    });
+    const caller = { backend: "codex", threadId: "thread-a" };
+    await service.register(caller, {
+      name: "is_question",
+      provider,
+      instructions: "Is this a question?",
+      question: { type: "predicate", name: "is_question" },
+      inputSchema: { type: "string", maxLength: 100 },
+    });
+    await service.invoke(caller, { name: "is_question", inputs: ["a", "b", "c", "d"], concurrency: 1 })
+      .catch(() => undefined);
+    expect([...sentStates]).toEqual(["a"]);
+    await service.close();
   });
 });
 

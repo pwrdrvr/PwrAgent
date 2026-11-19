@@ -56,10 +56,13 @@ export async function readSystemOneTarget(
 export async function resolveDefaultDecisionProvider(
   settings: DecisionSettingsReader,
 ): Promise<RegisteredDecisionProvider> {
-  const on = (provider: RegisteredDecisionProvider) => isDecisionProviderEnabled(settings, provider);
+  // One read of each section, so a single pick sees one set of switches.
+  const resolved = resolveDecisionModelSettings(settings.resolveDecisionModelSettings());
+  const openaiOn = settings.resolveOpenAIDecisionsSettings().enabled !== false;
+  const on = (provider: RegisteredDecisionProvider) => provider === "openai" ? openaiOn : resolved.enabled[provider];
   if (on("openai") && await settings.hasOpenAIDecisionsApiKey()) return "openai";
   // `model` is already "off" when the chosen provider is off.
-  const chosen = resolveDecisionModelSettings(settings.resolveDecisionModelSettings()).model;
+  const chosen = resolved.model;
   if (chosen === "jev" || chosen === "local") return chosen;
   if (on("jev") && await settings.hasDecisionApiKey("jev")) return "jev";
   return (["openai", "jev", "local"] as const).find(on) ?? "openai";
