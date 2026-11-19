@@ -32,6 +32,8 @@ export type PreparedHtmlPreview = {
   blockedRemote: number;
   /** Distinct local files the page asked for and did not get. */
   missingLocal: number;
+  /** The page has a script or an inline event handler: it draws less without scripts. */
+  hasScripts: boolean;
 };
 
 const STATIC_CSP = [
@@ -214,6 +216,7 @@ export function prepareHtmlPreviewDocument(
   const doc = parseHtml(html);
   const blocked = new Set<string>();
   const missing = new Set<string>();
+  let hasScripts = false;
 
   const inline = (ref: string): string | undefined => {
     const trimmed = ref.trim();
@@ -253,6 +256,10 @@ export function prepareHtmlPreviewDocument(
     }
 
     element.removeAttribute("ping");
+    if (!hasScripts) {
+      hasScripts = name === "script"
+        || element.getAttributeNames().some((attribute) => /^on/i.test(attribute));
+    }
     for (const attribute of RESOURCE_ATTRIBUTES) {
       const value = element.getAttribute(attribute);
       if (value === null || !loadsResource(element, attribute)) continue;
@@ -302,6 +309,7 @@ export function prepareHtmlPreviewDocument(
     srcdoc: (scripts) => `${before}${policyHead(scripts)}${after}`,
     blockedRemote: blocked.size,
     missingLocal: missing.size,
+    hasScripts,
   };
 }
 

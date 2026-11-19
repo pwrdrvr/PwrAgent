@@ -47,7 +47,11 @@ import {
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { resolveFilePullThread } from "../../federation/federation-file-pull";
-import { resolveTranscriptFiles, transcriptThreadDirectories } from "../../transcript-files";
+import {
+  isThreadWorkspaceFile,
+  resolveTranscriptFiles,
+  transcriptThreadDirectories,
+} from "../../transcript-files";
 import {
   MAX_HTML_PREVIEW_FILE_BYTES,
   readHtmlPreviewAssets,
@@ -147,12 +151,30 @@ async function readMarkdownFile(
       return { path: target, error: "File is too large to preview." };
     }
 
+    const content = await readFile(resolved, "utf8");
     return {
       path: target,
-      content: await readFile(resolved, "utf8"),
+      content,
+      ...(request.thread && filePreviewKind(resolved) === "html"
+        && await readsThreadWorkspaceFile(resolved, request.thread)
+        ? { threadWorkspace: true }
+        : {}),
     };
   } catch {
     return { path: target, error: `Path does not exist: ${target}` };
+  }
+}
+
+async function readsThreadWorkspaceFile(
+  resolved: string,
+  request: NonNullable<ReadMarkdownFileRequest["thread"]>,
+): Promise<boolean> {
+  try {
+    const thread = await resolveFilePullThread(getDesktopBackendRegistry(), request.backend, request.threadId);
+    return thread ? await isThreadWorkspaceFile(resolved, thread) : false;
+  } catch {
+    // An unknown thread only loses the default; the operator can still run scripts.
+    return false;
   }
 }
 

@@ -2676,6 +2676,12 @@ export type ReadMarkdownFileResponse = {
   path: string;
   content?: string;
   error?: string;
+  /**
+   * The file is the thread's own work: in one of its directories or its
+   * agent's scratchpad. An HTML preview runs such a page's scripts by
+   * default. Set only for a local HTML file read for a thread.
+   */
+  threadWorkspace?: boolean;
 };
 
 /**

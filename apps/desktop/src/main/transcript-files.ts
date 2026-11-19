@@ -18,6 +18,37 @@ export function transcriptThreadDirectories(thread: AppServerThreadSummary): str
   ].filter((directory): directory is string => Boolean(directory && path.isAbsolute(directory))))];
 }
 
+/**
+ * Whether a file is the thread's own work: inside one of its directories, or
+ * in the scratchpad Claude Code keeps for the session. Claude Code puts that
+ * at `<CLAUDE_CODE_TMPDIR or /tmp>/claude-<uid>/<cwd key>/<session id>/scratchpad`,
+ * and a PwrAgent Claude thread's id is its session id.
+ *
+ * `resolved` must already be a real path.
+ */
+export async function isThreadWorkspaceFile(
+  resolved: string,
+  thread: AppServerThreadSummary,
+  options: { tmpRoot?: string; uid?: number } = {},
+): Promise<boolean> {
+  const roots = await Promise.all(
+    transcriptThreadDirectories(thread).map((directory) => realpath(directory).catch(() => undefined)),
+  );
+  if (roots.some((root) => root !== undefined && isInside(root, resolved))) return true;
+  const uid = options.uid ?? process.getuid?.();
+  if (thread.source !== "claude" || uid === undefined) return false;
+  const tmpRoot = options.tmpRoot ?? process.env.CLAUDE_CODE_TMPDIR ?? "/tmp";
+  const sessions = await realpath(path.join(tmpRoot, `claude-${uid}`)).catch(() => undefined);
+  if (!sessions || !isInside(sessions, resolved)) return false;
+  const [, sessionId, folder, ...rest] = path.relative(sessions, resolved).split(path.sep);
+  return sessionId === thread.id && folder === "scratchpad" && rest.length > 0;
+}
+
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 /** Metadata only: never read file contents or persist hydration in SQLite. */
 export async function resolveTranscriptFiles(
   request: ResolveTranscriptFilesRequest,

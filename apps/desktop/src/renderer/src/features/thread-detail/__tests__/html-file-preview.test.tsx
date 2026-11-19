@@ -206,6 +206,60 @@ describe("HtmlFilePreview", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it("says a page's scripts are off only when the page has scripts and they did not start on", async () => {
+    // Exhaustive model: scripts start on when the setting says so or the page
+    // is the thread's own work; the notice shows when a scripted page is off.
+    for (const hasScripts of [false, true]) {
+      for (const setting of [false, true]) {
+        for (const threadWorkspace of [false, true]) {
+          const { api } = previewApi();
+          const view = render(
+            <HtmlPreviewPreferencesProvider runScripts={setting}>
+              <HtmlFilePreview
+                content={hasScripts ? "<div id=app></div><script>draw()</script>" : "<p>Hi</p>"}
+                desktopApi={api}
+                label="Brief"
+                path="/work/brief/index.html"
+                threadWorkspace={threadWorkspace}
+              />
+            </HtmlPreviewPreferencesProvider>,
+          );
+          const startsOn = setting || threadWorkspace;
+          const element = await frame();
+          const state = JSON.stringify({ hasScripts, setting, threadWorkspace });
+          expect(element.getAttribute("sandbox"), state).toBe(startsOn ? "allow-scripts" : "");
+          expect(screen.queryByRole("group", { name: "Page scripts" }) !== null, state)
+            .toBe(hasScripts && !startsOn);
+          view.unmount();
+        }
+      }
+    }
+  });
+
+  it("runs a page's scripts from the notice, or puts the notice away", async () => {
+    const { api } = previewApi();
+    render(
+      <HtmlFilePreview
+        content="<script>draw()</script>"
+        desktopApi={api}
+        label="Brief"
+        path="/work/brief/index.html"
+      />,
+    );
+
+    const notice = await screen.findByRole("group", { name: "Page scripts" });
+    expect(notice).toHaveTextContent("Run scripts only if you trust this page.");
+    fireEvent.click(screen.getByRole("button", { name: "Run scripts" }));
+    expect((await frame()).getAttribute("sandbox")).toBe("allow-scripts");
+    expect(screen.queryByRole("group", { name: "Page scripts" })).toBeNull();
+
+    // Turning scripts off again brings the notice back until it is dismissed.
+    fireEvent.click(screen.getByRole("switch", { name: "Scripts" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("group", { name: "Page scripts" })).toBeNull();
+    expect((await frame()).getAttribute("sandbox")).toBe("");
+  });
+
   it("does not ask for a peer page's files", async () => {
     const { api } = previewApi();
     render(
