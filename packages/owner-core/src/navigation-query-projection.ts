@@ -1,5 +1,6 @@
 import { sortSubthreadSummaries, threadProviderIdentity } from "@pwragent/shared";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import type {
   AppServerBackendKind,
   LinkedDirectorySummary,
@@ -27,6 +28,7 @@ import {
   countNavigationStarMapFacets,
   passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
+  rankDirectoryMentionMatches,
   rankThreadJumpMatches,
   textMatchesJumpQuery,
   buildPullRequestStatusKey,
@@ -630,6 +632,20 @@ function buildDirectoryRows(params: {
       ...(directory.launchpad?.backend ? { launchpadBackend: directory.launchpad.backend } : {}),
     };
   });
+}
+
+function selectIndexedDirectories(
+  directories: NavigationDirectorySummary[],
+  query: Extract<NavigationQuery, { kind: "directory-index" }>,
+): NavigationDirectorySummary[] {
+  const candidates = query.keys || query.paths ? directories.filter((directory) =>
+    query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))) : directories;
+  const filter = query.filter?.trim() ?? "";
+  if (query.match === "mention") {
+    return rankDirectoryMentionMatches(candidates, filter, homedir());
+  }
+  return filter ? candidates.filter((directory) => textMatchesJumpQuery(directory.label, filter)
+    || textMatchesJumpQuery(directory.path, filter)) : candidates;
 }
 
 /**
@@ -1365,16 +1381,12 @@ export function projectNavigationQuery(params: {
       ),
     } : {}),
     ...(includeDirectories ? { collectionKind: "directories" as const } : {}),
-    directories: includeDirectories
-      ? (query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
-        : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey, parentCandidates }))
-          .filter((directory) => query.kind !== "directory-index" || ((!query.keys && !query.paths)
-            || query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))))
-          .filter((directory) => query.kind !== "directory-index"
-            || !query.filter?.trim()
-            || [directory.label, directory.path]
-              .some((value) => textMatchesJumpQuery(value, query.filter ?? "")))
-      : [],
+    directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
+      : query.kind === "directory-index" ? buildDirectoryRows({
+        snapshot: { ...params.index, directories: selectIndexedDirectories(params.index.directories, query) },
+        threadsByLegacyKey,
+        parentCandidates,
+      }) : [],
     entries,
     queryKey: navigationQueryKey(params.request),
   };

@@ -1,5 +1,5 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
-import { formatFilesystemPath, isWindowsFilesystemPath } from "@pwragent/shared";
+import { formatFilesystemPath, isReferenceableDirectory, isWindowsFilesystemPath, rankDirectoryMentionMatches } from "@pwragent/shared";
 import { expandTildePath, getHomeDir, tildifyPath } from "./tildify-path";
 import { parseSkillMentionParts } from "./skill-mentions";
 
@@ -54,54 +54,12 @@ export type ReferenceDirectory = Pick<NavigationDirectorySummary,
   "key" | "kind" | "label" | "path" | "latestUpdatedAt"
 >;
 
-function isReferenceable(directory: ReferenceDirectory): boolean {
-  // Same exclusion as the project picker's `isPickable`, plus a real
-  // filesystem path requirement — a reference is only useful when there
-  // is a path to insert into the draft.
-  return directory.kind !== "unlinked" && Boolean(directory.path);
-}
-
-/**
- * Rank tracked directories for the `@` autocomplete: referenceable
- * entries whose label or path contains the query. Project-name prefixes
- * come before other matches; recency orders each group. Cap at 10 after
- * ranking so newer path matches cannot hide an older name match. Unlike
- * the project picker (which filters within its top 10 recents), the query
- * searches the full tracked set so an older project is still reachable.
- */
+/** Also filter cached candidates while the owner's new query is pending. */
 export function filterDirectoryReferenceCandidates<T extends ReferenceDirectory>(
-  directories: T[],
+  directories: readonly T[],
   query: string,
 ): T[] {
-  const trimmed = query.trim().toLowerCase();
-  return directories
-    .filter(isReferenceable)
-    .filter((directory) => {
-      if (!trimmed) {
-        return true;
-      }
-      const label = directory.label.toLowerCase();
-      const rawPath = (directory.path ?? "").toLowerCase();
-      const windowsPath = isWindowsFilesystemPath(rawPath);
-      const path = windowsPath ? rawPath.replace(/\\/g, "/") : rawPath;
-      const pathQuery = windowsPath ? trimmed.replace(/\\/g, "/") : trimmed;
-      return (
-        label.includes(trimmed)
-        || path.includes(pathQuery)
-        || (!windowsPath && tildifyPath(directory.path ?? "").toLowerCase().includes(trimmed))
-      );
-    })
-    .sort((left, right) => {
-      if (trimmed) {
-        const leftNamePrefix = left.label.toLowerCase().startsWith(trimmed);
-        const rightNamePrefix = right.label.toLowerCase().startsWith(trimmed);
-        if (leftNamePrefix !== rightNamePrefix) {
-          return leftNamePrefix ? -1 : 1;
-        }
-      }
-      return (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
-    })
-    .slice(0, CANDIDATE_LIMIT);
+  return rankDirectoryMentionMatches(directories, query, getHomeDir()).slice(0, CANDIDATE_LIMIT);
 }
 
 /** The text committed into the draft for a referenced directory. */
@@ -261,10 +219,10 @@ export function listReferencedDirectories(
   const matchedExcludedPaths = [...excluded].filter(containsPath);
 
   for (const directory of directories) {
-    if (!isReferenceable(directory)) {
+    if (!isReferenceableDirectory(directory)) {
       continue;
     }
-    const path = trimPath(directory.path!);
+    const path = trimPath(directory.path);
     const key = normalizeDirectoryReferencePath(path);
     if (!path || seenPaths.has(key)) {
       continue;

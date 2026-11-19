@@ -21619,9 +21619,14 @@ describe("Composer", () => {
     const expectedOwner = target.scope === "remote" ? target.instanceId : "local";
     const getNavigationQueryPage = vi.fn(async (request) => {
       const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "local";
-      return navigationQueryFixture(request, { directories: [{
-        key: owner, kind: "directory", label: `microapps-${owner}`, path: `/${owner}/microapps`,
-      }] });
+      const root = `/${owner}/github`;
+      return navigationQueryFixture(request, { directories: [
+        ...Array.from({ length: 10 }, (_, index) => ({
+          key: `${root}/project-${index}`, kind: "directory" as const, label: `project-${index}`,
+          path: `${root}/project-${index}`, latestUpdatedAt: index + 2,
+        })),
+        { key: `${root}/git`, kind: "directory", label: "git", path: `${root}/git`, latestUpdatedAt: 1 },
+      ] });
     });
     try {
       render(<Composer
@@ -21645,11 +21650,12 @@ describe("Composer", () => {
       />);
       expect(getNavigationQueryPage).not.toHaveBeenCalled();
       fireEvent.change(screen.getByLabelText(source === "launchpad" ? "New thread" : "Reply"), {
-        target: { value: "Read @microapps" },
+        target: { value: "Read @git" },
       });
-      await screen.findByRole("option", { name: new RegExp(`microapps-${expectedOwner}`) });
+      const git = await screen.findByRole("option", { name: new RegExp(`/${expectedOwner}/github/git$`) });
+      expect(within(screen.getByRole("listbox", { name: "Projects and instances" })).getAllByRole("option")[0]).toBe(git);
       expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
-        federationTarget: target, query: { kind: "directory-index", filter: "microapps" },
+        federationTarget: target, query: { kind: "directory-index", match: "mention", filter: "git" },
       }), expect.any(String));
       expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
     } finally {

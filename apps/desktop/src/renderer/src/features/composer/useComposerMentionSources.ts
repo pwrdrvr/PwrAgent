@@ -124,7 +124,7 @@ export function useComposerMentionSources(params: {
         protocol: 2,
         consumer: "mentions",
         federationTarget,
-        query: { kind: "directory-index", filter: demand },
+        query: { kind: "directory-index", match: "mention", filter: demand },
         pageSize: 10,
       }, directoryConsumer),
       // In the main window the # picker combines local threads with a

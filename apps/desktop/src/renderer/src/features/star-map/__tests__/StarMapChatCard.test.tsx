@@ -3115,7 +3115,7 @@ describe("StarMapChatCard mentions", () => {
     await screen.findByRole("option");
     expect(desktopApi.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
       federationTarget: thread.federation!.ref.target,
-      query: { kind: "directory-index", filter: "ap" },
+      query: { kind: "directory-index", match: "mention", filter: "ap" },
     }), expect.any(String));
   });
 

@@ -96,7 +96,10 @@ describe("bounded composer mention sources", () => {
     expect(result.current.directories.map((row) => row.path)).toEqual(["/m2-max/microapps"]);
     expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
-    expect(getNavigationQueryPage.mock.calls[0]![0].federationTarget).toEqual(target);
+    expect(getNavigationQueryPage.mock.calls[0]![0]).toMatchObject({
+      federationTarget: target,
+      query: { kind: "directory-index", match: "mention", filter: query },
+    });
     expect(getNavigationQueryPage.mock.calls[1]![0].federationTarget).toBeUndefined();
     rerender({ federationTarget: { ...target } });
     act(() => result.current.release());

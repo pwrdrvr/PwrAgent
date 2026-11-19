@@ -14,6 +14,18 @@ export function formatFilesystemPath(value: string): string {
   return isWindowsFilesystemPath(value) ? value.replace(/\//g, "\\") : value;
 }
 
+/** Abbreviate a POSIX home path while preserving native Windows syntax. */
+export function abbreviateHomePath(value: string, homeDir?: string): string {
+  const displayPath = formatFilesystemPath(value);
+  if (!displayPath.startsWith("/") || !homeDir?.startsWith("/")) {
+    return displayPath;
+  }
+  const home = homeDir.replace(/\/+$/, "");
+  if (!home) return displayPath;
+  if (displayPath === home) return "~";
+  return displayPath.startsWith(`${home}/`) ? `~${displayPath.slice(home.length)}` : displayPath;
+}
+
 /**
  * Display an absolute path relative to the longest known directory that
  * contains it. Relative paths use the separator style of a known Windows

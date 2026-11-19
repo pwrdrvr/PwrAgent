@@ -2404,6 +2404,8 @@ export type NavigationQuery =
   | {
       kind: "directory-index";
       filter?: string;
+      /** Composer autocomplete ranks referenceable directories before paging. */
+      match?: "mention";
       /** Exact compact descriptors for off-page selected directories, at most 100. */
       keys?: string[];
       /** Exact owner paths for a path-only link; never a fuzzy path match. */

@@ -109,5 +109,5 @@ export function filterAtReferenceCandidates(
     || shown(left).localeCompare(shown(right))
     || left.instanceId.localeCompare(right.instanceId),
   ).slice(0, 10);
-  return [...filterDirectoryReferenceCandidates([...directories], query), ...matches];
+  return [...filterDirectoryReferenceCandidates(directories, query), ...matches];
 }
