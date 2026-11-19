@@ -43,6 +43,7 @@ describe("thread orchestration tool contracts", () => {
       "unsupported_backend",
       "unsupported_capability",
       "unsupported_workspace",
+      "branch_already_checked_out",
       "unsupported_operation",
       "ambiguous_workspace",
       "requires_confirmation",
