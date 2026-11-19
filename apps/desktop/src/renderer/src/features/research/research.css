@@ -132,7 +132,7 @@ button.research-activity__text:hover { color: var(--accent); }
 .research-dl dd { margin: 0; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
 .research-caps { display: flex; flex-wrap: wrap; gap: 4px; }
 .research-chip--off { color: var(--text-muted); text-decoration: line-through; }
-.research-snippet { margin: 0; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-input); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; white-space: pre; overflow-x: auto; }
+.research-snippet { margin: 0; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-input); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .research-ops { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .research-form label.research-op { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-panel); cursor: pointer; }
 .research-form label.research-op:has(input:checked) { border-color: var(--accent-border); background: var(--bg-row-active); }

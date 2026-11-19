@@ -16,7 +16,8 @@ async function expectAccessiblePanel(window: Page, surface: string) {
   expect(violations.map((v) => `${surface}: ${v.id} ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
 }
 test("Discovery status, problems and bounded ancestry retain source authority", async ({ playwright: _playwright }, testInfo) => {
-  const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"),
+  // A laptop-sized window: the context rail is narrower than at the 1440px default, as on the Windows runners.
+  const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"), windowSize: { width: 1100, height: 900 },
     preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot)); } });
   try {
     await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
@@ -40,6 +41,9 @@ test("Discovery status, problems and bounded ancestry retain source authority", 
     await panel.getByRole("button", { name: "New run", exact: true }).click();
     await panel.getByRole("button", { name: "Open Math Harness", exact: true }).click();
     await expect(panel.getByText(/No Harness bridge is configured/)).toBeVisible();
+    // A region that scrolls sideways with nothing focusable in it cannot be read by keyboard.
+    const snippet = await panel.getByLabel("Example bridge configuration").evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(snippet.scroll).toBeLessThanOrEqual(snippet.client);
     await expectAccessiblePanel(app.window, "harness setup");
     await testInfo.attach("discovery-ancestry", { body: await app.window.screenshot(), contentType: "image/png" });
   } finally { await app.close(); }
