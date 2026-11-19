@@ -3,9 +3,9 @@ import path from "node:path";
 import type { ThreadWorktreeRegistration } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 
-type CheckoutIdentity = Omit<ThreadWorktreeRegistration, "authorizedAt" | "requestedBy">;
+export type CheckoutIdentity = Omit<ThreadWorktreeRegistration, "authorizedAt" | "requestedBy">;
 
-async function directoryIdentity(directory: string): Promise<string> {
+export async function worktreeDirectoryIdentity(directory: string): Promise<string> {
   const info = await lstat(directory, { bigint: true });
   if (!info.isDirectory()) throw new Error("The checkout and its Git directory must be real directories.");
   return `${info.dev}:${info.ino}:${info.birthtimeNs}`;
@@ -17,14 +17,14 @@ export async function inspectRegisterableWorktree(worktreePath: string): Promise
   if (!path.isAbsolute(worktreePath)) throw new Error("worktreePath must be absolute.");
   const checkout = await realpath(worktreePath);
   if (checkout !== path.resolve(worktreePath)) throw new Error(`Use the canonical checkout path: ${checkout}`);
-  const checkoutIdentity = await directoryIdentity(checkout);
+  const checkoutIdentity = await worktreeDirectoryIdentity(checkout);
   const git = async (args: string[]) => (await runGitCommand(checkout, args, { timeout: 10_000 })).stdout.trim();
   const top = await realpath(await git(["rev-parse", "--show-toplevel"]));
   if (top !== checkout) throw new Error("worktreePath must be the linked checkout root.");
   const gitDirectory = await realpath(await git(["rev-parse", "--absolute-git-dir"]));
   const commonDirectory = await realpath(await git(["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   if (gitDirectory === commonDirectory) throw new Error("Main checkouts cannot be registered for worktree cleanup.");
-  const gitDirectoryIdentity = await directoryIdentity(gitDirectory);
+  const gitDirectoryIdentity = await worktreeDirectoryIdentity(gitDirectory);
   const backlink = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
   if (await realpath(path.resolve(gitDirectory, backlink)) !== await realpath(path.join(checkout, ".git"))) {
     throw new Error("Git's linked checkout backlink does not match.");
@@ -33,8 +33,8 @@ export async function inspectRegisterableWorktree(worktreePath: string): Promise
   if (!listed.split("\0").includes(`worktree ${checkout.replace(/\\/g, "/")}`)) {
     throw new Error("Git does not list this linked checkout.");
   }
-  if (await directoryIdentity(checkout) !== checkoutIdentity
-    || await directoryIdentity(gitDirectory) !== gitDirectoryIdentity) {
+  if (await worktreeDirectoryIdentity(checkout) !== checkoutIdentity
+    || await worktreeDirectoryIdentity(gitDirectory) !== gitDirectoryIdentity) {
     throw new Error("The checkout changed while it was being inspected.");
   }
   return { worktreePath: checkout, gitDirectory, commonDirectory, checkoutIdentity, gitDirectoryIdentity };

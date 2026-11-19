@@ -11,6 +11,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
+import { sameRegisteredWorktree, worktreeDirectoryIdentity, type CheckoutIdentity } from "./worktree-maintenance-registration";
 
 type GitResult = {
   stdout: string;
@@ -38,6 +39,9 @@ type ArchiveWorktreeParams = {
   maxSnapshotBytes?: number;
   /** Returns a synchronous admission check for the actual removal dispatch. */
   beforeRemove?: () => Promise<() => void>;
+  /** A retry must address the same Git registration and directories. */
+  expectedCheckout?: CheckoutIdentity;
+  onCheckoutVerified?: (checkout: CheckoutIdentity) => void;
   onStage?: (stage: ThreadMaintenanceRunStage) => void;
 };
 
@@ -409,7 +413,19 @@ export class WorktreeArchiveService {
     if (gitDirectory === commonDirectory) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
-    await checkArchiveRegistration({ worktreePath, gitDirectory, commonDirectory });
+    const registration = { worktreePath, gitDirectory, commonDirectory };
+    await checkArchiveRegistration(registration);
+    const readIdentity = async (): Promise<CheckoutIdentity> => ({
+      ...registration,
+      checkoutIdentity: await worktreeDirectoryIdentity(worktreePath),
+      gitDirectoryIdentity: await worktreeDirectoryIdentity(gitDirectory),
+    });
+    const checkout = params.onCheckoutVerified || params.expectedCheckout ? await readIdentity() : undefined;
+    const changedCheckout = () => new Error("The Git checkout changed during archive cleanup; the worktree was kept.");
+    if (params.expectedCheckout && (!checkout || !sameRegisteredWorktree(params.expectedCheckout, checkout))) {
+      throw changedCheckout();
+    }
+    if (checkout) params.onCheckoutVerified?.(checkout);
     // Git's primary worktree is the common directory with a trailing /.git
     // removed, or the common directory itself for a bare/separate Git dir.
     const repositoryPath = path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : commonDirectory;
@@ -455,6 +471,10 @@ export class WorktreeArchiveService {
     }
     try {
       await this.removeCheckout({ worktreePath, gitDirectory, commonDirectory, repositoryPath, head, assertRemoval,
+        verifyIdentity: checkout && (async () => {
+          if (!sameRegisteredWorktree(checkout, await readIdentity())
+            || await realpath(path.resolve(params.worktreePath)) !== worktreePath) throw changedCheckout();
+        }),
         onStage: params.onStage,
         onRemovalStarted: () => { removalStarted = true; params.onStage?.("removing"); } });
     } catch (error) {
@@ -509,6 +529,7 @@ export class WorktreeArchiveService {
     repositoryPath: string;
     head: string;
     assertRemoval?: () => void;
+    verifyIdentity?: () => Promise<void>;
     onRemovalStarted: () => void;
     onStage?: (stage: ThreadMaintenanceRunStage) => void;
   }): Promise<void> {
@@ -521,6 +542,7 @@ export class WorktreeArchiveService {
       if (trimGitOutput((await this.runGit(worktreePath, ["rev-parse", "--verify", "HEAD"])).stdout) !== head) {
         throw new Error("Worktree HEAD changed during snapshot preparation; the worktree was kept.");
       }
+      await params.verifyIdentity?.();
       assertRemoval?.();
       if (process.platform === "win32") {
         params.onRemovalStarted();

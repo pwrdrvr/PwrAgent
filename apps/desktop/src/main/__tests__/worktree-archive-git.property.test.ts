@@ -8,6 +8,7 @@ import fc from "fast-check";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import * as gitBoundary from "../app-server/git-executable";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import type { CheckoutIdentity } from "../app-server/worktree-maintenance-registration";
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 
 const execFileAsync = promisify(execFile);
@@ -28,6 +29,49 @@ async function repository(root: string): Promise<string> {
     "commit", "--allow-empty", "-m", "initial");
   return repo;
 }
+
+it.each([true, false])("keeps retries bound to the verified Git checkout (retargeted: %s)", async (retargeted) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-retry-")));
+  try {
+    const repo = await repository(root);
+    const original = path.join(root, "original");
+    const other = path.join(root, "other");
+    await git(repo, "worktree", "add", "--detach", original);
+    await git(repo, "worktree", "add", "--detach", other);
+    const alias = path.join(root, "alias");
+    const aliasType = process.platform === "win32" ? "junction" : "dir";
+    await symlink(original, alias, aliasType);
+    const list = () => git(repo, "worktree", "list", "--porcelain", "-z");
+    const registered = await list();
+    const service = new WorktreeArchiveService();
+    const request = { backend: "codex" as const, threadId: "retry", repositoryPath: repo, worktreePath: alias };
+    let expectedCheckout: CheckoutIdentity | undefined;
+    await expect(service.archive({
+      ...request,
+      onCheckoutVerified: (identity) => { expectedCheckout = identity; },
+      beforeRemove: async () => {
+        if (retargeted) {
+          await rm(alias);
+          await symlink(other, alias, aliasType);
+        }
+        return () => { throw new Error("Admission invalidated"); };
+      },
+    })).rejects.toThrow("Admission invalidated");
+    expect(expectedCheckout?.worktreePath).toBe(original);
+    const retry = service.archive({ ...request, expectedCheckout });
+    if (retargeted) {
+      await expect(retry).rejects.toThrow("Git checkout changed");
+      expect(await list()).toBe(registered);
+    } else {
+      await retry;
+      const remaining = await list();
+      expect(remaining).not.toContain(`worktree ${original.replaceAll("\\", "/")}\0`);
+      expect(remaining).toContain(`worktree ${other.replaceAll("\\", "/")}\0`);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 // The Git boundary is measured, not replaced: every snapshot and removal runs
 // against the owning Git repository. Archive-all must not read sibling entries

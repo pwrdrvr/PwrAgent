@@ -10,7 +10,7 @@ import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { resolveOwnedMaintenanceCheckouts } from "./thread-owned-checkouts";
 import { mapMaintenanceAudit } from "./maintenance-audit-pool";
 import { ArchiveFleetIndex, type FleetChange, type FleetRow } from "./archive-cleanup-fleet-index";
-import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
+import { ArchiveRemovalNeedsFreshInventoryError, ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter, type ArchiveWorkspaceMutation, type ArchiveWorkspaceObservation } from "./archive-cleanup-workspace-scope";
 import {
   classifyDirectory,
   type DesktopCheckoutHibernationPolicy,
@@ -82,7 +82,7 @@ import {
 import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotLimitExceededError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
-import { inspectRegisterableWorktree, sameRegisteredWorktree } from "./worktree-maintenance-registration";
+import { inspectRegisterableWorktree, sameRegisteredWorktree, type CheckoutIdentity } from "./worktree-maintenance-registration";
 import { protectiveMaintenanceWatches, type MaintenancePrObservation } from "./maintenance-pr-watches";
 import { runMaintenanceItems } from "./maintenance-runner";
 import { describeHibernatedThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
@@ -1025,7 +1025,8 @@ export class ThreadArchiveCoordinator {
    * callers release admission when their work returns. */
   async withThreadLifecycleMutation<T>(
     identity: { backend?: AppServerBackendKind; threadId: string; sourcePath?: string; targetPath?: string; repositoryPath?: string; worktreePath?: string },
-    work: (finishMutation: () => void) => Promise<T>,
+    work: (finishMutation: (archived?: true) => void) => Promise<T>,
+    archiving = false,
   ): Promise<T> {
     const backend = identity.backend ?? "codex";
     const key = buildThreadIdentityKey(backend, identity.threadId);
@@ -1036,20 +1037,23 @@ export class ThreadArchiveCoordinator {
     const scopes = this.archiveLifecycleMutationPaths.get(key) ?? new Set<readonly string[]>();
     scopes.add(paths);
     this.archiveLifecycleMutationPaths.set(key, scopes);
-    this.recordArchiveWorkspaceChange(key, paths);
+    this.recordArchiveWorkspaceChange(key, paths, false, archiving);
     // Record intent synchronously, before yielding to a provider admission.
     this.cancelAutomaticArchive(backend, identity.threadId);
     const archival = this.threadArchiveOperations.get(key);
     if (archival) this.cancelledArchiveCleanupKeys.add(key);
     this.threadLifecycleMutationCounts.set(key, (this.threadLifecycleMutationCounts.get(key) ?? 0) + 1);
     let mutationFinished = false;
-    const finishMutation = () => {
+    const finishMutation = (archived?: true) => {
       if (mutationFinished) return;
       mutationFinished = true;
       // An admission can start while this mutation is already pending and
       // read its old provider row. Settling must fence that observation too.
       this.archiveWorkspaceRevision += 1;
-      this.recordArchiveWorkspaceChange(key, paths);
+      this.recordArchiveWorkspaceChange(key, paths, false, archiving);
+      if (archived) {
+        for (const { scope } of this.archiveWorktreeRemovalAdmissions) scope.archiveSettled(key);
+      }
       scopes.delete(paths);
       if (!scopes.size) this.archiveLifecycleMutationPaths.delete(key);
       const remaining = (this.threadLifecycleMutationCounts.get(key) ?? 1) - 1;
@@ -1658,6 +1662,7 @@ export class ThreadArchiveCoordinator {
     if (pending) return await pending;
     const operation = this.withThreadLifecycleMutation(request, async (finishMutation) =>
       await this.archiveThreadWithoutLifecycleLock(request, undefined, finishMutation),
+      true,
     );
     this.threadArchiveOperations.set(key, operation);
     try {
@@ -1675,7 +1680,7 @@ export class ThreadArchiveCoordinator {
   private async archiveThreadWithoutLifecycleLock(
     request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
     beforeMutation?: () => Promise<() => void>,
-    finishMutation?: () => void,
+    finishMutation?: (archived?: true) => void,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
     if (request.expectedParent !== undefined) {
@@ -1710,7 +1715,7 @@ export class ThreadArchiveCoordinator {
       });
       const completion = this.enqueueArchiveCleanup({ backend, threadId: request.threadId, archivedAt, codexRolloutMissing: false,
         preserveWorktrees: request.preserveWorktrees, messagingCleanup });
-      finishMutation?.();
+      finishMutation?.(true);
       return await this.observeArchiveCleanupCompletion(completion, {
         backend, threadId: request.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup,
       });
@@ -1776,7 +1781,7 @@ export class ThreadArchiveCoordinator {
     // Synchronous callers now wait only for the serial cleanup queue; keeping
     // them in mutation admission would prevent independent queued removals.
     // The operation promise remains registered for inverse-intent ordering.
-    finishMutation?.();
+    finishMutation?.(codexRolloutMissing ? undefined : true);
     await this.observeReleasedArchiveReference(backend, result.threadId, true);
     return await this.observeArchiveCleanupCompletion(completion, {
       backend, threadId: result.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup, mustComplete: codexRolloutMissing,
@@ -2326,7 +2331,7 @@ export class ThreadArchiveCoordinator {
     threadId: string;
     backgroundCleanup?: boolean;
     preserveWorktrees?: boolean;
-  }, beforeMutation?: () => Promise<() => void>, finishMutation?: () => void): Promise<ArchiveThreadResponse> {
+  }, beforeMutation?: () => Promise<() => void>, finishMutation?: (archived?: true) => void): Promise<ArchiveThreadResponse> {
     let session = this.context.providers.acp.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
@@ -2347,7 +2352,8 @@ export class ThreadArchiveCoordinator {
       backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.host().runtimeInstanceId, archivedAt,
     });
     await this.observeArchivedThreads([{ backend: params.backend, threadId: params.threadId }], archivedAt, { promoteSubthreads: true });
-    this.host().invalidateThreadListCache(params.backend, true, params.threadId);
+    this.host().invalidateThreadListCache(params.backend);
+    this.invalidateArchiveCleanupReads(params.backend, undefined, true, params.threadId, [], "archived");
     // Archival on ACP is a local store write, with no provider to announce it.
     // Say it in the same words Codex uses, because everything downstream is
     // written against the notification rather than against a backend: the
@@ -2369,7 +2375,7 @@ export class ThreadArchiveCoordinator {
     });
     const completion = this.enqueueArchiveCleanup({ backend: params.backend, threadId: params.threadId, archivedAt, codexRolloutMissing: false,
       preserveWorktrees: params.preserveWorktrees, messagingCleanup: {} });
-    finishMutation?.();
+    finishMutation?.(true);
     return await this.observeArchiveCleanupCompletion(completion, { ...params, archivedAt });
   }
 
@@ -4273,76 +4279,116 @@ export class ThreadArchiveCoordinator {
           };
         }
 
-        for (const owner of this.archivedAcpWorktreeOwners(candidate.worktreePath, params)) {
-          if (isAcpBackendId(owner.source)) await this.context.providers.acp.prepareWorktreeArchive(owner.source, owner.id);
-        }
+        const preparedAcpOwners = new Set<string>();
+        const prepareAcpOwners = async (owners: AppServerThreadSummary[]) => {
+          for (const { source, id } of owners) {
+            const identity = buildThreadIdentityKey(source, id);
+            if (!isAcpBackendId(source) || preparedAcpOwners.has(identity)) continue;
+            await this.context.providers.acp.prepareWorktreeArchive(source, id);
+            preparedAcpOwners.add(identity);
+          }
+        };
+        await prepareAcpOwners(this.archivedAcpWorktreeOwners(candidate.worktreePath, params));
         let removalMetadata: ArchiveCleanupMetadata | undefined;
         let removalSiblings: AppServerThreadSummary[] | undefined;
         const managedContainerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
-        const scope = new ArchiveWorkspaceAdmission(buildThreadIdentityKey(params.backend, params.thread.id), managedContainerPath ?? candidate.worktreePath);
-        const admission = {
-          backend: params.backend, threadId: params.thread.id,
-          worktreePath: normalizeWorktreePathForComparison(candidate.worktreePath),
-          containerPath: managedContainerPath,
-          scope,
-        };
-        removalAdmission = admission;
         const containerBefore = managedContainerPath ? await this.worktreeContainerService.inspect(candidate.worktreePath) : undefined;
         if (containerBefore?.error) backendRegistryLog.warn("archive worktree container inspection failed", containerBefore);
-        const snapshot = await this.host().worktreeArchiveService.archive({
-          backend: params.backend,
-          threadId: params.thread.id,
-          worktreePath: candidate.worktreePath,
-          repositoryPath: candidate.repositoryPath,
-          onStage: params.onStage,
-          maxSnapshotBytes: params.snapshotLimitBytes ?? this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
-          beforeRemove: params.context && this.context.providers.codex.listArchiveCleanupThreadsPage ? async () => {
-            params.onStage?.("checking");
-            this.archiveWorktreeRemovalAdmissions.add(admission);
-            this.archiveWorkspaceOwnership.beginAdmission(scope);
-            const current = await this.findThreadForArchiveCleanup({
-              backend: params.backend, threadId: params.thread.id, context: params.context,
-              codexRolloutMissing: params.codexRolloutMissing,
-              ownershipScope: managedContainerPath ?? candidate.worktreePath,
-              removalAdmission: scope,
-            });
-            removalMetadata = current;
-            removalSiblings = await this.archivedWorktreeSiblings({ archivedThreadId: params.thread.id, archivedThreads: current.archivedThreads,
-              ownershipPaths: current.ownershipPaths, backend: params.backend, worktreePath: candidate.worktreePath });
-            const ownership = await this.readCanonicalArchiveOwnership(current, candidate.worktreePath);
-            const key = normalizeWorktreePathForComparison(candidate.worktreePath);
-            const hasExternalMarker = () => current.worktreeEvidence?.externalPaths.has(key)
-              || (!current.worktreeEvidence && [current.thread, ...current.activeThreads, ...current.archivedThreads].some((thread) =>
-                thread.linkedDirectories.some((directory) => directory.worktreeOwnership === "external"
-                  && normalizeWorktreePathForComparison(linkedDirectoryWorktreePath(directory) ?? "") === key),
-              ));
-            const managedCheckout = hasExternalMarker() && await this.isManagedArchiveCheckout(current, candidate.worktreePath);
-            if (ownership.users.some((owner) => owner.id !== params.thread.id || owner.source !== params.backend)) {
-              await this.retainDeferredArchiveWorktree({ ...params, activeThreads: current.activeThreads }, candidate,
-                ownership.users.filter((owner) => owner.id !== params.thread.id || owner.source !== params.backend)
-                  .map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
-            }
-            await scope.prepare(this.archiveWorkspaceMutationsFor(scope));
-          const check = () => {
+        const admitRemoval = async (admission: ArchiveWorktreeRemovalAdmission) => {
+          const { scope } = admission;
+          params.onStage?.("checking");
+          this.archiveWorktreeRemovalAdmissions.add(admission);
+          this.archiveWorkspaceOwnership.beginAdmission(scope);
+          const current = await this.findThreadForArchiveCleanup({
+            backend: params.backend, threadId: params.thread.id, context: params.context,
+            codexRolloutMissing: params.codexRolloutMissing,
+            ownershipScope: managedContainerPath ?? candidate.worktreePath,
+            removalAdmission: scope,
+          });
+          removalMetadata = current;
+          removalSiblings = await this.archivedWorktreeSiblings({ archivedThreadId: params.thread.id, archivedThreads: current.archivedThreads,
+            ownershipPaths: current.ownershipPaths, backend: params.backend, worktreePath: candidate.worktreePath });
+          const ownership = await this.readCanonicalArchiveOwnership(current, candidate.worktreePath);
+          const key = normalizeWorktreePathForComparison(candidate.worktreePath);
+          const hasExternalMarker = () => current.worktreeEvidence?.externalPaths.has(key)
+            || (!current.worktreeEvidence && [current.thread, ...current.activeThreads, ...current.archivedThreads].some((thread) =>
+              thread.linkedDirectories.some((directory) => directory.worktreeOwnership === "external"
+                && normalizeWorktreePathForComparison(linkedDirectoryWorktreePath(directory) ?? "") === key),
+            ));
+          const managedCheckout = hasExternalMarker() && await this.isManagedArchiveCheckout(current, candidate.worktreePath);
+          if (ownership.users.some((owner) => owner.id !== params.thread.id || owner.source !== params.backend)) {
+            await this.retainDeferredArchiveWorktree({ ...params, activeThreads: current.activeThreads }, candidate,
+              ownership.users.filter((owner) => owner.id !== params.thread.id || owner.source !== params.backend)
+                .map((owner) => buildThreadIdentityKey(owner.source, owner.id)));
+          }
+          await scope.prepare(this.archiveWorkspaceMutationsFor(scope));
+          const checkOwnership = () => {
             params.context!.assertCurrent();
             scope.assertCurrent(this.archiveWorkspaceMutations());
-              for (const owner of this.archivedAcpWorktreeOwners(key, current)) {
-                if (isAcpBackendId(owner.source)) this.context.providers.acp.assertWorktreeArchiveReleased(owner.source, owner.id);
-              }
-              if (!current.thread.linkedDirectories.some((directory) => {
-                const worktreePath = linkedDirectoryWorktreePath(directory);
-                return worktreePath && normalizeWorktreePathForComparison(worktreePath) === key;
-              })) throw new Error("The archived thread no longer owns this worktree; the checkout was kept.");
-              if (!managedCheckout && hasExternalMarker()) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
-              if (ownership.external) throw new Error("Externally managed worktree; the checkout was kept.");
-              const users = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
-              if (users.length) throw new Error("Worktree is still used by another active thread; the checkout was kept.");
-            };
+            if (!current.thread.linkedDirectories.some((directory) => {
+              const worktreePath = linkedDirectoryWorktreePath(directory);
+              return worktreePath && normalizeWorktreePathForComparison(worktreePath) === key;
+            })) throw new Error("The archived thread no longer owns this worktree; the checkout was kept.");
+            if (!managedCheckout && hasExternalMarker()) throw new Error("Externally managed worktree; thread archive leaves this checkout in place.");
+            if (ownership.external) throw new Error("Externally managed worktree; the checkout was kept.");
+            const users = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
+            if (users.length) throw new Error("Worktree is still used by another active thread; the checkout was kept.");
+          };
+          checkOwnership();
+          const acpOwners = this.archivedAcpWorktreeOwners(key, current);
+          await prepareAcpOwners(acpOwners);
+          const check = () => {
+            checkOwnership();
+            for (const { source, id } of acpOwners) {
+              if (isAcpBackendId(source)) this.context.providers.acp.assertWorktreeArchiveReleased(source, id);
+            }
+          };
             check();
             scope.reserve(this.archiveWorkspaceMutations());
             return check;
-          } : undefined,
-        });
+        };
+        const usesRemovalAdmission = Boolean(params.context && this.context.providers.codex.listArchiveCleanupThreadsPage);
+        let expectedCheckout: CheckoutIdentity | undefined;
+        let snapshot: WorktreeSnapshotSummary;
+        let admission: ArchiveWorktreeRemovalAdmission;
+        for (;;) {
+          params.context?.assertCurrent();
+          admission = {
+            backend: params.backend, threadId: params.thread.id,
+            worktreePath: normalizeWorktreePathForComparison(candidate.worktreePath),
+            containerPath: managedContainerPath,
+            scope: new ArchiveWorkspaceAdmission(buildThreadIdentityKey(params.backend, params.thread.id), managedContainerPath ?? candidate.worktreePath),
+          };
+          removalAdmission = admission;
+          let removalStarted = false;
+          try {
+            snapshot = await this.host().worktreeArchiveService.archive({
+              backend: params.backend,
+              threadId: params.thread.id,
+              worktreePath: candidate.worktreePath,
+              repositoryPath: candidate.repositoryPath,
+              onStage: usesRemovalAdmission ? (stage) => {
+                if (stage === "removing") removalStarted = true;
+                params.onStage?.(stage);
+              } : params.onStage,
+              maxSnapshotBytes: params.snapshotLimitBytes ?? this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
+              beforeRemove: usesRemovalAdmission ? () => admitRemoval(admission) : undefined,
+              ...(usesRemovalAdmission ? { onCheckoutVerified: (checkout: CheckoutIdentity) => { expectedCheckout ??= checkout; } } : {}),
+              ...(expectedCheckout ? { expectedCheckout } : {}),
+            });
+            break;
+          } catch (error) {
+            if (!(error instanceof ArchiveRemovalNeedsFreshInventoryError) || removalStarted) throw error;
+            // The repository lock may have been held by a sibling checkout.
+            // Drop the stale reservation and take a fresh snapshot and scope.
+            // Only a newly settled archive can invalidate the next attempt this way.
+            this.archiveWorktreeRemovalAdmissions.delete(admission);
+            backendRegistryLog.info("archive worktree cleanup refreshing removal admission", {
+              backend: params.backend, threadId: params.thread.id, worktreePath: candidate.worktreePath,
+            });
+          }
+        }
+        const { scope } = admission;
         removedSnapshot = snapshot;
         params.onStage?.("recording");
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
@@ -5093,7 +5139,7 @@ export class ThreadArchiveCoordinator {
     );
   }
 
-  recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = [], observation = false): void {
+  recordArchiveWorkspaceChange(key?: string, paths: readonly string[] = [], observation = false, archiving = false): void {
     const identity = key ? parseThreadIdentityKey(key) : undefined;
     this.noteArchiveFleetChange(identity ? { backend: identity.backend, threadId: identity.threadId } : undefined, "provider",
       "workspace change without an identity");
@@ -5102,7 +5148,7 @@ export class ThreadArchiveCoordinator {
       if (key) this.observeArchiveFleetIdentity(scope, key);
       const observedPaths = observation && paths.length === 0 ? [""] : paths;
       if (observation && key) scope.observeThread(key, observedPaths);
-      scope.changed(key, observedPaths);
+      scope.changed(key, observedPaths, archiving);
     }
   }
 
@@ -5226,7 +5272,7 @@ export class ThreadArchiveCoordinator {
     else if (workspaceChanged) this.noteArchiveFleetChange(undefined, change, "workspace change without an identity");
     if (workspaceChanged) {
       this.archiveWorkspaceRevision += 1;
-      this.recordArchiveWorkspaceChange(backend && threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths);
+      this.recordArchiveWorkspaceChange(backend && threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths, false, change === "archived");
     }
     this.archiveCleanupReads.invalidate(backend);
     if (!backend || backend === "codex") this.context.providers.codex.invalidateThreadListings?.(notification);

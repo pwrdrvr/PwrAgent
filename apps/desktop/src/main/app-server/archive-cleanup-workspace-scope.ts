@@ -6,9 +6,17 @@ export type ArchiveWorkspaceMutation = { key: string; paths: readonly string[] }
 type OwnershipState = {
   generation: number;
   phase: "unknown" | "refreshing" | "disjoint" | "blocked";
-  changed: boolean;
+  change?: "workspace" | "archiving" | "archived";
   paths: Map<string, boolean | undefined>;
 };
+
+/** A confirmed archive can invalidate the sibling/snapshot inventory. The
+ * caller can rebuild it before starting destructive work. */
+export class ArchiveRemovalNeedsFreshInventoryError extends Error {
+  constructor() {
+    super("Another thread was archived during worktree cleanup; the worktree was kept.");
+  }
+}
 
 export type ArchiveWorkspaceObservation = {
   key: string;
@@ -113,7 +121,7 @@ export class ArchiveWorkspaceAdmission {
   private thread(key: string): OwnershipState {
     let state = this.threads.get(key);
     if (!state) {
-      state = { generation: 0, phase: "unknown", changed: false, paths: new Map() };
+      state = { generation: 0, phase: "unknown", paths: new Map() };
       this.threads.set(key, state);
     }
     return state;
@@ -131,7 +139,7 @@ export class ArchiveWorkspaceAdmission {
    */
   observeDisjoint(key: string, paths: readonly string[]): void {
     if (!key || key === this.ownerKey || this.threads.has(key) || paths.length === 0) return;
-    this.threads.set(key, { generation: 0, phase: "disjoint", changed: false, paths: new Map(paths.map((value) => [value, false])) });
+    this.threads.set(key, { generation: 0, phase: "disjoint", paths: new Map(paths.map((value) => [value, false])) });
   }
 
   observeThread(key: string, paths: readonly string[]): void {
@@ -144,19 +152,27 @@ export class ArchiveWorkspaceAdmission {
     }
   }
 
-  changed(key = "", paths: readonly string[] = []): void {
-    this.thread(key).changed = true;
+  changed(key = "", paths: readonly string[] = [], archiving = false): void {
+    const state = this.thread(key);
+    // Archive acceptance cannot certify ownership evidence invalidated by a
+    // concurrent workspace event, even if both events named the same thread.
+    if (state.change !== "workspace") state.change = archiving ? "archiving" : "workspace";
     this.observeThread(key, paths);
   }
 
+  archiveSettled(key: string): void {
+    const state = this.threads.get(key);
+    if (state?.change === "archiving") state.change = "archived";
+  }
+
   changedThreadKeys(): string[] {
-    return [...this.threads].filter(([key, state]) => key && state.changed).map(([key]) => key);
+    return [...this.threads].filter(([key, state]) => key && state.change).map(([key]) => key);
   }
 
   invalidateOwnership(key: string): number {
     const state = this.thread(key);
     state.generation += 1;
-    state.changed = true;
+    state.change = "workspace";
     state.phase = "refreshing";
     return state.generation;
   }
@@ -207,14 +223,20 @@ export class ArchiveWorkspaceAdmission {
   }
 
   assertCurrent(mutations: readonly ArchiveWorkspaceMutation[]): void {
-    if ([...this.threads.values()].some((state) => state.changed && state.phase !== "disjoint")) {
-      throw new Error("Thread workspace state changed during removal admission; the worktree was kept. Retry archive after it settles.");
+    let needsFreshInventory = false;
+    for (const state of this.threads.values()) {
+      if (!state.change || state.phase === "disjoint") continue;
+      if (state.change !== "archived") {
+        throw new Error("Thread workspace state changed during removal admission; the worktree was kept.");
+      }
+      needsFreshInventory = true;
     }
     if (mutations.some(({ key, paths }) => key !== this.ownerKey
       && (this.threads.get(key)?.phase !== "disjoint"
         || paths.some((value) => this.threads.get(key)?.paths.get(value) !== false)))) {
-      throw new Error("Another thread lifecycle mutation is still in flight and may use this worktree; the worktree was kept. Retry archive after it settles.");
+      throw new Error("Another thread lifecycle mutation is still in flight and may use this worktree; the worktree was kept.");
     }
+    if (needsFreshInventory) throw new ArchiveRemovalNeedsFreshInventoryError();
   }
 }
 

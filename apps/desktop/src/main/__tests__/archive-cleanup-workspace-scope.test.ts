@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
+import { ArchiveRemovalNeedsFreshInventoryError, ArchiveWorkspaceAdmission, ArchiveWorkspaceOwnership, archiveCleanupWorkspaceFilter } from "../app-server/archive-cleanup-workspace-scope";
 
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
@@ -16,6 +16,19 @@ afterEach(async () => {
 });
 
 describe("archive admission workspace scope", () => {
+  it("allows a fresh scan for a settled archive without clearing workspace invalidations", () => {
+    const scope = new ArchiveWorkspaceAdmission("claude:parent", "/fixture/parent");
+    scope.reserve([]);
+    scope.changed("claude:other", [], true);
+    scope.archiveSettled("claude:other");
+    expect(() => scope.assertCurrent([])).toThrow(ArchiveRemovalNeedsFreshInventoryError);
+
+    scope.invalidateOwnership("claude:other");
+    scope.changed("claude:other", [], true);
+    scope.archiveSettled("claude:other");
+    expect(() => scope.assertCurrent([])).toThrow("workspace state changed");
+  });
+
   it("reserves removal against controlled writers while retaining provider invalidation", async () => {
     const scope = new ArchiveWorkspaceAdmission("codex:target", "/fixture/target");
     scope.observeThread("codex:other", ["/fixture/other"]);

@@ -7,6 +7,8 @@ import path from "node:path";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import { ArchiveWorktreeReferences } from "../app-server/archive-worktree-references";
+import type { CheckoutIdentity } from "../app-server/worktree-maintenance-registration";
+import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import * as gitHeadBranch from "../app-server/git-head-branch";
@@ -119,7 +121,10 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
     if (key in object) return object[key as keyof typeof object];
     return vi.fn(async () => String(key).startsWith("list") ? [] : undefined);
   } });
-  const archiveWorktree = vi.fn(async (params: { backend: string; threadId: string; worktreePath: string; beforeRemove?: () => Promise<() => void> }) => {
+  const archiveWorktree = vi.fn(async (params: { backend: string; threadId: string; worktreePath: string;
+    beforeRemove?: () => Promise<() => void>; expectedCheckout?: CheckoutIdentity;
+    onCheckoutVerified?: (checkout: CheckoutIdentity) => void;
+  }) => {
     const assertRemoval = await params.beforeRemove?.();
     assertRemoval?.();
     removedWorktrees.add(path.resolve(params.worktreePath));
@@ -607,6 +612,99 @@ describe("archive cleanup pipeline", () => {
         : { skippedReason: expect.stringContaining(reason === "shared" ? "active-owner" : "Externally managed") }),
     })] });
     if (reason !== "snapshot failure") expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
+  async function archiveClaudeWithOverlappingArchives(count: number, sharesCheckout = false, lateAcp = false) {
+    const fixture = build([]);
+    const ids = ["parent", ...Array.from({ length: count }, (_, index) => `overlap-${index}`)];
+    const sessions = ids.map((id) => {
+      const cwd = sharesCheckout ? "/contrived/parent" : `/contrived/${id}`;
+      return { cwd, thread: { ...codexThread({ id, projectKey: cwd, linkedDirectories: [{
+        id, kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: cwd,
+      }] }), source: "claude" as const } };
+    });
+    const visible = new Set(["parent"]);
+    vi.mocked(fixture.claudeStore.list).mockImplementation(async () => sessions.filter(({ thread }) => visible.has(thread.id)));
+    vi.spyOn(fixture.claudeStore, "read").mockImplementation(async (id) => sessions.find(({ thread }) => thread.id === id)!);
+    vi.spyOn(fixture.claudeStore, "save").mockImplementation(async ({ thread }) => { visible.add(thread.id); });
+    const savedSnapshots = vi.fn(async () => {});
+    Object.assign(fixture.store, { upsertWorktreeSnapshot: savedSnapshots });
+    const backendId = "acp:archive-fixture";
+    const acpId = "late-acp-owner";
+    let session: ReturnType<AcpBackendAdapter["getSession"]> = {
+      backendId, sessionId: acpId, cwd: "/contrived/parent", title: "ACP owner",
+      createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle",
+    };
+    let released = false;
+    const acpMocks = lateAcp ? [
+      vi.spyOn(AcpBackendAdapter.prototype, "archiveCleanupBackendIds").mockResolvedValue([backendId]),
+      vi.spyOn(AcpBackendAdapter.prototype, "listArchiveCleanupSessionsPage").mockImplementation((_backend, options) => ({
+        sessions: session?.archivedAt && options.archived ? [session] : [],
+      })),
+      vi.spyOn(AcpBackendAdapter.prototype, "getSession").mockImplementation((_backend, id) => id === acpId ? session : undefined),
+      vi.spyOn(AcpBackendAdapter.prototype, "upsertSession").mockImplementation((next) => { session = next; }),
+      vi.spyOn(AcpBackendAdapter.prototype, "prepareWorktreeArchive").mockImplementation(async () => { released = true; }),
+      vi.spyOn(AcpBackendAdapter.prototype, "assertWorktreeArchiveReleased").mockImplementation(() => {
+        if (!released) throw new Error("ACP still holds the checkout");
+      }),
+    ] : [];
+    const archive = fixture.archiveWorktree.getMockImplementation()!;
+    const checkout = {
+      worktreePath: "/contrived/parent", gitDirectory: "/contrived/repo/.git/worktrees/parent",
+      commonDirectory: "/contrived/repo/.git", checkoutIdentity: "checkout", gitDirectoryIdentity: "git-dir",
+    };
+    let injected = false;
+    fixture.archiveWorktree.mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
+      params.onCheckoutVerified?.(checkout);
+      const guard = await params.beforeRemove!();
+      if (params.threadId === "parent" && !injected) {
+        injected = true;
+        // The checkout has a snapshot and is waiting for the repository's
+        // removal lock when the next local archive changes membership.
+        for (const threadId of ids.slice(1)) {
+          await fixture.registry.archiveThread({ backend: "claude", threadId, backgroundCleanup: true, preserveWorktrees: true });
+        }
+        if (lateAcp) await fixture.registry.archiveThread({ backend: backendId, threadId: acpId, backgroundCleanup: true, preserveWorktrees: true });
+      }
+      return guard;
+    } }));
+    const completion = new Promise<AgentEvent>((resolve) => {
+      fixture.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "parent") resolve(event);
+      });
+    });
+    try {
+      const response = await fixture.registry.archiveThread({ backend: "claude", threadId: "parent", backgroundCleanup: true });
+      expect(response.cleanupPending).toBe(true);
+      const event = await drivePacer(fixture.registry, completion);
+      expect(event.notification.params).toMatchObject({ threadId: "parent", cleanup: [{
+        worktreePath: "/contrived/parent", removedWorktree: true,
+      }] });
+      expect(fixture.removedWorktrees.has(path.resolve("/contrived/parent"))).toBe(true);
+      expect(fixture.archiveWorktree).toHaveBeenCalledTimes(2);
+      expect(fixture.archiveWorktree).toHaveBeenNthCalledWith(2, expect.objectContaining({ expectedCheckout: checkout }));
+      const expectedOwners = [...(sharesCheckout ? ids : ["parent"]), ...(lateAcp ? [acpId] : [])];
+      expect(savedSnapshots).toHaveBeenCalledTimes(expectedOwners.length);
+      for (const threadId of expectedOwners) {
+        expect(savedSnapshots).toHaveBeenCalledWith(expect.objectContaining({
+          threadId, snapshot: expect.objectContaining({ worktreePath: "/contrived/parent" }),
+        }));
+      }
+    } finally {
+      await fixture.registry.close();
+      for (const mock of acpMocks) mock.mockRestore();
+    }
+  }
+
+  it("removes an archived Claude checkout when another local archive finishes after admission", async () => {
+    vi.useFakeTimers();
+    await archiveClaudeWithOverlappingArchives(1);
+  });
+
+  it("settled archive-only mutations do not strand already archived checkouts", async () => {
+    vi.useFakeTimers();
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.boolean(), fc.boolean(),
+      archiveClaudeWithOverlappingArchives), { numRuns: 10, examples: [[1, false, true]] });
   });
 
   it("reports Claude archive metadata failure instead of an empty successful cleanup", async () => {
