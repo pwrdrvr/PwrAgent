@@ -60,7 +60,23 @@ delete env.UPDATE_SQLITE_WRITE_BUDGETS;
 function pnpm(log, ...args) {
   const fd = openSync(log, "w");
   try {
-    const result = spawnSync("pnpm", args, { cwd: checkout, env, stdio: ["ignore", fd, fd] });
+    const options = { cwd: checkout, env, stdio: ["ignore", fd, fd] };
+    let result;
+    if (process.platform === "win32") {
+      // cmd finds pnpm.exe or pnpm.cmd. Expand each argument inside its own
+      // quotes so a pattern or report path containing spaces stays one token.
+      const commandEnv = { ...env };
+      const quotedArgs = args.map((arg, index) => {
+        const key = `PWRAGENT_MUTATION_ARG_${index}`;
+        commandEnv[key] = arg;
+        return `"%${key}%"`;
+      });
+      result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/v:off", "/c", `pnpm ${quotedArgs.join(" ")}`], {
+        ...options, env: commandEnv, windowsVerbatimArguments: true,
+      });
+    } else {
+      result = spawnSync("pnpm", args, options);
+    }
     if (result.error) throw result.error;
     return result.status;
   } finally {
@@ -86,7 +102,7 @@ function run(name, pattern) {
       throw new Error(`${name}: expected an assertion failure in ${pattern}; see ${log}`);
     }
   } else if (status !== 0 || report.success !== true || failures.length !== 0
-    || suites.some(suite => !report.testResults.some(file => file.name.endsWith("/" + suite)
+    || suites.some(suite => !report.testResults.some(file => file.name.replaceAll("\\", "/").endsWith("/" + suite)
       && file.assertionResults.some(test => test.status === "passed")))) {
     throw new Error(`Unmutated suites must pass; see ${log}`);
   }

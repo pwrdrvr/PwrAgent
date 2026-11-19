@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const baseline = "cdf4b930c350d3513e28b294cb00abd184a94d04";
+const branchBase = "cdf4b930c350d3513e28b294cb00abd184a94d04";
 const core = "apps/desktop/src/main/messaging/core/";
 const controller = "messaging-controller.ts";
 const browse = "messaging-browse-workflow.ts";
@@ -12,6 +12,9 @@ const browse = "messaging-browse-workflow.ts";
 const extraction = process.argv.includes("--worktree") ? undefined : execFileSync("git", [
   "log", "--first-parent", "--diff-filter=A", "-1", "--format=%H", "HEAD", "--", core + browse,
 ], { encoding: "utf8" }).trim() || undefined;
+const baseline = extraction
+  ? execFileSync("git", ["rev-parse", extraction + "^1"], { encoding: "utf8" }).trim()
+  : branchBase;
 
 function source(name, revision) {
   const path = core + name;
@@ -61,14 +64,30 @@ assert.equal(moved.size, 10);
 const ctor = facade.get("constructor");
 const wiring = ctor.body.statements.find(node => node.getText(current).startsWith("this.browse = new MessagingBrowseWorkflow("));
 assert.ok(wiring);
-const ports = wiring.expression.right.arguments[0].properties;
-for (const [name, read] of Object.entries({
-  backend: "readBackend", store: "readStore", capabilityProfile: "readCapabilityProfile",
-  pendingIntentTtlMs: "readPendingIntentTtl", disposed: "readDisposed", logger: "readLogger",
-})) {
-  const port = ports.find(node => node.name.getText(current) === name);
-  assert.equal(port.getText(current), `get ${name}() { return ${read}(); }`);
-}
+const args = wiring.expression.right.arguments;
+assert.equal(args.length, 1, "browse constructor arguments");
+assert.ok(ts.isObjectLiteralExpression(args[0]), "browse context");
+// Compare every port before reversing the extraction's constructor block.
+// The exact arrow bodies preserve the receiver, argument order, and late reads.
+assert.deepEqual(args[0].properties.map(node => node.getText(current)), [
+  "get backend() { return readBackend(); }",
+  "get store() { return readStore(); }",
+  "get capabilityProfile() { return readCapabilityProfile(); }",
+  "get pendingIntentTtlMs() { return readPendingIntentTtl(); }",
+  "get disposed() { return readDisposed(); }",
+  "get logger() { return readLogger(); }",
+  "now: () => this.now()",
+  "deliver: (...args) => this.deliver(...args)",
+  "storePendingIntent: (...args) => this.storePendingIntent(...args)",
+  "newIntentId: (...args) => this.newIntentId(...args)",
+  "resolveNewThreadBackendForSession: (...args) => this.newThreadWorkflow.resolveNewThreadBackendForSession(...args)",
+  "loadDefaultAgentBackendSummaries: () => this.inboundTurns.loadDefaultAgentBackendSummaries()",
+  "actorHasPermission: (...args) => this.accessControl.actorHasPermission(...args)",
+  "canResumeFullAccessThreads: () => this.accessControl.canResumeFullAccessThreads()",
+  "deliverDefaultAgentCommandError: (...args) => this.deliverDefaultAgentCommandError(...args)",
+  "clearPendingNewThreadPrompt: (sessionId) => this.inboundTurns.clearPendingNewThreadPrompt(sessionId)",
+  "clearPendingFullAccessNewThreadPrompt: (sessionId) => { this.inboundTurns.pendingFullAccessNewThreadPrompts.delete(sessionId); }",
+], "browse context wiring");
 const cancels = owner.get("cancelProgressiveBrowse").body.getText(workflow).slice(6, -4);
 const dispose = owner.get("dispose").body.getText(workflow).slice(6, -4);
 for (const [name, node] of before) {
