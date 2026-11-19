@@ -21,6 +21,7 @@
     "backend.describeThreadMcpConnections",
     "backend.detachDirectoryFromThread",
     "backend.detachThreadPullRequest",
+    "backend.dismissFailedSubAgents",
     "backend.ensureDirectoryLaunchpad",
     "backend.forkThread",
     "backend.getLoadStatus",

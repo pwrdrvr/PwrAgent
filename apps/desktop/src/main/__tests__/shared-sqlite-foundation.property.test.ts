@@ -16,7 +16,8 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
   // additive owner-job, search-key, OpenAI Decisions registry, compaction
-  // recovery guard, research, and request-pricing changes that followed it.
+  // recovery guard, research, request-pricing, and sub-agent dismissal changes
+  // that followed it.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "openai_decision_versions"
@@ -28,9 +29,15 @@ function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string
     && row.tbl_name !== "research_items"
     && row.tbl_name !== "research_deliveries"
     && row.name !== "idx_thread_usage_lines_identity"
-  ).map(row => row.name === "thread_usage_lines"
-    ? { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") }
-    : row) : rows;
+  ).map(row => {
+    if (row.name === "thread_usage_lines") {
+      return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
+    }
+    if (row.name === "thread_sub_agents") {
+      return { ...row, sql: row.sql?.replace(/^ {2}dismissed_from_strip INTEGER NOT NULL DEFAULT 0,\n/m, "") };
+    }
+    return row;
+  }) : rows;
   return {
     sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
     objects: compared.length,
