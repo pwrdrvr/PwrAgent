@@ -2,6 +2,7 @@ import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
 import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
+import type { DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
@@ -1060,6 +1061,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request?: AppServerListSkillsRequest
   ) => Promise<AppServerListSkillsResponse>;
   getPrActivity?: () => Promise<PrActivitySnapshot>;
+  /** Decisions visible to a local thread, and the batches it ran. */
+  readDecisionsRail?: (request: DecisionsRailThreadRequest) => Promise<DecisionsRailSnapshot>;
+  /** One page of a batch's finished items. */
+  readDecisionsRailBatch?: (request: DecisionsRailBatchRequest) => Promise<DecisionsRailBatchPage>;
+  /** Stop (requests in flight finish) or Cancel (they are aborted) a running batch. */
+  actOnDecisionsRailBatch?: (request: DecisionsRailBatchActionRequest) => Promise<DecisionsRailBatchActionResult>;
+  /** Opens the batch's JSONL results file; main resolves the path from the batch id. */
+  openDecisionsRailResults?: (request: DecisionsRailOpenResultsRequest) => Promise<DecisionsRailOpenResultsResult>;
   searchResearch?: (request: ResearchSearchRequest) => Promise<ResearchSearchPage>;
   readResearchItem?: (request: ResearchItemReadRequest) => Promise<ResearchItemContext>;
   updateResearchItem?: (request: ResearchWorkRequest) => Promise<ResearchItemContext>;

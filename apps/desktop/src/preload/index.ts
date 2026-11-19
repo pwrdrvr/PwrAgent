@@ -1,4 +1,5 @@
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
+import type { DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
@@ -854,6 +855,10 @@ import {
   TRANSCRIPT_IMAGE_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_GET_PR_ACTIVITY_CHANNEL,
+  DECISIONS_RAIL_BATCH_ACTION_CHANNEL,
+  DECISIONS_RAIL_BATCH_CHANNEL,
+  DECISIONS_RAIL_OPEN_RESULTS_CHANNEL,
+  DECISIONS_RAIL_SNAPSHOT_CHANNEL,
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
@@ -1939,6 +1944,14 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_LIST_SKILLS_CHANNEL, request),
   getPrActivity: async (): Promise<PrActivitySnapshot> =>
     await ipcRenderer.invoke(APP_SERVER_GET_PR_ACTIVITY_CHANNEL),
+  readDecisionsRail: async (request: DecisionsRailThreadRequest): Promise<DecisionsRailSnapshot> =>
+    await ipcRenderer.invoke(DECISIONS_RAIL_SNAPSHOT_CHANNEL, request),
+  readDecisionsRailBatch: async (request: DecisionsRailBatchRequest): Promise<DecisionsRailBatchPage> =>
+    await ipcRenderer.invoke(DECISIONS_RAIL_BATCH_CHANNEL, request),
+  actOnDecisionsRailBatch: async (request: DecisionsRailBatchActionRequest): Promise<DecisionsRailBatchActionResult> =>
+    await ipcRenderer.invoke(DECISIONS_RAIL_BATCH_ACTION_CHANNEL, request),
+  openDecisionsRailResults: async (request: DecisionsRailOpenResultsRequest): Promise<DecisionsRailOpenResultsResult> =>
+    await ipcRenderer.invoke(DECISIONS_RAIL_OPEN_RESULTS_CHANNEL, request),
   searchResearch: async (request: ResearchSearchRequest): Promise<ResearchSearchPage> =>
     await ipcRenderer.invoke(RESEARCH_SEARCH_CHANNEL, request),
   readResearchItem: async (request: ResearchItemReadRequest): Promise<ResearchItemContext> =>

@@ -17,6 +17,19 @@ const openAIDecisionsLog = getMainLogger("pwragent:openai-decisions");
 
 let flushPendingUsage: (() => Promise<void>) | undefined;
 
+/** What the thread's Decisions tab reads and does, on this owner's decisions service. */
+export type OpenAIDecisionsRail = Pick<
+  OpenAIDecisionsService,
+  "railSnapshot" | "railBatchPage" | "operatorBatchAction" | "railResultsFile"
+>;
+
+let rail: OpenAIDecisionsRail | undefined;
+
+/** The Decisions tab's view of this owner's decisions, once the handler is installed. */
+export function getOpenAIDecisionsRail(): OpenAIDecisionsRail | undefined {
+  return rail;
+}
+
 /**
  * Cancels running decision batches, then writes batched decision usage
  * before the profile database closes, and writes any request still in
@@ -77,6 +90,12 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     },
   });
   flushPendingUsage = async () => await service.close();
+  rail = {
+    railSnapshot: async (caller) => await service.railSnapshot(caller),
+    railBatchPage: async (caller, params) => await service.railBatchPage(caller, params),
+    operatorBatchAction: async (caller, batchId, action) => await service.operatorBatchAction(caller, batchId, action),
+    railResultsFile: async (caller, batchId) => await service.railResultsFile(caller, batchId),
+  };
   return {
     register: (caller, args) => service.register(caller, args),
     list: (caller, args) => service.list(caller, args),

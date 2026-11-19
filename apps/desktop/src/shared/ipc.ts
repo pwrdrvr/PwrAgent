@@ -238,6 +238,10 @@ export const RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL = "research:harness-reveal-c
 export const RESEARCH_WITHDRAW_CHANNEL = "research:withdraw";
 export const RESEARCH_EVENTS_CHANNEL = "research:events";
 export const RESEARCH_CHANGES_CHANNEL = "research:changes";
+export const DECISIONS_RAIL_SNAPSHOT_CHANNEL = "decisions-rail:snapshot";
+export const DECISIONS_RAIL_BATCH_CHANNEL = "decisions-rail:batch";
+export const DECISIONS_RAIL_BATCH_ACTION_CHANNEL = "decisions-rail:batch-action";
+export const DECISIONS_RAIL_OPEN_RESULTS_CHANNEL = "decisions-rail:open-results";
 /** A thread's armed reviews and Auto-fix runs, read from its owner. */
 export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
 /** Don't auto-fix: turns Auto-fix off for one running review. */

@@ -22,6 +22,7 @@ export { CloseIcon } from "./CloseIcon";
 export { CommitIcon } from "./CommitIcon";
 export { ConnectionsIcon } from "./ConnectionsIcon";
 export { CopyIcon } from "./CopyIcon";
+export { DecisionsIcon } from "./DecisionsIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { DraftIcon } from "./DraftIcon";
 export { EditorIcon } from "./EditorIcon";

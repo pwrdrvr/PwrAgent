@@ -156,4 +156,5 @@ export * from "./thread-replay-paging";
 export * from "./transcript-image-sources";
 export * from "./research-harness";
 export * from "./research";
+export * from "./decisions-rail";
 export * from "./pr-merge-queue";

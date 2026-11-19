@@ -5108,3 +5108,59 @@ describe("ThreadContextPanel", () => {
     expect(onEditedFilesDockChange).toHaveBeenCalledWith("above");
   });
 });
+
+describe("ThreadContextPanel Decisions tab", () => {
+  const emptyRail = { decisions: [], batches: [], now: 1_800_000_000_000 };
+  const railWithDecision = {
+    ...emptyRail,
+    decisions: [{
+      decisionId: "dec_1",
+      name: "triage_relevance",
+      version: 2,
+      scope: "thread" as const,
+      provider: "openai" as const,
+      providerDisabled: false,
+      questions: [{ type: "predicate" as const, name: "relevant" }],
+      inputSchema: { type: "object", properties: { title: { type: "string" } } },
+    }],
+  };
+
+  // Rule: the tab shows only once the thread can see a decision or has run
+  // a batch, sits right after Tool calls, and a saved Decisions tab on a
+  // thread with neither falls back to Thread info.
+  it("shows only for a thread with a decision or a batch, after Tool calls", async () => {
+    const readDecisionsRail = vi.fn(async () => railWithDecision);
+    renderPanel({ threadToolAccountingEnabled: true, desktopApi: { readDecisionsRail } });
+    const tab = await screen.findByRole("tab", { name: "Decisions" });
+    const names = screen.getAllByRole("tab").map((element) => element.getAttribute("aria-label") ?? element.textContent);
+    expect(names.indexOf("Decisions")).toBe(names.indexOf("Tool calls") + 1);
+    expect(tab).toBeInTheDocument();
+    expect(readDecisionsRail).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" });
+  });
+
+  it("hides for a thread with neither, even when the saved tab is Decisions", async () => {
+    const readDecisionsRail = vi.fn(async () => emptyRail);
+    renderPanel({ activeTab: "decisions", pinned: true, desktopApi: { readDecisionsRail } });
+    await waitFor(() => expect(readDecisionsRail).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Decisions" })).not.toBeInTheDocument());
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
+  });
+
+  it("never asks for a thread another instance owns", () => {
+    const readDecisionsRail = vi.fn(async () => railWithDecision);
+    renderPanel({
+      desktopApi: { readDecisionsRail },
+      thread: {
+        ...baseThread,
+        federation: {
+          ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+          capabilities: [],
+        },
+      } as NavigationThreadSummary,
+    });
+    expect(screen.queryByRole("tab", { name: "Decisions" })).not.toBeInTheDocument();
+    expect(readDecisionsRail).not.toHaveBeenCalled();
+  });
+});
