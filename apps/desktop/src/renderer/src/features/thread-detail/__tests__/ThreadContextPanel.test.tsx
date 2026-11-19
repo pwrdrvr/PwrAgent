@@ -9,7 +9,8 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
+import { decisionBatchSubAgentId } from "@pwragent/shared";
 import type {
   BackendSummary,
   AppServerThreadEntry,
@@ -5144,6 +5145,65 @@ describe("ThreadContextPanel Decisions tab", () => {
     await waitFor(() => expect(readDecisionsRail).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("tab", { name: "Decisions" })).not.toBeInTheDocument());
     expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
+  });
+
+  // Rule: a decision batch's Sub-agents card switches the rail to the
+  // Decisions tab and opens that batch's dialog there.
+  it("opens a batch from its Sub-agents card in the Decisions tab", async () => {
+    const batch = {
+      batchId: "batch_run-1",
+      decisionId: "dec_1",
+      name: "triage_relevance",
+      version: 2,
+      provider: "openai" as const,
+      state: "running" as const,
+      stopping: false,
+      background: true,
+      count: 1000,
+      finished: 640,
+      succeeded: 631,
+      failed: 9,
+      skipped: 0,
+      concurrency: 8,
+      createdAt: 1_800_000_000_000,
+      startedAt: 1_800_000_000_000,
+      hasResultsFile: true,
+    };
+    const readDecisionsRail = vi.fn(async () => ({ ...railWithDecision, now: Date.now(), batches: [batch] }));
+    const readDecisionsRailBatch = vi.fn(async () => ({ batch, items: [] }));
+    const onActiveTabChange = vi.fn<(tab: ContextTabId) => void>();
+    function Stateful() {
+      const [tab, setTab] = useState<ContextTabId>("subagents");
+      return (
+        <ThreadContextPanel
+          activeTab={tab}
+          backends={[baseBackend]}
+          pinned
+          desktopApi={{ readDecisionsRail, readDecisionsRailBatch }}
+          thread={{
+            ...baseThread,
+            subAgents: [{
+              monitorId: decisionBatchSubAgentId("batch_run-1"),
+              task: "triage_relevance v2 · 1000 items",
+              status: "running",
+              createdAt: 1_800_000_000_000,
+              updatedAt: 1_800_000_000_000,
+              backend: "codex",
+              agentName: "PwrAgent",
+            }],
+          }}
+          onActiveTabChange={(next) => {
+            onActiveTabChange(next);
+            setTab(next);
+          }}
+        />
+      );
+    }
+    render(<Stateful />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open in Decisions" }));
+    expect(onActiveTabChange).toHaveBeenCalledWith("decisions");
+    await screen.findByRole("dialog", { name: "Decision batch: triage_relevance v2" });
+    expect(readDecisionsRailBatch).toHaveBeenCalledWith(expect.objectContaining({ batchId: "batch_run-1" }));
   });
 
   it("never asks for a thread another instance owns", () => {

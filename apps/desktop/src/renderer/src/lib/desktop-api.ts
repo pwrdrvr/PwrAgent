@@ -2,7 +2,7 @@ import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
 import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
-import type { DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
+import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
@@ -1069,6 +1069,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   actOnDecisionsRailBatch?: (request: DecisionsRailBatchActionRequest) => Promise<DecisionsRailBatchActionResult>;
   /** Opens the batch's JSONL results file; main resolves the path from the batch id. */
   openDecisionsRailResults?: (request: DecisionsRailOpenResultsRequest) => Promise<DecisionsRailOpenResultsResult>;
+  /** The profile-scope decisions, for Settings → AI Providers → Decisions. */
+  readProfileDecisions?: () => Promise<DecisionsProfileList>;
+  /** Deletes one profile-scope decision; a thread's own decisions are refused. */
+  deleteProfileDecision?: (request: DecisionsProfileDeleteRequest) => Promise<DecisionsProfileDeleteResult>;
   searchResearch?: (request: ResearchSearchRequest) => Promise<ResearchSearchPage>;
   readResearchItem?: (request: ResearchItemReadRequest) => Promise<ResearchItemContext>;
   updateResearchItem?: (request: ResearchWorkRequest) => Promise<ResearchItemContext>;

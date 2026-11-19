@@ -107,6 +107,7 @@ function page(request: DecisionsRailBatchRequest): DecisionsRailBatchPage {
 
 function renderPanel(overrides: {
   snapshot?: DecisionsRailSnapshot;
+  openBatchRequest?: { batchId: string; requestedAt: number };
   readDecisionsRailBatch?: (request: DecisionsRailBatchRequest) => Promise<DecisionsRailBatchPage>;
 } = {}) {
   const readDecisionsRailBatch = vi.fn(overrides.readDecisionsRailBatch ?? (async (request: DecisionsRailBatchRequest) => page(request)));
@@ -114,6 +115,7 @@ function renderPanel(overrides: {
   const openDecisionsRailResults = vi.fn(async () => ({ opened: true }));
   const onRefresh = vi.fn();
   const onDetailsModalOpenChange = vi.fn();
+  const onOpenBatchRequestSettled = vi.fn();
   const panel = (next: DecisionsRailSnapshot | undefined) => (
     <DecisionsPanel
       desktopApi={{ readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults }}
@@ -122,11 +124,13 @@ function renderPanel(overrides: {
       error={false}
       onRefresh={onRefresh}
       onDetailsModalOpenChange={onDetailsModalOpenChange}
+      openBatchRequest={overrides.openBatchRequest}
+      onOpenBatchRequestSettled={onOpenBatchRequestSettled}
     />
   );
   const view = render(panel(overrides.snapshot ?? snapshot));
   const rerender = (next: DecisionsRailSnapshot | undefined) => view.rerender(panel(next));
-  return { readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults, onRefresh, onDetailsModalOpenChange, rerender, unmount: view.unmount };
+  return { readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults, onRefresh, onDetailsModalOpenChange, onOpenBatchRequestSettled, rerender, unmount: view.unmount };
 }
 
 it("lists registered decisions and marks one whose provider is off", () => {
@@ -240,3 +244,25 @@ it("keeps polling a running batch after a failed read", async () => {
   await within(dialog).findByText("{\"title\":\"Sidebar flickers when a thread finishes\"}", undefined, { timeout: 4_000 });
   expect(api.readDecisionsRailBatch).toHaveBeenCalledTimes(2);
 }, 10_000);
+
+// Rule: a batch asked for from its Sub-agents card opens once the tab's
+// snapshot lists it; a snapshot older than the request is waited out, and
+// a newer one without it drops the request without opening anything.
+it("opens a batch asked for from Sub-agents once a snapshot lists it", async () => {
+  const stale = { ...snapshot, now: NOW - 1_000, batches: [stopped] };
+  const api = renderPanel({ snapshot: stale, openBatchRequest: { batchId: "batch_run-1", requestedAt: NOW } });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.onOpenBatchRequestSettled).not.toHaveBeenCalled();
+
+  api.rerender(snapshot);
+  await screen.findByRole("dialog", { name: "Decision batch: triage_relevance v2" });
+  expect(api.onOpenBatchRequestSettled).toHaveBeenCalledTimes(1);
+  expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(true);
+});
+
+it("drops a request for a batch a fresh snapshot no longer lists", () => {
+  const api = renderPanel({ openBatchRequest: { batchId: "batch_gone-1", requestedAt: NOW - 1 } });
+  expect(api.onOpenBatchRequestSettled).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.onDetailsModalOpenChange).not.toHaveBeenCalledWith(true);
+});

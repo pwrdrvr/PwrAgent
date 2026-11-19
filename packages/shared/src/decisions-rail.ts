@@ -139,6 +139,23 @@ export type DecisionsRailOpenResultsRequest = DecisionsRailThreadRequest & { bat
 
 export type DecisionsRailOpenResultsResult = { opened: boolean; error?: string };
 
+/**
+ * Settings → AI Providers → Decisions: the profile's own decisions. They
+ * outlive any one thread, so the operator sees and deletes them here
+ * rather than only from a thread's rail.
+ */
+export type DecisionsProfileDecision = DecisionsRailDecision & {
+  /** When this version was registered. */
+  createdAt: number;
+};
+
+export type DecisionsProfileList = { decisions: DecisionsProfileDecision[] };
+
+export type DecisionsProfileDeleteRequest = { decisionId: string };
+
+/** "not_found": no profile decision with that id is active, such as one an agent deleted first. */
+export type DecisionsProfileDeleteResult = { outcome: "deleted" | "not_found" };
+
 /** stoppedBy.code of a batch the operator stopped from the thread, as opposed to one an error stopped. */
 export const DECISIONS_OPERATOR_STOP_CODE = "stopped_by_operator";
 

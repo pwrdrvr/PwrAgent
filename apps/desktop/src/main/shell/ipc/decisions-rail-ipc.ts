@@ -2,6 +2,9 @@ import { ipcMain, shell, type WebContents } from "electron";
 import {
   DECISIONS_RAIL_PAGE_MAX_ITEMS,
   isAppServerBackendKind,
+  type DecisionsProfileDeleteRequest,
+  type DecisionsProfileDeleteResult,
+  type DecisionsProfileList,
   type DecisionsRailBatchActionRequest,
   type DecisionsRailBatchActionResult,
   type DecisionsRailBatchPage,
@@ -12,6 +15,8 @@ import {
   type DecisionsRailThreadRequest,
 } from "@pwragent/shared";
 import {
+  DECISIONS_PROFILE_DELETE_CHANNEL,
+  DECISIONS_PROFILE_LIST_CHANNEL,
   DECISIONS_RAIL_BATCH_ACTION_CHANNEL,
   DECISIONS_RAIL_BATCH_CHANNEL,
   DECISIONS_RAIL_OPEN_RESULTS_CHANNEL,
@@ -26,13 +31,17 @@ const CHANNELS = [
   DECISIONS_RAIL_BATCH_CHANNEL,
   DECISIONS_RAIL_BATCH_ACTION_CHANNEL,
   DECISIONS_RAIL_OPEN_RESULTS_CHANNEL,
+  DECISIONS_PROFILE_LIST_CHANNEL,
+  DECISIONS_PROFILE_DELETE_CHANNEL,
 ];
 
 /**
  * The thread's Decisions tab. Decisions run in the owner's decisions
  * service, so only a local main window reads them; a federation viewer
  * sees the tab on the owning instance. The window names a thread and a
- * batch id, never a path: the results file is resolved here.
+ * batch id, never a path: the results file is resolved here. Settings →
+ * AI Providers → Decisions lists and deletes the profile-scope decisions
+ * through the same service.
  */
 export function registerDecisionsRailIpcHandlers(): void {
   disposeDecisionsRailIpcHandlers();
@@ -68,6 +77,17 @@ export function registerDecisionsRailIpcHandlers(): void {
     if (await shell.openPath(file)) shell.showItemInFolder(file);
     return { opened: true };
   });
+  ipcMain.handle(DECISIONS_PROFILE_LIST_CHANNEL, (event): DecisionsProfileList => {
+    return { decisions: localRail(event.sender).profileDecisions() };
+  });
+  ipcMain.handle(DECISIONS_PROFILE_DELETE_CHANNEL, (event, request: DecisionsProfileDeleteRequest): DecisionsProfileDeleteResult => {
+    const rail = localRail(event.sender);
+    const decisionId: unknown = request?.decisionId;
+    if (typeof decisionId !== "string" || decisionId.length === 0 || decisionId.length > 200) {
+      throw new Error("Invalid decision id");
+    }
+    return rail.deleteProfileDecision(decisionId);
+  });
 }
 
 export function disposeDecisionsRailIpcHandlers(): void {
@@ -75,7 +95,7 @@ export function disposeDecisionsRailIpcHandlers(): void {
 }
 
 function localRail(sender: WebContents): OpenAIDecisionsRail {
-  if (!isLocalMainWindowWebContents(sender)) throw new Error("Open decisions on the instance that owns this thread");
+  if (!isLocalMainWindowWebContents(sender)) throw new Error("Open decisions on the PwrAgent instance that owns them");
   const rail = getOpenAIDecisionsRail();
   if (!rail) throw new Error("Decisions are unavailable in this PwrAgent runtime");
   return rail;

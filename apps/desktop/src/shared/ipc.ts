@@ -245,6 +245,9 @@ export const DECISIONS_RAIL_SNAPSHOT_CHANNEL = "decisions-rail:snapshot";
 export const DECISIONS_RAIL_BATCH_CHANNEL = "decisions-rail:batch";
 export const DECISIONS_RAIL_BATCH_ACTION_CHANNEL = "decisions-rail:batch-action";
 export const DECISIONS_RAIL_OPEN_RESULTS_CHANNEL = "decisions-rail:open-results";
+/** Settings → AI Providers → Decisions: the profile-scope decisions, and Delete. */
+export const DECISIONS_PROFILE_LIST_CHANNEL = "decisions-profile:list";
+export const DECISIONS_PROFILE_DELETE_CHANNEL = "decisions-profile:delete";
 /** A thread's armed reviews and Auto-fix runs, read from its owner. */
 export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
 /** Don't auto-fix: turns Auto-fix off for one running review. */

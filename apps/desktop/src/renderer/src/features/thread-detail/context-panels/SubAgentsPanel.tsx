@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  decisionBatchIdFromSubAgentId,
   hasStoppableSubAgentRun,
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
@@ -41,6 +42,11 @@ type SubAgentsPanelProps = {
   loading?: boolean;
   desktopApi?: DesktopApi;
   onDetailsModalOpenChange?: (open: boolean) => void;
+  /**
+   * Opens a decision batch's card in the Decisions tab, which shows its
+   * items. Absent where that tab is not, such as a peer's thread.
+   */
+  onOpenDecisionBatch?: (batchId: string) => void;
   onRefreshNavigation?: () => Promise<void>;
   pricingDisplayOptions?: PricingDisplayOptions;
   thread: NavigationThreadSummary;
@@ -264,6 +270,9 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
               subAgent.lastMessage && subAgent.lastMessage !== originSentence
                 ? subAgent.lastMessage
                 : undefined;
+            const decisionBatchId = props.onOpenDecisionBatch
+              ? decisionBatchIdFromSubAgentId(subAgent.monitorId)
+              : undefined;
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
               (subAgent.status === "pending"
@@ -325,13 +334,23 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
                   />
                 ) : null}
                 <div className="context-list__actions rail-card__actions">
-                  <button
-                    className="context-list__action rail-card__details-action"
-                    type="button"
-                    onClick={() => openDetails(subAgent)}
-                  >
-                    Details
-                  </button>
+                  {decisionBatchId !== undefined ? (
+                    <button
+                      className="context-list__action rail-card__details-action"
+                      type="button"
+                      onClick={() => props.onOpenDecisionBatch?.(decisionBatchId)}
+                    >
+                      Open in Decisions
+                    </button>
+                  ) : (
+                    <button
+                      className="context-list__action rail-card__details-action"
+                      type="button"
+                      onClick={() => openDetails(subAgent)}
+                    >
+                      Details
+                    </button>
+                  )}
                   {canStop ? (
                     <button
                       className="context-list__action context-list__action--danger"

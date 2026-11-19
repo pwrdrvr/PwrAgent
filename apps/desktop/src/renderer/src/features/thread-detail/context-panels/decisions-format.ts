@@ -186,6 +186,24 @@ export function decisionsRailPollDelayMs(snapshot: DecisionsRailSnapshot | undef
   return snapshot?.batches.some(isDecisionBatchRunning) ? 2_000 : 10_000;
 }
 
+/** A Sub-agents card asked the Decisions tab to open one batch's dialog. */
+export type DecisionBatchOpenRequest = { batchId: string; requestedAt: number };
+
+/**
+ * What the tab does with a request to open a batch: open it once a
+ * snapshot lists it; drop it once a snapshot taken after the request still
+ * does not (the batch aged out of memory and has no file); otherwise wait
+ * for the next read, since the snapshot on screen may predate the batch.
+ */
+export function decisionBatchOpenStep(
+  request: DecisionBatchOpenRequest,
+  snapshot: Pick<DecisionsRailSnapshot, "batches" | "now"> | undefined,
+): "open" | "drop" | "wait" {
+  if (!snapshot) return "wait";
+  if (snapshot.batches.some((batch) => batch.batchId === request.batchId)) return "open";
+  return snapshot.now >= request.requestedAt ? "drop" : "wait";
+}
+
 /** The tab shows once the thread has a decision it can see or a batch it ran. */
 export function decisionsRailHasContent(snapshot: DecisionsRailSnapshot | undefined): boolean {
   return Boolean(snapshot && (snapshot.decisions.length > 0 || snapshot.batches.length > 0));

@@ -10,6 +10,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { DecisionBatchDetailsModal } from "./DecisionBatchDetailsModal";
 import {
   decisionBatchCountsLabel,
+  decisionBatchOpenStep,
   decisionBatchStatusLabel,
   decisionBatchTimingLine,
   decisionBatchTone,
@@ -19,6 +20,7 @@ import {
   decisionQuestionKind,
   decisionSummaryLine,
   isDecisionBatchRunning,
+  type DecisionBatchOpenRequest,
 } from "./decisions-format";
 import { RailStatusChip } from "./RailStatusChip";
 import "./decisions-panel.css";
@@ -31,6 +33,10 @@ type DecisionsPanelProps = {
   onRefresh: () => void;
   /** Keeps the hover rail open while the batch dialog is up. */
   onDetailsModalOpenChange?: (open: boolean) => void;
+  /** A batch to open, asked for from its Sub-agents card. */
+  openBatchRequest?: DecisionBatchOpenRequest;
+  /** The request was answered: its dialog opened, or the batch is gone. */
+  onOpenBatchRequestSettled?: () => void;
 };
 
 /**
@@ -55,6 +61,18 @@ export function DecisionsPanel(props: DecisionsPanelProps) {
   // The open batch can leave the snapshot under the dialog (a thread
   // switch, the tab hiding). Release the rail's pinned-open state rather
   // than stranding it.
+  const { openBatchRequest, onOpenBatchRequestSettled } = props;
+  useEffect(() => {
+    if (!openBatchRequest) return;
+    const step = decisionBatchOpenStep(openBatchRequest, snapshot);
+    if (step === "wait") return;
+    onOpenBatchRequestSettled?.();
+    if (step === "open") {
+      setDetailsFor(openBatchRequest.batchId);
+      onDetailsModalOpenChange?.(true);
+    }
+  }, [onDetailsModalOpenChange, onOpenBatchRequestSettled, openBatchRequest, snapshot]);
+
   const detailsMissing = detailsFor !== undefined && detailsBatch === undefined;
   useEffect(() => {
     if (!detailsMissing) return;

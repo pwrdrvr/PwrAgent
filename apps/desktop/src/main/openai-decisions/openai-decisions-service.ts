@@ -8,6 +8,8 @@ import type {
   DecisionsRailDecision,
   DecisionsRailItemFilter,
   DecisionsRailSnapshot,
+  DecisionsProfileDecision,
+  DecisionsProfileDeleteResult,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -567,18 +569,34 @@ export class OpenAIDecisionsService {
    */
   async railSnapshot(caller: OpenAIDecisionCaller): Promise<DecisionsRailSnapshot> {
     const now = this.now();
-    const decisions: DecisionsRailDecision[] = this.options.store.listVisible(caller).map((record) => ({
-      decisionId: record.decisionId,
-      name: record.name,
-      version: record.version,
-      scope: record.scope,
-      provider: record.provider,
-      providerDisabled: this.options.isProviderEnabled?.(record.provider) === false,
-      questions: record.questions.map((question) => summarizeQuestion(question, false)),
-      inputSchema: record.inputSchema,
-      ...timingField(this.timings.summary(record.decisionId, record.version)),
-    }));
+    const decisions = this.options.store.listVisible(caller).map((record) => this.railDecision(record));
     return { decisions, batches: await this.railBatches(caller, now), now };
+  }
+
+  /**
+   * Settings → AI Providers → Decisions: every active profile-scope
+   * decision, by name. They outlive the thread that registered them, so
+   * the operator needs a place to see them that no thread owns.
+   */
+  profileDecisions(): DecisionsProfileDecision[] {
+    return this.options.store.listActiveProfile().map((record) => ({
+      ...this.railDecision(record),
+      createdAt: record.createdAt,
+    }));
+  }
+
+  /**
+   * The operator's Delete in Settings. Only an active profile-scope
+   * decision: a thread's own decisions belong to that thread, and Settings
+   * never lists them. Like decisions_delete, batches already running on it
+   * finish; later calls by name or id fail.
+   */
+  deleteProfileDecision(decisionId: string): DecisionsProfileDeleteResult {
+    const current = this.options.store.getActive(decisionId);
+    if (!current || current.scope !== "profile") return { outcome: "not_found" };
+    if (!this.options.store.softDelete(decisionId)) return { outcome: "not_found" };
+    this.options.log?.info("deleted decision from settings", logFields(current));
+    return { outcome: "deleted" };
   }
 
   /** One page of a batch's finished items for the Decisions tab. */
@@ -648,6 +666,20 @@ export class OpenAIDecisionsService {
   }
 
   /** The caller's batch from memory, else from its result file. */
+  private railDecision(record: OpenAIDecisionVersionRecord): DecisionsRailDecision {
+    return {
+      decisionId: record.decisionId,
+      name: record.name,
+      version: record.version,
+      scope: record.scope,
+      provider: record.provider,
+      providerDisabled: this.options.isProviderEnabled?.(record.provider) === false,
+      questions: record.questions.map((question) => summarizeQuestion(question, false)),
+      inputSchema: record.inputSchema,
+      ...timingField(this.timings.summary(record.decisionId, record.version)),
+    };
+  }
+
   private async ownBatch(caller: OpenAIDecisionCaller, batchId: unknown) {
     if (typeof batchId !== "string" || batchId.length === 0) {
       throw new OpenAIDecisionsError("invalid_input", "batchId must be a string.");
