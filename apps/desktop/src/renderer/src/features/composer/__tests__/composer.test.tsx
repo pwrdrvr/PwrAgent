@@ -630,6 +630,33 @@ function createScheduledActionApi(options?: {
   };
 }
 
+/** The Attached PR target's list: radios, or checkboxes when it can batch. */
+function pullRequestPicker(): HTMLElement {
+  return screen.queryByRole("group", { name: "Attached pull requests" })
+    ?? screen.getByRole("radiogroup", { name: "Attached pull requests" });
+}
+
+function pullRequestInputs(): HTMLInputElement[] {
+  return [...pullRequestPicker().querySelectorAll<HTMLInputElement>(
+    "input.review-pr-picker__input",
+  )];
+}
+
+/** Each row's name, `#7 Title`, in list order. */
+function pullRequestChoices(): string[] {
+  return pullRequestInputs().map((input) => input.getAttribute("aria-label") ?? "");
+}
+
+function checkedPullRequestUrls(): string[] {
+  return pullRequestInputs().filter((input) => input.checked).map((input) => input.value);
+}
+
+function choosePullRequest(url: string): void {
+  const input = pullRequestInputs().find((candidate) => candidate.value === url);
+  if (!input) throw new Error(`No pull request row for ${url}`);
+  fireEvent.click(input);
+}
+
 describe("Composer", () => {
   it.each(["$", "/"])("checks skill freshness once per %s picker opening, across query and summary updates", (prefix) => {
     const refresh = vi.fn();
@@ -8354,19 +8381,18 @@ describe("Composer", () => {
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
-    const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getByRole("option", { name: /^#1 Stack 1/ })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
-    expect(within(picker).queryByRole("option", { name: /Other change/ })).not.toBeInTheDocument();
-    expect(within(picker).queryByRole("option", { name: /unattached/ })).not.toBeInTheDocument();
-    fireEvent.change(picker, { target: { value: prs[0].url } });
+    expect(pullRequestChoices()).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^#1 Stack 1/), expect.stringMatching(/^#2/),
+    ]));
+    expect(pullRequestChoices().filter((name) => /Other change|unattached/.test(name)))
+      .toEqual([]);
+    choosePullRequest(prs[0].url);
     expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/other" } });
     // The project's sole PR is picked, as it is when the target is chosen.
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue(secondaryPr.url);
-    expect(within(picker).getAllByRole("option").map((option) => option.textContent))
-      .toEqual(["Choose pull request", "#1 Other change — stack-1"]);
-    fireEvent.change(picker, { target: { value: secondaryPr.url } });
+    expect(checkedPullRequestUrls()).toEqual([secondaryPr.url]);
+    expect(pullRequestChoices()).toEqual(["#1 Other change"]);
+    choosePullRequest(secondaryPr.url);
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
     expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("PwrAgent Sub Agent");
     expect(screen.queryByText(/Reviewing the pull request skips this checkout/)).not.toBeInTheDocument();
@@ -8375,8 +8401,8 @@ describe("Composer", () => {
     )).toBeInTheDocument();
     if (project === "primary") {
       fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
-      expect(picker).toHaveValue("");
-      fireEvent.change(picker, { target: { value: prs[0].url } });
+      expect(checkedPullRequestUrls()).toEqual([]);
+      choosePullRequest(prs[0].url);
       expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
       expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("Codex Sub Agent");
       expect(screen.queryByText(/^Reviews in /)).not.toBeInTheDocument();
@@ -8424,6 +8450,67 @@ describe("Composer", () => {
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       afterReview: starts ? "wait" : "auto-fix",
     }));
+  });
+
+  /**
+   * Rule: checking several attached PRs queues one review per PR, in the
+   * list's order (open newest first, then finished newest first) whatever
+   * order they were checked in, and never auto-fixes: the fixes would land in
+   * one checkout that is on at most one of their branches.
+   */
+  it("queues one review per checked PR in list order without Auto-fix", async () => {
+    const scheduledApi = createScheduledActionApi();
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
+      reviewCodexSubAgent: true, reviewAutoFix: true };
+    const now = Date.now();
+    const batchPr = (number: number, overrides: Partial<PrSummary>): PrSummary => ({
+      provider: "github.com", org: "fixture", repo: "project", number,
+      title: `Change ${number}`, url: `https://github.com/fixture/project/pull/${number}`,
+      state: "passing", checkState: "passing", lifecycleState: "open",
+      headRefName: `feat/change-${number}`, baseRefName: "main",
+      linkedDirectoryPaths: ["/repo/project"],
+      ...overrides,
+    });
+    // Attachment order is oldest first, the order the old select listed.
+    const prs = [
+      batchPr(9, { state: "merged", lifecycleState: "merged", createdAt: now - 5 * 3_600_000, mergedAt: now - 1_800_000 }),
+      batchPr(10, { createdAt: now - 2 * 3_600_000 }),
+      batchPr(11, { createdAt: now - 3_600_000 }),
+    ];
+    render(<Composer
+      backends={[backend]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview, ...scheduledApi }}
+      disabled={false} skills={[]}
+      thread={{
+        id: "thread-1", title: "Batch review", titleSource: "explicit",
+        source: "codex", executionMode: "default", inbox: { inInbox: false },
+        projectKey: "/repo/project",
+        linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
+        prs,
+      }}
+    />);
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    expect(pullRequestChoices()).toEqual(["#11 Change 11", "#10 Change 10", "#9 Change 9"]);
+    expect(within(pullRequestPicker()).getByText("merged 30m ago")).toBeInTheDocument();
+    choosePullRequest(prs[0].url);
+    choosePullRequest(prs[2].url);
+    expect(checkedPullRequestUrls()).toEqual([prs[2].url, prs[0].url]);
+    const autoFix = screen.getByRole("switch", { name: "Auto-fix findings" });
+    expect(autoFix).toBeDisabled();
+    expect(autoFix).toHaveAttribute("aria-checked", "false");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start 2 reviews" })); });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction.mock.calls.map(([request]) => ({
+      target: request.review?.target,
+      afterReview: request.review?.afterReview,
+      cwd: request.review?.cwd,
+    }))).toEqual([
+      { target: { type: "pullRequest", url: prs[2].url }, afterReview: "wait", cwd: "/repo/project" },
+      { target: { type: "pullRequest", url: prs[0].url }, afterReview: "wait", cwd: "/repo/project" },
+    ]);
   });
 
   it.each(["click", "keyboard"])("routes a sole secondary PR with its required review mode via %s", async (input) => {
@@ -8485,11 +8572,10 @@ describe("Composer", () => {
     await openReviewComposer();
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/tool" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
-    const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getByRole("option", { name: /^#1 Change 1/ })).toBeInTheDocument();
-    fireEvent.change(picker, { target: { value: "https://github.com/alpha/tool/pull/2" } });
+    expect(pullRequestChoices()).toContain("#1 Change 1");
+    choosePullRequest("https://github.com/alpha/tool/pull/2");
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/tool-fix" } });
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/alpha/tool/pull/2");
+    expect(checkedPullRequestUrls()).toEqual(["https://github.com/alpha/tool/pull/2"]);
 
     unmount();
     render(<Composer
@@ -8500,9 +8586,10 @@ describe("Composer", () => {
     // No project is chosen yet, so the list spans both repositories.
     await openReviewComposer();
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
-    const options = within(screen.getByLabelText("Attached pull request")).getAllByRole("option");
-    expect(options.map((option) => option.textContent)).toEqual([
-      "Choose pull request", "alpha/tool#1 Change 1", "beta/tool#2 Change 2",
+    // Open PRs list newest first; neither fixture has been polled, so the
+    // later attachment counts as the newer.
+    expect(pullRequestChoices()).toEqual([
+      "beta/tool#2 Change 2", "alpha/tool#1 Change 1",
     ]);
   });
 
@@ -8573,21 +8660,18 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
 
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
-    const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getAllByRole("option").map((option) => option.textContent))
-      .toEqual(["Choose pull request", "#546 PwrGit change 546 — feat/runtime-pin"]);
-    expect(picker).toHaveValue(gitRuntimePrs[2].url);
+    expect(pullRequestChoices()).toEqual(["#546 PwrGit change 546"]);
+    expect(checkedPullRequestUrls()).toEqual([gitRuntimePrs[2].url]);
 
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/git" } });
-    expect(picker).toHaveValue("");
-    expect(within(picker).getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Choose pull request",
-      "#4 git change 4 — feat/portable-runtime",
-      "#8 git change 8 — feat/runtime-reshare",
+    expect(checkedPullRequestUrls()).toEqual([]);
+    expect(pullRequestChoices()).toEqual([
+      "#8 git change 8",
+      "#4 git change 4",
     ]);
 
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/PwrGit" } });
-    expect(picker).toHaveValue(gitRuntimePrs[2].url);
+    expect(checkedPullRequestUrls()).toEqual([gitRuntimePrs[2].url]);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       cwd: "/worktrees/PwrGit",
@@ -8628,7 +8712,7 @@ describe("Composer", () => {
     fireEvent.change(project, { target: { value: "/repo/PwrGit" } });
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue(gitRuntimePrs[2].url);
+    expect(checkedPullRequestUrls()).toEqual([gitRuntimePrs[2].url]);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       cwd: "/repo/PwrGit",
@@ -8748,8 +8832,8 @@ describe("Composer", () => {
     const group = screen.getByRole("group", { name: "Review target" });
     expect(within(group).getByRole("button", { name: /Attached PR/ }))
       .toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Attached pull request"))
-      .toHaveValue("https://github.com/fixture/project/pull/7");
+    expect(checkedPullRequestUrls())
+      .toEqual(["https://github.com/fixture/project/pull/7"]);
     expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
   });
 
@@ -8780,7 +8864,7 @@ describe("Composer", () => {
     await openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
     fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
-    expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/fixture/project/pull/7");
+    expect(checkedPullRequestUrls()).toEqual(["https://github.com/fixture/project/pull/7"]);
     fireEvent.click(within(group).getByRole("button", { name: "Start review" }));
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/7" },
@@ -8799,8 +8883,8 @@ describe("Composer", () => {
     expect(within(group).getByRole("button", { name: /Base branch/ }))
       .toHaveAttribute("aria-pressed", "true");
     fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
-    expect(screen.getByLabelText("Attached pull request"))
-      .toHaveValue("https://github.com/fixture/project/pull/7");
+    expect(checkedPullRequestUrls())
+      .toEqual(["https://github.com/fixture/project/pull/7"]);
     expect(
       screen.getByText(/skips this checkout's 2 uncommitted files and 1 unpushed commit/),
     ).toBeInTheDocument();

@@ -1,4 +1,5 @@
 import type { PrSummary } from "@pwragent/shared";
+import { formatRelativeTime } from "../navigation/thread-time";
 import {
   isPrStatusUnknown,
   prStatusLabel,
@@ -195,4 +196,29 @@ export function prRollupLabel(prs: readonly PrSummary[]): string {
 /** A PR's chip label: `#12`, or `org/repo#12` when it needs its repository. */
 export function prNumberLabel(pr: PrSummary, showRepoPrefix: boolean): string {
   return showRepoPrefix ? `${pr.org}/${pr.repo}#${pr.number}` : `#${pr.number}`;
+}
+
+/**
+ * The time that places a PR in its stack (see `PrRollup.ordered`), in the
+ * sidebar's own age vocabulary: "opened 2h ago", "merged 15h ago",
+ * "closed Aug 16". Lists that sort by these times print them, or a merged
+ * stack read top to bottom looks like an ascending PR-number sort whenever
+ * an older PR merged last. Undefined when the PR carries no such time.
+ */
+export function prStackTimeLabel(pr: PrSummary): string | undefined {
+  const lifecycle = resolveLifecycleState(pr);
+  const at = lifecycle === "open"
+    ? pr.createdAt
+    : lifecycle === "merged"
+      ? pr.mergedAt
+      : pr.closedAt;
+  if (typeof at !== "number" || !Number.isFinite(at) || at <= 0) {
+    return undefined;
+  }
+  const verb = lifecycle === "open" ? "opened" : lifecycle;
+  const age = formatRelativeTime(at);
+  if (age === "now") {
+    return `${verb} just now`;
+  }
+  return /^\d/.test(age) ? `${verb} ${age} ago` : `${verb} ${age}`;
 }

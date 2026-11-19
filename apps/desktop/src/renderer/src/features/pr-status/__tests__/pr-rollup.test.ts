@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
-import { prRollupLabel, resolvePrRollup } from "../pr-rollup";
+import { prRollupLabel, prStackTimeLabel, resolvePrRollup } from "../pr-rollup";
 
 function pr(number: number, overrides: Partial<PrSummary> = {}): PrSummary {
   return {
@@ -168,5 +168,37 @@ describe("prRollupLabel", () => {
   it("names one PR by number and counts several", () => {
     expect(prRollupLabel([ready])).toBe("#5");
     expect(prRollupLabel([ready, running, merged])).toBe("3 PRs");
+  });
+});
+
+/**
+ * Rule: a PR list sorted by stack time prints that time, so a merged stack
+ * whose older PR merged last does not read as an ascending number sort.
+ */
+describe("prStackTimeLabel", () => {
+  const now = Date.UTC(2026, 10, 19, 16, 30);
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["an open PR by when it opened", pr(20, { createdAt: now - 3_600_000, mergedAt: now }), "opened 1h ago"],
+    ["a merged PR by when it merged", pr(21, { lifecycleState: "merged", state: "merged", createdAt: now - 86_400_000, mergedAt: now - 15 * 3_600_000 }), "merged 15h ago"],
+    ["a closed PR by when it closed", pr(22, { lifecycleState: "closed", state: "closed", closedAt: now - 2 * 86_400_000 }), "closed 2d ago"],
+    ["a PR that just opened", pr(23, { createdAt: now - 10_000 }), "opened just now"],
+  ])("labels %s", (_name, subject, expected) => {
+    vi.useFakeTimers({ now });
+    expect(prStackTimeLabel(subject)).toBe(expected);
+  });
+
+  it("prints a date past a week", () => {
+    vi.useFakeTimers({ now });
+    expect(prStackTimeLabel(pr(24, { lifecycleState: "merged", state: "merged", mergedAt: now - 30 * 86_400_000 })))
+      .toMatch(/^merged [A-Z][a-z]{2} \d{1,2}$/);
+  });
+
+  it("omits a time the PR does not carry", () => {
+    expect(prStackTimeLabel(pr(25))).toBeUndefined();
+    expect(prStackTimeLabel(pr(26, { lifecycleState: "merged", state: "merged", createdAt: now }))).toBeUndefined();
   });
 });

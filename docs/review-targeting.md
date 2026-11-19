@@ -63,3 +63,18 @@ native wire translation, and UI selection across linked projects.
 PR scope is retained in the existing native and managed review provenance.
 Codex Inline is no longer a supported execution mode. Queued PR review keeps
 its captured native or managed mode together with the immutable target snapshot.
+
+## Choosing pull requests
+
+The target lists the project's attached PRs in the panel, not a popup, in the
+sidebar PR popover's order (`resolvePrRollup().ordered`): open PRs first,
+newest opened first, then merged and closed PRs, newest finished first. Each
+row prints its state, head branch, and the time it is sorted by; its chip
+opens the standard PR card on hover.
+
+A thread composer whose owner takes queued reviews offers checkboxes. Checking
+several PRs submits one review per PR, in list order, through the owner's
+review queue: the first starts when the thread is free and each of the rest
+runs after the one before it, each with its own captured snapshot. Such a
+batch never auto-fixes, because the fixes would all land in this checkout,
+which is on at most one of the PRs' branches. A launchpad offers radios.
