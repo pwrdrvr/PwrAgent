@@ -337,6 +337,28 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("tab", { name: "Waiting for · agent follow-ups suspended" })).toBeInTheDocument();
     cleanup();
 
+    // A suspended follow-up that still waits keeps its count, in the filled
+    // badge. An owner that predates the list flag marks only the row.
+    renderPanel({
+      thread: {
+        ...baseThread,
+        pendingWakes: [{
+          kind: "scheduled_action", key: "scheduled_action:f1", actionId: "f1", actionKind: "turn",
+          status: "scheduled", displayText: "Check the deploy", createdAt: 1, wakesAt: 2,
+          createdBy: "agent", durable: true, stop: "cancel", followUpSuspended: true,
+        }],
+        federation: {
+          ref: { backend: "codex", target: { scope: "remote", instanceId: "peer" }, threadId: "thread-1" },
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+          capabilities: [],
+        },
+      } as NavigationThreadSummary,
+    });
+    const counted = screen.getByRole("tab", { name: "Waiting for · 1 pending wake · agent follow-ups suspended" });
+    expect(counted.querySelector(".context-rail__activity--suspended")).toHaveTextContent("1");
+    cleanup();
+
     renderPanel({ desktopApi: { manageThreadPendingWakes: vi.fn(async () => ({ ok: true as const, wakes: [], ended: [] })),
       onAgentEvent: () => () => undefined } });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Waiting for" })).toBeInTheDocument());
