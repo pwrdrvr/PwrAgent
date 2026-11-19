@@ -1,4 +1,7 @@
-import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
+import {
+  looksLikeCredentialText,
+  type RegisteredDecisionProvider,
+} from "@pwragent/shared/openai-decisions";
 
 /**
  * Batches of `decisions_invoke` inputs, kept in owner memory so answers that
@@ -10,9 +13,25 @@ import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisio
  * (decision-batch-files.ts) keeps it across evictions and restarts.
  */
 
+/**
+ * What the Decisions tab shows beside an item's outcome: a capped preview
+ * of the input that produced it and how long its request took. The agent
+ * has its inputs, so tool results leave these out (see `toolBatchItem`).
+ * A skipped item never ran and has neither.
+ */
+export type DecisionItemRailFields = {
+  /** The input's compact JSON, cut to DECISION_INPUT_PREVIEW_MAX_BYTES. */
+  inputPreview?: string;
+  inputTruncated?: true;
+  /** The input looked like it held a credential, so no preview was kept. */
+  inputRedacted?: true;
+  /** From the item's start to its outcome, retries included. */
+  durationMs?: number;
+};
+
 /** One input's outcome. A failed item carries a stable code. */
 export type DecisionBatchItem =
-  | {
+  | ({
       index: number;
       ok: true;
       model?: string;
@@ -20,8 +39,50 @@ export type DecisionBatchItem =
       response?: Record<string, unknown>;
       answers?: unknown[];
       usage?: Record<string, unknown>;
+    } & DecisionItemRailFields)
+  | ({ index: number; ok: false; code: string; message: string } & DecisionItemRailFields);
+
+/**
+ * An input preview's bound, in UTF-8 bytes. A batch's inputs total at most
+ * 4 MB, and a preview is never longer than its input, so previews add at
+ * most that much to a batch's result file.
+ */
+export const DECISION_INPUT_PREVIEW_MAX_BYTES = 2048;
+
+/**
+ * The preview kept with an item: its input's compact JSON, cut at a
+ * character boundary to fit the byte bound. Validation already refuses
+ * inputs with credential-named properties; one whose text still looks like
+ * a key or bearer token keeps no preview at all.
+ */
+export function decisionInputPreview(input: unknown): DecisionItemRailFields {
+  const text = JSON.stringify(input ?? null);
+  if (looksLikeCredentialText(text)) return { inputRedacted: true };
+  let bytes = 0;
+  let end = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    const size = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (bytes + size > DECISION_INPUT_PREVIEW_MAX_BYTES) {
+      return { inputPreview: text.slice(0, end), inputTruncated: true };
     }
-  | { index: number; ok: false; code: string; message: string };
+    bytes += size;
+    end += char.length;
+  }
+  return { inputPreview: text };
+}
+
+/** The item as decisions tools return it: without the Decisions tab's fields. */
+export function toolBatchItem(item: DecisionBatchItem): DecisionBatchItem {
+  const {
+    inputPreview: _inputPreview,
+    inputTruncated: _inputTruncated,
+    inputRedacted: _inputRedacted,
+    durationMs: _durationMs,
+    ...rest
+  } = item;
+  return rest as DecisionBatchItem;
+}
 
 /**
  * `queued` waits for another call on the same decision; `completed` ran
@@ -276,7 +337,7 @@ export function pageBatchResults(
   for (let index = Math.max(0, params.from); index < record.count; index += 1) {
     const item = record.results[index];
     if (!item || !matchesStatus(item, params.status)) continue;
-    const view = params.detail === "full" ? item : compactBatchItem(item);
+    const view = params.detail === "full" ? toolBatchItem(item) : compactBatchItem(item);
     const size = Buffer.byteLength(JSON.stringify(view));
     if (results.length >= params.limit || (results.length > 0 && bytes + size > maxBytes)) {
       return { results, nextFrom: index };
@@ -370,6 +431,12 @@ export function batchCardTask(record: DecisionBatchRecord): string {
   return `Decision batch ${record.name}: ${done} of ${record.count} done${failed}`;
 }
 
+/**
+ * `stoppedBy.code` when the operator pressed Stop in the Decisions tab:
+ * nothing more starts, and the requests in flight finish.
+ */
+export const OPERATOR_STOP_CODE = "stopped_by_operator";
+
 /** The thread card's detail line. */
 export function batchCardMessage(record: DecisionBatchRecord): string {
   const state = record.state === "queued"
@@ -378,6 +445,8 @@ export function batchCardMessage(record: DecisionBatchRecord): string {
       ? `${record.succeeded} answered, ${record.failed} failed, ${record.count - finishedItems(record)} to go.`
       : record.state === "completed"
         ? `Finished: ${record.succeeded} answered, ${record.failed} failed.`
+        : record.state === "stopped" && record.stoppedBy?.code === OPERATOR_STOP_CODE
+          ? `Stopped from the thread after ${finishedItems(record) - record.skipped} items; ${record.skipped} skipped.`
         : record.state === "stopped"
           ? `Stopped by ${record.stoppedBy?.code ?? "an error"} after ${finishedItems(record) - record.skipped} items; ${record.skipped} skipped.`
           : `Cancelled after ${finishedItems(record) - record.skipped} items (${record.cancelReason ?? "cancelled"}); ${record.skipped} skipped.`;

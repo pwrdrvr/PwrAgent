@@ -11,6 +11,7 @@ export type ContextTabId =
   | "edits"
   | "pricing"
   | "tool-calls"
+  | "decisions"
   | "actions"
   | "subagents"
   | "automations"
@@ -30,6 +31,7 @@ export const CONTEXT_TAB_IDS: ContextTabId[] = [
   "edits",
   "pricing",
   "tool-calls",
+  "decisions",
   "actions",
   "subagents",
   "automations",

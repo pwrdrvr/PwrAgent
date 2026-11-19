@@ -1,0 +1,199 @@
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import type {
+  DecisionsRailBatch,
+  DecisionsRailBatchPage,
+  DecisionsRailBatchRequest,
+  DecisionsRailSnapshot,
+} from "@pwragent/shared";
+import { DecisionsPanel } from "../DecisionsPanel";
+
+afterEach(cleanup);
+
+const NOW = new Date(2026, 10, 19, 14, 4, 41).getTime();
+const THREAD = { backend: "codex", threadId: "thread-1" };
+
+const running: DecisionsRailBatch = {
+  batchId: "batch_run-1",
+  decisionId: "dec_1",
+  name: "triage_relevance",
+  version: 2,
+  provider: "openai",
+  model: "gpt-6-luna",
+  state: "running",
+  stopping: false,
+  background: true,
+  count: 1000,
+  finished: 640,
+  succeeded: 631,
+  failed: 9,
+  skipped: 0,
+  concurrency: 8,
+  createdAt: NOW - 161_000,
+  startedAt: NOW - 161_000,
+  wallMs: 161_000,
+  itemsPerSecond: 640 / 161,
+  latency: { samples: 631, meanMs: 380, maxMs: 2_100 },
+  hasResultsFile: true,
+};
+
+const stopped: DecisionsRailBatch = {
+  ...running,
+  batchId: "batch_old-1",
+  version: 1,
+  state: "stopped",
+  background: false,
+  count: 120,
+  finished: 120,
+  succeeded: 12,
+  failed: 1,
+  skipped: 107,
+  createdAt: NOW - 3 * 3_600_000,
+  startedAt: NOW - 3 * 3_600_000,
+  stoppedBy: { code: "credential_rejected", message: "The OpenAI key was rejected." },
+};
+
+const snapshot: DecisionsRailSnapshot = {
+  now: NOW,
+  decisions: [
+    {
+      decisionId: "dec_1",
+      name: "triage_relevance",
+      version: 2,
+      scope: "thread",
+      provider: "openai",
+      providerDisabled: false,
+      questions: [
+        { type: "predicate", name: "relevant" },
+        { type: "choice", name: "severity", choices: ["low", "medium", "high", "critical"] },
+      ],
+      inputSchema: { type: "object", properties: { title: { type: "string" }, labels: { type: "array" } } },
+      timing: { samples: 200, minMs: 120, maxMs: 2_100, meanMs: 410, p50Ms: 390 },
+    },
+    {
+      decisionId: "dec_2",
+      name: "operator_present",
+      version: 4,
+      scope: "profile",
+      provider: "local",
+      providerDisabled: true,
+      questions: [{ type: "predicate", name: "present" }],
+      inputSchema: { type: "string" },
+    },
+  ],
+  batches: [running, stopped],
+};
+
+function page(request: DecisionsRailBatchRequest): DecisionsRailBatchPage {
+  const items: DecisionsRailBatchPage["items"] = [
+    {
+      index: 0,
+      ok: true,
+      inputPreview: "{\"title\":\"Sidebar flickers when a thread finishes\"}",
+      durationMs: 402,
+      answers: [
+        { type: "predicate", name: "relevant", value: "yes", probability: 0.93 },
+        { type: "choice", name: "severity", value: "medium", probability: 0.71 },
+      ],
+    },
+    { index: 3, ok: false, code: "rate_limited", message: "Retried 3 times, gave up.", inputPreview: "{\"title\":\"Export\"}", durationMs: 9_200 },
+  ];
+  return {
+    batch: running,
+    items: request.status === "failed" ? items.filter((item) => !item.ok) : items,
+  };
+}
+
+function renderPanel(overrides: { snapshot?: DecisionsRailSnapshot } = {}) {
+  const readDecisionsRailBatch = vi.fn(async (request: DecisionsRailBatchRequest) => page(request));
+  const actOnDecisionsRailBatch = vi.fn(async () => ({ outcome: "stopped" as const }));
+  const openDecisionsRailResults = vi.fn(async () => ({ opened: true }));
+  const onRefresh = vi.fn();
+  const onDetailsModalOpenChange = vi.fn();
+  render(
+    <DecisionsPanel
+      desktopApi={{ readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults }}
+      thread={THREAD}
+      snapshot={overrides.snapshot ?? snapshot}
+      error={false}
+      onRefresh={onRefresh}
+      onDetailsModalOpenChange={onDetailsModalOpenChange}
+    />,
+  );
+  return { readDecisionsRailBatch, actOnDecisionsRailBatch, openDecisionsRailResults, onRefresh, onDetailsModalOpenChange };
+}
+
+it("lists registered decisions and marks one whose provider is off", () => {
+  renderPanel();
+  expect(screen.getByRole("heading", { name: "Registered 2" })).toBeInTheDocument();
+  expect(screen.getByText("2 questions · mean 410 ms over 200 requests")).toBeInTheDocument();
+  expect(screen.getByText("Local model · off")).toBeInTheDocument();
+
+  const toggle = screen.getByRole("button", { name: /operator_present/ });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText(/Local decision model is turned off in Settings → AI Providers/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /triage_relevance/ }));
+  expect(screen.getByText("choice · low · medium · high · critical")).toBeInTheDocument();
+  expect(screen.getByText("{ title, labels[] }")).toBeInTheDocument();
+});
+
+it("shows each batch's status, counts and timing, newest first", () => {
+  renderPanel();
+  expect(screen.getByRole("heading", { name: "Batches 2" })).toBeInTheDocument();
+  const cards = screen.getAllByRole("listitem").filter((item) => item.classList.contains("decisions-batch"));
+  expect(cards).toHaveLength(2);
+  expect(within(cards[0]!).getByText("Running")).toBeInTheDocument();
+  expect(within(cards[0]!).getByText("background")).toBeInTheDocument();
+  expect(within(cards[0]!).getByText("640 of 1000 items done: 631 succeeded, 9 failed, 0 skipped")).toBeInTheDocument();
+  expect(within(cards[0]!).getByText(/2m 41s · 4\.0\/s · mean 380 ms · max 2\.1 s/)).toBeInTheDocument();
+  expect(within(cards[1]!).getByText("Stopped")).toBeInTheDocument();
+  expect(within(cards[1]!).getByText(/credential_rejected after 13 items/)).toBeInTheDocument();
+  // Only a running batch can be stopped.
+  expect(within(cards[0]!).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  expect(within(cards[1]!).queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+});
+
+it("stops a running batch from its card", async () => {
+  const api = renderPanel();
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => expect(api.actOnDecisionsRailBatch).toHaveBeenCalledWith({ ...THREAD, batchId: "batch_run-1", action: "stop" }));
+  await waitFor(() => expect(api.onRefresh).toHaveBeenCalled());
+});
+
+it("opens a batch's items with previews, answers and latency, and filters them", async () => {
+  const api = renderPanel();
+  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  expect(api.onDetailsModalOpenChange).toHaveBeenCalledWith(true);
+  const dialog = await screen.findByRole("dialog", { name: "Decision batch: triage_relevance v2" });
+  await within(dialog).findByText("{\"title\":\"Sidebar flickers when a thread finishes\"}");
+  expect(api.readDecisionsRailBatch).toHaveBeenCalledWith({ ...THREAD, batchId: "batch_run-1", status: "all", from: 0, limit: 100 });
+  expect(within(dialog).getByText("relevant: yes")).toBeInTheDocument();
+  expect(within(dialog).getByText("0.93")).toBeInTheDocument();
+  expect(within(dialog).getByText("402 ms")).toBeInTheDocument();
+  expect(within(dialog).getByText("rate_limited")).toBeInTheDocument();
+  expect(within(dialog).getByText("OpenAI · gpt-6-luna")).toBeInTheDocument();
+
+  fireEvent.click(within(dialog).getByRole("tab", { name: "Failed 9" }));
+  await waitFor(() => expect(api.readDecisionsRailBatch).toHaveBeenLastCalledWith({ ...THREAD, batchId: "batch_run-1", status: "failed", from: 0, limit: 100 }));
+  await waitFor(() => expect(within(dialog).queryByText("relevant: yes")).not.toBeInTheDocument());
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open results file" }));
+  await waitFor(() => expect(api.openDecisionsRailResults).toHaveBeenCalledWith({ ...THREAD, batchId: "batch_run-1" }));
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(api.actOnDecisionsRailBatch).toHaveBeenCalledWith({ ...THREAD, batchId: "batch_run-1", action: "cancel" }));
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
+});
+
+it("says so when the thread has no decisions and no batches", () => {
+  renderPanel({ snapshot: { now: NOW, decisions: [], batches: [] } });
+  expect(screen.getByText(/No decisions are visible to this thread/)).toBeInTheDocument();
+  expect(screen.getByText("This thread has not run a decision batch.")).toBeInTheDocument();
+});

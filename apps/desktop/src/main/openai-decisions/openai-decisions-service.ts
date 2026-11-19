@@ -1,6 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type {
+  DecisionsRailBatch,
+  DecisionsRailBatchActionResult,
+  DecisionsRailBatchPage,
+  DecisionsRailDecision,
+  DecisionsRailItemFilter,
+  DecisionsRailSnapshot,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import {
   OPENAI_DECISIONS_ORIGIN,
   OPENAI_DECISIONS_PRICING_CATALOG_ID,
@@ -35,10 +44,12 @@ import {
   DECISION_BATCH_LIMITS,
   DecisionBatchRegistry,
   DecisionItemTimings,
+  OPERATOR_STOP_CODE,
   batchCardMessage,
   batchCardTask,
   batchWakeupText,
   compactBatchItem,
+  decisionInputPreview,
   finishedItems,
   isFinishedBatch,
   pageBatchResults,
@@ -60,6 +71,7 @@ import {
   listDecisionBatchFileIds,
   readDecisionBatchFile,
 } from "./decision-batch-files";
+import { railBatch, railBatchPage } from "./decision-batch-rail";
 import type { SystemOneTarget } from "../decision/system-one";
 import { buildSystemOneDecisionRequest, postSystemOneDecision } from "./system-one-decisions";
 import {
@@ -177,6 +189,8 @@ const PROVIDER_SETTINGS_NAMES: Record<RegisteredDecisionProvider, string> = {
   local: "Local decision model",
 };
 const TARGET_KEYS = new Set(["name", "decisionId"]);
+/** Result-file summaries the Decisions tab keeps parsed, across threads. */
+const RAIL_FILE_SUMMARY_LIMIT = 200;
 /** A batch card is rewritten at each further tenth of its items. */
 const BATCH_CARD_STEPS = 10;
 
@@ -205,6 +219,13 @@ export class OpenAIDecisionsService {
   private readonly silentBatches = new Set<string>();
   /** Each running batch's result file writer. */
   private readonly writers = new Map<string, DecisionBatchFileWriter>();
+  /**
+   * Finished batches the Decisions tab read from result files, by file,
+   * so polling the tab stats files instead of parsing them again.
+   */
+  private readonly railFileSummaries = new Map<string, { mtimeMs: number; size: number; batch: DecisionsRailBatch }>();
+  /** The last result file the tab paged through, parsed. */
+  private railFileRecord: { file: string; mtimeMs: number; size: number; record: DecisionBatchRecord } | undefined;
   private closing = false;
 
   constructor(private readonly options: OpenAIDecisionsServiceOptions) {
@@ -539,6 +560,75 @@ export class OpenAIDecisionsService {
   }
 
   /**
+   * The Decisions tab: decisions visible to the thread, with each
+   * provider's on/off state and observed timing, and the thread's batches,
+   * newest first: running ones from memory, finished ones from memory or
+   * their result files.
+   */
+  async railSnapshot(caller: OpenAIDecisionCaller): Promise<DecisionsRailSnapshot> {
+    const now = this.now();
+    const decisions: DecisionsRailDecision[] = this.options.store.listVisible(caller).map((record) => ({
+      decisionId: record.decisionId,
+      name: record.name,
+      version: record.version,
+      scope: record.scope,
+      provider: record.provider,
+      providerDisabled: this.options.isProviderEnabled?.(record.provider) === false,
+      questions: record.questions.map((question) => summarizeQuestion(question, false)),
+      inputSchema: record.inputSchema,
+      ...timingField(this.timings.summary(record.decisionId, record.version)),
+    }));
+    return { decisions, batches: await this.railBatches(caller, now), now };
+  }
+
+  /** One page of a batch's finished items for the Decisions tab. */
+  async railBatchPage(
+    caller: OpenAIDecisionCaller,
+    params: { batchId: string; status: DecisionsRailItemFilter; from: number; limit: number },
+  ): Promise<DecisionsRailBatchPage> {
+    const record = this.batches.get(caller, params.batchId) ?? await this.railFileRecordFor(caller, params.batchId);
+    if (!record) {
+      throw new OpenAIDecisionsError("batch_not_found", "This thread has no batch with that id.");
+    }
+    return railBatchPage(record, { status: params.status, from: params.from, limit: params.limit, now: this.now() });
+  }
+
+  /**
+   * The operator's Stop or Cancel in the Decisions tab. Stop starts no
+   * more items and lets the requests in flight finish, so answers already
+   * paid for are kept; Cancel aborts those requests too. A batch still
+   * waiting for its lane has nothing in flight, so Stop cancels it. Like
+   * the Sub-agents card's Stop, neither wakes the thread.
+   */
+  async operatorBatchAction(
+    caller: OpenAIDecisionCaller,
+    batchId: string,
+    action: "stop" | "cancel",
+  ): Promise<DecisionsRailBatchActionResult> {
+    const batch = this.batches.get(caller, batchId);
+    if (!batch || isFinishedBatch(batch)) return { outcome: "not_running" };
+    this.silentBatches.add(batch.batchId);
+    if (action === "cancel" || batch.state === "queued") {
+      batch.cancelReason ??= "cancelled from the thread";
+      batch.controller.abort();
+      await this.runs.get(batch.batchId);
+      return { outcome: "cancelled" };
+    }
+    batch.stoppedBy ??= { code: OPERATOR_STOP_CODE, message: "Stopped from the thread." };
+    return { outcome: "stopped" };
+  }
+
+  /** The batch's result file, when it has one, for the tab's Open results file. */
+  async railResultsFile(caller: OpenAIDecisionCaller, batchId: string): Promise<string | undefined> {
+    const inMemory = this.batches.get(caller, batchId);
+    if (inMemory) return inMemory.resultsFile;
+    const directory = this.options.batchResultsDirectory?.(caller);
+    if (!directory || !isDecisionBatchId(batchId)) return undefined;
+    const file = decisionBatchFilePath(directory, batchId);
+    return await stat(file).then((info) => info.isFile() ? file : undefined, () => undefined);
+  }
+
+  /**
    * At owner shutdown: cancels running batches without a card or wake-up
    * (the database is closing), then writes pending usage.
    */
@@ -585,6 +675,61 @@ export class OpenAIDecisionsService {
       .map(async (batchId) => await this.readBatchFile(caller, batchId)));
     return [...inMemory, ...onDisk.filter((batch): batch is DecisionBatchRecord => batch !== undefined)]
       .sort((left, right) => right.createdAt - left.createdAt);
+  }
+
+  /**
+   * The thread's batches for the tab. Files are listed before memory is
+   * read: a batch that starts in between is then in memory, and one that
+   * leaves memory in between had already written its end line.
+   */
+  private async railBatches(caller: OpenAIDecisionCaller, now: number): Promise<DecisionsRailBatch[]> {
+    const directory = this.options.batchResultsDirectory?.(caller);
+    const fileIds = directory ? await listDecisionBatchFileIds(directory) : [];
+    const inMemory = this.batches.list(caller);
+    const known = new Set(inMemory.map((batch) => batch.batchId));
+    const onDisk = directory
+      ? await Promise.all(fileIds
+        .filter((batchId) => !known.has(batchId))
+        .map(async (batchId) => await this.railFileSummary(caller, decisionBatchFilePath(directory, batchId))))
+      : [];
+    return [
+      ...inMemory.map((batch) => railBatch(batch, now)),
+      ...onDisk.filter((batch): batch is DecisionsRailBatch => batch !== undefined),
+    ].sort((left, right) => right.createdAt - left.createdAt);
+  }
+
+  private async railFileSummary(caller: OpenAIDecisionCaller, file: string): Promise<DecisionsRailBatch | undefined> {
+    const info = await stat(file).catch(() => undefined);
+    if (!info) return undefined;
+    const cached = this.railFileSummaries.get(file);
+    if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.batch;
+    const record = await readDecisionBatchFile(file, caller);
+    if (!record) return undefined;
+    const batch = railBatch(record, this.now());
+    this.railFileSummaries.delete(file);
+    this.railFileSummaries.set(file, { mtimeMs: info.mtimeMs, size: info.size, batch });
+    // Result files keep 20 batches per thread; this bounds the cache across threads.
+    while (this.railFileSummaries.size > RAIL_FILE_SUMMARY_LIMIT) {
+      const oldest = this.railFileSummaries.keys().next().value;
+      if (oldest === undefined) break;
+      this.railFileSummaries.delete(oldest);
+    }
+    return batch;
+  }
+
+  private async railFileRecordFor(caller: OpenAIDecisionCaller, batchId: string) {
+    const directory = this.options.batchResultsDirectory?.(caller);
+    if (!directory || !isDecisionBatchId(batchId)) return undefined;
+    const file = decisionBatchFilePath(directory, batchId);
+    const info = await stat(file).catch(() => undefined);
+    if (!info) return undefined;
+    const cached = this.railFileRecord;
+    if (cached && cached.file === file && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+      return cached.record;
+    }
+    const record = await readDecisionBatchFile(file, caller);
+    this.railFileRecord = record ? { file, mtimeMs: info.mtimeMs, size: info.size, record } : undefined;
+    return record;
   }
 
   /** Starts the batch's result file with its header line. */
@@ -824,8 +969,13 @@ export class OpenAIDecisionsService {
       }
     }
     const mapper = new IterableMapper(pending(), async (index: number): Promise<number> => {
+      const startedAt = this.now();
+      // A preview of the input and the item's time, for the Decisions tab.
+      const preview = decisionInputPreview(inputs[index]);
+      const rail = () => ({ ...preview, durationMs: Math.max(0, this.now() - startedAt) });
       try {
-        this.recordItem(batch, { index, ok: true, ...batchItemData(await run(inputs[index])) });
+        const result = await run(inputs[index]);
+        this.recordItem(batch, { index, ok: true, ...batchItemData(result), ...rail() });
       } catch (error) {
         // Any failure stays with its item: earlier items were sent and
         // billed, and their answers must not be lost to one bad item.
@@ -836,9 +986,15 @@ export class OpenAIDecisionsService {
             index,
             error: error instanceof Error ? error.name : "unknown",
           });
-          this.recordItem(batch, { index, ok: false, code: "internal_error", message: "The item failed unexpectedly." });
+          this.recordItem(batch, {
+            index,
+            ok: false,
+            code: "internal_error",
+            message: "The item failed unexpectedly.",
+            ...rail(),
+          });
         } else {
-          this.recordItem(batch, { index, ok: false, code: error.code, message: error.message });
+          this.recordItem(batch, { index, ok: false, code: error.code, message: error.message, ...rail() });
           if (BATCH_STOPPING_CODES.has(error.code)) batch.stoppedBy ??= { code: error.code, message: error.message };
         }
       }
@@ -857,6 +1013,12 @@ export class OpenAIDecisionsService {
     batch: DecisionBatchRecord,
     card: BatchCard,
   ): Promise<void> {
+    // A Stop that came after every item started stopped nothing: the batch
+    // completed, and a background one still wakes its thread.
+    if (batch.stoppedBy?.code === OPERATOR_STOP_CODE && batch.results.every((item) => item !== undefined)) {
+      delete batch.stoppedBy;
+      this.silentBatches.delete(batch.batchId);
+    }
     const skippedReason = batch.stoppedBy
       ? `Skipped after ${batch.stoppedBy.code}.`
       : `Skipped because ${batch.cancelReason ?? "the call was cancelled"}.`;

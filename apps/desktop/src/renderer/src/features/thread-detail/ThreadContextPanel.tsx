@@ -36,6 +36,7 @@ import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
   ConnectionsIcon,
+  DecisionsIcon,
   EditsIcon,
   InfoIcon,
   HistoryIcon,
@@ -79,6 +80,9 @@ import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
 import { ToolCallsPanel } from "./context-panels/ToolCallsPanel";
+import { DecisionsPanel } from "./context-panels/DecisionsPanel";
+import { decisionsRailHasContent } from "./context-panels/decisions-format";
+import { useDecisionsRail } from "./context-panels/useDecisionsRail";
 import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
 import { ConnectionsPanel } from "./context-panels/ConnectionsPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
@@ -112,6 +116,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
+  { id: "decisions", label: "Decisions", Icon: DecisionsIcon },
   { id: "actions", label: "Actions", Icon: TerminalIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
@@ -323,6 +328,17 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   const researchEnabled = props.researchEnabled === true && props.thread?.source === "codex" && !props.thread?.federation?.ref.target;
+  // The tab shows once the thread can see a decision or has run a batch.
+  // While the first read is in flight, a thread that already had the tab
+  // open keeps it, so switching threads does not flash Thread info.
+  const decisionsRail = useDecisionsRail({
+    desktopApi: props.desktopApi,
+    thread: props.thread,
+    open: open && props.activeTab === "decisions",
+  });
+  const decisionsVisible = decisionsRail.available
+    && (decisionsRailHasContent(decisionsRail.snapshot)
+      || (props.activeTab === "decisions" && decisionsRail.snapshot === undefined));
 
   // The launchpad picks its own tab and never persists it: the stored tab
   // belongs to threads, and a launchpad visit should not reset it.
@@ -348,6 +364,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         ? "info"
       : props.activeTab === "research" && !researchEnabled
         ? "info"
+      : props.activeTab === "decisions" && !decisionsVisible
+        ? "info"
       : props.activeTab;
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
   const pendingWakeCount = pendingWakes.state.status === "ready"
@@ -370,6 +388,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
         && (tab.id !== "todos" || props.todos !== undefined)
         && (tab.id !== "research" || researchEnabled)
+        && (tab.id !== "decisions" || decisionsVisible)
       : tab.id === "providers"
         || (tab.id === "connections" && props.launchpadConnections !== undefined),
   );
@@ -988,6 +1007,18 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       }
+      case "decisions":
+        if (!props.thread) return null;
+        return (
+          <DecisionsPanel
+            desktopApi={props.desktopApi}
+            thread={{ backend: props.thread.source, threadId: props.thread.id }}
+            snapshot={decisionsRail.snapshot}
+            error={decisionsRail.error}
+            onRefresh={decisionsRail.refresh}
+            onDetailsModalOpenChange={handlePortaledInteractionChange}
+          />
+        );
       case "actions":
         if (!props.thread) return null;
         return (
