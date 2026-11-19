@@ -1,3 +1,4 @@
+import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
 import type { TurnEventObservers } from "./turn-event-observer";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
@@ -220,6 +221,7 @@ export interface RegistryDependencies {
   threadInspectionTools: ThreadInspectionTools;
   threadMcpConnections: ThreadMcpConnections;
   headlessAutomation: HeadlessAutomationTurns;
+  acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
   managedReviewService: ManagedReviewService;
   subAgentMonitorService: SubAgentMonitorService;
   threadUsageLedger: ThreadUsageLedger;

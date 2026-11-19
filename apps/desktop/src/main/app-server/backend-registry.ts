@@ -1,3 +1,4 @@
+import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
 import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
 import { providerPickerValue } from "@pwragent/shared";
@@ -223,7 +224,6 @@ import {
   type AnalyzeThreadToolHistoryResponse,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
-  type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type CodexEnvironmentOption,
   type CodexEnvironmentStartupFailure,
@@ -410,11 +410,9 @@ import {
 } from "@pwragent/shared";
 import {
   AcpBackendAdapter,
-  acpRuntimeValueLooksPrivileged,
   acpSessionToThreadSummary,
   findAcpModelConfigOption,
   findAcpThoughtLevelConfigOption,
-  formatAcpRuntimeLabel,
   inputToAcpPrompt,
   acpAdvertisesRuntimeModeSelector,
   isAcpSessionMissingForProjectError,
@@ -1002,6 +1000,7 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly worktreeRecoveryService: WorktreeRecoveryService;
   private readonly acpBackend: AcpBackendAdapter;
+  private readonly acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
   private readonly claudeBackend: ClaudeBackend;
   private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
@@ -1582,21 +1581,6 @@ export class DesktopBackendRegistry {
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
   private readonly turnCausalContextLocks = new PerKeyAsyncLock();
-  private readonly queuedAcpRuntimeOptions = new Map<
-    string,
-    {
-      source: BackendAcpRuntimeOptionSource;
-      optionId: string;
-      value: string;
-      queuedAt: number;
-      queueId: string;
-      flushAttempts: number;
-      fromValue?: string;
-      fromLabel?: string;
-      toLabel?: string;
-    }
-  >();
-  private readonly queuedAcpRuntimeOptionFlushes = new Map<string, Promise<void>>();
   /**
    * Gate for the Codex `listThreads` probe. Returns `true` while the
    * first-run wizard is still asking the operator which Codex profile
@@ -1777,6 +1761,7 @@ export class DesktopBackendRegistry {
     this.claudeAgentToolMcpServer = dependencies.claudeAgentToolMcpServer;
     this.claudeBackend = dependencies.claudeBackend;
     this.acpBackend = dependencies.acpBackend;
+    this.acpSessionRuntimeOptions = dependencies.acpSessionRuntimeOptions;
     this.providerRuntimeFingerprints = dependencies.providerRuntimeFingerprints;
     this.messagingStore = dependencies.messagingStore;
     this.appManagementHandler = dependencies.handlers.appManagementHandler;
@@ -1898,6 +1883,7 @@ export class DesktopBackendRegistry {
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
       approveGatewayInvocation: (...args: Parameters<ThreadMcpConnections["approveGatewayInvocation"]>) => this.threadMcpConnections.approveGatewayInvocation(...args),
+      appendPermissionTransition: (...args: Parameters<typeof this.appendPermissionTransition>) => this.appendPermissionTransition(...args),
       archiveThread: (...args: Parameters<ThreadArchiveCoordinator["archiveThread"]>) => this.threadArchiveCoordinator.archiveThread(...args),
       assertNotBootstrap: (...args: Parameters<typeof this.assertNotBootstrap>) => this.assertNotBootstrap(...args),
       assertThreadNotHandingOff: (...args: Parameters<typeof this.assertThreadNotHandingOff>) => this.assertThreadNotHandingOff(...args),
@@ -5754,429 +5740,10 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async setAcpSessionRuntimeOption(
+  setAcpSessionRuntimeOption(
     params: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
-    if (!isAcpBackendId(params.backend)) {
-      throw new Error("ACP runtime options are only available for ACP backends");
-    }
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP session not found: ${params.threadId}`);
-    }
-
-    const currentValue = this.readAcpRuntimeOptionValue(session.acpRuntime, params);
-    if (currentValue === params.value) {
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        runtimeState: session.acpRuntime,
-      };
-    }
-
-    if (this.threadHasActiveTurn(params.threadId, params.backend)) {
-      await this.queueAcpSessionRuntimeOption(params, currentValue);
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        runtimeState: session.acpRuntime,
-      };
-    }
-
-    return await this.applyAcpSessionRuntimeOption(params);
-  }
-
-  private async queueAcpSessionRuntimeOption(
-    params: SetAcpSessionRuntimeOptionRequest,
-    fromValue: string | undefined,
-  ): Promise<void> {
-    if (!isAcpBackendId(params.backend)) {
-      return;
-    }
-    const queuedAt = Date.now();
-    const queueId = randomUUID();
-    const queueKey = this.buildAcpRuntimeQueueKey(params.backend, params.threadId);
-    const fromLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
-    const toLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
-    this.queuedAcpRuntimeOptions.set(queueKey, {
-      source: params.source,
-      optionId: params.optionId,
-      value: params.value,
-      queuedAt,
-      queueId,
-      flushAttempts: 0,
-      fromValue,
-      fromLabel,
-      toLabel,
-    });
-
-    await this.appendPermissionTransition({
-      backend: params.backend,
-      threadId: params.threadId,
-      transition: {
-        id: randomUUID(),
-        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
-          ? "full-access"
-          : "default",
-        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
-          ? "full-access"
-          : "default",
-        fromLabel,
-        toLabel,
-        status: "queued",
-        occurredAt: queuedAt,
-        queueId,
-      },
-    });
-
-    backendRegistryLog.info("queued ACP runtime option change", {
-      backend: params.backend,
-      threadId: params.threadId,
-      source: params.source,
-      optionId: params.optionId,
-      from: fromValue,
-      to: params.value,
-      queueId,
-    });
-  }
-
-  private async applyAcpSessionRuntimeOption(
-    params: SetAcpSessionRuntimeOptionRequest,
-    options?: {
-      fromQueue?: boolean;
-      queueId?: string;
-      fromValue?: string;
-      fromLabel?: string;
-      toLabel?: string;
-    },
-  ): Promise<SetAcpSessionRuntimeOptionResponse> {
-    if (!isAcpBackendId(params.backend)) {
-      throw new Error("ACP runtime options are only available for ACP backends");
-    }
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP session not found: ${params.threadId}`);
-    }
-    const client = await this.acpBackend.getClientForSession(
-      params.backend,
-      params.threadId,
-    );
-    await client.ensureSession?.(session);
-    const fromValue =
-      options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
-    const runtimeState = this.normalizeAcpRuntimeSelectionState(
-      params,
-      await client.setRuntimeOption?.({
-        sessionId: params.threadId,
-        source: params.source,
-        optionId: params.optionId,
-        value: params.value,
-        // Below, the requested value is recorded and broadcast as applied.
-        // A thought level the client skipped was never sent, so it must fail
-        // here instead, as the agent's own refusal did.
-        rejectUnofferedThoughtLevel: true,
-      }),
-    );
-    const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
-    const changesExecutionMode = this.isAcpRuntimeExecutionModeOption(params);
-    const nextExecutionMode = changesExecutionMode
-      ? acpRuntimeValueLooksPrivileged(params.value)
-        ? "full-access"
-        : "default"
-      : session.executionMode;
-    const updatedAt = Math.max(
-      session.updatedAt,
-      runtimeState?.updatedAt ?? Date.now(),
-    );
-    this.acpBackend.upsertSession({
-      ...session,
-      acpRuntime: mergedRuntime,
-      executionMode: nextExecutionMode,
-      updatedAt,
-    });
-    if (changesExecutionMode) {
-      await this.overlayStore.setThreadExecutionMode({
-        backend: params.backend,
-        threadId: params.threadId,
-        executionMode: nextExecutionMode ?? "default",
-        updatedAt,
-      });
-    }
-
-    const fromLabel =
-      options?.fromLabel ??
-      this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
-    const toLabel =
-      options?.toLabel ??
-      this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
-    await this.appendPermissionTransition({
-      backend: params.backend,
-      threadId: params.threadId,
-      transition: {
-        id: randomUUID(),
-        fromExecutionMode: changesExecutionMode
-          ? acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"
-          : session.executionMode ?? "default",
-        toExecutionMode: nextExecutionMode ?? "default",
-        fromLabel,
-        toLabel,
-        status: "applied",
-        occurredAt: Date.now(),
-        queueId: options?.queueId,
-      },
-    });
-
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/acpRuntime/updated",
-        params: {
-          threadId: params.threadId,
-          acpRuntime: mergedRuntime,
-        },
-      },
-    });
-    if (nextExecutionMode !== session.executionMode) {
-      await this.emit({
-        backend: params.backend,
-        notification: {
-          method: "thread/executionMode/updated",
-          params: {
-            threadId: params.threadId,
-            executionMode: nextExecutionMode,
-          },
-        },
-      });
-    }
-
-    return {
-      backend: params.backend,
-      threadId: params.threadId,
-      runtimeState: mergedRuntime,
-    };
-  }
-
-  private async flushQueuedAcpRuntimeOptionIfPresent(
-    backend: AcpBackendId,
-    threadId: string,
-  ): Promise<void> {
-    const queueKey = this.buildAcpRuntimeQueueKey(backend, threadId);
-    const activeFlush = this.queuedAcpRuntimeOptionFlushes.get(queueKey);
-    if (activeFlush) {
-      await activeFlush;
-      return;
-    }
-    const queue = this.queuedAcpRuntimeOptions.get(queueKey);
-    if (!queue) {
-      return;
-    }
-    if (!this.queuedAcpRuntimeOptions.delete(queueKey)) {
-      return;
-    }
-    const flush = this.applyClaimedQueuedAcpRuntimeOption(backend, threadId, queue);
-    this.queuedAcpRuntimeOptionFlushes.set(queueKey, flush);
-    try {
-      await flush;
-    } finally {
-      if (this.queuedAcpRuntimeOptionFlushes.get(queueKey) === flush) {
-        this.queuedAcpRuntimeOptionFlushes.delete(queueKey);
-      }
-    }
-  }
-
-  private async applyClaimedQueuedAcpRuntimeOption(
-    backend: AcpBackendId,
-    threadId: string,
-    queue: {
-      source: BackendAcpRuntimeOptionSource;
-      optionId: string;
-      value: string;
-      queueId: string;
-      flushAttempts: number;
-      fromValue?: string;
-      fromLabel?: string;
-      toLabel?: string;
-    },
-  ): Promise<void> {
-    try {
-      await this.applyAcpSessionRuntimeOption(
-        {
-          backend,
-          threadId,
-          source: queue.source,
-          optionId: queue.optionId,
-          value: queue.value,
-        },
-        {
-          fromQueue: true,
-          queueId: queue.queueId,
-          fromValue: queue.fromValue,
-          fromLabel: queue.fromLabel,
-          toLabel: queue.toLabel,
-        },
-      );
-    } catch (error) {
-      const attempts = queue.flushAttempts + 1;
-      if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS) {
-        await this.appendPermissionTransition({
-          backend,
-          threadId,
-          transition: {
-            id: randomUUID(),
-            fromExecutionMode: acpRuntimeValueLooksPrivileged(queue.fromValue)
-              ? "full-access"
-              : "default",
-            toExecutionMode: acpRuntimeValueLooksPrivileged(queue.value)
-              ? "full-access"
-              : "default",
-            fromLabel: queue.fromLabel,
-            toLabel: queue.toLabel,
-            status: "cancelled",
-            occurredAt: Date.now(),
-            queueId: queue.queueId,
-            note: `auto-cancelled after ${MAX_QUEUE_FLUSH_ATTEMPTS} failed flush attempts`,
-          },
-        });
-        backendRegistryLog.error(
-          "auto-cancelling queued ACP runtime option change after repeated failures",
-          {
-            backend,
-            threadId,
-            queueId: queue.queueId,
-            attempts,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-        return;
-      }
-      this.queuedAcpRuntimeOptions.set(this.buildAcpRuntimeQueueKey(backend, threadId), {
-        ...queue,
-        queuedAt: Date.now(),
-        flushAttempts: attempts,
-      });
-      backendRegistryLog.warn("queued ACP runtime option flush failed; will retry", {
-        backend,
-        threadId,
-        queueId: queue.queueId,
-        attempts,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private buildAcpRuntimeQueueKey(backend: AcpBackendId, threadId: string): string {
-    return buildThreadIdentityKey(backend, threadId);
-  }
-
-  private readAcpRuntimeOptionValue(
-    runtime: BackendAcpSessionRuntimeState | undefined,
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
-  ): string | undefined {
-    if (
-      params.source === "configOption" &&
-      runtime?.currentModeId &&
-      this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
-    ) {
-      return runtime.currentModeId;
-    }
-    if (params.source === "configOption") {
-      return runtime?.configValues?.[params.optionId];
-    }
-    return params.source === "mode"
-      ? runtime?.currentModeId
-      : runtime?.currentModelId;
-  }
-
-  private normalizeAcpRuntimeSelectionState(
-    params: SetAcpSessionRuntimeOptionRequest,
-    runtimeState: BackendAcpSessionRuntimeState | undefined,
-  ): BackendAcpSessionRuntimeState {
-    const updatedAt = runtimeState?.updatedAt ?? Date.now();
-    const selectedState: BackendAcpSessionRuntimeState =
-      params.source === "model"
-        ? {
-            currentModelId: params.value,
-            updatedAt,
-          }
-        : params.source === "mode" ||
-            this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
-          ? {
-              configValues:
-                params.source === "configOption"
-                  ? { [params.optionId]: params.value }
-                  : runtimeState?.configValues,
-              currentModeId: params.value,
-              updatedAt,
-            }
-          : {
-              configValues: { [params.optionId]: params.value },
-              updatedAt,
-            };
-    return mergeAcpRuntimeState(runtimeState, selectedState) ?? selectedState;
-  }
-
-  private isAcpRuntimeModeConfigOption(
-    backend: AppServerBackendKind,
-    optionId: string,
-  ): boolean {
-    if (!isAcpBackendId(backend)) {
-      return false;
-    }
-    const agent = this.acpBackend.getInstalledAgent(backend);
-    return (
-      agent?.runtimeCapabilities?.configOptions?.some(
-        (option) => option.id === optionId && option.category === "mode",
-      ) ?? false
-    );
-  }
-
-  private acpRuntimeConfigOptionMirrorsMode(
-    backend: AppServerBackendKind,
-    optionId: string,
-  ): boolean {
-    const capabilities = isAcpBackendId(backend)
-      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
-      : undefined;
-    return this.isAcpRuntimeModeConfigOption(backend, optionId)
-      && findAcpPermissionModeConfigOption(capabilities)?.id !== optionId;
-  }
-
-  private isAcpRuntimeExecutionModeOption(
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
-  ): boolean {
-    const agent = isAcpBackendId(params.backend)
-      ? this.acpBackend.getInstalledAgent(params.backend)
-      : undefined;
-    if (agent?.registryId === "grok") {
-      return params.source === "configOption"
-        && params.optionId === findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.id;
-    }
-    return (
-      params.source === "mode" ||
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
-    );
-  }
-
-  private formatAcpRuntimeOptionLabel(
-    backend: AcpBackendId,
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "source" | "optionId">,
-    value: string | undefined,
-  ): string | undefined {
-    if (!value) {
-      return undefined;
-    }
-    const runtime = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
-    if (params.source === "configOption") {
-      const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
-      const label = option?.values.find((item) => item.value === value)?.label;
-      return formatAcpRuntimeLabel(label ?? value);
-    }
-    if (params.source === "model") {
-      const label = runtime?.models?.availableModels.find((model) => model.id === value)?.label;
-      return formatAcpRuntimeLabel(label ?? value);
-    }
-    const label = runtime?.modes?.availableModes.find((mode) => mode.id === value)?.label;
-    return formatAcpRuntimeLabel(label ?? value);
+    return this.acpSessionRuntimeOptions.setAcpSessionRuntimeOption(params);
   }
 
   private async resolveAcpSessionForTurn(
@@ -11147,7 +10714,7 @@ export class DesktopBackendRegistry {
               params.backend,
             );
           }
-          await this.flushQueuedAcpRuntimeOptionIfPresent(
+          await this.acpSessionRuntimeOptions.flushQueuedAcpRuntimeOptionIfPresent(
             identity.backend,
             params.threadId,
           );
@@ -21645,7 +21212,7 @@ export class DesktopBackendRegistry {
           event.backend,
         );
       }
-      await this.flushQueuedAcpRuntimeOptionIfPresent(
+      await this.acpSessionRuntimeOptions.flushQueuedAcpRuntimeOptionIfPresent(
         event.backend,
         notification.params.threadId,
       );
@@ -21772,7 +21339,7 @@ export class DesktopBackendRegistry {
               event.backend,
             );
           }
-          await this.flushQueuedAcpRuntimeOptionIfPresent(
+          await this.acpSessionRuntimeOptions.flushQueuedAcpRuntimeOptionIfPresent(
             event.backend,
             event.notification.params.threadId,
           );

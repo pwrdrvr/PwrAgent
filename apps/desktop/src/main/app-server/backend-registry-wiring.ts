@@ -1,3 +1,4 @@
+import { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import { HeadlessAutomationTurns } from "./headless-automation-turns";
 import { TurnEventObservers, type TurnEventObserver } from "./turn-event-observer";
 import { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
@@ -135,6 +136,7 @@ export interface RegistryModules {
   readonly threadInspectionTools: ThreadInspectionTools;
   readonly threadMcpConnections: ThreadMcpConnections;
   readonly headlessAutomation: HeadlessAutomationTurns;
+  readonly acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
   readonly managedReviewService: ManagedReviewService;
   readonly subAgentMonitorService: SubAgentMonitorService;
   readonly threadUsageLedger: ThreadUsageLedger;
@@ -1512,6 +1514,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadMaintenanceToolScans,
   }, () => ports);
   const threadMcpConnections = new ThreadMcpConnections(context, { forgeToolBridge }, () => ports);
+  const acpSessionRuntimeOptions = new AcpSessionRuntimeOptions(acpBackend, overlayStore, context.emit, () => ports);
   const headlessAutomation = new HeadlessAutomationTurns(context, threadMcpConnections, mcpGatewayTools, () => ports);
   const managedReviewService = new ManagedReviewService(context, () => ports);
   const subAgentMonitorService = new SubAgentMonitorService(context, {
@@ -1612,6 +1615,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadInspectionTools,
     threadMcpConnections,
     headlessAutomation,
+    acpSessionRuntimeOptions,
     managedReviewService,
     subAgentMonitorService,
     threadUsageLedger,
@@ -1713,6 +1717,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadInspectionTools,
     threadMcpConnections,
     headlessAutomation,
+    acpSessionRuntimeOptions,
     managedReviewService,
     subAgentMonitorService,
     threadUsageLedger,

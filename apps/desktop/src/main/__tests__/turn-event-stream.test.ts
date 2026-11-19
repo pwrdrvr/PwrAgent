@@ -86,13 +86,16 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "scheduleQueuedAgentChange",
     "flushQueuedExecutionModeIfPresent",
     "usesSlashControlledAcpExecutionModes",
-    "flushQueuedAcpRuntimeOptionIfPresent",
     "appendTurnFailure",
     "threadHasActiveCodexReviewTurn",
     "notifyForAttentionRequired",
     "notifyForTerminalOutcome",
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
+  {
+    name: "flushQueuedAcpRuntimeOptionIfPresent",
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).acpSessionRuntimeOptions as unknown as Members,
+  },
   // Moved to the Codex runtime supervisor (PWR-146).
   ...[
     "maybeRestartCodexForManagedRuntimeChange",
