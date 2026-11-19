@@ -342,6 +342,7 @@ import {
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
+import { ActiveDecisionBatchesStrip } from "../thread-detail/ActiveDecisionBatchesStrip";
 import { ActiveAutomationRunsStrip } from "../automations/ActiveAutomationRunsStrip";
 import {
   buildThreadComposerScopeKey,
@@ -13149,6 +13150,13 @@ function useComposerController(props: ComposerProps) {
       <ActiveSubAgentsStrip
         desktopApi={props.desktopApi}
         onRefreshNavigation={props.onRefreshNavigation}
+        thread={props.thread}
+      />
+
+      {/* Decision batches run in the owner's decisions service, not as
+          sub-agents, so they get their own strip in the same band. */}
+      <ActiveDecisionBatchesStrip
+        desktopApi={props.desktopApi}
         thread={props.thread}
       />
 

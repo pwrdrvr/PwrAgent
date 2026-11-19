@@ -72,16 +72,14 @@ export function isHarnessSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitor
 }
 
 /**
- * Whether a running card can be stopped: a thread turn to interrupt, a
- * Claude task, which Claude stops by its id, or a decision batch, which the
- * owner cancels by its batch id. Neither of the last two has a thread.
+ * Whether a running card can be stopped: a thread turn to interrupt, or a
+ * Claude task, which Claude stops by its id and which has no thread.
  */
 export function hasStoppableSubAgentRun(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId" | "monitorThreadId" | "monitorTurnId">,
 ): boolean {
   return (Boolean(subAgent.monitorThreadId) && Boolean(subAgent.monitorTurnId))
-    || isClaudeNativeSubAgent(subAgent)
-    || isDecisionBatchSubAgent(subAgent);
+    || isClaudeNativeSubAgent(subAgent);
 }
 
 /** Execution thread IDs also exist for ephemeral workers; they do not imply a reloadable transcript. */
@@ -104,19 +102,12 @@ export function isSystemQueuedMessageTitleHelperSubAgent(
   return subAgent.monitorId.startsWith("system:queued-message-titles:");
 }
 
-/** A decisions_invoke batch's card; the id after the prefix is its batch id. */
+/**
+ * A card an earlier version wrote for a decisions_invoke batch. Batches now
+ * show in the Decisions tab and their own strip above the composer; these
+ * rows stay in thread history and every sub-agent surface hides them.
+ */
 export const DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX = "system:decision-batch:";
-
-export function decisionBatchSubAgentId(batchId: string): string {
-  return `${DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX}${batchId}`;
-}
-
-/** The batch id a decision batch card names, or undefined for any other card. */
-export function decisionBatchIdFromSubAgentId(monitorId: string): string | undefined {
-  if (!monitorId.startsWith(DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX)) return undefined;
-  const batchId = monitorId.slice(DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX.length);
-  return batchId.length > 0 ? batchId : undefined;
-}
 
 export function isDecisionBatchSubAgent(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId">,

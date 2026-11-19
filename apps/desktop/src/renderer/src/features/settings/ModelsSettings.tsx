@@ -107,6 +107,7 @@ import {
   openAIDecisionsKeyLabel,
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
+import { ProfileDecisionsSettings } from "./ProfileDecisionsSettings";
 import {
   AUDIO_TRANSCRIPTION_FOCUS,
   modelServicesByKind,
@@ -939,6 +940,8 @@ export function ModelsSettings(props: {
         saving={props.saving}
         onSave={saveDecisionModels}
       />
+
+      <ProfileDecisionsSettings desktopApi={props.desktopApi} />
 
       <SettingsSection
         eyebrow="Models"

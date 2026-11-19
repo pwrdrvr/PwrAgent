@@ -31,6 +31,23 @@ describe("active sub-agent display", () => {
       { ...live, monitorId: "boundary", completionSource: { type: "monitor_tool" } },
     ]).map((agent) => agent.monitorId)).toEqual(["running", "blocked", "pending", "cancelling", "failed", "failure"]);
   });
+
+  // Rule: decision batches are not sub-agents. Cards an earlier version
+  // wrote for them, whatever their status, never reach the strip or the
+  // Sub-agents tab; every other monitor kind is unaffected.
+  it("hides cards an earlier version wrote for decision batches", () => {
+    const base = { task: "Decision batch triage: 3 of 40 done", createdAt: NOW, updatedAt: NOW };
+    const statuses = ["running", "failed", "failure", "success", "cancelled"] as const;
+    const legacy: ThreadSubAgentSummary[] = statuses.map((status) => ({
+      ...base,
+      monitorId: `system:decision-batch:batch_${status}`,
+      status,
+    }));
+    const monitor: ThreadSubAgentSummary = { ...base, monitorId: "monitor-1", status: "running" };
+    expect(projectActiveThreadSubAgents([...legacy, monitor]).map((agent) => agent.monitorId)).toEqual(["monitor-1"]);
+    for (const card of legacy) expect(isThreadSubAgentVisibleInPanel(card, NOW)).toBe(false);
+    expect(isThreadSubAgentVisibleInPanel(monitor, NOW)).toBe(true);
+  });
 });
 
 function nativeSummary(

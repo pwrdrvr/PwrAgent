@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import {
   hasStoppableSubAgentRun,
   isCodexNativeSubAgent,
+  isDecisionBatchSubAgent,
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
 } from "@pwragent/shared";
@@ -62,7 +63,10 @@ export function ActiveSubAgentsStrip(props: {
   );
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
 
-  const subAgents = props.thread?.activeSubAgents ?? props.thread?.subAgents ?? [];
+  // The owner's projection already drops cards an earlier build wrote for
+  // decision batches (they have their own strip); the raw history does not.
+  const subAgents = (props.thread?.activeSubAgents ?? props.thread?.subAgents ?? [])
+    .filter((subAgent) => !isDecisionBatchSubAgent(subAgent));
   const running = subAgents.filter(isRunningSubAgent);
   const blocked = subAgents.filter(isBlockedSubAgent);
   // Successful and cancelled sub-agents leave immediately — the sidebar and the

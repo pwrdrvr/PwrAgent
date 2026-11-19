@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   OpenAIDecisionsError,
   OpenAIDecisionsService,
-  type DecisionBatchCardReport,
+  type DecisionBatchUpdate,
 } from "../openai-decisions/openai-decisions-service";
 import {
   DECISION_BATCH_LIMITS,
@@ -34,12 +34,12 @@ const JEV = { provider: "jev", ...PREDICATE };
 type Wake = { caller: { backend: string; threadId: string }; batchId: string; text: string };
 
 let db: StateDb;
-let cards: DecisionBatchCardReport[];
+let updates: DecisionBatchUpdate[];
 let wakes: Wake[];
 
 beforeEach(() => {
   db = openInMemoryStateDb();
-  cards = [];
+  updates = [];
   wakes = [];
 });
 afterEach(() => db.close());
@@ -56,7 +56,7 @@ function makeService(
     readAccountSettings: () => ({}),
     profileId: () => "test-profile",
     recordUsageLines: async () => undefined,
-    reportBatch: async (report) => { cards.push(report); },
+    announceBatch: async (update) => { updates.push(update); },
     wakeThread: async (caller, wake) => { wakes.push({ caller, ...wake }); },
     newBatchId: () => `${options.idPrefix ?? "test"}-${(batch += 1)}`,
     ...(options.resultsDir ? { batchResultsDirectory: () => options.resultsDir! } : {}),
@@ -361,15 +361,15 @@ describe("background batches", () => {
     expect(wakes[0]!.text).toContain(`decisions_batch_results { "batchId": "${started.batchId}" }`);
     expect(wakes[0]!.text).toContain("200 of 200 items answered");
 
-    // Running first, terminal last, never more than 11 writes, and the
-    // count never goes backwards.
-    expect(cards.length).toBeGreaterThanOrEqual(2);
-    expect(cards.length).toBeLessThanOrEqual(11);
-    expect(cards[0]!.status).toBe("running");
-    expect(cards.at(-1)).toMatchObject({ status: "success", task: "Decision batch ad_hoc: 200 of 200 done" });
-    const done = cards.map((card) => Number(/: (\d+) of/.exec(card.task)![1]));
+    // Running first, terminal last, never more than 11 announcements, and
+    // the count never goes backwards.
+    expect(updates.length).toBeGreaterThanOrEqual(2);
+    expect(updates.length).toBeLessThanOrEqual(11);
+    expect(updates[0]!.status).toBe("running");
+    expect(updates.at(-1)).toMatchObject({ status: "success", finished: 200, count: 200 });
+    const done = updates.map((update) => update.finished);
     expect(done).toEqual([...done].sort((a, b) => a - b));
-    expect(cards.every((card) => card.batchId === started.batchId && card.caller.threadId === CALLER.threadId)).toBe(true);
+    expect(updates.every((update) => update.batchId === started.batchId && update.caller.threadId === CALLER.threadId)).toBe(true);
 
     const read = await service.batchResults(CALLER, { batchId: started.batchId, status: "succeeded", limit: 500 }) as unknown as Page;
     expect(read).toMatchObject({ state: "completed", succeeded: 200 });
@@ -407,12 +407,12 @@ describe("background batches", () => {
     for (const release of gates) release();
     const cancelled = await cancelling as unknown as Page;
     expect(cancelled).toMatchObject({ state: "cancelled", succeeded: 4, skipped: 36 });
-    expect(cards.at(-1)!.status).toBe("cancelled");
+    expect(updates.at(-1)!.status).toBe("cancelled");
     expect(wakes).toHaveLength(0);
     expect(await service.cancelBatch(CALLER, { batchId: started.batchId })).toMatchObject({ alreadyFinished: true });
   });
 
-  it("are cancelled at shutdown with no card or wake-up", async () => {
+  it("are cancelled at shutdown with no announcement or wake-up", async () => {
     const gate = deferred();
     const service = makeService(async () => {
       await gate.promise;
@@ -423,18 +423,18 @@ describe("background batches", () => {
       inputs: Array.from({ length: 40 }, (_, index) => `item-${index}`),
       background: true,
     });
-    await expect.poll(() => cards.length).toBe(1);
+    await expect.poll(() => updates.length).toBe(1);
     const closing = service.close();
     gate.resolve();
     await closing;
-    expect(cards).toHaveLength(1);
+    expect(updates).toHaveLength(1);
     expect(wakes).toHaveLength(0);
   });
 
   // Rule: a batch waiting for its decision's lane is visible on its thread
-  // and the operator can stop it. Pre-fix, its card was first written when
-  // the lane let it run, so a queued batch had no card and no Stop.
-  it("show a card while they wait for their lane, and can be stopped there", async () => {
+  // and the operator can stop it. Before announcements, its card was first
+  // written when the lane let it run, so a queued batch had no Stop.
+  it("are announced while they wait for their lane, and can be stopped there", async () => {
     const gate = deferred();
     const service = makeService(async () => {
       await gate.promise;
@@ -442,16 +442,18 @@ describe("background batches", () => {
     });
     const inputs = Array.from({ length: 20 }, (_, index) => `item-${index}`);
     const first = await service.invoke(CALLER, { definition: JEV, inputs, background: true }) as { batchId: string };
-    await expect.poll(() => cards.some((card) => card.batchId === first.batchId)).toBe(true);
+    await expect.poll(() => updates.some((update) => update.batchId === first.batchId)).toBe(true);
     const queued = await service.invoke(CALLER, { definition: JEV, inputs, background: true }) as { batchId: string; state: string };
     expect(queued.state).toBe("queued");
-    const waiting = cards.filter((card) => card.batchId === queued.batchId);
+    const waiting = updates.filter((update) => update.batchId === queued.batchId);
     expect(waiting).toHaveLength(1);
     expect(waiting[0]).toMatchObject({ status: "running" });
-    expect(waiting[0]!.message).toContain("Waiting for another call");
+    expect(service.railActiveBatches(CALLER).batches.find((batch) => batch.batchId === queued.batchId))
+      .toMatchObject({ state: "queued" });
 
-    expect(await service.stopBatch(CALLER, queued.batchId)).toBe("stopped");
-    expect(cards.filter((card) => card.batchId === queued.batchId).at(-1)).toMatchObject({ status: "cancelled" });
+    // Stop on a batch with nothing in flight cancels it.
+    expect(await service.operatorBatchAction(CALLER, queued.batchId, "stop")).toEqual({ outcome: "cancelled" });
+    expect(updates.filter((update) => update.batchId === queued.batchId).at(-1)).toMatchObject({ status: "cancelled" });
     gate.resolve();
     await expect.poll(() => wakes.length).toBe(1);
     expect(wakes[0]!.batchId).toBe(first.batchId);
@@ -741,16 +743,15 @@ describe("operator stop", () => {
       background: true,
     }) as { batchId: string };
     await expect.poll(() => gates.length).toBe(1);
-    // Another thread cannot stop it.
-    expect(await service.stopBatch(OTHER, started.batchId)).toBe("not_running");
-    const stopping = service.stopBatch(CALLER, started.batchId);
+    // Another thread cannot cancel it.
+    expect(await service.operatorBatchAction(OTHER, started.batchId, "cancel")).toEqual({ outcome: "not_running" });
+    const cancelling = service.operatorBatchAction(CALLER, started.batchId, "cancel");
     gates[0]!();
-    expect(await stopping).toBe("stopped");
-    expect(cards.at(-1)).toMatchObject({ status: "cancelled" });
-    expect(cards.at(-1)!.message).toContain("stopped from the thread");
+    expect(await cancelling).toEqual({ outcome: "cancelled" });
+    expect(updates.at(-1)).toMatchObject({ status: "cancelled" });
     expect(wakes).toHaveLength(0);
     const read = await service.batchResults(CALLER, { batchId: started.batchId }) as unknown as Page;
-    expect(read).toMatchObject({ state: "cancelled", succeeded: 2, skipped: 18 });
-    expect(await service.stopBatch(CALLER, started.batchId)).toBe("not_running");
+    expect(read).toMatchObject({ state: "cancelled", succeeded: 2, skipped: 18, cancelReason: "cancelled from the thread" });
+    expect(await service.operatorBatchAction(CALLER, started.batchId, "cancel")).toEqual({ outcome: "not_running" });
   });
 });

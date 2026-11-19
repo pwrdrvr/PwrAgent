@@ -242,9 +242,14 @@ export const RESEARCH_WITHDRAW_CHANNEL = "research:withdraw";
 export const RESEARCH_EVENTS_CHANNEL = "research:events";
 export const RESEARCH_CHANGES_CHANNEL = "research:changes";
 export const DECISIONS_RAIL_SNAPSHOT_CHANNEL = "decisions-rail:snapshot";
+/** The strip above the composer: a thread's running and error-stopped batches, from memory. */
+export const DECISIONS_RAIL_ACTIVE_CHANNEL = "decisions-rail:active";
 export const DECISIONS_RAIL_BATCH_CHANNEL = "decisions-rail:batch";
 export const DECISIONS_RAIL_BATCH_ACTION_CHANNEL = "decisions-rail:batch-action";
 export const DECISIONS_RAIL_OPEN_RESULTS_CHANNEL = "decisions-rail:open-results";
+/** Settings → AI Providers → Decisions: the profile-scope decisions, and Delete. */
+export const DECISIONS_PROFILE_LIST_CHANNEL = "decisions-profile:list";
+export const DECISIONS_PROFILE_DELETE_CHANNEL = "decisions-profile:delete";
 /** A thread's armed reviews and Auto-fix runs, read from its owner. */
 export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
 /** Don't auto-fix: turns Auto-fix off for one running review. */

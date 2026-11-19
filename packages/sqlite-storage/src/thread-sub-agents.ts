@@ -509,13 +509,17 @@ export class ThreadSubAgentTable {
     const excluded = JSON.stringify([...new Set(excludeMonitorIds)]);
     // Each query repeats the index's lens expression exactly, which is what
     // lets SQLite read the lens from the index; the plan test pins it.
+    // `isThreadSubAgentVisibleInPanel` hides the cards an earlier build wrote
+    // for decision batches (`DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX`),
+    // whatever their status. They fall in the pwragent lens.
     const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
       WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
           ELSE 'pwragent' END) = ?
-        AND monitor_id NOT IN (SELECT value FROM json_each(?))`);
+        AND monitor_id NOT IN (SELECT value FROM json_each(?))
+        AND substr(monitor_id, 1, 22) <> 'system:decision-batch:'`);
     // `isThreadSubAgentVisibleInPanel` (subagent-visibility.ts) in SQL: a
     // finished native worker leaves the panel a day after it last moved. A
     // card that is not JSON is skipped, as `parseCards` skips it, rather than
@@ -573,6 +577,7 @@ export class ThreadSubAgentTable {
           WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
           ELSE 'pwragent' END) = ?
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
+            AND substr(monitor_id, 1, 22) <> 'system:decision-batch:'
           ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
         .all(params.storageKey, params.lens, excluded, params.limit, params.offset);
     return parseCards(rows as CardRow[]);

@@ -5146,6 +5146,27 @@ describe("ThreadContextPanel Decisions tab", () => {
     expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
   });
 
+  // Rule: with no sub-agent card to watch, the tab learns a batch moved
+  // from the owner's announcement for this thread, and only this thread.
+  it("reads again when the owner announces one of this thread's batches", async () => {
+    const readDecisionsRail = vi.fn(async () => railWithDecision);
+    let listener: ((event: { backend: string; notification: unknown }) => void) | undefined;
+    const onAgentEvent = vi.fn((next: typeof listener) => {
+      listener = next;
+      return () => { listener = undefined; };
+    });
+    renderPanel({ desktopApi: { readDecisionsRail, onAgentEvent } as never });
+    await waitFor(() => expect(readDecisionsRail).toHaveBeenCalledTimes(1));
+    const announce = (threadId: string) => act(() => listener?.({
+      backend: "codex",
+      notification: { method: "thread/decisionBatches/updated", params: { threadId, batchId: "batch_1", status: "running" } },
+    }));
+    announce("thread-other");
+    expect(readDecisionsRail).toHaveBeenCalledTimes(1);
+    announce("thread-1");
+    await waitFor(() => expect(readDecisionsRail).toHaveBeenCalledTimes(2));
+  });
+
   it("never asks for a thread another instance owns", () => {
     const readDecisionsRail = vi.fn(async () => railWithDecision);
     renderPanel({

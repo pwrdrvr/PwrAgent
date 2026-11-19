@@ -17,10 +17,19 @@ const openAIDecisionsLog = getMainLogger("pwragent:openai-decisions");
 
 let flushPendingUsage: (() => Promise<void>) | undefined;
 
-/** What the thread's Decisions tab reads and does, on this owner's decisions service. */
+/**
+ * What the thread's Decisions tab and Settings → AI Providers → Decisions
+ * read and do, on this owner's decisions service.
+ */
 export type OpenAIDecisionsRail = Pick<
   OpenAIDecisionsService,
-  "railSnapshot" | "railBatchPage" | "operatorBatchAction" | "railResultsFile"
+  | "railSnapshot"
+  | "railActiveBatches"
+  | "railBatchPage"
+  | "operatorBatchAction"
+  | "railResultsFile"
+  | "profileDecisions"
+  | "deleteProfileDecision"
 >;
 
 let rail: OpenAIDecisionsRail | undefined;
@@ -47,8 +56,8 @@ export async function flushOpenAIDecisionsUsage(): Promise<void> {
 export function createOpenAIDecisionsAgentToolsHandler(params: {
   settings: DecisionSettingsReader;
   recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void>;
-  /** Shows a batch's progress as a card on its calling thread. */
-  reportBatch?: OpenAIDecisionsServiceOptions["reportBatch"];
+  /** Tells the calling thread's windows a batch moved. */
+  announceBatch?: OpenAIDecisionsServiceOptions["announceBatch"];
   /** Wakes the calling thread when its background batch ends. */
   wakeThread?: OpenAIDecisionsServiceOptions["wakeThread"];
 }): PwrAgentOpenAIDecisionsHandler {
@@ -65,6 +74,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
       getActive: (decisionId) => lazyStore().getActive(decisionId),
       findActiveByName: (name, caller) => lazyStore().findActiveByName(name, caller),
       listVisible: (caller) => lazyStore().listVisible(caller),
+      listActiveProfile: () => lazyStore().listActiveProfile(),
       hasDeletedName: (name, caller) => lazyStore().hasDeletedName(name, caller),
     },
     readApiKey: async () => await params.settings.resolveOpenAIDecisionsApiKey(),
@@ -77,7 +87,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     isProviderEnabled: (provider) => isDecisionProviderEnabled(params.settings, provider),
     profileId: () => resolveActiveProfileName(),
     recordUsageLines: params.recordUsageLines,
-    ...(params.reportBatch ? { reportBatch: params.reportBatch } : {}),
+    ...(params.announceBatch ? { announceBatch: params.announceBatch } : {}),
     ...(params.wakeThread ? { wakeThread: params.wakeThread } : {}),
     // Each batch's answers as JSONL in its thread's storage, removed with the thread.
     batchResultsDirectory: (caller) => threadDecisionBatchDirectory({
@@ -92,9 +102,12 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
   flushPendingUsage = async () => await service.close();
   rail = {
     railSnapshot: async (caller) => await service.railSnapshot(caller),
+    railActiveBatches: (caller) => service.railActiveBatches(caller),
     railBatchPage: async (caller, params) => await service.railBatchPage(caller, params),
     operatorBatchAction: async (caller, batchId, action) => await service.operatorBatchAction(caller, batchId, action),
     railResultsFile: async (caller, batchId) => await service.railResultsFile(caller, batchId),
+    profileDecisions: () => service.profileDecisions(),
+    deleteProfileDecision: (decisionId) => service.deleteProfileDecision(decisionId),
   };
   return {
     register: (caller, args) => service.register(caller, args),
@@ -104,6 +117,5 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     delete: (caller, args) => service.delete(caller, args),
     batchResults: async (caller, args) => await service.batchResults(caller, args),
     cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
-    stopBatch: async (caller, batchId) => await service.stopBatch(caller, batchId),
   };
 }

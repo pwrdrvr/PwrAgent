@@ -439,15 +439,16 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   );
   // Registered OpenAI Decisions: seven fixed tools over a profile registry.
   // The key stays in the settings secret store until an invoke needs it.
-  // A batch shows as a card on its thread; a background batch wakes the
-  // thread with a queued turn when it ends.
+  // A batch's moves are announced to its thread's windows (the Decisions
+  // tab and the strip above the composer read it); a background batch
+  // wakes the thread with a queued turn when it ends.
   getDesktopBackendRegistry().setPwrAgentOpenAIDecisionsHandler(
     createOpenAIDecisionsAgentToolsHandler({
       settings: getDesktopSettingsService(),
       recordUsageLines: async (lines) =>
         await getDesktopBackendRegistry().recordOpenAIDecisionsUsageLines(lines),
-      reportBatch: async (report) =>
-        await getDesktopBackendRegistry().publishDecisionBatchCard(report),
+      announceBatch: async (update) =>
+        await getDesktopBackendRegistry().publishDecisionBatchUpdate(update),
       wakeThread: async (caller, wake) =>
         await getDesktopBackendRegistry().deliverDecisionBatchWakeup({ ...caller, ...wake }),
     }),

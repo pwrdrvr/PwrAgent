@@ -37,8 +37,6 @@ export type PwrAgentOpenAIDecisionsHandler = {
   /** Reads a batch the calling thread started, or lists its batches. */
   batchResults: (caller: DecisionCaller, args: Record<string, unknown>) => Promise<unknown>;
   cancelBatch: (caller: DecisionCaller, args: Record<string, unknown>) => Promise<unknown>;
-  /** The operator's Stop on a batch card. Not a tool: the thread's Stop button calls it. */
-  stopBatch: (caller: DecisionCaller, batchId: string) => Promise<"stopped" | "not_running">;
 };
 
 /** An error that carries a stable tool failure code, such as `decision_not_found`. */

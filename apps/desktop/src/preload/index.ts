@@ -1,5 +1,5 @@
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
-import type { DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
+import type { DecisionsProfileDeleteRequest, DecisionsProfileDeleteResult, DecisionsProfileList, DecisionsRailActiveBatches, DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
 import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
@@ -856,6 +856,9 @@ import {
   TRANSCRIPT_IMAGE_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_GET_PR_ACTIVITY_CHANNEL,
+  DECISIONS_PROFILE_DELETE_CHANNEL,
+  DECISIONS_PROFILE_LIST_CHANNEL,
+  DECISIONS_RAIL_ACTIVE_CHANNEL,
   DECISIONS_RAIL_BATCH_ACTION_CHANNEL,
   DECISIONS_RAIL_BATCH_CHANNEL,
   DECISIONS_RAIL_OPEN_RESULTS_CHANNEL,
@@ -1947,12 +1950,18 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_SERVER_GET_PR_ACTIVITY_CHANNEL),
   readDecisionsRail: async (request: DecisionsRailThreadRequest): Promise<DecisionsRailSnapshot> =>
     await ipcRenderer.invoke(DECISIONS_RAIL_SNAPSHOT_CHANNEL, request),
+  readActiveDecisionBatches: async (request: DecisionsRailThreadRequest): Promise<DecisionsRailActiveBatches> =>
+    await ipcRenderer.invoke(DECISIONS_RAIL_ACTIVE_CHANNEL, request),
   readDecisionsRailBatch: async (request: DecisionsRailBatchRequest): Promise<DecisionsRailBatchPage> =>
     await ipcRenderer.invoke(DECISIONS_RAIL_BATCH_CHANNEL, request),
   actOnDecisionsRailBatch: async (request: DecisionsRailBatchActionRequest): Promise<DecisionsRailBatchActionResult> =>
     await ipcRenderer.invoke(DECISIONS_RAIL_BATCH_ACTION_CHANNEL, request),
   openDecisionsRailResults: async (request: DecisionsRailOpenResultsRequest): Promise<DecisionsRailOpenResultsResult> =>
     await ipcRenderer.invoke(DECISIONS_RAIL_OPEN_RESULTS_CHANNEL, request),
+  readProfileDecisions: async (): Promise<DecisionsProfileList> =>
+    await ipcRenderer.invoke(DECISIONS_PROFILE_LIST_CHANNEL),
+  deleteProfileDecision: async (request: DecisionsProfileDeleteRequest): Promise<DecisionsProfileDeleteResult> =>
+    await ipcRenderer.invoke(DECISIONS_PROFILE_DELETE_CHANNEL, request),
   searchResearch: async (request: ResearchSearchRequest): Promise<ResearchSearchPage> =>
     await ipcRenderer.invoke(RESEARCH_SEARCH_CHANNEL, request),
   readResearchItem: async (request: ResearchItemReadRequest): Promise<ResearchItemContext> =>

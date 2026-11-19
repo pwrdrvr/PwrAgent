@@ -7,7 +7,10 @@ import type {
   DecisionsRailBatchPage,
   DecisionsRailDecision,
   DecisionsRailItemFilter,
+  DecisionsRailActiveBatches,
   DecisionsRailSnapshot,
+  DecisionsProfileDecision,
+  DecisionsProfileDeleteResult,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -45,8 +48,7 @@ import {
   DecisionBatchRegistry,
   DecisionItemTimings,
   OPERATOR_STOP_CODE,
-  batchCardMessage,
-  batchCardTask,
+  batchProgressLine,
   batchWakeupText,
   compactBatchItem,
   decisionInputPreview,
@@ -112,16 +114,18 @@ export type OpenAIDecisionsLogger = {
   warn: (message: string, fields: Record<string, unknown>) => void;
 };
 
-/** What a batch's card on its thread shows. The caller is the thread. */
-export type DecisionBatchCardReport = {
+/**
+ * A batch moved: it started (or is waiting for its lane), finished another
+ * tenth of its items, or ended. The caller is the thread. Windows read the
+ * batch itself from the service; this only says to read again.
+ */
+export type DecisionBatchUpdate = {
   caller: DecisionBatchCaller;
   batchId: string;
-  task: string;
-  message: string;
   status: "running" | "success" | "failed" | "cancelled";
-  createdAt: number;
-  updatedAt: number;
-  completedAt?: number;
+  /** Items with an outcome so far, skipped ones included. */
+  finished: number;
+  count: number;
 };
 
 export type OpenAIDecisionsServiceOptions = {
@@ -156,8 +160,8 @@ export type OpenAIDecisionsServiceOptions = {
   log?: OpenAIDecisionsLogger;
   /** Waiters allowed behind the one in-flight call per decision. */
   queueLimit?: number;
-  /** Writes a batch's card on its calling thread. */
-  reportBatch?: (report: DecisionBatchCardReport) => Promise<void>;
+  /** Tells the calling thread's windows a batch moved. Nothing is written. */
+  announceBatch?: (update: DecisionBatchUpdate) => Promise<void>;
   /** Starts or queues a turn on the thread whose background batch ended. */
   wakeThread?: (caller: DecisionBatchCaller, wake: { batchId: string; text: string }) => Promise<void>;
   /**
@@ -191,11 +195,19 @@ const PROVIDER_SETTINGS_NAMES: Record<RegisteredDecisionProvider, string> = {
 const TARGET_KEYS = new Set(["name", "decisionId"]);
 /** Result-file summaries the Decisions tab keeps parsed, across threads. */
 const RAIL_FILE_SUMMARY_LIMIT = 200;
-/** A batch card is rewritten at each further tenth of its items. */
-const BATCH_CARD_STEPS = 10;
+/**
+ * A batch its thread hears about: a background one, or one bigger than a
+ * single wave of requests. A small blocking batch ends inside its tool call.
+ */
+function isAnnouncedBatch(batch: Pick<DecisionBatchRecord, "background" | "count">): boolean {
+  return batch.background || batch.count > OPENAI_DECISION_BOUNDS.bulkMaxConcurrency;
+}
 
-/** Writes a batch's card: on start (or while it waits), on progress, and at its end. */
-type BatchCard = {
+/** A batch is announced again at each further tenth of its items. */
+const BATCH_ANNOUNCE_STEPS = 10;
+
+/** Announces a batch: on start (or while it waits), on progress, and at its end. */
+type BatchAnnouncer = {
   update: () => void;
   progress: () => void;
   finish: () => Promise<void>;
@@ -445,14 +457,14 @@ export class OpenAIDecisionsService {
     this.assertLaneHasRoom(record.decisionId);
     this.batches.add(batch);
     this.openBatchFile(batch);
-    const card = this.batchCard(batch);
+    const announcer = this.batchAnnouncer(batch);
     // A batch that must wait for its lane shows as waiting, so the
     // operator can see it and stop it.
-    if (this.lanes.get(batch.decisionId)?.active) card.update();
+    if (this.lanes.get(batch.decisionId)?.active) announcer.update();
     if (background) {
       const done = this.inLane(batch.decisionId, batch.controller.signal, async () =>
-        await this.runBatch(batch, validated, run, card))
-        .catch((error: unknown) => this.finishUnstarted(batch, card, error));
+        await this.runBatch(batch, validated, run, announcer))
+        .catch((error: unknown) => this.finishUnstarted(batch, announcer, error));
       this.runs.set(batch.batchId, done);
       void done.finally(() => this.runs.delete(batch.batchId));
       return {
@@ -470,8 +482,8 @@ export class OpenAIDecisionsService {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       const done = this.inLane(batch.decisionId, batch.controller.signal, async () =>
-        await this.runBatch(batch, validated, run, card, onProgress))
-        .catch((error: unknown) => this.finishUnstarted(batch, card, error));
+        await this.runBatch(batch, validated, run, announcer, onProgress))
+        .catch((error: unknown) => this.finishUnstarted(batch, announcer, error));
       this.runs.set(batch.batchId, done);
       await done;
     } finally {
@@ -548,18 +560,6 @@ export class OpenAIDecisionsService {
   }
 
   /**
-   * The operator's Stop on a batch's card: cancels it as decisions_batch_cancel
-   * does, with no wake-up. "not_running" when the thread has no running
-   * batch with that id, such as one that already ended.
-   */
-  async stopBatch(caller: OpenAIDecisionCaller, batchId: string): Promise<"stopped" | "not_running"> {
-    const batch = this.batches.get(caller, batchId);
-    if (!batch || isFinishedBatch(batch)) return "not_running";
-    await this.cancelBatch(caller, { batchId }, "stopped from the thread");
-    return "stopped";
-  }
-
-  /**
    * The Decisions tab: decisions visible to the thread, with each
    * provider's on/off state and observed timing, and the thread's batches,
    * newest first: running ones from memory, finished ones from memory or
@@ -567,18 +567,50 @@ export class OpenAIDecisionsService {
    */
   async railSnapshot(caller: OpenAIDecisionCaller): Promise<DecisionsRailSnapshot> {
     const now = this.now();
-    const decisions: DecisionsRailDecision[] = this.options.store.listVisible(caller).map((record) => ({
-      decisionId: record.decisionId,
-      name: record.name,
-      version: record.version,
-      scope: record.scope,
-      provider: record.provider,
-      providerDisabled: this.options.isProviderEnabled?.(record.provider) === false,
-      questions: record.questions.map((question) => summarizeQuestion(question, false)),
-      inputSchema: record.inputSchema,
-      ...timingField(this.timings.summary(record.decisionId, record.version)),
-    }));
+    const decisions = this.options.store.listVisible(caller).map((record) => this.railDecision(record));
     return { decisions, batches: await this.railBatches(caller, now), now };
+  }
+
+  /**
+   * The strip above the composer: the thread's announced batches still in
+   * memory that are running, waiting, or stopped by an error. An
+   * operator's Stop, a Cancel, or a clean finish leaves the strip. Memory
+   * only: no result file and no database read.
+   */
+  railActiveBatches(caller: OpenAIDecisionCaller): DecisionsRailActiveBatches {
+    const now = this.now();
+    const batches = this.batches.list(caller)
+      .filter((batch) => isAnnouncedBatch(batch)
+        && (!isFinishedBatch(batch)
+          || (batch.state === "stopped" && batch.stoppedBy?.code !== OPERATOR_STOP_CODE)))
+      .map((batch) => railBatch(batch, now));
+    return { batches, now };
+  }
+
+  /**
+   * Settings → AI Providers → Decisions: every active profile-scope
+   * decision, by name. They outlive the thread that registered them, so
+   * the operator needs a place to see them that no thread owns.
+   */
+  profileDecisions(): DecisionsProfileDecision[] {
+    return this.options.store.listActiveProfile().map((record) => ({
+      ...this.railDecision(record),
+      createdAt: record.createdAt,
+    }));
+  }
+
+  /**
+   * The operator's Delete in Settings. Only an active profile-scope
+   * decision: a thread's own decisions belong to that thread, and Settings
+   * never lists them. Like decisions_delete, batches already running on it
+   * finish; later calls by name or id fail.
+   */
+  deleteProfileDecision(decisionId: string): DecisionsProfileDeleteResult {
+    const current = this.options.store.getActive(decisionId);
+    if (!current || current.scope !== "profile") return { outcome: "not_found" };
+    if (!this.options.store.softDelete(decisionId)) return { outcome: "not_found" };
+    this.options.log?.info("deleted decision from settings", logFields(current));
+    return { outcome: "deleted" };
   }
 
   /** One page of a batch's finished items for the Decisions tab. */
@@ -594,11 +626,11 @@ export class OpenAIDecisionsService {
   }
 
   /**
-   * The operator's Stop or Cancel in the Decisions tab. Stop starts no
-   * more items and lets the requests in flight finish, so answers already
-   * paid for are kept; Cancel aborts those requests too. A batch still
-   * waiting for its lane has nothing in flight, so Stop cancels it. Like
-   * the Sub-agents card's Stop, neither wakes the thread, except that Stop
+   * The operator's Stop or Cancel, from the Decisions tab or the strip
+   * above the composer. Stop starts no more items and lets the requests in
+   * flight finish, so answers already paid for are kept; Cancel aborts
+   * those requests too. A batch still waiting for its lane has nothing in
+   * flight, so Stop cancels it. Neither wakes the thread, except that Stop
    * on a batch an error is already stopping leaves that error's wake-up.
    */
   async operatorBatchAction(
@@ -634,7 +666,7 @@ export class OpenAIDecisionsService {
   }
 
   /**
-   * At owner shutdown: cancels running batches without a card or wake-up
+   * At owner shutdown: cancels running batches without an announcement or wake-up
    * (the database is closing), then writes pending usage.
    */
   async close(): Promise<void> {
@@ -645,6 +677,21 @@ export class OpenAIDecisionsService {
     }
     await Promise.all([...this.runs.values()]);
     await this.usage.close();
+  }
+
+  /** A stored decision version as the Decisions tab and Settings show it. */
+  private railDecision(record: OpenAIDecisionVersionRecord): DecisionsRailDecision {
+    return {
+      decisionId: record.decisionId,
+      name: record.name,
+      version: record.version,
+      scope: record.scope,
+      provider: record.provider,
+      providerDisabled: this.options.isProviderEnabled?.(record.provider) === false,
+      questions: record.questions.map((question) => summarizeQuestion(question, false)),
+      inputSchema: record.inputSchema,
+      ...timingField(this.timings.summary(record.decisionId, record.version)),
+    };
   }
 
   /** The caller's batch from memory, else from its result file. */
@@ -795,7 +842,7 @@ export class OpenAIDecisionsService {
    * or one that failed unexpectedly. Either way it ends cancelled, and
    * whatever finished stays readable.
    */
-  private async finishUnstarted(batch: DecisionBatchRecord, card: BatchCard, error: unknown): Promise<void> {
+  private async finishUnstarted(batch: DecisionBatchRecord, announcer: BatchAnnouncer, error: unknown): Promise<void> {
     if (isFinishedBatch(batch)) return;
     if (!(error instanceof OpenAIDecisionsError)) {
       this.options.log?.warn("decision batch failed unexpectedly", {
@@ -807,7 +854,7 @@ export class OpenAIDecisionsService {
     }
     batch.cancelReason ??= "the call was cancelled";
     batch.controller.abort();
-    await this.finishBatch(batch, card);
+    await this.finishBatch(batch, announcer);
   }
 
   /** The stored version a call names: latest active, or a pinned version. */
@@ -960,13 +1007,13 @@ export class OpenAIDecisionsService {
     batch: DecisionBatchRecord,
     inputs: readonly unknown[],
     run: (input: unknown) => Promise<DecisionItemResult>,
-    card: BatchCard,
+    announcer: BatchAnnouncer,
     onProgress?: (message: string) => void,
   ): Promise<void> {
     const signal = batch.controller.signal;
     batch.state = "running";
     batch.startedAt = this.now();
-    card.update();
+    announcer.update();
     function* pending(): Generator<number> {
       for (let index = 0; index < inputs.length; index += 1) {
         if (batch.stoppedBy || signal.aborted) return;
@@ -1003,20 +1050,20 @@ export class OpenAIDecisionsService {
           if (BATCH_STOPPING_CODES.has(error.code)) batch.stoppedBy ??= { code: error.code, message: error.message };
         }
       }
-      card.progress();
-      onProgress?.(batchCardTask(batch));
+      announcer.progress();
+      onProgress?.(batchProgressLine(batch));
       return index;
     }, { concurrency: batch.concurrency, maxUnread: batch.concurrency * 2 });
     for await (const _index of mapper) {
       // Results are written by index; draining keeps the mapper moving.
     }
-    await this.finishBatch(batch, card);
+    await this.finishBatch(batch, announcer);
   }
 
   /** Skips what never ran, settles the state, and tells the thread. */
   private async finishBatch(
     batch: DecisionBatchRecord,
-    card: BatchCard,
+    announcer: BatchAnnouncer,
   ): Promise<void> {
     // A Stop that came after every item started stopped nothing: the batch
     // completed, and a background one still wakes its thread.
@@ -1057,7 +1104,7 @@ export class OpenAIDecisionsService {
       state: batch.state,
       ...(batch.stoppedBy ? { stoppedBy: batch.stoppedBy.code } : {}),
     });
-    await card.finish();
+    await announcer.finish();
     const silent = this.silentBatches.delete(batch.batchId);
     if (!batch.background || silent || this.closing || !this.options.wakeThread) return;
     try {
@@ -1072,26 +1119,24 @@ export class OpenAIDecisionsService {
   }
 
   /**
-   * The batch's card on its thread. It is written when the batch starts,
-   * at each further tenth of its items finished, and when it ends: at most
-   * 11 writes a batch, whatever its size. Writes run in order and a failed
-   * write never fails the batch. Small blocking batches get no card.
+   * Tells the batch's thread it moved: when it starts, at each further
+   * tenth of its items finished, and when it ends, at most 11 times a
+   * batch whatever its size. Nothing is written; the Decisions tab and the
+   * strip above the composer read the batch itself. Announcements run in
+   * order and a failed one never fails the batch. Small blocking batches,
+   * which end inside their tool call, are not announced.
    */
-  private batchCard(batch: DecisionBatchRecord): BatchCard {
-    const report = this.options.reportBatch;
-    const shown = report !== undefined
-      && (batch.background || batch.count > OPENAI_DECISION_BOUNDS.bulkMaxConcurrency);
+  private batchAnnouncer(batch: DecisionBatchRecord): BatchAnnouncer {
+    const announce = this.options.announceBatch;
+    const announced = announce !== undefined && isAnnouncedBatch(batch);
     let chain: Promise<void> = Promise.resolve();
     let step = -1;
     const write = () => {
-      if (!shown || this.closing) return;
-      const finished = isFinishedBatch(batch);
-      const snapshot: DecisionBatchCardReport = {
+      if (!announced || this.closing) return;
+      const update: DecisionBatchUpdate = {
         caller: batch.caller,
         batchId: batch.batchId,
-        task: batchCardTask(batch),
-        message: batchCardMessage(batch),
-        status: !finished
+        status: !isFinishedBatch(batch)
           ? "running"
           : batch.state === "completed"
             ? "success"
@@ -1099,13 +1144,12 @@ export class OpenAIDecisionsService {
             : batch.state === "stopped" && batch.stoppedBy?.code !== OPERATOR_STOP_CODE
               ? "failed"
               : "cancelled",
-        createdAt: batch.createdAt,
-        updatedAt: this.now(),
-        ...(finished && batch.finishedAt !== undefined ? { completedAt: batch.finishedAt } : {}),
+        finished: finishedItems(batch),
+        count: batch.count,
       };
       chain = chain
-        .then(async () => await report(snapshot))
-        .catch((error: unknown) => this.options.log?.warn("decision batch card not written", {
+        .then(async () => await announce(update))
+        .catch((error: unknown) => this.options.log?.warn("decision batch update not announced", {
           decisionId: batch.decisionId,
           batchId: batch.batchId,
           error: error instanceof Error ? error.name : "unknown",
@@ -1117,16 +1161,16 @@ export class OpenAIDecisionsService {
         write();
       },
       progress: () => {
-        const next = Math.floor((finishedItems(batch) * BATCH_CARD_STEPS) / batch.count);
-        // The last step is the finish, which writes its own card.
-        if (next > step && next < BATCH_CARD_STEPS) {
+        const next = Math.floor((finishedItems(batch) * BATCH_ANNOUNCE_STEPS) / batch.count);
+        // The last step is the finish, which announces itself.
+        if (next > step && next < BATCH_ANNOUNCE_STEPS) {
           step = next;
           write();
         }
       },
       finish: async () => {
-        // A batch cancelled before it started never showed a card, and
-        // there is nothing to retire.
+        // A batch cancelled before it started was never announced, and
+        // nothing is waiting to hear that it ended.
         if (step >= 0) write();
         await chain;
       },

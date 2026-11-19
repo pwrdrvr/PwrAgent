@@ -55,6 +55,8 @@ export interface OpenAIDecisionRegistryStorage {
   /** The caller's own thread-scope definition first, then the profile one. */
   findActiveByName(name: string, caller: OpenAIDecisionCaller): OpenAIDecisionVersionRecord[];
   listVisible(caller: OpenAIDecisionCaller): OpenAIDecisionVersionRecord[];
+  /** Every active profile-scope decision, by name: the ones no thread owns. */
+  listActiveProfile(): OpenAIDecisionVersionRecord[];
   /** Whether a deleted decision with this name was visible to the caller. */
   hasDeletedName(name: string, caller: OpenAIDecisionCaller): boolean;
 }
@@ -157,6 +159,15 @@ export class OpenAIDecisionStore implements OpenAIDecisionRegistryStorage {
         )
         ORDER BY name, CASE scope WHEN 'thread' THEN 0 ELSE 1 END`,
     ).all({ backend: caller.backend, threadId: caller.threadId }) as Row[];
+    return rows.map(fromRow);
+  }
+
+  listActiveProfile(): OpenAIDecisionVersionRecord[] {
+    const rows = this.stateDb.raw.prepare(
+      `SELECT * FROM openai_decision_versions
+        WHERE status = 'active' AND scope = 'profile'
+        ORDER BY name`,
+    ).all() as Row[];
     return rows.map(fromRow);
   }
 
