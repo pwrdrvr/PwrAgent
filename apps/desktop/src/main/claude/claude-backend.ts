@@ -859,10 +859,11 @@ export class ClaudeBackend {
 
   /** One stored thread, as listThreads reports it, or undefined when its
    * metadata is gone or unreadable. */
-  async readThreadSummary(threadId: string): Promise<AppServerThreadSummary | undefined> {
+  async readThreadSummary(threadId: string, options?: { requireComplete?: boolean }): Promise<AppServerThreadSummary | undefined> {
     try {
       return this.threadSummary(await this.store.read(threadId));
-    } catch {
+    } catch (error) {
+      if (options?.requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return undefined;
     }
   }

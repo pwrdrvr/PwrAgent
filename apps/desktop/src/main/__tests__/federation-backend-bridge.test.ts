@@ -6,6 +6,8 @@ import type {
   AppServerTurnInputItem,
   FederationCapability,
   FederationProtocolEnvelope,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   NavigationThreadSummary,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
@@ -29,12 +31,34 @@ import {
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
+import { registerNavigationBackendHandlers } from "../federation/federation-navigation-handlers";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("keeps a hover lookup off the legacy selected-detail route", async () => {
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { protocol: 2, lookup: "thread-link", ref: { backend: "codex", threadId: "archive" } } as const;
+    const legacyRead = vi.fn();
+    router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail, legacyRead);
+    await expect(client.getNavigationSelectedDetail(request)).rejects.toMatchObject({ code: "method_not_found" });
+    expect(legacyRead).not.toHaveBeenCalled();
+
+    const getNavigationSelectedDetail = vi.fn(async (input: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> => ({
+      protocol: 2, ref: input.ref, lookup: input.lookup, identity: "unresolved", readiness: "failed", revision: "unknown",
+    }));
+    registerNavigationBackendHandlers({ router, backend: { getNavigationSelectedDetail } });
+    await expect(client.getNavigationSelectedDetail(request)).resolves.toMatchObject({ lookup: "thread-link", readiness: "failed" });
+    expect(getNavigationSelectedDetail).toHaveBeenCalledExactlyOnceWith(request, expect.any(Object));
+  });
+
   it("requires grouping and versioned promotion capabilities on the receiving owner", async () => {
     const request = { backend: "codex" as const, parentThreadId: "root", archivePromotion: {
       archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },

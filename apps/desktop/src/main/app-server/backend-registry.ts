@@ -3908,6 +3908,59 @@ export class DesktopBackendRegistry {
       : summary;
   }
 
+  /** An explicit link hover needs display facts, without publishing provider
+   * observations or invoking the maintenance-bearing thread list. */
+  async readNavigationThreadLink(ref: { backend: AppServerBackendKind; threadId: string }): Promise<{
+    thread: AppServerThreadSummary;
+    archived: boolean;
+  } | undefined> {
+    this.assertNotBootstrap("readNavigationThreadLink");
+    if (this.closed || (ref.backend === "codex" && this.isCodexBootstrapDeferredFn())) {
+      throw new Error("Thread link discovery is unavailable.");
+    }
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    const overlay = (await readOverlays.call(this.overlayStore, {
+      backend: ref.backend, threadIds: [ref.threadId],
+    }))[ref.threadId];
+    if (overlay?.archiveTombstonedAt !== undefined) return undefined;
+
+    let thread: AppServerThreadSummary | undefined;
+    let archived = false;
+    if (ref.backend === "codex") {
+      // A current archive observation can name threads beyond the newest page.
+      if (this.getThreadInfo(ref)?.archived === true) thread = this.getCachedThreadSummary(ref);
+      if (!thread) {
+        const readPage = this.codexClient.listArchiveCleanupThreadsPage;
+        if (!readPage) throw new Error("Bounded archive discovery is unavailable.");
+        const page = await readPage.call(this.codexClient, {
+          archived: true, limit: 100, sortKey: "updated_at", checkpoint: async () => {},
+          directoryFilter: async () => false,
+        });
+        thread = page.threads.find((candidate) => candidate.id === ref.threadId);
+        if (!thread && page.nextCursor) throw new Error("The archived thread lookup did not cover the full inventory.");
+      }
+      archived = true;
+    } else if (ref.backend === "claude") {
+      thread = await this.claudeBackend.readThreadSummary(ref.threadId, { requireComplete: true });
+      archived = thread?.archivedAt !== undefined;
+    } else if (isAcpBackendId(ref.backend)) {
+      const session = this.acpBackend.getSession(ref.backend, ref.threadId);
+      if (session) thread = this.acpBackend.sessionToThreadSummary(session);
+      archived = session?.archivedAt !== undefined;
+    }
+    if (!thread) return undefined;
+    return {
+      archived,
+      thread: this.withObservedThreadName({
+        ...thread,
+        ...(ref.backend === "codex" ? projectOverlayThreadTitle(thread, overlay) : {}),
+        executionMode: ref.backend === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
+        model: overlay?.model ?? thread.model,
+        reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
+      }),
+    };
+  }
+
   private findThreadListCachedSummary(
     params: {
       backend?: AppServerBackendKind;

@@ -22,12 +22,12 @@ const execute = promisify(execFile);
 
 async function cleanupScenario(options: {
   additionalExists: boolean; activeOwner: boolean; external: boolean; disappearsDuringArchive?: boolean;
-  missingGitMarker?: "removed-with-checkout" | "marker-only" | "during-probe"; residualFile?: string;
+  missingGitMarker?: "removed-with-checkout" | "marker-only" | "during-probe"; residualFile?: string; nested?: boolean;
 }) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-cleanup-presence-")));
   const repositoryPath = path.join(root, "repository");
   const primary = path.join(root, "primary");
-  const additional = path.join(root, "additional");
+  const additional = path.join(options.nested ? repositoryPath : root, "additional");
   const db = openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);
   const service = new WorktreeArchiveService();
@@ -131,11 +131,15 @@ it("keeps files in a residual folder after Git removed its checkout", async () =
   await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "removed-with-checkout" });
 });
 
+it("keeps a Git-less folder inside the repository where Git discovers the primary checkout", async () => {
+  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "marker-only", nested: true });
+});
+
 it("reports and preserves Git-less worktree folders regardless of remaining registration", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom("removed-with-checkout" as const, "marker-only" as const, "during-probe" as const),
-    fc.string({ minLength: 1, maxLength: 40 }), async (missingGitMarker, residualFile) => {
-      await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker, residualFile });
+    fc.string({ minLength: 1, maxLength: 40 }), fc.boolean(), async (missingGitMarker, residualFile, nested) => {
+      await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker, residualFile, nested });
     }), { numRuns: 5, examples: [
-    ["removed-with-checkout", "remaining data"], ["marker-only", "unsaved work"], ["during-probe", "remaining data"],
+    ["removed-with-checkout", "remaining data", true], ["marker-only", "unsaved work", true], ["during-probe", "remaining data", false],
   ] });
 });

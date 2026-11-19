@@ -2648,6 +2648,8 @@ export type NavigationLaunchpadConfigResponse = {
 
 export type NavigationSelectedDetailRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  /** Explicit hover-card demand. Reads only bounded, read-only display facts. */
+  lookup?: "thread-link";
   /** Explicit review inspection may await this thread's working-state probe. */
   probeWorkingStates?: boolean;
   /** Explicit review/handoff demand for only this thread's linked workspaces. */
@@ -2669,6 +2671,8 @@ export type NavigationDetailCollections = Pick<NavigationThreadSummary, Navigati
 
 export type NavigationSelectedDetailResponse = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  /** Acknowledges a bounded lookup on owners that support it. */
+  lookup?: "thread-link";
   ref: NavigationIdentity;
   revision: string;
   readiness: "ready" | "failed";

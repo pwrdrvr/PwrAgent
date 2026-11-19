@@ -6,7 +6,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkRow } from "../../lib/thread-link-rows";
-export { readThreadLinkRow as readThreadInfoRow } from "../../lib/thread-link-rows";
+export { readThreadInfoRow } from "../../lib/thread-link-rows";
 
 /** What a thread's hover card shows, from a loaded row or an owner's row. */
 export type ThreadInfoFacts = {

@@ -432,6 +432,9 @@ export class WorktreeArchiveService {
       await requireArchiveGitEntry(worktreePath);
       throw error;
     }
+    // Git discovers an enclosing repository when a nested folder lost its
+    // own .git entry. A bare repository is itself the Git directory.
+    if (worktreePath !== gitDirectory) await requireArchiveGitEntry(worktreePath);
     if (gitDirectory === commonDirectory) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
