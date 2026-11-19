@@ -1,3 +1,4 @@
+import { Select } from "../../../components/Select";
 import { useEffect, useState } from "react";
 import {
   AGENT_MEMORY_INDEX_BYTES,
@@ -21,12 +22,13 @@ export function AgentMemoryPanel({ access, canEdit }: {
         onClick={() => { setOpened(true); setOpen(!open); }}>
         {open ? "Close memory" : "Memory"}
       </button>
-      {opened ? <div hidden={!open}><MemoryEditor access={access} canEdit={canEdit} /></div> : null}
+      {opened ? <div hidden={!open}><MemoryEditor access={access} canEdit={canEdit} open={open} /></div> : null}
     </>
   );
 }
 
-function MemoryEditor({ access, canEdit }: {
+function MemoryEditor({ access, canEdit, open }: {
+  open: boolean;
   access: (operation: AgentMemoryArgs) => Promise<AgentMemoryResult>;
   canEdit: boolean;
 }) {
@@ -35,7 +37,9 @@ function MemoryEditor({ access, canEdit }: {
   const [newNote, setNewNote] = useState<string>();
   const [file, setFile] = useState<MemoryDocument>();
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(true);
+  const [working, setBusy] = useState(true);
+  const [listing, setListing] = useState(false);
+  const busy = working || listing;
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const dirty = file !== undefined && draft !== file.content;
@@ -44,9 +48,8 @@ function MemoryEditor({ access, canEdit }: {
 
   useEffect(() => {
     let dispose = false;
-    void Promise.all([access({ action: "list" }), access({ action: "read_index" })]).then(([list, index]) => {
+    void access({ action: "read_index" }).then((index) => {
       if (dispose) return;
-      if ("noteIds" in list) setNotes(list.noteIds);
       if ("content" in index) {
         setFile(index);
         setDraft(index.content);
@@ -56,6 +59,18 @@ function MemoryEditor({ access, canEdit }: {
     }).finally(() => { if (!dispose) setBusy(false); });
     return () => { dispose = true; };
   }, [access]);
+
+  useEffect(() => {
+    if (!open) return;
+    let dispose = false;
+    setListing(true);
+    void access({ action: "list" }).then((list) => {
+      if (!dispose && "noteIds" in list) setNotes(list.noteIds);
+    }).catch((failure: unknown) => {
+      if (!dispose) setError(failure instanceof Error ? failure.message : "Could not list Agent memory notes.");
+    }).finally(() => { if (!dispose) setListing(false); });
+    return () => { dispose = true; };
+  }, [access, open]);
 
   async function run(operation: () => Promise<void>) {
     setBusy(true);
@@ -70,9 +85,13 @@ function MemoryEditor({ access, canEdit }: {
     }
   }
 
-  async function select(noteId: string) {
+  async function select(noteId: string, reload = false) {
     await run(async () => {
-      const result = await access(noteId ? { action: "read_note", noteId } : { action: "read_index" });
+      const [result, list] = await Promise.all([
+        access(noteId ? { action: "read_note", noteId } : { action: "read_index" }),
+        reload ? access({ action: "list" }) : undefined,
+      ]);
+      if (list && "noteIds" in list) setNotes(list.noteIds);
       if (!("content" in result)) return;
       setFile(result);
       setSelected(noteId);
@@ -91,7 +110,7 @@ function MemoryEditor({ access, canEdit }: {
       if (!("content" in result)) return;
       setFile(result);
       setDraft(result.content);
-      if (selected && !notes.includes(selected)) setNotes([...notes, selected].sort());
+      if (selected) setNotes((current) => current.includes(selected) ? current : [...current, selected].sort());
     });
   }
 
@@ -100,7 +119,7 @@ function MemoryEditor({ access, canEdit }: {
     await run(async () => {
       const result = await access({ action: "delete_note", noteId: selected, revision: file.revision });
       if (!("content" in result)) return;
-      setNotes(notes.filter((note) => note !== selected));
+      setNotes((current) => current.filter((note) => note !== selected));
       setFile(result);
       setDraft("");
     });
@@ -112,11 +131,12 @@ function MemoryEditor({ access, canEdit }: {
       <div className="agent-memory-editor__actions">
         <label className="agent-memory-editor__file">
           File
-          <select value={selected} disabled={busy || dirty} onChange={(event) => void select(event.target.value)}>
-            <option value="">Index</option>
-            {selected && !notes.includes(selected) ? <option value={selected}>{selected} (unsaved note)</option> : null}
-            {notes.map((note) => <option key={note} value={note}>{note}</option>)}
-          </select>
+          <Select value={selected} disabled={busy || dirty} onChange={(noteId) => void select(noteId)}
+            options={[
+              { value: "", label: "Index" },
+              ...(selected && !notes.includes(selected) ? [{ value: selected, label: `${selected} (unsaved note)` }] : []),
+              ...notes.map((note) => ({ value: note, label: note })),
+            ]} />
         </label>
         {canEdit && newNote === undefined ? (
           <button type="button" className="context-list__action" disabled={busy || dirty}
@@ -154,7 +174,7 @@ function MemoryEditor({ access, canEdit }: {
               {dirty ? <button className="context-list__action" type="button" disabled={busy}
                 onClick={() => setDraft(file.content)}>Discard edits</button> : null}
               <button className="context-list__action" type="button" disabled={busy || dirty}
-                onClick={() => void select(selected)}>Reload</button>
+                onClick={() => void select(selected, true)}>Reload</button>
               {selected && file.exists ? (
                 <button className="context-list__action context-list__action--danger" type="button"
                   disabled={busy || dirty} onClick={() => confirmDelete ? void remove() : setConfirmDelete(true)}>

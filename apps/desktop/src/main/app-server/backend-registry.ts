@@ -4258,7 +4258,7 @@ export class DesktopBackendRegistry {
       const result = await this.accessAgentMemory(owner, { action: "read_index" });
       return "content" in result ? buildAgentMemoryContext(result.content) : undefined;
     } catch (error) {
-      if (!(error instanceof AgentMemoryError)) backendRegistryLog.warn("Agent memory index unavailable", owner);
+      if (!(error instanceof AgentMemoryError)) backendRegistryLog.warn("Agent memory index unavailable", { backend: owner.backend, threadId: owner.threadId });
       return undefined;
     }
   }

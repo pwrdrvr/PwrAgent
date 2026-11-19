@@ -1692,6 +1692,35 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("filters injected Agent memory from live and replayed user items while preserving quoted markers", async () => {
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      await client.readRateLimits();
+      const transport = MockTransport.instances.at(-1)!;
+      const ids = { threadId: "memory-thread", turnId: "memory-turn" };
+      const quoted = "What is <pwragent-agent-memory> used for?";
+      const content = [{ type: "text", text: quoted }];
+      const user = { id: "user", type: "userMessage", content: [...content, { type: "text", text: buildAgentMemoryContext("private progress") }] };
+      const assistant = { id: "assistant", type: "agentMessage", text: quoted };
+      for (const method of ["item/started", "item/completed"]) {
+        transport.emitInbound({ method, params: { ...ids, item: user } });
+      }
+      const turn = { id: ids.turnId, status: "completed", items: [user, assistant] };
+      transport.emitInbound({ method: "turn/completed", params: { ...ids, turn } });
+      await vi.waitFor(() => expect(notifications).toHaveLength(3));
+      expect(notifications[0]).toMatchObject({ method: "item/started", params: { item: { content } } });
+      expect(notifications[1]).toMatchObject({ method: "item/completed", params: { item: { content } } });
+      expect(JSON.stringify(notifications)).not.toContain("private progress");
+      const replay = extractThreadReplayFromReadResult({ thread: { turns: [turn] } });
+      expect(replay.messages.map((message) => message.text)).toEqual([quoted, quoted]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("carries partial-answer phases from item start to phase-less deltas until turn completion", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();

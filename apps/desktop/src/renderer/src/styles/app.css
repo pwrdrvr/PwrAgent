@@ -56709,7 +56709,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   flex: 1 1 140px;
 }
 
-.agent-memory-editor :is(input, select, textarea) {
+.agent-memory-editor :is(input, .select-trigger, textarea) {
   box-sizing: border-box;
   width: 100%;
   padding: 6px 8px;

@@ -182,6 +182,7 @@ type AcpActiveTurn = {
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
   sentAgentMemory?: boolean;
+  cancelBeforePrompt?: () => void;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
@@ -1230,6 +1231,11 @@ export class AcpAgentClient {
   }
 
   private async cancelSessionOperation(sessionId: string): Promise<void> {
+    const cancelBeforePrompt = this.activeTurns.get(sessionId)?.cancelBeforePrompt;
+    if (cancelBeforePrompt) {
+      cancelBeforePrompt();
+      return;
+    }
     if (!this.options.transport.notify) {
       throw new Error("ACP transport does not support notifications");
     }
@@ -2237,7 +2243,16 @@ export class AcpAgentClient {
         timer.unref?.();
       };
     });
+    const cancelled = { stopReason: "cancelled" };
+    let cancelledBeforePrompt = false;
+    const localCancellation = new Promise<typeof cancelled>((resolve) => {
+      if (activeTurn) activeTurn.cancelBeforePrompt = () => {
+        cancelledBeforePrompt = true;
+        resolve(cancelled);
+      };
+    });
     const sendPrompt = async () => {
+      if (cancelledBeforePrompt) return cancelled;
       // The agent keeps the block in the session's history, so a session
       // loaded again (after an idle close or an app restart) is not sent it
       // a second time. The stored record says what this agent session holds.
@@ -2251,7 +2266,11 @@ export class AcpAgentClient {
           params.sessionId,
         )?.agentInstructionsDigest;
       const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
-      if (activeTurn && memory) activeTurn.sentAgentMemory = true;
+      if (cancelledBeforePrompt) return cancelled;
+      if (activeTurn) {
+        activeTurn.cancelBeforePrompt = undefined;
+        activeTurn.sentAgentMemory = Boolean(memory);
+      }
       const result = await this.options.transport.request(
         "session/prompt",
         {
@@ -2281,6 +2300,7 @@ export class AcpAgentClient {
     return Promise.race([
       reload ? reload.then(sendPrompt) : sendPrompt(),
       terminalResponseGuard,
+      localCancellation,
     ]);
   }
 
@@ -2453,7 +2473,7 @@ export class AcpAgentClient {
     receivedAt: number,
     options: AcpSessionMetadataUpdateOptions = {},
   ): string | undefined {
-    const title = stripAgentMemoryChunk(readAcpTopicTitle(update) ?? "", false).text;
+    const title = stripAgentMemoryChunk(readAcpTopicTitle(update) ?? "").text;
     if (!title) {
       return undefined;
     }

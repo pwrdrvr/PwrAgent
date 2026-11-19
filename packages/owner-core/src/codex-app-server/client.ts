@@ -1,4 +1,4 @@
-import { stripAgentMemoryChunk } from "@pwragent/shared";
+import { isAgentMemoryContext, stripAgentMemoryChunk } from "@pwragent/shared";
 import type {
   CodexClientHost,
   CodexClientLogger,
@@ -1650,9 +1650,16 @@ function normalizeServerNotification(
   // session-error banner, messaging delivery, and headless-automation error
   // extraction all already key on `turn/failed`. Doing the alias here keeps the
   // Codex-specific shape out of every downstream consumer.
+  const turnRecord = asRecord(record.turn);
+  const turnWithSafeItems = turnRecord && Array.isArray(turnRecord.items)
+    ? { ...turnRecord, items: turnRecord.items.map((value) => {
+      const item = asRecord(value);
+      return item ? withoutAgentMemoryInput(item) : value;
+    }) }
+    : undefined;
   const failedTurn = normalizeFailedTurnCompletedNotification(
     method,
-    record,
+    turnWithSafeItems ? { ...record, turn: turnWithSafeItems } : record,
     metadata,
     guardianDenialLimitMessage,
   );
@@ -1694,6 +1701,7 @@ function normalizeServerNotification(
     method: method as AppServerNotification["method"],
     params: {
       ...record,
+      ...(turnWithSafeItems ? { turn: turnWithSafeItems } : {}),
       ...(configWarningMetadata ?? {}),
       ...(blockedError ? { error: blockedError } : {}),
       ...(normalizedItem ? {
@@ -1824,7 +1832,7 @@ function extractConfigWarningMetadata(
 function normalizeLiveNotificationItem(
   item: Record<string, unknown>
 ): Record<string, unknown> {
-  const normalized = { ...item };
+  const normalized = withoutAgentMemoryInput(item);
   if (item.type === "agentMessage") {
     const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
     if (phase) normalized.phase = phase;
@@ -2727,7 +2735,7 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
     normalizedType === "input_text" ||
     normalizedType === "output_text"
   ) {
-    const text = stripAgentMemoryText(pickString(record, ["text", "value", "content"]) ?? "");
+    const text = pickString(record, ["text", "value", "content"]);
     if (text && isCodexImageBoundaryText(text)) {
       return [];
     }
@@ -2795,14 +2803,34 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
 }
 
 function stripAgentMemoryText(text: string): string {
-  return stripAgentMemoryChunk(text, false).text;
+  return stripAgentMemoryChunk(text).text.trim();
+}
+
+function withoutAgentMemoryInput(item: Record<string, unknown>): Record<string, unknown> {
+  const role = normalizeConversationRole(pickString(item, ["type"]))
+    ?? normalizeConversationRole(pickString(item, ["role", "author", "speaker", "source"]));
+  if (role !== "user") return { ...item };
+  const isSynthetic = (value: unknown) => {
+    const part = asRecord(value);
+    return typeof value === "string" ? isAgentMemoryContext(value)
+      : (part?.type === "text" || part?.type === "input_text")
+        && typeof part.text === "string" && isAgentMemoryContext(part.text);
+  };
+  const result = { ...item };
+  for (const field of ["content", "parts", "input", "text", "message", "messages"]) {
+    const value = result[field];
+    if (Array.isArray(value)) result[field] = value.filter((part) => !isSynthetic(part));
+    else if (isSynthetic(value)) delete result[field];
+  }
+  return result;
 }
 
 /** The text and parts a replay message gets from one raw message item. */
-export function buildMessageContent(record: Record<string, unknown>): {
+export function buildMessageContent(item: Record<string, unknown>): {
   parts?: AppServerThreadMessagePart[];
   text: string;
 } {
+  const record = withoutAgentMemoryInput(item);
   const structuredParts = [
     ...extractStructuredMessageParts(record.content),
     ...extractStructuredMessageParts(record.parts),
@@ -2813,7 +2841,7 @@ export function buildMessageContent(record: Record<string, unknown>): {
     const text =
       dedupeJoinedText(
         structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
-      ) ?? stripAgentMemoryText(collectLegacyMessageText(record));
+      ) ?? collectLegacyMessageText(record);
     const parts =
       structuredParts.some((part) => part.type === "text") || !text
         ? structuredParts
@@ -2825,7 +2853,7 @@ export function buildMessageContent(record: Record<string, unknown>): {
     };
   }
 
-  const text = stripAgentMemoryText(collectLegacyMessageText(record));
+  const text = collectLegacyMessageText(record);
   return { text };
 }
 
