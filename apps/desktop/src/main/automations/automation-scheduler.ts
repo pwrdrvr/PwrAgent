@@ -17,6 +17,7 @@ import {
   collectDueAutomationWindows,
 } from "./automation-schedule.js";
 import { getMainLogger } from "../log.js";
+import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry.js";
 import type { AutomationGateRunner } from "./automation-gate-runner.js";
 import type {
   AutomationRunner,
@@ -33,6 +34,7 @@ export type AutomationSchedulerOptions = {
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+  admitResumedRun?: () => boolean;
   /**
    * Ends runs whose owning process is proved dead and returns the
    * automations whose running run that freed. Only the process that ended a
@@ -75,7 +77,11 @@ export function throttleSkipMessage(droppedCount: number): string {
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private stopped = false;
   private dispatchPauseCount = 0;
+  private readonly pausedDispatchWaiters = new Set<(proceed: boolean) => void>();
+  private readonly leaseBlockedLanes = new Set<string>();
+  private providerRetryTimer?: ReturnType<typeof setTimeout>;
   private readonly sessionStartedAt: number;
   private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
   /**
@@ -91,6 +97,7 @@ export class AutomationScheduler {
   }
 
   start(): void {
+    this.stopped = false;
     if (this.running) {
       this.scheduleNextTimer();
       return;
@@ -100,7 +107,12 @@ export class AutomationScheduler {
   }
 
   stop(): void {
+    this.stopped = true;
     this.running = false;
+    clearTimeout(this.providerRetryTimer);
+    this.providerRetryTimer = undefined;
+    this.leaseBlockedLanes.clear();
+    this.releasePausedDispatchWaiters(false);
     if (this.timer) {
       this.clearTimer(this.timer);
       this.timer = null;
@@ -129,6 +141,8 @@ export class AutomationScheduler {
       released = true;
       this.dispatchPauseCount = Math.max(0, this.dispatchPauseCount - 1);
       if (this.dispatchPauseCount > 0) return;
+      this.releasePausedDispatchWaiters(true);
+      this.scheduleProviderRetry();
       this.scheduleNextTimer();
       await this.resumePendingRuns();
     };
@@ -607,7 +621,7 @@ export class AutomationScheduler {
     now: number;
   }): Promise<AutomationRunSubmissionResult | undefined> {
     const run = this.options.store.getRun(params.runId);
-    if (!run) return undefined;
+    if (!run || this.stopped) return undefined;
 
     if (this.dispatchPauseCount > 0) {
       const queued = this.options.store.markRunQueued({
@@ -622,6 +636,19 @@ export class AutomationScheduler {
       });
     }
 
+    // Admission can be denied during the previous provider owner's lease
+    // grace period. Keep the run queued, with no execution claim or gate work.
+    if (run.resumedAt !== undefined && !this.canDispatchResumedRun(run.automationId)) {
+      return buildLaneQueuedResult({ run, position: 1 });
+    }
+    // The claim covers both the shell gate and the provider call. Either
+    // can have side effects before acknowledging that work began.
+    const claimed = this.options.store.claimRunForDispatch(run.id, Math.max(params.now, this.now()));
+    if (!claimed) {
+      const current = this.options.store.getRun(run.id);
+      if (current?.status !== "pending" && current?.status !== "queued") return undefined;
+      return buildLaneQueuedResult({ run: current, position: 1 });
+    }
     try {
       const gateResult = await this.runGateIfNeeded({
         automation: params.automation,
@@ -631,30 +658,14 @@ export class AutomationScheduler {
       if (gateResult?.status === "skip" || gateResult?.status === "failed") {
         return undefined;
       }
-      // A gate can outlive the moment quit quiescing begins. Nothing awaits
-      // between this check and provider submission, so another main-process
-      // event cannot pause dispatch after this check and before submission.
-      if (this.dispatchPauseCount > 0) {
-        const queued = this.options.store.markRunQueued({
-          runId: run.id,
-          queueEntryId: run.queueEntryId ?? buildLaneQueueEntryId(run.id),
-          queuedAt: params.now,
-          now: params.now,
-        });
-        return buildLaneQueuedResult({
-          run: queued ?? run,
-          position: 1,
-        });
+      // Hold the claimed lane across quit confirmation. If the operator
+      // stays, continue with this gate result and never invoke the gate again.
+      while (!this.stopped && this.dispatchPauseCount > 0) {
+        const proceed = await new Promise<boolean>((resolve) => this.pausedDispatchWaiters.add(resolve));
+        if (!proceed) return undefined;
       }
+      if (this.stopped) return undefined;
       const priorRuns = this.collectPriorRunContext(params.automation, run.id, params.now);
-      // Commit the running state before calling the provider. A missing
-      // acknowledgement is ambiguous and must never cause a replay.
-      const claimed = this.options.store.claimRunForDispatch(run.id, Math.max(params.now, this.now()));
-      if (!claimed) {
-        const current = this.options.store.getRun(run.id);
-        if (current?.status !== "pending" && current?.status !== "queued") return undefined;
-        return buildLaneQueuedResult({ run: current, position: 1 });
-      }
       const result = await this.options.runner.submitRun({
         automation: params.automation,
         gateResult,
@@ -703,6 +714,46 @@ export class AutomationScheduler {
       });
       return undefined;
     }
+  }
+
+  private releasePausedDispatchWaiters(proceed: boolean): void {
+    for (const resolve of this.pausedDispatchWaiters) resolve(proceed);
+    this.pausedDispatchWaiters.clear();
+  }
+
+  private canDispatchResumedRun(automationId: string): boolean {
+    try {
+      if (this.options.admitResumedRun?.() !== false) return true;
+    } catch (error) {
+      automationSchedulerLog.debug("automation provider admission unavailable", {
+        automationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.leaseBlockedLanes.add(automationId);
+    this.scheduleProviderRetry();
+    return false;
+  }
+
+  private scheduleProviderRetry(): void {
+    if (this.providerRetryTimer || this.stopped || this.dispatchPauseCount > 0 || this.leaseBlockedLanes.size === 0) return;
+    this.providerRetryTimer = setTimeout(() => {
+      this.providerRetryTimer = undefined;
+      if (this.stopped || this.dispatchPauseCount > 0) return;
+      const lanes = [...this.leaseBlockedLanes];
+      this.leaseBlockedLanes.clear();
+      for (const automationId of lanes) {
+        void this.startNextQueuedRun(automationId).catch((error: unknown) => {
+          automationSchedulerLog.warn("automation provider admission retry failed", {
+            automationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.leaseBlockedLanes.add(automationId);
+          this.scheduleProviderRetry();
+        });
+      }
+    }, RUNTIME_LEASE_RETRY_MS);
+    this.providerRetryTimer.unref?.();
   }
 
   /**
@@ -759,7 +810,6 @@ export class AutomationScheduler {
     now: number;
   }): Promise<AutomationGateRunResult | undefined> {
     if (!params.automation.gate || !this.options.gateRunner) return undefined;
-    this.options.store.disarmRunRestartRecovery(params.runId, params.now);
     const gateResult = await this.options.gateRunner.runGate(params.automation.gate);
     if (gateResult.status === "proceed") {
       return gateResult;
@@ -818,7 +868,7 @@ export class AutomationScheduler {
     if (!automationId) return;
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return;
-    while (this.dispatchPauseCount === 0) {
+    while (!this.stopped && this.dispatchPauseCount === 0) {
       if (this.options.store.findActiveRunForAutomation(automationId)?.status === "running") return;
       const pending = this.options.store.findPendingRunForAutomation(automationId);
       if (!pending || this.startingPendingRunIds.has(pending.id)) return;

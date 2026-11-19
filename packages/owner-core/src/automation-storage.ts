@@ -204,7 +204,6 @@ export interface AutomationStorage {
   }): number;
   findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined;
   claimRunForDispatch(runId: string, now: number): AutomationRunSummary | undefined;
-  disarmRunRestartRecovery(runId: string, now: number): void;
   markRunQueued(params: {
     runId: string;
     queueEntryId: string;

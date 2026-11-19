@@ -1,7 +1,8 @@
 import fc from "fast-check";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AutomationRunOwner, AutomationRunSummary } from "@pwragent/shared";
 import { AutomationStore } from "../storage/automation-store";
+import { AutomationScheduler } from "../automations/automation-scheduler";
 import type { StateDb } from "../state/state-db";
 import {
   createTempStateDb,
@@ -282,7 +283,9 @@ function checkTwoRestarts(
     now: 1,
   });
   if (firstCrash === "queued") advance(first, "run-recovery", "queue", 2);
-  if (firstCrash === "gate") first.disarmRunRestartRecovery("run-recovery", 2);
+  if (firstCrash === "gate") {
+    expect(first.claimRunForDispatch("run-recovery", 2)).toMatchObject({ status: "running" });
+  }
   if (firstCrash === "started" || firstCrash === "completed") {
     // A provider that never acknowledged the request may still be running it.
     expect(first.claimRunForDispatch("run-recovery", 3)).toMatchObject({ status: "running" });
@@ -350,4 +353,69 @@ it("two launches that scanned the same dead owner can adopt its run only once", 
 
   expect(result).toMatchObject({ resumedRuns: [], interruptedRuns: [] });
   expect(secondLaunch.getRun("run-race")).toMatchObject({ status: "queued", owner: ownerOf(1), resumedAt: 2 });
+});
+
+it("competing schedulers execute an adopted run's shell gate once", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (recoveringSchedulerFirst) => {
+    resetProfile();
+    const previous = openInstance(ownerOf(0)).store;
+    const recovering = openInstance(ownerOf(1)).store;
+    const other = openInstance(ownerOf(2)).store;
+    previous.updateAutomation("automation-0", { gate: { command: "side effect" }, now: 1 });
+    previous.createRun({
+      id: "gated", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now: 1,
+    });
+    recovering.reconcileStartup({ resumeUnstartedRuns: true, now: 2 });
+    const runGate = vi.fn(async ({ command }: { command: string }) => ({
+      status: "proceed" as const, command, durationMs: 0, output: "",
+    }));
+    const submitRun = vi.fn(async () => ({ status: "started" as const, queueEntryId: "entry", turnId: "turn" }));
+    const start = (store: AutomationStore) => new AutomationScheduler({
+      store, runner: { submitRun }, gateRunner: { runGate }, now: () => 3,
+    }).startNextQueuedRun("automation-0", store === recovering ? new Set(["gated"]) : undefined);
+    await Promise.all(recoveringSchedulerFirst ? [start(recovering), start(other)] : [start(other), start(recovering)]);
+    expect(runGate).toHaveBeenCalledOnce();
+    expect(submitRun).toHaveBeenCalledOnce();
+    expect(recovering.getRun("gated")).toMatchObject({ status: "running", resumedAt: 2 });
+  }), { examples: [[false], [true]], numRuns: 4 });
+});
+
+it("queueing cannot overwrite a dispatch claim on a second connection", () => {
+  fc.assert(fc.property(fc.boolean(), (initiallyQueued) => {
+    resetProfile();
+    const queueing = new AutomationStore(template, { runOwner: ownerOf(0) });
+    const claiming = openInstance(ownerOf(1)).store;
+    connections[0]!.raw.pragma("busy_timeout = 0");
+    queueing.createRun({
+      id: "handoff", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now: 1,
+    });
+    if (initiallyQueued) advance(queueing, "handoff", "queue", 2);
+    let blocked = false;
+    const prepare = template.raw.prepare.bind(template.raw);
+    const hook = vi.spyOn(template.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql !== "SELECT * FROM automation_runs WHERE run_id = ?") return statement;
+      const get = statement.get.bind(statement);
+      statement.get = (...args: unknown[]) => {
+        const row = get(...args);
+        try {
+          expect(claiming.claimRunForDispatch("handoff", 3)?.status).toBe("running");
+        } catch (error) {
+          if ((error as { code?: string }).code !== "SQLITE_BUSY") throw error;
+          blocked = true;
+        }
+        return row;
+      };
+      return statement;
+    });
+    try {
+      queueing.markRunQueued({ runId: "handoff", queueEntryId: "queue-updated", now: 4 });
+    } finally {
+      hook.mockRestore();
+    }
+    if (blocked) expect(claiming.claimRunForDispatch("handoff", 5)?.status).toBe("running");
+    expect(queueing.getRun("handoff")).toMatchObject({
+      status: "running", owner: ownerOf(1), recoverOnRestart: undefined,
+    });
+  }), { examples: [[false], [true]], numRuns: 4 });
 });

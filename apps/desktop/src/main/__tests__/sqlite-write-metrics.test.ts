@@ -3224,7 +3224,7 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       scenario: gated ? "automation-scheduled-gated-dispatch" : "automation-scheduled-dispatch",
       note: gated
-        ? "Schedule advance and run creation, disarm recovery before shell gate, claim dispatch, and provider acknowledgement."
+        ? "Schedule advance and run creation, one dispatch claim before the shell gate, and provider acknowledgement."
         : "Schedule advance and run creation in one commit, followed by dispatch claim and provider acknowledgement.",
       writes,
     });

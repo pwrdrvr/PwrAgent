@@ -196,6 +196,7 @@ export class DesktopAutomationService {
    */
   private readonly pendingRunUsage = new Map<string, AutomationRunUsage>();
   private runOwnerRecheckTimer: NodeJS.Timeout | undefined;
+  private readonly unconfirmedStartupOwnerIds = new Set<string>();
   /** Runs already handed to a report pass in this process. */
   private readonly reportingInterruptedRunIds = new Set<string>();
   /**
@@ -250,6 +251,7 @@ export class DesktopAutomationService {
       now: options.now,
       setTimer: options.scheduler?.setTimer,
       clearTimer: options.scheduler?.clearTimer,
+      admitResumedRun: () => options.registry.tryAdmitAutomationProvider?.() ?? true,
       releaseDeadOwnerRuns: () => freedLanes(
         this.releaseDeadOwnerRuns({ reschedule: false }).interruptedRuns,
       ),
@@ -418,6 +420,7 @@ export class DesktopAutomationService {
       clearTimeout(this.runOwnerRecheckTimer);
       this.runOwnerRecheckTimer = undefined;
     }
+    this.unconfirmedStartupOwnerIds.clear();
     if (this.pendingRunUsageTimer) {
       clearTimeout(this.pendingRunUsageTimer);
       this.pendingRunUsageTimer = undefined;
@@ -1655,8 +1658,12 @@ export class DesktopAutomationService {
       resumeUnstartedRuns: options.startup,
       // An unconfirmed owner keeps its runs for now and is checked once more.
       isOwnerAlive: (owner) => {
+        if (this.unconfirmedStartupOwnerIds.has(owner.instanceId)) return true;
         const state = liveness(owner);
-        if (state === "unconfirmed") unconfirmedOwner = true;
+        if (state === "unconfirmed") {
+          unconfirmedOwner = true;
+          if (options.startup) this.unconfirmedStartupOwnerIds.add(owner.instanceId);
+        }
         return state !== "dead";
       },
     });
@@ -1675,29 +1682,36 @@ export class DesktopAutomationService {
     if (result.interruptedRuns.length > 0 || options.startup) {
       this.reportUnreportedInterruptedRuns();
     }
-    if (unconfirmedOwner && !this.runOwnerRecheckTimer) {
-      this.runOwnerRecheckTimer = setTimeout(
-        () => this.recheckUnconfirmedRunOwners(options.startup === true),
-        this.options.runOwnerRecheckDelayMs ?? RUN_OWNER_RECHECK_DELAY_MS,
-      );
-      this.runOwnerRecheckTimer.unref?.();
-    }
+    if (unconfirmedOwner) this.scheduleRunOwnerRecheck();
     return result;
+  }
+
+  private scheduleRunOwnerRecheck(): void {
+    if (this.runOwnerRecheckTimer) return;
+    this.runOwnerRecheckTimer = setTimeout(
+      () => this.recheckUnconfirmedRunOwners(),
+      this.options.runOwnerRecheckDelayMs ?? RUN_OWNER_RECHECK_DELAY_MS,
+    );
+    this.runOwnerRecheckTimer.unref?.();
   }
 
   /**
    * A live owner has rewritten its marker by now. One that still has none is
    * a reused process ID: the owner is gone and its runs are interrupted.
    */
-  private recheckUnconfirmedRunOwners(resumeUnstartedRuns: boolean): void {
+  private recheckUnconfirmedRunOwners(): void {
     this.runOwnerRecheckTimer = undefined;
+    const startupOwners = this.unconfirmedStartupOwnerIds;
+    const resumeUnstartedRuns = startupOwners.size > 0;
     try {
       const liveness = this.options.runOwnerLiveness ?? readAutomationRunOwnerLiveness;
       const result = this.options.store.reconcileStartup({
-        now: Date.now(),
+        now: this.options.now?.() ?? Date.now(),
         resumeUnstartedRuns,
-        isOwnerAlive: (owner) => liveness(owner) === "alive",
+        isOwnerAlive: (owner) =>
+          (resumeUnstartedRuns && !startupOwners.has(owner.instanceId)) || liveness(owner) === "alive",
       });
+      startupOwners.clear();
       if (result.interruptedRuns.length > 0 || result.resumedRuns.length > 0) {
         automationServiceLog.debug("automation run owner recheck reconciled runs", {
           interruptedRunCount: result.interruptedRuns.length,
@@ -1711,6 +1725,7 @@ export class DesktopAutomationService {
       automationServiceLog.warn("automation run owner recheck failed", {
         error: error instanceof Error ? error.message : String(error),
       });
+      if (startupOwners.size > 0) this.scheduleRunOwnerRecheck();
     }
   }
 

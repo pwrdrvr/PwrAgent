@@ -7,6 +7,7 @@ import {
 } from "../automations/desktop-automation-service";
 import { AutomationStore } from "../storage/automation-store";
 import { StateDb } from "../state/state-db";
+import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const automationLoggerMock = vi.hoisted(() => ({
@@ -2002,6 +2003,69 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
   function runUpdates(): AgentEvent[] {
     return publishedEvents.filter((event) => event.notification.method === "automation/run/updated");
   }
+
+  it.each([1, 3])("keeps adopted work queued through %i provider ownership retries", async (denials) => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    seedPreviousProcessRuns();
+    const previous = new AutomationStore(stateDb, { runOwner: deadOwner });
+    previous.createRun({
+      id: "recovery-lease", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now,
+    });
+    const current = new AutomationStore(stateDb, {
+      runOwner: { instanceId: "current", processId: 4_243, startedAt: now },
+    });
+    let admitted = false;
+    Object.assign(registry, { tryAdmitAutomationProvider: () => admitted });
+    const service = new DesktopAutomationService({
+      registry, store: current, runOwnerLiveness: () => "dead",
+    });
+    try {
+      service.start();
+      for (let check = 0; check < denials; check += 1) {
+        await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+        expect(current.getRun("recovery-lease")).toMatchObject({ status: "queued", resumedAt: now });
+        expect(registry.startAutomationHeadlessTurn).not.toHaveBeenCalled();
+      }
+      admitted = true;
+      await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+      expect(current.getRun("recovery-lease")).toMatchObject({ status: "running", resumedAt: now });
+      expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledOnce();
+    } finally {
+      service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([1_000, 2_000])("preserves deferred startup recovery through a sweep at +%i ms", async (dueIn) => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    seedPreviousProcessRuns();
+    const previous = new AutomationStore(stateDb, { runOwner: deadOwner });
+    previous.createRun({
+      id: "recovery-unconfirmed", automationId: "automation-0", trigger: "manual", recoverOnRestart: true, now,
+    });
+    previous.updateAutomation("automation-1", { nextRunAt: now + dueIn, now });
+    const current = new AutomationStore(stateDb, {
+      runOwner: { instanceId: "current", processId: 4_243, startedAt: now },
+    });
+    let previousState: "unconfirmed" | "dead" = "unconfirmed";
+    const service = new DesktopAutomationService({
+      registry, store: current, runOwnerRecheckDelayMs: 5_000,
+      runOwnerLiveness: (owner) => owner.instanceId === deadOwner.instanceId ? previousState : "alive",
+    });
+    try {
+      service.start();
+      previousState = "dead";
+      await vi.advanceTimersByTimeAsync(dueIn);
+      expect(current.getRun("recovery-unconfirmed")?.status).toBe("pending");
+      await vi.advanceTimersByTimeAsync(5_000 - dueIn);
+      expect(current.getRun("recovery-unconfirmed")).toMatchObject({ status: "running", resumedAt: now + 5_000 });
+    } finally {
+      service.dispose();
+      vi.useRealTimers();
+    }
+  });
 
   it("dispatches the adopted run under the new owner and reports the ambiguous run", async () => {
     seedPreviousProcessRuns();

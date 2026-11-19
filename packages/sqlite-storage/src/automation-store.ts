@@ -336,30 +336,32 @@ export class AutomationStore implements AutomationStorage {
     now: number;
     errorMessage: string;
   }): void {
-    const rows = this.stateDb.raw
-      .prepare(
-        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued')",
-      )
-      .all(params.automationId) as AutomationRunRow[];
-    for (const row of rows) {
-      const run = this.runFromRow(row);
-      if (!run) continue;
-      this.upsertRun(
-        {
-          ...run,
-          status: "cancelled",
-          completedAt: params.now,
-          errorMessage: params.errorMessage,
-        },
-        {
-          backend: row.backend,
-          threadId: row.thread_id,
-          queueEntryId: row.queue_entry_id ?? undefined,
-          createdAt: row.created_at,
-          updatedAt: params.now,
-        },
-      );
-    }
+    this.stateDb.raw.transaction(() => {
+      const rows = this.stateDb.raw
+        .prepare(
+          "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued')",
+        )
+        .all(params.automationId) as AutomationRunRow[];
+      for (const row of rows) {
+        const run = this.runFromRow(row);
+        if (!run) continue;
+        this.upsertRun(
+          {
+            ...run,
+            status: "cancelled",
+            completedAt: params.now,
+            errorMessage: params.errorMessage,
+          },
+          {
+            backend: row.backend,
+            threadId: row.thread_id,
+            queueEntryId: row.queue_entry_id ?? undefined,
+            createdAt: row.created_at,
+            updatedAt: params.now,
+          },
+        );
+      }
+    }).immediate();
   }
 
   getAutomation(
@@ -625,17 +627,6 @@ export class AutomationStore implements AutomationStorage {
       });
       return claimed;
     }).immediate();
-  }
-
-  disarmRunRestartRecovery(runId: string, now: number): void {
-    // The gate can execute a shell command before the provider is called.
-    // Once the gate begins, a restart must not repeat its side effects.
-    this.stateDb.raw.prepare(
-      `UPDATE automation_runs
-          SET payload = json_remove(payload, '$.recoverOnRestart'), updated_at = ?
-        WHERE run_id = ? AND status IN ('pending', 'queued')
-          AND json_valid(payload) AND json_extract(payload, '$.recoverOnRestart') = 1`,
-    ).run(now, runId);
   }
 
   markRunQueued(params: {
@@ -1108,47 +1099,51 @@ export class AutomationStore implements AutomationStorage {
       now?: number;
     },
   ): AutomationRunSummary | undefined {
-    const row = this.getRunRow(runId);
-    if (!row) return undefined;
-    const current = this.runFromRow(row);
-    if (!current) return undefined;
-    const now = input.now ?? Date.now();
-    const transitions = RUN_STATUS_TRANSITIONS[current.status];
-    const acceptsLifecycle = transitions.includes(input.status)
-      || (transitions.length > 0 && input.status === current.status);
-    // Lifecycle events may beat submission acknowledgements. Stale updates
-    // can fill missing identities, but cannot rewind status, timestamps or outcome.
-    const nextRun: StoredAutomationRun = {
-      ...current,
-      status: acceptsLifecycle ? input.status : current.status,
-      queuedAt: current.queuedAt ?? (acceptsLifecycle ? input.queuedAt : undefined),
-      startedAt: current.startedAt ?? (acceptsLifecycle ? input.startedAt : undefined),
-      completedAt: current.completedAt ?? (acceptsLifecycle ? input.completedAt : undefined),
-      backendThreadId: current.backendThreadId ?? input.backendThreadId,
-      backendTurnId: current.backendTurnId ?? input.backendTurnId,
-      queueEntryId: input.queueEntryId ?? current.queueEntryId,
-      errorMessage: acceptsLifecycle
-        ? input.errorMessage ?? current.errorMessage
-        : current.errorMessage,
-      skipReason: acceptsLifecycle
-        ? input.skipReason ?? current.skipReason
-        : current.skipReason,
-      coalescedCount: acceptsLifecycle
-        ? input.coalescedCount ?? current.coalescedCount
-        : current.coalescedCount,
-    };
-    if (
-      (Object.keys(nextRun) as (keyof AutomationRunSummary)[])
-        .every((key) => nextRun[key] === current[key])
-    ) return current;
-    this.upsertRun(nextRun, {
-      backend: row.backend,
-      threadId: row.thread_id,
-      queueEntryId: nextRun.queueEntryId,
-      createdAt: row.created_at,
-      updatedAt: Math.max(row.updated_at, now),
-    });
-    return nextRun;
+    return this.stateDb.raw.transaction(() => {
+      const row = this.getRunRow(runId);
+      if (!row) return undefined;
+      const current = this.runFromRow(row);
+      if (!current) return undefined;
+      const now = input.now ?? Date.now();
+      const transitions = RUN_STATUS_TRANSITIONS[current.status];
+      const acceptsLifecycle = transitions.includes(input.status)
+        || (transitions.length > 0 && input.status === current.status);
+      // Lifecycle events may beat submission acknowledgements. Stale updates
+      // can fill missing identities, but cannot rewind status, timestamps or outcome.
+      const nextRun: StoredAutomationRun = {
+        ...current,
+        status: acceptsLifecycle ? input.status : current.status,
+        queuedAt: current.queuedAt ?? (acceptsLifecycle ? input.queuedAt : undefined),
+        startedAt: current.startedAt ?? (acceptsLifecycle ? input.startedAt : undefined),
+        completedAt: current.completedAt ?? (acceptsLifecycle ? input.completedAt : undefined),
+        backendThreadId: current.backendThreadId ?? input.backendThreadId,
+        backendTurnId: current.backendTurnId ?? input.backendTurnId,
+        queueEntryId: !acceptsLifecycle && input.status === "queued"
+          ? current.queueEntryId ?? input.queueEntryId
+          : input.queueEntryId ?? current.queueEntryId,
+        errorMessage: acceptsLifecycle
+          ? input.errorMessage ?? current.errorMessage
+          : current.errorMessage,
+        skipReason: acceptsLifecycle
+          ? input.skipReason ?? current.skipReason
+          : current.skipReason,
+        coalescedCount: acceptsLifecycle
+          ? input.coalescedCount ?? current.coalescedCount
+          : current.coalescedCount,
+      };
+      if (
+        (Object.keys(nextRun) as (keyof AutomationRunSummary)[])
+          .every((key) => nextRun[key] === current[key])
+      ) return current;
+      this.upsertRun(nextRun, {
+        backend: row.backend,
+        threadId: row.thread_id,
+        queueEntryId: nextRun.queueEntryId,
+        createdAt: row.created_at,
+        updatedAt: Math.max(row.updated_at, now),
+      });
+      return nextRun;
+    }).immediate();
   }
 
   private updateAutomationLastRun(

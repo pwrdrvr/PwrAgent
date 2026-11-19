@@ -137,16 +137,17 @@ A runtime marker expires 45 seconds after its last heartbeat, so a live owner
 can lack a fresh one: the machine has just woken, or its main thread was busy.
 An owner with no matching marker whose process ID is still alive is therefore
 left alone at startup and checked once more 30 seconds later
-(`readAutomationRunOwnerLiveness`). A live owner has rewritten its marker by
-then. One that still has none is a reused process ID, and its runs are
-interrupted.
+(`readAutomationRunOwnerLiveness`). Scheduled sweeps leave those startup
+runs alone until the check. A live owner has rewritten its marker by then.
+Startup reconciles the runs if the process is gone or the PID has been reused.
 
 Startup can requeue a dead owner's pending or queued run once when the stored
 run proves execution never began. The same run ID keeps its trigger metadata,
 takes the new process as owner and records a resume timestamp for run history.
-The scheduler persists `running` before calling the provider and disarms
-recovery before invoking a configured shell gate. Unfinished runs from older
-builds lack this proof. A later interruption ends an already resumed run.
+The scheduler holds adopted runs in the queue until the provider ownership
+lease is available. It persists an exclusive `running` claim before invoking
+a shell gate or calling the provider. Unfinished runs from older builds lack
+this proof. A later interruption ends an already resumed run.
 
 Other dead-owner runs become `failed` with `failureReason: "interrupted"`, and
 run history shows them as interrupted. Older builds read the existing

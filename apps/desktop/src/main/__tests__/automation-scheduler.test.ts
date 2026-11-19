@@ -818,7 +818,7 @@ describe("AutomationScheduler", () => {
     });
   });
 
-  it("queues a run when quit quiescing begins while its gate is in progress", async () => {
+  it("keeps the gate's claim during quit confirmation and uses its result if quit is canceled", async () => {
     createIntervalAutomation({
       backend: "codex",
       threadId: "thread-1",
@@ -859,16 +859,17 @@ describe("AutomationScheduler", () => {
     await Promise.resolve();
     const resume = scheduler.quiesceDispatch();
     releaseFirstGate();
-    await evaluating;
+    await Promise.resolve();
 
     expect(launcher.started).toHaveLength(0);
     expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
-      status: "queued",
+      status: "running",
     });
 
     await resume();
+    await evaluating;
 
-    expect(gateCalls).toBe(2);
+    expect(gateCalls).toBe(1);
     expect(launcher.started).toHaveLength(1);
     expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
       status: "running",

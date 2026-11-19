@@ -36,7 +36,7 @@ import {
   type ThreadRenameOptions,
 } from "@pwragent/owner-core/thread-naming-lifecycle";
 import { projectOwnerThreadTitle, projectOverlayThreadTitle } from "@pwragent/owner-core/thread-title-projection";
-import { type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
+import { ThreadOwnerUnavailableError, type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 
 
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
@@ -3192,6 +3192,17 @@ export class DesktopBackendRegistry {
       }
     }
     await this.emit(event);
+  }
+
+  tryAdmitAutomationProvider(): boolean {
+    if (this.closed || this.shutdownRequested) return false;
+    try {
+      this.assertThreadOwnership();
+      return true;
+    } catch (error) {
+      if (error instanceof ThreadOwnerUnavailableError) return false;
+      throw error;
+    }
   }
 
   startAutomationHeadlessTurn(
