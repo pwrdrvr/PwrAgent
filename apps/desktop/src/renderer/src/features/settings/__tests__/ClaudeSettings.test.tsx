@@ -62,6 +62,27 @@ describe("Claude settings", () => {
     expect(screen.getByText(/does not check credits or usage limits/)).toBeInTheDocument();
   });
 
+  it("can start Claude Code sign-in even while the CLI reports a signed-in account", () => {
+    const onSignIn = vi.fn();
+    render(<ClaudeSettings onChecked={async () => {}} onSignIn={onSignIn} backend={claudeBackend({
+      executable: "/fixture/claude", authStatus: "signed-in", authMethod: "claude-account",
+    })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude" }));
+    expect(onSignIn).toHaveBeenCalledOnce();
+    expect(screen.getByText("claude setup-token")).toBeInTheDocument();
+    expect(screen.getByText("CLAUDE_CODE_OAUTH_TOKEN")).toBeInTheDocument();
+  });
+
+  it("replaces the signed-in chip as soon as a turn rejects the saved login", () => {
+    const backend = (authStatus: "signed-in" | "session-expired") => claudeBackend({ executable: "/fixture/claude", authStatus });
+    const onChecked = async () => {};
+    const { rerender } = render(<ClaudeSettings onChecked={onChecked} backend={backend("signed-in")} />);
+    expect(screen.getByText("Signed in")).toBeInTheDocument();
+    rerender(<ClaudeSettings onChecked={onChecked} backend={backend("session-expired")} />);
+    expect(screen.getByText("Sign-in expired")).toBeInTheDocument();
+    expect(screen.queryByText("Signed in")).not.toBeInTheDocument();
+  });
+
   it("refreshes the provider summary once per finished test, not for the remembered one", async () => {
     const remembered: SettingsCredentialTestResult = {
       kind: "claude", status: "ok", testedAt: Date.now() - 60_000, durationMs: 5, detail: "API key",

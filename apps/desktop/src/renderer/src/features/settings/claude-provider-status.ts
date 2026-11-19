@@ -28,6 +28,9 @@ export function claudeProviderStatus(
   if (!installation.executable) {
     return { label: "Not installed", tone: "muted", dot: "off", navChip: "not installed" };
   }
+  if (installation.authStatus === "session-expired") {
+    return { label: "Sign-in expired", tone: "warn", dot: "warn", navChip: "sign in" };
+  }
   if (installation.authStatus === "sign-in-required") {
     return { label: "Sign-in required", tone: "warn", dot: "warn", navChip: "sign in" };
   }

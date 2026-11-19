@@ -362,6 +362,13 @@ describe("CredentialTester", () => {
       }).tester.test("claude");
       expect(result.status).toBe("unset");
     });
+
+    it("reports when a turn has rejected Claude Code's saved credentials", async () => {
+      const result = await buildTester({
+        checkClaude: async () => ({ executable: "/usr/local/bin/claude", authStatus: "session-expired" }),
+      }).tester.test("claude");
+      expect(result).toMatchObject({ status: "failed", errorMessage: "Claude rejected the saved sign-in. Sign in again to continue." });
+    });
   });
 
   describe("codex", () => {

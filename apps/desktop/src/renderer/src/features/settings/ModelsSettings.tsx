@@ -64,6 +64,7 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { ClaudeSettings } from "./ClaudeSettings";
+import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { claudeProviderStatus } from "./claude-provider-status";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
@@ -165,6 +166,7 @@ function migrationMatchesSelection(
 
 export function ModelsSettings(props: {
   cachedBackends?: BackendSummary[];
+  claudeSignIn?: ClaudeSignInControls;
   desktopApi?: DesktopApi;
   /** Focused provider screen: "codex" or an ACP registry id. Omitted =
    *  the AI Providers hub (new-thread defaults + provider index). */
@@ -775,6 +777,7 @@ export function ModelsSettings(props: {
         <ClaudeSettings
           backend={claude}
           desktopApi={props.desktopApi}
+          {...props.claudeSignIn}
           onChecked={async () => {
             // The test re-inspected Claude in main; read back the summary it
             // left so this list, the nav, and the composer agree with it.

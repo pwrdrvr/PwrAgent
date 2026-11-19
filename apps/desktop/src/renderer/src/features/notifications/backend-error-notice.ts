@@ -34,10 +34,11 @@ export type BackendErrorSignal = (
       kind: "turn-failed";
       onDismiss?: () => void;
       onCodexLogin?: () => void;
+      onClaudeLogin?: () => void;
       onOpenCodexSettings?: () => void;
       /** Offered when the turn's error says Claude deleted the thread's session. */
       onContinueClaudeSession?: () => void;
-      recovery?: "claudeSessionGone";
+      recovery?: "claudeSessionGone" | "claudeSignIn";
       /** The provider refused the response; name the block, not a fault. */
       block?: ProviderResponseBlock;
       backend: AppServerBackendKind;
@@ -165,6 +166,10 @@ export function resolveBackendErrorNotice(
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
         ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
+        : {}),
+      ...(signal.backend === "claude" && !signal.instanceId && !signal.block
+        && signal.onClaudeLogin && signal.recovery === "claudeSignIn"
+        ? { actions: [{ label: "Sign in to Claude", onClick: signal.onClaudeLogin, tone: "primary" as const }] }
         : {}),
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onOpenCodexSettings && isCodexLaunchFailureReason(signal.errorMessage)

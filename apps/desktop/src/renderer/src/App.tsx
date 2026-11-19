@@ -248,6 +248,7 @@ import {
 } from "./features/notifications/CodexLaunchNotice";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
+import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
 import {
   buildNoStartupBackendNotice,
   NO_STARTUP_BACKEND_NOTICE_ID,
@@ -708,6 +709,13 @@ function DesktopAppShell(props: {
       refreshFederationHealth();
     });
   }, [desktopApi, refreshFederationHealth]);
+  const openClaudeSettings = useCallback(() => {
+    openSettingsSection("models", "claude");
+  }, [openSettingsSection]);
+  const claudeSignIn = useClaudeSignIn(
+    readRendererFederationTarget() ? undefined : desktopApi?.signInClaude,
+    openClaudeSettings,
+  );
   const {
     openMessagingActivityWindow,
     openMessagingSettings,
@@ -724,9 +732,9 @@ function DesktopAppShell(props: {
     syncCodexLaunchNotice,
     changeCodexManagedBuilds,
     checkCodexManagedBuildUpdates,
-  } = useAppOwnerNotifications();
+  } = useAppOwnerNotifications(claudeSignIn.controls.onSignIn);
 
-  function useAppOwnerNotifications() {
+  function useAppOwnerNotifications(onClaudeLogin: (() => void) | undefined) {
     const resumePrAutoDispatchBudget = useCallback(() => {
       void desktopApi?.resumePrAutoDispatchBudget?.()
         .then((status) => {
@@ -1499,7 +1507,7 @@ function DesktopAppShell(props: {
             turnId?: string;
             turn?: { error?: { message?: unknown; recovery?: unknown; block?: unknown } };
           };
-          const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
+          const recovery = params.turn?.error?.recovery;
           // A peer on an older build forwards the text without the tag.
           const block = detectProviderResponseBlock(params.turn?.error);
           const rawMessage = params.turn?.error?.message;
@@ -1528,8 +1536,10 @@ function DesktopAppShell(props: {
               errorNoticeContext: event.errorNoticeContext,
               originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
               onCodexLogin: openCodexLogin,
+              onClaudeLogin,
               onOpenCodexSettings: openCodexSettings,
-              ...(recovery && params.threadId ? {
+              ...(recovery === "claudeSignIn" ? { recovery } : {}),
+              ...(recovery === "claudeSessionGone" && params.threadId ? {
                 recovery,
                 onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
               } : {}),
@@ -1618,6 +1628,7 @@ function DesktopAppShell(props: {
       acknowledgeThreadSpendAlert,
       desktopApi,
       continueClaudeThreadInNewSession,
+      onClaudeLogin,
       openCodexLogin,
       openCodexSettings,
       props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
@@ -4942,7 +4953,8 @@ function DesktopAppShell(props: {
               <Suspense fallback={null}>
                 <LazySettingsScreen
                   appearanceController={props.appearanceController}
-                  cachedBackends={backendSummaries.backends}
+                  cachedBackends={windowBackendSummaries.backends}
+                  claudeSignIn={claudeSignIn.controls}
                   desktopApi={desktopApi}
                   initialSection={settingsInitialSection}
                   initialSubsection={settingsInitialSubsection}
@@ -5120,6 +5132,7 @@ function DesktopAppShell(props: {
             })}
             onSuppressCodexWarning={suppressCodexWarning}
             transientNotices={[
+              { notice: claudeSignIn.notice, onDismiss: claudeSignIn.dismissNotice },
               {
                 notice: navigation.archiveCleanupSummaryNotice,
                 onDismiss: navigation.dismissArchiveCleanupSummaryNotice,

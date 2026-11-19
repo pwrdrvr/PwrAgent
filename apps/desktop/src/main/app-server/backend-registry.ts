@@ -3656,8 +3656,8 @@ export class DesktopBackendRegistry {
     if ((!policy || policy.enabledBackends.includes("claude")) && (request.refreshModels === true || request.refreshModels === "claude")) {
       await this.claudeBackend.discover();
     }
-    const summaries = [codexSummary, this.claudeBackend.summary()];
     const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId) ? await this.acpBackend.describeInstalledBackends() : [];
+    const summaries = [codexSummary, this.claudeBackend.summary()];
     const enabled = [...summaries, ...acpSummaries].filter(backend => !policy || policy.enabledBackends.includes(backend.kind))
       .map(backend => !policy ? backend : { ...backend, executionModes: backend.executionModes.filter(mode => policy.executionModes.includes(mode.mode)) });
 
@@ -12886,6 +12886,12 @@ export class DesktopBackendRegistry {
       ...(result.promptText ? { promptText: result.promptText } : {}),
       ...(result.restoredFileCount !== undefined ? { restoredFileCount: result.restoredFileCount } : {}),
     };
+  }
+
+  async signInClaude(): Promise<void> {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if (policy && !policy.enabledBackends.includes("claude")) throw new Error("Claude is disabled on this instance.");
+    await this.claudeBackend.signIn();
   }
 
   /** A Claude thread whose session Claude Code deleted continues in a new
