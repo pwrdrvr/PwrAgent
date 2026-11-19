@@ -94,8 +94,6 @@ CREATE INDEX IF NOT EXISTS idx_research_events_harness ON research_events(run_id
   WHERE json_extract(payload, '$.data.type') = 'harness';
 CREATE INDEX IF NOT EXISTS idx_research_events_adopted ON research_events(run_id, seq DESC)
   WHERE json_extract(payload, '$.data.type') = 'adopted';
-CREATE INDEX IF NOT EXISTS idx_research_items_interrupted ON research_items(run_id, created_seq, item_id)
-  WHERE json_extract(payload, '$.record.interrupted') = 1;
 CREATE INDEX IF NOT EXISTS idx_research_events_harness_record ON research_events(run_id, json_extract(payload, '$.provenance.seq'))
   WHERE json_extract(payload, '$.data.type') = 'harness_observation';
 `;
@@ -244,7 +242,8 @@ export class ResearchStore implements ResearchStorage {
   approaches(id: string, filter: { worker: ResearchThread } | { occupying: true } | { interrupted: true }): ResearchApproach[] {
     const db = this.stateDb.raw;
     const rows = "interrupted" in filter
-      ? db.prepare(`SELECT payload FROM research_items WHERE run_id = ? AND json_extract(payload, '$.record.interrupted') = 1
+      // Only approaches can be cut off, and a run has few: the type index bounds the read without one of its own.
+      ? db.prepare(`SELECT payload FROM research_items WHERE run_id = ? AND item_type = 'approach' AND json_extract(payload, '$.record.interrupted') = 1
           ORDER BY created_seq, item_id`).all(id)
       : "worker" in filter
       // The unary plus keeps the planner on the worker index: without it, it walks the whole run in creation
