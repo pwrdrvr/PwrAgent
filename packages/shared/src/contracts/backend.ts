@@ -363,7 +363,8 @@ export type BackendSummary = {
     source?: "system" | "bundled";
     version?: string;
     loginCommand?: string;
-    authStatus: "signed-in" | "sign-in-required" | "unknown";
+    /** Session expiry is observed by a turn and can outlast a positive local credential check. */
+    authStatus: "signed-in" | "sign-in-required" | "session-expired" | "unknown";
     authMethod?: "api-key" | "claude-account" | "external";
     message?: string;
   };

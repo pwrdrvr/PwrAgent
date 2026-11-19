@@ -118,13 +118,14 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<string> {
+async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal,
+  options?: { timeout: number; cwd: string }): Promise<string> {
   signal?.throwIfAborted();
   const isScript = /\.(c?js|mjs)$/i.test(command);
   const operation = runFile(isScript ? process.execPath : command,
     [...(isScript ? [command] : []), ...args], {
       env: isScript ? { ...env, ELECTRON_RUN_AS_NODE: "1" } : env,
-      timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true, signal,
+      timeout: options?.timeout ?? 10_000, cwd: options?.cwd, maxBuffer: 64 * 1024, windowsHide: true, signal,
     });
   const closed = new Promise<void>((resolve) => operation.child.once("close", () => resolve()));
   try {
@@ -132,6 +133,17 @@ async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv
   } finally {
     // execFile abort rejects before process/stdio close on Windows.
     await closed;
+  }
+}
+
+export async function signInWithClaudeCode(executable: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+  try {
+    // Claude opens its own browser authorization flow. Its output can contain
+    // a one-time authorization URL, so keep it out of IPC and logs.
+    await runClaude(executable, ["auth", "login"], env, signal, { timeout: 180_000, cwd: os.homedir() });
+  } catch {
+    // The child error includes its output. Expose only the recovery step.
+    throw new Error("Claude Code sign-in did not finish. Try again or run the sign-in command in your terminal.");
   }
 }
 

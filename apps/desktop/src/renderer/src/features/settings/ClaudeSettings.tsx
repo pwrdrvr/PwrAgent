@@ -7,11 +7,14 @@ import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 
 const CLAUDE_SETUP_GUIDE_URL = "https://code.claude.com/docs/en/setup";
+const CLAUDE_TOKEN_GUIDE_URL = "https://code.claude.com/docs/en/authentication#generate-a-long-lived-token";
 const CLAUDE_SIGN_IN_COMMAND = "claude auth login";
 
 export function ClaudeSettings(props: {
   backend?: BackendSummary;
   desktopApi?: DesktopApi;
+  onSignIn?: () => void;
+  signingIn?: boolean;
   /** A connection test finished; re-read the summary it refreshed. */
   onChecked: () => Promise<void>;
 }) {
@@ -34,7 +37,6 @@ export function ClaudeSettings(props: {
   const executable = installation?.executable;
   const loginCommand = installation?.loginCommand ?? CLAUDE_SIGN_IN_COMMAND;
   const apiKey = installation?.authStatus === "signed-in" && installation.authMethod === "api-key";
-  const signedOut = Boolean(executable) && installation?.authStatus !== "signed-in";
 
   return (
     <SettingsSection
@@ -85,35 +87,42 @@ export function ClaudeSettings(props: {
             }
           />
         ) : null}
-        {signedOut ? (
+        {executable ? (
           <SettingsField
-            label="Sign in"
-            sub="Run this in your terminal, then test again."
+            label="Claude sign-in"
+            sub={props.onSignIn ? "Sign in through your browser or run the command in your terminal." : "Run this in your terminal, then test again."}
             control={
-              <SettingsCopyValue
-                value={loginCommand}
-                desktopApi={props.desktopApi}
-                label="Claude sign-in command"
-              />
+              <div className="settings-fields">
+                {props.onSignIn ? (
+                  <div className="settings-inline-actions">
+                    <button
+                      type="button"
+                      className={`button button--${installation?.authStatus === "signed-in" ? "secondary" : "primary"}`}
+                      disabled={props.signingIn}
+                      onClick={props.onSignIn}
+                    >
+                      {props.signingIn ? "Waiting for Claude sign-in…" : "Sign in to Claude"}
+                    </button>
+                  </div>
+                ) : null}
+                <SettingsCopyValue
+                  value={apiKey ? `${loginCommand} --claudeai` : loginCommand}
+                  desktopApi={props.desktopApi}
+                  label="Claude sign-in command"
+                />
+              </div>
             }
           />
         ) : null}
         {apiKey ? (
           <SettingsField
             label="Billing"
-            sub="Billed to your API key. To use your Claude plan, sign in with your Claude account."
-            control={
-              <SettingsCopyValue
-                value={`${loginCommand} --claudeai`}
-                desktopApi={props.desktopApi}
-                label="Claude account sign-in command"
-              />
-            }
+            control={<span>Billed to your API key.</span>}
           />
         ) : null}
         <SettingsField
           label="Connection test"
-          sub="Confirms Claude Code runs and is signed in. It does not check credits or usage limits."
+          sub="Checks Claude Code’s saved sign-in. It does not check credits or usage limits."
           control={
             <SettingsTestBlock
               kind="claude"
@@ -125,6 +134,19 @@ export function ClaudeSettings(props: {
             />
           }
         />
+        {executable ? (
+          <SettingsField
+            label="Unattended CLI jobs"
+            sub={<>For standalone jobs, run <code>claude setup-token</code> and set <code>CLAUDE_CODE_OAUTH_TOKEN</code> in the job’s environment. PwrAgent filters inherited credential variables.</>}
+            control={
+              <div className="settings-inline-actions">
+                <a className="button button--secondary" href={CLAUDE_TOKEN_GUIDE_URL} target="_blank" rel="noreferrer">
+                  Open token guide
+                </a>
+              </div>
+            }
+          />
+        ) : null}
       </div>
     </SettingsSection>
   );

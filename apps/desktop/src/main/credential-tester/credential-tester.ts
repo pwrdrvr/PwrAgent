@@ -235,7 +235,9 @@ export class CredentialTester {
       ...finished,
       status: "failed",
       account,
-      errorMessage: claude.authStatus === "sign-in-required"
+      errorMessage: claude.authStatus === "session-expired"
+        ? "Claude rejected the saved sign-in. Sign in again to continue."
+        : claude.authStatus === "sign-in-required"
         ? "Sign-in required"
         : "Could not verify sign-in",
     };

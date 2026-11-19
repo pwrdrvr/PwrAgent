@@ -994,7 +994,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   claudeAgentToolMcpServer = agentToolMcpServer;
   const claudeBackend = new ClaudeBackend({
     inspectInstallation: options?.useMachineClaudeDiscovery
-      ? async () => inspectClaudeInstallation({ env: await settingsService?.resolveTerminalSpawnEnvAsync() })
+      ? inspectClaudeInstallation
       : async () => ({ authStatus: "unknown" }),
     resolveEnv: async () => await settingsService?.resolveTerminalSpawnEnvAsync() ?? process.env,
     // A chunk's __dirname is its own folder; this module is bundled into

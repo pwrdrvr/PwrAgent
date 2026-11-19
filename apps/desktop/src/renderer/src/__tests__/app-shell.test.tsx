@@ -1940,6 +1940,41 @@ describe("App", () => {
     }), expect.anything()));
   });
 
+  it("starts Claude Code sign-in from the failed-turn toast", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const outcome = Promise.withResolvers<void>();
+    const signInClaude = vi.fn(() => outcome.promise);
+    Object.defineProperty(window, "pwragent", { configurable: true, value: ownerApi({
+      signInClaude,
+      getNavigationSnapshot: async () => ({
+        backend: "all", fetchedAt: Date.now(), unchanged: false,
+        inboxThreadKeys: [], threads: [], directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+      }),
+      listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+      onAgentEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    }) });
+    await renderApp();
+    await waitFor(() => expect(listeners.size).toBeGreaterThan(0));
+    act(() => {
+      for (const listener of listeners) listener({ backend: "claude", notification: {
+        method: "turn/failed", params: { threadId: "claude-auth-fixture", turnId: "expired", turn: {
+          id: "expired", status: "failed", error: {
+            message: "Failed to authenticate: this login reached its time limit and cannot be renewed.",
+          },
+        } },
+      } });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude" }));
+    expect(signInClaude).toHaveBeenCalledOnce();
+    expect(screen.getByText("Finish signing in through your browser.")).toBeInTheDocument();
+    await act(async () => outcome.resolve());
+    expect(screen.getByText("Signed in to Claude")).toBeInTheDocument();
+  });
+
   it.each([
     "retry", "dismiss", "delete", "blocked-retry", "blocked-retry-with-events", "blocked-event", "retry-throws",
   ] as const)("acknowledges both turn failure surfaces on %s", async (action) => {

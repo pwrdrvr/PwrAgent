@@ -123,6 +123,7 @@ export * from "./subagent-activity";
 
 export * from "./forge-product";
 export { isCodexAuthenticationFailure } from "./codex-authentication";
+export { isClaudeAuthenticationFailure } from "./claude-authentication";
 
 export * from "./local-model-pricing";
 export * from "./codex-model-providers";

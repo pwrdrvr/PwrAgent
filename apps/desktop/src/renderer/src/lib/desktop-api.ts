@@ -1304,6 +1304,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   continueClaudeThreadInNewSession?: (
     request: { threadId: string },
   ) => Promise<{ threadId: string }>;
+  /** Run Claude Code's own sign-in on this machine. */
+  signInClaude?: () => Promise<void>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;

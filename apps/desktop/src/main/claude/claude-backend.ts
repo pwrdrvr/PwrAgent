@@ -9,6 +9,7 @@ import type {
   SDKResultMessage, SDKUserMessage, SlashCommand, UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import { loadClaudeAgentSdk } from "./claude-sdk";
+import { isClaudeAuthenticationFailure } from "@pwragent/shared";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackendWake, AppServerBackgroundTask, AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification, AppServerReviewContext,
@@ -24,7 +25,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -72,6 +73,7 @@ export type ClaudeBackendOptions = {
   /** Session reads for a Claude launched under another CLAUDE_CONFIG_DIR. */
   openSessionReader?: (env: NodeJS.ProcessEnv) => ClaudeSessionReader;
   inspectInstallation?: typeof inspectClaudeInstallation;
+  signInWithClaudeCode?: typeof signInWithClaudeCode;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
   readMcpServers?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<McpServerStatus[]>;
@@ -417,6 +419,7 @@ type LiveSession = {
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
   titleEnv?: NodeJS.ProcessEnv;
+  authAttempt?: number;
   /** Shell commands and sub-agents this process runs. */
   tasks: ClaudeTaskTracker;
   /** The rows last published through `thread/backgroundTasks/updated`: commands only. */
@@ -602,6 +605,9 @@ export class ClaudeBackend {
    */
   private readonly carriedReleases = new Map<string, (() => void)[]>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
+  private authAttempt = 0;
+  private authObservation = { attempt: 0, expired: false };
+  private signInOperation?: Promise<void>;
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
   private readonly discoveryOperations = new Set<Promise<unknown>>();
@@ -676,7 +682,9 @@ export class ClaudeBackend {
     const available = this.available();
     return {
       kind: "claude", source: "builtin", label: "Claude", available,
-      claude: { ...this.installation },
+      claude: this.authObservation.expired && this.installation.executable
+        ? { ...this.installation, authStatus: "session-expired", authMethod: undefined }
+        : { ...this.installation },
       rateLimits: this.shownRateLimits(),
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
@@ -706,6 +714,34 @@ export class ClaudeBackend {
         { id: "haiku", label: "Haiku", supportsImage: true },
       ] },
     };
+  }
+
+  async signIn(): Promise<void> {
+    this.options.assertOwnerAdmission?.();
+    if (this.closing) throw new Error("Claude backend is closing.");
+    this.signInOperation ??= this.runSignIn().finally(() => { this.signInOperation = undefined; });
+    await this.signInOperation;
+  }
+
+  private async runSignIn(): Promise<void> {
+    if (!this.installation.executable) await this.discover({ models: false });
+    const executable = this.installation.executable;
+    if (!executable) throw new Error(CLAUDE_SETUP_INSTRUCTIONS);
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    await this.ownDiscoveryOperation((this.options.signInWithClaudeCode ?? signInWithClaudeCode)(
+      executable, env, this.discoveryController.signal,
+    ));
+    if (this.closing) return;
+    // A probe started before login finished can still report the old account.
+    this.authObservation = { attempt: ++this.authAttempt, expired: false };
+    await this.discovery?.promise.catch(() => {});
+    await this.discover({ models: false });
+    if (!this.closing) await this.reportAuthStatus();
+  }
+
+  private async reportAuthStatus(): Promise<void> {
+    await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } })
+      .catch((error: unknown) => claudeBackendLog.warn("Could not publish Claude sign-in status", error));
   }
 
   private async requireInstallation(): Promise<string> {
@@ -1108,12 +1144,14 @@ export class ClaudeBackend {
       const { config } = current;
       // The environment's toolchain (PATH, NVM_DIR, …) reaches every command
       // Claude runs, as it does for Codex and ACP threads.
-      const env = claudeEnvironment({
-        ...(await this.options.resolveEnv?.() ?? process.env),
-        ...config.shellEnvironment,
-      });
+      const providerEnv = await this.options.resolveEnv?.() ?? process.env;
+      const env = claudeEnvironment({ ...providerEnv, ...config.shellEnvironment });
       controller.signal.throwIfAborted();
       current.titleEnv = env;
+      // A workspace with its own account cannot establish the default account's status.
+      if (env.CLAUDE_CONFIG_DIR === providerEnv.CLAUDE_CONFIG_DIR && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE) {
+        current.authAttempt = ++this.authAttempt;
+      }
       // The thread id names its first SDK session. A rewind past the first
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
@@ -1885,6 +1923,7 @@ export class ClaudeBackend {
     const { turnId } = turn;
     await this.stopLiveUsage(turn);
     const cancelled = outcome.cancelled || turn.interrupted === true;
+    if (!cancelled) await this.observeTurnAuth(live, turn, outcome.failure);
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
     const end = { turnId, status, startedAt: turn.startedAt, completedAt: Date.now() } as const;
@@ -1933,6 +1972,18 @@ export class ClaudeBackend {
       // Stop waits on this, so it settles even when a report fails.
       turn.ended.resolve();
     }
+  }
+
+  private async observeTurnAuth(live: LiveSession, turn: RunningTurn, failure?: string): Promise<void> {
+    const attempt = live.authAttempt;
+    if (attempt === undefined || attempt < this.authObservation.attempt) return;
+    const expired = Boolean(failure && isClaudeAuthenticationFailure(failure));
+    // A local command can complete without calling Anthropic. Only a model
+    // response can supersede a rejection after signing in outside PwrAgent.
+    if (!expired && (!this.authObservation.expired || failure || !turn.lastResult?.usage?.output_tokens)) return;
+    const changed = expired !== this.authObservation.expired;
+    this.authObservation = { attempt, expired };
+    if (changed) await this.reportAuthStatus();
   }
 
   /** Re-read metadata so a live rename/mode change cannot be overwritten. */
@@ -2380,7 +2431,7 @@ export class ClaudeBackend {
   /** Remembered limits describe a usable install; hide them while Claude is unavailable. */
   private shownRateLimits(): BackendRateLimitSummary[] | undefined {
     const limits = this.planLimits.limits("claude");
-    return limits && (this.available() ? limits : []);
+    return limits && (this.available() && !this.authObservation.expired ? limits : []);
   }
 
   /** An account Claude does not meter by plan has no limits. Returns whether that changed them. */

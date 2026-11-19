@@ -54,6 +54,7 @@ async function runHooks(options: Options, event: HookEvent, input: Record<string
 }
 
 const TASK_NOTIFICATION = "<task-notification>\n<task-id>task-1</task-id>\n<status>completed</status>\n<summary>Build passed</summary>\n</task-notification>";
+const EXPIRED_LOGIN = "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs";
 
 /** Run the query's UserPromptSubmit hooks, as the CLI does before a prompt, and return their answers. */
 async function runPromptSubmit(options: Options, input: { prompt: string; source?: string }): Promise<unknown[]> {
@@ -1988,6 +1989,78 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: { turn: { error: { message: "Sign in with claude auth login" } } } });
     expect((await f.backend.readThread(threadId)).messages[0].text).toBe("Hello");
+  });
+
+  it("remembers the packaged Claude login rejection across an auth status check", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: true, result: EXPIRED_LOGIN } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().claude?.authStatus).toBe("session-expired");
+    expect(f.events.slice(-2).map(({ notification }) => notification.method)).toEqual([
+      "backend/providerStatus/updated", "turn/failed",
+    ]);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary().claude?.authStatus).toBe("session-expired");
+  });
+
+  it("clears a rejected login only after successful sign-in and ignores a late pre-login rejection", async () => {
+    const lateResult = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      if (f.run.mock.calls.length > 1) await lateResult.promise;
+      yield { type: "result", subtype: "success", is_error: true, result: EXPIRED_LOGIN } as SDKMessage;
+    });
+    onTestFinished(() => lateResult.resolve());
+    const approval = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const signInWithClaudeCode = vi.fn().mockRejectedValueOnce(new Error("Browser closed"))
+      .mockImplementation(async () => {
+        started.resolve();
+        await approval.promise;
+      });
+    const backend = f.openBackend({ ...f.backendOptions, signInWithClaudeCode });
+    const first = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    const second = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId: first.threadId, input: [{ type: "text", text: "First" }] });
+    await f.waitForTurn();
+    await backend.startTurn({ threadId: second.threadId, input: [{ type: "text", text: "Second" }] });
+    await expect(backend.signIn()).rejects.toThrow("Browser closed");
+    expect(backend.summary().claude?.authStatus).toBe("session-expired");
+
+    const login = backend.signIn();
+    const duplicate = backend.signIn();
+    await started.promise;
+    expect(signInWithClaudeCode).toHaveBeenCalledTimes(2);
+    approval.resolve();
+    await Promise.all([login, duplicate]);
+    expect(backend.summary().claude?.authStatus).toBe("signed-in");
+    expect(signInWithClaudeCode.mock.calls.at(-1)).toEqual([
+      "/fixture/claude", expect.objectContaining({ PATH: "/fixture" }), expect.any(AbortSignal),
+    ]);
+    expect(signInWithClaudeCode.mock.calls.at(-1)?.[1]).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    lateResult.resolve();
+    await f.waitForTurn();
+    expect(backend.summary().claude?.authStatus).toBe("signed-in");
+  });
+
+  it("clears a rejected login once a retry receives a model response after terminal sign-in", async () => {
+    let call = 0;
+    const f = await fixture(async function* () {
+      const results = [
+        { is_error: true, result: EXPIRED_LOGIN },
+        { is_error: false, result: "Local command", usage: { output_tokens: 0 } },
+        { is_error: false, result: "Model response", usage: { output_tokens: 10 } },
+      ];
+      yield { type: "result", subtype: "success", ...results[call++] } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    for (const expected of ["session-expired", "session-expired", "signed-in"]) {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+      await f.waitForTurn();
+      expect(f.backend.summary().claude?.authStatus).toBe(expected);
+    }
   });
 
   it.each([

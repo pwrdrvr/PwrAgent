@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand, CLAUDE_SIGN_IN_REQUIRED } from "../claude/claude-executable";
+import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand, CLAUDE_SIGN_IN_REQUIRED, signInWithClaudeCode } from "../claude/claude-executable";
 
 const inspectClaudeInstallation = (options: Parameters<typeof inspectInstallation>[0]) => inspectInstallation({
   resolveBundledExecutable: async () => undefined,
@@ -11,6 +11,21 @@ const inspectClaudeInstallation = (options: Parameters<typeof inspectInstallatio
 });
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+it("runs the CLI's auth login command and keeps its output private", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-login-"));
+  roots.push(root);
+  const executable = path.join(root, "claude login fixture.cjs");
+  await writeFile(executable, `
+    if (process.argv.slice(2).join(" ") !== "auth login") process.exit(2);
+    console.log("private-authorization-url");
+    if (process.env.FIXTURE_FAIL_LOGIN) process.exit(1);
+  `);
+  const { signal } = new AbortController();
+  await expect(signInWithClaudeCode(executable, process.env, signal)).resolves.toBeUndefined();
+  await expect(signInWithClaudeCode(executable, { ...process.env, FIXTURE_FAIL_LOGIN: "1" }, signal))
+    .rejects.toThrow(/^Claude Code sign-in did not finish\. Try again or run the sign-in command in your terminal\.$/);
+});
 
 describe("Claude executable discovery", () => {
   it.skipIf(process.platform === "win32")("resolves the user's executable symlink without launching it", async () => {

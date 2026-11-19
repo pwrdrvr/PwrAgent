@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { describeGitCommandState } from "./CommandToolsSettings";
 import { claudeProviderStatus } from "./claude-provider-status";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
@@ -338,6 +339,7 @@ export function SettingsScreen(props: {
    *  anyway because the snapshot is unavailable. */
   appearanceController?: AppearanceController;
   cachedBackends?: BackendSummary[];
+  claudeSignIn?: ClaudeSignInControls;
   desktopApi?: DesktopApi;
   profiles?: PwrAgentProfilesState;
   settings: DesktopSettingsState;
@@ -961,6 +963,7 @@ export function SettingsScreen(props: {
                 acpAgents={acpCatalog.entries}
                 appearanceController={props.appearanceController}
                 cachedBackends={props.cachedBackends}
+                claudeSignIn={props.claudeSignIn}
                 desktopApi={props.desktopApi}
                 onForgeStatusChange={reportForgeStatus}
                 onOpenRoute={openRoute}
@@ -993,6 +996,7 @@ function SettingsSectionBody(props: {
   acpAgents?: AcpAgentSettingsEntry[];
   appearanceController?: AppearanceController;
   cachedBackends?: BackendSummary[];
+  claudeSignIn?: ClaudeSignInControls;
   desktopApi?: DesktopApi;
   /** Lifted so the settings nav's Git children can show the same
    *  connection state the pane shows, without probing a second time. */
@@ -1678,6 +1682,7 @@ function SettingsSectionBody(props: {
   return (
     <ModelsSettings
       cachedBackends={props.cachedBackends}
+      claudeSignIn={props.claudeSignIn}
       desktopApi={props.desktopApi}
       focus={props.sub}
       onFocusChange={(focus) => props.onOpenRoute("models", focus)}
