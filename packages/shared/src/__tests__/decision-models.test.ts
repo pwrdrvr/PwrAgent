@@ -9,7 +9,7 @@ import {
 describe("decision models", () => {
   it("defaults to no decision model, with the local one ready at PwrSuiteLab's Clef address", () => {
     expect(resolveDecisionModelSettings(undefined)).toEqual({
-      model: "off", localEndpoint: "http://127.0.0.1:8787", localModel: "clef-flash", jevModel: "jev-latest", cameraCues: true,
+      model: "off", chosenModel: "off", enabled: { local: true, jev: true }, localEndpoint: "http://127.0.0.1:8787", localModel: "clef-flash", jevModel: "jev-latest", cameraCues: true,
     });
   });
 

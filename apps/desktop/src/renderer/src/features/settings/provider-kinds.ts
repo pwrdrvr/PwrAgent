@@ -12,6 +12,7 @@ import {
 } from "./DecisionModelSettings";
 import {
   OPENAI_DECISIONS_FOCUS,
+  openAIDecisionsEnabled,
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
 
@@ -79,6 +80,9 @@ export type ModelServiceEntry = {
   decisionProvider?: DecisionProviderId;
 };
 
+/** A provider the operator turned off, whatever its key or address. */
+const OFF_NAV: ModelServiceEntry["nav"] = { dot: "off", chip: "off" };
+
 function navState(
   keyReady: boolean,
   endpointProblem: string | undefined,
@@ -95,9 +99,8 @@ function navState(
 export function modelServiceEntries(
   snapshot: DesktopSettingsSnapshot,
 ): ModelServiceEntry[] {
-  const localEndpointProblem = decisionLocalEndpointProblem(
-    resolveDecisionModelSettings(snapshot.models.decisionModels).localEndpoint,
-  );
+  const decision = resolveDecisionModelSettings(snapshot.models.decisionModels);
+  const localEndpointProblem = decisionLocalEndpointProblem(decision.localEndpoint);
   const decisions = DECISION_PROVIDER_IDS.map((provider): ModelServiceEntry => {
     const keyReady =
       provider === "local" || decisionSecrets(snapshot).jevApiKey.configured;
@@ -106,10 +109,9 @@ export function modelServiceEntries(
       name: DECISION_PROVIDER_NAMES[provider],
       kind: DECISION_PROVIDER_KIND[provider],
       keyReady,
-      nav: navState(
-        keyReady,
-        provider === "local" ? localEndpointProblem : undefined,
-      ),
+      nav: decision.enabled[provider]
+        ? navState(keyReady, provider === "local" ? localEndpointProblem : undefined)
+        : OFF_NAV,
       decisionProvider: provider,
     };
   });
@@ -122,7 +124,9 @@ export function modelServiceEntries(
       name: "OpenAI Decisions",
       kind: "direct-api",
       keyReady: openAIKeyReady,
-      nav: navState(openAIKeyReady, undefined),
+      nav: openAIDecisionsEnabled(snapshot)
+        ? navState(openAIKeyReady, undefined)
+        : OFF_NAV,
     },
     {
       focus: AUDIO_TRANSCRIPTION_FOCUS,
@@ -130,7 +134,7 @@ export function modelServiceEntries(
       kind: "direct-api",
       keyReady: transcriptionKeyReady,
       nav: snapshot.models.audioTranscriptionEnabled?.value === false
-        ? { dot: "off", chip: "off" }
+        ? OFF_NAV
         : navState(transcriptionKeyReady, undefined),
     },
   ];

@@ -15,7 +15,18 @@ export type DecisionSettingsReader = {
   /** Presence only: picking a default never decrypts a key. */
   hasOpenAIDecisionsApiKey: () => Promise<boolean>;
   hasDecisionApiKey: (provider: DecisionProviderId) => Promise<boolean>;
+  /** Whether OpenAI Decisions is on, and its dashboard ids. */
+  resolveOpenAIDecisionsSettings: () => { enabled?: boolean; organizationId?: string; projectId?: string };
 };
+
+/** Whether Settings lets agents use a provider. Every provider is on by default. */
+export function isDecisionProviderEnabled(
+  settings: Pick<DecisionSettingsReader, "resolveDecisionModelSettings" | "resolveOpenAIDecisionsSettings">,
+  provider: RegisteredDecisionProvider,
+): boolean {
+  if (provider === "openai") return settings.resolveOpenAIDecisionsSettings().enabled !== false;
+  return resolveDecisionModelSettings(settings.resolveDecisionModelSettings()).enabled[provider];
+}
 
 /** The saved Jev or local decision model, as Settings → AI Providers holds it. */
 export async function readSystemOneTarget(
@@ -36,16 +47,20 @@ export async function readSystemOneTarget(
 }
 
 /**
- * The provider for a registration that names none: OpenAI when its key is
- * saved, else the decision model picked under Defaults → Decisions, else Jev
- * when only its key is saved, else OpenAI (invoke then asks for a key).
+ * The provider for a registration that names none, among the providers that
+ * are on: OpenAI when its key is saved, else the decision model picked under
+ * Defaults → Decisions, else Jev when only its key is saved, else the first
+ * provider that is on, so register can ask for its key. With every provider
+ * off it returns OpenAI, and register refuses it as off.
  */
 export async function resolveDefaultDecisionProvider(
   settings: DecisionSettingsReader,
 ): Promise<RegisteredDecisionProvider> {
-  if (await settings.hasOpenAIDecisionsApiKey()) return "openai";
+  const on = (provider: RegisteredDecisionProvider) => isDecisionProviderEnabled(settings, provider);
+  if (on("openai") && await settings.hasOpenAIDecisionsApiKey()) return "openai";
+  // `model` is already "off" when the chosen provider is off.
   const chosen = resolveDecisionModelSettings(settings.resolveDecisionModelSettings()).model;
   if (chosen === "jev" || chosen === "local") return chosen;
-  if (await settings.hasDecisionApiKey("jev")) return "jev";
-  return "openai";
+  if (on("jev") && await settings.hasDecisionApiKey("jev")) return "jev";
+  return (["openai", "jev", "local"] as const).find(on) ?? "openai";
 }

@@ -103,6 +103,7 @@ import {
 import {
   OPENAI_DECISIONS_FOCUS,
   OpenAIDecisionsScreen,
+  openAIDecisionsEnabled,
   openAIDecisionsKeyLabel,
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
@@ -1069,6 +1070,7 @@ function ModelServiceIndexRow(props: {
     );
   }
   if (service.decisionProvider) {
+    const enabled = decision.enabled[service.decisionProvider];
     const inUse = decision.model === service.decisionProvider;
     return (
       <SettingsIndexRow
@@ -1076,21 +1078,26 @@ function ModelServiceIndexRow(props: {
         meta={service.decisionProvider === "local"
           ? decision.localEndpoint
           : decision.jevModel}
-        chip={inUse
-          ? "In use"
-          : service.keyReady ? "Decision model" : "No API key"}
+        chip={!enabled
+          ? "Disabled"
+          : inUse
+            ? "In use"
+            : service.keyReady ? "Decision model" : "No API key"}
         chipKind={inUse ? "ok" : "muted"}
+        off={!enabled}
         onOpen={props.onOpen}
       />
     );
   }
   const keyState = openAIDecisionsKeyState(props.snapshot);
+  const enabled = openAIDecisionsEnabled(props.snapshot);
   return (
     <SettingsIndexRow
       name={service.name}
       meta="Registered decisions on gpt-6-luna"
-      chip={openAIDecisionsKeyLabel(keyState)}
-      chipKind={keyState.configured ? "ok" : "muted"}
+      chip={enabled ? openAIDecisionsKeyLabel(keyState) : "Disabled"}
+      chipKind={enabled && keyState.configured ? "ok" : "muted"}
+      off={!enabled}
       onOpen={props.onOpen}
     />
   );

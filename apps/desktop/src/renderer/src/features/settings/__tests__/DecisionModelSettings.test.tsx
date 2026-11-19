@@ -123,3 +123,44 @@ describe("decision provider screens", () => {
     expect(onSave).toHaveBeenCalledWith({ jev: { model: "jev-preview" } });
   });
 });
+
+describe("turning a decision provider off", () => {
+  const screenFor = (provider: "local" | "jev", settings: DesktopDecisionModelSettings, onSave = vi.fn(async (_next: DesktopDecisionModelSettings) => undefined)) => {
+    render(
+      <DecisionProviderScreen
+        provider={provider}
+        snapshot={snapshot(settings, true)}
+        saving={false}
+        onSave={onSave}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+      />,
+    );
+    return onSave;
+  };
+
+  it("keeps the rest of the section when a provider is switched off and back on", async () => {
+    const onSave = screenFor("jev", { model: "jev", jev: { model: "jev-2" } });
+    const toggle = screen.getByRole("switch", { name: /Enabled.*TypeSafe Jev/ });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await act(async () => { fireEvent.click(toggle); });
+    expect(onSave).toHaveBeenLastCalledWith({ model: "jev", jev: { enabled: false, model: "jev-2" } });
+    cleanup();
+
+    const again = screenFor("local", { model: "local", local: { enabled: false, endpoint: "http://127.0.0.1:9000" } });
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("switch", { name: /Enabled.*Local decision model/ })); });
+    // On is the default, so turning it back on drops the key.
+    expect(again).toHaveBeenLastCalledWith({ model: "local", local: { endpoint: "http://127.0.0.1:9000" } });
+  });
+
+  it("offers only providers that are on, and reads a choice whose provider is off as Off", () => {
+    render(<DecisionModelDefaults snapshot={snapshot({ model: "local", local: { enabled: false } })} saving={false} onSave={vi.fn(async () => undefined)} />);
+    const picker = screen.getByRole("combobox", { name: "Decision model" });
+    expect(picker).toHaveTextContent("Off");
+    expect(selectOptionLabels(picker)).toEqual(["TypeSafe Jev", "Off"]);
+    expect(screen.getByText(/Local decision model is off/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Camera cues in live voice" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Turn on the local decision model to use camera cues.")).toBeInTheDocument();
+  });
+});

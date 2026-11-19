@@ -2159,10 +2159,14 @@ export function desktopSettingsPatchToEdits(
       localEndpoint: decision.local?.endpoint,
       localModel: decision.local?.model,
       jevModel: decision.jev?.model,
+      localEnabled: decision.local?.enabled,
+      jevEnabled: decision.jev?.enabled,
     });
     const keys: [string, string | boolean | undefined][] = [
       ["model", normalized?.model],
       ["camera_cues", normalized?.cameraCues],
+      ["local_enabled", normalized?.local?.enabled],
+      ["jev_enabled", normalized?.jev?.enabled],
       ["local_endpoint", normalized?.local?.endpoint],
       ["local_model", normalized?.local?.model],
       ["jev_model", normalized?.jev?.model],
@@ -2176,7 +2180,8 @@ export function desktopSettingsPatchToEdits(
     // `[models.openai_decisions]`: new keys with no legacy shape. Dashboard
     // ids only; the API key lives in the secret store, never in TOML.
     const ids = normalizeOpenAIDecisionsSettings(patch.models.openaiDecisions);
-    const keys: [string, string | undefined][] = [
+    const keys: [string, string | boolean | undefined][] = [
+      ["enabled", ids?.enabled],
       ["organization_id", ids?.organizationId],
       ["project_id", ids?.projectId],
     ];
@@ -2852,8 +2857,11 @@ function normalizeDesktopConfig(
         localEndpoint: decision?.local_endpoint,
         localModel: decision?.local_model,
         jevModel: decision?.jev_model,
+        localEnabled: decision?.local_enabled,
+        jevEnabled: decision?.jev_enabled,
       }),
       openaiDecisions: normalizeOpenAIDecisionsSettings({
+        enabled: readBoolean(openaiDecisions?.enabled),
         organizationId: readString(openaiDecisions?.organization_id),
         projectId: readString(openaiDecisions?.project_id),
       }),
@@ -4475,14 +4483,19 @@ function readWorktreeStorage(
     : undefined;
 }
 
-/** Trimmed dashboard ids, or undefined when neither is a valid short id. */
+/**
+ * Trimmed dashboard ids and `enabled: false`, or undefined when nothing is
+ * left. On is the default, so it is never written.
+ */
 function normalizeOpenAIDecisionsSettings(
   value: DesktopOpenAIDecisionsSettings | undefined,
 ): DesktopOpenAIDecisionsSettings | undefined {
   const organizationId = normalizeOpenAIDecisionsAccountId(value?.organizationId);
   const projectId = normalizeOpenAIDecisionsAccountId(value?.projectId);
-  return organizationId || projectId
+  const off = value?.enabled === false;
+  return organizationId || projectId || off
     ? {
+        ...(off ? { enabled: false } : {}),
         ...(organizationId ? { organizationId } : {}),
         ...(projectId ? { projectId } : {}),
       }
