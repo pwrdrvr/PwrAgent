@@ -647,16 +647,7 @@ export class MessagingBackendEventRouter {
         // as an answer on a later terminal event.
         const itemId = (event.notification.params as { item?: { id?: string } }).item?.id;
         await this.context.host().waitForAssistantStreamDeliveriesForEvent(event, binding);
-        for (const key of this.context.host().assistantStreamBufferKeysForEvent(event, binding)) {
-          const buffer = this.context.host().assistantStreamBuffers.get(key);
-          if (itemId && buffer?.itemId === itemId) {
-            this.context.host().assistantStreamBuffers.delete(key);
-            this.context.host().assistantStreamDeliveryQueues.delete(key);
-            this.context.host().assistantStreamCancellationSignals.delete(
-              this.context.host().turnProseKey(binding.id, buffer.turnId),
-            );
-          }
-        }
+        this.context.host().discardAssistantStreamItemForEvent(event, binding, itemId);
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);

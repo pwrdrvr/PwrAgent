@@ -949,6 +949,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-monitor-workflow.ts` | Bound and conversation monitors, timer resources, topic observation, cleanup proposals and per-thread fanout; turn state and the detach pipeline stay with their existing owners |
 | `apps/desktop/src/main/messaging/core/messaging-monitor-context.ts` | Narrow store/backend/adapter ports, live turn-state and disposal reads, and seven lazy host ports |
 | `apps/desktop/src/main/messaging/core/messaging-monitor-helpers.ts` | Pure monitor preferences, topic identities/proposal formatting, navigation identities and permanent-target classification |
+| `apps/desktop/src/main/messaging/core/messaging-assistant-streams.ts` | Assistant stream buffering, serialized delivery per stream, terminal flush and private-response cancellation. The backend event router requests operations without accessing the stream collections. |
 | `apps/desktop/src/main/messaging/core/messaging-pending-request-workflow.ts` | Pending-request presentation reservations, approvals, questionnaires and async answer settlement; canonical turn and admission effects use their existing owners |
 | `apps/desktop/src/main/messaging/core/messaging-pending-request-context.ts` | Six store methods, three backend methods and 22 lazy host ports with original signatures, receivers and error boundaries |
 | `apps/desktop/src/main/messaging/core/messaging-pending-request-helpers.ts` | Approval response context and questionnaire answer encoding |
