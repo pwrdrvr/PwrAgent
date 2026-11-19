@@ -46,9 +46,9 @@ const BOUNDS_STEP_WEIGHTS: Partial<Record<StepKind, number>> = {
   start: 5, finding: 3, submit: 3, review: 2, work: 2, assign: 3, observe_start: 6, observe_end: 4, advance: 12, bounds: 8, restart: 2, stop: 1, repeat: 2, resend: 2, read: 1,
 };
 
-const stepArb = (weights: Partial<Record<StepKind, number>>) => fc.record({
+const stepArb = (weights: Partial<Record<StepKind, number>>, other: fc.Arbitrary<number> = fc.nat()) => fc.record({
   kind: fc.constantFrom(...stepKinds(weights)),
-  run: fc.nat(), actor: fc.nat(), approach: fc.nat(), item: fc.nat(), other: fc.nat(), variant: fc.nat(), flag: fc.boolean(),
+  run: fc.nat(), actor: fc.nat(), approach: fc.nat(), item: fc.nat(), other, variant: fc.nat(), flag: fc.boolean(),
   faults: fc.record<Faults>({
     spawn: fc.constantFrom("ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "refused", "error", "no_turn"),
     stop: fc.constantFrom("ok", "ok", "ok", "ok", "ok", "error"),
@@ -57,7 +57,8 @@ const stepArb = (weights: Partial<Record<StepKind, number>>) => fc.record({
   }),
 });
 export const researchDifferentialStepArb = stepArb(STEP_WEIGHTS);
-export const researchDifferentialBoundsStepArb = stepArb(BOUNDS_STEP_WEIGHTS);
+// Half its waits are the long ones (`other % 8 === 7`), so the limits its runs set are reached.
+export const researchDifferentialBoundsStepArb = stepArb(BOUNDS_STEP_WEIGHTS, fc.oneof(fc.nat(), fc.nat({ max: 2 ** 27 }).map((n) => n * 8 + 7)));
 export type ResearchDifferentialStep = typeof researchDifferentialStepArb extends fc.Arbitrary<infer T> ? T : never;
 
 /** What the generated sequences reached, so a test can show its generator crosses the rules it claims to compare. */
@@ -253,7 +254,9 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
         const count = step.variant % 9 === 8 ? 0 : 1 + step.variant % 3;
         // Sometimes with a per-worker time limit or total worker time, which arm timers the advance steps fire.
         const request: StartResearchRequest = { objective: `Objective ${text}`, minutes: 1 + step.other % 20, workspaceMode: step.flag ? "none" : "new_worktree",
-          ...(step.variant % 4 === 1 ? { turnMinutes: 1 + step.item % 15 } : {}), ...(step.variant % 5 === 2 ? { totalWorkerMinutes: 1 + step.approach % 30 } : {}),
+          // Short, so a few waits reach them: a limit the sequence never reaches compares nothing. Never both at once,
+          // because a per-worker limit that stops every worker first leaves the total unreached.
+          ...(step.variant % 4 === 1 ? { turnMinutes: 1 + step.item % 4 } : step.variant % 4 === 2 ? { totalWorkerMinutes: 1 + step.approach % 12 } : {}),
           approaches: Array.from({ length: count }, (_, n) => ({ title: step.variant % 7 === 6 ? "Same title" : `Approach ${n + 1}`, task: `Task ${n + 1}` })) };
         // Mostly a new call; sometimes an earlier call ID, which repeats that start or reuses its key with other arguments.
         const context: ResearchExecutionContext = { ...(step.actor % 8 >= 4 && actor.kind === "agent" ? actor as ResearchExecutionContext : coordinator), callId: step.other % 4 === 3 ? `start-${step.item % 2}` : `start-${call}` };

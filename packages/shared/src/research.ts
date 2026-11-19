@@ -254,8 +254,12 @@ export type ResearchSnapshotRequest = ResearchThread & { runId?: string };
  * `revision`. Without one, the thread's pending request changed.
  */
 export type ResearchChange = ResearchThread & { runId?: string; revision?: number };
-/** The parts of a run that change after it starts, with the counts its card shows. */
-export type ResearchRunState = Pick<ResearchRun, "revision" | "status" | "reason" | "activeWorkers" | "harness"> & { unreviewed: number; accepted: number; findings: number; candidates: number };
+/**
+ * The parts of a run that change after it starts, with the counts its card shows. The bounds are here because
+ * the operator can change them on a live run; a bound left out has been removed or was never set.
+ */
+export type ResearchRunState = Pick<ResearchRun, "revision" | "status" | "reason" | "activeWorkers" | "harness" | "workerLimit" | "deadlineAt" | "turnMinutes" | "totalWorkerMinutes">
+  & { unreviewed: number; accepted: number; findings: number; candidates: number };
 /** One approach on the Map: how many contributions it has, and the IDs of its newest few, newest first. */
 export type ResearchApproachLeaves = { approachId: string; findings: number; candidates: number; leafIds: string[] };
 /** The last item a page of changes returned. Versions repeat when one event changes several items. */
@@ -383,6 +387,16 @@ export function researchWorkerLimit(created: Pick<Extract<ResearchEventData, { t
 }
 
 export type ResearchBounds = Pick<ResearchRun, "workerLimit" | "deadlineAt" | "turnMinutes" | "totalWorkerMinutes">;
+/** Just the bounds of a run or header, with no key for a bound that is not set. */
+export function researchBoundsOf(run: ResearchBounds): ResearchBounds {
+  return { workerLimit: run.workerLimit, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}),
+    ...(run.turnMinutes !== undefined ? { turnMinutes: run.turnMinutes } : {}), ...(run.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: run.totalWorkerMinutes } : {}) };
+}
+/** `target` with the bounds of `source`, removing any bound `source` does not set. */
+export function withResearchBounds<T extends ResearchBounds>(target: T, source: ResearchBounds): T {
+  const { deadlineAt: _deadlineAt, turnMinutes: _turnMinutes, totalWorkerMinutes: _totalWorkerMinutes, ...rest } = target;
+  return { ...rest, ...researchBoundsOf(source) } as T;
+}
 /** A run's bounds after the operator's latest change. Replay and the indexed header both apply it here. */
 export function applyResearchBounds<T extends ResearchBounds>(run: T, data: Extract<ResearchEventData, { type: "bounds" }>): T {
   run.workerLimit = data.workerLimit;
@@ -622,7 +636,7 @@ export function normalizeResearchChangesCursor(sinceRevision: number | undefined
 /** The in-memory oracle for a stored run state. */
 export function researchRunState(run: ResearchRun): ResearchRunState {
   return { revision: run.revision, status: run.status, ...(run.reason !== undefined ? { reason: run.reason } : {}), activeWorkers: run.activeWorkers,
-    ...(run.harness ? { harness: run.harness } : {}),
+    ...(run.harness ? { harness: run.harness } : {}), ...researchBoundsOf(run),
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     findings: run.findings.length, candidates: run.submissions.length };
 }

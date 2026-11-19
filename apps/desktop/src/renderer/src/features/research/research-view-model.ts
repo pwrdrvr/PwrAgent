@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, researchWorkerTime, researchWorkerTimeUsed, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, researchWorkerTime, researchWorkerTimeUsed, sameResearchThread, withResearchBounds, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,
@@ -13,7 +13,8 @@ export function researchRunView(header: Omit<ResearchRunHeader, "harness"> & { h
   if (store.runId !== header.id || !store.state || !researchRunStoreSynced(store)) return undefined;
   // A summary names only the Harness phase; the run's full source state arrives with its store.
   const { harness: _phase, ...run } = header;
-  return { ...run, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves };
+  // The store's state is the newer: a bound the operator removed is absent from it, so it must not fall back to the header's.
+  return withResearchBounds({ ...run, ...store.state, items: store.items, approaches: store.approaches, submissions: store.submissions, leaves: store.leaves }, store.state);
 }
 
 export type ResearchTone = "live" | "attention" | "done" | "neutral" | "problem";

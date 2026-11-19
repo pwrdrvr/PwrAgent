@@ -344,6 +344,9 @@ export class ResearchStore implements ResearchStorage {
   private state(id: string): ResearchRunState | undefined {
     const db = this.stateDb.raw;
     const row = db.prepare("SELECT r.status, r.reason, " + HARNESS_STATE + ` AS harness,
+      (SELECT payload FROM research_events WHERE run_id = r.run_id AND seq = 1) AS created,
+      (SELECT json_extract(payload, '$.data') FROM research_events
+        WHERE run_id = r.run_id AND json_extract(payload, '$.data.type') = 'bounds' ORDER BY seq DESC LIMIT 1) AS bounds,
       (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers,
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND kind IS NULL AND review_state = 'unreviewed') AS unreviewed,
@@ -351,9 +354,10 @@ export class ResearchStore implements ResearchStorage {
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND item_type = 'finding') AS findings,
       (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND item_type = 'submission') AS candidates
       FROM research_runs r WHERE r.run_id = ?`).get(id) as { status: ResearchRun["status"]; reason: string | null; revision: number | null; active_workers: number;
-        unreviewed: number; accepted: number; findings: number; candidates: number; harness: string | null } | undefined;
-    if (!row || row.revision === null) return undefined;
+        unreviewed: number; accepted: number; findings: number; candidates: number; harness: string | null; created: string | null; bounds: string | null } | undefined;
+    if (!row || row.revision === null || row.created === null) return undefined;
     return { revision: row.revision, status: row.status, ...(row.reason !== null ? { reason: row.reason } : {}), activeWorkers: row.active_workers,
+      ...researchRowBounds(JSON.parse(row.created) as ResearchEvent, row.bounds),
       unreviewed: row.unreviewed, accepted: row.accepted, findings: row.findings, candidates: row.candidates,
       ...(row.harness ? { harness: JSON.parse(row.harness) as NonNullable<ResearchRun["harness"]> } : {}) };
   }
@@ -483,15 +487,21 @@ function headerFromRow(row: HeaderRow): ResearchRunHeader {
   const data = event.data;
   // The process holding the run: whoever took it over last, or the one that started it.
   const owner = row.owner ? JSON.parse(row.owner) as Pick<ResearchRunHeader, "ownerId" | "ownerPid" | "ownerStartedAt"> : data;
-  // The bounds as the operator last set them, or as the run started.
-  const created: ResearchBounds = { workerLimit: researchWorkerLimit(data), ...(data.deadlineAt !== undefined ? { deadlineAt: data.deadlineAt } : {}),
-    ...(data.turnMinutes !== undefined ? { turnMinutes: data.turnMinutes } : {}), ...(data.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: data.totalWorkerMinutes } : {}) };
-  const bounds = row.bounds ? applyResearchBounds(created, JSON.parse(row.bounds) as Extract<ResearchEventData, { type: "bounds" }>) : created;
+  const bounds = researchRowBounds(event, row.bounds);
   return { id: row.run_id, revision: row.revision, objective: data.objective, coordinator: data.coordinator, ownerId: owner.ownerId, ownerPid: owner.ownerPid,
     ownerStartedAt: owner.ownerStartedAt, createdAt: event.at, deadlineAt: bounds.deadlineAt, workspaceMode: data.workspaceMode, status: row.status,
     ...(row.reason !== null ? { reason: row.reason } : {}), workerLimit: bounds.workerLimit, activeWorkers: row.active_workers,
     ...(bounds.turnMinutes !== undefined ? { turnMinutes: bounds.turnMinutes } : {}), ...(bounds.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: bounds.totalWorkerMinutes } : {}),
     ...(row.harness ? { harness: JSON.parse(row.harness) as NonNullable<ResearchRun["harness"]> } : {}) };
+}
+
+/** The bounds as the operator last set them, or as the run started: the latest bounds event over the creation event. */
+function researchRowBounds(created: ResearchEvent, bounds: string | null): ResearchBounds {
+  if (created.data.type !== "created") throw new Error("Invalid research header");
+  const data = created.data;
+  const initial: ResearchBounds = { workerLimit: researchWorkerLimit(data), ...(data.deadlineAt !== undefined ? { deadlineAt: data.deadlineAt } : {}),
+    ...(data.turnMinutes !== undefined ? { turnMinutes: data.turnMinutes } : {}), ...(data.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: data.totalWorkerMinutes } : {}) };
+  return bounds ? applyResearchBounds(initial, JSON.parse(bounds) as Extract<ResearchEventData, { type: "bounds" }>) : initial;
 }
 
 function readProjectedItem(db: StateDb["raw"], runId: string, itemId: string): ResearchItem | undefined {
