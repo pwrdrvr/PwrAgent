@@ -391,6 +391,72 @@ describe("useThreadSessionState", () => {
     expect(result.current.contextWindow).not.toHaveProperty("cumulativeTotalTokens");
   });
 
+  it("recovers a newer Claude reading from the remote owner and retains it through missing snapshots", async () => {
+    const response = { ...readThreadResponse({ entries: [], hasPreviousPage: false }), backend: "claude" as const };
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const thread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 100 }), source: "claude",
+      federation: { instanceLabel: "Owner", ref: { backend: "claude", threadId: "thread-1", target } },
+    };
+    let emit: (event: AgentEvent) => void = () => undefined;
+    let contextWindow: typeof response.replay.contextWindow = { usedTokens: 580_000, modelContextWindow: 1_000_000 };
+    const desktopApi: DesktopApi = {
+      readThread: async () => ({ ...response, replay: { ...response.replay, contextWindow } }),
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+    expect(result.current.contextWindow?.usedPercent).toBeCloseTo(58);
+
+    contextWindow = { usedTokens: 30_000, modelContextWindow: 1_000_000 };
+    act(() => emit({ backend: "claude", federationTarget: target, notification: {
+      method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "reconnected" },
+    } }));
+    await waitFor(() => expect(result.current.contextWindow?.usedPercent).toBe(3));
+
+    for (const next of [undefined, { usedTokens: -1, modelContextWindow: 1_000_000 }]) {
+      contextWindow = next;
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.contextWindow?.usedPercent).toBe(3);
+    }
+    act(() => emit({ backend: "claude", federationTarget: target, notification: {
+      method: "thread/compacted", params: { threadId: "thread-1", itemId: "compact-1" },
+    } }));
+    await waitForThreadHydration(result);
+    expect(result.current.contextWindow?.usedPercent).toBe(3);
+  });
+
+  it("keeps a racing Claude live reading until a stream gap revalidates the owner's newer reading", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const thread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 100 }), source: "claude",
+      federation: { instanceLabel: "Owner", ref: { backend: "claude", threadId: "thread-1", target } },
+    };
+    const response = { ...readThreadResponse({ entries: [], hasPreviousPage: false }), backend: "claude" as const, replayRevision: "rev-1" };
+    const initialRead = Promise.withResolvers<AppServerReadThreadResponse>();
+    const readThread = vi.fn().mockReturnValueOnce(initialRead.promise).mockResolvedValue({ ...response, unchanged: true });
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = { readThread, onAgentEvent: (listener) => { emit = listener; return () => undefined; } };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitFor(() => expect(readThread).toHaveBeenCalledOnce());
+    act(() => emit({ backend: "claude", federationTarget: target, notification: {
+      method: "thread/contextWindow/updated", params: { threadId: "thread-1", usedTokens: 90_000, modelContextWindow: 1_000_000 },
+    } }));
+    await act(async () => initialRead.resolve({ ...response, replay: {
+      ...response.replay, contextWindow: { usedTokens: 580_000, modelContextWindow: 1_000_000 },
+    } }));
+    await waitForThreadHydration(result);
+    expect(result.current.contextWindow?.usedPercent).toBe(9);
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.contextWindow?.usedPercent).toBe(9);
+
+    await act(async () => emit({ backend: "claude", federationTarget: target, notification: {
+      method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "gap" },
+    } }));
+    expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({ knownRevision: "rev-1" }));
+    expect(result.current.contextWindow?.totalTokens).toBe(580_000);
+  });
+
   it("reuses an unchanged remote owner page without clearing transcript or pagination", async () => {
     const initial = {
       ...readThreadResponse({

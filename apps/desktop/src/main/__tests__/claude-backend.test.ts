@@ -4684,6 +4684,31 @@ describe("Claude thread rewind", () => {
     expect((await f.store.read(threadId)).resumeSessionAt).toBeUndefined();
   });
 
+  it("keeps the last observed context across a rewind and an unavailable probe after resuming", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const getContextUsage = vi.fn().mockResolvedValue({ totalTokens: 580_000, maxTokens: 1_000_000 });
+    const f = await fixture(promptRecorder(prompts), { getContextUsage });
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    const lastKnown = { usedTokens: 580_000, modelContextWindow: 1_000_000 };
+    expect((await f.backend.readThread(threadId)).contextWindow).toEqual(lastKnown);
+
+    await f.backend.rewindThread({
+      threadId, target: { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] }, mode: "conversation",
+    });
+    expect((await f.openBackend().readThread(threadId)).contextWindow).toEqual(lastKnown);
+
+    getContextUsage.mockRejectedValue(new Error("Context usage is unavailable"));
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Try again" }] });
+    await f.waitForTurn();
+    expect((await f.openBackend().readThread(threadId)).contextWindow).toEqual(lastKnown);
+
+    getContextUsage.mockResolvedValue({ totalTokens: 25_000, maxTokens: 1_000_000 });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect((await f.openBackend().readThread(threadId)).contextWindow).toEqual({ usedTokens: 25_000, modelContextWindow: 1_000_000 });
+  });
+
   it("reads a sub-agent's transcript from the session that ran it", async () => {
     const f = await fixture();
     const { threadId } = await runTurns(f, ["Audit the limiters"]);

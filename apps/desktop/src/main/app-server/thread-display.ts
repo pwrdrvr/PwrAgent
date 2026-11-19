@@ -285,6 +285,8 @@ export function projectThreadDisplay(
     threadStatus: response.threadStatus,
     replay: {
       entries, messages: [],
+      ...(demand.resource === "transcript" && response.replay.contextWindow
+        ? { contextWindow: response.replay.contextWindow } : {}),
       pagination: response.replay.pagination,
       threadStatus: response.replay.threadStatus,
       agentName: response.replay.agentName,
