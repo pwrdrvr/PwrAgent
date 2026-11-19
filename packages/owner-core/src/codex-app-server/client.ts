@@ -20,6 +20,7 @@ import type {
   ThreadBackgroundTerminalsListResponse,
   ThreadBackgroundTerminalsTerminateResponse,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
+import { buildPendingTurnId } from "@pwragent/shared";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { rememberBoundedMap } from "../bounded-map";
 import { usageAccountKey } from "../usage-account-identity";
@@ -11613,7 +11614,7 @@ export class CodexAppServerClient {
     });
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
-    const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    const turnId = extractTurnIdFromValue(result) ?? buildPendingTurnId(threadId);
     const turn = asRecord(asRecord(result)?.turn);
     const terminalStatus = pickString(turn ?? {}, ["status"]);
     if (terminalStatus === "completed" || terminalStatus === "failed" || terminalStatus === "interrupted") {

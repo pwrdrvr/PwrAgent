@@ -3,6 +3,7 @@ import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } 
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import {
+  buildPendingTurnId,
   buildThreadIdentityKey,
   isAcpBackendId,
   type AgentEvent,
@@ -1053,7 +1054,7 @@ export class ManagedReviewService {
       ?? (
         request.backend === "codex"
         && this.context.turnState.hasStartReservation(request.threadId)
-          ? `pending:${request.threadId}`
+          ? buildPendingTurnId(request.threadId)
           : undefined
       )
       ?? (
@@ -1061,7 +1062,7 @@ export class ManagedReviewService {
         && this.host().reservedAcpStartThreadKeys.has(
           buildTurnStartReservationKey(request.backend, request.threadId),
         )
-          ? `pending:${request.threadId}`
+          ? buildPendingTurnId(request.threadId)
           : undefined
       );
     if (!invokingTurnId) {

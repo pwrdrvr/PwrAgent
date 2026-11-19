@@ -10,7 +10,7 @@ import type {
   AppServerThreadTurnStatus,
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
-import { formatWebSearchLabel } from "@pwragent/shared";
+import { buildPendingTurnId, formatWebSearchLabel } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
@@ -632,7 +632,7 @@ export class AcpSessionReplayNormalizer {
       } else if (kind === "pwragent_turn_failed") {
         this.recordTurnFailed({
           sessionId: update.sessionId,
-          turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+          turnId: readString(update.update, "turnId") ?? buildPendingTurnId(update.sessionId),
           error: readString(update.update, "error") ?? "Turn failed.",
           receivedAt: createdAt,
         });
@@ -641,7 +641,7 @@ export class AcpSessionReplayNormalizer {
           sessionId: update.sessionId,
           prompt: readString(update.update, "prompt") ?? "",
           parts: readMessageParts(update.update),
-          turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+          turnId: readString(update.update, "turnId") ?? buildPendingTurnId(update.sessionId),
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });

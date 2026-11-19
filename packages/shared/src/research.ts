@@ -1,3 +1,4 @@
+import { isPendingTurnId } from "./turn-placeholder";
 import type { AppServerBackendKind } from "./contracts/normalized-app-server";
 import type { ResearchHarnessState, ResearchProvenance } from "./research-harness";
 
@@ -778,7 +779,7 @@ export function sameResearchThread(a: ResearchThread, b: ResearchThread): boolea
  * from start to end.
  */
 export function researchTurnIsPlaceholder(thread: ResearchThread, turnId: string): boolean {
-  return turnId === `pending:${thread.threadId}`;
+  return isPendingTurnId(thread.threadId, turnId);
 }
 
 export function researchApproachOccupiesSlot(approach: ResearchApproach): boolean {

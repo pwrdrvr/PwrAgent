@@ -2,6 +2,7 @@ import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import {
+  buildPendingTurnId,
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   FORGE_AGENT_RULE_APPROVAL_SOURCE,
   FORGE_AGENT_TOOL_GROUP_LABELS,
@@ -965,7 +966,7 @@ export class ForgeToolBridge {
   private isForgePlanTurn(context: AgentToolCallContext): boolean {
     if (context.backend === "claude") return this.context.providers.claude.livePermissionMode(context.threadId) === "plan";
     if (context.backend !== "codex") return false;
-    const pendingKey = buildActiveTurnKey("codex", context.threadId, `pending:${context.threadId}`);
+    const pendingKey = buildActiveTurnKey("codex", context.threadId, buildPendingTurnId(context.threadId));
     const turnId = context.turnId ?? this.host().getActiveTurnForThread(context)?.turnId;
     const mode = turnId
       ? this.context.turnState.collaborationMode({ backend: "codex", threadId: context.threadId, turnId: turnId })
