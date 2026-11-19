@@ -453,7 +453,8 @@ describe("Research panel", () => {
     chooseSelectOption(screen.getByRole("combobox", { name: "Run" }), /Second objective/);
     await waitFor(() => expect(mocks.researchChanges).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent", runId: "other-run", sinceRevision: 0 }));
     expect(await screen.findByText("Second objective", { selector: ".research-objective" })).toBeInTheDocument();
-    expect(screen.getByText("This run’s owner is not running in this window’s process.", { exact: false })).toBeInTheDocument();
+    // The owner did not name this run as one this process may record on: another running process holds it.
+    expect(screen.getByText("Another running PwrAgent process owns this run.", { exact: false })).toBeInTheDocument();
     // Choosing a run reads that run, not the list again.
     expect(mocks.researchSnapshot).toHaveBeenCalledTimes(1);
   });

@@ -1,5 +1,5 @@
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
+import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
 import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
 import type { DecisionsRailBatchActionRequest, DecisionsRailBatchActionResult, DecisionsRailBatchPage, DecisionsRailBatchRequest, DecisionsRailOpenResultsRequest, DecisionsRailOpenResultsResult, DecisionsRailSnapshot, DecisionsRailThreadRequest } from "@pwragent/shared";
@@ -1082,6 +1082,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   checkResearchHarness?: (request: ResearchThread) => Promise<ResearchHarnessCheck>;
   reconcileResearchHarness?: (request: ResearchHarnessReconcileRequest) => Promise<ResearchUpdateReceipt>;
   revealResearchHarnessConfig?: () => Promise<void>;
+  researchProfileRuns?: (request?: ResearchProfileRunsQuery) => Promise<ResearchProfileRunsPage>;
+  openResearchWindow?: (request?: { runId?: string }) => Promise<void>;
+  onResearchWindowSelect?: (callback: (runId: string) => void) => () => void;
   startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchUpdateReceipt>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
   withdrawResearch?: (thread: ResearchThread) => Promise<void>;

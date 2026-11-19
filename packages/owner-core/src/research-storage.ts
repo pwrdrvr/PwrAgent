@@ -1,7 +1,7 @@
 import type {
   ResearchEvent, ResearchRun, ResearchThread, ResearchRunHeader, ResearchItem, ResearchSearchQuery, ResearchSearchPage, ResearchRunSummary,
   ResearchEventRange, ResearchEventPage, ResearchApproach, ResearchDelivery, ResearchBoardRange, ResearchBoardPage,
-  ResearchChangesCursor, ResearchChangePage, ResearchSubmission,
+  ResearchChangesCursor, ResearchChangePage, ResearchSubmission, ResearchProfileRunsQuery, ResearchProfileRun, ResearchRunAttention,
 } from "@pwragent/shared/research";
 
 /**
@@ -19,6 +19,11 @@ export interface ResearchStorage {
   summaries(thread: ResearchThread): ResearchRunHeader[];
   /** The thread's newest runs, or only `runId` when the thread belongs to it. */
   runSummaries(thread: ResearchThread, limit: number, runId?: string): ResearchRunSummary[];
+  /**
+   * One page of every run on the profile, by attention group and then newest first, with each group's
+   * total under the same filters. One snapshot; no journal replay.
+   */
+  profileRuns(query: ResearchProfileRunsQuery, limit: number): { runs: Array<Omit<ResearchProfileRun, "thread">>; counts: Record<ResearchRunAttention, number> };
   /** One page of the journal and its revision, read from one snapshot. */
   events(id: string, range: ResearchEventRange): ResearchEventPage;
   members(id: string): ResearchThread[];

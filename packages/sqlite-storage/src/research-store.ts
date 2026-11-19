@@ -4,7 +4,7 @@ import { applyResearchItemEvent, normalizeResearchChangesCursor, normalizeResear
   type ResearchEvent, type ResearchRun, type ResearchThread, type ResearchRunHeader, type ResearchItem, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchRunSummary, type ResearchEventRange, type ResearchEventPage, type ResearchApproach, type ResearchDelivery, type ResearchSubmission,
   type ResearchBoardRange, type ResearchBoardPage, type ResearchChangesCursor, type ResearchChangePage, type ResearchRunState, type ResearchApproachLeaves,
-  type ResearchFinding, type ResearchHarnessPhase,
+  type ResearchFinding, type ResearchHarnessPhase, type ResearchProfileRunsQuery, type ResearchProfileRun, type ResearchRunAttention, RESEARCH_RUN_ATTENTION_ORDER,
 } from "@pwragent/shared/research";
 import type { StateDb } from "./state-db";
 
@@ -116,6 +116,28 @@ const HARNESS_PHASE = "(SELECT json_object('state', json_extract(h, '$.state'), 
   + " FROM (SELECT " + HARNESS_STATE + " AS h) WHERE h IS NOT NULL)";
 const SELECT_SUMMARIES = "SELECT " + SUMMARY_COLUMNS + ", " + HARNESS_PHASE + " AS harness_phase " + HEADER_FROM;
 
+/**
+ * The attention group as a sort rank: 0 needs you, 1 live, 2 retained. It restates `researchRunAttention`;
+ * a differential test holds the two together over generated journals.
+ */
+const PHASE_STATE = "json_extract(s.harness_phase, '$.state')";
+const ATTENTION_RANK = "CASE WHEN s.harness_phase IS NOT NULL THEN CASE"
+  + " WHEN s.status = 'completed' THEN 2"
+  + " WHEN " + PHASE_STATE + " = 'unknown' THEN 0"
+  + " WHEN " + PHASE_STATE + " IN ('pending', 'running') AND s.status NOT IN ('running', 'stopping') THEN 0"
+  + " WHEN " + PHASE_STATE + " = 'stopping' THEN CASE WHEN s.status = 'stopping' THEN 1 ELSE 0 END"
+  + " WHEN " + PHASE_STATE + " = 'ended' THEN CASE WHEN s.unreviewed > 0 THEN 0 ELSE 2 END"
+  + " WHEN " + PHASE_STATE + " = 'running' THEN CASE WHEN json_extract(s.harness_phase, '$.mode') = 'execute' AND s.unreviewed > 0 THEN 0 ELSE 1 END"
+  + " WHEN " + PHASE_STATE + " IN ('pending', 'reconciling') THEN 1"
+  + " ELSE 2 END"
+  + " WHEN s.status = 'running' THEN CASE WHEN s.active_workers = 0 AND (s.unreviewed > 0 OR s.accepted > 0) THEN 0 ELSE 1 END"
+  + " WHEN s.status = 'stopping' THEN 1 ELSE 2 END";
+/** Every run on the profile with its attention rank, under the list's source and objective filters. */
+const PROFILE_RUNS = "WITH s AS (SELECT " + SUMMARY_COLUMNS + ", " + HARNESS_PHASE + " AS harness_phase, r.created_at AS created_at " + HEADER_FROM + "),"
+  + " a AS (SELECT s.*, " + ATTENTION_RANK + " AS attention FROM s"
+  + " WHERE (@source IS NULL OR (@source = 'harness') = (s.harness_phase IS NOT NULL))"
+  + " AND (@text IS NULL OR instr(lower(json_extract(s.payload, '$.data.objective')), @text) > 0)) ";
+
 type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; revision: number; active_workers: number; harness?: string | null };
 type SummaryRow = HeaderRow & { unreviewed: number; accepted: number; harness_phase: string | null };
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
@@ -172,12 +194,25 @@ export class ResearchStore implements ResearchStorage {
       : db.prepare(SELECT_SUMMARIES + ` WHERE r.run_id = ? AND ((r.coordinator_backend = ? AND r.coordinator_thread_id = ?) OR EXISTS
             (SELECT 1 FROM research_workers WHERE run_id = r.run_id AND backend = ? AND thread_id = ?))
           LIMIT ?`).all(runId, thread.backend, thread.threadId, thread.backend, thread.threadId, limit);
-    return (rows as SummaryRow[]).map((row) => {
-      const summary = headerFromRow(row);
-      const phase = row.harness_phase ? JSON.parse(row.harness_phase) as { state: ResearchHarnessPhase["state"]; mode: ResearchHarnessPhase["mode"]; source: ResearchHarnessPhase["source"] | null } : undefined;
-      return { ...summary, unreviewed: row.unreviewed, accepted: row.accepted,
-        ...(phase ? { harness: { state: phase.state, mode: phase.mode, ...(phase.source ? { source: phase.source } : {}) } } : {}) };
-    });
+    return (rows as SummaryRow[]).map(summaryFromRow);
+  }
+  profileRuns(query: ResearchProfileRunsQuery, limit: number): { runs: Array<Omit<ResearchProfileRun, "thread">>; counts: Record<ResearchRunAttention, number> } {
+    const db = this.stateDb.raw;
+    const text = query.text?.trim().toLowerCase();
+    const filters = { source: query.source ?? null, text: text ? text : null };
+    const after = query.after;
+    return db.transaction(() => {
+      const rows = db.prepare(PROFILE_RUNS + `SELECT * FROM a WHERE @afterAttention IS NULL OR attention > @afterAttention
+        OR (attention = @afterAttention AND (created_at < @afterCreatedAt OR (created_at = @afterCreatedAt AND run_id < @afterId)))
+        ORDER BY attention, created_at DESC, run_id DESC LIMIT @limit`).all({ ...filters, limit,
+        afterAttention: after ? RESEARCH_RUN_ATTENTION_ORDER.indexOf(after.attention) : null, afterCreatedAt: after?.createdAt ?? null, afterId: after?.id ?? null,
+      }) as Array<SummaryRow & { attention: number }>;
+      const counts: Record<ResearchRunAttention, number> = { needs_you: 0, live: 0, retained: 0 };
+      for (const row of db.prepare(PROFILE_RUNS + "SELECT attention, count(*) AS count FROM a GROUP BY attention").all(filters) as Array<{ attention: number; count: number }>) {
+        counts[RESEARCH_RUN_ATTENTION_ORDER[row.attention]!] = row.count;
+      }
+      return { runs: rows.map((row) => ({ ...summaryFromRow(row), attention: RESEARCH_RUN_ATTENTION_ORDER[row.attention]! })), counts };
+    }).deferred();
   }
   events(id: string, range: ResearchEventRange): ResearchEventPage {
     const r = normalizeResearchEventRange(range);
@@ -410,6 +445,12 @@ export class ResearchStore implements ResearchStorage {
   }
 }
 
+function summaryFromRow(row: SummaryRow): ResearchRunSummary {
+  const summary = headerFromRow(row);
+  const phase = row.harness_phase ? JSON.parse(row.harness_phase) as { state: ResearchHarnessPhase["state"]; mode: ResearchHarnessPhase["mode"]; source: ResearchHarnessPhase["source"] | null } : undefined;
+  return { ...summary, unreviewed: row.unreviewed, accepted: row.accepted,
+    ...(phase ? { harness: { state: phase.state, mode: phase.mode, ...(phase.source ? { source: phase.source } : {}) } } : {}) };
+}
 function headerFromRow(row: HeaderRow): ResearchRunHeader {
   const event = JSON.parse(row.payload) as ResearchEvent;
   if (event.data.type !== "created") throw new Error("Invalid research header");

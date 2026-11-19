@@ -29,7 +29,7 @@ function setup(input = discoveryRecords(), override?: ResearchHarnessConnection[
     return value;
   })) };
   const probe = vi.fn(async () => {});
-  service = new ResearchHarnessService(store, { ownerId: "owner", ownerPid: 1, ownerStartedAt: 100, now: () => 1000,
+  service = new ResearchHarnessService(store, { ownerId: "owner", ownerPid: 1, ownerStartedAt: 100, isOwnerAlive: () => true, now: () => 1000,
     changed: () => {}, schedule: () => () => {}, onError: () => {}, open: () => connection, probe });
   return { store, connection, probe };
 }

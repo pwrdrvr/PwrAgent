@@ -1,5 +1,6 @@
-import { useEffect, useId, useMemo, useState, type KeyboardEvent } from "react";
-import { sameResearchThread, type NavigationThreadSummary, type ResearchCommand, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared";
+import { useId, useMemo, useState } from "react";
+import { sameResearchThread, type NavigationThreadSummary, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared";
+import { PopoutIcon } from "../../icons";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -13,6 +14,9 @@ import { ResearchPendingCard, ResearchStartForm, type ResearchStartValues } from
 import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
 import { excerpt, isResearchRunLive, researchRunPhase, researchRunView } from "./research-view-model";
 import { useResearchSync } from "./useResearchSync";
+import { useResearchNow } from "./useResearchNow";
+import { researchErrorMessage as message, useResearchRunActions } from "./useResearchRunActions";
+import { ResearchTabs } from "./ResearchTabs";
 import "./research.css";
 
 const VIEWS = [
@@ -22,18 +26,6 @@ const VIEWS = [
 const DISCOVERY_VIEWS = [{ id: "discovery", label: "Discovery" }, { id: "activity", label: "Activity" }] as const;
 type View = typeof VIEWS[number]["id"] | typeof DISCOVERY_VIEWS[number]["id"];
 
-/** Wall-clock time for countdowns, ticking only while something on screen is live. */
-function useNow(live: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!live) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => window.clearInterval(timer);
-  }, [live]);
-  return now;
-}
-
 export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
   const identity = thread && !remote && thread.source === "codex" ? { backend: thread.source, threadId: thread.id } : undefined;
@@ -42,9 +34,9 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const tabsId = useId();
   const [view, setView] = useState<View>("map");
   const [filter, setFilter] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
+  const [formBusy, setBusy] = useState(false);
+  const [formNotice, setNotice] = useState("");
+  const [formError, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [source, setSource] = useState<"native" | "harness">("native");
   const [openItemId, setOpenItemId] = useState<string>();
@@ -60,7 +52,13 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const loadingRun = Boolean(summary && !run);
   // Read the clock directly: once the request expires, the tick that hid it also stops the timer.
   const pendingLive = Boolean(state.pending && state.pending.expiresAt > Date.now());
-  const now = useNow(Boolean(run && isResearchRunLive(run)) || pendingLive);
+  const now = useResearchNow(Boolean(run && isResearchRunLive(run)) || pendingLive);
+  // Review, stop, finish, reconcile and evidence act on the run on screen; the forms above keep their own state.
+  const actions = useResearchRunActions(api, identity, run?.id);
+  const { update, reconcile, openEvidence } = actions;
+  const busy = formBusy || actions.busy;
+  const notice = formNotice || actions.notice;
+  const error = formError || actions.error;
   const pending = state.pending && now < state.pending.expiresAt ? state.pending : undefined;
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
   const writable = Boolean(run && state.writableRunIds.includes(run.id));
@@ -69,7 +67,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   const currentView: View = views.some((entry) => entry.id === view) ? view : views[0]!.id;
 
   function selectRun(id: string) {
-    setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError("");
+    setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError(""); actions.reset();
   }
   function openItem(itemId: string) {
     setOpenItemId(itemId); setReturnFocusId(undefined); setView("items");
@@ -86,7 +84,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   }
   async function start(values: ResearchStartValues): Promise<boolean> {
     if (!identity || !api?.prepareResearch) return false;
-    setBusy(true); setError(""); setNotice("");
+    setBusy(true); setError(""); setNotice(""); actions.reset();
     let prepared = false;
     try {
       const { intentId } = await api.prepareResearch({ ...identity, ...values });
@@ -101,54 +99,16 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     }
     finally { setBusy(false); }
   }
-  async function reconcile() {
-    if (!run || !identity || !api?.reconcileResearchHarness) return;
-    setBusy(true); setError(""); setNotice("");
-    try { await api.reconcileResearchHarness({ ...identity, runId: run.id }); }
-    catch (failure) { setError(message(failure)); }
-    finally { setBusy(false); }
-  }
   function harnessStarted(runId: string) {
     setCreating(false); setSource("native"); selectRun(runId);
   }
   async function withdraw() {
     if (!identity || !api?.withdrawResearch) return;
-    setBusy(true); setError(""); setNotice("");
+    setBusy(true); setError(""); setNotice(""); actions.reset();
     try { await api.withdrawResearch(identity); setNotice("Request withdrawn. If this thread tries to start it, the start is refused."); }
     catch (failure) { setError(message(failure)); }
     finally { setBusy(false); }
   }
-  async function update(command: ResearchCommand): Promise<boolean> {
-    if (!run || !identity || !api?.updateResearch) return false;
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const result = await api.updateResearch({ ...identity, runId: run.id, requestId: crypto.randomUUID(), command });
-      if (command.action === "review" && command.decision === "revision_requested") {
-        const delivery = result.delivery;
-        setNotice(delivery?.state === "queued" ? "Revision feedback is queued for the worker." : delivery?.state === "started" ? "The worker received the revision feedback." : "The revision is recorded, but delivery to the worker was not confirmed. Check Activity before you send it again.");
-      } else if (command.action === "review") setNotice(`Decision recorded: ${command.decision === "accepted" ? "accepted" : "rejected"}.`);
-      return true;
-    } catch (failure) { setError(message(failure)); return false; }
-    finally { setBusy(false); }
-  }
-  async function openEvidence(itemId: string, pathIndex: number) {
-    if (!identity || !run || !api?.openResearchEvidence) return;
-    setError("");
-    try {
-      const result = await api.openResearchEvidence({ ...identity, runId: run.id, itemId, pathIndex });
-      if (!result.opened) throw new Error(result.error ?? "Evidence could not be opened");
-    } catch (failure) { setError(message(failure)); }
-  }
-  function onTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const index = views.findIndex((entry) => entry.id === currentView);
-    const next = event.key === "ArrowRight" ? (index + 1) % views.length : event.key === "ArrowLeft" ? (index - 1 + views.length) % views.length
-      : event.key === "Home" ? 0 : event.key === "End" ? views.length - 1 : -1;
-    if (next < 0) return;
-    event.preventDefault();
-    chooseView(views[next]!.id);
-    document.getElementById(`${tabsId}-${views[next]!.id}`)?.focus();
-  }
-
   if (remote) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Open this thread on its owning instance to inspect its research runs.</p></section>;
   if (!identity) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research runs are available in local Codex threads.</p></section>;
   if (!api?.researchSnapshot || !api.researchChanges) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
@@ -161,6 +121,8 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
   return <section className="context-panel__section research-panel" aria-label="Research">
     <div className="research-heading">
       <h3>Research</h3>
+      {api.openResearchWindow && <button type="button" className="research-icon-button tooltip-target" aria-label="Open in Research window" data-tooltip="Open in Research window"
+        onClick={() => { void api.openResearchWindow?.(summary ? { runId: summary.id } : undefined).catch((failure: unknown) => setError(message(failure))); }}><PopoutIcon /></button>}
       {!firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
     </div>
     {showForm && harnessAvailable && <div className="research-switch" role="group" aria-label="Run source">
@@ -184,12 +146,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
         onReconcile={api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
-      <div className="research-tabs" role="tablist" aria-label="Research views" onKeyDown={onTabKeyDown}>
-        {views.map((entry) => <button type="button" role="tab" key={entry.id} id={`${tabsId}-${entry.id}`} aria-selected={currentView === entry.id}
-          aria-controls={`${tabsId}-panel`} tabIndex={currentView === entry.id ? 0 : -1} onClick={() => chooseView(entry.id)}>
-          {entry.label}{entry.id === "review" && reviewCount > 0 && <><span className="research-sr-only">,</span>{" "}<span className="research-tab-count">{reviewCount}</span>{" "}<span className="research-sr-only">to review</span></>}
-        </button>)}
-      </div>
+      <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount} onChoose={chooseView} />
       <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">
         {(currentView === "map" || currentView === "findings" || currentView === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"
           placeholder={currentView === "map" ? "Filter approaches and findings" : currentView === "findings" ? "Filter findings" : "Filter activity"} value={filter} onChange={(event) => setFilter(event.target.value)} />}
@@ -210,5 +167,3 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     </>}
   </section>;
 }
-
-function message(error: unknown): string { return error instanceof Error ? error.message : "Research operation failed"; }

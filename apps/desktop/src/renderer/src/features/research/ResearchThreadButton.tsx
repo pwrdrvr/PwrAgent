@@ -1,5 +1,13 @@
+import { createContext, useContext } from "react";
 import type { ResearchThread } from "@pwragent/shared";
 import { useThreadLinks } from "../../lib/thread-links";
+
+/**
+ * How a window with no thread list of its own opens a research member thread:
+ * the Research window asks the main window to show it. The main window's
+ * panel leaves this unset and resolves threads through its own list.
+ */
+export const ResearchThreadOpener = createContext<((thread: ResearchThread) => void) | undefined>(undefined);
 
 /**
  * A link to a research member thread. `label` names the destination for
@@ -7,10 +15,12 @@ import { useThreadLinks } from "../../lib/thread-links";
  * this window cannot resolve stays focusable and explains why.
  */
 export function ResearchThreadButton({ thread, title, label }: { thread: ResearchThread; title: string; label?: string }) {
+  const open = useContext(ResearchThreadOpener);
   const links = useThreadLinks();
-  const link = links?.resolve(thread);
+  const link = open ? undefined : links?.resolve(thread);
+  const available = Boolean(open || link);
   const unavailable = "This thread is not in this window’s thread list";
-  return <button type="button" className={`research-link${link ? "" : " tooltip-target"}`} aria-label={label}
-    aria-disabled={link ? undefined : true} data-tooltip={link ? undefined : unavailable}
-    onClick={() => { if (link) links?.show(link); }}>{title}</button>;
+  return <button type="button" className={`research-link${available ? "" : " tooltip-target"}`} aria-label={label}
+    aria-disabled={available ? undefined : true} data-tooltip={available ? undefined : unavailable}
+    onClick={() => { if (open) open(thread); else if (link) links?.show(link); }}>{title}</button>;
 }

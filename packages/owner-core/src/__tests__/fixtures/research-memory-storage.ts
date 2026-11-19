@@ -1,5 +1,6 @@
 import {
   projectResearchRun, researchApproachOccupiesSlot, researchBoardPage, researchChangePage, researchEventPage, sameResearchThread, searchResearchItems, summarizeResearchRun,
+  researchRunAttention, RESEARCH_RUN_ATTENTION_ORDER, type ResearchProfileRunsQuery, type ResearchRunAttention,
   type ResearchApproach, type ResearchBoardRange, type ResearchChangesCursor, type ResearchEvent, type ResearchEventRange, type ResearchRun, type ResearchRunHeader,
   type ResearchSearchQuery, type ResearchSubmission, type ResearchThread,
 } from "@pwragent/shared/research";
@@ -53,6 +54,20 @@ export class MemoryResearchStorage implements ResearchStorage {
     return this.all().filter((run) => ["running", "stopping"].includes(run.status) && (!thread || this.isMember(run.id, thread))).map((run) => this.header(run.id)!);
   }
   summaries(thread: ResearchThread) { return this.all().filter((run) => this.isMember(run.id, thread)).slice(0, 20).map((run) => this.header(run.id)!); }
+  /** The oracle for the store's ranked run list: the shared attention rule over replayed runs. */
+  profileRuns(query: ResearchProfileRunsQuery, limit: number) {
+    const text = query.text?.trim().toLowerCase();
+    const rank = (attention: ResearchRunAttention) => RESEARCH_RUN_ATTENTION_ORDER.indexOf(attention);
+    const all = this.all().map((run) => { const summary = summarizeResearchRun(run); return { ...summary, attention: researchRunAttention(summary) }; })
+      .filter((run) => (!query.source || (query.source === "harness") === Boolean(run.harness)) && (!text || run.objective.toLowerCase().includes(text)))
+      .sort((a, b) => rank(a.attention) - rank(b.attention) || b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    const counts: Record<ResearchRunAttention, number> = { needs_you: 0, live: 0, retained: 0 };
+    for (const run of all) counts[run.attention]++;
+    const after = query.after;
+    const rest = after ? all.filter((run) => rank(run.attention) > rank(after.attention)
+      || (run.attention === after.attention && (run.createdAt < after.createdAt || (run.createdAt === after.createdAt && run.id < after.id)))) : all;
+    return { runs: rest.slice(0, limit), counts };
+  }
   runSummaries(thread: ResearchThread, limit: number, runId?: string) {
     return this.all().filter((run) => this.isMember(run.id, thread) && (runId === undefined || run.id === runId)).slice(0, limit).map(summarizeResearchRun);
   }

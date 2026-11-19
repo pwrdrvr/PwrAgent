@@ -45,6 +45,7 @@ export const WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER =
   "tool-output-incident-explorer" as const;
 export const WINDOW_KIND_AUTOMATION_RUN = "automation-run" as const;
 export const WINDOW_KIND_USAGE_ACTIVITY = "usage-activity" as const;
+export const WINDOW_KIND_RESEARCH = "research" as const;
 export type WindowKind =
   | typeof WINDOW_KIND_FEDERATION_ACTIVITY
   | typeof WINDOW_KIND_MAIN
@@ -56,6 +57,7 @@ export type WindowKind =
   | typeof WINDOW_KIND_MARKDOWN_FILES
   | typeof WINDOW_KIND_AUTOMATION_RUN
   | typeof WINDOW_KIND_USAGE_ACTIVITY
+  | typeof WINDOW_KIND_RESEARCH
   | typeof WINDOW_KIND_SUB_AGENT_TRANSCRIPT
   | typeof WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER;
 
@@ -98,6 +100,19 @@ export function isLocalMainWindowWebContents(
 ): boolean {
   const entry = webContents ? entries.get(webContents) : undefined;
   return entry?.kind === WINDOW_KIND_MAIN && entry.federationTarget === undefined;
+}
+
+/**
+ * A window that may read and act on this profile's research: a local main
+ * window, or the Research window, which only ever shows this instance's own
+ * runs. A federation viewer is neither.
+ */
+export function isLocalResearchWebContents(
+  webContents: WebContents | undefined,
+): boolean {
+  const entry = webContents ? entries.get(webContents) : undefined;
+  return entry?.federationTarget === undefined
+    && (entry?.kind === WINDOW_KIND_MAIN || entry?.kind === WINDOW_KIND_RESEARCH);
 }
 
 /** Return every WebContents that has subscribed to the given channel. */

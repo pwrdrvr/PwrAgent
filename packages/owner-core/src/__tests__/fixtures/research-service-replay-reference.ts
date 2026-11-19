@@ -2,13 +2,15 @@
  * The research service as it was before commands and observers read stored
  * projections: every command and every turn or queue observation replays the
  * run's journal with `projectResearchRun`. The service is kept, unchanged
- * apart from its imports and the removed renderer snapshot, as the reference
+ * apart from its imports, the removed renderer snapshot and deliberate rule
+ * changes (who may record on a run after its process is gone), as the reference
  * for differential tests: the projection-based service must accept and refuse
  * the same commands and append the same events. Its in-memory storage answers
  * as it did, but replays a journal once per length. Nothing outside tests
  * imports it.
  */
 import { randomUUID } from "node:crypto";
+import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy } from "../../research-ownership";
 import {
   RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, searchResearchItems,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEvent, type ResearchEventData, type ResearchDelivery,
@@ -383,7 +385,7 @@ export class ReplayResearchService {
     if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
     let run = this.read(id, actor);
-    if (run.ownerId !== this.ports.ownerId) throw new Error("This run belongs to another process. Open its worker threads to inspect interrupted work.");
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
     const signature = JSON.stringify(command);
     const duplicate = run.events.find((e) => e.commandId === requestId);
     if (duplicate) {
@@ -489,10 +491,17 @@ export class ReplayResearchService {
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRun> {
     const run = this.read(id, actor);
     if (actor.kind !== "operator" && !sameResearchThread(actor, run.coordinator)) throw new Error("Only the coordinator or operator may stop a run");
-    if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
     const pending = this.stops.get(id);
     if (pending) return pending;
-    if (!["running", "stopping"].includes(run.status)) return run;
+    if (!["running", "stopping"].includes(run.status)) {
+      if (outcome === "completed" && ["interrupted", "exhausted"].includes(run.status)) {
+        if (!run.submissions.some((submission) => submission.review?.decision === "accepted")) throw new Error("Accept a submission before completing the run");
+        this.append(run, requestId, actor, { type: "status", status: "completed", reason }, signature);
+        return this.requireRun(id);
+      }
+      return run;
+    }
     this.append(run, requestId, actor, { type: "status", status: "stopping", reason: `${outcome}: ${reason}` }, signature);
     this.deadlines.get(id)?.();
     this.deadlines.delete(id);

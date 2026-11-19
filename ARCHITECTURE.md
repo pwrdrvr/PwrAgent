@@ -133,6 +133,27 @@ Disabling a three-worker run uses the existing five-commit stop budget,
 127,720 WAL bytes (approximately 0.128 MB/day at one active disable per day).
 Unchanged disabled settings and idle checks introduce no research writes.
 
+The Research window lists every run on the profile, where the context-rail
+panel shows only one thread's. It is one auxiliary window per app, opened from
+the panel, and it reuses the panel's run card, views and item detail at full
+width with an inspector for the selected item. It starts no runs: a run still
+starts from its coordinating thread. Research IPC admits it as a local owner
+window (`isLocalResearchWebContents`) for reads, review, stop, finish,
+reconcile and evidence; a federation viewer is still refused, and starting or
+importing a run stays with the main window. One owner read,
+`ResearchService.profileRuns`, returns 50 run summaries a page, ordered by
+attention group and then newest first, with each group's total and a keyset
+cursor. The group is `researchRunAttention` in `packages/shared`: *needs you*
+(an unknown or unconfirmed Harness outcome, or candidates awaiting review with
+no worker running), *live*, or *retained*. The store ranks by the same rule in
+SQL, and a differential property test over generated journals holds the two
+together. The read writes nothing. Each run's contents are still read as its
+coordinating thread through the member-checked per-run reads, so the window
+adds no second authority. The main process labels each row with the thread's
+last-observed title and first linked directory; that label is not ownership
+proof. The window re-reads the list, as far as it was loaded, on any research
+change event, because a run can move between groups.
+
 `research_runs`, `research_events` and `research_workers` retain PwrAgent-owned
 structured state, not provider transcripts. Each mutation compares the
 journal revision and appends its command identity in one transaction. Reads
@@ -141,7 +162,23 @@ research operations and run boundaries write; streamed tokens do not. The
 checked-in SQLite budgets cover those boundaries. Recovery validates the
 owner's PID, runtime instance ID and start time against the existing profile
 marker. A dead owner becomes interrupted without replaying model work; a
-different live process retains authority. Older journals without a process
+different live process retains authority.
+
+Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. A
+run's own process always may. A restart is a new process, so a later one may
+too once the run is no longer running or stopping and the process that started
+it is gone: the operator and coordinating thread are the same, and nobody else
+could record on it. That covers reviewing candidates, finishing the run and
+reconciling a Harness source. A run that ended as interrupted or exhausted,
+as every live run does when PwrAgent quits, can be completed once a candidate
+is accepted; that appends the outcome and stops nothing. Work that needs a
+live run (assigning, revision delivery, stopping workers or a bridge) stays
+with the process that holds it. A live run of a dead process is not held by
+anyone until recovery at the next launch retires it. Snapshots, change pages
+and the run list report `writable` by the same function, reading liveness once
+per distinct owner. A review plus a finish on a retained run is two commits
+(41,200 observed WAL bytes), on operator action only: about 0.82 MB/day at
+twenty a day. Older journals without a process
 start time cannot prove live ownership and become interrupted. Revision
 queue receipts identify exactly which pending sends a
 run may cancel. An unknown cancellation outcome keeps the run stopping.

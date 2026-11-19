@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchHarnessEffectiveState, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,
@@ -72,7 +72,8 @@ export function researchRunPhase(run: ResearchPhaseInput): ResearchPhase {
  */
 function researchHarnessPhase(run: Omit<ResearchPhaseInput, "harness">, harness: NonNullable<ResearchPhaseInput["harness"]>): ResearchPhase {
   if (run.status === "completed") return { label: "Completed", tone: "done" };
-  switch (harness.state) {
+  // A run its dead owner left pending or running is not running: its outcome is unknown.
+  switch (researchHarnessEffectiveState(run.status, harness)) {
     case "unknown": return { label: "Outcome unknown", tone: "attention" };
     case "reconciling": return { label: "Reconciling", tone: "live" };
     case "stopping": return run.status === "stopping" ? { label: "Stopping", tone: "live" } : { label: "Stop unconfirmed", tone: "attention" };
@@ -99,7 +100,14 @@ export function researchHarnessOutcome(run: Pick<ResearchRunView, "status" | "ha
   const harness = run.harness;
   if (!harness || run.status === "completed") return undefined;
   const unresolvedStop = harness.state === "stopping" && run.status !== "stopping";
-  if (harness.state !== "unknown" && !unresolvedStop) return undefined;
+  const ownerLost = harness.state !== "unknown" && researchHarnessEffectiveState(run.status, harness) === "unknown";
+  if (harness.state !== "unknown" && !unresolvedStop) {
+    // The owner ended while this run was pending or running, so its last note describes work nobody is doing.
+    if (!ownerLost) return undefined;
+    return harness.mode === "import"
+      ? { title: "This import ended before it was complete.", body: "PwrAgent closed while it was reading the source. Source work was never owned by this import." }
+      : { title: "This run's outcome is unknown.", body: "PwrAgent closed while this swarm was running. Source work may still be running. PwrAgent will not resend the start or the stop." };
+  }
   // Stopping an import sends no cancellation, so only an execution can have an unconfirmed stop.
   const title = harness.mode === "import" ? "This import ended before it was complete."
     : unresolvedStop || harness.unresolved === "cancel" || run.status === "stopping" ? "The bridge did not confirm the stop." : "This run's outcome is unknown.";
@@ -117,6 +125,13 @@ export function researchTimeLeft(run: Pick<ResearchRun, "status" | "deadlineAt">
   const minutes = Math.floor(remaining / 60_000);
   if (minutes < 60) return `${minutes} min left · ends ${at}`;
   return `${Math.floor(minutes / 60)} h ${minutes % 60} min left · ends ${at}`;
+}
+
+/** When a run in a list happened: the time today, otherwise the date. */
+export function formatRunWhen(at: number, now: number): string {
+  const then = new Date(at), today = new Date(now);
+  const sameDay = then.getFullYear() === today.getFullYear() && then.getMonth() === today.getMonth() && then.getDate() === today.getDate();
+  return sameDay ? formatClock(at) : then.toLocaleDateString([], { month: "short", day: "numeric", ...(then.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }) });
 }
 
 export function formatClock(at: number): string {

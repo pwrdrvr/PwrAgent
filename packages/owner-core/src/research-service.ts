@@ -7,7 +7,9 @@ import {
   type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork, type ResearchPendingRequest,
   type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage, type ResearchChange, type ResearchChanges,
   type ResearchChangesCursor, type ResearchBoardRange, type ResearchBoardPage,
+  RESEARCH_PROFILE_RUNS_PAGE, type ResearchProfileRunsQuery, type ResearchProfileRunsPage, type ResearchProfileRun,
 } from "@pwragent/shared/research";
+import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy, type ResearchOwnerIdentity } from "./research-ownership";
 
 /** How many of a thread's runs the panel lists. Each run's items are read by delta. */
 export const RESEARCH_SNAPSHOT_RUN_LIMIT = 50;
@@ -89,7 +91,32 @@ export class ResearchService {
     const thread = { backend: request.backend, threadId: request.threadId };
     const runs = this.storage.runSummaries(thread, RESEARCH_SNAPSHOT_RUN_LIMIT, request.runId);
     const pending = this.pendingRequest(thread);
-    return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id), ...(pending ? { pending } : {}) };
+    return { runs, writableRunIds: this.heldRunIds(runs), ...(pending ? { pending } : {}) };
+  }
+
+  /**
+   * One page of every run on this profile, for the local operator's Research window. It names runs across
+   * threads, so only the owning instance's own windows may ask. Each run's contents are still read as its
+   * coordinating thread, through the member-checked reads below.
+   */
+  profileRuns(query: ResearchProfileRunsQuery): Omit<ResearchProfileRunsPage, "runs"> & { runs: Array<Omit<ResearchProfileRun, "thread">> } {
+    const page = this.storage.profileRuns(query, RESEARCH_PROFILE_RUNS_PAGE + 1);
+    const runs = page.runs.slice(0, RESEARCH_PROFILE_RUNS_PAGE);
+    const last = runs.at(-1);
+    return { runs, counts: page.counts, writableRunIds: this.heldRunIds(runs),
+      ...(last && page.runs.length > RESEARCH_PROFILE_RUNS_PAGE ? { nextCursor: { attention: last.attention, createdAt: last.createdAt, id: last.id } } : {}) };
+  }
+
+  /** The runs this process may record on. Liveness is read once per distinct owner, not once per run. */
+  private heldRunIds(runs: ReadonlyArray<Pick<ResearchRunHeader, "id" | "status" | "ownerId" | "ownerPid" | "ownerStartedAt">>): string[] {
+    if (this.closed) return [];
+    const alive = new Map<string, boolean>();
+    const isOwnerAlive = (owner: ResearchOwnerIdentity) => {
+      const key = `${owner.ownerId}\n${owner.ownerPid}\n${owner.ownerStartedAt ?? ""}`;
+      if (!alive.has(key)) alive.set(key, this.ports.isOwnerAlive(owner));
+      return alive.get(key)!;
+    };
+    return runs.filter((run) => researchRunHeldBy(run, this.ports.ownerId, isOwnerAlive)).map((run) => run.id);
   }
 
   /** The run's state and the items changed after `sinceRevision`. Members only; no writes. */
@@ -97,7 +124,7 @@ export class ResearchService {
     const header = this.accessibleHeader(id, actor);
     const page = this.storage.changes(id, sinceRevision, after);
     if (!page) throw new Error("Research run not found");
-    return { ...page, writable: !this.closed && header.ownerId === this.ports.ownerId };
+    return { ...page, writable: this.heldRunIds([header]).length > 0 };
   }
 
   /** One page of a run's journal, newest first. Members only; no writes. */
@@ -419,7 +446,7 @@ export class ResearchService {
     const run = this.memberHeader(id, actor);
     if (run.harness && !["review", "stop", "finish"].includes(command.action)) throw new Error("Harness records are immutable source observations");
     if (run.harness && command.action === "review" && command.decision === "revision_requested") throw new Error("Bridge revision delivery is unavailable; record rejection or acceptance locally");
-    if (run.ownerId !== this.ports.ownerId) throw new Error("This run belongs to another process. Open its worker threads to inspect interrupted work.");
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
     const signature = JSON.stringify(command);
     const duplicate = this.storage.findCommand(id, requestId);
     if (duplicate) {
@@ -528,10 +555,19 @@ export class ResearchService {
       return await this.ports.stopHarness(id, actor, outcome, reason);
     }
     if (actor.kind !== "operator" && !sameResearchThread(actor, run.coordinator)) throw new Error("Only the coordinator or operator may stop a run");
-    if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
     const pending = this.stops.get(id);
     if (pending) return pending;
-    if (!["running", "stopping"].includes(run.status)) return run;
+    if (!["running", "stopping"].includes(run.status)) {
+      // A run that ended without being finished, as every live run does when PwrAgent quits, can still be
+      // completed once a candidate is accepted. Nothing is running, so this records the outcome and stops nothing.
+      if (outcome === "completed" && ["interrupted", "exhausted"].includes(run.status)) {
+        if (!this.storage.hasSubmission(id, "accepted")) throw new Error("Accept a submission before completing the run");
+        this.append(run, requestId, actor, { type: "status", status: "completed", reason }, signature);
+        return this.requireHeader(id);
+      }
+      return run;
+    }
     this.append(run, requestId, actor, { type: "status", status: "stopping", reason: `${outcome}: ${reason}` }, signature);
     this.deadlines.get(id)?.();
     this.deadlines.delete(id);

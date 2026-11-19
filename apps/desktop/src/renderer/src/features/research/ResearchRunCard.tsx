@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { RESEARCH_HARNESS_RECONCILABLE } from "@pwragent/shared";
+import { RESEARCH_HARNESS_RECONCILABLE, researchHarnessEffectiveState } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { formatClock, isResearchRunLive, plural, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
@@ -12,11 +12,15 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
   const counts = researchRunCounts(run);
   const live = isResearchRunLive(run);
   const harness = run.harness;
-  const controls = coordinator && writable && (live || (run.status !== "completed" && harness && ["ended", "imported"].includes(harness.state)));
+  // A run that ended without being finished can still be completed once a candidate is accepted:
+  // a settled Harness run, or a PwrAgent run that was interrupted (as every live run is when the app quits).
+  const finishableRetired = harness ? run.status !== "completed" && ["ended", "imported"].includes(harness.state)
+    : ["interrupted", "exhausted"].includes(run.status) && run.accepted > 0;
+  const controls = coordinator && writable && (live || finishableRetired);
   const finishBlocker = researchFinishBlocker(run);
   const outcome = researchHarnessOutcome(run);
   // The owner refuses a reconcile it cannot do; offering it only where it can succeed keeps the action honest.
-  const reconcile = onReconcile && coordinator && harness && harness.source !== "discovery" && RESEARCH_HARNESS_RECONCILABLE.includes(harness.state)
+  const reconcile = onReconcile && coordinator && harness && harness.source !== "discovery" && RESEARCH_HARNESS_RECONCILABLE.includes(researchHarnessEffectiveState(run.status, harness))
     && (!live || writable) && run.status !== "completed" ? onReconcile : undefined;
   return <section className="research-card" aria-label="Research run summary">
     <div className="research-card__top">
@@ -38,8 +42,9 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       {reconcile && <span className="research-actions"><button type="button" className="research-button research-button--primary" disabled={busy} onClick={reconcile}>Reconcile from source</button></span>}
     </div>}
     {harness && !outcome && harness.state === "reconciling" && <p className="research-muted" role="status">{harness.note}</p>}
-    {harness && !outcome && reconcile && harness.state !== "reconciling" && <span className="research-actions">
-      <button type="button" className="research-button" disabled={busy} onClick={reconcile}>{harness.state === "imported" ? "Import newer records" : "Reconcile from source"}</button>
+    {harness && !outcome && reconcile && <span className="research-actions">
+      {/* A reconcile its owner abandoned stays "reconciling"; the owner refuses a second one only while the first still runs. */}
+      <button type="button" className="research-button" disabled={busy} onClick={reconcile}>{harness.state === "imported" ? "Import newer records" : harness.state === "reconciling" ? "Reconcile again" : "Reconcile from source"}</button>
     </span>}
     {harness && <details className="research-details">
       <summary>Source details</summary>
@@ -56,8 +61,7 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       </dl>
     </details>}
     {!harness && run.reason && !live && <p className="research-muted">{run.reason}</p>}
-    {!harness && !writable && (live || run.status === "interrupted") && <p className="research-muted">This run’s owner is not running in this window’s process. Its evidence is kept. Open the worker threads to inspect them before you start a new run.</p>}
-    {harness && !writable && live && !outcome && <p className="research-muted">This run’s owner is another PwrAgent process. Its records are kept here as they arrive.</p>}
+    {!writable && run.status !== "completed" && !outcome && <p className="research-muted">Another running PwrAgent process owns this run. Its records are kept here as they arrive; review and finish it from that process.</p>}
     {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
     {controls && !confirmingStop && <div className="research-card__actions">
       {finishBlocker && <span className="research-muted">{finishBlocker}</span>}

@@ -28,7 +28,7 @@ it.skipIf(!configPath)("accepts a deployed Harness through the installed adapter
   const errors: unknown[] = [];
   let service: ResearchHarnessService;
   service = new ResearchHarnessService(store, {
-    ownerId: "explicit-harness-acceptance", ownerPid: process.pid, ownerStartedAt: Date.now(), changed: () => {}, onError: (error) => errors.push(error),
+    ownerId: "explicit-harness-acceptance", ownerPid: process.pid, ownerStartedAt: Date.now(), isOwnerAlive: () => true, changed: () => {}, onError: (error) => errors.push(error),
     open: (cwd, id) => {
       let modelBusy = false;
       const connection = openResearchHarnessProcess(config.bridge, cwd, async (method, params, signal) => {

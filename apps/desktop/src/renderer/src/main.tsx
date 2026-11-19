@@ -155,6 +155,9 @@ const FederationActivityWindow = lazy(async () => ({
 const UsageActivityWindow = lazy(async () => ({
   default: (await import("./features/federation-activity/UsageActivityWindow")).UsageActivityWindow,
 }));
+const ResearchWindow = lazy(async () => ({
+  default: (await import("./features/research/ResearchWindow")).ResearchWindow,
+}));
 const MessagingActivityWindow = lazy(async () => ({
   default: (await import("./features/messaging-activity/MessagingActivityWindow"))
     .MessagingActivityWindow,
@@ -203,6 +206,11 @@ const routes: Array<{
     // `usage-activity?provider=anthropic` opens on that provider's limits.
     match: (hash) => hash.split("?")[0] === "usage-activity",
     render: () => <UsageActivityWindow />,
+  },
+  {
+    // `research?run=<id>` opens with that run selected.
+    match: (hash) => hash.split("?")[0] === "research",
+    render: () => <ResearchWindow />,
   },
   {
     match: (hash) => hash === "messaging-activity",

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
@@ -10,9 +10,13 @@ const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> 
   open: "Release / reopen", claimed: "Claim", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancel item",
 };
 
-export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, onBack, onOpenItem }: {
+export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, onBack, onOpenItem, backLabel, children }: {
   api: DesktopApi; thread: ResearchThread; run: ResearchRunView; itemId: string; writable: boolean; coordinator: boolean;
   onBack: () => void; onOpenItem: (itemId: string) => void;
+  /** What leaving this detail is called where it does not replace a result list. */
+  backLabel?: string;
+  /** Drawn after the item's evidence: the Research window puts a candidate's decision here. */
+  children?: ReactNode;
 }) {
   const id = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -79,7 +83,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
   const source = record && "itemId" in record && record.itemId ? run.items.get(record.itemId) : undefined;
   const transitions = item ? RESEARCH_WORK_TRANSITIONS[item.work.state].filter((value) => coordinator || !["open", "cancelled"].includes(value)) as ResearchWorkCommand["state"][] : [];
   return <article className="research-detail" aria-labelledby={`${id}-heading`}>
-    <button type="button" className="research-link research-detail__back" onClick={onBack}>← Back to results</button>
+    <button type="button" className="research-link research-detail__back" onClick={onBack}>{backLabel ?? "← Back to results"}</button>
     <h4 id={`${id}-heading`} ref={headingRef} tabIndex={-1} className="research-detail__heading">
       {item ? item.type === "approach" ? item.record.title : item.type === "finding" ? `${researchLabel(item.record.kind)} from ${approachTitle(run, item.approachId)}` : `Candidate from ${approachTitle(run, item.approachId)}` : "Research item"}
     </h4>
@@ -108,6 +112,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
           {item.work.assignee && <ResearchThreadButton thread={item.work.assignee} title="Open child thread" />}
         </span>
       </div>}
+      {children}
       {notice && <p role="status" className="research-muted">{notice}</p>}
       {error && <p role="alert" className="research-error">{error}</p>}
       {workActive && api.updateResearchItem && transitions.length > 0 && <div className="research-review-form">
