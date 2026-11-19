@@ -5791,7 +5791,7 @@ export class DesktopBackendRegistry {
         // ACP has no instruction field. The client sends these ahead of the
         // prompt when the agent session has not been sent this text.
         agentInstructions: providerDeliveredAgentInstructions(overlay?.agent) ?? "",
-        readAgentMemory: () => this.readAgentMemoryContext(params),
+        ...(overlay?.agent ? { readAgentMemory: () => this.readAgentMemoryContext(params) } : {}),
       });
       this.invalidateThreadListCache(params.backend);
       return {
