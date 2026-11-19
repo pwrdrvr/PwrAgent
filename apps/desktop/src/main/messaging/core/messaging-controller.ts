@@ -1,7 +1,7 @@
 import { MessagingThreadSettings } from "./messaging-thread-settings";
 import { MessagingOutboundDelivery, type MessagingControllerDeliveryBudgetEvent, type MessagingReplyReceiptRequest } from "./messaging-outbound-delivery";
 import type { MessagingDeliveryRecord, MessagingReplyReceipt, MessagingReplyReceiptReason } from "./messaging-migrations";
-import { OPEN_REPLY_RECEIPT_PREFIX, claimReplyReceipt, decideOpenReplyReceipt, releaseReplyReceipt } from "./messaging-reply-receipts";
+import { OPEN_REPLY_RECEIPT_PREFIX, claimReplyReceipt, decideOpenReplyReceipt, isAcceptedDeliveryOutcome, releaseReplyReceipt } from "./messaging-reply-receipts";
 import { MessagingAssistantStreams } from "./messaging-assistant-streams";
 import { MessagingPendingRequestWorkflow } from "./messaging-pending-request-workflow";
 import type { MessagingPendingRequestHost } from "./messaging-pending-request-context";
@@ -196,6 +196,8 @@ export type MessagingControllerOptions = {
 export type MessagingReceiptRecoverySummary = {
   open: number;
   resent: number;
+  /** Resends the provider did not accept; their receipts settled again. */
+  unsent: number;
   flagged: number;
   withdrawn: number;
 };
@@ -1851,7 +1853,7 @@ export class MessagingController {
    * or expired one is flagged for the operator.
    */
   async recoverDeliveryReceipts(): Promise<MessagingReceiptRecoverySummary> {
-    const summary: MessagingReceiptRecoverySummary = { open: 0, resent: 0, flagged: 0, withdrawn: 0 };
+    const summary: MessagingReceiptRecoverySummary = { open: 0, resent: 0, unsent: 0, flagged: 0, withdrawn: 0 };
     const store = this.options.store;
     if (!store.listDeliveriesWithIdPrefix || !store.settleDelivery || this.disposed) {
       return summary;
@@ -1902,7 +1904,7 @@ export class MessagingController {
     row: MessagingDeliveryRecord & { bindingId: string },
     receipt: MessagingReplyReceipt,
     decision: { action: "resend" } | { action: "flag"; reason: MessagingReplyReceiptReason },
-  ): Promise<"resent" | "flagged" | "withdrawn"> {
+  ): Promise<"resent" | "unsent" | "flagged" | "withdrawn"> {
     const settle = async (
       state: "unknown" | "withdrawn",
       reason: MessagingReplyReceiptReason,
@@ -1962,7 +1964,7 @@ export class MessagingController {
       if (delivery.surface) {
         await this.options.store.upsertPendingIntent({ ...pendingIntent, surface: delivery.surface });
       }
-      return "resent";
+      return isAcceptedDeliveryOutcome(delivery.outcome) ? "resent" : "unsent";
     }
     const text = receipt.turnId && receipt.itemId
       ? (await this.options.backend.readThreadAssistantReply?.({
@@ -1976,7 +1978,27 @@ export class MessagingController {
     if (!text) {
       return await settle("unknown", "reply-unavailable");
     }
-    await this.deliver(
+    // The images the original reply carried, found again by turn and item.
+    let images: MessagingImagePart[] = [];
+    try {
+      images = selectAssistantImagesForCapability(
+        await this.options.backend.resolveAssistantMessageImages?.({
+          backend: binding.backend,
+          federationTarget: federationTargetForBinding(binding),
+          itemId: receipt.itemId,
+          text,
+          threadId: binding.threadId,
+          turnId: receipt.turnId,
+        }) ?? [],
+        this.capabilityProfile,
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging delivery receipt image resolution failed", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+    }
+    const delivery = await this.deliver(
       {
         id: this.newIntentId("assistant-message"),
         kind: "message",
@@ -1984,14 +2006,14 @@ export class MessagingController {
         createdAt: this.now(),
         role: "assistant",
         attribution: await this.responseAttributionForBinding(binding),
-        parts: [{ type: "text", text, markdown: "markdown" }],
+        parts: [{ type: "text", text, markdown: "markdown" }, ...images],
       },
       binding,
       undefined,
       undefined,
       request,
     );
-    return "resent";
+    return isAcceptedDeliveryOutcome(delivery.outcome) ? "resent" : "unsent";
   }
 
   /**
@@ -2044,7 +2066,7 @@ export class MessagingController {
     // A peer's thread has its own owner; the activity log row covers it here.
     if (binding?.federatedThread || !this.options.raiseDeliveryCheck) return;
     await this.options.raiseDeliveryCheck({
-      backend: binding?.backend ?? (receipt.backend as AppServerBackendKind),
+      backend: binding?.backend ?? receipt.backend,
       threadId: receipt.threadId,
       key: `messaging-delivery-check:${bindingId}`,
       title: "Check that a reply reached its messaging conversation",

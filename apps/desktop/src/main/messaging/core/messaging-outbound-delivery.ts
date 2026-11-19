@@ -212,6 +212,14 @@ export class MessagingOutboundDelivery {
     const receipt = binding && receiptRequest
       ? await this.openReceipt(intent, binding, receiptRequest)
       : undefined;
+    if (receipt === "in-flight") {
+      // Another send owns this reply; a second one could only duplicate it.
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.context.now(),
+        outcome: "discarded",
+      };
+    }
     if (!receipt) {
       return await this.deliverWithReceipt(intent, binding, event, guard, undefined);
     }
@@ -250,12 +258,12 @@ export class MessagingOutboundDelivery {
     intent: MessagingSurfaceIntent,
     binding: MessagingBindingRecord,
     request: MessagingReplyReceiptRequest,
-  ): Promise<OpenReplyReceipt | undefined> {
+  ): Promise<OpenReplyReceipt | "in-flight" | undefined> {
     if (!this.options.store.settleDelivery) return undefined;
     const openId = openReplyReceiptId(request.identity);
     if (!request.claimed && !claimReplyReceipt(openId)) {
       this.context.logger.debug?.("messaging reply receipt already in flight", { openId });
-      return undefined;
+      return "in-flight";
     }
     const { bindingId: _bindingId, ...identity } = request.identity;
     const now = this.context.now();
@@ -677,7 +685,9 @@ export class MessagingOutboundDelivery {
       if (receipt) {
         // The settle replaces the delivery row every send writes, so a
         // receipt costs one commit more than an unmarked send: the marker.
-        if (result.rateLimit && !isAcceptedDeliveryOutcome(result.outcome)) {
+        // Only a retryable rate limit proves nothing visible was posted; a
+        // non-retryable one may follow a partly sent message.
+        if (result.rateLimit?.retryable === true && !isAcceptedDeliveryOutcome(result.outcome)) {
           await this.settleReceipt(receipt, "owed", "rate-limited");
         } else if (isAcceptedDeliveryOutcome(result.outcome)) {
           await this.settleReceipt(receipt, "sent", undefined, result);

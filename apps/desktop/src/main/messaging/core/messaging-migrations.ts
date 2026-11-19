@@ -12,6 +12,7 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
+import type { AppServerBackendKind } from "@pwragent/shared";
 import {
   MESSAGING_TOOL_UPDATE_MODES,
   normalizeMessagingBindingTargetKind,
@@ -43,7 +44,7 @@ export type MessagingDeliveryRecord = MessagingDeliveryResult & {
 export type MessagingReplyReceipt = {
   kind: "assistant-final" | "approval";
   state: MessagingReplyReceiptState;
-  backend: string;
+  backend: AppServerBackendKind;
   threadId: string;
   turnId?: string;
   /** The final assistant item, for `assistant-final`. */

@@ -32,8 +32,10 @@ const FAULTS = [
   "crash-before-send",
   // After the marker: the adapter is stopped and nothing replaced it.
   "adapter-stopped",
-  // During the send: the provider refuses or errs, landing or not.
+  // During the send: the provider refuses or errs, landing or not. Only a
+  // retryable rate limit proves nothing visible was posted.
   "rate-limited",
+  "rate-limited-not-retryable",
   "send-failed",
   "send-throws",
   // After the send: the process dies before the provider answers.
@@ -142,10 +144,15 @@ function boot(w: World, fault: { current?: Step; crashed?: () => void }, now?: (
         fault.crashed?.();
         return await new Promise<never>(() => {});
       case "rate-limited":
+      case "rate-limited-not-retryable": {
+        const retryable = step.fault === "rate-limited";
+        // A non-retryable limit may follow a partly posted message.
+        if (!retryable && step.landed) w.chat.push(text);
         return {
           channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture rate limit",
-          rateLimit: { scope: { id: "fixture-scope", platform: "telegram", kind: "dm" }, retryAfterMs: 1_000, retryable: false },
+          rateLimit: { scope: { id: "fixture-scope", platform: "telegram", kind: "dm" }, retryAfterMs: 1_000, retryable },
         };
+      }
       case "send-failed":
         if (step.landed) w.chat.push(text);
         return { channel: "telegram", deliveredAt: 1, outcome: "failed", errorMessage: "Fixture send failure" };
@@ -307,7 +314,7 @@ describe("final reply delivery model", () => {
       });
     }
     const identity = {
-      kind: "approval" as const, backend: "codex", bindingId: binding.id, threadId: THREAD_ID, pendingIntentId: "pending-approval",
+      kind: "approval" as const, backend: "codex" as const, bindingId: binding.id, threadId: THREAD_ID, pendingIntentId: "pending-approval",
     };
     const { bindingId: _bindingId, ...fields } = identity;
     await process.store.recordDelivery(receipts.openReplyReceiptRecord({
