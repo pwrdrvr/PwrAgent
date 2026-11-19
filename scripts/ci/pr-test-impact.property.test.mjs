@@ -193,7 +193,7 @@ it("widens for an aliased createRequire loader with a computed specifier", async
 it("uses Playwright's collected specs and widens when registration is absent or collection fails", async () => {
   await temporaryTree(async (root, write) => {
     const config = "apps/desktop/playwright.config.cjs";
-    const playwright = createRequire(new URL("../../apps/desktop/package.json", import.meta.url)).resolve("@playwright/test");
+    const playwright = createRequire(path.resolve("apps/desktop/package.json")).resolve("@playwright/test");
     const other = "apps/desktop/e2e/other.spec.ts";
     const register = `const { test } = require(${JSON.stringify(playwright)}); test("collected", () => {});`;
     write(config, 'module.exports = { testDir: "./e2e" };');

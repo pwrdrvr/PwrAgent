@@ -102,7 +102,7 @@ export async function planImpact(files, { fallback, unit, e2eFiles = listE2eFile
 }
 
 export function listE2eFiles(root = process.cwd(), config = "apps/desktop/playwright.config.ts") {
-  const cli = createRequire(new URL("../../apps/desktop/package.json", import.meta.url)).resolve("@playwright/test/cli");
+  const cli = createRequire(path.resolve("apps/desktop/package.json")).resolve("@playwright/test/cli");
   const configFile = path.resolve(root, config);
   const directory = mkdtempSync(path.join(os.tmpdir(), "pr-impact-playwright-"));
   const output = path.join(directory, "collected.json");
