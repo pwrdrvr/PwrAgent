@@ -123,8 +123,11 @@ compacted result. So the client acts only on what an agent reports live.
 - A `usage_update` whose `used` is below half of the last one the session
   reported. Kimi, Qwen and Gemini each report the current context fill there,
   and the fill only grows between compactions. Qwen sends no fill for a
-  sub-agent. The last fill is kept in memory, so a compaction in the first
-  turn after an app restart goes unseen.
+  sub-agent. The last fill is kept in memory for the agent session that
+  reported it, so a thread bound to a new agent session starts a new
+  baseline, and a compaction in the first turn after an app restart goes
+  unseen. Pruning old tool results (Qwen's microcompaction, Gemini's output
+  masking) can also halve the fill; that costs one redundant block.
 
 On either signal the client clears `agentInstructionsDigest`, so the next
 prompt carries the block. If the compaction ran inside the prompt that

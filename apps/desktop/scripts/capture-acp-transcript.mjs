@@ -43,6 +43,10 @@ const PROMPT = flag("prompt", "tell me your favorite breakfast cereal");
 const THEN_PROMPTS = process.argv.flatMap((arg, index) => (
   arg === "--then-prompt" ? [process.argv[index + 1]] : []
 ));
+if (THEN_PROMPTS.some((text) => text === undefined)) {
+  process.stderr.write("--then-prompt needs the prompt text after it\n");
+  process.exit(2);
+}
 const QUIET_MS = Number(flag("quiet-ms", "6000"));
 const HARD_TIMEOUT_MS = Number(flag("timeout-ms", "180000"));
 const ALLOW_TOOLS = process.argv.includes("--allow-tools");

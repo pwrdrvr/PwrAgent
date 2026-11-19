@@ -294,8 +294,15 @@ export class AcpAgentClient {
    * until session/close, so `closeIdleSessions` releases quiet ones.
    */
   private readonly sessionLastActivityAt = new Map<string, number>();
-  /** The context fill each session last reported live in `usage_update`. */
-  private readonly sessionContextFill = new Map<string, number>();
+  /**
+   * The context fill each session last reported live in `usage_update`, with
+   * the agent session that reported it: a thread bound to a new agent session
+   * starts a new baseline.
+   */
+  private readonly sessionContextFill = new Map<
+    string,
+    { protocolSessionId: string; used: number }
+  >();
   /** Permission requests the agent is waiting on, by app session id. */
   private readonly pendingPermissionRequests = new Map<string, number>();
   /**
@@ -1669,13 +1676,11 @@ export class AcpAgentClient {
       !fromSessionLoad
       && (
         updateKind === "auto_compact_completed"
-        || this.contextFillHalved(sessionId, update, updateKind)
+        || this.contextFillHalved(sessionId, protocolSessionId, update, updateKind)
       )
     ) {
       if (activeTurn) activeTurn.compacted = true;
-      if (this.options.store.getSession(this.options.backendId, sessionId)?.agentInstructionsDigest) {
-        this.recordDeliveredAgentInstructions(sessionId, undefined);
-      }
+      this.recordDeliveredAgentInstructions(sessionId, undefined);
     }
     if (isProviderTranscriptReplayUpdate(update)) {
       if (loadState) {
@@ -2328,6 +2333,7 @@ export class AcpAgentClient {
    */
   private contextFillHalved(
     sessionId: string,
+    protocolSessionId: string,
     update: Record<string, unknown>,
     updateKind: string | undefined,
   ): boolean {
@@ -2335,17 +2341,21 @@ export class AcpAgentClient {
     const used = update.used;
     if (typeof used !== "number" || !Number.isFinite(used)) return false;
     const previous = this.sessionContextFill.get(sessionId);
-    this.sessionContextFill.set(sessionId, used);
-    return previous !== undefined && used < previous / 2;
+    this.sessionContextFill.set(sessionId, { protocolSessionId, used });
+    return previous?.protocolSessionId === protocolSessionId
+      && used < previous.used / 2;
   }
 
-  /** One write per delivered block: the first delivery and each edit. */
+  /**
+   * One write per delivered block (the first delivery and each edit) and per
+   * compaction that clears the record. An unchanged record is not written.
+   */
   private recordDeliveredAgentInstructions(
     sessionId: string,
     digest: string | undefined,
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata) {
+    if (!metadata || metadata.agentInstructionsDigest === digest) {
       return;
     }
     const { agentInstructionsDigest: _previous, ...rest } = metadata;

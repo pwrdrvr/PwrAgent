@@ -572,9 +572,55 @@ describe("the ACP instruction block", () => {
     ]]] });
   }, 60_000);
 
+  it("is not sent twice when a thread moves to a new agent session with a smaller context", async () => {
+    const db = openInMemoryStateDb();
+    const store = new AcpSessionStore(db);
+    const transport = new FakeAcpAgentTransport({
+      initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
+    });
+    const request = transport.request.bind(transport);
+    let agentSessions = 0;
+    const fills = [150_000, 20_000, 25_000];
+    vi.spyOn(transport, "request").mockImplementation(async (method, params, timeoutMs) => {
+      if (method === "session/new") {
+        transport.requests.push({ method, params });
+        agentSessions += 1;
+        return { sessionId: `agent-${agentSessions}` };
+      }
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params });
+        transport.emitSessionUpdate(String(params!.sessionId), { sessionUpdate: "usage_update", used: fills.shift(), size: 1_000_000 });
+        return { stopReason: "end_turn" };
+      }
+      return await request(method, params, timeoutMs);
+    });
+    const client = new AcpAgentClient({ backendId: ACP, store, transport });
+    try {
+      await client.initialize();
+      const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
+      const blocks: boolean[] = [];
+      const turn = async () => {
+        client.startPrompt({ sessionId, prompt: "operator text", agentInstructions: "alpha" });
+        await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
+        blocks.push(JSON.stringify(transport.requests.at(-1)!.params).includes(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER));
+      };
+      await turn();
+      // The thread is bound to a new agent session, which starts small.
+      await client.startSession({ sessionId, cwd: "/repo", executionMode: "default" });
+      await turn();
+      await turn();
+      expect(blocks).toEqual([true, true, false]);
+    } finally {
+      await client.dispose();
+      db.close();
+    }
+  });
+
   it("costs one write per reported compaction, and none for a repeated report", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-    const db = openInMemoryStateDb();
+    const { dbPath, tempDir } = createTempStateDb("pwragent-agent-instructions-budget-");
+    roots.push(tempDir);
+    const db = StateDb.open(dbPath);
     const store = new AcpSessionStore(db);
     const transport = new FakeAcpAgentTransport({
       initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
@@ -606,7 +652,7 @@ describe("the ACP instruction block", () => {
         .map((request) => JSON.stringify(request.params)).at(-1)).toContain(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER);
       expectSqliteWriteBudget({
         budgetFile: "acp-agent-instruction-write-budgets.json",
-        note: "Two reports of one Grok compaction: the first clears the session's delivery record, the second finds nothing to clear; one commit (~16 KB WAL) per compaction, ~0.16 MB/day at 10 compactions a day",
+        note: "Two reports of one Grok compaction: the first clears the session's delivery record, the second finds nothing to clear; one commit (~12 KB WAL) per compaction, ~0.12 MB/day at 10 compactions a day",
         scenario: "acp-compaction-instruction-redelivery",
         writes,
       });
