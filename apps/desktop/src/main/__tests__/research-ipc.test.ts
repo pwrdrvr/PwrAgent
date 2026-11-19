@@ -30,3 +30,19 @@ it("a stale renderer IPC handler consults the live default-off research gate bef
     else { expect(call).toThrow("Research runs are disabled"); expect(control.prepare).toHaveBeenCalledTimes(calls); }
   }
 });
+
+it("the research window accepts a local thread of every backend and refuses anything that is not a backend", () => {
+  registerResearchIpcHandlers();
+  const handler = control.handlers.get(RESEARCH_PREPARE_CHANNEL)!;
+  control.enabled = true;
+  for (const backend of ["codex", "claude", "acp:kimi", "acp:grok"]) {
+    control.prepare.mockClear();
+    expect(handler({ sender: {} }, { backend, threadId: "parent" })).toEqual({ intentId: "operator-request" });
+    expect(control.prepare).toHaveBeenCalledOnce();
+  }
+  for (const backend of ["", "Codex", "acp:", "openai", 7, undefined]) {
+    control.prepare.mockClear();
+    expect(() => handler({ sender: {} }, { backend, threadId: "parent" })).toThrow("Choose a local thread");
+    expect(control.prepare).not.toHaveBeenCalled();
+  }
+});

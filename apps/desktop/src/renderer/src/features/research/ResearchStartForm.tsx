@@ -32,7 +32,7 @@ export function ResearchStartForm({ firstRun, busy, disabled, replacesPending, o
     if (await onSubmit({ objective: objective.trim(), workers, ...(minutes !== undefined ? { minutes } : {}), workspaceMode })) setObjective("");
   }
   return <form onSubmit={(event) => { void submit(event); }} className="research-form" aria-label="New research run">
-    {firstRun && <p className="research-intro">Split one objective across several Codex workers. They share findings here. This thread coordinates: it proposes approaches, reviews candidates and finishes the run.</p>}
+    {firstRun && <p className="research-intro">Split one objective across several workers. They share findings here. This thread coordinates: it proposes approaches, reviews candidates and finishes the run.</p>}
     <label>Objective<textarea value={objective} onChange={(event) => setObjective(event.target.value)} maxLength={8000} rows={3} required placeholder="What should the workers find out?" /></label>
     <label>Workers at once<input type="number" min={1} max={RESEARCH_MAX_WORKERS} required value={workers} onChange={(event) => setWorkers(Number(event.target.value))} /></label>
     <div className="research-field">

@@ -61,6 +61,16 @@ function apiFor(data: OwnerState = snapshot()) {
 }
 
 describe("Research panel", () => {
+  it("reads a local thread's runs as that thread, on every backend", async () => {
+    for (const source of ["codex", "claude", "acp:kimi"] as const) {
+      const { api, mocks } = apiFor();
+      render(<ResearchPanel desktopApi={api} thread={{ ...thread, source }} />);
+      await waitFor(() => expect(mocks.researchSnapshot).toHaveBeenCalledWith({ backend: source, threadId: "parent" }));
+      expect(screen.queryByText(/available in local Codex threads/)).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
   it("searches compact pages, opens one item in place and uses its version for progress", async () => {
     const { api, mocks } = apiFor(snapshot(15));
     render(<ResearchPanel desktopApi={api} thread={thread} />);

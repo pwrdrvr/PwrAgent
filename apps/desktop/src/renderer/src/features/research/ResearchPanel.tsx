@@ -28,7 +28,7 @@ type View = typeof VIEWS[number]["id"] | typeof DISCOVERY_VIEWS[number]["id"];
 
 export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
-  const identity = thread && !remote && thread.source === "codex" ? { backend: thread.source, threadId: thread.id } : undefined;
+  const identity = thread && !remote ? { backend: thread.source, threadId: thread.id } : undefined;
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const state = useResearchSync(api, identity, selectedRunId);
   const tabsId = useId();
@@ -110,7 +110,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     finally { setBusy(false); }
   }
   if (remote) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Open this thread on its owning instance to inspect its research runs.</p></section>;
-  if (!identity) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research runs are available in local Codex threads.</p></section>;
+  if (!identity) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Select a thread to see its research runs.</p></section>;
   if (!api?.researchSnapshot || !api.researchChanges) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
 
   const firstRun = Boolean(runs && runs.length === 0 && !pending);

@@ -8,7 +8,7 @@ The investigated upstream revision is
 ## Ownership and scope
 
 The local operator starts execution or imports an observed prefix from the
-Research panel on a local Codex coordinating thread. PwrAgent owns the request
+Research panel on a local coordinating thread of any backend. PwrAgent owns the request
 identity, journal, review records, workspace binding, settings, deadline and
 cancellation disposition. External members are source identities, never invented
 PwrAgent worker threads. Native assignments and revision delivery are disabled

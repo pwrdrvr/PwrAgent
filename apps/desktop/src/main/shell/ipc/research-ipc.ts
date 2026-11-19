@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, shell } from "electron";
-import { type ResearchThread, type ResearchSnapshotRequest, type ResearchChangesRequest, type ResearchUpdateReceipt, type ResearchEventsRequest, type ResearchUpdateRequest, type ResearchEvidenceRequest, type PrepareResearchRequest, type ResearchSearchRequest, type ResearchItemReadRequest, type ResearchWorkRequest } from "@pwragent/shared";
+import { isAppServerBackendKind, type ResearchThread, type ResearchSnapshotRequest, type ResearchChangesRequest, type ResearchUpdateReceipt, type ResearchEventsRequest, type ResearchUpdateRequest, type ResearchEvidenceRequest, type PrepareResearchRequest, type ResearchSearchRequest, type ResearchItemReadRequest, type ResearchWorkRequest } from "@pwragent/shared";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../../../shared/ipc";
 import { getResearchService } from "../../research/research-runtime";
 import { resolveHarnessEvidencePath, resolveResearchEvidencePath } from "../../research/research-evidence-path";
@@ -170,10 +170,10 @@ function profileRunsQuery(request: ResearchProfileRunsQuery | undefined): Resear
 }
 
 function requireResearchEnabled(): void {
-  if (getDesktopSettingsService().resolveResearchEnabled?.() !== true) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental with Codex Tool Discovery.");
+  if (getDesktopSettingsService().resolveResearchEnabled?.() !== true) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental.");
 }
 
 function validateThread(request: ResearchThread): void {
   requireResearchEnabled();
-  if (!request || request.backend !== "codex" || typeof request.threadId !== "string" || !request.threadId.trim()) throw new Error("Choose a local Codex thread");
+  if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) throw new Error("Choose a local thread");
 }
