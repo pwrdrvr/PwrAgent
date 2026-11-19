@@ -2230,11 +2230,11 @@ export type AppServerNotification =
           error: {
             message: string;
             /**
-             * A way forward the client can offer. `claudeSessionGone`:
-             * Claude Code deleted the session the thread resumes, and the
-             * thread can continue in a new one.
+             * A way forward the client can offer.
+             * `claudeSessionGone` resumes the thread in a new session.
+             * `claudeSignIn` means the owner can renew the account this turn used.
              */
-            recovery?: "claudeSessionGone";
+            recovery?: "claudeSessionGone" | "claudeSignIn";
             /** Set when the provider refused the response, not a transport fault. */
             block?: ProviderResponseBlock;
           };

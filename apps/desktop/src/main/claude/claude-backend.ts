@@ -313,6 +313,7 @@ function claudeAccountKey(info: AccountInfo): string {
 /** One desktop turn: what the operator sees start and end. */
 type RunningTurn = {
   turnId: string;
+  authSequence: number;
   /** Claude turn ids are UUIDv4 and carry no time, so report the start. */
   startedAt: number;
   entries: Map<string, AppServerThreadEntry>;
@@ -419,7 +420,7 @@ type LiveSession = {
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
   titleEnv?: NodeJS.ProcessEnv;
-  authAttempt?: number;
+  usesProviderAuth?: boolean;
   /** Shell commands and sub-agents this process runs. */
   tasks: ClaudeTaskTracker;
   /** The rows last published through `thread/backgroundTasks/updated`: commands only. */
@@ -539,10 +540,10 @@ function claudeSavedEntryHash(entry: AppServerThreadEntry): string {
 }
 
 /** A session read before the turn has no baseline yet; the caller sets it. */
-function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
+function claudeTurn(authSequence: number, session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
-    turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), savedEntries: new Map(), pendingSteers: new Set(),
+    turnId: randomUUID(), authSequence, startedAt: Date.now(), entries: new Map(), savedEntries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [],
     artifactCalls: new Map(), lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
@@ -605,8 +606,8 @@ export class ClaudeBackend {
    */
   private readonly carriedReleases = new Map<string, (() => void)[]>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
-  private authAttempt = 0;
-  private authObservation = { attempt: 0, expired: false };
+  private authSequence = 0;
+  private authObservation = { sequence: 0, expired: false };
   private signInOperation?: Promise<void>;
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
@@ -732,8 +733,9 @@ export class ClaudeBackend {
       executable, env, this.discoveryController.signal,
     ));
     if (this.closing) return;
+    // Older turns may still report results for the credentials this login replaced.
+    this.authObservation = { sequence: ++this.authSequence, expired: false };
     // A probe started before login finished can still report the old account.
-    this.authObservation = { attempt: ++this.authAttempt, expired: false };
     await this.discovery?.promise.catch(() => {});
     await this.discover({ models: false });
     if (!this.closing) await this.reportAuthStatus();
@@ -1113,7 +1115,7 @@ export class ClaudeBackend {
     const { threadId } = params;
     const controller = new AbortController();
     this.starting.set(threadId, controller);
-    const turn = claudeTurn();
+    const turn = claudeTurn(++this.authSequence);
     let live: LiveSession | undefined;
     try {
       const executable = await this.requireInstallation();
@@ -1148,10 +1150,14 @@ export class ClaudeBackend {
       const env = claudeEnvironment({ ...providerEnv, ...config.shellEnvironment });
       controller.signal.throwIfAborted();
       current.titleEnv = env;
-      // A workspace with its own account cannot establish the default account's status.
-      if (env.CLAUDE_CONFIG_DIR === providerEnv.CLAUDE_CONFIG_DIR && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE) {
-        current.authAttempt = ++this.authAttempt;
-      }
+      // Only the account the Settings sign-in can reach may affect its status.
+      const configDir = env.CLAUDE_CONFIG_DIR;
+      const signInConfigDir = providerEnv.CLAUDE_CONFIG_DIR;
+      const sameConfigDir = configDir && signInConfigDir
+        ? path.resolve(session.cwd, configDir) === path.resolve(homedir(), signInConfigDir)
+        : configDir === signInConfigDir;
+      current.usesProviderAuth = sameConfigDir && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE
+        && env.HOME === providerEnv.HOME && env.USERPROFILE === providerEnv.USERPROFILE;
       // The thread id names its first SDK session. A rewind past the first
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
@@ -1271,7 +1277,7 @@ export class ClaudeBackend {
         if (this.sessions.get(threadId) === live) this.sessions.delete(threadId);
         this.runSessionClosed(live);
       }
-      if (turn.started) await this.failTurn(threadId, turn, failure);
+      if (turn.started) await this.failTurn(threadId, turn, failure, live?.usesProviderAuth);
       throw new Error(failure, { cause: error });
     } finally {
       if (this.starting.get(threadId) === controller) this.starting.delete(threadId);
@@ -1299,7 +1305,7 @@ export class ClaudeBackend {
     }
     if (live.turn) throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
     if (live.closing || this.sessions.get(threadId) !== live) return undefined;
-    const turn = claudeTurn(live.session);
+    const turn = claudeTurn(++this.authSequence, live.session);
     live.turn = turn;
     live.lastTurnId = turn.turnId;
     // Claude runs prompts in order, so a dropped prompt's result comes before
@@ -1324,7 +1330,7 @@ export class ClaudeBackend {
       const failure = claudeExceptionMessage(error, "");
       claudeBackendLog.warn("Claude turn failed to start in a live session", { threadId, turnId: turn.turnId, error: failure });
       // A session that closed meanwhile has already ended a started turn.
-      if (turn.started && !turn.ended.settled) await this.failTurn(threadId, turn, failure);
+      if (turn.started && !turn.ended.settled) await this.failTurn(threadId, turn, failure, live.usesProviderAuth);
       throw error;
     } finally {
       prompted.resolve();
@@ -1449,17 +1455,20 @@ export class ClaudeBackend {
   }
 
   /** Fail a turn that never reached its query. */
-  private async failTurn(threadId: string, turn: RunningTurn, failure: string): Promise<void> {
+  private async failTurn(threadId: string, turn: RunningTurn, failure: string, usesProviderAuth: boolean | undefined): Promise<void> {
     this.sessions.get(threadId)?.accountChecked.resolve();
     const end = { turnId: turn.turnId, status: "failed" as const, startedAt: turn.startedAt };
     for (const entry of turn.entries.values()) {
       entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
     }
     try {
+      const loginRejected = await this.observeTurnAuth(turn, usesProviderAuth, failure);
       await this.store.append(threadId, this.unsavedTurnEntries(turn), end);
       await this.emit({ method: "turn/failed", params: {
         threadId, turnId: turn.turnId,
-        turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
+        turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: {
+          message: failure, ...(loginRejected ? { recovery: "claudeSignIn" } : {}),
+        } },
       } });
     } finally {
       turn.ended.resolve();
@@ -1750,7 +1759,7 @@ export class ClaudeBackend {
 
   /** Claude answers a settled task on its own; the desktop shows that as a turn. */
   private async startFollowUpTurn(live: LiveSession): Promise<void> {
-    const turn = claudeTurn(live.session, true);
+    const turn = claudeTurn(++this.authSequence, live.session, true);
     live.turn = turn;
     live.lastTurnId = turn.turnId;
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
@@ -1923,7 +1932,7 @@ export class ClaudeBackend {
     const { turnId } = turn;
     await this.stopLiveUsage(turn);
     const cancelled = outcome.cancelled || turn.interrupted === true;
-    if (!cancelled) await this.observeTurnAuth(live, turn, outcome.failure);
+    const loginRejected = !cancelled && await this.observeTurnAuth(turn, live.usesProviderAuth, outcome.failure);
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
     const end = { turnId, status, startedAt: turn.startedAt, completedAt: Date.now() } as const;
@@ -1957,10 +1966,11 @@ export class ClaudeBackend {
           id: turnId, status: "cancelled", startedAt: turn.startedAt,
         } } });
       } else if (failure) {
-        const recovery = failure === CLAUDE_SESSION_GONE_MESSAGE || failure === CLAUDE_FORK_SOURCE_GONE_MESSAGE
-          ? { recovery: "claudeSessionGone" as const } : {};
+        const recovery = loginRejected && failure === outcome.failure ? "claudeSignIn"
+          : failure === CLAUDE_SESSION_GONE_MESSAGE || failure === CLAUDE_FORK_SOURCE_GONE_MESSAGE
+            ? "claudeSessionGone" : undefined;
         await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
-          id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure, ...recovery },
+          id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure, ...(recovery ? { recovery } : {}) },
         } } });
       } else {
         await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
@@ -1974,16 +1984,16 @@ export class ClaudeBackend {
     }
   }
 
-  private async observeTurnAuth(live: LiveSession, turn: RunningTurn, failure?: string): Promise<void> {
-    const attempt = live.authAttempt;
-    if (attempt === undefined || attempt < this.authObservation.attempt) return;
+  private async observeTurnAuth(turn: RunningTurn, usesProviderAuth: boolean | undefined, failure?: string): Promise<boolean> {
+    if (!usesProviderAuth || turn.authSequence < this.authObservation.sequence) return false;
     const expired = Boolean(failure && isClaudeAuthenticationFailure(failure));
     // A local command can complete without calling Anthropic. Only a model
     // response can supersede a rejection after signing in outside PwrAgent.
-    if (!expired && (!this.authObservation.expired || failure || !turn.lastResult?.usage?.output_tokens)) return;
+    if (!expired && (failure || !turn.lastResult?.usage?.output_tokens)) return false;
     const changed = expired !== this.authObservation.expired;
-    this.authObservation = { attempt, expired };
+    this.authObservation = { sequence: turn.authSequence, expired };
     if (changed) await this.reportAuthStatus();
+    return expired;
   }
 
   /** Re-read metadata so a live rename/mode change cannot be overwritten. */

@@ -1991,9 +1991,13 @@ describe("Claude SDK backend", () => {
     expect((await f.backend.readThread(threadId)).messages[0].text).toBe("Hello");
   });
 
-  it("remembers the packaged Claude login rejection across an auth status check", async () => {
+  it.each([
+    EXPIRED_LOGIN,
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "Not logged in · Please run /login",
+  ])("remembers a saved-login rejection across an auth status check (%s)", async (message) => {
     const f = await fixture(async function* () {
-      yield { type: "result", subtype: "success", is_error: true, result: EXPIRED_LOGIN } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: true, result: message } as SDKMessage;
     });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
@@ -2002,8 +2006,31 @@ describe("Claude SDK backend", () => {
     expect(f.events.slice(-2).map(({ notification }) => notification.method)).toEqual([
       "backend/providerStatus/updated", "turn/failed",
     ]);
+    expect(f.events.at(-1)?.notification.params).toMatchObject({
+      turn: { error: { message, recovery: "claudeSignIn" } },
+    });
     await f.backend.discover({ models: false });
     expect(f.backend.summary().claude?.authStatus).toBe("session-expired");
+  });
+
+  it.each<{ shellEnvironment?: Record<string, string>; providerConfigDir?: string; message: string }>([
+    { shellEnvironment: { CLAUDE_CONFIG_DIR: "/fixture/workspace-claude" }, message: EXPIRED_LOGIN },
+    { shellEnvironment: { ANTHROPIC_PROFILE: "workspace-account" }, message: EXPIRED_LOGIN },
+    { providerConfigDir: ".relative-claude", message: EXPIRED_LOGIN },
+    { message: "Failed to authenticate: Invalid API key" },
+  ])("omits recovery for another credential source ($shellEnvironment / $providerConfigDir / $message)", async ({ shellEnvironment, providerConfigDir, message }) => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: true, result: message } as SDKMessage;
+    });
+    const backend = providerConfigDir ? f.openBackend({
+      ...f.backendOptions, resolveEnv: async () => ({ ...await f.backendOptions.resolveEnv(), CLAUDE_CONFIG_DIR: providerConfigDir }),
+    }) : f.backend;
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }], shellEnvironment });
+    await f.waitForTurn();
+    expect(backend.summary().claude?.authStatus).toBe("signed-in");
+    expect(f.events.at(-1)?.notification.params).toMatchObject({ turn: { error: { message } } });
+    expect(f.events.at(-1)?.notification.params).not.toHaveProperty("turn.error.recovery");
   });
 
   it("clears a rejected login only after successful sign-in and ignores a late pre-login rejection", async () => {

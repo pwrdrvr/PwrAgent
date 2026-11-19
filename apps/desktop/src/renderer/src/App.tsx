@@ -1506,7 +1506,7 @@ function DesktopAppShell(props: {
             turnId?: string;
             turn?: { error?: { message?: unknown; recovery?: unknown; block?: unknown } };
           };
-          const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
+          const recovery = params.turn?.error?.recovery;
           // A peer on an older build forwards the text without the tag.
           const block = detectProviderResponseBlock(params.turn?.error);
           const rawMessage = params.turn?.error?.message;
@@ -1537,7 +1537,8 @@ function DesktopAppShell(props: {
               onCodexLogin: openCodexLogin,
               onClaudeLogin,
               onOpenCodexSettings: openCodexSettings,
-              ...(recovery && params.threadId ? {
+              ...(recovery === "claudeSignIn" ? { recovery } : {}),
+              ...(recovery === "claudeSessionGone" && params.threadId ? {
                 recovery,
                 onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
               } : {}),

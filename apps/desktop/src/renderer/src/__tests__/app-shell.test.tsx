@@ -1964,6 +1964,7 @@ describe("App", () => {
         method: "turn/failed", params: { threadId: "claude-auth-fixture", turnId: "expired", turn: {
           id: "expired", status: "failed", error: {
             message: "Failed to authenticate: this login reached its time limit and cannot be renewed.",
+            recovery: "claudeSignIn",
           },
         } },
       } });

@@ -1,4 +1,4 @@
-import { describeProviderResponseBlock, isClaudeAuthenticationFailure, isCodexAuthenticationFailure } from "@pwragent/shared";
+import { describeProviderResponseBlock, isCodexAuthenticationFailure } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -38,7 +38,7 @@ export type BackendErrorSignal = (
       onOpenCodexSettings?: () => void;
       /** Offered when the turn's error says Claude deleted the thread's session. */
       onContinueClaudeSession?: () => void;
-      recovery?: "claudeSessionGone";
+      recovery?: "claudeSessionGone" | "claudeSignIn";
       /** The provider refused the response; name the block, not a fault. */
       block?: ProviderResponseBlock;
       backend: AppServerBackendKind;
@@ -168,7 +168,7 @@ export function resolveBackendErrorNotice(
         ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
         : {}),
       ...(signal.backend === "claude" && !signal.instanceId && !signal.block
-        && signal.onClaudeLogin && isClaudeAuthenticationFailure(signal.errorMessage)
+        && signal.onClaudeLogin && signal.recovery === "claudeSignIn"
         ? { actions: [{ label: "Sign in to Claude", onClick: signal.onClaudeLogin, tone: "primary" as const }] }
         : {}),
       ...(signal.backend === "codex" && !signal.instanceId
