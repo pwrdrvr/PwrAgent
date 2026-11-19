@@ -7,7 +7,9 @@ import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildResearchToolDefinitions } from "../agent-tools/pwragent-research-agent-tools";
 import { createResearchAgentHandler } from "../research/research-runtime";
 
-async function expectBothUpdatesApplied(backend: "claude" | "acp:grok", requestId: number | string, notes: [string, string]) {
+async function expectBothUpdatesApplied(
+  backend: "claude" | "acp:grok", requestId: number | string, notes: [string, string], useSessions: boolean,
+) {
   const turn = { backend, threadId: "coordinator", turnId: "active-turn" };
   const coordinator = { ...turn, kind: "agent", callId: "start" } as const;
   const service = new ResearchService(new MemoryResearchStorage(), {
@@ -34,33 +36,54 @@ async function expectBothUpdatesApplied(backend: "claude" | "acp:grok", requestI
     const run = await service.start({ objective: "Investigate a queue race", workspaceMode: "none",
       approaches: [{ title: "Events", task: "Trace event order" }] }, coordinator);
     const { server: registration } = await server.registerClient(turn);
-    const replies = [];
-    // Close each HTTP connection after its response. Both stateless MCP calls
-    // deliberately use the same JSON-RPC id and the same thread credentials.
-    for (const note of notes) {
-      const response = await fetch(registration.url, {
-        method: "POST",
-        headers: {
-          ...Object.fromEntries(registration.headers.map(({ name, value }) => [name, value])),
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          Connection: "close",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: requestId, method: "tools/call",
-          params: { name: "research_update", arguments: { runId: run.id,
-            command: { action: "finding", approachId: "a1", kind: "note", text: note, paths: [] } } },
-        }),
-      });
+    const headers = Object.fromEntries(registration.headers.map(({ name, value }) => [name, value]));
+    const post = (message: object, sessionId?: string) => fetch(registration.url, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Connection: "close",
+        ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", ...message }),
+    });
+    const initialize = async () => {
+      const response = await post({ id: 0, method: "initialize", params: {
+        protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "research-fixture", version: "1" },
+      } });
+      expect(response.status, await response.text()).toBe(200);
+      const sessionId = response.headers.get("Mcp-Session-Id");
+      expect(sessionId).toBeTruthy();
+      const initialized = await post({ method: "notifications/initialized" }, sessionId!);
+      expect(initialized.status).toBe(202);
+      return sessionId!;
+    };
+    const firstSession = useSessions ? await initialize() : undefined;
+    const secondSession = useSessions ? await initialize() : undefined;
+    // Separate HTTP connections carry independent calls and the replay, even
+    // when the credentials, request IDs and research arguments match exactly.
+    const update = async (note: string, sessionId?: string) => {
+      const response = await post({ id: requestId, method: "tools/call",
+        params: { name: "research_update", arguments: { runId: run.id,
+          command: { action: "finding", approachId: "a1", kind: "note", text: note, paths: [] } } },
+      }, sessionId);
       const body = await response.text();
       expect(response.status, body).toBe(200);
       const data = body.split("\n").find((line) => line.startsWith("data:"));
       expect(data, body).toBeDefined();
-      replies.push(JSON.parse(data!.slice("data:".length)));
+      return JSON.parse(data!.slice("data:".length));
+    };
+    const replies = [await update(notes[0], firstSession), await update(notes[1], secondSession)];
+    if (useSessions) {
+      const revision = service.read(run.id, coordinator).revision;
+      expect(await update(notes[1], secondSession)).toEqual(replies[1]);
+      expect(callIds[2]).toBe(callIds[1]);
+      expect(service.read(run.id, coordinator).revision).toBe(revision);
     }
 
-    // Each wire call must get its own identity and append one finding, even
-    // when the request IDs and the full command arguments are identical.
+    // Each independent call must append a finding even when its request ID
+    // and arguments match those of another call.
     expect({
       distinctCallIds: new Set(callIds).size,
       replies,
@@ -78,16 +101,20 @@ async function expectBothUpdatesApplied(backend: "claude" | "acp:grok", requestI
   }
 }
 
-it("keeps overlapping MCP request IDs distinct within a turn and applies both research updates", async () => {
+it("applies independent MCP calls once each and returns the original receipt on a same-session retry", async () => {
   const note = fc.stringMatching(/^[a-z]{1,20}$/);
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("claude" as const, "acp:grok" as const),
-    fc.oneof(fc.nat(), fc.string()),
+    fc.oneof(fc.integer({ min: 1 }), fc.string()),
     fc.oneof(note.map((text): [string, string] => [text, text]), fc.tuple(note, note)),
-    expectBothUpdatesApplied,
+    (backend, requestId, notes) => expectBothUpdatesApplied(backend, requestId, notes, true),
   ), { numRuns: 25 });
 });
 
-it("applies two identical findings from separate MCP connections that both use request ID zero", async () => {
-  await expectBothUpdatesApplied("claude", 0, ["a", "a"]);
+it("applies two identical findings from separate sessionless MCP connections that both use request ID zero", async () => {
+  await expectBothUpdatesApplied("claude", 0, ["a", "a"], false);
+});
+
+it("deduplicates an identical research update only within its MCP session", async () => {
+  await expectBothUpdatesApplied("claude", 1, ["a", "a"], true);
 });
