@@ -29,6 +29,7 @@
     "backend.getNavigationQueueProjection",
     "backend.getNavigationSelectedDetail",
     "backend.getNavigationSnapshot",
+    "backend.getNavigationThreadLinkDetail",
     "backend.getProjectPage",
     "backend.getSteerRequest",
     "backend.getTurnRequest",
