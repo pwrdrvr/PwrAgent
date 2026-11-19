@@ -14073,7 +14073,11 @@ function useComposerController(props: ComposerProps) {
             ) : (
               <small>No attached pull request belongs to this project.</small>
             )}
-            {selectedReviewPullRequestSync?.differences.length ? (
+            {selectedReviewPullRequestSync?.otherBranch ? (
+              <small className="composer__review-divergence">
+                {`This checkout is on ${selectedReviewPullRequestSync.otherBranch}, not the pull request's ${selectedReviewPullRequest?.headRefName ?? "branch"}, so reviewing the pull request skips it. Base branch reviews what is here.`}
+              </small>
+            ) : selectedReviewPullRequestSync?.differences.length ? (
               <small className="composer__review-divergence">
                 {`Reviewing the pull request skips this checkout's ${formatReviewDivergence(selectedReviewPullRequestSync.differences)}. Base branch reviews what is here.`}
               </small>

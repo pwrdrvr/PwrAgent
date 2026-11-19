@@ -8890,6 +8890,26 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * Rule: a checkout on another branch is named in a whole sentence. The
+   * count list ("skips this checkout's 2 uncommitted files") once spliced the
+   * branch clause in, reading "skips this checkout's this checkout is on …".
+   */
+  it("names a checkout on another branch in a whole sentence", async () => {
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={{ ...reviewTargetThread({}), observedGitBranch: "main" }}
+    />);
+    await openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
+    expect(screen.getByText(
+      "This checkout is on main, not the pull request's feat/stack-1, so reviewing the pull request skips it. Base branch reviews what is here.",
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/skips this checkout's this checkout/)).not.toBeInTheDocument();
+  });
+
   it("walks only the targets it offers and waits for a PR before submitting", async () => {
     const withoutPrs = render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}

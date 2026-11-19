@@ -48802,6 +48802,17 @@ button.composer__subthread-source-parent:hover {
   color: var(--accent-bright);
 }
 
+/* Off and not choosable, as for a batch of PR reviews. It must not read as a
+   plain "off" the operator could turn back on. */
+.composer__review-after:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.composer__review-after:disabled:hover {
+  color: var(--text-secondary);
+}
+
 .composer__review-after:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;

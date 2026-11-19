@@ -561,8 +561,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   ? `${prStatusLabel(pr)} · ${behind}`
                   : prStatusLabel(pr);
                 // The time each stack sorts by, so the order reads as one.
+                // It leads, so a long open status never cuts it off, and it
+                // replaces a finished PR's plain "merged" or "closed without
+                // merge", which it already says.
                 const stackTime = prStackTimeLabel(pr);
-                const statusLine = stackTime ? `${status} · ${stackTime}` : status;
+                const statusLine = !stackTime
+                  ? status
+                  : status === "merged" || status === "closed without merge"
+                    ? stackTime
+                    : `${stackTime} · ${status}`;
                 const rowPresentation = resolvePrChipPresentation(pr);
                 const rowWaitingForCi = Boolean(watchFor(pr)?.ci);
                 const openRow = (): void => {
