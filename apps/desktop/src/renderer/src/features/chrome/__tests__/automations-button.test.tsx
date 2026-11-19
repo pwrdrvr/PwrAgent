@@ -32,6 +32,15 @@ describe("AutomationsButton", () => {
     expect(tooltip?.textContent).toContain("takes over when that instance quits");
   });
 
+  it("shows automations paused without naming a holder when the lease could not be read", () => {
+    render(<AutomationsButton schedulingStatus={{ state: "elsewhere" }} />);
+    const button = screen.getByRole("button", { name: "Open automations, paused in this window" });
+    fireEvent.mouseEnter(button);
+    const tooltip = document.body.querySelector(".viewport-tooltip");
+    expect(tooltip?.textContent).toContain("could not take the profile's background lease");
+    expect(tooltip?.textContent).not.toContain("Another PwrAgent instance");
+  });
+
   it("shows automations off when this instance was launched without them", () => {
     render(<AutomationsButton schedulingStatus={{ state: "disabled", reason: "--disable-automations" }} />);
     expect(screen.getByRole("button", { name: "Open automations, off for this app instance" }))

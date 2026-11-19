@@ -1411,7 +1411,8 @@ export type AutomationSchedulingStatus =
   | { state: "active" }
   | {
     state: "elsewhere";
-    holder: { instanceId: string; processId?: number; cwdHint?: string; startedAt?: number };
+    /** Absent when the lease could not be read; this instance retries it. */
+    holder?: { instanceId: string; processId?: number; cwdHint?: string; startedAt?: number };
   }
   | { state: "disabled"; reason?: string };
 

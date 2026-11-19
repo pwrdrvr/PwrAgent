@@ -59,6 +59,7 @@ import {
   TelegramIcon,
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
+import { formatRuntimeLeaseHolder } from "../../lib/runtime-identity";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
@@ -341,14 +342,7 @@ export function MessagingSettings(props: {
         ? { state: "current", label: "Next" }
         : { state: "waiting", label: "Waiting" };
   };
-  const leaseHolderLabel = runtimeMessaging.leaseHolder
-    ? [
-        runtimeMessaging.leaseHolder.cwdHint,
-        runtimeMessaging.leaseHolder.processId
-          ? `pid ${runtimeMessaging.leaseHolder.processId}`
-          : undefined,
-      ].filter(Boolean).join(" - ")
-    : undefined;
+  const leaseHolderLabel = formatRuntimeLeaseHolder(runtimeMessaging.leaseHolder);
   const runtimeWarningTitle =
     runtimeMessaging.disabledReasonKind === "lease_held"
       ? "Messaging active in another app instance"

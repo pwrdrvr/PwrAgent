@@ -210,7 +210,8 @@ export class DesktopAutomationService {
   private readonly schedulingLeaseRetry = new RuntimeLeaseRetry();
   /** Dead owners' runs are ended once per launch, not per lease retry. */
   private startupRunsReconciled = false;
-  private schedulingLeaseHolder: RuntimeLeaseHolder | undefined;
+  /** Set while another instance runs automations, or the lease could not be read. */
+  private schedulingElsewhere: { holder?: RuntimeLeaseHolder } | undefined;
   private readonly schedulingStatusListeners = new Set<(status: AutomationSchedulingStatus) => void>();
   private readonly pendingRunTranscriptEvents = new Map<
     string,
@@ -318,13 +319,15 @@ export class DesktopAutomationService {
               holderInstanceId: result.holder.instanceId,
               holderProcessId: result.holder.processId,
             });
-            this.setSchedulingLeaseHolder(result.holder);
+            this.setSchedulingElsewhere({ holder: result.holder });
           }
         } catch (error) {
           // A busy database must not stop the owner from starting.
           automationServiceLog.warn("automation scheduling lease acquisition failed", {
             error: error instanceof Error ? error.message : String(error),
           });
+          // Not scheduling here: show automations paused until a retry settles it.
+          this.setSchedulingElsewhere({ holder: this.schedulingElsewhere?.holder });
         }
         if (!acquired) {
           this.schedulingLeaseRetry.schedule(leaseManager, "background", generation, async () => {
@@ -340,7 +343,7 @@ export class DesktopAutomationService {
         });
       }
       this.schedulingLeaseHeld = true;
-      this.setSchedulingLeaseHolder(undefined);
+      this.setSchedulingElsewhere(undefined);
     }
     this.reconcileStartupRuns({ reschedule: true });
     this.scheduler.start();
@@ -350,9 +353,10 @@ export class DesktopAutomationService {
     if (this.options.runtime?.disabled) {
       return { state: "disabled", reason: this.options.runtime.disabledReason };
     }
-    return this.schedulingLeaseHolder
-      ? { state: "elsewhere", holder: this.schedulingLeaseHolder }
-      : { state: "active" };
+    if (!this.schedulingElsewhere) return { state: "active" };
+    return this.schedulingElsewhere.holder
+      ? { state: "elsewhere", holder: this.schedulingElsewhere.holder }
+      : { state: "elsewhere" };
   }
 
   onSchedulingStatusChanged(listener: (status: AutomationSchedulingStatus) => void): () => void {
@@ -360,9 +364,9 @@ export class DesktopAutomationService {
     return () => this.schedulingStatusListeners.delete(listener);
   }
 
-  private setSchedulingLeaseHolder(holder: RuntimeLeaseHolder | undefined): void {
+  private setSchedulingElsewhere(elsewhere: { holder?: RuntimeLeaseHolder } | undefined): void {
     const before = JSON.stringify(this.getSchedulingStatus());
-    this.schedulingLeaseHolder = holder;
+    this.schedulingElsewhere = elsewhere;
     const status = this.getSchedulingStatus();
     if (JSON.stringify(status) === before) return;
     for (const listener of this.schedulingStatusListeners) listener(status);

@@ -368,3 +368,29 @@ it("reports automations paused in the instance without the lease until the holde
     vi.useRealTimers();
   }
 });
+
+it("reports automations paused when the scheduling lease cannot be read", () => {
+  resetProfile(["coalesce"]);
+  const db = openFreshStateDb(dbPath);
+  connections.push(db);
+  const leaseManager = {
+    id: ownerOf(0).instanceId,
+    acquire: () => {
+      throw new Error("database is locked");
+    },
+    release: () => true,
+    shouldRetryAcquisition: () => false,
+  } as unknown as RuntimeLeaseManager;
+  const service = new DesktopAutomationService({
+    registry: stubRegistry(),
+    store: new AutomationStore(db, { runOwner: ownerOf(0) }),
+    leaseManager,
+    runOwnerLiveness: () => "alive",
+  });
+  try {
+    expect(() => service.start()).not.toThrow();
+    expect(service.getSchedulingStatus()).toEqual({ state: "elsewhere" });
+  } finally {
+    service.dispose();
+  }
+});
