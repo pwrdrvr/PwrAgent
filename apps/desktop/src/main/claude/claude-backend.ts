@@ -2341,6 +2341,9 @@ export class ClaudeBackend {
   private mergeRateLimits(reading: BackendRateLimitSummary[], precise: boolean, since?: number): boolean {
     const changed = this.planLimits.record("claude", {
       limits: reading.map(canonicalClaudeRateLimit), precise, since, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+      // A CLI names Fable only while its last request used Fable, so a Fable
+      // reset shows first as a lower weekly window in another model's reading.
+      creditsRenewTogether: true,
       // A probe is a reading of the account. A stream event names one or two
       // windows, and dates the rest as read now only when it names them all.
       ...(precise ? { dated: true } : {}),

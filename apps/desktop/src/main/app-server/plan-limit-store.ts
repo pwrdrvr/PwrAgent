@@ -11,8 +11,12 @@ import type { BackendRateLimitSummary } from "@pwragent/shared";
  * store merges each one window by window and only moves a value forward:
  *
  * - A window a reading leaves out keeps its last value until its reset passes.
- * - Within one window (resets within the tolerance) usage only rises. A lower
- *   reading is older.
+ * - Within one window (resets within the tolerance) usage only rises. A
+ *   reading a few points lower is an older one arriving late, and one far
+ *   lower reading alone proves nothing.
+ * - A run of readings well below the window that hold or rise from one to the
+ *   next is the account after a credit nobody's newest read saw: the second
+ *   one replaces the window, coarse or not.
  * - A reset well after the known one starts a new window and replaces it. A
  *   reset well before it is a reading from the previous window, and ignored.
  * - A precise reading may refine the reset and labels a coarse reading left;
@@ -23,6 +27,9 @@ import type { BackendRateLimitSummary } from "@pwragent/shared";
  *   readings recorded meanwhile do not overtake it.
  * - A balance (`windowKey: "credits"`) has no window to order by, so the last
  *   reading replaces it.
+ * - With `creditsRenewTogether`, a credit that lowers a window also refilled
+ *   the windows that renew with it. Those the reading leaves out are stale
+ *   and hidden until a reading names them.
  *
  * A window past its reset no longer describes the account and is hidden until
  * the provider reports it again; subscribers hear when that happens. An
@@ -35,6 +42,12 @@ import type { BackendRateLimitSummary } from "@pwragent/shared";
 /** Exact resets from one source can still differ by a few seconds. */
 const DEFAULT_RESET_TOLERANCE_MS = 5 * 60_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+/** A drop smaller than this, in percent of the limit, is a late reading, not a credit. */
+const CREDIT_MIN_DROP_PERCENT = 5;
+/** Agreeing readings below the window that show a credit without a newest read. */
+const CREDIT_RUN_READINGS = 2;
+/** How far a reading may dip below the last one in its run and still agree with it. */
+const CREDIT_RUN_DIP_PERCENT = 1;
 /** Fields that measure use within a window; the rest describe the window. */
 const USAGE_FIELDS = ["usedPercent", "used", "remaining"] as const;
 
@@ -67,6 +80,13 @@ export type PlanLimitReading = {
   dated?: boolean;
   /** The opaque account key the reading was taken for, recorded as is. */
   account?: string;
+  /**
+   * A credit on one window also refills the windows as long as it whose
+   * reset is within the tolerance of its own: Claude's Fable reset gives
+   * back what Fable used on the weekly limit. A credited reading's omitted
+   * siblings are dropped.
+   */
+  creditsRenewTogether?: boolean;
   /** Relabels a merged row from its fields, after the merge. */
   describe?: (limit: BackendRateLimitSummary) => BackendRateLimitSummary;
 };
@@ -80,8 +100,13 @@ export type PlanLimitSnapshot = {
   observedAt?: number;
 };
 
-/** `precise`: the row's reset and labels came from a precise reading. */
-type HeldLimit = { limit: BackendRateLimitSummary; toleranceMs: number; precise: boolean };
+/**
+ * `precise`: the row's reset and labels came from a precise reading.
+ * `lower`: the run of readings well below the window seen since it last rose.
+ */
+type HeldLimit = { limit: BackendRateLimitSummary; toleranceMs: number; precise: boolean; lower?: LowerRun };
+/** The last reading in a run of agreeing readings below the window, and how many there were. */
+type LowerRun = { usedPercent: number; readings: number };
 
 type Entry = {
   held: HeldLimit[];
@@ -328,7 +353,7 @@ export function planLimitKey(limit: BackendRateLimitSummary): string {
  */
 function mergePlanLimits(
   held: readonly HeldLimit[],
-  reading: Pick<PlanLimitReading, "limits" | "precise" | "resetToleranceMs" | "describe">,
+  reading: Pick<PlanLimitReading, "limits" | "precise" | "resetToleranceMs" | "creditsRenewTogether" | "describe">,
   now: number,
   newest: boolean,
 ): HeldLimit[] {
@@ -341,16 +366,26 @@ function mergePlanLimits(
       limits.set(planLimitKey(known.limit), known);
     }
   }
+  const named = new Set<string>();
+  const credited: HeldLimit[] = [];
   for (const raw of reading.limits) {
     const limit = definedFields(raw);
     if (limit.resetAt !== undefined && limit.resetAt <= now) continue;
     const key = planLimitKey(limit);
+    named.add(key);
     const known = limits.get(key);
     const merged = mergeWindow(known, { limit, toleranceMs, precise }, newest);
     if (!merged) continue;
+    if (known && credit(known, merged)) credited.push(known);
     limits.set(key, reading.describe
       ? { ...merged, limit: reading.describe(merged.limit) }
       : merged);
+  }
+  if (reading.creditsRenewTogether) {
+    for (const [key, sibling] of limits) {
+      if (named.has(key)) continue;
+      if (credited.some((window) => renewTogether(window, sibling))) limits.delete(key);
+    }
   }
   if (!newest) return [...limits.values()];
   const ordered = new Map<string, HeldLimit>();
@@ -380,18 +415,56 @@ function mergeWindow(
   // recorded while it was in flight may have started the next one.
   if (order < 0) return undefined;
   if (newest) return refined(known, reading, { ...known.limit, ...limit });
-  if (compareUsage(known.limit, limit) > 0) {
+  const lower = lowerRun(known, limit);
+  if (compareUsage(known.limit, limit) > 0 || (lower && lower.readings >= CREDIT_RUN_READINGS)) {
     // The reading is the newer one: a precise reading takes over the window,
-    // a coarse one only raises its use.
+    // a coarse one only moves its use. A run of agreeing readings far below
+    // the window is newer too: the account after a credit.
     return reading.precise
       ? refined(known, reading, { ...known.limit, ...limit })
-      : { ...known, limit: { ...known.limit, ...usageOf(limit) } };
+      : { limit: { ...known.limit, ...usageOf(limit) }, toleranceMs: known.toleranceMs, precise: known.precise };
   }
   // An older reading may still refine a reset that a coarse one left; never
   // one a precise reading set.
-  return reading.precise && !known.precise
+  const older = reading.precise && !known.precise
     ? refined(known, reading, { ...known.limit, ...withoutUsage(limit) })
     : known;
+  return lower ? { ...older, lower } : older;
+}
+
+/**
+ * The window's run of lower readings with this one added, or undefined when
+ * the reading is not well below the window. A reading that dips further
+ * than the run allows starts a new run.
+ */
+function lowerRun(known: HeldLimit, limit: BackendRateLimitSummary): LowerRun | undefined {
+  const held = known.limit.usedPercent;
+  const used = limit.usedPercent;
+  if (held === undefined || used === undefined || used > held - CREDIT_MIN_DROP_PERCENT) return undefined;
+  const run = known.lower;
+  return run && used >= run.usedPercent - CREDIT_RUN_DIP_PERCENT
+    ? { usedPercent: used, readings: run.readings + 1 }
+    : { usedPercent: used, readings: 1 };
+}
+
+/**
+ * Whether the merge credited the window: lowered its use well within the
+ * same window. A window that starts early is not one, since nothing yet shows
+ * what that does to the windows that renew with it.
+ */
+function credit(known: HeldLimit, merged: HeldLimit): boolean {
+  const before = known.limit.usedPercent;
+  const after = merged.limit.usedPercent;
+  return before !== undefined && after !== undefined && after <= before - CREDIT_MIN_DROP_PERCENT
+    && windowOrder(known.limit.resetAt, merged.limit.resetAt, Math.max(known.toleranceMs, merged.toleranceMs)) === 0;
+}
+
+/** Two windows renew together when they are as long and reset within the larger tolerance. */
+function renewTogether(window: HeldLimit, sibling: HeldLimit): boolean {
+  const { resetAt, windowMinutes } = window.limit;
+  return resetAt !== undefined && sibling.limit.resetAt !== undefined
+    && windowMinutes === sibling.limit.windowMinutes
+    && windowOrder(resetAt, sibling.limit.resetAt, Math.max(window.toleranceMs, sibling.toleranceMs)) === 0;
 }
 
 /** A merged row whose reset and labels now come from `reading` where it named them. */
