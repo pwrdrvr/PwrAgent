@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PWRAGENT_WORKTREE_LOCK_REASON,
   lockWorktreeOnSeparateVolume,
-  parseWorktreeLockRecords,
   unlockPwrAgentWorktreeLock,
 } from "../app-server/worktree-volume-lock";
 
@@ -36,9 +35,12 @@ async function fixture(): Promise<{ repo: string; worktree: string; container: s
   return { repo, worktree, container };
 }
 
-function record(repo: string, worktree: string) {
-  return parseWorktreeLockRecords(git(repo, ["worktree", "list", "--porcelain"]))
-    .find((candidate) => candidate.path === worktree);
+function record(repo: string, worktree: string): { locked: boolean; lockReason?: string } | undefined {
+  const block = git(repo, ["worktree", "list", "--porcelain"]).split(/\n\n/)
+    .find((candidate) => candidate.startsWith(`worktree ${worktree}\n`));
+  if (!block) return undefined;
+  const lock = block.split("\n").find((line) => line === "locked" || line.startsWith("locked "));
+  return { locked: lock !== undefined, lockReason: lock?.slice("locked ".length) || undefined };
 }
 
 /**

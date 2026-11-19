@@ -190,6 +190,19 @@ describe("WorktreeRecoveryService", () => {
     expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toContain(`locked ${PWRAGENT_WORKTREE_LOCK_REASON}`);
   });
 
+  it("leaves PwrAgent's drive lock in place when it refuses for another reason", async () => {
+    await git(repoPath, ["worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, worktreePath]);
+    await deleteOutsideGit();
+
+    const result = await service.recreate({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+      branch: "fix/retry-backoff", expectedHead: "0".repeat(40),
+    });
+
+    expect(result).toMatchObject({ status: "failed", reason: "branch-moved" });
+    expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toContain(`locked ${PWRAGENT_WORKTREE_LOCK_REASON}`);
+  });
+
   it("clears PwrAgent's drive lock and recreates once the drive is back", async () => {
     await git(repoPath, ["worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, worktreePath]);
     await deleteOutsideGit();

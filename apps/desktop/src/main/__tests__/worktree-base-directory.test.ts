@@ -27,7 +27,8 @@ describe("computeWorktreePath worktree folder", () => {
         fc.constantFrom("claude", "codex", undefined) as fc.Arbitrary<"claude" | "codex" | undefined>,
         fc.boolean(),
         fc.boolean(),
-        async (storage, backend, baseExists, includeCodex) => {
+        fc.constantFrom("", "/", "/./"),
+        async (storage, backend, baseExists, includeCodex, spelling) => {
           const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-base-"));
           cleanupPaths.push(sandbox);
           const homeDir = path.join(sandbox, "home");
@@ -44,7 +45,8 @@ describe("computeWorktreePath worktree folder", () => {
             homeDir,
             repoRoot,
             storage,
-            worktreeFolder: { directory: baseDirectory, includeCodex },
+            // A configured folder may carry a trailing slash or `.` segment.
+            worktreeFolder: { directory: `${baseDirectory}${spelling}`, includeCodex },
           });
 
           if (usesFolder && !baseExists) {
@@ -63,7 +65,7 @@ describe("computeWorktreePath worktree folder", () => {
           expect(existsSync(baseDirectory)).toBe(baseExists);
         },
       ),
-      { numRuns: 48 },
+      { numRuns: 96 },
     );
   });
 

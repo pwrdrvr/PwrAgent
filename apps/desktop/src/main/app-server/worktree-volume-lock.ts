@@ -42,27 +42,10 @@ export async function lockWorktreeOnSeparateVolume(params: {
   }
 }
 
-export type WorktreeLockRecord = { path: string; locked: boolean; lockReason?: string };
+/** A `git worktree list --porcelain` record: `locked` alone, or `locked <reason>`. */
+export type WorktreeLockRecord = { locked: boolean; lockReason?: string };
 
-/** `git worktree list --porcelain` records with their lock reasons. */
-export function parseWorktreeLockRecords(output: string): WorktreeLockRecord[] {
-  const records: WorktreeLockRecord[] = [];
-  let current: WorktreeLockRecord | undefined;
-  for (const line of output.split(/\r?\n/)) {
-    if (line.startsWith("worktree ")) {
-      current = { path: path.resolve(line.slice("worktree ".length)), locked: false };
-      records.push(current);
-    } else if (current && line === "locked") {
-      current.locked = true;
-    } else if (current && line.startsWith("locked ")) {
-      current.locked = true;
-      current.lockReason = line.slice("locked ".length);
-    }
-  }
-  return records;
-}
-
-export function isPwrAgentWorktreeLock(record: Pick<WorktreeLockRecord, "locked" | "lockReason">): boolean {
+export function isPwrAgentWorktreeLock(record: WorktreeLockRecord): boolean {
   return record.locked && record.lockReason === PWRAGENT_WORKTREE_LOCK_REASON;
 }
 

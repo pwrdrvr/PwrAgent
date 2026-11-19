@@ -371,8 +371,9 @@ export async function computeWorktreePath(params: {
   /** Operator-chosen folder that replaces the home folder for `user-home`. */
   worktreeFolder?: DesktopWorktreeFolder;
 }): Promise<string> {
+  // Resolved, so a trailing slash or `..` cannot slip past the guard below.
   const directory = params.worktreeFolder?.directory.trim();
-  const worktreeFolder = directory ? { ...params.worktreeFolder!, directory } : undefined;
+  const worktreeFolder = directory ? { ...params.worktreeFolder!, directory: path.resolve(directory) } : undefined;
   const root = worktreesRootFor(params.repoRoot, params.storage, {
     backend: params.backend,
     codexHome: params.codexHome,

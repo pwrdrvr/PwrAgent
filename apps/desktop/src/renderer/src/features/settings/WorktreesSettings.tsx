@@ -139,8 +139,15 @@ function WorktreeFolderField(props: {
   const save = async (baseDirectory: string | null) => {
     if (!write) return;
     setError(undefined);
-    if (!await write({ worktrees: { baseDirectory } })) {
-      setError("The worktree folder could not be saved. Try again.");
+    const saved = await write({ worktrees: { baseDirectory } }).catch(() => false);
+    if (!saved) setError("The worktree folder could not be saved. Try again.");
+  };
+  const choose = async () => {
+    try {
+      const picked = await pick?.();
+      if (picked && !picked.canceled) await save(picked.path);
+    } catch {
+      setError("The folder picker could not open. Try again.");
     }
   };
   const unavailable = props.baseDirectory !== undefined && props.available === false;
@@ -154,13 +161,12 @@ function WorktreeFolderField(props: {
         : undefined)}
       control={
         <div className="worktree-folder__row">
-          <code
+          <input
             aria-label="Worktree folder"
-            aria-readonly="true"
             className="settings-input settings-input--readonly"
-          >
-            {props.baseDirectory ?? "Home folder"}
-          </code>
+            readOnly
+            value={props.baseDirectory ?? "Home folder"}
+          />
           {props.baseDirectory ? (
             <span
               className={`settings-pathrow__chip ${unavailable ? "settings-pathrow__chip--err" : "settings-pathrow__chip--ok"}`}
@@ -172,12 +178,7 @@ function WorktreeFolderField(props: {
             type="button"
             className="button button--secondary"
             disabled={props.disabled || !pick || !write}
-            onClick={() => {
-              void (async () => {
-                const picked = await pick?.();
-                if (picked && !picked.canceled) await save(picked.path);
-              })();
-            }}
+            onClick={() => void choose()}
           >
             Choose…
           </button>

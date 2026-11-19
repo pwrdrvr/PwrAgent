@@ -50,7 +50,9 @@ repository is locked with `PWRAGENT_WORKTREE_LOCK_REASON` (`src/main/app-server/
 as Git's documentation advises for removable media.
 
 - Lock after every `git worktree add` with `lockWorktreeOnSeparateVolume`. It compares the volumes
-  (`stat().dev`) and never fails creation.
+  (`stat().dev`) and never fails creation. That includes a thread handed in from another instance:
+  its worktree comes from `allocateCodexWorktreePath`, which can be on the folder, and the desktop
+  wrapper in `src/main/federation/thread-instance-handoff-service.ts` locks it after the import.
 - Before every PwrAgent removal, call `unlockPwrAgentWorktreeLock`. It reads only this worktree's
   `locked` file (never `git worktree list`, which would make archiving a fleet quadratic) and clears
   only PwrAgent's own lock, so a lock someone else set still stops the removal.

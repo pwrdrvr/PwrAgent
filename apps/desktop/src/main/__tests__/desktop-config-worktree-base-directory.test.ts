@@ -35,6 +35,13 @@ describe("worktree folder configuration", () => {
     expect(parseDesktopSettingsToml(saved, "test.toml").worktrees?.baseDirectoryIncludesCodex).toBe(true);
   });
 
+  it("clears the Codex opt-in with the folder, so a later folder asks again", () => {
+    const original = '[worktrees]\nbase_directory = "/Volumes/Dev"\nbase_directory_includes_codex = true\n';
+    const cleared = save(original, null);
+    expect(cleared).not.toContain("base_directory");
+    expect(parseDesktopSettingsToml(cleared, "test.toml").worktrees?.baseDirectoryIncludesCodex).toBeUndefined();
+  });
+
   it("ignores a relative or non-string folder", () => {
     expect(parseDesktopSettingsToml('[worktrees]\nbase_directory = "Dev"\n', "test.toml").worktrees?.baseDirectory)
       .toBeUndefined();

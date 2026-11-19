@@ -37,7 +37,7 @@ function renderSettings(worktrees: Partial<DesktopSettingsSnapshot["worktrees"]>
 describe("WorktreesSettings worktree folder", () => {
   it("saves a chosen folder at once", async () => {
     const { onWriteConfig } = renderSettings({});
-    expect(screen.getByLabelText("Worktree folder")).toHaveTextContent("Home folder");
+    expect(screen.getByLabelText("Worktree folder")).toHaveValue("Home folder");
     expect(screen.queryByRole("button", { name: "Use home folder" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Choose…" }));
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith({ worktrees: { baseDirectory: "/Volumes/Dev" } }));

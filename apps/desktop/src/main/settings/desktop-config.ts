@@ -2426,11 +2426,15 @@ function worktreeFolderEdits(
     const baseDirectory = worktrees.baseDirectory?.trim();
     if (baseDirectory) {
       edits.push({ op: "set", path: ["worktrees", "base_directory"], value: baseDirectory });
-    } else if (currentTables["worktrees"]?.base_directory !== undefined) {
-      edits.push({ op: "delete", path: ["worktrees", "base_directory"] });
+    } else {
+      // Use home folder clears the Codex opt-in too, so a later folder
+      // never moves Codex worktrees without being asked again.
+      for (const key of ["base_directory", "base_directory_includes_codex"]) {
+        if (currentTables["worktrees"]?.[key] !== undefined) edits.push({ op: "delete", path: ["worktrees", key] });
+      }
     }
   }
-  if (worktrees.baseDirectoryIncludesCodex !== undefined) {
+  if (worktrees.baseDirectoryIncludesCodex !== undefined && worktrees.baseDirectory !== null) {
     edits.push({
       op: "set",
       path: ["worktrees", "base_directory_includes_codex"],
