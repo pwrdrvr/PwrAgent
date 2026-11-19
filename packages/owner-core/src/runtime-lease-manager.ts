@@ -10,7 +10,13 @@ import type {
 
 const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
 
-export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections" | "automations";
+/**
+ * `background` covers profile-wide work that must run in one instance but has
+ * no on/off setting of its own, scheduled automations today. Messaging,
+ * federation and MCP connections keep their own leases because each can be
+ * enabled, disabled or fail independently of the others.
+ */
+export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections" | "background";
 export type RuntimeLeaseClaim = "runtime" | "thread_owner";
 
 export type RuntimeLeaseHolder = {
@@ -277,7 +283,7 @@ export class RuntimeLeaseManager {
       case "messaging": return this.store.acquireMessagingLease(params);
       case "federation": return this.store.acquireFederationLease(params);
       case "mcp_connections": return this.store.acquireMcpConnectionsLease(params);
-      case "automations": return this.store.acquireAutomationsLease(params);
+      case "background": return this.store.acquireBackgroundLease(params);
     }
   }
 
@@ -289,7 +295,7 @@ export class RuntimeLeaseManager {
       case "messaging": return this.store.releaseMessagingLease(params);
       case "federation": return this.store.releaseFederationLease(params);
       case "mcp_connections": return this.store.releaseMcpConnectionsLease(params);
-      case "automations": return this.store.releaseAutomationsLease(params);
+      case "background": return this.store.releaseBackgroundLease(params);
     }
   }
 
@@ -298,7 +304,7 @@ export class RuntimeLeaseManager {
       case "messaging": return this.store.getMessagingLease();
       case "federation": return this.store.getFederationLease();
       case "mcp_connections": return this.store.getMcpConnectionsLease();
-      case "automations": return this.store.getAutomationsLease();
+      case "background": return this.store.getBackgroundLease();
     }
   }
 

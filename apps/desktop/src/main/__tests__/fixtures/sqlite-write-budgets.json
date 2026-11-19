@@ -490,7 +490,7 @@
     "rowsChanged": 3,
     "statements": 3
   },
-  "idle-hour-runtime-leases": {"commits": 0, "note": "one idle hour: PID-owned messaging, federation, MCP connection, and automation leases", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "idle-hour-runtime-leases": {"commits": 0, "note": "one idle hour: PID-owned messaging, federation, MCP connection, and background leases", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "inactive-thread-sweep-dirty": {
     "commits": 0,
     "note": "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).",

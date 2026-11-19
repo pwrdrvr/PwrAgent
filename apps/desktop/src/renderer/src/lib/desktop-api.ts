@@ -229,6 +229,7 @@ import type {
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
   ListAutomationLoadIssuesResponse,
+  AutomationSchedulingStatus,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationsRequest,
@@ -856,6 +857,11 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;
   listAutomationLoadIssues?: () => Promise<ListAutomationLoadIssuesResponse>;
+  /** Whether this instance runs scheduled automations or another one does. */
+  readAutomationSchedulingStatus?: () => Promise<AutomationSchedulingStatus>;
+  onAutomationSchedulingStatus?: (
+    callback: (status: AutomationSchedulingStatus) => void,
+  ) => () => void;
   /** Draft an automation task prompt from a plain-language description. */
   draftAutomationPrompt?: (
     request: DraftAutomationPromptRequest,

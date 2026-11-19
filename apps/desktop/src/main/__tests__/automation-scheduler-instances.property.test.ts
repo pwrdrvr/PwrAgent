@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   AutomationBacklogPolicy,
   AutomationRunOwner,
@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
+import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store";
 import { AutomationStore } from "../storage/automation-store";
@@ -29,7 +30,7 @@ import {
  * runner submission and turn completion, which stand in for the work a real
  * process awaits.
  *
- * Before the profile `automations` lease, every instance armed a schedule
+ * Before the profile `background` lease, every instance armed a schedule
  * timer. The counterexamples then shrank to one automation and one window:
  * a turn that finished before its submission result left the window due
  * with no active run, so the second instance ran it again; and a
@@ -335,5 +336,35 @@ it("an instance without the scheduling lease still ends runs its crashed predece
     expect(reader.getRun(orphan!.id)).toMatchObject({ status: "failed", failureReason: "interrupted" });
   } finally {
     for (const { service } of instances) service.dispose();
+  }
+});
+
+it("reports automations paused in the instance without the lease until the holder quits", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    resetProfile(["coalesce"]);
+    const now = 0;
+    const dead = new Set<string>();
+    const s = { schedule: <T>(task: Promise<T>) => task } as unknown as fc.Scheduler;
+    const open = (index: number) => openInstance({ index, clock: () => now, dead, finishes: () => false, s });
+    const holder = open(0);
+    const other = open(1);
+    expect(holder.service.getSchedulingStatus()).toEqual({ state: "active" });
+    expect(other.service.getSchedulingStatus()).toEqual({
+      state: "elsewhere",
+      holder: expect.objectContaining({ instanceId: ownerOf(0).instanceId, processId: ownerOf(0).processId }),
+    });
+    const changes: unknown[] = [];
+    other.service.onSchedulingStatusChanged((status) => changes.push(status));
+
+    // The holder quits and releases the lease; the next retry takes it.
+    holder.service.dispose();
+    vi.advanceTimersByTime(RUNTIME_LEASE_RETRY_MS);
+
+    expect(changes).toEqual([{ state: "active" }]);
+    expect(other.service.getSchedulingStatus()).toEqual({ state: "active" });
+    other.service.dispose();
+  } finally {
+    vi.useRealTimers();
   }
 });

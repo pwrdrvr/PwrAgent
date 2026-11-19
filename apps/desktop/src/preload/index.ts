@@ -172,6 +172,7 @@ import type {
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
   ListAutomationLoadIssuesResponse,
+  AutomationSchedulingStatus,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationsRequest,
@@ -818,6 +819,8 @@ import {
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_LOAD_ISSUES_CHANNEL,
+  AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL,
+  AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL,
   AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL,
   AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL,
   AUTOMATIONS_REPLAY_INBOUND_CHANNEL,
@@ -1651,6 +1654,20 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL, request),
   listAutomationLoadIssues: async (): Promise<ListAutomationLoadIssuesResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_LOAD_ISSUES_CHANNEL),
+  readAutomationSchedulingStatus: async (): Promise<AutomationSchedulingStatus> =>
+    await ipcRenderer.invoke(AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL),
+  onAutomationSchedulingStatus: (
+    callback: (status: AutomationSchedulingStatus) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: AutomationSchedulingStatus,
+    ) => callback(status);
+    ipcRenderer.on(AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, listener);
+    };
+  },
   draftAutomationPrompt: async (
     request: DraftAutomationPromptRequest,
   ): Promise<DraftAutomationPromptResponse> =>

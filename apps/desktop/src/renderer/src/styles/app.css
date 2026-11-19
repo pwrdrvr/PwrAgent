@@ -5164,6 +5164,23 @@ textarea,
   line-height: 1;
 }
 
+/* Scheduled automations run in another PwrAgent instance on this profile:
+   the calendar rests muted and carries the paused dot (`--status-suspended`,
+   "configured but intentionally paused"). The tooltip names the holder. */
+.sidebar__icon-button.is-automations-paused {
+  position: relative;
+  color: var(--text-muted);
+}
+
+.sidebar__icon-button .automations-paused-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  pointer-events: none;
+}
+
 .sidebar__icon-button:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);

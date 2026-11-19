@@ -67,7 +67,7 @@ import { createOwnerRoutedForgeReadHandler } from "./federation/federated-forge-
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../shared/navigation-diagnostic-cause";
 import { setBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { navigationQueryEventRequiresRefresh, type AgentEvent, forgeRuleProjectLabel } from "@pwragent/shared";
-import { CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
+import { AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import { disposeThreadMaintenanceService, getThreadMaintenanceService } from "./thread-maintenance-runtime";
 import { readFederationThreadPrWatchesRequest } from "./pr-status/thread-pr-watches-federation";
 import { getDesktopNavigationQueryStore } from "./app-server/navigation-query-store";
@@ -690,6 +690,13 @@ wireOwnerRendererEvents();
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });
   scheduledActions.start();
+  // Windows read the status once at load; this tells them when another
+  // instance on the profile takes or hands back scheduled automations.
+  ownerSubscriptions.add(automations.onSchedulingStatusChanged((status) => {
+    for (const target of rendererSubscribers(AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL)) {
+      if (!target.isDestroyed()) target.send(AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, status);
+    }
+  }));
   automations.start();
 
   // Transcript images from PwrSnap are read through the MCP session that

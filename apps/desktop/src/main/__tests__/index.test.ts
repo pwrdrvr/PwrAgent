@@ -3615,6 +3615,6 @@ vi.mock("../app-server/desktop-app-server-service", () => {
 });
 
 vi.mock("../automations/desktop-automation-service", () => ({
-  initializeDesktopAutomationService: () => ({ start: startDesktopAutomationServiceMock }),
+  initializeDesktopAutomationService: () => ({ start: startDesktopAutomationServiceMock, onSchedulingStatusChanged: () => () => undefined }),
   disposeDesktopAutomationService: vi.fn(),
 }));

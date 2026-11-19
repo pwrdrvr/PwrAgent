@@ -16,6 +16,7 @@ import type {
   AutomationRunStatus,
   AutomationRunUsage,
   AutomationRunTranscriptEvent,
+  AutomationSchedulingStatus,
   AutomationTriggerDefinition,
   CreateAutomationRequest,
   GetAutomationRunArtifactRequest,
@@ -51,6 +52,7 @@ import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAutomationStorage } from "../storage/desktop-automation-storage.js";
 import {
   getExistingRuntimeLeaseManager,
+  type RuntimeLeaseHolder,
   type RuntimeLeaseManager,
 } from "../runtime-lease-manager.js";
 import { RuntimeLeaseRetry } from "../runtime-lease-retry.js";
@@ -198,7 +200,7 @@ export class DesktopAutomationService {
   private readonly reportingInterruptedRunIds = new Set<string>();
   private pendingRunUsageTimer: NodeJS.Timeout | undefined;
   /**
-   * Only the instance holding the profile `automations` lease evaluates
+   * Only the instance holding the profile `background` lease evaluates
    * schedules, reconciles startup runs and resumes queued runs, so one
    * trigger window produces at most one run however many instances share
    * the profile. Inbound-message runs already come from one instance: only
@@ -208,6 +210,8 @@ export class DesktopAutomationService {
   private readonly schedulingLeaseRetry = new RuntimeLeaseRetry();
   /** Dead owners' runs are ended once per launch, not per lease retry. */
   private startupRunsReconciled = false;
+  private schedulingLeaseHolder: RuntimeLeaseHolder | undefined;
+  private readonly schedulingStatusListeners = new Set<(status: AutomationSchedulingStatus) => void>();
   private readonly pendingRunTranscriptEvents = new Map<
     string,
     Map<string, AutomationRunTranscriptEvent>
@@ -307,13 +311,14 @@ export class DesktopAutomationService {
       if (leaseManager) {
         let acquired = false;
         try {
-          const result = leaseManager.acquire("automations");
+          const result = leaseManager.acquire("background");
           acquired = result.acquired;
           if (!result.acquired) {
             automationServiceLog.info("automation scheduling is active in another PwrAgent instance for this profile", {
               holderInstanceId: result.holder.instanceId,
               holderProcessId: result.holder.processId,
             });
+            this.setSchedulingLeaseHolder(result.holder);
           }
         } catch (error) {
           // A busy database must not stop the owner from starting.
@@ -322,7 +327,7 @@ export class DesktopAutomationService {
           });
         }
         if (!acquired) {
-          this.schedulingLeaseRetry.schedule(leaseManager, "automations", generation, async () => {
+          this.schedulingLeaseRetry.schedule(leaseManager, "background", generation, async () => {
             this.startSchedulingIfLeaseAcquired();
           });
           // Any instance may end a dead owner's runs; only the holder
@@ -335,9 +340,32 @@ export class DesktopAutomationService {
         });
       }
       this.schedulingLeaseHeld = true;
+      this.setSchedulingLeaseHolder(undefined);
     }
     this.reconcileStartupRuns({ reschedule: true });
     this.scheduler.start();
+  }
+
+  getSchedulingStatus(): AutomationSchedulingStatus {
+    if (this.options.runtime?.disabled) {
+      return { state: "disabled", reason: this.options.runtime.disabledReason };
+    }
+    return this.schedulingLeaseHolder
+      ? { state: "elsewhere", holder: this.schedulingLeaseHolder }
+      : { state: "active" };
+  }
+
+  onSchedulingStatusChanged(listener: (status: AutomationSchedulingStatus) => void): () => void {
+    this.schedulingStatusListeners.add(listener);
+    return () => this.schedulingStatusListeners.delete(listener);
+  }
+
+  private setSchedulingLeaseHolder(holder: RuntimeLeaseHolder | undefined): void {
+    const before = JSON.stringify(this.getSchedulingStatus());
+    this.schedulingLeaseHolder = holder;
+    const status = this.getSchedulingStatus();
+    if (JSON.stringify(status) === before) return;
+    for (const listener of this.schedulingStatusListeners) listener(status);
   }
 
   /** Without a process owner (unit tests), this instance schedules alone. */
@@ -367,7 +395,7 @@ export class DesktopAutomationService {
     this.schedulingLeaseRetry.cancel();
     if (this.schedulingLeaseHeld) {
       this.schedulingLeaseHeld = false;
-      this.schedulingLeaseManager()?.release("automations");
+      this.schedulingLeaseManager()?.release("background");
     }
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;

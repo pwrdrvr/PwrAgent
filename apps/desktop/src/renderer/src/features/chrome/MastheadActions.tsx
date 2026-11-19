@@ -1,5 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
-import { AutomationsIcon, SearchIcon, SettingsIcon } from "../../icons";
+import type { AutomationSchedulingStatus } from "@pwragent/shared";
+import { SearchIcon, SettingsIcon } from "../../icons";
+import { AutomationsButton } from "./AutomationsButton";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { FederationThreadTarget } from "./federation-thread-targets";
 import { NewThreadButton } from "./NewThreadButton";
@@ -16,6 +18,8 @@ export type MastheadActionsProps = {
   voiceControl?: ReactNode;
   addingProjectDirectory?: boolean;
   automationsActive?: boolean;
+  /** Shown paused when another instance on the profile runs automations. */
+  automationsSchedulingStatus?: AutomationSchedulingStatus;
   settingsActive?: boolean;
   threadSearchActive?: boolean;
   creatingThread?: boolean;
@@ -55,15 +59,11 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
         </button>
       ) : null}
       {isFederationWindow ? null : (
-        <button
-          type="button"
-          aria-label="Open automations"
-          aria-pressed={props.automationsActive}
-          className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
+        <AutomationsButton
+          active={props.automationsActive}
+          schedulingStatus={props.automationsSchedulingStatus}
           onClick={props.onOpenAutomations}
-        >
-          <AutomationsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
-        </button>
+        />
       )}
       {isFederationWindow ? null : (
         <button

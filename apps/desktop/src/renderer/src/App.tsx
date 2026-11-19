@@ -335,6 +335,7 @@ import {
   useDirectorVoiceShortcut,
 } from "./features/native-voice/DirectorVoice";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
+import { useAutomationSchedulingStatus } from "./features/automations/useAutomationSchedulingStatus";
 import {
   ThreadSearchPanel,
   useThreadSearchPanelState,
@@ -628,6 +629,7 @@ function DesktopAppShell(props: {
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
+  const automationsSchedulingStatus = useAutomationSchedulingStatus(desktopApi);
   const acknowledgedSpendAlertIdsRef = useRef(new Set<string>());
   const acknowledgeThreadSpendAlert = useCallback((params: {
     alert: ThreadSpendAlert;
@@ -3805,6 +3807,7 @@ function DesktopAppShell(props: {
     voiceControl: directorVoiceControl,
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
+    automationsSchedulingStatus,
     settingsActive: mainView === "settings",
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
@@ -4548,6 +4551,7 @@ function DesktopAppShell(props: {
             agentCommandThreadKeys={session.agentCommandThreadKeys}
             threads={navigation.threads}
             automationsActive={mainView === "automations"}
+            automationsSchedulingStatus={automationsSchedulingStatus}
             threadSearchActive={mainView === "search"}
             settingsActive={mainView === "settings"}
             onBrowseModeChange={navigation.setBrowseMode}

@@ -1401,6 +1401,20 @@ export type ListAutomationLoadIssuesResponse = {
   issues: AutomationLoadIssue[];
 };
 
+/**
+ * Whether this app instance runs scheduled automations. One instance per
+ * profile holds the profile's background lease and runs them; another
+ * instance on the same profile, such as `pnpm dev` beside the installed app,
+ * shows them paused and takes over when the holder quits.
+ */
+export type AutomationSchedulingStatus =
+  | { state: "active" }
+  | {
+    state: "elsewhere";
+    holder: { instanceId: string; processId?: number; cwdHint?: string; startedAt?: number };
+  }
+  | { state: "disabled"; reason?: string };
+
 export type AutomationMutationResponse = {
   automation: AutomationDetail;
 };
