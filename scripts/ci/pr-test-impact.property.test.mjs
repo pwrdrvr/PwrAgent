@@ -59,6 +59,29 @@ it("retains status and path identity from Git and falls back when main advances 
     expect(git("show", "HEAD:base-only")).toBe("broke on main");
     expect(diverged.branchFiles.some(({ file }) => file === "base-only")).toBe(false);
     expect(diverged.fallback).toMatch(/base advanced/);
+
+    // GitHub can merge the declared parent into trunk before testing the
+    // child. Only the incremental child patch should feed its selection.
+    git("checkout", "-b", "stack-parent", fork);
+    write("parent-only", "stack parent");
+    const stackBase = commit("stack parent");
+    git("checkout", "-b", "stack-child");
+    write("child-only", "stack child");
+    const stackHead = commit("stack child");
+    git("checkout", "-b", "tested-stack", base);
+    git("merge", "--no-ff", "stack-parent");
+    const testedBase = git("rev-parse", "HEAD");
+    git("merge", "--no-ff", "stack-child");
+    const stackApi = [{ filename: "child-only", status: "added" }];
+    const event = { base: stackBase, head: stackHead, changedFiles: 1 };
+    expect(getPrDiff(root, event, stackApi)).toMatchObject({
+      stacked: true, testedBase, mergeFiles: [{ status: "A", file: "child-only" }],
+    });
+    expect(getPrDiff(root, event, stackApi).fallback).toBeUndefined();
+    write("child-only", "different contents");
+    git("add", "child-only");
+    git("commit", "--amend", "--no-edit");
+    expect(getPrDiff(root, event, stackApi).fallback).toBe("tested stack merge changed the child patch");
   });
 });
 

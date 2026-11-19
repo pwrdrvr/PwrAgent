@@ -8,8 +8,10 @@ standalone Outpost tests, and pushes to `main` or release branches have no
 selection plan.
 
 The report verifies the GitHub file list against an immutable three-dot Git
-diff, verifies the tested merge's parents, and checks its diff against the
-event base. A stale branch or ambiguous merge falls back to the full suite.
+diff and verifies the tested merge's parents. For a GitHub stack that first
+merges the declared PR base into trunk, it compares the tested child patch
+against that synthetic parent and requires an exact match to the PR patch.
+A stale branch or ambiguous merge falls back to the full suite.
 An edit that landed on main after the fork can affect the tested merge even
 though the PR file list omits it.
 

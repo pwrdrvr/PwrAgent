@@ -38,17 +38,30 @@ export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   const parents = git(root, "show", "-s", "--format=%P", merge).trim().split(" ");
   const mergeBase = git(root, "merge-base", base, head).trim();
   const branchFiles = gitFiles(root, `${base}...${head}`);
-  const mergeFiles = gitFiles(root, `${base}..${merge}`);
-  const source = { base, head, mergeBase, merge, githubFiles, branchFiles, mergeFiles };
+  const testedBase = parents[0];
+  // GitHub stacks can first merge the declared base into trunk, then
+  // merge the child into that synthetic first parent.
+  const stacked = parents.length === 2 && parents[1] === head && testedBase !== base
+    && git(root, "show", "-s", "--format=%P", testedBase).trim().split(" ").length === 2
+    && git(root, "rev-parse", `${testedBase}^2`).trim() === base;
+  const testedRange = `${stacked ? testedBase : base}..${merge}`;
+  const mergeFiles = gitFiles(root, testedRange);
+  const source = { base, head, mergeBase, merge, testedBase, stacked, githubFiles, branchFiles, mergeFiles };
   if (!Array.isArray(githubFiles) || !githubFiles.length || githubFiles.length !== changedFiles) {
     return { ...source, fallback: "incomplete GitHub diff" };
   }
   if (!sameFiles(apiFileEntries(githubFiles), branchFiles)) return { ...source, fallback: "GitHub and three-dot diff disagree" };
-  if (parents.length !== 2 || parents[0] !== base || parents[1] !== head) {
+  if (parents.length !== 2 || (!stacked && testedBase !== base) || parents[1] !== head) {
     return { ...source, fallback: "checkout is not the merge of the event base and head" };
   }
   if (mergeBase !== base || !sameFiles(branchFiles, mergeFiles)) {
     return { ...source, fallback: "base advanced or the merge diff differs from the PR diff" };
+  }
+  if (stacked) {
+    const patch = (range) => git(root, "diff", "--no-ext-diff", "--no-renames", "--binary", range, "--");
+    if (patch(`${base}..${head}`) !== patch(testedRange)) {
+      return { ...source, fallback: "tested stack merge changed the child patch" };
+    }
   }
   return source;
 }
