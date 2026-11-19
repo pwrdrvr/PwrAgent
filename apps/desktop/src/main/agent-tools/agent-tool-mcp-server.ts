@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createResponseFlush } from "../util/response-flush";
 import {
   createServer as createHttpServer,
@@ -577,7 +577,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       backend: callContext.backend,
       threadId: callContext.threadId,
       turnId: callContext.turnId,
-      callId: String(extra.requestId),
+      // The stateless transport has no session ID, and JSON-RPC IDs can repeat across clients.
+      callId: randomUUID(),
       tool: request.params.name,
       args: request.params.arguments,
       signal: extra.signal,
