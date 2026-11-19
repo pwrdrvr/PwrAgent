@@ -1832,7 +1832,7 @@ function extractConfigWarningMetadata(
 function normalizeLiveNotificationItem(
   item: Record<string, unknown>
 ): Record<string, unknown> {
-  const normalized = withoutAgentMemoryInput(item);
+  const normalized = { ...withoutAgentMemoryInput(item) };
   if (item.type === "agentMessage") {
     const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
     if (phase) normalized.phase = phase;
@@ -2809,7 +2809,7 @@ function stripAgentMemoryText(text: string): string {
 function withoutAgentMemoryInput(item: Record<string, unknown>): Record<string, unknown> {
   const role = normalizeConversationRole(pickString(item, ["type"]))
     ?? normalizeConversationRole(pickString(item, ["role", "author", "speaker", "source"]));
-  if (role !== "user") return { ...item };
+  if (role !== "user") return item;
   const isSynthetic = (value: unknown) => {
     const part = asRecord(value);
     return typeof value === "string" ? isAgentMemoryContext(value)
