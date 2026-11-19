@@ -5,6 +5,7 @@ import fc from "fast-check";
 import { RESEARCH_HARNESS_REVISION, type ResearchHarnessRequest } from "@pwragent/shared";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
 import { ResearchHarnessService, type ResearchHarnessConnection, type ResearchHarnessPorts } from "@pwragent/owner-core/research-harness-service";
+import { ResearchService } from "@pwragent/owner-core/research-service";
 import { harnessRecordDigest } from "@pwragent/owner-core/research-harness-records";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -101,6 +102,31 @@ describe("Harness reconcile and bridge check over real SQLite", () => {
       if (ended) await expect(service.reconcile(run.id, actor)).rejects.toThrow("no unresolved source outcome");
       await service.close();
     }), { numRuns: 40, examples: [[{ visible: 4, page: 50, total: ENDED, cause: "lost-cancel" }], [{ visible: 3, page: 2, total: 6, cause: "lost-records" }]] });
+  });
+
+  /**
+   * A process that dies writes no unknown boundary. The next launch retires the run as interrupted, but its
+   * last Harness state still says running. That run's outcome is unknown, so the operator must be able to
+   * reconcile it, and reconciling still never starts or stops anything.
+   */
+  it("reconciles a run whose owner died mid-execution, without resending anything", async () => {
+    const oracle = source({ page: 50, visible: 4 });
+    const dead = setup(oracle, "owner-that-dies");
+    const run = await dead.service.start(request(), fixture.tempDir);
+    expect(dead.store.header(run.id)).toMatchObject({ status: "running", harness: { state: "running", cursor: 4 } });
+    const recovery = new ResearchService(dead.store, { ownerId: "next-launch", ownerPid: 2, ownerStartedAt: 200, isOwnerAlive: () => false,
+      spawn: async () => { throw new Error("Recovery must not dispatch"); }, stop: async () => {}, notify: async () => ({}), cancelQueued: async () => ({}),
+      changed: () => {}, schedule: () => () => {}, onError: () => {} });
+    recovery.initialize(); recovery.close();
+    expect(dead.store.header(run.id)).toMatchObject({ status: "interrupted", harness: { state: "running" } });
+
+    const next = setup(oracle, "next-launch");
+    oracle.state.visible = ENDED;
+    const after = await next.service.reconcile(run.id, actor);
+    expect(after.harness).toMatchObject({ state: "ended", cursor: ENDED });
+    expect(oracle.connections.at(-1)?.mode).toBe("import");
+    expect(oracle.methods.filter((m) => m === "execute")).toHaveLength(1);
+    expect(oracle.methods).not.toContain("cancel");
   });
 
   it("budgets one reconcile: intent, one page with its cursor, and the result", async () => {

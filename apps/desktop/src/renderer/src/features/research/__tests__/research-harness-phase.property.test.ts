@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import type { ResearchHarnessState, ResearchRun } from "@pwragent/shared";
-import { researchRunPhase } from "../research-view-model";
+import { researchRunAttention, type ResearchHarnessState, type ResearchRun } from "@pwragent/shared";
+import { researchHarnessOutcome, researchRunPhase } from "../research-view-model";
 
 /**
  * The run chip is the operator's first answer to "did this happen?". For a
@@ -26,7 +26,16 @@ it("derives a Harness run's chip from its source state without reporting an unco
   fc.assert(fc.property(run, (input) => {
     const phase = researchRunPhase(input);
     const state = input.harness.state;
+    const live = input.status === "running" || input.status === "stopping";
     if (state === "unknown") expect(phase).toEqual({ label: "Outcome unknown", tone: "attention" });
+    // An owner that died mid-run leaves the last Harness state pending or running on a retired run.
+    // Nothing is running it: the chip must not say it is, and the card must offer the way forward.
+    if (!live && input.status !== "completed" && (state === "pending" || state === "running")) {
+      expect(phase).toEqual({ label: "Outcome unknown", tone: "attention" });
+      expect(researchHarnessOutcome(input)).toBeDefined();
+    }
+    // The chip's tone and the run list's group are one rule.
+    expect(phase.tone === "attention" ? "needs_you" : phase.tone === "live" ? "live" : "retained").toBe(researchRunAttention(input));
     if (state === "imported" && input.status !== "completed") {
       expect(phase.tone).not.toBe("problem");
       expect(phase.label).toBe(input.harness.source === "discovery" ? "Snapshot" : "Imported");
@@ -36,4 +45,12 @@ it("derives a Harness run's chip from its source state without reporting an unco
     if (state === "reconciling") expect(phase).toEqual({ label: "Reconciling", tone: "live" });
     if (input.status === "completed") expect(phase).toEqual({ label: "Completed", tone: "done" });
   }), { numRuns: 400 });
+});
+
+it("groups a native run in the run list by the same rule its chip follows", () => {
+  const native = fc.record({ status, activeWorkers: fc.nat(8), unreviewed: fc.nat(3), accepted: fc.nat(3) });
+  fc.assert(fc.property(native, (input) => {
+    const tone = researchRunPhase(input).tone;
+    expect(tone === "attention" ? "needs_you" : tone === "live" ? "live" : "retained").toBe(researchRunAttention(input));
+  }), { numRuns: 300 });
 });

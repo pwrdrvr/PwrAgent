@@ -176,3 +176,40 @@ button.research-activity__text:hover { color: var(--accent); }
 .research-outline__meta { grid-column: 2 / 4; color: var(--text-muted); font-size: 10.5px; }
 .research-bar { display: inline-block; width: 36px; height: 4px; border-radius: 2px; background: var(--border-strong); overflow: hidden; }
 .research-bar i { display: block; height: 100%; background: var(--accent); }
+
+/* Research window: every run, one selected, with an inspector beside its views */
+.research-heading h3 { margin-right: auto; }
+.research-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0; background: var(--bg-panel-elevated); color: var(--text-secondary); cursor: pointer; }
+.research-icon-button:hover { color: var(--text-primary); }
+.research-icon-button svg { width: 14px; height: 14px; }
+.research-window .activity-titlebar .research-button { flex: 0 0 auto; }
+.research-window__body { display: grid; grid-template-columns: 300px minmax(0, 1fr); flex: 1; min-height: 0; }
+.research-window__body:has(> .research-window__inspector) { grid-template-columns: 300px minmax(0, 1fr) 340px; }
+.research-window__rail, .research-window__main, .research-window__inspector { min-height: 0; overflow-y: auto; }
+.research-window__rail { gap: 10px; padding: 12px; border-right: 1px solid var(--border-subtle); background: var(--bg-sidebar); }
+.research-window__main { padding: 14px 16px; }
+.research-window__inspector { padding: 14px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel-elevated); }
+.research-window__rail section { display: flex; flex-direction: column; gap: 4px; }
+.research-window__group { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; }
+.research-window__count { color: var(--text-muted); }
+.research-window__runs { display: flex; flex-direction: column; gap: 2px; padding: 0; list-style: none; }
+.research-window__run { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.research-window__run:hover { background: var(--bg-panel-hover); }
+.research-window__run[aria-current="true"] { border-color: var(--accent-border); background: var(--bg-row-active); }
+.research-window__run-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; align-self: stretch; }
+.research-window__tag { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.research-window__run-title { display: -webkit-box; overflow: hidden; color: var(--text-primary); font-size: 12.5px; font-weight: 600; line-height: 1.35; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.research-window__run-meta { max-width: 100%; overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+/* Width is the point of the window: approaches side by side, and a discovery plot beside its outline. */
+.research-window__main .research-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); align-items: start; }
+.research-window__main .research-stats { max-width: 560px; }
+.research-discovery__overview, .research-discovery__tree { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.research-window__main .research-discovery__split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) {
+  .research-window__body, .research-window__body:has(> .research-window__inspector) { grid-template-columns: 220px minmax(0, 1fr); }
+  /* Too narrow for three columns: the inspector takes the lower part of the run's column. */
+  .research-window__body:has(> .research-window__inspector) { grid-template-rows: minmax(0, 1fr) minmax(0, 45%); }
+  .research-window__body:has(> .research-window__inspector) .research-window__rail { grid-row: 1 / 3; }
+  .research-window__inspector { grid-column: 2; border-left: 0; border-top: 1px solid var(--border-subtle); }
+  .research-window__main .research-discovery__split { grid-template-columns: minmax(0, 1fr); }
+}

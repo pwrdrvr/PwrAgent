@@ -146,6 +146,65 @@ export type ResearchHarnessPhase = Pick<ResearchHarnessState, "state" | "mode" |
 export function researchHarnessPhase(harness: ResearchHarnessState): ResearchHarnessPhase {
   return { state: harness.state, mode: harness.mode, ...(harness.source ? { source: harness.source } : {}) };
 }
+
+/**
+ * The Harness state a run is effectively in. When the owner dies mid-run,
+ * recovery retires the run as interrupted, but its last Harness state still
+ * says pending or running. Nothing is running it, so its outcome is unknown.
+ */
+export function researchHarnessEffectiveState(status: ResearchRun["status"], harness: Pick<ResearchHarnessState, "state">): ResearchHarnessState["state"] {
+  const live = status === "running" || status === "stopping";
+  return !live && (harness.state === "pending" || harness.state === "running") ? "unknown" : harness.state;
+}
+
+/** What a run asks of the operator: a decision or reconcile, nothing while it works, or nothing because it is settled. */
+export type ResearchRunAttention = "needs_you" | "live" | "retained";
+export const RESEARCH_RUN_ATTENTION_ORDER: readonly ResearchRunAttention[] = ["needs_you", "live", "retained"];
+/**
+ * The one rule for a run's attention group. The run list's SQL ranks by it and
+ * the run chip's tone follows it; tests hold both to this function.
+ */
+export function researchRunAttention(run: Pick<ResearchRunSummary, "status" | "activeWorkers" | "unreviewed" | "accepted" | "harness">): ResearchRunAttention {
+  if (run.harness) {
+    if (run.status === "completed") return "retained";
+    switch (researchHarnessEffectiveState(run.status, run.harness)) {
+      case "unknown": return "needs_you";
+      case "stopping": return run.status === "stopping" ? "live" : "needs_you";
+      case "ended": return run.unreviewed ? "needs_you" : "retained";
+      case "running": return run.harness.mode === "execute" && run.unreviewed ? "needs_you" : "live";
+      case "pending": case "reconciling": return "live";
+      case "imported": case "stopped": return "retained";
+    }
+  }
+  if (run.status === "running") return run.activeWorkers === 0 && (run.unreviewed || run.accepted) ? "needs_you" : "live";
+  return run.status === "stopping" ? "live" : "retained";
+}
+
+/** Runs one page of the profile's run list holds. */
+export const RESEARCH_PROFILE_RUNS_PAGE = 50;
+/** Where the next page of the profile's run list starts: after this run in attention, then newest-first, order. */
+export type ResearchProfileRunsCursor = { attention: ResearchRunAttention; createdAt: number; id: string };
+export type ResearchProfileRunsQuery = {
+  /** Only runs PwrAgent workers did, or only runs from a Harness source. */
+  source?: "native" | "harness";
+  /** Case-insensitive literal text in the objective. */
+  text?: string;
+  after?: ResearchProfileRunsCursor;
+};
+export type ResearchProfileRun = ResearchRunSummary & {
+  attention: ResearchRunAttention;
+  /** The coordinating thread as this instance last observed it; absent when the thread is gone. */
+  thread?: { title: string; project?: string };
+};
+/** Every run on this profile, grouped by attention and newest first within a group. Local owner only. */
+export type ResearchProfileRunsPage = {
+  runs: ResearchProfileRun[];
+  /** Runs this process owns and may still act on. */
+  writableRunIds: string[];
+  /** How many runs each group holds across all pages, under the same filters. */
+  counts: Record<ResearchRunAttention, number>;
+  nextCursor?: ResearchProfileRunsCursor;
+};
 /** The thread's run summaries. Each run's items are read separately, by delta (`ResearchChangesRequest`). */
 export type ResearchSnapshot = { runs: ResearchRunSummary[]; writableRunIds: string[]; pending?: ResearchPendingRequest };
 /** With `runId`, `runs` holds only that run's summary, or nothing when the thread cannot see it. */

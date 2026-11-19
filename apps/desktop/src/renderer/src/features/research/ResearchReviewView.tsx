@@ -30,15 +30,7 @@ function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailab
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
-  const id = useId();
-  const [reason, setReason] = useState("");
-  const [changing, setChanging] = useState(false);
   const title = approachTitle(run, submission.approachId);
-  const revisionBlocker = researchRevisionBlocker(run, submission, live);
-  const formOpen = canReview && (!submission.review || changing);
-  const decide = async (decision: Decision) => {
-    if (await onReview(submission.id, decision, reason.trim())) { setReason(""); setChanging(false); }
-  };
   return <article className="research-entry" aria-label={`Candidate from ${title}`}>
     <div className="research-entry__meta">
       <span>{title}</span>
@@ -48,6 +40,31 @@ function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailab
     {run.harness && <ResearchSourceTag run={run} itemId={submission.id} />}
     {submission.paths.length > 0 && <EvidenceList paths={submission.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(submission.id, index)} />}
     {submission.author && <ResearchThreadButton thread={submission.author} title="Open source thread" label={`Open source thread: ${title}`} />}
+    <CandidateDecision run={run} submission={submission} live={live} canReview={canReview} busy={busy} onReview={onReview} />
+  </article>;
+}
+
+/**
+ * The reviewer's decision on one candidate: what was decided and why, and the
+ * form that records or changes it. The Review list and the Research window's
+ * inspector both draw it, so a decision is made the same way in either.
+ */
+export function CandidateDecision({ run, submission, live, canReview, busy, onReview, blocked }: {
+  run: ResearchRunView; submission: ResearchSubmission; live: boolean; canReview: boolean; busy: boolean;
+  onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
+  /** Why no decision can be recorded here, shown where the form would be. */
+  blocked?: string;
+}) {
+  const id = useId();
+  const [reason, setReason] = useState("");
+  const [changing, setChanging] = useState(false);
+  const revisionBlocker = researchRevisionBlocker(run, submission, live);
+  const formOpen = canReview && (!submission.review || changing);
+  const decide = async (decision: Decision) => {
+    if (await onReview(submission.id, decision, reason.trim())) { setReason(""); setChanging(false); }
+  };
+  return <>
+    {!canReview && blocked && <p className="research-muted">{blocked}</p>}
     {submission.review && <p className="research-review-note"><strong>{submission.review.actor.kind === "operator" ? "You" : "Coordinator"}:</strong> {submission.review.reason}</p>}
     {canReview && submission.review && !changing && <div className="research-actions"><button type="button" className="research-button research-button--ghost" onClick={() => setChanging(true)}>Change decision</button></div>}
     {formOpen && <div className="research-review-form">
@@ -61,5 +78,5 @@ function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailab
         {changing && <button type="button" className="research-button research-button--ghost" onClick={() => { setChanging(false); setReason(""); }}>Cancel</button>}
       </div>
     </div>}
-  </article>;
+  </>;
 }

@@ -7,6 +7,7 @@ import {
   type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork, type ResearchPendingRequest,
   type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage, type ResearchChange, type ResearchChanges,
   type ResearchChangesCursor, type ResearchBoardRange, type ResearchBoardPage,
+  RESEARCH_PROFILE_RUNS_PAGE, type ResearchProfileRunsQuery, type ResearchProfileRunsPage, type ResearchProfileRun,
 } from "@pwragent/shared/research";
 
 /** How many of a thread's runs the panel lists. Each run's items are read by delta. */
@@ -90,6 +91,19 @@ export class ResearchService {
     const runs = this.storage.runSummaries(thread, RESEARCH_SNAPSHOT_RUN_LIMIT, request.runId);
     const pending = this.pendingRequest(thread);
     return { runs, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id), ...(pending ? { pending } : {}) };
+  }
+
+  /**
+   * One page of every run on this profile, for the local operator's Research window. It names runs across
+   * threads, so only the owning instance's own windows may ask. Each run's contents are still read as its
+   * coordinating thread, through the member-checked reads below.
+   */
+  profileRuns(query: ResearchProfileRunsQuery): Omit<ResearchProfileRunsPage, "runs"> & { runs: Array<Omit<ResearchProfileRun, "thread">> } {
+    const page = this.storage.profileRuns(query, RESEARCH_PROFILE_RUNS_PAGE + 1);
+    const runs = page.runs.slice(0, RESEARCH_PROFILE_RUNS_PAGE);
+    const last = runs.at(-1);
+    return { runs, counts: page.counts, writableRunIds: this.closed ? [] : runs.filter((r) => r.ownerId === this.ports.ownerId).map((r) => r.id),
+      ...(last && page.runs.length > RESEARCH_PROFILE_RUNS_PAGE ? { nextCursor: { attention: last.attention, createdAt: last.createdAt, id: last.id } } : {}) };
   }
 
   /** The run's state and the items changed after `sinceRevision`. Members only; no writes. */

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, sameResearchThread, type ResearchActor, type ResearchEvent,
+import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, researchHarnessEffectiveState, sameResearchThread, type ResearchActor, type ResearchEvent,
   type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
@@ -246,11 +246,13 @@ export class ResearchHarnessService {
     if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
     if (!sameResearchThread(run.coordinator, actor)) throw new Error("Only the coordinating thread can reconcile this run");
     if (origin.source === "discovery") throw new Error("A discovery snapshot has no source cursor. Import a new snapshot instead.");
-    if (!RESEARCH_HARNESS_RECONCILABLE.includes(origin.state)) throw new Error("This run has no unresolved source outcome to reconcile");
+    // A run its dead owner left pending or running has an unknown outcome, whatever its last recorded state says.
+    const effective = researchHarnessEffectiveState(run.status, origin);
+    if (!RESEARCH_HARNESS_RECONCILABLE.includes(effective)) throw new Error("This run has no unresolved source outcome to reconcile");
     if (this.connections.has(id) || this.pending.has(id) || this.reconciling.has(id)) throw new Error("This run's bridge connection is still open");
     if (["running", "stopping"].includes(run.status) && run.ownerId !== this.ports.ownerId) throw new Error("Another PwrAgent process owns this run");
     this.reconciling.set(id, undefined);
-    const prior = origin.state === "reconciling" ? origin.mode === "import" ? "imported" : "unknown" : origin.state;
+    const prior = effective === "reconciling" ? origin.mode === "import" ? "imported" : "unknown" : effective;
     const from = origin.cursor;
     let connection: ResearchHarnessConnection | undefined;
     let ended = false, resumed = false, more = false;

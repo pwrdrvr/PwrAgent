@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { RESEARCH_HARNESS_RECONCILABLE } from "@pwragent/shared";
+import { RESEARCH_HARNESS_RECONCILABLE, researchHarnessEffectiveState } from "@pwragent/shared";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { formatClock, isResearchRunLive, plural, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
@@ -16,7 +16,7 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
   const finishBlocker = researchFinishBlocker(run);
   const outcome = researchHarnessOutcome(run);
   // The owner refuses a reconcile it cannot do; offering it only where it can succeed keeps the action honest.
-  const reconcile = onReconcile && coordinator && harness && harness.source !== "discovery" && RESEARCH_HARNESS_RECONCILABLE.includes(harness.state)
+  const reconcile = onReconcile && coordinator && harness && harness.source !== "discovery" && RESEARCH_HARNESS_RECONCILABLE.includes(researchHarnessEffectiveState(run.status, harness))
     && (!live || writable) && run.status !== "completed" ? onReconcile : undefined;
   return <section className="research-card" aria-label="Research run summary">
     <div className="research-card__top">
@@ -38,8 +38,9 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       {reconcile && <span className="research-actions"><button type="button" className="research-button research-button--primary" disabled={busy} onClick={reconcile}>Reconcile from source</button></span>}
     </div>}
     {harness && !outcome && harness.state === "reconciling" && <p className="research-muted" role="status">{harness.note}</p>}
-    {harness && !outcome && reconcile && harness.state !== "reconciling" && <span className="research-actions">
-      <button type="button" className="research-button" disabled={busy} onClick={reconcile}>{harness.state === "imported" ? "Import newer records" : "Reconcile from source"}</button>
+    {harness && !outcome && reconcile && <span className="research-actions">
+      {/* A reconcile its owner abandoned stays "reconciling"; the owner refuses a second one only while the first still runs. */}
+      <button type="button" className="research-button" disabled={busy} onClick={reconcile}>{harness.state === "imported" ? "Import newer records" : harness.state === "reconciling" ? "Reconcile again" : "Reconcile from source"}</button>
     </span>}
     {harness && <details className="research-details">
       <summary>Source details</summary>

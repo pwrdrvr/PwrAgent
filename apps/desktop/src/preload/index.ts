@@ -1,5 +1,6 @@
 import type { ResearchThread, ResearchUpdateRequest, ResearchSnapshot, ResearchSnapshotRequest, ResearchUpdateReceipt, ResearchChange, ResearchChanges, ResearchChangesRequest, ResearchEventsRequest, ResearchEventPage, ResearchEvidenceRequest, PrepareResearchRequest, ResearchItemReadRequest, ResearchSearchRequest, ResearchWorkRequest, ResearchItemContext, ResearchSearchPage } from "@pwragent/shared";
-import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus } from "@pwragent/shared";
+import type { ResearchHarnessCheck, ResearchHarnessReconcileRequest, ResearchHarnessRequest, ResearchHarnessStatus, ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared";
+import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
@@ -1940,6 +1941,16 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_HARNESS_RECONCILE_CHANNEL, request),
   revealResearchHarnessConfig: async (): Promise<void> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL),
+  researchProfileRuns: async (request?: ResearchProfileRunsQuery): Promise<ResearchProfileRunsPage> =>
+    await ipcRenderer.invoke(RESEARCH_PROFILE_RUNS_CHANNEL, request),
+  openResearchWindow: async (request?: { runId?: string }): Promise<void> =>
+    await ipcRenderer.invoke(RESEARCH_OPEN_WINDOW_CHANNEL, request),
+  /** The Research window is told which run to select when it is opened again. */
+  onResearchWindowSelect: (callback: (runId: string) => void): (() => void) => {
+    const listener = (_event: unknown, runId: unknown) => { if (typeof runId === "string") callback(runId); };
+    ipcRenderer.on(RESEARCH_WINDOW_SELECT_EVENT_CHANNEL, listener);
+    return () => { ipcRenderer.removeListener(RESEARCH_WINDOW_SELECT_EVENT_CHANNEL, listener); };
+  },
   startResearchHarness: async (request: ResearchHarnessRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_START_CHANNEL, request),
   readResearchEvents: async (request: ResearchEventsRequest): Promise<ResearchEventPage> =>

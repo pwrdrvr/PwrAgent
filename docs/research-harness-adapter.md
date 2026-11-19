@@ -164,6 +164,12 @@ the Harness state, so it survives the owner rewriting the run's status on
 restart. No execution or cancellation is blindly retried. Reopening never starts
 the bridge or a model request. A late page cannot resurrect a stopped run.
 
+A process that dies writes no unknown boundary. The next launch retires the run
+as interrupted, but its last Harness state still says `pending` or `running`.
+`researchHarnessEffectiveState` treats that pair as `unknown`: the run chip,
+the outcome callout, the run list's attention group and reconcile eligibility
+all read it, so a dead run never shows as running and can always be reconciled.
+
 **Reconcile** is an explicit, read-only import into the same run from its stored
 cursor. It applies to `unknown`, `stopping`, `imported` and stale `reconciling`
 swarm runs; a discovery snapshot has no cursor and takes a new snapshot instead.

@@ -133,6 +133,27 @@ Disabling a three-worker run uses the existing five-commit stop budget,
 127,720 WAL bytes (approximately 0.128 MB/day at one active disable per day).
 Unchanged disabled settings and idle checks introduce no research writes.
 
+The Research window lists every run on the profile, where the context-rail
+panel shows only one thread's. It is one auxiliary window per app, opened from
+the panel, and it reuses the panel's run card, views and item detail at full
+width with an inspector for the selected item. It starts no runs: a run still
+starts from its coordinating thread. Research IPC admits it as a local owner
+window (`isLocalResearchWebContents`) for reads, review, stop, finish,
+reconcile and evidence; a federation viewer is still refused, and starting or
+importing a run stays with the main window. One owner read,
+`ResearchService.profileRuns`, returns 50 run summaries a page, ordered by
+attention group and then newest first, with each group's total and a keyset
+cursor. The group is `researchRunAttention` in `packages/shared`: *needs you*
+(an unknown or unconfirmed Harness outcome, or candidates awaiting review with
+no worker running), *live*, or *retained*. The store ranks by the same rule in
+SQL, and a differential property test over generated journals holds the two
+together. The read writes nothing. Each run's contents are still read as its
+coordinating thread through the member-checked per-run reads, so the window
+adds no second authority. The main process labels each row with the thread's
+last-observed title and first linked directory; that label is not ownership
+proof. The window re-reads the list, as far as it was loaded, on any research
+change event, because a run can move between groups.
+
 `research_runs`, `research_events` and `research_workers` retain PwrAgent-owned
 structured state, not provider transcripts. Each mutation compares the
 journal revision and appends its command identity in one transaction. Reads
