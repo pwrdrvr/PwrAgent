@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { readResearchHarnessConfig } from "../settings/config-store/research-runtime-config";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import {
   providerLastKnownGoodMatchesConfig,
@@ -30,6 +32,42 @@ afterEach(() => {
 });
 
 describe("DesktopConfigStore", () => {
+  it("serves the latest valid Harness domain and blocks admission after invalid edits", () => {
+    const fixture = createFixture("");
+    const store = fixture.createStore();
+    fc.assert(fc.property(fc.array(fc.constantFrom("", " has spaces ", "$(literal)", "--socket"), { maxLength: 12 }), (args) => {
+      const expected = { command: "/fixture/bridge", args, model: "fixture-model" };
+      fs.writeFileSync(fixture.configPath, `[research.harness]\ncommand = "/fixture/bridge"\nargs = ${JSON.stringify(args)}\nmodel = "fixture-model"\n`);
+      store.reloadFromDisk("watch");
+      expect(readResearchHarnessConfig(store)).toEqual(expected);
+      expect(new DurableConfigSnapshotStore(fixture.db).readConfig()?.domains.research.harness).toEqual(expected);
+      expect(Object.isFrozen(store.read("research").harness?.args)).toBe(true);
+
+      fs.writeFileSync(fixture.configPath, '[research.harness]\ncommand = "/replacement"\nargs = [1]\n');
+      store.reloadFromDisk("watch");
+      expect(store.read("research").harness).toEqual(expected);
+      expect(() => readResearchHarnessConfig(store)).toThrow("invalid config.toml");
+
+      fs.writeFileSync(fixture.configPath, "");
+      store.reloadFromDisk("watch");
+      expect(readResearchHarnessConfig(store)).toBeUndefined();
+    }), { numRuns: 25 });
+  });
+
+  it("defaults the additive research domain when hydrating older schema-v1 snapshots", () => {
+    const fixture = createFixture('[general.appearance]\ntheme = "dark"\n');
+    fixture.createStore().dispose();
+    const storage = new DurableConfigSnapshotStore(fixture.db);
+    const snapshot = storage.readConfig()!;
+    const { research: _research, ...oldDomains } = snapshot.domains;
+    fixture.db.raw.prepare("UPDATE desktop_config_snapshots SET payload = ?").run(JSON.stringify(oldDomains));
+    fs.writeFileSync(fixture.configPath, "[invalid\n");
+    const restarted = fixture.createStore();
+    expect(restarted.read("general").appearance.theme).toBe("dark");
+    expect(restarted.read("research")).toEqual({});
+    expect(() => readResearchHarnessConfig(restarted)).toThrow("invalid config.toml");
+  });
+
   it("serves immutable domain reads without filesystem or sqlite work", () => {
     const fixture = createFixture(`
 [general.appearance]
@@ -682,6 +720,32 @@ cli_path = "/opt/qwen-one"
 });
 
 describe("DesktopConfigStore write cost", () => {
+  it("publishes Harness edits once and keeps repeated adapter config reads free", async () => {
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-harness-config-budget-"));
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "");
+    const db = StateDb.open(path.join(root, "state.db"));
+    const store = new DesktopConfigStore({ configPath, storage: new DurableConfigSnapshotStore(db) });
+    try {
+      fs.writeFileSync(configPath, '[research.harness]\ncommand = "/fixture/bridge"\nargs = ["--import"]\n');
+      const changed = await measureSqliteWrites(async () => store.reloadFromDisk("watch"));
+      expectSqliteWriteBudget({ scenario: "research-harness-config-revision", note: "one existing config snapshot commit per changed Harness configuration revision", writes: changed.writes });
+      const readFile = vi.spyOn(fs, "readFileSync");
+      const reads = await measureSqliteWrites(async () => {
+        for (let i = 0; i < 1_000; i++) expect(readResearchHarnessConfig(store)?.command).toBe("/fixture/bridge");
+      });
+      expect(readFile).not.toHaveBeenCalled();
+      readFile.mockRestore();
+      expectSqliteWriteBudget({ scenario: "research-harness-config-reads", note: "1000 adapter status/admission config reads use the immutable owner snapshot without filesystem or SQLite work", writes: reads.writes });
+    } finally {
+      store.dispose();
+      db.close();
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("writes one durable row for one changed config revision", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-config-budget-"));

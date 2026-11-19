@@ -589,9 +589,9 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
     const channelKey = this.policy.buildMessagingConversationKey(channel);
     const rows = this.stateDb.raw
       .prepare(
-        "SELECT payload FROM monitor_subscriptions WHERE status = 'active' AND channel_kind = ?",
+        "SELECT payload FROM monitor_subscriptions WHERE status = 'active' AND channel_kind = ? AND channel_id = ?",
       )
-      .all(channel.channel) as { payload: string }[];
+      .all(channel.channel, this.policy.buildChannelId(channel)) as { payload: string }[];
     return rows
       .map((row) => JSON.parse(row.payload) as Records["monitorSubscription"])
       .filter(

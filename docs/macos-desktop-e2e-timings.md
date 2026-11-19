@@ -8,7 +8,7 @@ Measurements use GitHub-hosted `macos-26` VMs. The four-lane studies retain the 
 
 The macOS matrix now runs eight default count shards. With global `fullyParallel: false`, sequential files still form indivisible groups. `a11y.spec.ts` already opts into Playwright's per-test grouping, and each audit owns its Electron launch. The existing grouping allows several VMs to share that file while each VM still uses one worker. CI compares the union of all eight Playwright collections with the unsharded test IDs, including platform skips, and requires the accessibility tests to span multiple lanes.
 
-Applying Playwright's count-and-group allocator to the [older 320-test timing input](desktop-e2e-shard-durations.json) yields the following model. Figures sum median test durations and exclude queue, setup, build, bootstrap and reporting. The eight-lane model assigns 40 and 28 accessibility tests to the first two lanes respectively.
+Applying Playwright's count-and-group allocator to the [older 320-test timing input](desktop-e2e-shard-durations-2026-11-04.json) yields the following model. Figures sum median test durations and exclude queue, setup, build, bootstrap and reporting. The eight-lane model assigns 40 and 28 accessibility tests to the first two lanes respectively.
 
 | Plan | Modeled test time by lane (seconds) | Longest lane |
 | --- | --- | ---: |

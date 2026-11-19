@@ -4,7 +4,7 @@ import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thr
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
-import type { LaunchpadCreationStatus } from "@pwragent/shared";
+import type { LaunchpadCreationStatus, RemoteThreadPinPublication } from "@pwragent/shared";
 import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
@@ -3082,7 +3082,7 @@ export function useThreadNavigation(
   loaded: boolean;
   providerRefresh?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
   refreshing: boolean;
-  refresh: (caller?: NavigationRefreshCaller) => Promise<void>;
+  refresh: (caller?: NavigationRefreshCaller, pinPublication?: RemoteThreadPinPublication) => Promise<void>;
   refreshThreadMetadata: (thread: NavigationThreadSummary) => Promise<void>;
   materializeDirectoryLaunchpad: (
     directoryKey: string,
@@ -3941,18 +3941,18 @@ export function useThreadNavigation(
         suppressedArchivedThreadKeysRef.current.add(key);
         deferredArchiveRemovalsRef.current.delete(key);
       }
-      // Directories this pass may rebuild: those in a page that landed now,
-      // from a read that began after the directory's last patch. An earlier
-      // read can still land between an unpin and the owner's event.
-      const changedDirectoryKeys = new Set(changedPages.flatMap(([id, page]) => {
+      // Keep the eligible descriptor itself: a fresh index and an older
+      // selection page can land together. Eligibility of the index must not
+      // admit the selection page's pre-command pin or disclosure fields.
+      const changedDirectoryFields = new Map(changedPages.flatMap(([id, page]) => {
         const state = boundedNavigation.resources.get(id)?.state;
-        if (!state || state.stale) return [];
+        if (!state || state.stale || !federationTargetsEqual(state.request.federationTarget, rendererFederationTarget)) return [];
         return [...page.directories ?? [], ...page.selectionDirectory ? [page.selectionDirectory] : []]
           .filter((directory) => {
             const patched = directoryPatchReadsRef.current.get(directory.key)?.get(id);
             return !patched || patched.request !== state.request || state.pendingSequence > patched.sequence;
           })
-          .map((directory) => directory.key);
+          .map((directory) => [directory.key, directory] as const);
       }));
       const pendingDirectoryPins = new Set(pendingDirectoryPinsRef.current.keys());
       const retainedKeys = new Set([...pages.values(), ...boundedNavigation.selectionAncestry ? [boundedNavigation.selectionAncestry] : []]
@@ -4055,12 +4055,11 @@ export function useThreadNavigation(
           for (const [key, directory] of nextDirectoryRows) {
             const previous = current.rows?.directoryRows.get(key);
             if (!previous) continue;
-            const retainFields = !changedDirectoryKeys.has(key);
-            if (!retainFields && !pendingDirectoryPins.has(key)) continue;
+            const observed = changedDirectoryFields.get(key);
             nextDirectoryRows.set(key, { ...directory,
-              pinnedRank: previous.pinnedRank,
-              ...(retainFields ? { directoryThreadsCollapsed: previous.directoryThreadsCollapsed,
-                forgeAutomation: previous.forgeAutomation } : {}) });
+              pinnedRank: !observed || pendingDirectoryPins.has(key) ? previous.pinnedRank : observed.pinnedRank,
+              directoryThreadsCollapsed: observed ? observed.directoryThreadsCollapsed : previous.directoryThreadsCollapsed,
+              forgeAutomation: observed ? observed.forgeAutomation : previous.forgeAutomation });
           }
         }
         const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,
@@ -4165,15 +4164,19 @@ export function useThreadNavigation(
     },
     [performRefresh]
   );
-  const refreshNavigation = useCallback(async (caller: NavigationRefreshCaller = "navigation/refresh"): Promise<void> => {
-    // A viewer-mount removal publishes its membership event before replying.
-    // Await any still-invalidated work, including an in-flight replacement;
-    // a settled publication needs no second discovery wave. Ordinary refresh
-    // remains a full discovery request.
-    await refresh(undefined, undefined, false, { diagnosticTrigger: caller,
-      invalidatedOnly: caller === "action/remote-pin-remove" });
+  const refreshNavigation = useCallback(async (
+    caller: NavigationRefreshCaller = "navigation/refresh", pinPublication?: RemoteThreadPinPublication,
+  ): Promise<void> => {
+    // The receipt can establish discovery even before the broadcast arrives.
+    // Both use the same fence, and a settled publication needs no second wave.
+    const owners: FederationTarget[] | undefined = pinPublication ? [{ scope: "local" }] : undefined;
+    if (pinPublication) invalidateNavigation(owners, { backend: pinPublication.backend, notification: {
+      method: "navigation/remoteThreadPins/changed", params: pinPublication,
+    } });
+    await refresh(undefined, undefined, false, { diagnosticTrigger: caller, owners,
+      invalidatedOnly: Boolean(pinPublication) || caller === "action/remote-pin-remove" });
     await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
-  }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
+  }, [invalidateNavigation, refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
   const refreshThreadMetadata = useCallback(async (thread: NavigationThreadSummary): Promise<void> => {
     const target = thread.federation?.ref.target ?? rendererFederationTarget;
     const owners: FederationTarget[] = [target ?? { scope: "local" }];

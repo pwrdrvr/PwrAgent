@@ -9,7 +9,7 @@ import { type MessagingArtifact } from "./messaging-artifact-renderer.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
 import { type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
-import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantStreamBuffer, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 
 export interface MessagingBackendEventHost {
   readonly refreshStatusSurfacesForBackend: (backend: AppServerBackendKind, reason: string, federationTarget?: FederationTarget) => Promise<void>;
@@ -36,7 +36,7 @@ export interface MessagingBackendEventHost {
   readonly deliverToolUpdateDelivery: (delivery: MessagingToolUpdatePolicyDelivery, knownBinding?: MessagingBindingRecord) => Promise<void>;
   readonly deliverIncomingWork: (binding: MessagingBindingRecord, deliveryId: string, summary: ThreadIncomingWorkSummary) => Promise<void>;
   readonly suppressTaskMonitorLifecycle: (event: AgentEvent, threadId: ThreadIdentifier, lifecycle: MessagingTaskMonitorLifecycle, fallbackParentTurnId?: string) => boolean;
-  readonly handleAutomationRunUpdated: (params: { bindings: MessagingBindingRecord[]; event: AgentEvent; finalText?: string; outputDecision?: AutomationRunOutputDecision; runId: string; status: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
+  readonly handleAutomationRunUpdated: (params: { automationName?: string; bindings: MessagingBindingRecord[]; errorMessage?: string; event: AgentEvent; failureReason?: string; finalText?: string; outputDecision?: AutomationRunOutputDecision; runId: string; status: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly handleAutomationTurnStarted: (params: { messageOrigin?: AppServerThreadMessageOrigin; automationName?: string; automationRunId?: string; backend: AppServerBackendKind; bindings: MessagingBindingRecord[]; threadId: ThreadIdentifier; turnId: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly handleAutomationTurnTerminal: (params: { automationRunId?: string; backend: AppServerBackendKind; bindings: MessagingBindingRecord[]; event: AgentEvent; finalText?: string; threadId: ThreadIdentifier; turnId: string; suppressBindingBroadcast?: boolean; }) => Promise<void>;
   readonly isAutomationTurnEvent: (event: AgentEvent, binding: MessagingBindingRecord, fallbackTurnId?: string) => boolean;
@@ -53,10 +53,7 @@ export interface MessagingBackendEventHost {
   readonly workingUpdateSurfaces: Map<string, Map<string, MessagingSurfaceRef>>;
   readonly workingUpdateCancellationFailures: Set<string>;
   readonly waitForAssistantStreamDeliveriesForEvent: (event: AgentEvent, binding: MessagingBindingRecord) => Promise<void>;
-  readonly assistantStreamBufferKeysForEvent: (event: AgentEvent, binding: MessagingBindingRecord) => string[];
-  readonly assistantStreamBuffers: Map<string, AssistantStreamBuffer>;
-  readonly assistantStreamDeliveryQueues: Map<string, Promise<MessagingDeliveryResult>>;
-  readonly assistantStreamCancellationSignals: Map<string, MessagingCancellationSignal>;
+  readonly discardAssistantStreamItemForEvent: (event: AgentEvent, binding: MessagingBindingRecord, itemId: string | undefined) => void;
   readonly deliverAssistantStreamUpdate: (delta: AssistantStreamDelta, binding: MessagingBindingRecord, options?: { bufferOnly?: boolean; }) => Promise<void>;
   readonly privateResponses: Pick<MessagingPrivateResponses, "hold" | "heldText" | "completeReply">;
   readonly deliverPrivateResponseFallback: (params: { binding: MessagingBindingRecord; event: AgentEvent; text: string; turnId: string; }) => Promise<void>;

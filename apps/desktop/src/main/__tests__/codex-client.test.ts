@@ -17248,6 +17248,21 @@ describe("CodexAppServerClient", () => {
       expect(client.readAppServerExecutable()).toBeUndefined();
     });
 
+    it("reports whether a Codex process is running or starting, without starting one", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      expect(client.hasAppServerProcess()).toBe(false);
+      const starting = client.getInitializeResult();
+      expect(client.hasAppServerProcess()).toBe(true);
+      await starting;
+      expect(client.hasAppServerProcess()).toBe(true);
+      await client.close();
+      expect(client.hasAppServerProcess()).toBe(false);
+      await client.getInitializeResult();
+      expect(await client.retireAppServerWhenIdle({ isThreadBusy: () => false })).toEqual({ kind: "retired" });
+      expect(client.hasAppServerProcess()).toBe(false);
+    });
+
     it("retires only once nothing depends on the process, and never starts Codex again", async () => {
       const { client, transport } = await generationFixture();
       const idle = { isThreadBusy: () => false };

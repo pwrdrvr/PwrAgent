@@ -130,14 +130,16 @@ jobs:
               path.startsWith("docs/")
               || path.toLowerCase().endsWith(".md")
               || path.startsWith(".agents/skills/");
-            // Code that only a macOS or Windows runner exercises: the
-            // dependency lockfile (Electron and native-module bumps), the
-            // platform-specific specs and their visual baselines, the macOS
-            // native plug-ins, app icon and the scripts that build them (their
+            // Changes that require native platform coverage: the lockfile
+            // (Electron and native modules), platform-specific specs and
+            // baselines, detached onboarding handoffs, the macOS native
+            // plug-ins, app icon and the scripts that build them (their
             // tests self-skip off darwin or need actool), and the macOS lane
             // scripts.
             const isPlatformPath = (path) =>
               path === "pnpm-lock.yaml"
+              || path === "apps/desktop/e2e/onboarding-wizard.spec.ts"
+              || path === "apps/desktop/e2e/fixtures/detached-profile-instances.ts"
               || path.startsWith("apps/desktop/e2e/visual-regression.spec.ts")
               || path.startsWith("apps/desktop/e2e/macos-")
               || path.startsWith("apps/desktop/e2e/windows-")
@@ -153,7 +155,7 @@ jobs:
             const platformFile = files.find((file) =>
               pathsOf(file).some((path) => !isNonProductPath(path) && isPlatformPath(path)));
             if (platformFile) {
-              fullCi(`\`${platformFile.filename}\` is exercised only on macOS or Windows runners`);
+              fullCi(`\`${platformFile.filename}\` requires macOS and Windows coverage`);
               return;
             }
             core.setOutput("full_platforms", "false");
@@ -731,12 +733,12 @@ jobs:
       # parallel groups; workers remain at 1. Include platform-skipped tests
       # in the allocation even though their execution cost is negligible.
       #
-      # The historical 83:82:67:88 fit used spec durations on all three platforms.
-      # At 320 collected tests this moves federation-remote-window to lane 2,
-      # while rendering-diagnostics and onboarding-wizard stay in lane 3.
+      # The 77:91:104:133 fit used 405 collected tests on all three platforms.
+      # The input includes every platform skip and 216 complete groups;
+      # failed and interrupted measurement lanes are excluded.
       # It minimizes the sum of each platform's longest modeled lane over
       # all contiguous group allocations. See docs/desktop-e2e-shard-timings.md
-      # for measurements, the Linux tradeoff, and the reproducible fit.
+      # for current measurements, exclusions, and the reproducible fit.
       #
       # Linux and Windows retain the same four-lane allocation. macOS uses
       # eight lanes with Playwright's default count weights.
@@ -777,7 +779,7 @@ jobs:
         timeout-minutes: 10
         env:
           # Lane sizes by test count; see the strategy comment above.
-          PWTEST_SHARD_WEIGHTS: "83:82:67:88"
+          PWTEST_SHARD_WEIGHTS: "77:91:104:133"
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
@@ -1288,7 +1290,7 @@ jobs:
         id: e2e-tests
         continue-on-error: true
         env:
-          PWTEST_SHARD_WEIGHTS: "83:82:67:88"
+          PWTEST_SHARD_WEIGHTS: "77:91:104:133"
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json

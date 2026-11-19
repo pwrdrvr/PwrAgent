@@ -334,6 +334,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   pendingWakes?: import("./thread-pending-wakes").ThreadPendingWake[];
   /** The owner could not read every wake source, so `pendingWakes` may miss one. */
   pendingWakesIncomplete?: true;
+  /** The owner's agent follow-ups are suspended by loop protection, even with none waiting. */
+  pendingWakesFollowUpsSuspended?: true;
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**
@@ -2910,6 +2912,18 @@ export type AddRemoteThreadPinRequest = {
 
 export type AddRemoteThreadPinResponse = {
   pin: RemoteThreadPin;
+  /** The same viewer membership publication broadcast before this reply. */
+  publication?: RemoteThreadPinPublication;
+};
+
+export type RemoteThreadPinPublication = {
+  publicationId: string;
+  backend: AppServerBackendKind;
+  instanceId: string;
+  threadId: string;
+  pinned: true;
+  /** All departing root anchors when the mount also ranks a companion. */
+  anchorChanges?: NavigationIdentity[];
 };
 
 /** Exact persisted viewer membership, independent of loaded navigation pages. */

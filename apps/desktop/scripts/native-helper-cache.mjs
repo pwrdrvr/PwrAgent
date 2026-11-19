@@ -110,6 +110,35 @@ function plan({ args, source, output, scripts, arch }) {
     source: hash(expanded.stdout), scripts: scriptBytes, trace: normalized, inputs })) };
 }
 
+// otool -l contains dependency names, LC_ID_DYLIB and LC_RPATH together.
+// Keep raw names here: @loader_path/@executable_path/@rpath belong to each
+// traversal context, not to the cached inspection of an immutable file.
+export function parseMachOLoadCommands(text) {
+  const blocks = text.split(/^Load command \d+\r?$/m).slice(1);
+  if (!blocks.length) return undefined;
+  const libraries = [];
+  const rpaths = [];
+  const ids = [];
+  const loads = new Set(["LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB", "LC_LOAD_UPWARD_DYLIB", "LC_LAZY_LOAD_DYLIB"]);
+  for (const block of blocks) {
+    const command = /^\s+cmd (LC_\w+)\s*$/m.exec(block)?.[1];
+    if (!command) return undefined;
+    if (command === "LC_RPATH") {
+      const value = /^\s+path (.+) \(offset \d+\)\s*$/m.exec(block)?.[1];
+      if (!value) return undefined;
+      rpaths.push(value);
+    } else if (loads.has(command) || command === "LC_ID_DYLIB") {
+      const value = /^\s+name (.+) \(offset \d+\)\s*$/m.exec(block)?.[1];
+      if (!value || (loads.has(command) && !/^(?:\/|@)/.test(value))) return undefined;
+      (command === "LC_ID_DYLIB" ? ids : libraries).push(value);
+    } else if (command.endsWith("DYLIB")) {
+      // Unknown/legacy dependency forms must not produce a partial reuse key.
+      return undefined;
+    }
+  }
+  return { libraries, rpaths, ids };
+}
+
 function dependencies(tools, trace) {
   const paths = new Set();
   for (const line of trace.split(/\r?\n/)) {
@@ -121,6 +150,7 @@ function dependencies(tools, trace) {
   if (paths.size === 0) return undefined;
   const pending = tools.map((path) => ({ path, executable: path, rpaths: [] }));
   const visited = new Set();
+  const inspections = new Map();
   let sharedCacheRequired = false;
   while (pending.length) {
     const context = pending.pop();
@@ -130,35 +160,42 @@ function dependencies(tools, trace) {
     if (visited.size > 256) return undefined;
     visited.add(contextKey);
     paths.add(tool);
-    const result = spawnSync(process.platform === "darwin" ? "/usr/bin/otool" : "ldd",
-      process.platform === "darwin" ? ["-L", tool] : [tool], { encoding: "utf8", maxBuffer: 1024 * 1024 });
-    if (result.error || result.status !== 0) {
-      if (process.platform === "linux" && /not a dynamic executable|statically linked/.test(result.stdout + result.stderr)) continue;
-      return undefined;
-    }
+    let names;
     const expand = (path) => path.replace(/^@loader_path(?=\/|$)/, dirname(tool))
       .replace(/^@executable_path(?=\/|$)/, dirname(context.executable));
     let rpaths = context.rpaths;
     if (process.platform === "darwin") {
-      const commands = spawnSync("/usr/bin/otool", ["-l", tool], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
-      if (commands.error || commands.status !== 0) return undefined;
-      const local = [...commands.stdout.matchAll(/cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset/g)].map((match) => expand(match[1]));
+      let inspection = inspections.get(tool);
+      const identity = snapshot(tool);
+      if (inspection && !equal(inspection.identity, identity)) return undefined;
+      if (!inspection) {
+        const commands = spawnSync("/usr/bin/otool", ["-l", tool], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+        if (commands.error || commands.status !== 0 || !equal(identity, snapshot(tool))) return undefined;
+        const parsed = parseMachOLoadCommands(commands.stdout);
+        if (!parsed) return undefined;
+        inspection = { identity, parsed };
+        inspections.set(tool, inspection);
+      }
+      names = inspection.parsed.libraries;
+      const local = inspection.parsed.rpaths.map(expand);
       if (local.some((path) => !isAbsolute(path))) return undefined;
       rpaths = [...new Set([...local, ...rpaths])];
       for (const path of rpaths) paths.add(resolve(path));
-    }
-    const installId = process.platform === "darwin" && tool.endsWith(".dylib")
-      ? spawnSync("/usr/bin/otool", ["-D", tool], { encoding: "utf8" }).stdout?.trim().split(/\r?\n/).at(-1)
-      : undefined;
-    for (const line of result.stdout.split(/\r?\n/).slice(process.platform === "darwin" ? 1 : 0)) {
-      // A dylib's LC_ID_DYLIB is its own name, not a dependency lookup.
-      if (installId && line.trim().startsWith(`${installId} (`)) continue;
-      const match = process.platform === "darwin" ? /^\s+((?:\/|@)\S+) \(/.exec(line) : /(?:=>\s*)?(\/\S+)\s+\(/.exec(line);
-      if (!match) {
-        if (/not found|@(?:rpath|loader_path|executable_path)/.test(line)) return undefined;
-        continue;
+    } else {
+      const result = spawnSync("ldd", [tool], { encoding: "utf8", maxBuffer: 1024 * 1024 });
+      if (result.error || result.status !== 0) {
+        if (/not a dynamic executable|statically linked/.test(result.stdout + result.stderr)) continue;
+        return undefined;
       }
-      let path = process.platform === "darwin" ? expand(match[1]) : match[1];
+      names = [];
+      for (const line of result.stdout.split(/\r?\n/)) {
+        const match = /(?:=>\s*)?(\/\S+)\s+\(/.exec(line);
+        if (match) names.push(match[1]);
+        else if (/not found|@(?:rpath|loader_path|executable_path)/.test(line)) return undefined;
+      }
+    }
+    for (const name of names) {
+      let path = process.platform === "darwin" ? expand(name) : name;
       if (path.startsWith("@rpath/")) {
         const candidates = rpaths.map((directory) => resolve(directory, path.slice(7)));
         for (const candidate of candidates) paths.add(candidate);
@@ -175,6 +212,9 @@ function dependencies(tools, trace) {
       }
       else return undefined;
     }
+  }
+  for (const [tool, inspection] of inspections) {
+    if (!equal(inspection.identity, snapshot(tool))) return undefined;
   }
   if (sharedCacheRequired) {
     let found = false;

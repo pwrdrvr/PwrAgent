@@ -1,3 +1,9 @@
+import type { MessagingAgentTools } from "../../messaging/core/messaging-agent-tools";
+import type { MessagingAgentToolHost } from "../../messaging/core/messaging-agent-tool-context";
+import type { MessagingMonitorWorkflow } from "../../messaging/core/messaging-monitor-workflow";
+import type { MessagingMonitorHost } from "../../messaging/core/messaging-monitor-context";
+import type { MessagingPendingRequestWorkflow } from "../../messaging/core/messaging-pending-request-workflow";
+import type { MessagingPendingRequestHost } from "../../messaging/core/messaging-pending-request-context";
 import type { MessagingTurns } from "../../messaging/core/messaging-turn-state";
 import type { MessagingQueueRecoveries } from "../../messaging/core/messaging-queue-recoveries";
 import type { MessagingTurnAdmission } from "../../messaging/core/messaging-turn-admission";
@@ -39,6 +45,12 @@ export function messagingModules(controller: MessagingController): {
   readonly inboundHost: () => MessagingInboundHost;
   readonly reviews: MessagingReviewWorkflow;
   readonly reviewHost: () => MessagingReviewHost;
+  readonly agentTools: MessagingAgentTools;
+  readonly agentToolHost: () => MessagingAgentToolHost;
+  readonly monitors: MessagingMonitorWorkflow;
+  readonly monitorHost: () => MessagingMonitorHost;
+  readonly pendingRequests: MessagingPendingRequestWorkflow;
+  readonly pendingRequestHost: () => MessagingPendingRequestHost;
   readonly newThreads: MessagingNewThreadWorkflow;
   readonly newThreadHost: () => MessagingNewThreadHost;
 } {
@@ -60,6 +72,12 @@ export function messagingModules(controller: MessagingController): {
     inboundHost(): MessagingInboundHost;
     readonly reviewWorkflow: MessagingReviewWorkflow;
     reviewHost(): MessagingReviewHost;
+    readonly agentToolWorkflow: MessagingAgentTools;
+    agentToolHost(): MessagingAgentToolHost;
+    readonly monitorWorkflow: MessagingMonitorWorkflow;
+    monitorHost(): MessagingMonitorHost;
+    readonly pendingRequests: MessagingPendingRequestWorkflow;
+    pendingRequestHost(): MessagingPendingRequestHost;
     readonly newThreadWorkflow: MessagingNewThreadWorkflow;
     newThreadHost(): MessagingNewThreadHost;
   };
@@ -81,6 +99,12 @@ export function messagingModules(controller: MessagingController): {
     inboundHost: () => ports.inboundHost(),
     reviews: ports.reviewWorkflow,
     reviewHost: () => ports.reviewHost(),
+    agentTools: ports.agentToolWorkflow,
+    agentToolHost: () => ports.agentToolHost(),
+    monitors: ports.monitorWorkflow,
+    monitorHost: () => ports.monitorHost(),
+    pendingRequests: ports.pendingRequests,
+    pendingRequestHost: () => ports.pendingRequestHost(),
     newThreads: ports.newThreadWorkflow,
     newThreadHost: () => ports.newThreadHost(),
   };

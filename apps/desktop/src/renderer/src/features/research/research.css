@@ -118,3 +118,61 @@ button.research-activity__text { cursor: pointer; }
 button.research-activity__text:hover { color: var(--accent); }
 .research-activity-panel { display: flex; flex-direction: column; gap: 10px; }
 .research-activity__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+
+/* Harness: bridge setup, source details and unresolved outcomes */
+.research-panel input[type="checkbox"], .research-panel input[type="radio"] { flex: 0 0 auto; width: auto; margin: 2px 0 0; padding: 0; accent-color: var(--accent); }
+.research-text { color: var(--text-primary); font-size: 12px; line-height: 1.55; }
+.research-code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-primary); overflow-wrap: anywhere; }
+.research-ok { color: var(--success-text); }
+.research-bad { color: var(--danger-text); }
+.research-bridge { display: flex; flex-direction: column; gap: 8px; }
+.research-bridge h4 { margin: 0; }
+.research-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; font-size: 11px; line-height: 1.5; }
+.research-dl dt { color: var(--text-muted); }
+.research-dl dd { margin: 0; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.research-caps { display: flex; flex-wrap: wrap; gap: 4px; }
+.research-chip--off { color: var(--text-muted); text-decoration: line-through; }
+.research-snippet { margin: 0; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-input); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.research-ops { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.research-form label.research-op { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-panel); cursor: pointer; }
+.research-form label.research-op:has(input:checked) { border-color: var(--accent-border); background: var(--bg-row-active); }
+.research-form label.research-op:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.research-op__title { color: var(--text-primary); font-size: 12px; font-weight: 600; }
+.research-op__detail { grid-column: 2; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.research-budget { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--accent-border); border-radius: 6px; background: var(--accent-soft); }
+.research-budget ul { margin: 0; padding-left: 16px; color: var(--text-primary); font-size: 11px; line-height: 1.6; }
+.research-form label.research-check { flex-direction: row; align-items: flex-start; gap: 8px; color: var(--text-primary); line-height: 1.5; }
+.research-callout { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--accent-border); border-left-width: 3px; border-radius: 6px; background: var(--bg-panel); }
+.research-callout strong { color: var(--text-primary); font-size: 12px; font-weight: 600; }
+.research-details summary { color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+.research-details[open] summary { margin-bottom: 8px; }
+.research-source { margin: 0; color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+
+/* Harness: discovery snapshot */
+.research-discovery { display: flex; flex-direction: column; gap: 10px; }
+.research-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.research-table th { padding: 4px 6px; border-bottom: 1px solid var(--border-subtle); color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; font-weight: 500; text-align: left; }
+.research-table td { padding: 6px; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); vertical-align: top; }
+.research-table .is-number { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.research-table tr.is-selected td { background: var(--bg-row-active); }
+.research-plot { margin: 0; }
+.research-plot svg { display: block; }
+.research-plot__axis { fill: none; stroke: var(--border-strong); }
+.research-plot__label { fill: var(--text-muted); font-family: var(--font-mono); font-size: 9px; }
+.research-plot__edge { fill: none; stroke: var(--accent); stroke-opacity: 0.45; }
+.research-plot__node { fill: var(--accent); cursor: pointer; }
+.research-plot__node.is-verified { fill: var(--success-text); }
+.research-plot__edge.is-dim, .research-plot__node.is-dim { opacity: 0.2; }
+.research-plot__ring { fill: none; stroke: var(--text-primary); stroke-width: 1.25; pointer-events: none; }
+.research-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; color: var(--text-muted); font-size: 10.5px; }
+.research-outline { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.research-outline li { padding-left: calc(var(--depth, 0) * 12px); border-bottom: 1px solid var(--border-subtle); }
+.research-outline__row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; width: 100%; padding: 6px 4px; border: 0; border-left: 1px solid var(--border-strong); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.research-outline__row:hover { background: var(--bg-panel-hover); }
+.research-outline__row[aria-current="true"] { background: var(--bg-row-active); }
+.research-outline__id { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.research-outline__text { overflow: hidden; color: var(--text-primary); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.research-outline__score { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.research-outline__meta { grid-column: 2 / 4; color: var(--text-muted); font-size: 10.5px; }
+.research-bar { display: inline-block; width: 36px; height: 4px; border-radius: 2px; background: var(--border-strong); overflow: hidden; }
+.research-bar i { display: block; height: 100%; background: var(--accent); }

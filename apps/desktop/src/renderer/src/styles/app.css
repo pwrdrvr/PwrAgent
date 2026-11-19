@@ -12157,19 +12157,6 @@ a.button {
   border-radius: 6px;
 }
 
-/* A split action's menu leaves the card, which clips to its rounded edge
-   otherwise. The content keeps its own scroller. */
-.app-notice-toast:has(.todo-split--open) {
-  overflow: visible;
-}
-
-/* The stack sits on the window's bottom edge unless focus moved it to the
-   top, so its menus open upward there. */
-.app-toast-stack:not([data-placement="top"]) .todo-split__menu {
-  top: auto;
-  bottom: calc(100% + 6px);
-}
-
 /* Borderless. 24px keeps WCAG 2.5.8's target size, which the a11y gate
    checks; Copy and Dismiss sit edge to edge, so neither can be smaller. */
 .app-notice-toast__icon-button {
@@ -26682,6 +26669,28 @@ a.button {
   user-select: text;
 }
 
+/* A review card's title opens its review in the transcript. */
+.thread-todo-card__title-link {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.thread-todo-card__title-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.thread-todo-card__title-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .thread-todo-card__age {
   flex: none;
   color: var(--text-muted);
@@ -27556,6 +27565,15 @@ a.button {
   box-shadow: var(--shadow-popover);
 }
 
+/* A split action's menu floats on the body (TodoSplitButton places it), so
+   no card, scroller, or sticky heading clips or covers it. */
+.todo-split__menu--floating {
+  position: fixed;
+  right: auto;
+  z-index: 150;
+  overflow-y: auto;
+}
+
 .todo-split__menu:focus {
   outline: none;
 }
@@ -27783,6 +27801,75 @@ a.button {
 .thread-todos-panel__group-count {
   flex: none;
   font-variant-numeric: tabular-nums;
+}
+
+/* Marks the thread on screen in a group or thread heading. */
+.thread-todos-panel__thread-here {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 14px;
+}
+
+/* All groups by project; each thread in a project gets its own heading,
+   which holds the top under the project's (24px: its 16px line plus the
+   toggle's 4px padding above and below) until its thread's rows scroll by. */
+.thread-todos-panel__thread-title {
+  position: sticky;
+  top: 24px;
+  z-index: 1;
+  margin: 0 -12px 4px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.thread-todos-panel__thread-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0 3px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.thread-todos-panel__thread-heading {
+  cursor: pointer;
+}
+
+button.thread-todos-panel__thread-heading:hover {
+  color: var(--text-primary);
+}
+
+button.thread-todos-panel__thread-heading:hover .thread-todos-panel__thread-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.thread-todos-panel__thread-heading:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.thread-todos-panel__thread-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-todos-panel__list {

@@ -2,7 +2,7 @@ import { expect, test } from "./fixtures/electron-test";
 import { createBranchDriftFixture, readThreadPayload } from "./fixtures/branch-drift-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 
-test("keeps the branch drift warning open after refreshing observed checkout state", async () => {
+test("keeps the branch drift warning after refresh and retains the indicator on dismissal", async () => {
   const fixture = await createBranchDriftFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -48,29 +48,14 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
       gitBranch: "codex/expected-branch",
       observedGitBranch: "codex/current-branch",
     });
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
 
-test("keeps the branch drift indicator when the user keeps the warning", async () => {
-  const fixture = await createBranchDriftFixture();
-  const app = await launchElectronApp({
-    fixturePath: fixture.fixturePath,
-    env: fixture.env,
-  });
-
-  try {
     await app.window
       .getByRole("button", {
         name: "Keep warning. I'll switch back to codex/expected-branch",
       })
       .click();
 
-    await expect(
-      app.window.getByRole("dialog", { name: "Thread branch changed" }),
-    ).toBeHidden();
+    await expect(dialog).toBeHidden();
     await expect(app.window.getByText(/Branch warning:/)).toBeVisible();
     expect(readThreadPayload(fixture.homeDir)).toMatchObject({
       gitBranch: "codex/expected-branch",

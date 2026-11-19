@@ -135,6 +135,7 @@ type StoredChatReplyComposer =
   | LegacyChatReplyComposer;
 
 export type DesktopSettingsConfig = {
+  research?: { harness?: import("@pwragent/shared").ResearchHarnessConfig };
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
@@ -2410,7 +2411,7 @@ export function parseDesktopSettingsToml(
   filePath: string,
 ): DesktopSettingsConfig {
   return normalizeDesktopConfig(parseTomlTables(contents, filePath, {
-    requiredValuePaths: ["models.codex.config_overrides", "models.codex.local_model_ids"],
+    requiredValuePaths: ["models.codex.config_overrides", "models.codex.local_model_ids", "research.harness.command", "research.harness.args", "research.harness.endpoint", "research.harness.model", "research.harness.api_key_env"],
   }));
 }
 
@@ -2461,6 +2462,7 @@ function normalizeDesktopConfig(
   const hibernate = tables["worktrees.hibernate"];
 
   return pruneEmptyConfig({
+    research: tables["research.harness"] ? { harness: readResearchHarnessConfig(tables["research.harness"]) } : undefined,
     general: {
       confirmQuitWithInProgressThreads: readBoolean(
         general?.confirm_quit_with_in_progress_threads,
@@ -2972,8 +2974,17 @@ function normalizeDesktopConfig(
   });
 }
 
+function readResearchHarnessConfig(table: Record<string, TomlScalar>): import("@pwragent/shared").ResearchHarnessConfig {
+  if (typeof table.command !== "string" || !table.command.trim()) throw new Error("research.harness.command must name an installed executable");
+  const args = table.args ?? [];
+  if (!Array.isArray(args) || args.length > 64 || !args.every((v): v is string => typeof v === "string") || JSON.stringify(args).length > 16_000) throw new Error("research.harness.args must be a bounded string array");
+  for (const key of ["endpoint", "model", "api_key_env"]) if (table[key] !== undefined && typeof table[key] !== "string") throw new Error(`research.harness.${key} must be a string`);
+  return { command: table.command, args, endpoint: readString(table.endpoint), model: readString(table.model), apiKeyEnv: readString(table.api_key_env) };
+}
+
 function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig {
   const pruned: DesktopSettingsConfig = {};
+  if (config.research) pruned.research = config.research;
 
   const developerMode = config.general?.developerMode;
   const hotCpuProfilingEnabled = config.general?.hotCpuProfilingEnabled;

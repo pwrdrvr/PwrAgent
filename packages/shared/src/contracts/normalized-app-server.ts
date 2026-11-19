@@ -3,7 +3,10 @@ import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
-import type { AutomationRunOutputDecision } from "./automations";
+import type {
+  AutomationRunFailureReason,
+  AutomationRunOutputDecision,
+} from "./automations";
 import type { ScheduledThreadAction } from "./scheduled-thread-actions";
 import type {
   MessagingChannelKind,
@@ -19,6 +22,7 @@ import type {
 } from "./federation";
 import type {
   PrSummary,
+  NavigationIdentity,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
   ThreadLock,
@@ -2810,6 +2814,9 @@ export type AppServerNotification =
         threadId: string;
         automationId: string;
         automationName?: string;
+        /** The run's error, for a bound conversation's failure notice. */
+        errorMessage?: string;
+        failureReason?: AutomationRunFailureReason;
         finalText?: string;
         outputDecision?: AutomationRunOutputDecision;
         runId: string;
@@ -2946,6 +2953,10 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
+        /** Correlates a completed explicit mount with its IPC reply. */
+        publicationId?: string;
+        /** All departing root anchors when the mount also ranks a companion. */
+        anchorChanges?: NavigationIdentity[];
         /** Complete changed-row set from a published summary refresh whose
          * membership and placement are unchanged. Absent for pin mutations,
          * discovery, archive proofs and availability transitions. Only complete

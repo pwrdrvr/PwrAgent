@@ -44,19 +44,6 @@ export type AssistantStreamDelta = {
   turnId: string;
 };
 
-export type AssistantStreamBuffer = AssistantStreamDelta & {
-  // Earliest time a non-final `stream_update` may be emitted for this message.
-  // Deltas arriving before it are coalesced into `text`; see
-  // {@link coalesceBackoffMs}. The final flush ignores this and emits at once.
-  nextReleaseAt: number;
-  // Count of non-final edits already emitted for this message, driving the
-  // exponential backoff between successive coalesced releases.
-  releaseCount: number;
-  sequence: number;
-  surface?: MessagingSurfaceRef;
-  text: string;
-};
-
 export type AssistantMessageDeliveryIdentity = {
   itemId?: string;
   threadId?: string;
@@ -472,6 +459,9 @@ export function turnQueueUpdateForBackendEvent(event: AgentEvent): {
 }
 
 export function automationRunUpdateForBackendEvent(event: AgentEvent): {
+  automationName?: string;
+  errorMessage?: string;
+  failureReason?: string;
   finalText?: string;
   outputDecision?: AutomationRunOutputDecision;
   runId: string;
@@ -482,6 +472,9 @@ export function automationRunUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   const params = event.notification.params as {
+    automationName?: unknown;
+    errorMessage?: unknown;
+    failureReason?: unknown;
     finalText?: unknown;
     outputDecision?: unknown;
     runId?: unknown;
@@ -492,6 +485,13 @@ export function automationRunUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   return {
+    automationName: typeof params.automationName === "string"
+      ? params.automationName
+      : undefined,
+    errorMessage: typeof params.errorMessage === "string" ? params.errorMessage : undefined,
+    failureReason: typeof params.failureReason === "string"
+      ? params.failureReason
+      : undefined,
     finalText: typeof params.finalText === "string" ? params.finalText : undefined,
     outputDecision: isAutomationRunOutputDecision(params.outputDecision)
       ? params.outputDecision
@@ -903,3 +903,7 @@ export type TurnLifecycleParams = {
     status?: string | null;
   };
 };
+
+export function messagingSurfaceKey(surface: MessagingSurfaceRef): string {
+  return `${surface.channel}\0${surface.id}`;
+}

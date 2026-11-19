@@ -549,6 +549,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    * snapshot rather than diffing per-binding changes themselves.
    */
   private readonly bindingsChangedListeners = new Set<() => void>();
+  /** Channels that already replayed interrupted automation runs. */
+  private readonly interruptedRunReplayedChannels = new Set<MessagingChannelKind>();
   private readonly pairingChangedListeners = new Set<
     (event: MessagingPairingChangedEvent) => void
   >();
@@ -565,6 +567,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
       automationInboundHandler?: MessagingAutomationInboundHandler;
       automationInboundMatches?: MessagingAutomationInboundMatcher;
+      /**
+       * Interrupted-run updates the automation service published this boot.
+       * They are published before channels connect, so each channel replays
+       * them once when it first starts.
+       */
+      interruptedAutomationRunUpdates?: () => readonly AgentEvent[];
       adapterStartTimeoutMs?: number;
     },
   ) {
@@ -1870,6 +1878,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     messagingLog.info(`${adapter.channel}: adapter started successfully`, {
       channel: adapter.channel,
     });
+    await this.replayInterruptedAutomationRuns(adapter.channel, controller);
     return "started";
   }
 
@@ -2387,6 +2396,44 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       messagingLog.debug("observed-conversation sync unavailable", {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Hands a channel's first controller the interrupted-run updates published
+   * before it was listening. It runs after the controller joins
+   * `controllers`, so an update published meanwhile also arrives live; the
+   * controller's delivered-key set keeps that to one message. A restarted
+   * channel does not replay again.
+   */
+  private async replayInterruptedAutomationRuns(
+    channel: MessagingChannelKind,
+    controller: MessagingController,
+  ): Promise<void> {
+    if (this.interruptedRunReplayedChannels.has(channel)) return;
+    this.interruptedRunReplayedChannels.add(channel);
+    let events: readonly AgentEvent[];
+    try {
+      events = this.options.interruptedAutomationRunUpdates?.() ?? [];
+    } catch (error) {
+      // The automation service is unavailable (unit harnesses, an instance
+      // with automations disabled): the channel starts regardless.
+      messagingLog.warn("interrupted automation runs unavailable", {
+        channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    // One undeliverable notice must not drop the others.
+    for (const event of events) {
+      try {
+        await controller.handleBackendEvent(event);
+      } catch (error) {
+        messagingLog.warn("interrupted automation run replay failed", {
+          channel,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -3467,6 +3514,8 @@ export function initializeDesktopMessagingRuntime(
         getDesktopAutomationService().handleMessagingInboundEvent(event),
       automationInboundMatches: (event) =>
         getDesktopAutomationService().matchesInboundEvent(event),
+      interruptedAutomationRunUpdates: () =>
+        getDesktopAutomationService().listInterruptedRunUpdates(),
     });
   }
 

@@ -66,7 +66,19 @@ has no rollout to reload from. It gets the message at once and the reload
 before its second turn.
 
 The text takes the place of `developer_instructions` from Codex configuration
-for that thread, because Codex reads one or the other.
+for that thread. Codex 0.164 resolves the field as
+`developer_instructions.or(cfg.developer_instructions)`
+(`codex-rs/core/src/config/mod.rs`), so a request value wins and the configured
+value is dropped, whichever layer set it: user, profile, project or `-c` flag.
+A thread without an Agent sends no override and keeps the configured text.
+Managed `additional_developer_instructions` is a separate field and still
+applies.
+
+This is deliberate. An operator who wants configured text on an Agent thread
+puts it in the Agent's instructions. Combining the two was considered:
+`config/read` with the thread's `cwd` returns the configured value, so the
+client could send it ahead of the Agent's text. It was not adopted, to keep
+the Agent's instructions the one text that reaches the model.
 
 Two other fields were considered and not used.
 `collaborationMode.settings.developer_instructions` on `turn/start` is

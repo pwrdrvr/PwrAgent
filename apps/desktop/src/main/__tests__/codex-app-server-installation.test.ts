@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { decideCodexInstallationChange } from "@pwragent/owner-core/codex-app-server/app-server-installation";
+import {
+  combineCodexAppServerRolloverOutcomes,
+  decideCodexInstallationChange,
+  type CodexAppServerRolloverOutcome,
+} from "@pwragent/owner-core/codex-app-server/app-server-installation";
 import { readCodexExecutableIdentity, type CodexExecutableIdentity } from "../codex-app-server/executable-identity";
 
 const roots: string[] = [];
@@ -93,5 +97,30 @@ describe("Codex installation identity", () => {
               : undefined;
       expect(decision).toBe(expected);
     }), { numRuns: 500 });
+  });
+
+  it("applies a selection only when every runtime applied it (oracle)", () => {
+    const outcome: fc.Arbitrary<CodexAppServerRolloverOutcome> = fc.oneof(
+      fc.record({ kind: fc.constant("promoted" as const), generation: fc.integer({ min: 1, max: 9 }) }),
+      fc.constant({ kind: "restarted-lazily" as const }),
+      fc.constant({ kind: "current" as const }),
+      fc.record({ kind: fc.constant("failed" as const), error: fc.constantFrom("a", "b") }),
+      fc.record({ kind: fc.constant("deferred" as const), retryAt: fc.integer({ min: 0, max: 9 }) }),
+    );
+    fc.assert(fc.property(fc.array(outcome, { maxLength: 6 }), (outcomes) => {
+      const combined = combineCodexAppServerRolloverOutcomes(outcomes);
+      const kinds = new Set(outcomes.map((entry) => entry.kind));
+      const applied = !kinds.has("failed") && !kinds.has("deferred");
+      expect(combined.kind === "failed" || combined.kind === "deferred").toBe(!applied);
+      if (kinds.has("failed")) expect(combined.kind).toBe("failed");
+      else if (kinds.has("deferred")) {
+        // Retry no sooner than the last runtime allows.
+        expect(combined).toEqual({ kind: "deferred", retryAt: Math.max(
+          ...outcomes.flatMap((entry) => entry.kind === "deferred" ? [entry.retryAt] : []),
+        ) });
+      } else if (kinds.has("promoted")) expect(combined.kind).toBe("promoted");
+      else if (kinds.has("restarted-lazily")) expect(combined.kind).toBe("restarted-lazily");
+      else expect(combined).toEqual({ kind: "current" });
+    }), { numRuns: 300 });
   });
 });

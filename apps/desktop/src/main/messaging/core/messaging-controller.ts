@@ -1,3 +1,10 @@
+import { MessagingAssistantStreams } from "./messaging-assistant-streams";
+import { MessagingPendingRequestWorkflow } from "./messaging-pending-request-workflow";
+import type { MessagingPendingRequestHost } from "./messaging-pending-request-context";
+import { MessagingAgentTools } from "./messaging-agent-tools";
+import type { MessagingAgentToolHost } from "./messaging-agent-tool-context";
+import { MessagingMonitorWorkflow } from "./messaging-monitor-workflow";
+import type { MessagingMonitorHost } from "./messaging-monitor-context";
 import { MessagingNewThreadWorkflow } from "./messaging-new-thread-workflow";
 import type { MessagingNewThreadHost } from "./messaging-new-thread-context";
 import { MessagingReviewWorkflow } from "./messaging-review-workflow";
@@ -9,50 +16,43 @@ import type { MessagingAccessHost } from "./messaging-access-context";
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
 import type { MessagingCallbackHost } from "./messaging-callback-context";
-import { readThreadExecutionModeValue, readAcpRuntimeOptionSource, PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, isSameMessagingSurface, branchPageIndexFromValue, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, readMessagingToolUpdateModeValue, formatDefaultAgentScope, topicChannelRef, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
+import { readThreadExecutionModeValue, readAcpRuntimeOptionSource, PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX, ACP_RUNTIME_RISK_ACTION_PREFIX, branchPageIndexFromValue, defaultBackendModel, reasoningEffortsForModel, resolveReasoningEffortForModel, readMessagingToolUpdateModeValue, formatDefaultAgentScope, findThreadForBinding, type AcpRuntimeRiskWarningContext, type PendingQueueAuditMessage } from "./messaging-callback-helpers";
 import { MessagingCommandHandlers } from "./messaging-command-handlers";
 import type { MessagingCommandHost } from "./messaging-command-context";
-import { messageOriginForInboundEvent, type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
+import { readStringValue } from "./messaging-command-helpers";
 import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
-import { threadIdForBackendEvent, asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, isTerminalTurnLifecycle, assistantStreamKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type AssistantStreamDelta, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantStreamBuffer, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
-import { containedMessagingBindingMatches } from "@pwragent/shared";
-import { automatedWorkStartedLabel, incomingWorkText } from "./messaging-thread-notifications";
+import { asPlainRecord, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import { automatedWorkStartedLabel, automationRunFailureNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared";
-
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { buildFederatedThreadRef, buildThreadIdentityKey, codexAsyncQuestionItemId, federatedThreadIdentityKey, formatCodexAsyncQuestionReply, isAcpBackendId, isAppServerBackendKind, isCodexAsyncQuestionAnswered, isMessagingBindingTargetKind, readProviderResponseBlockNotification, describeProviderResponseBlock, stripCodexGitActionDirectives, summarizeCodexAsyncQuestionReply, type CodexAsyncQuestion, type CodexAsyncQuestionReply } from "@pwragent/shared";
-import type { AgentEvent, AppServerTurnInputItem, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, AppServerToolRequestUserInputNotification, FederatedThreadRef, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingConversationCapabilitiesSummary, PwrAgentMessagingLocationSummary, PwrAgentMessagingManagedConversationSummary, PwrAgentMessagingOutboundAttachmentSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, ListMessagingSurfacesResult, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, isAcpBackendId, isAppServerBackendKind, readProviderResponseBlockNotification, describeProviderResponseBlock, stripCodexGitActionDirectives } from "@pwragent/shared";
+import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingManagedConversationOperationSupport, MessagingManagedTopicRecord, MessagingMonitorState, MessagingMonitorSubscriptionRecord, MessagingPendingIntentRecord, MessagingPrivateConversationResolveResult, MessagingPrivateReplySource, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingResponseMode, MessagingStreamUpdateIntent, MessagingSurfaceAction, MessagingSurfaceRef, MessagingSurfaceIntent, MessagingTopicCleanupProposalItem, MessagingTopicCleanupProposalRecord } from "@pwragent/messaging-interface";
-import { capabilityProfilePageSize, evictStaleStreamAnchors, MESSAGING_CALLBACK_HANDLE_TTL_MS, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
-import { buildMonitorStatusIntent, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT, MESSAGING_MONITOR_INTERVAL_MS, nextMonitorIntervalMs, nextMonitorThreadLimit, normalizeMonitorIntervalMs, normalizeMonitorThreadLimit, selectMonitorThreads, type MessagingMonitorNavigation, type MessagingMonitorRows } from "./messaging-monitor-card.js";
+import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import { capabilityProfilePageSize, MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
-import { resolveMessagingOutboundFile, resolveMessagingOutboundBytes, validateMessagingFileMetadata, type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
-import { resolveScratchProjectsRoots } from "../../app-server/scratch-projects.js";
+import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
 import { defaultAgentBackendSupport, defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
-import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply, MessagingThreadAdmissionState } from "./messaging-adapter.js";
-import { MessagingFederatedThreadTargetError } from "./messaging-adapter.js";
+import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply } from "./messaging-adapter.js";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
-import { buildActivityIntent, buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
+import { buildActivityIntent, buildConfirmationIntent, buildErrorIntent, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
 import { buildArtifactDeliveryIntent, buildArtifactInlineFallbackIntent, type MessagingArtifact, type MessagingArtifactMessageIntent } from "./messaging-artifact-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import { buildBoundedResumeIntent, isNewThreadLaunchAction, parseResumeCommandArgs, resumeBrowserPageSize } from "./messaging-resume-browser.js";
-import { buildStatusAcpRuntimeModePickerIntent, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, handoffRequestFromValue, messagingStreamingResponsesEnabled, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
+import { buildStatusAcpRuntimeModePickerIntent, buildHandoffBranchPickerIntent, buildHandoffConfirmationIntent, buildHandoffOverviewIntent, buildHandoffProjectPickerIntent, buildStatusModelPickerIntent, buildStatusPermissionsPickerIntent, buildStatusReasoningPickerIntent, buildStatusResponseModePickerIntent, buildStatusToolUpdateModePickerIntent, formatExecutionModeLabel, handoffRequestFromValue, messagingToolUpdateModeChoices, nextMessagingStreamingResponseMode, resolveMessagingStreamingResponseMode, resolveMessagingToolUpdateMode, type MessagingWorkspaceHandoffContext } from "./messaging-status-card.js";
 import { acpBackendDeclaresExecutionMode, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
 import { buildSkillRemovedIntent, buildSkillSelectedIntent, buildSkillsBrowserIntent, buildSkillsSearchPromptIntent, flattenSkillEntries, isSkillsWorkflowIntent, skillSelectionFromValue } from "./messaging-skills-browser.js";
 import { resolveMessagingThreadState, type MessagingNavigationContext, type MessagingThreadContext, type MessagingResolvedThreadState } from "./messaging-thread-state.js";
@@ -61,19 +61,22 @@ import type { MessagingToolActivity } from "./messaging-tool-activity.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
 import { isDeferrableDeliveryPriority, MessagingDeliveryBudget, type MessagingDeliveryPriority } from "./messaging-delivery-budget.js";
 import { MessagingDeliveryLane, type MessagingDeliveryLaneTicket } from "./messaging-delivery-lane.js";
-import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import { type MessagingAttachmentPolicy } from "./messaging-attachment-processor.js";
-import { MessagingOriginalAttachmentStore, OriginalAttachmentError, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
+import { MessagingOriginalAttachmentStore, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
 import { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
 import { MessagingTurnAdmission, threadKeyForBinding } from "./messaging-turn-admission.js";
 import { renderAutomationDecisionForMessaging, renderAutomationOutputForMessaging } from "../../automations/automation-output-decision.js";
 import { registerAutomationSourceMessageDeliveryHandler, registerAutomationTargetMessageDeliveryHandler } from "../../automations/automation-action-executor.js";
 import { MessagingBindingService } from "./messaging-binding-service";
 import type { MessagingBindingHost } from "./messaging-binding-context";
-import { threadContextForAdmissionState, normalizeConversationTitle, isDefaultAgentRouteBinding, handoffContextForBinding, type MessagingToolUpdateDefaultModeResolver } from "./messaging-binding-helpers";
-import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, originalAttachmentActorKey, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, truncateText, type MessagingFullAccessControlsResolver } from "./messaging-inbound-helpers";
+import { threadContextForAdmissionState, isDefaultAgentRouteBinding, handoffContextForBinding, type MessagingToolUpdateDefaultModeResolver } from "./messaging-binding-helpers";
+import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, agentMessagingThreadKey, resolveExecutionModeForThread, type ExecutionModeResolution, truncateText, type MessagingFullAccessControlsResolver } from "./messaging-inbound-helpers";
 import { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingInboundHost } from "./messaging-inbound-context";
+import { assistantImageDeliverySignature, isMessagingToolOriginBinding, summarizeNavigationThreadForMessaging, responseAttributionLabel, isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
+import { formatTimeOfDay, isPermanentMessagingTargetFailure } from "./messaging-monitor-helpers";
+
+
 
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -88,51 +91,14 @@ export type MessagingWorkingCardState = {
   omittedTaskCount: number;
   sequence: number;
 };
-const PRIVATE_REPLY_CONTINUATION_TTL_MS = 24 * 60 * 60 * 1_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const messagingControllerLog = getMainLogger("pwragent:messaging");
-
-type MonitorStateOptions = Pick<
-  MessagingMonitorState,
-  | "intervalMs"
-  | "pinnedThreadLimit"
-  | "recentThreadLimit"
-  | "showLastResponseSnippet"
-  | "showStatusLine"
->;
 
 type AutomationTurnMessagingContext = {
   automationName?: string;
   automationRunId?: string;
 };
-
-type AgentMessagingOriginResolution =
-  | { ok: true; origin: ActiveAgentMessagingOrigin }
-  | Extract<PwrAgentMessagingResponse, { ok: false }>;
-
-type AttachTargetResolution =
-  | {
-      ok: true;
-      federatedThread?: FederatedThreadRef;
-      thread: NavigationThreadSummary;
-    }
-  | Extract<PwrAgentMessagingResponse, { ok: false }>;
-
-function attachTargetNotFound(
-  backend: AppServerBackendKind,
-  threadId: string,
-): Extract<PwrAgentMessagingResponse, { ok: false }> {
-  return {
-    ok: false,
-    error: {
-      code: "not_found",
-      message:
-        `Thread ${backend}:${threadId} is not an active attachable thread. `
-        + "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
-    },
-  };
-}
 
 function resolveExecutionModeForBinding(
   binding: MessagingBindingRecord,
@@ -149,57 +115,6 @@ function executionModeForBinding(
   navigation?: MessagingNavigationContext,
 ): ThreadExecutionMode | undefined {
   return resolveExecutionModeForBinding(binding, navigation).mode;
-}
-
-function federationTargetForThread(
-  thread: NavigationThreadSummary,
-): FederationTarget | undefined {
-  return thread.federation?.ref.target.scope === "remote"
-    ? thread.federation.ref.target
-    : undefined;
-}
-
-function threadKeyForNavigationThread(
-  thread: NavigationThreadSummary,
-): string {
-  return thread.federation
-    ? federatedThreadIdentityKey(thread.federation.ref)
-    : buildThreadIdentityKey(thread.source, thread.id);
-}
-
-function readPdfToolString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readOptionalPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-    ? value
-    : undefined;
-}
-
-function readPdfToolPageNumbers(value: unknown): number[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) {
-    return undefined;
-  }
-  const pageNumbers = value.map(readOptionalPositiveInteger);
-  return pageNumbers.every((pageNumber) => pageNumber !== undefined)
-    ? pageNumbers as number[]
-    : undefined;
-}
-
-function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok: false }> {
-  const message = error instanceof Error ? error.message : "PDF attachment could not be read.";
-  return {
-    ok: false,
-    error: {
-      code:
-        message.startsWith("No PDF attachments") ||
-        message.startsWith("That PDF attachment")
-          ? "not_found"
-          : "invalid_arguments",
-      message,
-    },
-  };
 }
 
 export type MessagingControllerDeliveryBudgetEvent = {
@@ -317,16 +232,7 @@ export class MessagingController {
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   /** Turns whose final assistant item already resolved its images, per binding. */
   private readonly finalAssistantImageTurns = new Map<string, true>();
-  private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
-  private readonly assistantStreamDeliveryQueues = new Map<
-    string,
-    Promise<MessagingDeliveryResult>
-  >();
-  private readonly assistantStreamCancellationFailures = new Set<string>();
-  private readonly assistantStreamCancellationSignals = new Map<
-    string,
-    MessagingCancellationSignal
-  >();
+  private readonly assistantStreams: MessagingAssistantStreams;
   private readonly workingUpdateCancellationSignals = new Map<
     string,
     MessagingCancellationSignal
@@ -364,7 +270,6 @@ export class MessagingController {
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
-  private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly queuedTurnActions = new Set<Promise<void>>();
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly turns: MessagingTurns;
@@ -403,14 +308,6 @@ export class MessagingController {
   private readonly queueRecoveries: MessagingQueueRecoveries;
   private readonly sharedQueueNotices = new Map<string, QueueNoticeState<MessagingQueuedTurnEntry>>();
   private readonly sharedQueueNoticeHistory = new Set<string>();
-  private readonly monitorTimersByBindingId = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
-  private readonly monitorTimersBySubscriptionId = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
   // Set once dispose() runs. A monitor tick that was already in-flight when
   // dispose() cleared the timer maps would otherwise re-arm a fresh recurring
   // timer at the end of its run (the timer-map `has` guard is false post-clear),
@@ -456,6 +353,14 @@ export class MessagingController {
   private newThreadHostPorts?: MessagingNewThreadHost;
   private readonly reviewWorkflow: MessagingReviewWorkflow;
   private reviewHostPorts?: MessagingReviewHost;
+
+  private readonly agentToolWorkflow: MessagingAgentTools;
+  private agentToolHostPorts?: MessagingAgentToolHost;
+  private readonly monitorWorkflow: MessagingMonitorWorkflow;
+  private monitorHostPorts?: MessagingMonitorHost;
+
+  private readonly pendingRequests: MessagingPendingRequestWorkflow;
+  private pendingRequestHostPorts?: MessagingPendingRequestHost;
 
   constructor(private readonly options: MessagingControllerOptions) {
     const readStore = () => this.options.store;
@@ -507,6 +412,59 @@ export class MessagingController {
       get now() { return readNow(); },
       get logger() { return readLogger(); },
       host: () => this.callbackHost(),
+    });
+    this.assistantStreams = new MessagingAssistantStreams({
+      now: () => this.now(),
+      get streamingResponsesDefault() { return readStreamingDefault(); },
+      host: {
+        isTerminalPrivateResponseTurn: (...args) => this.isTerminalPrivateResponseTurn(...args),
+        turnProseKey: (...args) => this.turnProseKey(...args),
+        deliverAssistantMessage: (...args) => this.deliverAssistantMessage(...args),
+        responseAttributionForBinding: (...args) => this.responseAttributionForBinding(...args),
+        newIntentId: (...args) => this.newIntentId(...args),
+        deliver: (...args) => this.deliver(...args),
+        dismissTerminalPrivateResponseSurface: (...args) => this.dismissTerminalPrivateResponseSurface(...args),
+      },
+    });
+    this.pendingRequests = new MessagingPendingRequestWorkflow({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.pendingRequestHost(),
+    });
+    const readAgentToolConfig = () => this.options;
+    const readPrivateResponses = () => this.privateResponses;
+    const readToolUpdatePolicy = () => this.toolUpdatePolicy;
+    const readPdfAttachments = () => this.pdfAttachmentStore;
+    this.agentToolWorkflow = new MessagingAgentTools({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get privateResponses() { return readPrivateResponses(); },
+      get toolUpdatePolicy() { return readToolUpdatePolicy(); },
+      get pdfAttachmentStore() { return readPdfAttachments(); },
+      get config() { return readAgentToolConfig(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.agentToolHost(),
+    });
+    const readMonitorConfig = () => this.options;
+    const readTurns = () => this.turns;
+    const readDisposed = () => this.disposed;
+    this.monitorWorkflow = new MessagingMonitorWorkflow({
+      get store() { return readStore(); },
+      get backend() { return readBackend(); },
+      get adapter() { return readAdapter(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get turns() { return readTurns(); },
+      get disposed() { return readDisposed(); },
+      get config() { return readMonitorConfig(); },
+      now: () => this.now(),
+      get logger() { return readLogger(); },
+      host: () => this.monitorHost(),
     });
     const readBindingConfig = () => this.options;
     this.bindingService = new MessagingBindingService({
@@ -576,71 +534,11 @@ export class MessagingController {
     receivedFile?: Uint8Array,
     consumeOriginal?: OriginalAttachmentConsumer,
   ): Promise<PwrAgentMessagingResponse> {
-    switch (request.operation) {
-      case "list_messaging_attachments":
-      case "export_messaging_attachment":
-        return await this.handleOriginalAttachmentRequest(request, consumeOriginal);
-      case "list_messaging_surfaces":
-        return await this.listRetainedMessagingSurfaces(request);
-      case "attach_thread_to_surface":
-        return await this.attachThreadToRetainedSurface(request);
-      case "get_current_location":
-      case "get_current_messaging_surface": {
-        const origin = await this.resolveAgentMessagingOrigin(request.context);
-        if (!origin.ok) {
-          return origin;
-        }
-        return {
-          ok: true,
-          data: {
-            location: await this.summarizeAgentMessagingLocation(origin.origin),
-          },
-        };
-      }
-      case "rename_current_messaging_conversation":
-        return await this.renameCurrentMessagingConversationFromAgentMessagingOrigin(
-          request,
-        );
-      case "send_private_response":
-        return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
-      case "send_messaging_file":
-        return await this.sendMessagingFileFromAgentMessagingOrigin(request, receivedFile);
-      case "attach_thread_here":
-        return await this.attachThreadHereFromAgentMessagingOrigin(request);
-      case "inspect_messaging_pdfs":
-        return await this.inspectMessagingPdfsFromAgentMessagingOrigin(request);
-      case "search_messaging_pdf_text":
-        return await this.searchMessagingPdfTextFromAgentMessagingOrigin(request);
-      case "render_messaging_pdf_pages":
-        return await this.renderMessagingPdfPagesFromAgentMessagingOrigin(request);
-    }
+    return await this.agentToolWorkflow.handlePwrAgentMessagingRequest(request, receivedFile, consumeOriginal);
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
-    await this.inboundTurns.cleanupExpiredPrivateReplyContinuations();
-    if (this.options.channel) {
-      const subscriptions =
-        await this.options.store.findActiveMonitorSubscriptionsForChannelKind({
-          channel: this.options.channel,
-        });
-      for (const subscription of subscriptions) {
-        if (subscription.monitor.enabled) {
-          await this.runMonitorSubscriptionTick(subscription.id);
-        }
-      }
-    }
-
-    const backends = await this.resolveMonitorBackendKinds();
-    for (const backend of backends) {
-      const bindings = this.filterBindingsForChannel(
-        await this.options.store.findActiveBindingsForBackend({ backend }),
-      );
-      for (const binding of bindings) {
-        if (binding.monitor?.enabled) {
-          await this.runMonitorTick(binding.id);
-        }
-      }
-    }
+    await this.monitorWorkflow.startMonitoringForEnabledBindings();
   }
 
   private accessHost(): MessagingAccessHost {
@@ -912,7 +810,7 @@ export class MessagingController {
       get callbackHandlers() { return readController().callbackHandlers; },
       presentSkillsBrowser: (...args) => this.presentSkillsBrowser(...args),
       handleReviewTextAnswer: (...args) => this.reviewWorkflow.handleReviewTextAnswer(...args),
-      handleQuestionnaireTextAnswer: (...args) => this.handleQuestionnaireTextAnswer(...args),
+      handleQuestionnaireTextAnswer: (...args) => this.pendingRequests.handleQuestionnaireTextAnswer(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
       cycleToolUpdateMode: (...args) => this.cycleToolUpdateMode(...args),
@@ -943,7 +841,7 @@ export class MessagingController {
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       reconcileActiveTurnFromThreadStatus: (...args) => this.reconcileActiveTurnFromThreadStatus(...args),
       get backendEventRouter() { return readController().backendEventRouter; },
-      observeManagedTopicFromInbound: (...args) => this.observeManagedTopicFromInbound(...args),
+      observeManagedTopicFromInbound: (...args) => this.monitorWorkflow.observeManagedTopicFromInbound(...args),
       requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
       loadNewThreadBackendChoices: (...args) => this.newThreadWorkflow.loadNewThreadBackendChoices(...args),
       deliverSelectedNewThreadBackendUnavailable: (...args) => this.newThreadWorkflow.deliverSelectedNewThreadBackendUnavailable(...args),
@@ -953,6 +851,78 @@ export class MessagingController {
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },
       resolveFullAccessRiskForSession: (...args) => this.accessControl.resolveFullAccessRiskForSession(...args),
       presentFullAccessRiskWarning: (...args) => this.accessControl.presentFullAccessRiskWarning(...args),
+    };
+  }
+
+  private agentToolHost(): MessagingAgentToolHost {
+    const readOrigins = () => this.activeAgentMessagingOriginsByTurnKey;
+    return this.agentToolHostPorts ??= {
+      retainedRequestSource: (...args) => this.accessControl.retainedRequestSource(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
+      retainedRequestCanCrossInstance: (...args) => this.accessControl.retainedRequestCanCrossInstance(...args),
+      retainedSourceHasPermissions: (...args) => this.accessControl.retainedSourceHasPermissions(...args),
+      retainedSourceIsAuthorized: (...args) => this.accessControl.retainedSourceIsAuthorized(...args),
+      actorHasPermission: (...args) => this.accessControl.actorHasPermission(...args),
+      requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
+      bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
+      restoreAttachedTurnActivity: (...args) => this.restoreAttachedTurnActivity(...args),
+      renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
+      repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
+      notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
+      resolveBoundThreadSummary: (...args) => this.resolveBoundThreadSummary(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      clearTurnProse: (...args) => this.clearTurnProse(...args),
+      cancelAssistantStreamsForTurn: (...args) => this.assistantStreams.cancelAssistantStreamsForTurn(...args),
+      cancelWorkingUpdatesForTurn: (...args) => this.cancelWorkingUpdatesForTurn(...args),
+      clearTerminalPrivateResponseActivity: (...args) => this.clearTerminalPrivateResponseActivity(...args),
+      checkDynamicToolPermission: (...args) => this.accessControl.checkDynamicToolPermission(...args),
+      authorizeRetainedTool: (...args) => this.accessControl.authorizeRetainedTool(...args),
+      claimAssistantMessageContentDelivery: (...args) => this.claimAssistantMessageContentDelivery(...args),
+      readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
+      get activeAgentMessagingOriginsByTurnKey() { return readOrigins(); },
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      resolveActorPermissions: (...args) => this.accessControl.resolveActorPermissions(...args),
+      desktopActivityLog: (...args) => this.desktopActivityLog(...args),
+    };
+  }
+
+  private monitorHost(): MessagingMonitorHost {
+    return this.monitorHostPorts ??= {
+      cleanupExpiredPrivateReplyContinuations: (...args) => this.inboundTurns.cleanupExpiredPrivateReplyContinuations(...args),
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      deliver: (...args) => this.deliver(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      monitorAuthorizedActorIds: (...args) => this.accessControl.monitorAuthorizedActorIds(...args),
+      readExactNavigationThread: (...args) => this.readExactNavigationThread(...args),
+      bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
+    };
+  }
+
+  private pendingRequestHost(): MessagingPendingRequestHost {
+    return this.pendingRequestHostPorts ??= {
+      filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      bindingsForAgentTurn: (...args) => this.bindingsForAgentTurn(...args),
+      readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
+      reconcileIdleTurn: (...args) => this.reconcileIdleTurn(...args),
+      storePendingIntent: (...args) => this.storePendingIntent(...args),
+      flushPendingTurnProseBeforeElicitation: (...args) => this.flushPendingTurnProseBeforeElicitation(...args),
+      deliver: (...args) => this.deliver(...args),
+      reconcileActiveTurnFromBackendStatus: (...args) => this.reconcileActiveTurnFromBackendStatus(...args),
+      setActiveTurn: (...args) => this.setActiveTurn(...args),
+      signalTurnActivity: (...args) => this.signalTurnActivity(...args),
+      renderAutomaticBindingStatus: (...args) => this.bindingService.renderAutomaticBindingStatus(...args),
+      newIntentId: (...args) => this.newIntentId(...args),
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
+      isTurnOccupied: (...args) => this.inboundTurns.isTurnOccupied(...args),
+      resolveSteerableActiveTurn: (...args) => this.resolveSteerableActiveTurn(...args),
+      rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
+      startPreparedInput: (...args) => this.inboundTurns.startPreparedInput(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
+      agentMessagingOriginForPendingIntent: (...args) => this.agentMessagingOriginForPendingIntent(...args),
+      getActiveTurn: (...args) => this.getActiveTurn(...args),
+      logBindingTurnStateChange: (...args) => this.logBindingTurnStateChange(...args),
     };
   }
 
@@ -1005,13 +975,13 @@ export class MessagingController {
       presentDefaultAgentAssignmentBrowser: (...args) => this.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
-      stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
-      enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
-      resolveMonitorControlTopic: (...args) => this.resolveMonitorControlTopic(...args),
-      eventForManagedTopic: (...args) => this.eventForManagedTopic(...args),
-      renderTopicCleanupProposal: (...args) => this.renderTopicCleanupProposal(...args),
-      runTopicMonitorFanout: (...args) => this.runTopicMonitorFanout(...args),
-      renderTopicControlStatus: (...args) => this.renderTopicControlStatus(...args),
+      stopMonitoringForChannel: (...args) => this.monitorWorkflow.stopMonitoringForChannel(...args),
+      enableAndRenderChannelMonitor: (...args) => this.monitorWorkflow.enableAndRenderChannelMonitor(...args),
+      resolveMonitorControlTopic: (...args) => this.monitorWorkflow.resolveMonitorControlTopic(...args),
+      eventForManagedTopic: (...args) => this.monitorWorkflow.eventForManagedTopic(...args),
+      renderTopicCleanupProposal: (...args) => this.monitorWorkflow.renderTopicCleanupProposal(...args),
+      runTopicMonitorFanout: (...args) => this.monitorWorkflow.runTopicMonitorFanout(...args),
+      renderTopicControlStatus: (...args) => this.monitorWorkflow.renderTopicControlStatus(...args),
     };
   }
 
@@ -1024,10 +994,10 @@ export class MessagingController {
       newIntentId: (...args) => this.newIntentId(...args),
       readBoundNavigationThread: (...args) => this.readBoundNavigationThread(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
-      disableChannelMonitorSubscription: (...args) => this.disableChannelMonitorSubscription(...args),
+      disableChannelMonitorSubscription: (...args) => this.monitorWorkflow.disableChannelMonitorSubscription(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       flushToolUpdatesForBinding: (...args) => this.flushToolUpdatesForBinding(...args),
-      stopMonitoringForBinding: (...args) => this.stopMonitoringForBinding(...args),
+      stopMonitoringForBinding: (...args) => this.monitorWorkflow.stopMonitoringForBinding(...args),
       isChannelInScope: (...args) => this.isChannelInScope(...args),
       get showStreamingOptionConfig() { return readController().showStreamingOptionConfig; },
       contextUsageSummaryForBinding: (...args) => this.contextUsageSummaryForBinding(...args),
@@ -1057,10 +1027,10 @@ export class MessagingController {
       bindChannelToThread: (...args) => this.bindingService.bindChannelToThread(...args),
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
-      submitApprovalAction: (...args) => this.submitApprovalAction(...args),
-      retireApprovalIntent: (...args) => this.retireApprovalIntent(...args),
-      resumeBindingForPendingIntent: (...args) => this.resumeBindingForPendingIntent(...args),
-      handleQuestionnaireAction: (...args) => this.handleQuestionnaireAction(...args),
+      submitApprovalAction: (...args) => this.pendingRequests.submitApprovalAction(...args),
+      retireApprovalIntent: (...args) => this.pendingRequests.retireApprovalIntent(...args),
+      resumeBindingForPendingIntent: (...args) => this.pendingRequests.resumeBindingForPendingIntent(...args),
+      handleQuestionnaireAction: (...args) => this.pendingRequests.handleQuestionnaireAction(...args),
       handleReviewAction: (...args) => this.reviewWorkflow.handleReviewAction(...args),
       get turnAdmission() { return readController().turnAdmission; },
       isDisposed: () => this.disposed,
@@ -1101,9 +1071,9 @@ export class MessagingController {
       presentDefaultAgentStatus: (...args) => this.presentDefaultAgentStatus(...args),
       ensureFullAccessEscalationAllowed: (...args) => this.accessControl.ensureFullAccessEscalationAllowed(...args),
       updateBindingPreferences: (...args) => this.bindingService.updateBindingPreferences(...args),
-      stopMonitoringForChannel: (...args) => this.stopMonitoringForChannel(...args),
-      enableAndRenderChannelMonitor: (...args) => this.enableAndRenderChannelMonitor(...args),
-      deliverInvalidTopicApproval: (...args) => this.deliverInvalidTopicApproval(...args),
+      stopMonitoringForChannel: (...args) => this.monitorWorkflow.stopMonitoringForChannel(...args),
+      enableAndRenderChannelMonitor: (...args) => this.monitorWorkflow.enableAndRenderChannelMonitor(...args),
+      deliverInvalidTopicApproval: (...args) => this.monitorWorkflow.deliverInvalidTopicApproval(...args),
       getActiveTurn: (...args) => this.getActiveTurn(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
       detachBinding: (...args) => this.bindingService.detachBinding(...args),
@@ -1168,14 +1138,14 @@ export class MessagingController {
     const readController = () => this;
     return this.backendEventPorts = {
       refreshStatusSurfacesForBackend: (...args) => this.refreshStatusSurfacesForBackend(...args),
-      retireAnsweredAsyncQuestionnaires: (...args) => this.retireAnsweredAsyncQuestionnaires(...args),
+      retireAnsweredAsyncQuestionnaires: (...args) => this.pendingRequests.retireAnsweredAsyncQuestionnaires(...args),
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
       applySharedQueueNoticeEvent: (...args) => this.applySharedQueueNoticeEvent(...args),
       reconcileQueuedAgentMessagingOrigin: (...args) => this.reconcileQueuedAgentMessagingOrigin(...args),
       rememberContextUsageSummary: (...args) => this.rememberContextUsageSummary(...args),
-      handleBackendRequestResolved: (...args) => this.handleBackendRequestResolved(...args),
+      handleBackendRequestResolved: (...args) => this.pendingRequests.handleBackendRequestResolved(...args),
       handleExecutionModeQueued: (...args) => this.handleExecutionModeQueued(...args),
       refreshStatusSurfacesForThread: (...args) => this.bindingService.refreshStatusSurfacesForThread(...args),
       handleExecutionModeQueueCleared: (...args) => this.handleExecutionModeQueueCleared(...args),
@@ -1207,23 +1177,20 @@ export class MessagingController {
       get workingUpdateDeliveries() { return readController().workingUpdateDeliveries; },
       get workingUpdateSurfaces() { return readController().workingUpdateSurfaces; },
       get workingUpdateCancellationFailures() { return readController().workingUpdateCancellationFailures; },
-      waitForAssistantStreamDeliveriesForEvent: (...args) => this.waitForAssistantStreamDeliveriesForEvent(...args),
-      assistantStreamBufferKeysForEvent: (...args) => this.assistantStreamBufferKeysForEvent(...args),
-      get assistantStreamBuffers() { return readController().assistantStreamBuffers; },
-      get assistantStreamDeliveryQueues() { return readController().assistantStreamDeliveryQueues; },
-      get assistantStreamCancellationSignals() { return readController().assistantStreamCancellationSignals; },
-      deliverAssistantStreamUpdate: (...args) => this.deliverAssistantStreamUpdate(...args),
+      waitForAssistantStreamDeliveriesForEvent: (...args) => this.assistantStreams.waitForAssistantStreamDeliveriesForEvent(...args),
+      discardAssistantStreamItemForEvent: (...args) => this.assistantStreams.discardAssistantStreamItemForEvent(...args),
+      deliverAssistantStreamUpdate: (...args) => this.assistantStreams.deliverAssistantStreamUpdate(...args),
       get privateResponses() { return readController().privateResponses; },
       deliverPrivateResponseFallback: (...args) => this.deliverPrivateResponseFallback(...args),
-      takeBufferedAssistantTextForTerminalEvent: (...args) => this.takeBufferedAssistantTextForTerminalEvent(...args),
+      takeBufferedAssistantTextForTerminalEvent: (...args) => this.assistantStreams.takeBufferedAssistantTextForTerminalEvent(...args),
       markAssistantMessageDelivered: (...args) => this.markAssistantMessageDelivered(...args),
       resolveAssistantMessageImages: (...args) => this.resolveAssistantMessageImages(...args),
       deliverAssistantImages: (...args) => this.deliverAssistantImages(...args),
-      deliverAsyncQuestionnaire: (...args) => this.deliverAsyncQuestionnaire(...args),
-      flushAssistantStreamForEvent: (...args) => this.flushAssistantStreamForEvent(...args),
+      deliverAsyncQuestionnaire: (...args) => this.pendingRequests.deliverAsyncQuestionnaire(...args),
+      flushAssistantStreamForEvent: (...args) => this.assistantStreams.flushAssistantStreamForEvent(...args),
       deliverAssistantMessage: (...args) => this.deliverAssistantMessage(...args),
       deliverAssistantProseForBackendEvent: (...args) => this.deliverAssistantProseForBackendEvent(...args),
-      flushBufferedAssistantStreamsForTerminalEvent: (...args) => this.flushBufferedAssistantStreamsForTerminalEvent(...args),
+      flushBufferedAssistantStreamsForTerminalEvent: (...args) => this.assistantStreams.flushBufferedAssistantStreamsForTerminalEvent(...args),
       deliverTurnFailureMessage: (...args) => this.deliverTurnFailureMessage(...args),
       deliverResponseBlockedNotice: (...args) => this.deliverResponseBlockedNotice(...args),
       deliverArtifactForBinding: (...args) => this.deliverArtifactForBinding(...args),
@@ -1291,131 +1258,7 @@ export class MessagingController {
     request: AppServerPendingRequestNotification,
     federationTarget?: FederationTarget,
   ): Promise<void> {
-    const key = JSON.stringify([
-      backend,
-      request.params.threadId,
-      request.params.requestId,
-      federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined,
-    ]);
-    const existing = this.pendingRequestPresentations.get(key);
-    if (existing) {
-      await existing;
-      return;
-    }
-    // Reserve before the first store read completes so overlapping redisplays
-    // cannot both create an intent for the same backend request.
-    const presentation = this.presentBackendPendingRequest(backend, request, federationTarget);
-    this.pendingRequestPresentations.set(key, presentation);
-    try {
-      await presentation;
-    } finally {
-      this.pendingRequestPresentations.delete(key);
-    }
-  }
-
-  private async presentBackendPendingRequest(
-    backend: AppServerBackendKind,
-    request: AppServerPendingRequestNotification,
-    federationTarget?: FederationTarget,
-  ): Promise<void> {
-    const persistentBindings = this.filterBindingsForChannel(
-      await this.options.store.findActiveBindingsForThread({
-        backend,
-        threadId: request.params.threadId,
-      }),
-    ).filter((binding) =>
-      bindingMatchesFederationTarget(binding, federationTarget)
-    );
-    const bindings = this.bindingsForAgentTurn(
-      backend,
-      request.params.threadId,
-      request.params.turnId ?? undefined,
-      persistentBindings,
-    );
-
-    const existingIntents = await this.options.store.findActivePendingIntentsForRequest({
-      backend,
-      threadId: request.params.threadId,
-      requestId: request.params.requestId,
-      now: this.now(),
-    });
-    for (const binding of bindings) {
-      // Desktop transcript recovery also reaches messaging. Keep the existing
-      // actionable message and any questionnaire answers for this binding.
-      if (existingIntents.some((intent) => intent.bindingId === binding.id)) {
-        continue;
-      }
-      const intent = this.intentForPendingRequest(request);
-      if (!intent) {
-        continue;
-      }
-      intent.bindingId = binding.id;
-      intent.requestContext = {
-        backend,
-        method: request.method,
-        requestId: request.params.requestId,
-        threadId: request.params.threadId,
-        turnId: request.params.turnId ?? undefined,
-      };
-      intent.audit = buildMessagingAuditContext({
-        action: "pending_request.presented",
-        actor: {
-          platformUserId: binding.authorizedActorIds[0] ?? "unknown",
-        },
-        backend,
-        bindingId: binding.id,
-        channel: binding.channel,
-        now: this.now(),
-        threadId: request.params.threadId,
-      });
-      if (request.params.turnId) {
-        const threadStatus = await this.readBackendThreadStatus(binding);
-        if (threadStatus === "idle") {
-          await this.reconcileIdleTurn(binding, "pending_request");
-          continue;
-        }
-      }
-      const pendingIntent = await this.storePendingIntent(intent, binding);
-      await this.flushPendingTurnProseBeforeElicitation(
-        binding,
-        request.params.turnId,
-      );
-      const delivery = await this.deliver(intent, binding);
-      let deliveredPendingIntent = pendingIntent;
-      if (delivery.surface) {
-        deliveredPendingIntent = {
-          ...pendingIntent,
-          surface: delivery.surface,
-        };
-        await this.options.store.upsertPendingIntent(deliveredPendingIntent);
-      }
-      if (request.params.turnId) {
-        const reconciledTurn = await this.reconcileActiveTurnFromBackendStatus(
-          binding,
-          "pending_request",
-        );
-        if (isTerminalTurnLifecycle(reconciledTurn)) {
-          await this.retireStalePendingIntent(deliveredPendingIntent);
-          continue;
-        }
-        const threadStatus = await this.readBackendThreadStatus(binding);
-        if (threadStatus === "idle") {
-          await this.retireStalePendingIntent(deliveredPendingIntent);
-          await this.reconcileIdleTurn(binding, "pending_request");
-          continue;
-        }
-        const activeTurn: MessagingActiveTurnSummary = {
-          turnId: request.params.turnId,
-          status: "waiting",
-          updatedAt: this.now(),
-        };
-        this.setActiveTurn(binding, activeTurn);
-        await this.signalTurnActivity(binding, activeTurn, {
-          force: true,
-        });
-        await this.bindingService.renderAutomaticBindingStatus(binding);
-      }
-    }
+    await this.pendingRequests.handleBackendPendingRequest(backend, request, federationTarget);
   }
 
   private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
@@ -1547,578 +1390,6 @@ export class MessagingController {
       });
     }).finally(() => { this.queuedTurnActions.delete(task); });
     this.queuedTurnActions.add(task);
-  }
-
-  private async handleQuestionnaireTextAnswer(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundTextEvent,
-  ): Promise<boolean> {
-    if (pendingIntent.intent.kind !== "questionnaire") {
-      return false;
-    }
-
-    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
-    const question = intent.questions[intent.currentIndex];
-    const value = event.text.trim();
-    if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
-      return false;
-    }
-
-    const updated = this.questionnaireWithRecordedAnswer(intent, {
-      kind: "custom",
-      value,
-    });
-    if (this.questionnaireReadyToSubmit(updated)) {
-      await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
-      return true;
-    }
-
-    await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
-    return true;
-  }
-
-  private async handleQuestionnaireAction(
-    pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent,
-    action: MessagingSurfaceAction,
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "questionnaire") {
-      return;
-    }
-
-    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
-    if (action.id === "questionnaire:skip") {
-      if (intent.asyncReply) {
-        await this.options.store.deletePendingIntent(pendingIntent.id);
-        await this.deliverQuestionnaireIntent(
-          pendingIntent,
-          { ...intent, phase: "skipped" },
-          event,
-        );
-      }
-      return;
-    }
-
-    if (action.id === "questionnaire:back") {
-      await this.updateQuestionnairePendingIntent(
-        pendingIntent,
-        this.questionnaireWithPreviousQuestion(intent),
-        event,
-      );
-      return;
-    }
-
-    if (action.id === "questionnaire:next") {
-      await this.updateQuestionnairePendingIntent(
-        pendingIntent,
-        this.questionnaireWithNextQuestion(intent),
-        event,
-      );
-      return;
-    }
-
-    if (action.id === "questionnaire:submit") {
-      if (!this.questionnaireReadyToSubmit(intent)) {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("questionnaire-incomplete"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: this.now(),
-            title: "Answer each question",
-            body: "Review the input request and answer every question before submitting.",
-            fallbackText: "Answer each question before submitting.",
-          }),
-          undefined,
-          event,
-        );
-        return;
-      }
-
-      await this.submitAndRetireQuestionnaire(pendingIntent, intent, event);
-      return;
-    }
-
-    const updated = this.questionnaireWithOptionAnswer(intent, action.id);
-    if (updated !== intent) {
-      if (this.questionnaireReadyToSubmit(updated)) {
-        await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
-        return;
-      }
-
-      await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
-    }
-  }
-
-  private questionnaireWithOptionAnswer(
-    intent: MessagingQuestionnaireIntent,
-    optionId: string,
-  ): MessagingQuestionnaireIntent {
-    if (intent.phase !== "answering") {
-      return intent;
-    }
-
-    const question = intent.questions[intent.currentIndex];
-    const option = question?.options.find((candidate) => candidate.id === optionId);
-    if (!option) {
-      return intent;
-    }
-
-    return this.questionnaireWithRecordedAnswer(intent, {
-      kind: "option",
-      optionId: option.id,
-      value: typeof option.value === "string" ? option.value : option.label,
-    });
-  }
-
-  private questionnaireWithRecordedAnswer(
-    intent: MessagingQuestionnaireIntent,
-    answer: MessagingQuestionnaireAnswer,
-  ): MessagingQuestionnaireIntent {
-    const answers = [...intent.answers];
-    answers[intent.currentIndex] = answer;
-
-    const nextIndex = intent.currentIndex + 1;
-    if (nextIndex < intent.questions.length) {
-      return {
-        ...intent,
-        answers,
-        currentIndex: nextIndex,
-        phase: "answering",
-      };
-    }
-
-    return {
-      ...intent,
-      answers,
-      phase: "answering",
-    };
-  }
-
-  private questionnaireWithNextQuestion(
-    intent: MessagingQuestionnaireIntent,
-  ): MessagingQuestionnaireIntent {
-    if (intent.phase !== "answering") {
-      return intent;
-    }
-    if (!messagingQuestionnaireAnswerComplete(intent.answers[intent.currentIndex])) {
-      return intent;
-    }
-    if (intent.currentIndex >= intent.questions.length - 1) {
-      return intent;
-    }
-    return {
-      ...intent,
-      currentIndex: intent.currentIndex + 1,
-    };
-  }
-
-  private questionnaireReadyToSubmit(intent: MessagingQuestionnaireIntent): boolean {
-    return (
-      intent.currentIndex >= intent.questions.length - 1 &&
-      intent.answers.every(messagingQuestionnaireAnswerComplete)
-    );
-  }
-
-  private async submitAndRetireQuestionnaire(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<void> {
-    if (intent.asyncReply) {
-      await this.submitAsyncQuestionnaire(pendingIntent, intent, event);
-      return;
-    }
-    const submittedIntent: MessagingQuestionnaireIntent = {
-      ...intent,
-      phase: "submitted",
-    };
-    await this.submitQuestionnaireIntent(submittedIntent);
-    await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    await this.resumeBindingForPendingIntent(
-      pendingIntent,
-      "pending_request.submitted",
-    );
-  }
-
-  private questionnaireWithPreviousQuestion(
-    intent: MessagingQuestionnaireIntent,
-  ): MessagingQuestionnaireIntent {
-    if (intent.phase === "review") {
-      return {
-        ...intent,
-        currentIndex: Math.max(0, intent.questions.length - 1),
-        phase: "answering",
-      };
-    }
-    if (intent.phase !== "answering" || intent.currentIndex <= 0) {
-      return intent;
-    }
-    return {
-      ...intent,
-      currentIndex: intent.currentIndex - 1,
-    };
-  }
-
-  private async updateQuestionnairePendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<void> {
-    const result = await this.deliverQuestionnaireIntent(pendingIntent, intent, event);
-    await this.options.store.upsertPendingIntent({
-      ...pendingIntent,
-      intent,
-      surface: result.surface ?? pendingIntent.surface,
-    });
-  }
-
-  private async deliverQuestionnaireIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event?: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<MessagingDeliveryResult> {
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    const targetSurface = pendingIntent.surface ?? (
-      event?.kind === "callback" ? event.interaction : undefined
-    );
-    const deliveryIntent: MessagingQuestionnaireIntent = targetSurface
-      ? {
-          ...intent,
-          delivery: {
-            mode: "update",
-            replaceMarkup: true,
-            fallback: "present_new",
-          },
-          targetSurface,
-        }
-      : intent;
-    return await this.deliver(deliveryIntent, binding, event);
-  }
-
-  /**
-   * Presents the questions a Codex async question message asked. Nothing is
-   * waiting on the answer, so the turn keeps its working state.
-   */
-  private async deliverAsyncQuestionnaire(
-    asyncQuestions: { itemId: string; questions: CodexAsyncQuestion[] },
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-    turnId: string | undefined,
-  ): Promise<void> {
-    const threadId = threadIdForBackendEvent(event) ?? binding.threadId;
-    const intent = buildAsyncQuestionnaireIntent({
-      asyncReply: {
-        backend: event.backend,
-        itemId: asyncQuestions.itemId,
-        threadId,
-      },
-      capabilityProfile: this.capabilityProfile,
-      createdAt: this.now(),
-      id: this.newIntentId("async-question"),
-      questions: asyncQuestions.questions,
-    });
-    intent.bindingId = binding.id;
-    intent.audit = buildMessagingAuditContext({
-      action: "async_question.presented",
-      actor: {
-        platformUserId: binding.authorizedActorIds[0] ?? "unknown",
-      },
-      backend: event.backend,
-      bindingId: binding.id,
-      channel: binding.channel,
-      now: this.now(),
-      threadId,
-    });
-    const pendingIntent = await this.storePendingIntent(intent, binding);
-    await this.flushPendingTurnProseBeforeElicitation(binding, turnId);
-    const delivery = await this.deliver(intent, binding);
-    if (delivery.outcome === "failed") {
-      // No turn end retires an async card, so one nobody can see would take
-      // the operator's next message as its answer.
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      return;
-    }
-    if (delivery.surface) {
-      await this.options.store.upsertPendingIntent({
-        ...pendingIntent,
-        surface: delivery.surface,
-      });
-    }
-  }
-
-  /**
-   * A Codex async question has no pending request to answer. The answers go
-   * back as one message in Codex's reply envelope: steered into the turn when
-   * one is running, as Codex expects, and otherwise as a new turn.
-   */
-  private async submitAsyncQuestionnaire(
-    pendingIntent: MessagingPendingIntentRecord,
-    intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
-  ): Promise<void> {
-    const asyncReply = intent.asyncReply;
-    if (!asyncReply) {
-      return;
-    }
-    const binding = pendingIntent.bindingId
-      ? await this.options.store.getBinding(pendingIntent.bindingId)
-      : undefined;
-    const text = formatCodexAsyncQuestionReply(
-      intent.questions.map((question, index) => ({
-        questionItemId: codexAsyncQuestionItemId(asyncReply.itemId, index),
-        question: question.question,
-        answer: intent.answers[index]?.value ?? "",
-      })),
-    );
-    if (!text) {
-      return;
-    }
-    if (!binding || binding.revokedAt) {
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("async-question-unavailable"),
-          createdAt: this.now(),
-          title: "Question unavailable",
-          body: "This conversation is no longer bound to the thread that asked.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-    if (
-      !(await this.accessControl.requirePermission(
-        event,
-        "message.reply",
-        "questionnaire:async-reply",
-      ))
-      || !(await this.accessControl.requireRemoteScopeForBinding(
-        event,
-        binding,
-        "questionnaire:async-reply:remote-instance",
-      ))
-    ) {
-      return;
-    }
-
-    // Retire the card before sending: the reply's own echo would otherwise
-    // find it still pending and close it a second time.
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    const sent = await this.sendAsyncQuestionReply({
-      binding,
-      event,
-      preview: summarizeCodexAsyncQuestionReply(
-        intent.answers.map((answer) => ({ answer: answer?.value ?? "" })),
-      ),
-      text,
-    });
-    if (!sent) {
-      await this.updateQuestionnairePendingIntent(pendingIntent, intent, event);
-      return;
-    }
-    await this.deliverQuestionnaireIntent(
-      pendingIntent,
-      { ...intent, phase: "submitted" },
-      event,
-    );
-  }
-
-  private async sendAsyncQuestionReply(params: {
-    binding: MessagingBindingRecord;
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent;
-    preview: string;
-    text: string;
-  }): Promise<boolean> {
-    const { binding, event } = params;
-    const input: AppServerTurnInputItem[] = [{ type: "text", text: params.text }];
-    const threadKey = threadKeyForBinding(binding);
-    let admissionState: MessagingThreadAdmissionState;
-    try {
-      admissionState = await this.options.backend.getThreadAdmissionState({
-        backend: binding.backend,
-        federationTarget: federationTargetForBinding(binding),
-        threadId: binding.threadId,
-      });
-    } catch (error) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("async-question-reply-failed"),
-          createdAt: this.now(),
-          title: "Answer could not be sent",
-          body: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        }),
-        binding,
-        event,
-      );
-      return false;
-    }
-
-    if (await this.inboundTurns.isTurnOccupied(binding, threadKey, admissionState)) {
-      const activeTurn = await this.resolveSteerableActiveTurn(
-        binding,
-        "async_question_reply",
-      );
-      if (
-        this.options.backend.steerTurn
-        && activeTurn
-        && ["working", "waiting"].includes(activeTurn.status)
-      ) {
-        try {
-          await this.options.backend.steerTurn({
-            backend: binding.backend,
-            federationTarget: federationTargetForBinding(binding),
-            threadId: binding.threadId,
-            expectedTurnId: activeTurn.turnId,
-            input,
-            requestId: this.newIntentId("async-question-reply"),
-            messageOrigin: messageOriginForInboundEvent(event, this.rememberHumanMessagingSource(binding, event)?.ref),
-          });
-          return true;
-        } catch (error) {
-          this.logger.warn?.("messaging async question reply could not steer", {
-            bindingId: binding.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-    }
-
-    const started = await this.inboundTurns.startPreparedInput({
-      admissionState,
-      binding,
-      event,
-      input,
-      preview: params.preview,
-      threadKey,
-    });
-    return started !== "failed";
-  }
-
-  /**
-   * An async question answered anywhere closes its card here, so a later
-   * chat message is not captured as a second answer.
-   */
-  private async retireAnsweredAsyncQuestionnaires(
-    event: AgentEvent,
-    threadId: ThreadIdentifier,
-    replies: readonly CodexAsyncQuestionReply[],
-  ): Promise<void> {
-    const answers = new Map(
-      replies.map((reply) => [reply.questionItemId, reply.answer]),
-    );
-    const answeredIds = new Set(answers.keys());
-    const pendingIntents =
-      await this.options.store.findActivePendingAsyncQuestionnaires({
-        backend: event.backend,
-        threadId,
-        now: this.now(),
-      });
-    for (const pendingIntent of pendingIntents) {
-      if (
-        pendingIntent.intent.kind !== "questionnaire"
-        || !this.isChannelInScope(pendingIntent.channel)
-      ) {
-        continue;
-      }
-      const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
-      const itemId = intent.asyncReply?.itemId;
-      if (
-        !itemId
-        || !intent.questions.some((_, index) =>
-          isCodexAsyncQuestionAnswered(answeredIds, itemId, index)
-        )
-      ) {
-        continue;
-      }
-      const binding = pendingIntent.bindingId
-        ? await this.options.store.getBinding(pendingIntent.bindingId)
-        : undefined;
-      if (binding && !bindingMatchesFederationTarget(binding, event.federationTarget)) {
-        continue;
-      }
-      const answered: MessagingQuestionnaireIntent = {
-        ...intent,
-        answers: intent.questions.map((question, index) => {
-          const value = answers.get(codexAsyncQuestionItemId(itemId, index))
-            ?? answers.get(itemId);
-          if (!value) {
-            return intent.answers[index] ?? null;
-          }
-          const option = question.options.find((candidate) => candidate.value === value);
-          return option
-            ? { kind: "option", optionId: option.id, value }
-            : { kind: "custom", value };
-        }),
-        phase: "submitted",
-      };
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.deliverQuestionnaireIntent(pendingIntent, answered);
-    }
-  }
-
-  private async submitQuestionnaireIntent(
-    intent: MessagingQuestionnaireIntent,
-  ): Promise<void> {
-    const requestContext = intent.requestContext;
-    if (!requestContext || !this.options.backend.submitServerRequest) {
-      return;
-    }
-    const binding = intent.bindingId
-      ? await this.options.store.getBinding(intent.bindingId)
-      : undefined;
-
-    await this.options.backend.submitServerRequest({
-      backend: requestContext.backend,
-      federationTarget: binding
-        ? federationTargetForBinding(binding)
-        : undefined,
-      threadId: requestContext.threadId,
-      turnId: requestContext.turnId,
-      requestId: requestContext.requestId,
-      response: {
-        answers: Object.fromEntries(
-          intent.questions.map((question, index) => [
-            question.id,
-            {
-              answers: questionnaireAnswerValue(intent.answers[index]),
-            },
-          ]),
-        ),
-      },
-    });
-  }
-
-  private async submitApprovalAction(
-    intent: Extract<MessagingSurfaceIntent, { kind: "approval" }>,
-    actionId: string,
-  ): Promise<MessagingApprovalDecision | undefined> {
-    const requestContext = intent.requestContext;
-    const action = intent.decisions.find((candidate) => candidate.id === actionId);
-    const decision = action?.decision;
-    if (!requestContext || !action || !this.options.backend.submitServerRequest) {
-      return decision;
-    }
-    const binding = intent.bindingId
-      ? await this.options.store.getBinding(intent.bindingId)
-      : undefined;
-
-    await this.options.backend.submitServerRequest({
-      backend: requestContext.backend,
-      federationTarget: binding
-        ? federationTargetForBinding(binding)
-        : undefined,
-      threadId: requestContext.threadId,
-      turnId: requestContext.turnId,
-      requestId: requestContext.requestId,
-      response: action.response ?? { decision },
-    });
-    return decision;
   }
 
   /**
@@ -2328,118 +1599,6 @@ export class MessagingController {
     return buildThreadIdentityKey(backend, threadId);
   }
 
-  private async handleBackendRequestResolved(event: AgentEvent): Promise<void> {
-    if (event.notification.method !== "serverRequest/resolved") {
-      return;
-    }
-
-    const pendingIntents =
-      await this.options.store.findActivePendingIntentsForRequest({
-        backend: event.backend,
-        threadId: event.notification.params.threadId,
-        requestId: event.notification.params.requestId,
-        now: this.now(),
-      });
-
-    for (const pendingIntent of pendingIntents.filter((intent) =>
-      this.isChannelInScope(intent.channel),
-    )) {
-      const binding = pendingIntent.bindingId
-        ? await this.options.store.getBinding(pendingIntent.bindingId)
-        : undefined;
-      if (
-        binding &&
-        !bindingMatchesFederationTarget(binding, event.federationTarget)
-      ) {
-        continue;
-      }
-      await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.resumeBindingForPendingIntent(
-        pendingIntent,
-        event.notification.method,
-      );
-    }
-  }
-
-  private async retireApprovalIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    event?: MessagingInboundCallbackEvent,
-    responseLabel = "Resolved",
-  ): Promise<void> {
-    if (pendingIntent.intent.kind !== "approval") {
-      return;
-    }
-
-    const targetSurface = pendingIntent.surface ?? event?.interaction;
-    if (!targetSurface) {
-      return;
-    }
-
-    try {
-      await this.deliver(
-        {
-          ...pendingIntent.intent,
-          body: approvalBodyWithResponse(pendingIntent.intent.body, responseLabel),
-          decisions: [],
-          delivery: {
-            mode: "update",
-            replaceMarkup: true,
-            fallback: "fail",
-          },
-          fallbackText: `Approval response received: ${responseLabel}.`,
-          targetSurface,
-        },
-        undefined,
-        event,
-      );
-    } catch (error) {
-      this.logger.debug?.("messaging approval retirement update failed", {
-        error: error instanceof Error ? error.message : String(error),
-        intentId: pendingIntent.intent.id,
-      });
-    }
-  }
-
-  private async resumeBindingForPendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-    reason: string,
-  ): Promise<MessagingBindingRecord | undefined> {
-    const bindingId = pendingIntent.bindingId;
-    const turnId = pendingIntent.intent.requestContext?.turnId;
-    if (!bindingId || !turnId) {
-      return undefined;
-    }
-
-    const origin = this.agentMessagingOriginForPendingIntent(pendingIntent);
-    const binding = await this.options.store.getBinding(bindingId)
-      ?? origin?.deliveryBinding
-      ?? origin?.binding;
-    const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
-    if (
-      !binding ||
-      binding.revokedAt ||
-      !activeTurn ||
-      activeTurn.turnId !== turnId ||
-      activeTurn.status !== "waiting"
-    ) {
-      return undefined;
-    }
-
-    const resumedTurn: MessagingActiveTurnSummary = {
-      ...activeTurn,
-      status: "working",
-      updatedAt: this.now(),
-    };
-    this.setActiveTurn(binding, resumedTurn);
-    this.logBindingTurnStateChange(binding, activeTurn, resumedTurn, reason);
-    await this.signalTurnActivity(binding, resumedTurn, {
-      force: true,
-      reason,
-    });
-    return binding;
-  }
-
   /**
    * Resolve the effective streaming-responses toggle for a binding. Mirrors the
    * adapter-side check (`policy` + global `config.streamingResponses`) and the
@@ -2449,503 +1608,6 @@ export class MessagingController {
    * real short-circuit on this path — not a `policy` the adapter discards after
    * the intent has already churned the delivery budget.
    */
-  private isStreamingResponsesEnabledForBinding(
-    binding: MessagingBindingRecord,
-  ): boolean {
-    return messagingStreamingResponsesEnabled(
-      resolveMessagingStreamingResponseMode(binding),
-      this.streamingResponsesDefault,
-    );
-  }
-
-  private async deliverAssistantStreamUpdate(
-    delta: AssistantStreamDelta,
-    binding: MessagingBindingRecord,
-    options?: { bufferOnly?: boolean },
-  ): Promise<void> {
-    if (
-      this.isTerminalPrivateResponseTurn(
-        binding.backend,
-        binding.threadId,
-        delta.turnId,
-      )
-    ) {
-      return;
-    }
-    const bufferKey = this.assistantStreamBufferKey(delta.streamKey, binding);
-    const now = this.now();
-    const existing = this.assistantStreamBuffers.get(bufferKey);
-    const buffer: AssistantStreamBuffer = existing
-      ? {
-          ...existing,
-          delta: delta.delta,
-          sequence: existing.sequence + 1,
-          text: `${existing.text}${delta.delta}`,
-        }
-      : {
-          ...delta,
-          // First receipt: hold the first coalesced block for the initial
-          // window so a burst of opening tokens becomes one edit, not many.
-          nextReleaseAt: now + coalesceBackoffMs(0),
-          releaseCount: 0,
-          sequence: 1,
-          text: delta.delta,
-        };
-    this.assistantStreamBuffers.set(bufferKey, buffer);
-    // Bound the buffer map: a turn whose late deltas arrive after its terminal
-    // flush re-creates an entry that no later terminal event clears. Cap it so
-    // those orphans are reclaimed rather than accumulating for the process life.
-    evictStaleStreamAnchors(this.assistantStreamBuffers);
-
-    if (options?.bufferOnly) {
-      return;
-    }
-
-    // Streaming off: keep accumulating deltas (the terminal flush still needs
-    // the buffered text — e.g. ACP turns whose only output arrives as deltas)
-    // but never emit a partial `stream_update`. Those intents would be
-    // discarded downstream yet still consume a budget-admission check, and the
-    // surface churn is what floods the channel with many separate messages.
-    if (!this.isStreamingResponsesEnabledForBinding(binding)) {
-      return;
-    }
-
-    // Coalesce: buffer this delta into `text` (already done above) and emit
-    // nothing until the stored release time passes. Each release then schedules
-    // the next one exponentially further out (~400ms → 1s → 2s → 4s → 8s → 16s
-    // cap) so a long stream settles to at most one edit every ~16s instead of
-    // one edit per delta. The final flush bypasses this timer entirely.
-    if (buffer.text.trim().length === 0 || now < buffer.nextReleaseAt) {
-      return;
-    }
-
-    const releaseCount = buffer.releaseCount + 1;
-    this.assistantStreamBuffers.set(bufferKey, {
-      ...buffer,
-      releaseCount,
-      nextReleaseAt: now + coalesceBackoffMs(releaseCount),
-    });
-    await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, false);
-  }
-
-  private async flushAssistantStreamForEvent(
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-    finalText: string,
-  ): Promise<boolean> {
-    const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
-    let deliveredFinalStream = false;
-    const completedTurnIds = new Set<string>();
-    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
-      const buffer = this.assistantStreamBuffers.get(bufferKey);
-      if (!buffer) {
-        continue;
-      }
-      completedTurnIds.add(buffer.turnId);
-      // Streaming off: drop the accumulator without emitting a final
-      // `stream_update`. Returning `false` routes the caller to
-      // `deliverAssistantMessage`, so the turn lands as a single message
-      // instead of a discarded stream edit followed by that same message.
-      if (!streamingEnabled) {
-        this.assistantStreamBuffers.delete(bufferKey);
-        this.assistantStreamDeliveryQueues.delete(bufferKey);
-        continue;
-      }
-      this.assistantStreamBuffers.set(bufferKey, {
-        ...buffer,
-        delta: "",
-        sequence: buffer.sequence + 1,
-        text: finalText,
-      });
-      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
-      deliveredFinalStream ||= isVisibleAssistantStreamDelivery(result);
-      this.assistantStreamBuffers.delete(bufferKey);
-      this.assistantStreamDeliveryQueues.delete(bufferKey);
-    }
-    for (const turnId of completedTurnIds) {
-      this.assistantStreamCancellationSignals.delete(
-        this.turnProseKey(binding.id, turnId),
-      );
-    }
-    return deliveredFinalStream;
-  }
-
-  private async flushBufferedAssistantStreamsForTerminalEvent(
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-  ): Promise<void> {
-    const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
-    const fallbackMessages: Array<{
-      identity: AssistantMessageDeliveryIdentity;
-      text: string;
-    }> = [];
-    const completedTurnIds = new Set<string>();
-    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
-      const buffer = this.assistantStreamBuffers.get(bufferKey);
-      if (!buffer) {
-        continue;
-      }
-      completedTurnIds.add(buffer.turnId);
-      const text = buffer.text.trim();
-      if (!text) {
-        this.assistantStreamBuffers.delete(bufferKey);
-        this.assistantStreamDeliveryQueues.delete(bufferKey);
-        continue;
-      }
-      // Streaming off: post the buffered text as a plain message rather than an
-      // (immediately discarded) final `stream_update`. Same single-message
-      // outcome, without churning the delivery budget on a doomed stream edit.
-      if (!streamingEnabled) {
-        fallbackMessages.push({
-          identity: {
-            itemId: buffer.itemId,
-            threadId: buffer.threadId,
-            turnId: buffer.turnId,
-          },
-          text,
-        });
-        this.assistantStreamBuffers.delete(bufferKey);
-        this.assistantStreamDeliveryQueues.delete(bufferKey);
-        continue;
-      }
-      this.assistantStreamBuffers.set(bufferKey, {
-        ...buffer,
-        delta: "",
-        sequence: buffer.sequence + 1,
-        text,
-      });
-      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
-      if (!isVisibleAssistantStreamDelivery(result)) {
-        fallbackMessages.push({
-          identity: {
-            itemId: buffer.itemId,
-            threadId: buffer.threadId,
-            turnId: buffer.turnId,
-          },
-          text,
-        });
-      }
-      this.assistantStreamBuffers.delete(bufferKey);
-      this.assistantStreamDeliveryQueues.delete(bufferKey);
-    }
-
-    for (const turnId of completedTurnIds) {
-      this.assistantStreamCancellationSignals.delete(
-        this.turnProseKey(binding.id, turnId),
-      );
-    }
-
-    for (const fallback of fallbackMessages) {
-      await this.deliverAssistantMessage(
-        fallback.text,
-        event,
-        binding,
-        [],
-        fallback.identity,
-      );
-    }
-  }
-
-  private takeBufferedAssistantTextForTerminalEvent(
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-  ): string | undefined {
-    const completedTurnIds = new Set<string>();
-    const messages: string[] = [];
-    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
-      const buffer = this.assistantStreamBuffers.get(bufferKey);
-      if (!buffer) {
-        continue;
-      }
-      completedTurnIds.add(buffer.turnId);
-      const text = buffer.text.trim();
-      if (text) {
-        messages.push(text);
-      }
-      this.assistantStreamBuffers.delete(bufferKey);
-      this.assistantStreamDeliveryQueues.delete(bufferKey);
-    }
-    for (const turnId of completedTurnIds) {
-      this.assistantStreamCancellationSignals.delete(
-        this.turnProseKey(binding.id, turnId),
-      );
-    }
-    const text = messages.join("\n\n").trim();
-    return text || undefined;
-  }
-
-  private async waitForAssistantStreamDeliveriesForEvent(
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-  ): Promise<void> {
-    const deliveries = this.assistantStreamBufferKeysForEvent(event, binding)
-      .map((bufferKey) => this.assistantStreamDeliveryQueues.get(bufferKey))
-      .filter(
-        (delivery): delivery is Promise<MessagingDeliveryResult> => Boolean(delivery),
-      );
-    if (deliveries.length === 0) {
-      return;
-    }
-    await Promise.allSettled(deliveries);
-  }
-
-  private assistantStreamBufferKeysForEvent(
-    event: AgentEvent,
-    binding: MessagingBindingRecord,
-  ): string[] {
-    const keys = new Set(
-      assistantStreamKeysForBackendEvent(event).map((streamKey) =>
-        this.assistantStreamBufferKey(streamKey, binding),
-      ),
-    );
-    const filter = assistantStreamFilterForBackendEvent(event);
-    if (!filter) {
-      return [...keys];
-    }
-    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
-      if (
-        bufferKey.startsWith(`${binding.id}\0`) &&
-        buffer.streamKey.startsWith(`${event.backend}:`) &&
-        buffer.threadId === filter.threadId &&
-        (!filter.turnId || buffer.turnId === filter.turnId)
-      ) {
-        keys.add(bufferKey);
-      }
-    }
-    return [...keys];
-  }
-
-  private async enqueueAssistantStreamBufferDelivery(
-    bufferKey: string,
-    binding: MessagingBindingRecord,
-    isFinal: boolean,
-  ): Promise<MessagingDeliveryResult> {
-    const previous = this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
-    const delivery = previous
-      .catch(() => undefined)
-      .then(async (): Promise<MessagingDeliveryResult> => {
-        const latest = this.assistantStreamBuffers.get(bufferKey);
-        if (!latest) {
-          return {
-            channel: binding.channel.channel,
-            deliveredAt: this.now(),
-            outcome: "discarded",
-          };
-        }
-        return await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
-      });
-    this.assistantStreamDeliveryQueues.set(bufferKey, delivery);
-    try {
-      return await delivery;
-    } finally {
-      if (this.assistantStreamDeliveryQueues.get(bufferKey) === delivery) {
-        this.assistantStreamDeliveryQueues.delete(bufferKey);
-      }
-    }
-  }
-
-  private async deliverAssistantStreamBuffer(
-    buffer: AssistantStreamBuffer,
-    binding: MessagingBindingRecord,
-    isFinal: boolean,
-  ): Promise<MessagingDeliveryResult> {
-    const cancellationKey = this.turnProseKey(binding.id, buffer.turnId);
-    const cancellation = this.ensureAssistantStreamCancellationSignal(
-      binding,
-      buffer.turnId,
-    );
-    const now = this.now();
-    const attribution = isFinal
-      ? await this.responseAttributionForBinding(binding)
-      : undefined;
-    const intent: MessagingStreamUpdateIntent = {
-      id: this.newIntentId(isFinal ? "assistant-stream-final" : "assistant-stream"),
-      kind: "stream_update",
-      bindingId: binding.id,
-      createdAt: now,
-      ...(buffer.surface
-        ? {
-            delivery: {
-              mode: "update",
-              fallback: "fail",
-            },
-            targetSurface: buffer.surface,
-          }
-        : {}),
-      role: "assistant",
-      ...(attribution ? { attribution } : {}),
-      markdown: isFinal ? "markdown" : "plain",
-      policy: binding.preferences?.streamingResponses ?? "inherit",
-      delta: buffer.delta,
-      text: buffer.text,
-      stream: {
-        key: buffer.streamKey,
-        turnId: buffer.turnId,
-        itemId: buffer.itemId,
-        sequence: buffer.sequence,
-        isFinal,
-      },
-    };
-    const result = await this.deliver(intent, binding, undefined, {
-      isCancelled: cancellation.isCancelled,
-      whenCancelled: cancellation.whenCancelled,
-      onCancelledDelivery: async (cancelledResult) => {
-        if (
-          cancelledResult.surface
-          && isVisibleAssistantStreamDelivery(cancelledResult)
-          && !isSameMessagingSurface(cancelledResult.surface, buffer.surface)
-        ) {
-          const dismissed = await this.dismissTerminalPrivateResponseSurface(
-            binding,
-            buffer.turnId,
-            cancelledResult.surface,
-          );
-          if (!dismissed) {
-            this.assistantStreamCancellationFailures.add(cancellationKey);
-          }
-        }
-      },
-    });
-    if (cancellation.isCancelled()) {
-      const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
-      this.assistantStreamBuffers.delete(bufferKey);
-      return result;
-    }
-    const surface =
-      result.surface && isVisibleAssistantStreamDelivery(result)
-        ? result.surface
-        : buffer.surface;
-    const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
-    const current = this.assistantStreamBuffers.get(bufferKey);
-    this.assistantStreamBuffers.set(bufferKey, {
-      ...(current && current.sequence >= buffer.sequence ? current : buffer),
-      surface,
-    });
-    return result;
-  }
-
-  private assistantStreamBufferKey(
-    streamKey: string,
-    binding: MessagingBindingRecord,
-  ): string {
-    return `${binding.id}\0${streamKey}`;
-  }
-
-  private ensureAssistantStreamCancellationSignal(
-    binding: MessagingBindingRecord,
-    turnId: string,
-  ): MessagingCancellationSignal {
-    const key = this.turnProseKey(binding.id, turnId);
-    const existing = this.assistantStreamCancellationSignals.get(key);
-    if (existing) {
-      return existing;
-    }
-    let cancelled = this.isTerminalPrivateResponseTurn(
-      binding.backend,
-      binding.threadId,
-      turnId,
-    );
-    let resolveCancellation!: () => void;
-    const whenCancelled = new Promise<void>((resolve) => {
-      resolveCancellation = resolve;
-    });
-    const cancellation: MessagingCancellationSignal = {
-      cancel: () => {
-        if (cancelled) {
-          return;
-        }
-        cancelled = true;
-        resolveCancellation();
-      },
-      isCancelled: () =>
-        cancelled
-        || this.isTerminalPrivateResponseTurn(
-          binding.backend,
-          binding.threadId,
-          turnId,
-        ),
-      whenCancelled,
-    };
-    if (cancelled) {
-      resolveCancellation();
-    }
-    this.assistantStreamCancellationSignals.set(key, cancellation);
-    return cancellation;
-  }
-
-  private async cancelAssistantStreamsForTurn(
-    binding: MessagingBindingRecord,
-    turnId: string,
-  ): Promise<boolean> {
-    const cancellationKey = this.turnProseKey(binding.id, turnId);
-    const deliveries = new Set<Promise<MessagingDeliveryResult>>();
-    const surfaces = new Map<string, MessagingSurfaceRef>();
-    this.assistantStreamCancellationFailures.delete(cancellationKey);
-    this.assistantStreamCancellationSignals.get(cancellationKey)?.cancel();
-    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
-      if (
-        bufferKey.startsWith(`${binding.id}\0`)
-        && buffer.turnId === turnId
-      ) {
-        if (buffer.surface) {
-          surfaces.set(messagingSurfaceKey(buffer.surface), buffer.surface);
-        }
-        const delivery = this.assistantStreamDeliveryQueues.get(bufferKey);
-        if (delivery) {
-          deliveries.add(delivery);
-        }
-        this.assistantStreamBuffers.delete(bufferKey);
-      }
-    }
-    const deliveryResults = await Promise.allSettled(deliveries);
-    for (const deliveryResult of deliveryResults) {
-      if (
-        deliveryResult.status === "fulfilled"
-        && deliveryResult.value.surface
-        && isVisibleAssistantStreamDelivery(deliveryResult.value)
-      ) {
-        surfaces.set(
-          messagingSurfaceKey(deliveryResult.value.surface),
-          deliveryResult.value.surface,
-        );
-      }
-    }
-
-    // A delivery already awaiting its adapter can finish after the buffers are
-    // cleared. Retain the settled delivery result above so the cancellation
-    // path owns a surface created between the delivery guard's post-adapter
-    // check and the caller recording it, then make one final sweep for existing
-    // surfaces.
-    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
-      if (
-        bufferKey.startsWith(`${binding.id}\0`)
-        && buffer.turnId === turnId
-      ) {
-        if (buffer.surface) {
-          surfaces.set(messagingSurfaceKey(buffer.surface), buffer.surface);
-        }
-        this.assistantStreamBuffers.delete(bufferKey);
-        this.assistantStreamDeliveryQueues.delete(bufferKey);
-      }
-    }
-    for (const surface of surfaces.values()) {
-      const dismissed = await this.dismissTerminalPrivateResponseSurface(
-        binding,
-        turnId,
-        surface,
-      );
-      if (!dismissed) {
-        this.assistantStreamCancellationFailures.add(cancellationKey);
-      }
-    }
-    const cancelledCleanly = !this.assistantStreamCancellationFailures.has(
-      cancellationKey,
-    );
-    this.assistantStreamCancellationFailures.delete(cancellationKey);
-    this.assistantStreamCancellationSignals.delete(cancellationKey);
-    return cancelledCleanly;
-  }
-
   private ensureWorkingUpdateCancellationSignal(
     binding: MessagingBindingRecord,
     turnId: string,
@@ -3463,14 +2125,7 @@ export class MessagingController {
     this.sharedQueueNotices.clear();
     this.sharedQueueNoticeHistory.clear();
     this.inboundTurns.clearAdmissionTiming();
-    for (const timer of this.monitorTimersByBindingId.values()) {
-      clearTimeout(timer);
-    }
-    this.monitorTimersByBindingId.clear();
-    for (const timer of this.monitorTimersBySubscriptionId.values()) {
-      clearTimeout(timer);
-    }
-    this.monitorTimersBySubscriptionId.clear();
+    this.monitorWorkflow.dispose();
     this.inboundTurns.clearPendingPrompts();
     this.toolUpdatePolicy.dispose();
     this.taskMonitorMessagingOrigins.clear();
@@ -3479,11 +2134,7 @@ export class MessagingController {
     this.backendEventRouter.dispose();
     this.privateResponses.dispose();
     this.privateReplyClaims.dispose();
-    this.assistantStreamCancellationFailures.clear();
-    for (const cancellation of this.assistantStreamCancellationSignals.values()) {
-      cancellation.cancel();
-    }
-    this.assistantStreamCancellationSignals.clear();
+    this.assistantStreams.dispose();
     this.workingUpdateCancellationFailures.clear();
     for (const cancellation of this.workingUpdateCancellationSignals.values()) {
       cancellation.cancel();
@@ -3937,759 +2588,6 @@ export class MessagingController {
     }
 
     await this.bindingService.recreateBindingStatus(binding, event);
-  }
-
-  private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
-    return channel.channel === "telegram" &&
-      (channel.conversation.kind === "topic" || channel.conversation.kind === "channel");
-  }
-
-  private async resolveMonitorControlTopic(
-    event: MessagingInboundCommandEvent,
-  ): Promise<MessagingManagedTopicRecord | undefined> {
-    if (event.channel.conversation.kind === "topic") {
-      return await this.upsertManagedTopicFromChannel(event, {
-        source: "owned",
-        lifecycle: "open",
-        recommendation: "keep",
-      });
-    }
-
-    if (event.channel.conversation.kind !== "channel") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-not-supergroup"),
-          createdAt: this.now(),
-          title: "Telegram supergroup required",
-          body: "Open Monitor from a Telegram supergroup or one of its topics so PwrAgent can manage forum topics.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    const supergroupId = event.channel.conversation.id;
-    const knownTopics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId,
-    });
-    const existing = knownTopics.find(
-      (topic) => topic.source === "owned" && topic.lifecycle !== "deleted",
-    );
-    if (existing) {
-      return existing;
-    }
-
-    if (!this.adapter.createManagedConversation) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-create-unsupported"),
-          createdAt: this.now(),
-          title: "Topic creation unavailable",
-          body: "This adapter cannot create a PwrAgent control topic. Run this from an existing Telegram topic to adopt it instead.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    const result = await this.adapter.createManagedConversation({
-      actor: event.actor,
-      parent: event.channel,
-      routingState: event.routingState,
-      title: "PwrAgent topic owner",
-    });
-    if (result.outcome !== "created" || !result.conversation) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-create-failed"),
-          createdAt: this.now(),
-          title: "Topic creation failed",
-          body: result.errorMessage ?? "Telegram could not create the PwrAgent control topic.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    return await this.options.store.upsertManagedTopic(
-      managedTopicRecordFromConversation({
-        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-        channel: event.channel.channel,
-        conversation: result.conversation,
-        now: this.now(),
-        routingState: result.routingState,
-        source: "owned",
-      }),
-    );
-  }
-
-  private eventForManagedTopic(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-    args: string[],
-  ): MessagingInboundCommandEvent {
-    return {
-      ...event,
-      id: `${event.id}:topic:${topic.id}`,
-      kind: "command",
-      channel: topicChannelRef(topic),
-      command: "monitor",
-      args,
-      rawText: `/monitor ${args.join(" ")}`,
-      routingState: topic.routingState ?? event.routingState,
-    };
-  }
-
-  private async deliverInvalidTopicApproval(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    await this.deliver(
-      buildErrorIntent({
-        id: this.newIntentId("topics-approval-invalid"),
-        createdAt: this.now(),
-        title: "Topic action expired",
-        body: "That cleanup proposal is no longer active. Run /monitor topics cleanup to refresh it.",
-        recoverable: true,
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async renderTopicControlStatus(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-  ): Promise<void> {
-    const rights = await this.adapter.getManagedConversationRights?.({
-      actor: event.actor,
-      channel: event.channel,
-      routingState: event.routingState,
-    });
-    const topics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId: topic.supergroupId,
-    });
-    const rightsLines = rights
-      ? formatManagedTopicRights(rights.operations)
-      : ["Topic operations: unsupported by this adapter"];
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-control"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "PwrAgent topic owner",
-        body: [
-          `Control topic: ${topic.title ?? topic.topicId}`,
-          `Known topics: ${topics.length}`,
-          "",
-          ...rightsLines,
-          "",
-          "Use /monitor topics cleanup for a dry-run cleanup proposal.",
-          "Use /monitor topics fanout to create or reuse per-thread monitor topics.",
-        ].join("\n"),
-        actions: [
-          {
-            id: "monitor:topics:cleanup",
-            label: "Dry Run Cleanup",
-            style: "secondary",
-            fallbackText: "/monitor topics cleanup",
-          },
-          {
-            id: "monitor:topics:fanout",
-            label: "Fanout",
-            style: "secondary",
-            fallbackText: "/monitor topics fanout",
-          },
-        ],
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async renderTopicCleanupProposal(
-    event: MessagingInboundEvent,
-    controlTopic: MessagingManagedTopicRecord,
-  ): Promise<void> {
-    const topics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId: controlTopic.supergroupId,
-    });
-    const now = this.now();
-    const items = topics
-      .filter((topic) => topic.lifecycle !== "deleted")
-      .map((topic): MessagingTopicCleanupProposalItem => {
-        const action =
-          topic.id === controlTopic.id ||
-          topic.source === "owned" ||
-          topic.source === "linked"
-            ? "keep"
-            : topic.lifecycle === "closed"
-              ? "delete"
-              : "close";
-        return {
-          id: topic.topicId,
-          action,
-          reason:
-            action === "keep"
-              ? "owned or linked topic"
-              : action === "delete"
-                ? "already closed known topic"
-                : "known topic not owned or linked to a PwrAgent thread",
-          title: topic.title,
-          topicRecordId: topic.id,
-        };
-      });
-    const proposal: MessagingTopicCleanupProposalRecord = {
-      id: `topic-cleanup:${controlTopic.supergroupId}:${now}`,
-      authorizedActorIds: this.accessControl.monitorAuthorizedActorIds(event),
-      channel: event.channel.channel,
-      controlTopicRecordId: controlTopic.id,
-      createdAt: now,
-      items,
-      status: "pending",
-      supergroupId: controlTopic.supergroupId,
-      updatedAt: now,
-    };
-    await this.options.store.upsertTopicCleanupProposal(proposal);
-    const actions = items
-      .filter((item) => item.action === "close" || item.action === "delete")
-      .slice(0, 6)
-      .map((item) => ({
-        id: `monitor:topics:approve:${proposal.id}:${item.id}`,
-        label: `${item.action === "delete" ? "Delete" : "Close"} ${item.title ?? item.id}`,
-        style: item.action === "delete" ? "danger" as const : "secondary" as const,
-        fallbackText: `/monitor topics approve ${proposal.id} ${item.id}`,
-      }));
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-cleanup"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: now,
-        title: "Topic cleanup dry run",
-        body: formatTopicCleanupProposalBody(items),
-        actions,
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async runTopicMonitorFanout(
-    event: MessagingInboundEvent,
-    controlTopic: MessagingManagedTopicRecord,
-  ): Promise<void> {
-    if (!this.adapter.createManagedConversation) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-fanout-unsupported"),
-          createdAt: this.now(),
-          title: "Topic creation unavailable",
-          body: "This adapter cannot create managed topics.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
-
-    const snapshot = await this.readMonitorRows();
-    const selected = selectMonitorThreads({ navigation: snapshot }).threads.slice(0, 3);
-    const created: string[] = [];
-    const reused: string[] = [];
-    const failed: string[] = [];
-    for (const row of selected) {
-      const target = federationTargetForThread(row);
-      const thread = await this.readExactNavigationThread({ ref: { backend: row.source, threadId: row.id,
-        ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) }, federationTarget: target });
-      if (!thread || thread.archivedAt) {
-        failed.push(row.title);
-        continue;
-      }
-      const existing = await this.options.store.findThreadTopicLink({
-        backend: thread.source,
-        channel: event.channel.channel,
-        supergroupId: controlTopic.supergroupId,
-        threadId: thread.id,
-      });
-      if (existing) {
-        const topic = await this.options.store.getManagedTopic(existing.topicRecordId);
-        if (topic) {
-          await this.ensureManagedTopicBinding(event, topic, thread);
-        }
-        reused.push(thread.title);
-        continue;
-      }
-      const result = await this.adapter.createManagedConversation({
-        actor: event.actor,
-        parent: event.channel,
-        routingState: event.routingState,
-        title: topicTitleForThread(thread),
-      });
-      if (result.outcome !== "created" || !result.conversation) {
-        failed.push(thread.title);
-        continue;
-      }
-      const topic = await this.options.store.upsertManagedTopic(
-        managedTopicRecordFromConversation({
-          actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-          channel: event.channel.channel,
-          conversation: result.conversation,
-          now: this.now(),
-          routingState: result.routingState,
-          source: "linked",
-        }),
-      );
-      await this.options.store.upsertThreadTopicLink({
-        id: `topic-link:${event.channel.channel}:${controlTopic.supergroupId}:${thread.source}:${thread.id}`,
-        backend: thread.source,
-        channel: event.channel.channel,
-        createdAt: this.now(),
-        supergroupId: controlTopic.supergroupId,
-        threadId: thread.id,
-        topicRecordId: topic.id,
-        updatedAt: this.now(),
-      });
-      const bindingOutcome = await this.ensureManagedTopicBinding(event, topic, thread);
-      if (bindingOutcome === "conflict") {
-        failed.push(thread.title);
-        continue;
-      }
-      await this.deliverTopicSeed(event, topic, thread);
-      created.push(thread.title);
-    }
-
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("topics-fanout"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Topic fanout complete",
-        body: [
-          `Created: ${created.length}${created.length ? ` (${created.join(", ")})` : ""}`,
-          `Reused: ${reused.length}${reused.length ? ` (${reused.join(", ")})` : ""}`,
-          `Failed: ${failed.length}${failed.length ? ` (${failed.join(", ")})` : ""}`,
-        ].join("\n"),
-        actions: [],
-      }),
-      undefined,
-      event,
-    );
-  }
-
-  private async deliverTopicSeed(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-    thread: NavigationThreadSummary,
-  ): Promise<void> {
-    const project =
-      thread.linkedDirectories[0]?.label ??
-      thread.linkedDirectories[0]?.path;
-    await this.deliver({
-      id: this.newIntentId("topic-seed"),
-      kind: "message",
-      createdAt: this.now(),
-      audit: buildMessagingAuditContext({
-        action: "topics.seed",
-        actor: event.actor,
-        backend: thread.source,
-        channel: topicChannelRef(topic),
-        now: this.now(),
-        threadId: thread.id,
-      }),
-      parts: [
-        {
-          type: "text",
-          text: [
-            `Monitoring: ${thread.title}`,
-            `Backend: ${thread.source}`,
-            project ? `Project: ${project}` : undefined,
-            thread.updatedAt ? `Updated: ${formatTimeOfDay(thread.updatedAt)}` : undefined,
-            "",
-            "This topic is attached to the thread for follow-up messages.",
-          ].filter(Boolean).join("\n"),
-        },
-      ],
-    });
-  }
-
-  private async ensureManagedTopicBinding(
-    event: MessagingInboundEvent,
-    topic: MessagingManagedTopicRecord,
-    thread: NavigationThreadSummary,
-  ): Promise<"bound" | "existing" | "conflict"> {
-    const channel = topicChannelRef(topic);
-    const existing = await this.options.store.findActiveBindingForChannel(channel);
-    if (existing) {
-      if (existing.backend === thread.source && existing.threadId === thread.id) {
-        return "existing";
-      }
-      this.logger.debug?.("managed topic already bound to another thread", {
-        backend: existing.backend,
-        bindingId: existing.id,
-        threadId: existing.threadId,
-        topicId: topic.topicId,
-      });
-      return "conflict";
-    }
-
-    await this.bindingService.bindChannelToThread(
-      {
-        ...event,
-        id: `${event.id}:topic-bind:${topic.id}`,
-        kind: "command",
-        channel,
-        command: "monitor",
-        args: ["topics", "fanout"],
-        rawText: "/monitor topics fanout",
-        receivedAt: this.now(),
-        routingState: topic.routingState ?? event.routingState,
-      } satisfies MessagingInboundCommandEvent,
-      {
-        backend: thread.source,
-        threadId: thread.id,
-      },
-    );
-    return "bound";
-  }
-
-  private async observeManagedTopicFromInbound(
-    event: MessagingInboundEvent,
-  ): Promise<void> {
-    if (
-      event.channel.conversation.kind !== "topic" ||
-      !event.channel.conversation.parentId
-    ) {
-      return;
-    }
-    const observedAt = event.receivedAt;
-    await this.options.store.mergeManagedTopicObservation({
-      ...managedTopicRecordFromConversation({
-        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-        channel: event.channel.channel,
-        conversation: event.channel.conversation,
-        now: observedAt,
-        routingState: event.routingState,
-        source: "observed",
-      }),
-      lastObservedAt: observedAt,
-      lifecycle: "open",
-      updatedAt: observedAt,
-    });
-  }
-
-  private async upsertManagedTopicFromChannel(
-    event: MessagingInboundEvent,
-    options: Pick<
-      MessagingManagedTopicRecord,
-      "source" | "lifecycle" | "recommendation"
-    >,
-  ): Promise<MessagingManagedTopicRecord> {
-    const now = this.now();
-    const existing = await this.options.store.findManagedTopicByConversation({
-      channel: event.channel.channel,
-      supergroupId: event.channel.conversation.parentId ?? "",
-      topicId: event.channel.conversation.id,
-    });
-    return await this.options.store.upsertManagedTopic({
-      ...managedTopicRecordFromConversation({
-        actorIds: this.accessControl.monitorAuthorizedActorIds(event),
-        channel: event.channel.channel,
-        conversation: event.channel.conversation,
-        now,
-        routingState: event.routingState,
-        source: options.source,
-      }),
-      ...existing,
-      authorizedActorIds: existing?.authorizedActorIds.length
-        ? existing.authorizedActorIds
-        : this.accessControl.monitorAuthorizedActorIds(event),
-      lastObservedAt: now,
-      lifecycle: options.lifecycle,
-      recommendation: options.recommendation ?? existing?.recommendation,
-      routingState: event.routingState ?? existing?.routingState,
-      source: existing?.source === "owned" || existing?.source === "linked"
-        ? existing.source
-        : options.source,
-      updatedAt: now,
-    });
-  }
-
-  private async enableAndRenderChannelMonitor(
-    event: MessagingInboundEvent,
-    action: MonitorCommandAction = { kind: "start" },
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    const now = this.now();
-    const existing =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
-    const monitorOptions = resolveMonitorStateOptions(existing?.monitor, action);
-    const subscription = await this.options.store.upsertMonitorSubscription({
-      id: existing?.id ?? buildMonitorSubscriptionId(event.channel),
-      channel: event.channel,
-      authorizedActorIds: existing?.authorizedActorIds.length
-        ? existing.authorizedActorIds
-        : this.accessControl.monitorAuthorizedActorIds(event),
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      monitor: {
-        ...existing?.monitor,
-        enabled: true,
-        intervalMs: monitorOptions.intervalMs,
-        lastRenderedAt: existing?.monitor.lastRenderedAt,
-        pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
-        recentThreadLimit: monitorOptions.recentThreadLimit,
-        showLastResponseSnippet: monitorOptions.showLastResponseSnippet,
-        showStatusLine: monitorOptions.showStatusLine,
-        updatedAt: now,
-      },
-      monitorSurface: existing?.monitorSurface,
-    });
-    if (existing) {
-      this.clearMonitorSubscriptionTimer(existing.id);
-    }
-    try {
-      const rendered = await this.renderChannelMonitorStatus(subscription, event);
-      this.scheduleMonitorSubscriptionTick(rendered);
-      return rendered;
-    } catch (error) {
-      this.logger.debug?.("messaging channel monitor initial render failed", {
-        error: error instanceof Error ? error.message : String(error),
-        subscriptionId: subscription.id,
-      });
-      this.scheduleMonitorSubscriptionTick(subscription);
-      return subscription;
-    }
-  }
-
-  private async stopMonitoringForChannel(
-    event: MessagingInboundEvent,
-  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
-    const subscription =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
-    if (!subscription) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("monitor-stopped"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Monitor stopped",
-          body: "Monitor was not running for this conversation.",
-          actions: [],
-        }),
-        undefined,
-        event,
-      );
-      return undefined;
-    }
-
-    this.clearMonitorSubscriptionTimer(subscription.id);
-    const now = this.now();
-    if (subscription.monitorSurface) {
-      try {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("monitor-stopped"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: now,
-            title: "Monitor stopped",
-            body: "Recent thread updates will no longer post to this conversation.",
-            actions: [],
-            delivery: {
-              mode: this.capabilityProfile.text.supportsMessageEdit
-                ? "update"
-                : "present",
-              replaceMarkup: true,
-              fallback: "present_new",
-            },
-            targetSurface: this.capabilityProfile.text.supportsMessageEdit
-              ? subscription.monitorSurface
-              : undefined,
-          }),
-          undefined,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging channel monitor stop update failed", {
-          error: error instanceof Error ? error.message : String(error),
-          subscriptionId: subscription.id,
-        });
-      }
-    } else {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("monitor-stopped"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: now,
-          title: "Monitor stopped",
-          body: "Recent thread updates will no longer post to this conversation.",
-          actions: [],
-        }),
-        undefined,
-        event,
-      );
-    }
-
-    return await this.options.store.upsertMonitorSubscription({
-      ...subscription,
-      monitor: {
-        ...subscription.monitor,
-        enabled: false,
-        intervalMs: subscription.monitor.intervalMs,
-        lastRenderedAt: subscription.monitor.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
-  }
-
-  private async enableAndRenderMonitor(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-  ): Promise<MessagingBindingRecord> {
-    const enabledBinding = await this.options.store.upsertBinding({
-      ...binding,
-      monitor: {
-        enabled: true,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: binding.monitor?.lastRenderedAt,
-        updatedAt: this.now(),
-      },
-      updatedAt: this.now(),
-    });
-    try {
-      const rendered = await this.renderMonitorStatus(enabledBinding, event);
-      this.scheduleMonitorTick(rendered);
-      return rendered;
-    } catch (error) {
-      this.logger.debug?.("messaging monitor initial render failed", {
-        bindingId: enabledBinding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: enabledBinding.threadId,
-      });
-      this.scheduleMonitorTick(enabledBinding);
-      return enabledBinding;
-    }
-  }
-
-  private async stopMonitoringForBinding(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    options: { deliverStatus?: boolean } = {},
-  ): Promise<MessagingBindingRecord> {
-    this.clearMonitorTimer(binding.id);
-    const now = this.now();
-    const deliverStatus = options.deliverStatus ?? true;
-    if (deliverStatus && binding.monitorSurface) {
-      try {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("monitor-stopped"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: now,
-            title: "Monitor stopped",
-            body: "Recent thread updates will no longer post to this conversation.",
-            actions: [],
-            delivery: {
-              mode: "update",
-              replaceMarkup: true,
-              fallback: "present_new",
-            },
-            targetSurface: binding.monitorSurface,
-          }),
-          binding,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging monitor stop update failed", {
-          bindingId: binding.id,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: binding.threadId,
-        });
-      }
-    } else if (deliverStatus && event) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("monitor-stopped"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: now,
-          title: "Monitor stopped",
-          body: binding.monitor?.enabled
-            ? "Recent thread updates will no longer post to this conversation."
-            : "Monitor was not running for this conversation.",
-          actions: [],
-        }),
-        binding,
-        event,
-      );
-    }
-
-    return await this.options.store.upsertBinding({
-      ...binding,
-      monitor: {
-        enabled: false,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: binding.monitor?.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
-  }
-
-  private async disableChannelMonitorSubscription(
-    subscription: MessagingMonitorSubscriptionRecord,
-    event?: MessagingInboundEvent,
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    this.clearMonitorSubscriptionTimer(subscription.id);
-    const now = this.now();
-    if (subscription.monitorSurface) {
-      try {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("monitor-detached"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: now,
-            title: "Monitor detached",
-            body: "Recent thread updates will no longer post to this conversation.",
-            actions: [],
-            delivery: {
-              mode: "update",
-              replaceMarkup: true,
-              fallback: "fail",
-            },
-            targetSurface: subscription.monitorSurface,
-          }),
-          undefined,
-          event,
-        );
-      } catch (error) {
-        this.logger.debug?.("messaging channel monitor detach update failed", {
-          error: error instanceof Error ? error.message : String(error),
-          subscriptionId: subscription.id,
-        });
-      }
-    }
-    return await this.options.store.upsertMonitorSubscription({
-      ...subscription,
-      monitor: {
-        ...subscription.monitor,
-        enabled: false,
-        intervalMs: subscription.monitor.intervalMs,
-        lastRenderedAt: subscription.monitor.lastRenderedAt,
-        updatedAt: now,
-      },
-      monitorSurface: undefined,
-      updatedAt: now,
-    });
   }
 
   private async presentSkillsBrowser(
@@ -6280,376 +4178,6 @@ export class MessagingController {
     return await this.bindingService.handleBindingRevokeRequest(binding);
   }
 
-  private async readMonitorRows(monitor?: MessagingMonitorState, federationTarget?: FederationTarget): Promise<MessagingMonitorRows> {
-    const read = this.options.backend.getNavigationQueryPage?.bind(this.options.backend);
-    if (!read) throw new Error("Upgrade the owning instance to navigation query protocol 2 before opening a monitor.");
-    const sections = [
-      { pinned: "include" as const, size: normalizeMonitorThreadLimit(monitor?.pinnedThreadLimit, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT) },
-      { pinned: "exclude" as const, size: normalizeMonitorThreadLimit(monitor?.recentThreadLimit, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT) },
-    ];
-    const pages = await Promise.all(sections.filter((section) => section.size > 0).map(async (section) => {
-      const page = await read({ protocol: 2, consumer: "agent-tool", federationTarget,
-        query: { kind: "star-map", filters: { pinned: section.pinned } }, pageSize: section.size });
-      if (page.protocol !== 2 || page.unchanged) throw new Error("The owning instance did not provide a monitor row page.");
-      return page.entries.map((entry) => entry.row);
-    }));
-    return { kind: "bounded-monitor", threads: pages.flat() };
-  }
-
-  private async renderMonitorStatus(
-    binding: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingMonitorNavigation,
-  ): Promise<MessagingBindingRecord> {
-    const snapshot =
-      navigation ??
-      (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
-    const now = this.now();
-    // Startup and timer renders have no inbound operator event.
-    const countsAsActivity = event !== undefined;
-    const activeTurns = await this.resolveMonitorActiveTurns(
-      snapshot,
-      binding.monitor,
-      countsAsActivity,
-    );
-    const snippetsByThreadKey = await this.resolveMonitorSnippets(
-      snapshot,
-      binding.monitor,
-      countsAsActivity,
-    );
-    const intent = buildMonitorStatusIntent({
-      activeTurnsByThreadKey: activeTurns,
-      binding,
-      capabilityProfile: this.capabilityProfile,
-      createdAt: now,
-      id: this.newIntentId("monitor"),
-      navigation: snapshot,
-      snippetsByThreadKey,
-      topicControls: this.supportsMonitorTopicControls(event?.channel ?? binding.channel),
-    });
-    const result = await this.deliver(intent, binding, event);
-    const latestBinding = await this.options.store.getBinding(binding.id);
-    if (latestBinding?.revokedAt) {
-      this.clearMonitorTimer(binding.id);
-      return latestBinding;
-    }
-    const currentBinding = latestBinding ?? binding;
-    return await this.options.store.upsertBinding({
-      ...currentBinding,
-      monitor: {
-        ...currentBinding.monitor,
-        enabled: true,
-        intervalMs:
-          currentBinding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
-        lastRenderedAt: now,
-        updatedAt: now,
-      },
-      monitorSurface:
-        result.surface && result.outcome !== "failed"
-          ? result.surface
-          : currentBinding.monitorSurface,
-      updatedAt: now,
-    });
-  }
-
-  private async renderChannelMonitorStatus(
-    subscription: MessagingMonitorSubscriptionRecord,
-    event?: MessagingInboundEvent,
-    navigation?: MessagingMonitorNavigation,
-  ): Promise<MessagingMonitorSubscriptionRecord> {
-    const snapshot =
-      navigation ??
-      (await this.readMonitorRows(subscription.monitor));
-    const now = this.now();
-    const countsAsActivity = event !== undefined;
-    const activeTurns = await this.resolveMonitorActiveTurns(
-      snapshot,
-      subscription.monitor,
-      countsAsActivity,
-    );
-    const snippetsByThreadKey = await this.resolveMonitorSnippets(
-      snapshot,
-      subscription.monitor,
-      countsAsActivity,
-    );
-    const intent = {
-      ...buildMonitorStatusIntent({
-        activeTurnsByThreadKey: activeTurns,
-        bindingId: subscription.id,
-        capabilityProfile: this.capabilityProfile,
-        createdAt: now,
-        id: this.newIntentId("monitor"),
-        monitor: subscription.monitor,
-        monitorSurface: subscription.monitorSurface,
-        navigation: snapshot,
-        snippetsByThreadKey,
-        topicControls: this.supportsMonitorTopicControls(event?.channel ?? subscription.channel),
-      }),
-      allowedActorIds: subscription.authorizedActorIds,
-      ...(event
-        ? {}
-        : {
-            audit: buildMessagingAuditContext({
-              action: "monitor.deliver",
-              actor: {
-                platformUserId: subscription.authorizedActorIds[0] ?? "unknown",
-              },
-              bindingId: subscription.id,
-              channel: subscription.channel,
-              now,
-            }),
-          }),
-    };
-    const result = await this.deliver(intent, undefined, event);
-    if (isPermanentMessagingTargetFailure(result)) {
-      const revoked = await this.options.store.revokeMonitorSubscription({
-        subscriptionId: subscription.id,
-        revokedAt: now,
-      });
-      this.clearMonitorSubscriptionTimer(subscription.id);
-      return revoked ?? {
-        ...subscription,
-        revokedAt: now,
-        updatedAt: now,
-      };
-    }
-
-    const latest =
-      await this.options.store.getMonitorSubscription(subscription.id);
-    if (latest?.revokedAt) {
-      this.clearMonitorSubscriptionTimer(subscription.id);
-      return latest;
-    }
-    const current = latest ?? subscription;
-    return await this.options.store.upsertMonitorSubscription({
-      ...current,
-      monitor: {
-        ...current.monitor,
-        enabled: true,
-        intervalMs: current.monitor.intervalMs,
-        lastRenderedAt: now,
-        updatedAt: now,
-      },
-      monitorSurface:
-        result.surface && result.outcome !== "failed"
-          ? result.surface
-          : current.monitorSurface,
-      updatedAt: now,
-    });
-  }
-
-  private scheduleMonitorTick(binding: MessagingBindingRecord): void {
-    if (
-      this.disposed ||
-      binding.revokedAt ||
-      !binding.monitor?.enabled ||
-      this.monitorTimersByBindingId.has(binding.id)
-    ) {
-      return;
-    }
-
-    const intervalMs = binding.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
-    const timer = setTimeout(() => {
-      this.monitorTimersByBindingId.delete(binding.id);
-      void this.runMonitorTick(binding.id);
-    }, intervalMs);
-    this.monitorTimersByBindingId.set(binding.id, timer);
-  }
-
-  private scheduleMonitorSubscriptionTick(
-    subscription: MessagingMonitorSubscriptionRecord,
-  ): void {
-    if (
-      this.disposed ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled ||
-      this.monitorTimersBySubscriptionId.has(subscription.id)
-    ) {
-      return;
-    }
-
-    const intervalMs =
-      subscription.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
-    const timer = setTimeout(() => {
-      this.monitorTimersBySubscriptionId.delete(subscription.id);
-      void this.runMonitorSubscriptionTick(subscription.id);
-    }, intervalMs);
-    this.monitorTimersBySubscriptionId.set(subscription.id, timer);
-  }
-
-  private clearMonitorTimer(bindingId: string): void {
-    const timer = this.monitorTimersByBindingId.get(bindingId);
-    if (!timer) {
-      return;
-    }
-    clearTimeout(timer);
-    this.monitorTimersByBindingId.delete(bindingId);
-  }
-
-  private clearMonitorSubscriptionTimer(subscriptionId: string): void {
-    const timer = this.monitorTimersBySubscriptionId.get(subscriptionId);
-    if (!timer) {
-      return;
-    }
-    clearTimeout(timer);
-    this.monitorTimersBySubscriptionId.delete(subscriptionId);
-  }
-
-  private async runMonitorTick(bindingId: string): Promise<void> {
-    const binding = await this.options.store.getBinding(bindingId);
-    if (!binding || binding.revokedAt || !binding.monitor?.enabled) {
-      this.clearMonitorTimer(bindingId);
-      return;
-    }
-
-    let rendered: MessagingBindingRecord | undefined;
-    try {
-      rendered = await this.renderMonitorStatus(binding);
-    } catch (error) {
-      this.logger.debug?.("messaging monitor tick failed", {
-        bindingId,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
-    }
-
-    const latest = rendered ?? await this.options.store.getBinding(bindingId);
-    if (latest && !latest.revokedAt && latest.monitor?.enabled) {
-      this.scheduleMonitorTick(latest);
-    }
-  }
-
-  private async runMonitorSubscriptionTick(subscriptionId: string): Promise<void> {
-    const subscription =
-      await this.options.store.getMonitorSubscription(subscriptionId);
-    if (
-      !subscription ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled
-    ) {
-      this.clearMonitorSubscriptionTimer(subscriptionId);
-      return;
-    }
-
-    let rendered: MessagingMonitorSubscriptionRecord | undefined;
-    try {
-      rendered = await this.renderChannelMonitorStatus(subscription);
-    } catch (error) {
-      this.logger.debug?.("messaging channel monitor tick failed", {
-        error: error instanceof Error ? error.message : String(error),
-        subscriptionId,
-      });
-    }
-
-    const latest =
-      rendered ?? await this.options.store.getMonitorSubscription(subscriptionId);
-    if (latest && !latest.revokedAt && latest.monitor.enabled) {
-      this.scheduleMonitorSubscriptionTick(latest);
-    }
-  }
-
-  private async resolveMonitorActiveTurns(
-    navigation: MessagingMonitorNavigation,
-    monitor?: MessagingMonitorState,
-    countsAsActivity = true,
-  ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
-    const activeTurns = new Map(this.turns.snapshot());
-    if (!this.options.backend.readThreadStatus) {
-      return activeTurns;
-    }
-
-    const threads = selectMonitorThreads({ monitor, navigation }).threads;
-    await Promise.all(
-      threads.map(async (thread) => {
-        const threadKey = threadKeyForNavigationThread(thread);
-        const existing = activeTurns.get(threadKey);
-        try {
-          const status = await this.options.backend.readThreadStatus?.({
-            backend: thread.source,
-            federationTarget: federationTargetForThread(thread),
-            threadId: thread.id,
-            ...(countsAsActivity ? {} : { countsAsActivity: false }),
-          });
-          if (status === "active") {
-            activeTurns.set(threadKey, {
-              status: existing?.status === "waiting" ? "waiting" : "working",
-              turnId: existing?.turnId ?? `${threadKey}:monitor`,
-              updatedAt: this.now(),
-            });
-          } else if (
-            status === "idle" &&
-            existing &&
-            (existing.status === "working" || existing.status === "waiting")
-          ) {
-            activeTurns.set(threadKey, {
-              ...existing,
-              status: "completed",
-              updatedAt: this.now(),
-            });
-          }
-        } catch (error) {
-          this.logger.debug?.("messaging monitor thread status read failed", {
-            backend: thread.source,
-            error: error instanceof Error ? error.message : String(error),
-            threadId: thread.id,
-          });
-        }
-      }),
-    );
-    return activeTurns;
-  }
-
-  private async resolveMonitorSnippets(
-    navigation: MessagingMonitorNavigation,
-    monitor?: MessagingMonitorState,
-    countsAsActivity = true,
-  ): Promise<ReadonlyMap<string, string>> {
-    const snippets = new Map<string, string>();
-    if (
-      monitor?.showLastResponseSnippet !== true ||
-      !this.options.backend.readThreadLastAssistantMessage
-    ) {
-      return snippets;
-    }
-
-    const threads = selectMonitorThreads({ monitor, navigation }).threads;
-    await Promise.all(
-      threads.map(async (thread) => {
-        const threadKey = threadKeyForNavigationThread(thread);
-        try {
-          const text =
-            await this.options.backend.readThreadLastAssistantMessage?.({
-              backend: thread.source,
-              federationTarget: federationTargetForThread(thread),
-              threadId: thread.id,
-              ...(countsAsActivity ? {} : { countsAsActivity: false }),
-            });
-          const trimmed = text?.trim();
-          if (trimmed) {
-            snippets.set(threadKey, trimmed);
-          }
-        } catch (error) {
-          this.logger.debug?.("messaging monitor thread snippet read failed", {
-            backend: thread.source,
-            error: error instanceof Error ? error.message : String(error),
-            threadId: thread.id,
-          });
-        }
-      }),
-    );
-    return snippets;
-  }
-
-  private async resolveMonitorBackendKinds(): Promise<AppServerBackendKind[]> {
-    const listed = await this.options.backend.listBackends?.({
-      includeUnavailable: true,
-    });
-    if (listed?.backends.length) {
-      return [...new Set(listed.backends.map((backend) => backend.kind))];
-    }
-    return ["codex"];
-  }
-
   private async reconcileActiveTurnFromBackendStatus(
     binding: MessagingBindingRecord,
     reason: string,
@@ -6816,13 +4344,6 @@ export class MessagingController {
     await this.reconcileActiveTurnFromBackendStatus(binding, reason);
   }
 
-  private async retireStalePendingIntent(
-    pendingIntent: MessagingPendingIntentRecord,
-  ): Promise<void> {
-    await this.options.store.deletePendingIntent(pendingIntent.id);
-    await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
-  }
-
   private async readBackendThreadStatus(
     binding: MessagingBindingRecord,
   ): Promise<string | undefined> {
@@ -6917,8 +4438,11 @@ export class MessagingController {
   }
 
   private async handleAutomationRunUpdated(params: {
+    automationName?: string;
     bindings: MessagingBindingRecord[];
+    errorMessage?: string;
     event: AgentEvent;
+    failureReason?: string;
     finalText?: string;
     outputDecision?: AutomationRunOutputDecision;
     runId: string;
@@ -6939,10 +4463,17 @@ export class MessagingController {
     ) {
       return;
     }
+    // A failed or interrupted run that produced no output of its own still
+    // tells the conversation, in one line, so an operator watching only chat
+    // learns the run ended.
+    const failureNotice = params.status === "failed"
+      ? automationRunFailureNotice(params)
+      : undefined;
     for (const binding of params.bindings) {
       await this.deliverAutomationFinalMessageOnce({
         binding,
         event: params.event,
+        failureNotice,
         finalText: params.finalText,
         keyParts: [binding.id, params.runId, "automation-run"],
         outputDecision: params.outputDecision,
@@ -6953,6 +4484,8 @@ export class MessagingController {
   private async deliverAutomationFinalMessageOnce(params: {
     binding: MessagingBindingRecord;
     event: AgentEvent;
+    /** Sent when the run produced no message; never alongside its output. */
+    failureNotice?: string;
     finalText?: string;
     keyParts: string[];
     outputDecision?: AutomationRunOutputDecision;
@@ -6960,14 +4493,20 @@ export class MessagingController {
     if (params.outputDecision?.kind === "quiet") {
       return;
     }
-    const messageText =
+    const outputText =
       params.outputDecision?.kind === "post_card"
         ? renderAutomationDecisionForMessaging(params.outputDecision)
         : renderAutomationOutputForMessaging(params.finalText);
+    const messageText = outputText || params.failureNotice;
     if (!messageText) {
       return;
     }
-    const key = [...params.keyParts, messageText].join("\0");
+    // A run's failure notice is keyed by the run, not its wording: a later
+    // update may carry a different error message for the same failure.
+    const key = [
+      ...params.keyParts,
+      outputText ? outputText : "failure-notice",
+    ].join("\0");
     if (this.deliveredAutomationFinalKeys.has(key)) {
       return;
     }
@@ -7716,30 +5255,6 @@ export class MessagingController {
     };
   }
 
-  private intentForPendingRequest(
-    request: AppServerPendingRequestNotification,
-  ): MessagingSurfaceIntent | undefined {
-    if (request.method === "item/tool/requestUserInput") {
-      return buildQuestionnaireIntent({
-        id: this.newIntentId("questionnaire"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        request: request as AppServerToolRequestUserInputNotification,
-      });
-    }
-
-    if (isMessagingInteractivePendingRequest(request)) {
-      return buildApprovalIntent({
-        id: this.newIntentId("approval"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        request,
-      });
-    }
-
-    return undefined;
-  }
-
   private async storePendingIntent(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -8110,6 +5625,7 @@ export class MessagingController {
       if (
         binding &&
         result.channel === binding.channel.channel &&
+        !guard?.isCancelled() &&
         isPermanentMessagingTargetFailure(result)
       ) {
         await this.options.store.revokeBinding({
@@ -8642,7 +6158,7 @@ export class MessagingController {
 
     let response: PwrAgentMessagingResponse;
     try {
-      response = await this.sendPrivateResponseFromAgentMessagingOrigin({
+      response = await this.agentToolWorkflow.sendPrivateResponseFromAgentMessagingOrigin({
         operation: "send_private_response",
         context: {
           backend: params.event.backend,
@@ -8671,1626 +6187,11 @@ export class MessagingController {
     );
   }
 
-  private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"], code: "forbidden" | "not_found" = "forbidden"): Extract<PwrAgentMessagingResponse, { ok: false }> {
-    return { ok: false, error: {
-      code: context.causalMessagingAmbiguous ? "ambiguous_location" : code,
-      message: context.causalMessagingAmbiguous
-        ? "This turn combines different causal messaging requests; choose a separately attributable request before attaching."
-        : "No currently authorized human messaging request is available for this operation. Saved bindings do not establish the requesting actor.",
-    } };
-  }
-
-  private async listRetainedMessagingSurfaces(
-    request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_surfaces" }>,
-  ): Promise<PwrAgentMessagingResponse> {
-    const source = this.accessControl.retainedRequestSource(request.context);
-    if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
-    if (!this.accessControl.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.accessControl.retainedSourceHasPermissions(source)
-      || !await this.accessControl.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
-    if (!isAppServerBackendKind(request.args.backend) || !request.args.threadId?.trim()
-      || (request.args.limit !== undefined && (!Number.isInteger(request.args.limit) || request.args.limit < 1 || request.args.limit > 25))) {
-      return { ok: false, error: { code: "invalid_arguments", message: "Provide a target backend/threadId and a limit between 1 and 25." } };
-    }
-    const canUseRemote = this.accessControl.actorHasPermission(source.event, "federation.remote_control");
-    if (request.args.instanceId && !canUseRemote) return this.retainedSourceUnavailable(request.context);
-    const target = await this.resolveAttachTarget({ ...request.args, includeRemote: canUseRemote && request.args.includeRemote !== false });
-    if (!target.ok) return target;
-    let before: { at: number; selector: string } | undefined;
-    if (request.args.cursor) {
-      try {
-        if (request.args.cursor.length > 512) throw new Error("oversized cursor");
-        const cursor = JSON.parse(Buffer.from(request.args.cursor, "base64url").toString("utf8")) as { scope: string; at: number; selector: string };
-        if (cursor.scope !== source.principalScope || !Number.isSafeInteger(cursor.at) || !/^[a-f0-9]{64}$/.test(cursor.selector)) throw new Error("invalid cursor");
-        before = cursor;
-      } catch {
-        return { ok: false, error: { code: "invalid_arguments", message: "Use an unmodified nextCursor from this request's destination listing." } };
-      }
-    }
-    const limit = request.args.limit ?? 25;
-    const candidates = this.options.requestStore.list(source, limit + 1, before);
-    const page = candidates.slice(0, limit);
-    const result: ListMessagingSurfacesResult = {
-      surfaces: [], eligibleCount: null, countIsComplete: !before && candidates.length <= limit,
-      selectionReason: "unavailable",
-    };
-    for (const candidate of page) {
-      if (!this.accessControl.retainedSourceHasPermissions(candidate)) continue;
-      const authorized = await this.accessControl.retainedSourceIsAuthorized(candidate);
-      if (authorized === undefined) result.countIsComplete = false;
-      if (!authorized) continue;
-      // Use the immutable request's reply anchor for its causal destination,
-      // even if a later human interaction updated this surface's summary.
-      const selected = candidate.selector === source.selector ? source : candidate;
-      const origin = await this.originForRetainedSource(selected);
-      const location = await this.summarizeAgentMessagingLocation(origin, { navigation: { kind: "thread", thread: target.thread } });
-      if (location.managedConversation.outcome === "failed") result.countIsComplete = false;
-      if (!this.resolveAttachPlacement({ location, origin, placement: request.args.placement ?? "auto" }).ok) continue;
-      result.surfaces.push({ surfaceSelector: candidate.selector, location,
-        revision: selected.ref.requestId,
-        lastUserInteractionAt: candidate.event.receivedAt, route: candidate.route,
-        provenance: candidate.selector === source.selector ? "causal_request" : "last_human_interaction" });
-    }
-    if (result.countIsComplete) result.eligibleCount = result.surfaces.length;
-    if (candidates.length > limit && page.length) {
-      const last = page[page.length - 1]!;
-      result.nextCursor = Buffer.from(JSON.stringify({ scope: source.principalScope,
-        at: last.event.receivedAt, selector: last.selector })).toString("base64url");
-    }
-    // Recommendation does not reorder the human-recency list and does not
-    // require enumerating every surface on the normal causal attach path.
-    const origin = await this.originForRetainedSource(source);
-    const location = await this.summarizeAgentMessagingLocation(origin, { navigation: { kind: "thread", thread: target.thread } });
-    if (this.resolveAttachPlacement({ location, origin, placement: request.args.placement ?? "auto" }).ok) {
-      result.recommendedSurfaceSelector = source.selector;
-      result.selectionReason = "causal_request";
-    } else if (result.surfaces.length) {
-      if (result.countIsComplete && result.surfaces.length === 1) {
-        result.selectionReason = "sole_eligible";
-        result.recommendedSurfaceSelector = result.surfaces[0]!.surfaceSelector;
-      } else result.selectionReason = "ambiguous";
-    } else if (result.countIsComplete) result.selectionReason = "none";
-    return { ok: true, data: result };
-  }
-
-  private async originForRetainedSource(source: MessagingRequestSource): Promise<ActiveAgentMessagingOrigin> {
-    return { source, event: source.event,
-      binding: source.bindingId ? await this.options.store.getBinding(source.bindingId) : undefined };
-  }
-
-  private async attachThreadToRetainedSurface(
-    request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_to_surface" }>,
-  ): Promise<PwrAgentMessagingResponse> {
-    const source = this.accessControl.retainedRequestSource(request.context);
-    if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
-    if (!this.accessControl.retainedRequestCanCrossInstance(request.context, source) || !this.accessControl.retainedSourceHasPermissions(source)
-      || !await this.accessControl.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
-    if (request.args.instanceId && !this.accessControl.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
-    let selector = request.args.surfaceSelector;
-    if (request.args.selection !== undefined && !["causal", "sole_eligible"].includes(request.args.selection)) {
-      return { ok: false, error: { code: "invalid_arguments", message: "selection must be causal or sole_eligible." } };
-    }
-    if (request.args.selection === "sole_eligible") {
-      if (selector) return { ok: false, error: { code: "invalid_arguments", message: "Choose an explicit surfaceSelector or sole_eligible selection, not both." } };
-      const listed = await this.listRetainedMessagingSurfaces({ operation: "list_messaging_surfaces", context: request.context,
-        args: { ...request.args, limit: 25 } });
-      if (!listed.ok) return listed;
-      if (!("surfaces" in listed.data) || !listed.data.countIsComplete || listed.data.eligibleCount !== 1) {
-        return { ok: false, error: { code: "ambiguous_location", message: "Sole-surface selection requires a complete authorized candidate set with exactly one eligible destination. Inspect and select a destination explicitly." } };
-      }
-      selector = listed.data.surfaces[0]!.surfaceSelector;
-    }
-    const selected = !selector || selector === source.selector ? source
-      : this.options.requestStore?.destination(source, selector);
-    if (!selected || !this.accessControl.retainedSourceHasPermissions(selected)
-      || !await this.accessControl.retainedSourceIsAuthorized(selected, false)) return this.retainedSourceUnavailable(request.context);
-    if (request.args.expectedRevision && request.args.expectedRevision !== selected.ref.requestId) {
-      return { ok: false, error: { code: "forbidden", message: "The selected destination's human reply anchor changed. Inspect its current revision before attaching." } };
-    }
-    if (request.args.idempotencyKey !== undefined && (typeof request.args.idempotencyKey !== "string"
-      || !request.args.idempotencyKey || request.args.idempotencyKey.length > 128)) {
-      return { ok: false, error: { code: "invalid_arguments", message: "idempotencyKey must contain 1 to 128 characters." } };
-    }
-    const claim = this.options.requestStore?.claimAttachment([source.ref.requestId, selected.selector,
-      request.args.backend, request.args.threadId, request.args.instanceId ?? null,
-      request.args.placement ?? "auto", request.args.targetKind ?? "thread", request.args.title ?? null,
-      request.args.idempotencyKey ?? null]);
-    if (!claim) return this.retainedSourceUnavailable(request.context);
-    if (!claim.claimed) {
-      if (!await this.accessControl.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
-      if (claim.result?.ok && "binding" in claim.result.data) {
-        const binding = await this.options.store.getBinding(claim.result.data.binding.id);
-        if (!binding || binding.revokedAt) return this.retainedSourceUnavailable(request.context);
-      }
-      return claim.result ?? { ok: false, error: { code: "internal_error",
-        message: "This attachment was already claimed and its provider outcome is unresolved. Reconcile it before retrying; no second conversation was created." } };
-    }
-    const result = await this.attachThreadHereFromAgentMessagingOrigin({
-      operation: "attach_thread_here", context: request.context,
-      args: { ...request.args, includeRemote: this.accessControl.actorHasPermission(source.event, "federation.remote_control") && request.args.includeRemote !== false },
-    }, await this.originForRetainedSource(selected));
-    this.options.requestStore!.finishAttachment(claim.id, result);
-    return result;
-  }
-
   async authorizeRetainedTool(
     context: PwrAgentMessagingRequest["context"],
     check: Parameters<MessagingController["checkDynamicToolPermission"]>[0],
   ): Promise<{ owns: boolean; allowed: boolean; permission?: string }>{
     return this.accessControl.authorizeRetainedTool(context, check);
-  }
-
-  private async attachThreadHereFromAgentMessagingOrigin(
-    request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_here" }>,
-    retainedOrigin?: ActiveAgentMessagingOrigin,
-  ): Promise<PwrAgentMessagingResponse> {
-    const { args } = request;
-    if (
-      !args ||
-      !isAppServerBackendKind(args.backend) ||
-      typeof args.threadId !== "string" ||
-      args.threadId.trim().length === 0
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "attach_thread_here requires backend and threadId.",
-        },
-      };
-    }
-    const instanceId = args.instanceId?.trim();
-    const includeRemote = args.includeRemote !== false;
-    if (Object.hasOwn(args, "instanceId") && !instanceId) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "instanceId must be a non-empty string when provided.",
-        },
-      };
-    }
-    if (instanceId && !includeRemote) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "instanceId cannot be used when includeRemote is false.",
-        },
-      };
-    }
-    const placement = args.placement ?? "auto";
-    if (
-      placement !== "auto" &&
-      placement !== "new_child" &&
-      placement !== "current_conversation"
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "placement must be auto, new_child, or current_conversation.",
-        },
-      };
-    }
-    const targetKind = args.targetKind ?? "thread";
-    if (!isMessagingBindingTargetKind(targetKind)) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "targetKind must be thread or agent_thread.",
-        },
-      };
-    }
-
-    const origin = retainedOrigin ? { ok: true as const, origin: retainedOrigin }
-      : await this.resolveAgentMessagingOrigin(request.context);
-    if (!origin.ok) {
-      return origin;
-    }
-    const target = await this.resolveAttachTarget({
-      backend: args.backend,
-      threadId: args.threadId,
-      ...(instanceId ? { instanceId } : {}),
-      includeRemote,
-    });
-    if (!target.ok) {
-      return target;
-    }
-
-    if (!await this.accessControl.requireRemoteScope(origin.origin.event, target.federatedThread?.target, "agent-attach:remote-instance", { notify: false })) {
-      return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot attach a thread from this instance." } };
-    }
-
-    const location = await this.summarizeAgentMessagingLocation(origin.origin, {
-      navigation: { kind: "thread", thread: target.thread },
-    });
-    const resolvedPlacement = this.resolveAttachPlacement({
-      location,
-      origin: origin.origin,
-      placement,
-    });
-    if (!resolvedPlacement.ok) {
-      return resolvedPlacement;
-    }
-
-    let attachEvent = origin.origin.event;
-    let createdConversation: MessagingChannelRef["conversation"] | undefined;
-    if (retainedOrigin?.source && (!this.accessControl.retainedSourceHasPermissions(retainedOrigin.source)
-      || !await this.accessControl.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
-    if (resolvedPlacement.placement === "new_child") {
-      if (!this.adapter.createManagedConversation) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message:
-              "This messaging provider does not support creating a native child conversation from PwrAgent.",
-          },
-        };
-      }
-      const createResult = await this.adapter.createManagedConversation({
-        actor: origin.origin.event.actor,
-        parent: origin.origin.event.channel,
-        routingState: origin.origin.event.routingState,
-        sourceSurface: origin.origin.event.sourceSurface,
-        title: sanitizeMessagingChildTitle(args.title),
-      });
-      if (createResult.outcome !== "created" || !createResult.conversation) {
-        return {
-          ok: false,
-          error: {
-            code: createResult.outcome === "unsupported"
-              ? "unsupported_operation"
-              : "internal_error",
-            message:
-              createResult.errorMessage ??
-              "The messaging provider could not create a native child conversation.",
-          },
-        };
-      }
-      createdConversation = createResult.conversation;
-      attachEvent = {
-        ...origin.origin.event,
-        id: `${origin.origin.event.id}:attach:${this.now()}`,
-        kind: "lifecycle",
-        lifecycle: "bound",
-        channel: {
-          channel: createResult.channel,
-          conversation: createResult.conversation,
-        },
-        routingState: createResult.routingState,
-        receivedAt: this.now(),
-      };
-    }
-
-    if (retainedOrigin?.source && (!this.accessControl.retainedSourceHasPermissions(retainedOrigin.source)
-      || !await this.accessControl.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
-    const binding = await this.bindingService.bindChannelToThread(attachEvent, {
-      backend: args.backend,
-      federatedThread: target.federatedThread,
-      threadId: args.threadId,
-      targetKind,
-    });
-    await this.restoreAttachedTurnActivity(binding);
-    const visibleBinding = await this.bindingService.renderBindingStatus(binding);
-    await this.repostLastAssistantMessageForResume(visibleBinding, {
-      important: true,
-    });
-    return {
-      ok: true,
-      data: {
-        binding: summarizeMessagingBinding(
-          visibleBinding,
-          summarizeNavigationThreadForMessaging(target.thread),
-        ),
-        channel: visibleBinding.channel.channel,
-        conversation: summarizeMessagingConversation(visibleBinding.channel.conversation),
-        createdConversation: createdConversation
-          ? summarizeMessagingConversation(createdConversation)
-          : undefined,
-        location,
-        outcome: resolvedPlacement.placement === "new_child"
-          ? "created_and_attached"
-          : "attached",
-        placement: resolvedPlacement.placement,
-      },
-    };
-  }
-
-  private async renameCurrentMessagingConversationFromAgentMessagingOrigin(
-    request: Extract<
-      PwrAgentMessagingRequest,
-      { operation: "rename_current_messaging_conversation" }
-    >,
-  ): Promise<PwrAgentMessagingResponse> {
-    const title = normalizeConversationTitle(
-      typeof request.args?.title === "string" ? request.args.title : undefined,
-    );
-    if (!title || title.length > 200) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "rename_current_messaging_conversation requires title between 1 and 200 characters.",
-        },
-      };
-    }
-    const origin = await this.resolveAgentMessagingOrigin(request.context);
-    if (!origin.ok) {
-      return origin;
-    }
-    if (!this.adapter.setConversationTitle) {
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_operation",
-          message:
-            "This messaging provider does not support renaming the current conversation.",
-        },
-      };
-    }
-
-    const result = await this.adapter.setConversationTitle({
-      actor: origin.origin.event.actor,
-      channel: origin.origin.event.channel,
-      routingState:
-        origin.origin.event.routingState ?? origin.origin.binding?.routingState,
-      title,
-    });
-    if (result.outcome !== "updated") {
-      return {
-        ok: false,
-        error: {
-          code: result.outcome === "unsupported"
-            ? "unsupported_operation"
-            : "internal_error",
-          message:
-            result.errorMessage
-            ?? "The messaging provider could not rename the current conversation.",
-        },
-      };
-    }
-
-    const renamedConversation = {
-      ...result.conversation,
-      title: result.title,
-    };
-    if (origin.origin.binding) {
-      const updatedBinding = await this.options.store.upsertBinding({
-        ...origin.origin.binding,
-        channel: {
-          ...origin.origin.binding.channel,
-          conversation: {
-            ...origin.origin.binding.channel.conversation,
-            ...renamedConversation,
-          },
-        },
-        updatedAt: result.updatedAt,
-      });
-      origin.origin.binding = updatedBinding;
-      if (origin.origin.deliveryBinding?.id === updatedBinding.id) {
-        origin.origin.deliveryBinding = updatedBinding;
-      }
-      this.bindingService.notifyBindingChanged("agent-rename-conversation");
-      // Binding-local mutation with no registry event behind it, so the
-      // status card needs the inline render too — the bus never fires for
-      // this, and the provider's own rename echo (Slack's
-      // `agent_session_title_changed`) only fires for a participant's
-      // rename, never for ours.
-      await this.bindingService.renderBindingStatus(updatedBinding, origin.origin.event);
-    }
-
-    return {
-      ok: true,
-      data: {
-        channel: result.channel,
-        conversation: summarizeMessagingConversation(renamedConversation),
-        outcome: "renamed",
-        title: result.title,
-        updatedAt: result.updatedAt,
-      },
-    };
-  }
-
-  private async sendPrivateResponseFromAgentMessagingOrigin(
-    request: Extract<
-      PwrAgentMessagingRequest,
-      { operation: "send_private_response" }
-    >,
-  ): Promise<PwrAgentMessagingResponse> {
-    const text = typeof request.args?.text === "string"
-      ? request.args.text
-      : "";
-    const awaitReply = request.args?.awaitReply === true;
-    const replyInstructions = typeof request.args?.replyInstructions === "string"
-      ? request.args.replyInstructions.trim()
-      : "";
-    const suppliedReplyOptions = request.args?.replyOptions;
-    const replyOptions = suppliedReplyOptions === undefined
-      ? [{ label: "I did it", text: "I did it." }]
-      : suppliedReplyOptions;
-    if (!text.trim() || text.length > 40_000) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "send_private_response requires text between 1 and 40,000 characters.",
-        },
-      };
-    }
-    if (
-      awaitReply
-      && (!replyInstructions || replyInstructions.length > 4_000)
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "send_private_response requires replyInstructions between 1 and 4,000 characters when awaitReply is true.",
-        },
-      };
-    }
-    if (
-      suppliedReplyOptions !== undefined
-      && (
-        !awaitReply
-        || !Array.isArray(suppliedReplyOptions)
-        || suppliedReplyOptions.length < 1
-        || suppliedReplyOptions.length > 3
-        || suppliedReplyOptions.some((option) =>
-          !option
-          || typeof option.label !== "string"
-          || option.label.trim().length < 1
-          || option.label.length > 40
-          || typeof option.text !== "string"
-          || option.text.trim().length < 1
-          || option.text.length > 500
-        )
-      )
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "replyOptions requires awaitReply and one to three buttons with a label (1–40 characters) and text (1–500 characters).",
-        },
-      };
-    }
-    const actionCapabilities = this.capabilityProfile.actions;
-    const actionCapacity = actionCapabilities
-      ? Math.min(
-          actionCapabilities.maxActions,
-          (actionCapabilities.maxRows ?? Number.POSITIVE_INFINITY)
-            * actionCapabilities.maxActionsPerRow,
-        )
-      : 0;
-    if (
-      awaitReply
-      && actionCapacity >= 2
-      && (
-        replyOptions.length + 1 > actionCapacity
-        || replyOptions.some((option) =>
-          option.label.length > (actionCapabilities?.maxLabelLength ?? 40)
-        )
-      )
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            `This messaging provider supports at most ${actionCapacity - 1} private reply option(s) plus Cancel; labels must fit its button limit.`,
-        },
-      };
-    }
-    if (!request.context.turnId) {
-      return {
-        ok: false,
-        error: {
-          code: "not_found",
-          message:
-            "Private responses require the active messaging turn that identified the requesting user.",
-        },
-      };
-    }
-    const turnKey = agentMessagingTurnKey(
-      request.context.backend,
-      request.context.threadId,
-      request.context.turnId,
-    );
-    const privateReceipt = this.privateResponses.beginTool(turnKey);
-    try {
-      const origin = await this.resolveAgentMessagingOrigin(request.context);
-      if (!origin.ok) {
-        return origin;
-      }
-      if (!this.adapter.resolvePrivateConversation) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message:
-              "This messaging provider cannot start a private response to the requesting user.",
-          },
-        };
-      }
-
-      let privateConversation: MessagingPrivateConversationResolveResult;
-      try {
-        privateConversation = await this.adapter.resolvePrivateConversation({
-          actor: origin.origin.event.actor,
-          ...(awaitReply ? { replyContinuationRequired: true } : {}),
-          source: origin.origin.event.channel,
-          routingState: origin.origin.event.routingState,
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error: {
-            code: "internal_error",
-            message:
-              error instanceof Error
-                ? `Could not resolve a private conversation: ${error.message}`
-                : "Could not resolve a private conversation.",
-          },
-        };
-      }
-      if (
-        privateConversation.outcome !== "resolved"
-        || !privateConversation.conversation
-        || privateConversation.channel !== origin.origin.event.channel.channel
-      ) {
-        return {
-          ok: false,
-          error: {
-            code: privateConversation.outcome === "unsupported"
-              ? "unsupported_operation"
-              : "internal_error",
-            message:
-              privateConversation.errorMessage
-              ?? "The messaging provider could not resolve a private conversation.",
-          },
-        };
-      }
-
-      const privateEvent: MessagingInboundEvent = {
-        ...origin.origin.event,
-        id: `${origin.origin.event.id}:private-response:${this.now()}`,
-        channel: {
-          channel: privateConversation.channel,
-          conversation: privateConversation.conversation,
-        },
-        receivedAt: this.now(),
-        routingState: privateConversation.routingState,
-      };
-      const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
-      if (awaitReply && !sourceBinding) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message: "A private reply needs an originating conversation for its completion.",
-          },
-        };
-      }
-      const sourceThread = sourceBinding
-        ? await this.resolveBoundThreadSummary(sourceBinding)
-        : undefined;
-      const attributionLabel = sourceBinding
-        ? responseAttributionLabel(sourceBinding, sourceThread)
-        : "PwrAgent Agent";
-      const requestId = awaitReply ? randomUUID() : undefined;
-      // Interactive cards use one provider text block. Keep long private content
-      // on the ordinary message path so provider block limits cannot clip it.
-      const buttonActions = awaitReply && requestId && actionCapacity >= 2 && text.length <= 2_000
-        ? [
-            ...replyOptions.map((option, index) => ({
-              id: `private-reply:${requestId}:reply:${index}`,
-              label: option.label,
-              style: "primary" as const,
-            })),
-            {
-              id: `private-reply:${requestId}:cancel`,
-              label: "Cancel",
-              style: "secondary" as const,
-            },
-          ]
-        : [];
-      const result = await this.deliver(
-        buttonActions.length > 0
-          ? {
-              ...buildConfirmationIntent({
-                id: this.newIntentId("private-response"),
-                capabilityProfile: this.capabilityProfile,
-                createdAt: this.now(),
-                title: attributionLabel,
-                body: `${text}\n\nChoose a button or reply in this message's thread. Completion returns to the original conversation.`,
-                actions: buttonActions,
-              }),
-              allowedActorIds: [origin.origin.event.actor.platformUserId],
-              bindingId: sourceBinding?.id,
-            }
-          : {
-              id: this.newIntentId("private-response"),
-              kind: "message",
-              bindingId: sourceBinding?.id,
-              createdAt: this.now(),
-              role: "assistant",
-              attribution: {
-                label: attributionLabel,
-                hint: awaitReply
-                  ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
-                  : "Private Request · Reply in Thread to Respond to this Agent",
-              },
-              parts: [{ type: "text", text, markdown: "markdown" }],
-            },
-        undefined,
-        privateEvent,
-      );
-      if (!isVisibleAssistantStreamDelivery(result)) {
-        return {
-          ok: false,
-          error: {
-            code: result.outcome === "unsupported"
-              ? "unsupported_operation"
-              : "internal_error",
-            message:
-              result.errorMessage
-              ?? "The private response was not delivered, so the source response was not suppressed.",
-          },
-        };
-      }
-
-      this.privateResponses.delivered(privateReceipt);
-      let sourceStreamsCancelled = true;
-      let sourceWorkingUpdatesCancelled = true;
-      if (sourceBinding) {
-        this.toolUpdatePolicy.flush({
-          bindingId: sourceBinding.id,
-          clear: true,
-          turnId: request.context.turnId,
-        });
-        this.clearTurnProse(sourceBinding.id, request.context.turnId);
-        [sourceStreamsCancelled, sourceWorkingUpdatesCancelled] = await Promise.all([
-          this.cancelAssistantStreamsForTurn(
-            sourceBinding,
-            request.context.turnId,
-          ),
-          this.cancelWorkingUpdatesForTurn(
-            sourceBinding,
-            request.context.turnId,
-          ),
-        ]);
-      }
-      if (!sourceStreamsCancelled || !sourceWorkingUpdatesCancelled) {
-        return {
-          ok: false,
-          error: {
-            code: "internal_error",
-            message:
-              "The private response was delivered, but existing source output could not be fully retracted. Further source output remains suppressed.",
-          },
-        };
-      }
-      if (sourceBinding) {
-        await this.clearTerminalPrivateResponseActivity(
-          sourceBinding,
-          request.context.turnId,
-        );
-      }
-      if (awaitReply && (!sourceBinding || !result.continuation)) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message:
-              "The private response was delivered, but this provider did not return a reply thread for the requested continuation. Further source output remains suppressed.",
-          },
-        };
-      }
-      if (sourceBinding && result.continuation) {
-        try {
-          let continuationBinding = await this.bindingService.bindChannelToThread(
-            {
-              ...privateEvent,
-              id: `${privateEvent.id}:continuation`,
-              channel: result.continuation.channel,
-              routingState: result.continuation.routingState,
-            },
-            {
-              backend: request.context.backend,
-              recordTransition: false,
-              statusPresentation: "on_demand",
-              threadId: request.context.threadId,
-              targetKind: sourceBinding.targetKind ?? "agent_thread",
-            },
-          );
-          if (awaitReply) {
-            continuationBinding = await this.options.store.upsertBinding({
-              ...continuationBinding,
-              privateReplyContinuation: {
-                createdAt: this.now(),
-                expiresAt: this.now() + PRIVATE_REPLY_CONTINUATION_TTL_MS,
-                instructions: replyInstructions,
-                ...(requestId ? { requestId } : {}),
-                ...(result.surface ? { requestSurface: result.surface } : {}),
-                replyOptions: replyOptions.map((option) => ({
-                  label: option.label.trim(),
-                  text: option.text.trim(),
-                })),
-                source: privateReplySourceFromBinding(sourceBinding),
-              },
-              updatedAt: this.now(),
-            });
-            this.bindingService.notifyBindingChanged("private-reply-awaiting");
-          }
-          await this.clearTerminalPrivateResponseActivity(
-            continuationBinding,
-            request.context.turnId,
-          );
-        } catch (error) {
-          this.logger.warn?.("messaging private response continuation bind failed", {
-            backend: request.context.backend,
-            error: error instanceof Error ? error.message : String(error),
-            threadId: request.context.threadId,
-          });
-          return {
-            ok: false,
-            error: {
-              code: "internal_error",
-              message:
-                "The private response was delivered, but replies to it could not be routed back to this Agent. Further source output remains suppressed.",
-            },
-          };
-        }
-      }
-      return {
-        ok: true,
-        data: {
-          awaitingReply: awaitReply,
-          channel: result.channel,
-          deliveredAt: result.deliveredAt,
-          outcome: "delivered",
-          recipient: summarizeMessagingActor(origin.origin.event.actor),
-        },
-      };
-    } finally {
-      this.privateResponses.finishTool(privateReceipt);
-    }
-  }
-
-  private async sendMessagingFileFromAgentMessagingOrigin(
-    request: Extract<
-      PwrAgentMessagingRequest,
-      { operation: "send_messaging_file" }
-    >,
-    receivedFile?: Uint8Array,
-  ): Promise<PwrAgentMessagingResponse> {
-    const invalid = validateMessagingFileMetadata(request.args);
-    if (invalid) return { ok: false, error: { code: invalid.code, message: invalid.message } };
-    if (request.context.requestingInstanceId && !receivedFile) {
-      return { ok: false, error: { code: "forbidden", message: "Federated file sends require received bytes, never a provider-owner path." } };
-    }
-    const caption = typeof request.args?.caption === "string"
-      ? request.args.caption.trim()
-      : "";
-    const filename = typeof request.args?.filename === "string"
-      ? request.args.filename.trim()
-      : "";
-    const mediaKind = request.args?.mediaKind;
-    if (
-      mediaKind !== undefined
-      && mediaKind !== "auto"
-      && mediaKind !== "document"
-      && mediaKind !== "image"
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "send_messaging_file mediaKind must be document, image, or auto.",
-        },
-      };
-    }
-    if (caption.length > 4_000) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "send_messaging_file caption must be at most 4,000 characters.",
-        },
-      };
-    }
-    const permission = this.accessControl.checkDynamicToolPermission({
-      backend: request.context.backend,
-      threadId: request.context.threadId,
-      turnId: request.context.turnId,
-      category: "messaging_context",
-      tool: "send_messaging_file",
-    });
-    if (permission.owns && !permission.allowed) {
-      return {
-        ok: false,
-        error: {
-          code: "forbidden",
-          message:
-            `The messaging user who started this turn lacks permission for this tool (${
-              permission.permission ?? "message.reply"
-            }).`,
-        },
-      };
-    }
-    const sendPrivately = request.args?.private === true;
-    if (sendPrivately && !request.context.turnId) {
-      return {
-        ok: false,
-        error: {
-          code: "not_found",
-          message:
-            "Private file delivery requires the active messaging turn that identified the requesting user.",
-        },
-      };
-    }
-    const origin = await this.resolveAgentMessagingOrigin(request.context);
-    if (!origin.ok) {
-      return origin;
-    }
-
-    // Resolve the destination before loading bytes. A file may run to the
-    // provider's whole upload ceiling, and every failure below is knowable
-    // without reading it.
-    let deliveryEvent = origin.origin.event;
-    if (sendPrivately) {
-      if (!this.adapter.resolvePrivateConversation) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message:
-              "This messaging provider cannot send a private file to the requesting user.",
-          },
-        };
-      }
-      let privateConversation: MessagingPrivateConversationResolveResult;
-      try {
-        privateConversation = await this.adapter.resolvePrivateConversation({
-          actor: origin.origin.event.actor,
-          source: origin.origin.event.channel,
-          routingState: origin.origin.event.routingState,
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error: {
-            code: "internal_error",
-            message:
-              error instanceof Error
-                ? `Could not resolve a private conversation: ${error.message}`
-                : "Could not resolve a private conversation.",
-          },
-        };
-      }
-      if (
-        privateConversation.outcome !== "resolved"
-        || !privateConversation.conversation
-        || privateConversation.channel !== origin.origin.event.channel.channel
-      ) {
-        return {
-          ok: false,
-          error: {
-            code: privateConversation.outcome === "unsupported"
-              ? "unsupported_operation"
-              : "internal_error",
-            message:
-              privateConversation.errorMessage
-              ?? "The messaging provider could not resolve a private conversation.",
-          },
-        };
-      }
-      deliveryEvent = {
-        ...origin.origin.event,
-        id: `${origin.origin.event.id}:private-file:${this.now()}`,
-        channel: {
-          channel: privateConversation.channel,
-          conversation: privateConversation.conversation,
-        },
-        receivedAt: this.now(),
-        routingState: privateConversation.routingState,
-      };
-    }
-
-    const fileRequest = {
-      path: typeof request.args?.path === "string" ? request.args.path : "",
-      ...(filename ? { filename } : {}),
-      ...(mediaKind ? { mediaKind } : {}),
-    };
-    const outbound = receivedFile
-      ? resolveMessagingOutboundBytes(fileRequest, this.capabilityProfile.outboundAttachments ?? {}, receivedFile)
-      : await resolveMessagingOutboundFile(fileRequest, this.capabilityProfile.outboundAttachments ?? {},
-        await this.resolveOutboundFileAccess(request.context));
-    if (!outbound.ok) {
-      return {
-        ok: false,
-        error: {
-          code: outbound.code,
-          message: outbound.message,
-        },
-      };
-    }
-
-    if (request.context.requestingInstanceId) {
-      const permission = await this.accessControl.authorizeRetainedTool(request.context, {
-        ...request.context, category: "messaging_context", tool: "send_messaging_file", arguments: request.args,
-      });
-      if (!permission.allowed || !(await this.resolveAgentMessagingOrigin(request.context)).ok) {
-        return { ok: false, error: { code: "forbidden", message: "The original messaging authority changed before file delivery." } };
-      }
-    }
-    const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
-    const filePart = outbound.mediaKind === "image"
-      ? {
-          type: "image" as const,
-          // Bytes, not a base64 data URL. See MessagingImagePart.data — the
-          // round trip through text costs several copies of the whole file.
-          url: "",
-          data: outbound.data,
-          mimeType: outbound.mimeType,
-          alt: outbound.filename,
-          name: outbound.filename,
-          sourceUrl: outbound.path,
-        }
-      : {
-          type: "file" as const,
-          name: outbound.filename,
-          data: outbound.data,
-          mimeType: outbound.mimeType,
-          sizeBytes: outbound.sizeBytes,
-        };
-    const result = await this.deliver(
-      {
-        id: this.newIntentId("messaging-file"),
-        kind: "message",
-        bindingId: sourceBinding?.id,
-        createdAt: this.now(),
-        delivery: {
-          requireAttachments: true,
-        },
-        role: "assistant",
-        parts: [
-          ...(caption
-            ? [{ type: "text" as const, text: caption, markdown: "markdown" as const }]
-            : []),
-          filePart,
-        ],
-      },
-      sendPrivately ? undefined : sourceBinding,
-      deliveryEvent,
-    );
-    if (!isVisibleAssistantStreamDelivery(result)) {
-      return {
-        ok: false,
-        error: {
-          code: result.outcome === "unsupported"
-            ? "unsupported_operation"
-            : "internal_error",
-          message:
-            result.errorMessage
-            ?? "The file was not delivered to the messaging surface.",
-        },
-      };
-    }
-    this.recordOutboundFileActivity({
-      backend: request.context.backend,
-      binding: sourceBinding,
-      event: deliveryEvent,
-      file: {
-        filename: outbound.filename,
-        mediaKind: outbound.mediaKind,
-        mimeType: outbound.mimeType,
-        path: outbound.path,
-        sizeBytes: outbound.sizeBytes,
-      },
-      deliveredAt: result.deliveredAt,
-      private: sendPrivately,
-      threadId: request.context.threadId,
-    });
-    if (
-      !sendPrivately
-      && sourceBinding
-      && filePart.type === "image"
-    ) {
-      this.rememberOutboundMessagingFileImages({
-        backend: request.context.backend,
-        binding: sourceBinding,
-        images: [filePart],
-        pathAliases: [outbound.path, typeof request.args?.path === "string"
-          ? request.args.path.trim()
-          : ""],
-        threadId: request.context.threadId,
-        turnId: request.context.turnId,
-      });
-    }
-
-    return {
-      ok: true,
-      data: {
-        channel: deliveryEvent.channel.channel,
-        conversation: summarizeMessagingConversation(
-          deliveryEvent.channel.conversation,
-        ),
-        deliveredAt: result.deliveredAt,
-        filename: outbound.filename,
-        mediaKind: outbound.mediaKind,
-        mimeType: outbound.mimeType,
-        outcome: "delivered",
-        private: sendPrivately,
-        sizeBytes: outbound.sizeBytes,
-        ...(sendPrivately
-          ? { recipient: summarizeMessagingActor(origin.origin.event.actor) }
-          : {}),
-      },
-    };
-  }
-
-  private rememberOutboundMessagingFileImages(params: {
-    backend: AppServerBackendKind;
-    binding: MessagingBindingRecord;
-    images: MessagingImagePart[];
-    pathAliases?: readonly string[];
-    threadId: ThreadIdentifier;
-    turnId?: string;
-  }): void {
-    if (params.images.length === 0) {
-      return;
-    }
-    const identity = {
-      threadId: params.threadId,
-      turnId: params.turnId,
-    };
-    const syntheticEvent = {
-      backend: params.backend,
-      notification: {
-        method: "item/completed",
-        params: {
-          threadId: params.threadId,
-          turnId: params.turnId,
-        },
-      },
-    } as AgentEvent;
-    const variants: MessagingImagePart[][] = [params.images];
-    for (const image of params.images) {
-      // Only claim the sourceUrl-less shape when `url` still identifies the
-      // image. A bytes-backed part has an empty url, and claiming that would
-      // register a signature matching any other empty-url image.
-      if (image.url) {
-        variants.push([{ ...image, sourceUrl: undefined }]);
-      }
-      const aliases = outboundImageClaimAliases([
-        image.sourceUrl,
-        image.url,
-        ...(params.pathAliases ?? []),
-      ]);
-      for (const alias of aliases) {
-        variants.push([{
-          ...image,
-          url: alias,
-          sourceUrl: alias,
-        }]);
-      }
-    }
-    for (const images of variants) {
-      this.claimAssistantMessageContentDelivery(
-        syntheticEvent,
-        params.binding,
-        assistantImageDeliverySignature(images),
-        identity,
-      );
-    }
-  }
-
-  private async resolveOutboundFileAccess(
-    context: PwrAgentMessagingRequest["context"],
-  ): Promise<MessagingOutboundFileAccess> {
-    const configured = this.options.outboundFileAccess?.();
-    const allowedRoots = [
-      ...resolveScratchProjectsRoots(),
-      ...(configured?.allowedRoots ?? []),
-    ];
-    try {
-      const thread = await this.readExactNavigationThread({ ref: { backend: context.backend, threadId: context.threadId } });
-      if (thread?.projectKey) {
-        allowedRoots.push(thread.projectKey);
-      }
-      for (const directory of thread?.linkedDirectories ?? []) {
-        allowedRoots.push(directory.path);
-        if (directory.worktreePath) {
-          allowedRoots.push(directory.worktreePath);
-        }
-      }
-    } catch {
-      // Scratch-project and configured roots still apply.
-    }
-    return {
-      allowedRoots,
-      ...(configured?.privateStorageRoots
-        ? { privateStorageRoots: configured.privateStorageRoots }
-        : {}),
-    };
-  }
-
-  private async handleOriginalAttachmentRequest(
-    request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_attachments" | "export_messaging_attachment" }>,
-    consumeOriginal?: OriginalAttachmentConsumer,
-  ): Promise<PwrAgentMessagingResponse> {
-    const store = this.options.originalAttachmentStore;
-    if (!store) return { ok: false, error: { code: "not_found", message: "No original-file cache is available on this messaging owner. Ask the sender to reattach the file after upgrading." } };
-    if (request.context.causalMessagingAmbiguous) return this.retainedSourceUnavailable(request.context);
-    const active = request.context.turnId ? this.activeAgentMessagingOriginsByTurnKey.get(
-      agentMessagingTurnKey(request.context.backend, request.context.threadId, request.context.turnId),
-    ) : undefined;
-    const source = this.accessControl.retainedRequestSource(request.context);
-    const event = source?.event ?? active?.event;
-    // The request store is shared by every provider. An unrelated controller
-    // must yield before actor authorization, so the owner can decide access.
-    if (event && !this.isChannelInScope(event.channel)) {
-      return { ok: false, error: { code: "not_found", message: "No original attachments for this messaging provider." } };
-    }
-    const remote = request.context.requestingInstanceId;
-    // The authenticated caller must be the actual execution owner, including
-    // full peers. A source ref or colliding thread ID alone is never a grant.
-    const remoteAuthorized = async (verifyAccess = true): Promise<boolean> => {
-      if (!remote || !source || !source.bindingId || source.agent.backend !== request.context.backend
-        || source.agent.threadId !== request.context.threadId) return false;
-      if (!await this.accessControl.retainedSourceIsAuthorized(source, verifyAccess)) return false;
-      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
-      return binding?.id === source.bindingId && binding.backend === request.context.backend
-        && binding.threadId === request.context.threadId && containedMessagingBindingMatches(request.context, binding)
-        && this.accessControl.retainedRequestCanCrossInstance(request.context, source)
-        && this.accessControl.checkDynamicToolPermission({ ...request.context, category: "messaging_context",
-          tool: request.operation, arguments: request.args }, source).allowed;
-    };
-    if (remote && !await remoteAuthorized()) return this.retainedSourceUnavailable(request.context);
-    if (!event && (request.context.messagingTurn || request.context.causalMessagingSource)) {
-      return { ok: false, error: { code: "not_found", message:
-        "This messaging turn's actor cannot be reauthorized after restart. Send a new message in the original conversation, or request the save in a local desktop turn on this thread." } };
-    }
-    if (!remote && !active && request.context.causalMessagingSource && (!source || !await this.accessControl.retainedSourceIsAuthorized(source))) {
-      return this.retainedSourceUnavailable(request.context);
-    }
-    const permission = this.accessControl.checkDynamicToolPermission({ ...request.context,
-      category: "messaging_context", tool: request.operation, arguments: request.args,
-    }, source);
-    if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot access received attachments." } };
-    const scope = { backend: request.context.backend, threadId: request.context.threadId, provider: this.options.channel,
-      ...(remote ? { instanceId: remote } : {}) };
-    const actorKey = event ? originalAttachmentActorKey(event) : undefined;
-    try {
-      if (request.operation === "list_messaging_attachments") {
-        if (request.args.cursor !== undefined && typeof request.args.cursor !== "string") {
-          return { ok: false, error: { code: "invalid_arguments", message: "cursor must be a returned nextCursor string." } };
-        }
-        const result = await store.list(scope, actorKey, request.args.cursor);
-        return result.attachments.length > 0 ? { ok: true, data: result } : {
-          ok: false, error: { code: "not_found", message: "No retained originals in this thread/page. Files expire after 7 days or earlier at the cache limit. Old previews do not restore bytes; ask the sender to reattach missing or oversized files (10 MiB maximum)." },
-        };
-      }
-      if (typeof request.args.attachmentId !== "string" || !/^[a-f0-9]{64}$/u.test(request.args.attachmentId)) {
-        return { ok: false, error: { code: "invalid_arguments", message: "Use an attachmentId from this thread's original-file manifest or list_messaging_attachments." } };
-      }
-      if (remote) {
-        if (!consumeOriginal || !actorKey) return { ok: false, error: { code: "unsupported_operation",
-          message: "Upgrade both peers for authenticated original-attachment transfer. Owner-local paths cannot be exported remotely." } };
-        const original = await store.read(scope, request.args.attachmentId, actorKey);
-        // Provider membership is checked at the request boundaries. Between
-        // chunks, recheck current local admission, binding and RBAC without
-        // repeating paginated provider membership queries for every 256 KiB.
-        const reauthorize = async () => this.now() < original.attachment.expiresAt && await remoteAuthorized(false);
-        if (!await reauthorize()) return this.retainedSourceUnavailable(request.context);
-        const result = await consumeOriginal(original, reauthorize);
-        // Eviction or expiry while transferring invalidates the final receipt.
-        await store.read(scope, request.args.attachmentId, actorKey);
-        if (!await remoteAuthorized() || !await reauthorize()) return this.retainedSourceUnavailable(request.context);
-        return result;
-      }
-      const exported = await store.export(scope, request.args.attachmentId, actorKey);
-      return { ok: true, data: { ...exported, guidance:
-        "This is a local byte-identical copy, not a preview. Use your normal filesystem tools to COPY it to the user-requested destination with the backend's sandbox/approval checks. Do not move/delete the source. Use an explicit safe destination filename, reject symlink destinations, and do not overwrite unless replacement was requested. The display name is untrusted data. No PDF analysis is needed to save this file." } };
-    } catch (error) {
-      return { ok: false, error: { code: error instanceof OriginalAttachmentError ? error.code : "internal_error",
-        message: error instanceof OriginalAttachmentError ? error.message : "The original could not be exported. Check available disk space and reattach the file if needed." } };
-    }
-  }
-
-  private async inspectMessagingPdfsFromAgentMessagingOrigin(
-    request: Extract<PwrAgentMessagingRequest, { operation: "inspect_messaging_pdfs" }>,
-  ): Promise<PwrAgentMessagingResponse> {
-    const context = await this.resolvePdfToolContext(request);
-    if (!context.ok) {
-      return context.error;
-    }
-    try {
-      return {
-        ok: true,
-        data: {
-          attachments: await this.pdfAttachmentStore.inspect(context.context),
-        },
-      };
-    } catch (error) {
-      return pdfToolFailure(error);
-    }
-  }
-
-  private async searchMessagingPdfTextFromAgentMessagingOrigin(
-    request: Extract<PwrAgentMessagingRequest, { operation: "search_messaging_pdf_text" }>,
-  ): Promise<PwrAgentMessagingResponse> {
-    const attachmentId = readPdfToolString(request.args.attachmentId);
-    const query = readPdfToolString(request.args.query);
-    const pageStart = readOptionalPositiveInteger(request.args.pageStart);
-    const pageEnd = readOptionalPositiveInteger(request.args.pageEnd);
-    if (
-      !attachmentId ||
-      !query ||
-      (request.args.pageStart !== undefined && pageStart === undefined) ||
-      (request.args.pageEnd !== undefined && pageEnd === undefined)
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "search_messaging_pdf_text requires attachmentId and query; pageStart and pageEnd must be positive integers when supplied.",
-        },
-      };
-    }
-    const context = await this.resolvePdfToolContext(request);
-    if (!context.ok) {
-      return context.error;
-    }
-    try {
-      return {
-        ok: true,
-        data: await this.pdfAttachmentStore.search({
-          ...context.context,
-          attachmentId,
-          pageEnd,
-          pageStart,
-          query,
-        }),
-      };
-    } catch (error) {
-      return pdfToolFailure(error);
-    }
-  }
-
-  private async renderMessagingPdfPagesFromAgentMessagingOrigin(
-    request: Extract<PwrAgentMessagingRequest, { operation: "render_messaging_pdf_pages" }>,
-  ): Promise<PwrAgentMessagingResponse> {
-    if (request.context.backend !== "codex") {
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_operation",
-          message:
-            "Rendered messaging PDF pages are currently available only to Codex PDF analysis turns.",
-        },
-      };
-    }
-    const attachmentId = readPdfToolString(request.args.attachmentId);
-    const pageNumbers = readPdfToolPageNumbers(request.args.pageNumbers);
-    if (!attachmentId || !pageNumbers) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "render_messaging_pdf_pages requires attachmentId and one or more positive integer pageNumbers.",
-        },
-      };
-    }
-    const context = await this.resolvePdfToolContext(request);
-    if (!context.ok) {
-      return context.error;
-    }
-    try {
-      const rendered = await this.pdfAttachmentStore.render({
-        ...context.context,
-        attachmentId,
-        pageNumbers,
-      });
-      return {
-        ok: true,
-        data: rendered.result,
-        imageContent: rendered.imageContent,
-      };
-    } catch (error) {
-      return pdfToolFailure(error);
-    }
-  }
-
-  private async resolvePdfToolContext(
-    request: PwrAgentMessagingRequest,
-  ): Promise<
-    | {
-        ok: true;
-        context: {
-          backend: AppServerBackendKind;
-          threadId: ThreadIdentifier;
-          turnId: string;
-        };
-      }
-    | { ok: false; error: Extract<PwrAgentMessagingResponse, { ok: false }> }
-  > {
-    if (!request.context.turnId) {
-      return {
-        ok: false,
-        error: {
-          ok: false,
-          error: {
-            code: "not_found",
-            message: "Messaging PDF tools require an active messaging turn.",
-          },
-        },
-      };
-    }
-    if (request.context.requestingInstanceId && !this.pdfAttachmentStore.authorizesSource({
-      backend: request.context.backend, threadId: request.context.threadId, turnId: request.context.turnId,
-    }, request.context.requestingInstanceId, request.context.causalMessagingSource)) {
-      return { ok: false, error: { ok: false, error: { code: "forbidden", message: "PDF attachments do not belong to this source and messaging turn." } } };
-    }
-    const origin = await this.resolveAgentMessagingOrigin(request.context);
-    if (!origin.ok) {
-      return { ok: false, error: origin };
-    }
-    return {
-      ok: true,
-      context: {
-        backend: request.context.backend,
-        threadId: request.context.threadId,
-        turnId: request.context.turnId,
-      },
-    };
-  }
-
-  private async resolveAttachTarget(request: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    instanceId?: string;
-    includeRemote: boolean;
-  }): Promise<AttachTargetResolution> {
-    let target: NavigationThreadSummary | undefined;
-    try {
-      if (this.options.backend.resolveThreadTarget) {
-        const resolved = await this.options.backend.resolveThreadTarget(request);
-        return resolved
-          ? { ok: true, ...resolved }
-          : attachTargetNotFound(request.backend, request.threadId);
-      }
-      if (request.instanceId || request.includeRemote === false) {
-        return attachTargetNotFound(request.backend, request.threadId);
-      }
-      target = await this.readExactNavigationThread({ ref: { backend: request.backend, threadId: request.threadId } });
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code:
-            error instanceof MessagingFederatedThreadTargetError
-              ? error.code
-              : "internal_error",
-          message:
-            error instanceof Error
-              ? `Could not verify target thread before attaching: ${error.message}`
-              : "Could not verify target thread before attaching.",
-        },
-      };
-    }
-
-    if (!target) {
-      return attachTargetNotFound(request.backend, request.threadId);
-    }
-
-    return { ok: true, thread: target };
-  }
-
-  private resolveAttachPlacement(params: {
-    location: PwrAgentMessagingLocationSummary;
-    origin: ActiveAgentMessagingOrigin;
-    placement: "auto" | "current_conversation" | "new_child";
-  }):
-    | { ok: true; placement: "current_conversation" | "new_child" }
-    | Extract<PwrAgentMessagingResponse, { ok: false }> {
-    if (params.placement !== "auto") {
-      if (
-        params.placement === "new_child" &&
-        !params.location.managedConversation.canCreateChild
-      ) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message: managedConversationUnavailableMessage(
-              params.location.managedConversation,
-            ),
-          },
-        };
-      }
-      return { ok: true, placement: params.placement };
-    }
-
-    if (params.location.managedConversation.canCreateChild) {
-      return { ok: true, placement: "new_child" };
-    }
-
-    const sourceConversationKind = params.origin.event.channel.conversation.kind;
-    const canAttachToCurrentUnboundConversation =
-      !params.origin.binding
-      && (
-        sourceConversationKind === "dm"
-        || sourceConversationKind === "thread"
-        || sourceConversationKind === "topic"
-      );
-    const canReplaceCurrentThreadOrTopicBinding =
-      Boolean(params.origin.binding)
-      && params.origin.binding?.targetKind !== "agent_thread"
-      && (
-        sourceConversationKind === "thread"
-        || sourceConversationKind === "topic"
-      );
-    if (
-      canAttachToCurrentUnboundConversation
-      || canReplaceCurrentThreadOrTopicBinding
-    ) {
-      return { ok: true, placement: "current_conversation" };
-    }
-
-    return {
-      ok: false,
-      error: {
-        code: "unsupported_operation",
-        message:
-          `${managedConversationUnavailableMessage(
-            params.location.managedConversation,
-          )} Pass placement=current_conversation only if replacing the current conversation binding is intended.`,
-      },
-    };
-  }
-
-  private async resolveAgentMessagingOrigin(
-    context: PwrAgentMessagingRequest["context"],
-  ): Promise<AgentMessagingOriginResolution> {
-    if (context.requestingInstanceId && context.causalMessagingSource) {
-      const source = this.accessControl.retainedRequestSource(context);
-      if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(context, "not_found");
-      if (!this.accessControl.retainedRequestCanCrossInstance(context, source) || !this.accessControl.retainedSourceHasPermissions(source)
-        || !await this.accessControl.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(context);
-      return { ok: true, origin: await this.originForRetainedSource(source) };
-    }
-    if (context.turnId) {
-      const origin = this.activeAgentMessagingOriginsByTurnKey.get(
-        agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
-      );
-      if (
-        !origin
-        || !this.isChannelInScope(origin.binding?.channel ?? origin.event.channel)
-      ) {
-        return {
-          ok: false,
-          error: {
-            code: "not_found",
-            message:
-              "No active messaging origin is recorded for this Agent turn. For a delegated/completion request, use list_messaging_surfaces and attach_thread_to_surface to inspect and select its retained destination.",
-          },
-        };
-      }
-      return { ok: true, origin };
-    }
-
-    let navigation: MessagingThreadContext | undefined;
-    try {
-      navigation = { kind: "thread", thread: await this.readExactNavigationThread({
-        ref: { backend: context.backend, threadId: context.threadId },
-      }) };
-    } catch {
-      navigation = undefined;
-    }
-
-    const bindings = this.filterBindingsForChannel(
-      await this.options.store.findActiveBindingsForThread({
-        backend: context.backend,
-        threadId: context.threadId,
-      }),
-    ).filter((binding) =>
-      isMessagingToolOriginBinding(binding, navigation)
-    );
-    if (bindings.length === 0) {
-      return {
-        ok: false,
-        error: {
-          code: "not_found",
-          message:
-            "No active messaging binding is attached to this Agent or handoff thread.",
-        },
-      };
-    }
-    if (bindings.length > 1) {
-      return {
-        ok: false,
-        error: {
-          code: "ambiguous_location",
-          message:
-            "This Agent or handoff thread is attached to more than one messaging surface; call from an active messaging turn so PwrAgent can resolve here.",
-        },
-      };
-    }
-    const binding = bindings[0]!;
-    return {
-      ok: true,
-      origin: {
-        binding,
-        event: eventFromBinding(binding, this.now()),
-      },
-    };
-  }
-
-  private async summarizeAgentMessagingLocation(
-    origin: ActiveAgentMessagingOrigin,
-    options: { navigation?: MessagingNavigationContext } = {},
-  ): Promise<PwrAgentMessagingLocationSummary> {
-    return {
-      actor: summarizeMessagingActor(origin.event.actor),
-      ...(origin.binding
-        ? {
-            binding: summarizeMessagingBinding(
-              origin.binding,
-              await this.resolveBoundThreadSummary(
-                origin.binding,
-                options.navigation,
-              ),
-            ),
-          }
-        : {}),
-      channel: origin.event.channel.channel,
-      conversation: summarizeMessagingConversation(origin.event.channel.conversation),
-      conversationCapabilities: this.summarizeConversationCapabilities(origin),
-      managedConversation: await this.resolveManagedConversationSummary(origin),
-      outboundAttachments: this.summarizeOutboundAttachments(),
-    };
-  }
-
-  private summarizeConversationCapabilities(
-    origin: ActiveAgentMessagingOrigin,
-  ): PwrAgentMessagingConversationCapabilitiesSummary {
-    const permissions = this.accessControl.resolveActorPermissions(origin.event);
-    return {
-      rename: {
-        allowed:
-          permissions === null
-          || permissions.permissions.has("thread.settings.name"),
-        supported: this.adapter.supportsConversationTitle?.({
-          actor: origin.event.actor,
-          channel: origin.event.channel,
-          routingState: origin.event.routingState ?? origin.binding?.routingState,
-        }) === true,
-      },
-    };
-  }
-
-  private summarizeOutboundAttachments(): PwrAgentMessagingOutboundAttachmentSummary {
-    const profile = this.capabilityProfile.outboundAttachments;
-    return {
-      ...(profile?.maxUploadBytes !== undefined
-        ? { maxUploadBytes: profile.maxUploadBytes }
-        : {}),
-      supportsFileUpload: profile?.supportsFileUpload === true,
-      supportsImageUpload: profile?.supportsImageUpload === true,
-    };
   }
 
   private async readExactNavigationContext(request: Omit<NavigationSelectedDetailRequest, "protocol">) {
@@ -10391,48 +6292,6 @@ export class MessagingController {
     };
   }
 
-  private async resolveManagedConversationSummary(
-    origin: ActiveAgentMessagingOrigin,
-  ): Promise<PwrAgentMessagingManagedConversationSummary> {
-    const providerSupportsCreation =
-      typeof this.adapter.createManagedConversation === "function";
-    if (!this.adapter.getManagedConversationRights) {
-      const operation = {
-        operation: "create_child" as const,
-        supported: providerSupportsCreation,
-        reason: providerSupportsCreation
-          ? "provider does not expose permission preflight"
-          : "provider does not support managed conversations",
-      };
-      return {
-        canCreateChild: providerSupportsCreation,
-        operation,
-        operations: [operation],
-        outcome: providerSupportsCreation ? "ok" : "unsupported",
-        providerSupportsCreation,
-      };
-    }
-
-    const rights = await this.adapter.getManagedConversationRights({
-      actor: origin.event.actor,
-      channel: origin.event.channel,
-      routingState: origin.event.routingState,
-      sourceSurface: origin.event.sourceSurface,
-    });
-    const operation = rights.operations.find(
-      (candidate) => candidate.operation === "create_child",
-    );
-    return {
-      canCreateChild: providerSupportsCreation && operation?.supported === true,
-      operation,
-      operations: rights.operations.map((candidate) => ({ ...candidate })),
-      outcome: rights.outcome,
-      errorMessage: rights.errorMessage,
-      providerSupportsCreation,
-      updatedAt: rights.updatedAt,
-    };
-  }
-
   private filterBindingsForChannel(
     bindings: MessagingBindingRecord[],
   ): MessagingBindingRecord[] {
@@ -10498,61 +6357,6 @@ export class MessagingController {
   }
 
   /**
-   * `send_messaging_file` reads a workspace file and pushes its bytes to an
-   * external platform. That is the one outbound delivery an operator needs to
-   * be able to audit after the fact, so it gets a real row rather than the
-   * timestamp bump ordinary replies write.
-   */
-  private recordOutboundFileActivity(params: {
-    backend: AppServerBackendKind;
-    binding: MessagingBindingRecord | undefined;
-    event: MessagingInboundEvent;
-    file: {
-      filename: string;
-      mediaKind: "document" | "image";
-      mimeType: string;
-      path: string;
-      sizeBytes: number;
-    };
-    deliveredAt: number;
-    private: boolean;
-    threadId: ThreadIdentifier;
-  }): void {
-    try {
-      const log = this.desktopActivityLog();
-      if (!log) return;
-      const conversation = params.event.channel.conversation;
-      log.record({
-        platform: params.event.channel.channel,
-        kind: "outbound",
-        backend: params.backend,
-        threadId: params.threadId,
-        bindingId: params.binding?.id,
-        conversationId: conversation.id,
-        conversationTitle: conversation.title,
-        actorId: params.event.actor.platformUserId,
-        actorDisplayName: params.event.actor.displayName,
-        summary: `Sent ${params.file.filename}${
-          params.private ? " privately" : ""
-        } (${params.file.sizeBytes} bytes)`,
-        createdAt: params.deliveredAt,
-        payload: {
-          tool: "send_messaging_file",
-          filename: params.file.filename,
-          mediaKind: params.file.mediaKind,
-          mimeType: params.file.mimeType,
-          sizeBytes: params.file.sizeBytes,
-          sourcePath: params.file.path,
-          private: params.private,
-          conversationKind: conversation.kind,
-        },
-      });
-    } catch {
-      // Activity log is best-effort observability.
-    }
-  }
-
-  /**
    * Authorize an agent dynamic-tool call against the RBAC actor who started the
    * turn. `owns: false` means this controller has no record of the turn (a
    * different platform's controller, or a desktop-operator turn) — the runtime
@@ -10586,216 +6390,6 @@ export class MessagingController {
 }
 
 export { isMessagingInteractivePendingRequest };
-
-/**
- * Format a wall-clock timestamp as `HH:MM AM/PM` for messaging audit
- * messages. Mirrors the format the user sees in the desktop transcript.
- */
-function formatTimeOfDay(epochMs: number): string {
-  const date = new Date(epochMs);
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const period = hours >= 12 ? "PM" : "AM";
-  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
-  const paddedMinutes = minutes < 10 ? `0${minutes}` : String(minutes);
-  return `${displayHours}:${paddedMinutes} ${period}`;
-}
-
-function resolveMonitorStateOptions(
-  monitor: MessagingMonitorState | undefined,
-  action: MonitorCommandAction,
-): MonitorStateOptions {
-  const currentPinned = normalizeMonitorThreadLimit(
-    monitor?.pinnedThreadLimit,
-    MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
-  );
-  const currentIntervalMs = normalizeMonitorIntervalMs(
-    monitor?.intervalMs,
-    MESSAGING_MONITOR_INTERVAL_MS,
-  );
-  const currentRecent = normalizeMonitorThreadLimit(
-    monitor?.recentThreadLimit,
-    MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
-  );
-  const currentShowStatusLine = monitor?.showStatusLine === true;
-  const currentShowSnippet = monitor?.showLastResponseSnippet === true;
-
-  switch (action.kind) {
-    case "cycle-pinned":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: nextMonitorThreadLimit(currentPinned),
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "cycle-recent":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: nextMonitorThreadLimit(currentRecent),
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "cycle-interval":
-      return {
-        intervalMs: nextMonitorIntervalMs(currentIntervalMs),
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "toggle-status-line":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: !currentShowStatusLine,
-      };
-    case "toggle-snippet":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: !currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-pinned":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: normalizeMonitorThreadLimit(action.count, currentPinned),
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-interval":
-      return {
-        intervalMs: normalizeMonitorIntervalMs(action.intervalMs, currentIntervalMs),
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-recent":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: normalizeMonitorThreadLimit(action.count, currentRecent),
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "set-status-line":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: action.enabled,
-      };
-    case "set-snippet":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: action.enabled,
-        showStatusLine: currentShowStatusLine,
-      };
-    case "refresh":
-    case "start":
-    case "stop":
-    case "topics-adopt":
-    case "topics-cleanup":
-    case "topics-fanout":
-      return {
-        intervalMs: currentIntervalMs,
-        pinnedThreadLimit: currentPinned,
-        recentThreadLimit: currentRecent,
-        showLastResponseSnippet: currentShowSnippet,
-        showStatusLine: currentShowStatusLine,
-      };
-  }
-}
-
-function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {
-  return `monitor:${buildMessagingConversationKey(channel)}`;
-}
-
-function managedTopicRecordFromConversation(params: {
-  actorIds: string[];
-  channel: MessagingChannelKind;
-  conversation: MessagingChannelRef["conversation"];
-  now: number;
-  routingState?: MessagingAdapterState;
-  source: MessagingManagedTopicRecord["source"];
-}): MessagingManagedTopicRecord {
-  const supergroupId = params.conversation.parentId ?? params.conversation.id;
-  const topicId = params.conversation.kind === "topic"
-    ? params.conversation.id
-    : "";
-  return {
-    id: `topic:${params.channel}:${supergroupId}:${topicId}`,
-    authorizedActorIds: params.actorIds,
-    channel: params.channel,
-    conversation: params.conversation,
-    createdAt: params.now,
-    lastObservedAt: params.now,
-    lifecycle: "open",
-    routingState: params.routingState,
-    source: params.source,
-    supergroupId,
-    title: params.conversation.title,
-    topicId,
-    updatedAt: params.now,
-  };
-}
-
-function topicTitleForThread(thread: NavigationThreadSummary): string {
-  const trimmed = thread.title.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, 120) : `${thread.source} thread`;
-}
-
-function formatManagedTopicRights(
-  operations: readonly MessagingManagedConversationOperationSupport[],
-): string[] {
-  return operations.map((operation) => {
-    const label =
-      operation.operation === "create_child"
-        ? "create"
-        : operation.operation;
-    if (operation.supported) {
-      return `${label}: available`;
-    }
-    return `${label}: unavailable${operation.missingPermission ? ` (${operation.missingPermission})` : operation.reason ? ` (${operation.reason})` : ""}`;
-  });
-}
-
-function formatTopicCleanupProposalBody(
-  items: readonly MessagingTopicCleanupProposalItem[],
-): string {
-  if (items.length === 0) {
-    return [
-      "No known topics yet.",
-      "",
-      "Telegram bots cannot list every historical topic. Adopt topics from inside the topic first, then run cleanup again.",
-    ].join("\n");
-  }
-  const grouped = {
-    keep: items.filter((item) => item.action === "keep"),
-    close: items.filter((item) => item.action === "close"),
-    delete: items.filter((item) => item.action === "delete"),
-  };
-  return [
-    "Dry run only. No topic will be closed or deleted until you approve one of the actions below.",
-    "",
-    `Keep: ${grouped.keep.length}`,
-    ...grouped.keep.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
-    `Close candidates: ${grouped.close.length}`,
-    ...grouped.close.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
-    `Delete candidates: ${grouped.delete.length}`,
-    ...grouped.delete.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
-  ].join("\n");
-}
 
 function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,
@@ -11045,32 +6639,6 @@ function imageDataUrlSizeBytes(url: string): number | undefined {
   return Math.floor(payload.length * 3 / 4) - padding;
 }
 
-function assistantImageDeliverySignature(images: readonly MessagingImagePart[]): string {
-  return `images:${images.map((image) => image.sourceUrl ?? image.url).join("\0")}`;
-}
-
-function outboundImageClaimAliases(
-  values: readonly (string | undefined)[],
-): string[] {
-  const aliases = new Set<string>();
-  for (const value of values) {
-    if (!value) {
-      continue;
-    }
-    aliases.add(value);
-    if (
-      value.startsWith("data:")
-      || /^https?:\/\//iu.test(value)
-    ) {
-      continue;
-    }
-    if (path.isAbsolute(value)) {
-      aliases.add(pathToFileURL(value).toString());
-    }
-  }
-  return [...aliases];
-}
-
 function automationTurnKey(params: {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -11087,83 +6655,6 @@ function agentMessagingQueueKey(
   return `${backend}:${threadId}:${queueEntryId}`;
 }
 
-function privateReplySourceFromBinding(
-  binding: MessagingBindingRecord,
-): MessagingPrivateReplySource {
-  return {
-    authorizedActorIds: [...binding.authorizedActorIds],
-    backend: binding.backend,
-    channel: structuredClone(binding.channel),
-    createdAt: binding.createdAt,
-    displayName: binding.displayName,
-    federatedThread: binding.federatedThread,
-    id: binding.id,
-    routingState: binding.routingState
-      ? structuredClone(binding.routingState)
-      : undefined,
-    targetKind: binding.targetKind,
-    threadId: binding.threadId,
-    updatedAt: binding.updatedAt,
-  };
-}
-
-function summarizeMessagingConversation(
-  conversation: MessagingChannelRef["conversation"],
-): PwrAgentMessagingLocationSummary["conversation"] {
-  return {
-    id: conversation.id,
-    kind: conversation.kind,
-    parentId: conversation.parentId,
-    parentConversationId: conversation.parentConversationId,
-    workspaceId: conversation.workspaceId,
-    title: conversation.title,
-    parentTitle: conversation.parentTitle,
-    ancestorTitle: conversation.ancestorTitle,
-  };
-}
-
-function summarizeMessagingActor(
-  actor: MessagingInboundEvent["actor"],
-): NonNullable<PwrAgentMessagingLocationSummary["actor"]> {
-  return {
-    platformUserId: actor.platformUserId,
-    displayName: actor.displayName,
-    username: actor.username,
-    isBot: actor.isBot,
-  };
-}
-
-function summarizeMessagingBinding(
-  binding: MessagingBindingRecord,
-  thread?: PwrAgentMessagingBoundThreadSummary,
-): PwrAgentMessagingLocationSummary["binding"] {
-  return {
-    id: binding.id,
-    backend: binding.backend,
-    threadId: binding.threadId,
-    targetKind: binding.targetKind ?? "thread",
-    displayName: binding.displayName,
-    ...(thread ? { thread } : {}),
-  };
-}
-
-function isMessagingToolOriginBinding(
-  binding: MessagingBindingRecord,
-  navigation: MessagingNavigationContext | undefined,
-): boolean {
-  if (binding.backend === "codex" && navigation
-    && findThreadForBinding(navigation, binding)?.agent) {
-    return true;
-  }
-  if (binding.targetKind === "agent_thread") {
-    return true;
-  }
-  if (binding.targetKind !== "thread" || !navigation) {
-    return false;
-  }
-  return Boolean(findThreadForBinding(navigation, binding)?.handoffOrigin);
-}
-
 function isLiveMessagingToolOriginBinding(
   binding: MessagingBindingRecord,
   navigation: MessagingNavigationContext | undefined,
@@ -11175,84 +6666,6 @@ function isLiveMessagingToolOriginBinding(
     binding.targetKind === "thread"
     || isMessagingToolOriginBinding(binding, navigation)
   );
-}
-
-function summarizeNavigationThreadForMessaging(
-  thread: NavigationThreadSummary,
-): PwrAgentMessagingBoundThreadSummary {
-  const gitBranch = thread.gitBranch ?? thread.observedGitBranch;
-  return {
-    title: thread.title,
-    titleSource: thread.titleSource,
-    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
-    ...(gitBranch ? { gitBranch } : {}),
-    ...(thread.model ? { model: thread.model } : {}),
-    ...(thread.executionMode ? { executionMode: thread.executionMode } : {}),
-    ...(thread.agent?.name ? { agentName: thread.agent.name } : {}),
-  };
-}
-
-function responseAttributionLabel(
-  binding: MessagingBindingRecord,
-  thread: PwrAgentMessagingBoundThreadSummary | undefined,
-): string {
-  const targetKind = binding.targetKind ?? "thread";
-  const identity = targetKind === "agent_thread"
-    ? thread?.agentName
-    : thread?.titleSource === "fallback"
-      ? undefined
-      : thread?.title;
-  const normalized = identity?.replace(/\s+/g, " ").trim();
-  if (normalized) {
-    return targetKind === "agent_thread"
-      ? `Agent: ${normalized}`
-      : `Bound thread: ${normalized}`;
-  }
-  return targetKind === "agent_thread"
-    ? "PwrAgent Agent"
-    : "PwrAgent thread";
-}
-
-function eventFromBinding(
-  binding: MessagingBindingRecord,
-  now: number,
-): MessagingInboundEvent {
-  return {
-    id: `agent-origin:${binding.id}`,
-    kind: "lifecycle",
-    lifecycle: "bound",
-    actor: {
-      platformUserId: binding.authorizedActorIds[0] ?? "unknown",
-      displayName: binding.displayName,
-    },
-    channel: binding.channel,
-    receivedAt: now,
-    routingState: binding.routingState,
-  };
-}
-
-function sanitizeMessagingChildTitle(title: string | undefined): string {
-  const normalized = (title ?? "PwrAgent thread").replace(/\s+/g, " ").trim();
-  return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
-}
-
-function managedConversationUnavailableMessage(
-  summary: PwrAgentMessagingManagedConversationSummary,
-): string {
-  if (!summary.providerSupportsCreation) {
-    return "This messaging provider does not support creating native child conversations.";
-  }
-  const operation = summary.operation;
-  if (operation?.missingPermission) {
-    return `PwrAgent cannot create a native child conversation because the provider permission ${operation.missingPermission} is missing.`;
-  }
-  if (operation?.reason) {
-    return `PwrAgent cannot create a native child conversation: ${operation.reason}.`;
-  }
-  if (summary.errorMessage) {
-    return `PwrAgent cannot create a native child conversation: ${summary.errorMessage}.`;
-  }
-  return "PwrAgent cannot create a native child conversation in the current messaging location.";
 }
 
 /**
@@ -11477,21 +6890,6 @@ function isUserInitiatedDeliveryEvent(
   );
 }
 
-function approvalBodyWithResponse(body: string, responseLabel: string): string {
-  const blocks = body
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-  const preservedBlocks = blocks.filter((block, index) => {
-    if (index === 0) {
-      return false;
-    }
-    return !/^Reply with\b/i.test(block);
-  });
-
-  return [...preservedBlocks, `Response Received: ${responseLabel}`].join("\n\n");
-}
-
 function sleepUntil(
   retryAt: number,
   now: () => number,
@@ -11514,51 +6912,6 @@ function isClaudeSessionGoneFailure(event: AgentEvent): boolean {
   return error?.recovery === "claudeSessionGone";
 }
 
-function assistantStreamKeysForBackendEvent(event: AgentEvent): string[] {
-  const params = event.notification.params as {
-    threadId?: unknown;
-    turn?: { id?: unknown };
-    turnId?: unknown;
-  };
-  if (typeof params.threadId !== "string") {
-    return [];
-  }
-  const turnId =
-    typeof params.turnId === "string"
-      ? params.turnId
-      : typeof params.turn?.id === "string"
-        ? params.turn.id
-        : undefined;
-  return [
-    assistantStreamKey({
-      backend: event.backend,
-      threadId: params.threadId,
-      turnId,
-    }),
-  ];
-}
-
-function assistantStreamFilterForBackendEvent(
-  event: AgentEvent,
-): { threadId: ThreadIdentifier; turnId?: string } | undefined {
-  const params = event.notification.params as {
-    threadId?: unknown;
-    turn?: { id?: unknown };
-    turnId?: unknown;
-  };
-  if (typeof params.threadId !== "string") {
-    return undefined;
-  }
-  return {
-    threadId: params.threadId,
-    turnId: typeof params.turnId === "string"
-      ? params.turnId
-      : typeof params.turn?.id === "string"
-        ? params.turn.id
-        : undefined,
-  };
-}
-
 function compactLogPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
@@ -11577,17 +6930,6 @@ function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean, manualRet
   return `${quotedPreview}\n\nI got your message, but there is a turn in progress. I've queued it to be sent when the turn completes.${steeringSentence} You can cancel if you don't want this queued.`;
 }
 
-function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
-  return (
-    result.outcome === "failed" &&
-    Boolean(
-      result.errorMessage?.match(
-        /\bUnknown Channel\b|chat not found|message thread not found/i,
-      ),
-    )
-  );
-}
-
 function shouldRetryArtifactInline(
   intent: MessagingArtifactMessageIntent,
   result: MessagingDeliveryResult,
@@ -11596,19 +6938,6 @@ function shouldRetryArtifactInline(
     intent.artifactDelivery.mode === "attachment_summary" &&
     (result.outcome === "failed" || result.outcome === "unsupported")
   );
-}
-
-function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): boolean {
-  return (
-    result.outcome === "presented" ||
-    result.outcome === "presented_new" ||
-    result.outcome === "updated" ||
-    result.outcome === "pinned"
-  );
-}
-
-function messagingSurfaceKey(surface: MessagingSurfaceRef): string {
-  return `${surface.channel}\0${surface.id}`;
 }
 
 function shouldRecordOutboundActivity(
@@ -11792,11 +7121,4 @@ function readStatusStopTurnValue(
   return {
     turnId,
   };
-}
-
-function questionnaireAnswerValue(
-  answer: MessagingQuestionnaireAnswer | null | undefined,
-): string[] {
-  const value = answer?.value.trim();
-  return value ? [value] : [];
 }

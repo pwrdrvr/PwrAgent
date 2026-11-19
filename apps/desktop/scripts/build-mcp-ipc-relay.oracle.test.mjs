@@ -46,17 +46,16 @@ int ${entry}(${parameters}) {
 }
 `);
   let attempt = 0;
-  const program = (options = {}) => {
+  const program = (options = {}, profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) => {
     const label = { root, attempt: ++attempt };
     const build = `buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, reuse: process.platform !== "win32", ...options })})`;
-    const profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE;
     return `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
       ${profile ? `import { profileNativeBuild } from ${JSON.stringify(new URL("./native-relay-oracle-profile.mjs", import.meta.url).href)};` : ""}
       console.log(JSON.stringify(${profile ? `profileNativeBuild(${JSON.stringify(label)}, () => ${build})` : build}));`;
   };
-  const command = (options) => ["--input-type=module", "-e", program(options)];
+  const command = (options, profile) => ["--input-type=module", "-e", program(options, profile)];
   const build = (options, env = process.env) => {
-    const args = command(options);
+    const args = command(options, env.PWRAGENT_NATIVE_ORACLE_PROFILE);
     const started = performance.now();
     try { return parseOutput(execFileSync(process.execPath, args, { encoding: "utf8", env, stdio: "pipe" })); }
     finally { appendNativeOracleTiming({ kind: "build-process", label: { root, attempt }, ms: performance.now() - started }); }
@@ -91,6 +90,36 @@ function machine(output) {
   expect(bytes.subarray(pe, pe + 4).toString()).toBe("PE\0\0");
   return bytes.readUInt16LE(pe + 4) === 0xaa64 ? "arm64" : bytes.readUInt16LE(pe + 4) === 0x8664 ? "x64" : "unknown";
 }
+
+it("inspects each native Mach-O input once while preserving emitted code and cache sealing", () => {
+  const f = fixture();
+  if (process.platform !== "darwin") {
+    const output = f.build({ reuse: true });
+    expect(machine(output)).toBe(process.arch);
+    expect(observe(output)).toBe("source-one header-one flag-1");
+    return;
+  }
+  const log = join(f.root, "inspections.jsonl");
+  const output = f.build({ reuse: true }, { ...process.env, PWRAGENT_NATIVE_ORACLE_PROFILE: log });
+  expect(machine(output)).toBe(process.arch);
+  expect(observe(output)).toBe("source-one header-one flag-1");
+  expect(existsSync(`${output}.build.json`)).toBe(true);
+  const records = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const build = records.find((record) => record.kind === "native-build");
+  expect(build.completed).toBe(true);
+  expect(build.lockRemaining).toBe(false);
+  expect(build.inspectionsOmitted).toBe(0);
+  expect(build.inspections.length).toBeGreaterThan(0);
+  // Raw Mach-O load commands belong to the file. Loader context may change
+  // resolution, but must not launch another inspector for unchanged bytes.
+  const targets = new Set(build.inspections.map((call) => call.before.real));
+  expect(build.inspections).toHaveLength(targets.size);
+  for (const call of build.inspections) {
+    expect(call.mode).toBe("-l");
+    expect(call.status).toBe(0);
+    expect(call.before).toEqual(call.after);
+  }
+});
 
 it("emitted native code follows source, included headers and compiler flags at the same output path", () => {
   const f = fixture();
@@ -280,4 +309,36 @@ it("removes an installed Outpost helper after a failed POSIX rebuild and rejects
     expect(existsSync(output)).toBe(false);
     expect(existsSync(installed)).toBe(false);
   }
+});
+
+it("tracks a real rpath dylib through cache reuse and restored-size/mtime invalidation", () => {
+  if (process.platform !== "darwin") {
+    expect(process.platform === "linux" || process.platform === "win32").toBe(true);
+    return;
+  }
+  const f = fixture();
+  const library = join(f.root, "libvalue.dylib");
+  const source = join(f.root, "value.c");
+  const buildLibrary = (value) => {
+    writeFileSync(source, `const char *oracle_library_value(void) { return "${value}"; }\n`);
+    execFileSync("cc", ["-dynamiclib", "-O2", "-mmacosx-version-min=12.0", source, "-Wl,-install_name,@rpath/libvalue.dylib", "-o", library], { stdio: "pipe" });
+  };
+  buildLibrary("lib-one");
+  writeFileSync(f.source, "const char *oracle_library_value(void);\n" + readFileSync(f.source, "utf8").replace('puts("source-one ', 'puts(oracle_library_value()); puts("source-one '));
+  writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${library}`)}, ${JSON.stringify(`-Wl,-rpath,${f.root}`)}, "-o", output`));
+  const output = f.build({ reuse: true });
+  expect(observe(output)).toBe("lib-one\nsource-one header-one flag-1");
+  expect(existsSync(`${output}.build.json`)).toBe(true);
+  const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
+  expect(inputs.some((input) => input.path === library)).toBe(true);
+  utimesSync(output, 1, 1);
+  f.build({ reuse: true });
+  expect(statSync(output).mtimeMs).toBe(1000);
+  const before = statSync(library);
+  buildLibrary("lib-two");
+  utimesSync(library, before.atime, before.mtime);
+  expect(statSync(library).size).toBe(before.size);
+  f.build({ reuse: true });
+  expect(statSync(output).mtimeMs).toBeGreaterThan(1000);
+  expect(observe(output)).toBe("lib-two\nsource-one header-one flag-1");
 });

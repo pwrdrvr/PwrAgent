@@ -1,8 +1,14 @@
 # Desktop E2E shard allocation
 
-This records the historical four-lane fit. Linux and Windows retain the refit
-weights. For the macOS eight-lane allocation, see the
+Linux and Windows use the four-lane allocation `77:91:104:133`, fitted to
+405 tests in 216 groups.
+See the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md)
+for native measurements, phase comparisons, source identities and coverage checks.
+The [fitter input](desktop-e2e-shard-durations.json) includes every test ID
+and platform skip. For the macOS eight-lane allocation, see the
 [macOS timing study](macos-desktop-e2e-timings.md#november-18-eight-lane-allocation).
+
+## November 4 allocation
 
 The shared `PWTEST_SHARD_WEIGHTS` changed from `9:12:12:14` to `83:82:67:88`.
 The measured suite collected 320 tests in 168 groups: 68 individual a11y groups
@@ -30,7 +36,7 @@ The first run's failed Windows lane 2 is excluded from the fit; the other
 costs. Platform skips contribute collected tests and their negligible
 recorded duration.
 
-[The measured input](desktop-e2e-shard-durations.json) records median completed
+[The historical measured input](desktop-e2e-shard-durations-2026-11-04.json) records median completed
 group durations in seconds, in collection order. Each non-a11y row sums the
 spec's attempts before taking its median across successful lanes. Each a11y
 test has its own row and stable Playwright ID. Failed or interrupted lanes
@@ -82,8 +88,8 @@ In particular, `federation-remote-window.spec.ts` moves to lane 2, and
 Reproduce the baseline and exhaustive refit with Python's standard library:
 
 ```sh
-python3 scripts/ci/fit-desktop-e2e-shards.py --fit
-python3 scripts/ci/fit-desktop-e2e-shards.py --weights 83:82:67:88
+python3 scripts/ci/fit-desktop-e2e-shards.py --data docs/desktop-e2e-shard-durations-2026-11-04.json --fit
+python3 scripts/ci/fit-desktop-e2e-shards.py --data docs/desktop-e2e-shard-durations-2026-11-04.json --weights 83:82:67:88
 ```
 
 To refresh the input, download each successful lane's

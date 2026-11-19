@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 
 function deferred<T>() {
@@ -8,6 +9,177 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+it("publishes one loading snapshot when a pin refresh queues the admitted directory sections", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom(6, 12), async (size) => {
+    const read = vi.fn(async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+      const key = JSON.stringify(request.query);
+      const ref = { backend: "codex", threadId: key } as const;
+      const row: NavigationRow = { id: key, source: ref.backend, ref, rowRevision: key, title: key, titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+        queueCount: 0, queueState: "unknown" };
+      return { protocol: 2, queryKey: key, generation: key, ownerEpoch: "viewer", countsRevision: key,
+        counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+        entries: [{ row, orderKey: navigationIdentityKey(ref), placement: { kind: "root" } }] };
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    try {
+      const keys = Array.from({ length: size }, (_, i) => `project-${i}`);
+      queries.setDemand(new Map(keys.map((key) => [key, { protocol: 2, inventory: "viewer", consumer: "main-sidebar",
+        query: { kind: "directory", directoryKey: key, roots: "unpinned" } } satisfies NavigationQueryRequest])));
+      await queries.refresh();
+      const population = () => [...queries.getSnapshot().resources.values()].map(({ state }) => state.page?.entries[0]?.row.id);
+      const before = population();
+      queries.invalidate(undefined, [{ scope: "local" }], { backend: "codex", notification: {
+        method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: "mount", pinned: true, publicationId: "mount-1" },
+      } });
+      const loadingSnapshots: number[] = [];
+      const populations: ReturnType<typeof population>[] = [];
+      const unsubscribe = queries.subscribe(() => {
+        loadingSnapshots.push([...queries.getSnapshot().resources.values()].filter(({ loading }) => loading).length);
+        populations.push(population());
+      });
+      read.mockClear();
+      const refresh = queries.refresh(undefined, [{ scope: "local" }], true);
+      const initialLoading = [...loadingSnapshots];
+      await refresh;
+      unsubscribe();
+      expect(initialLoading).toEqual([size]);
+      expect(read).toHaveBeenCalledTimes(size);
+      expect(populations.every((published) => JSON.stringify(published) === JSON.stringify(before))).toBe(true);
+    } finally { queries.dispose(); }
+  }), { numRuns: 12 });
+});
+
+it("lets a pin reply join its dispatched replacement without delaying other scoped refreshes", async () => {
+  const owners = [{ scope: "local" }] as const;
+  const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+    query: { kind: "directory", directoryKey: "project", roots: "unpinned" } };
+  const before: NavigationQueryPage = { protocol: 2, queryKey: "project", generation: "old", ownerEpoch: "viewer",
+    countsRevision: "old", counts: { total: 0, active: 0, unread: 0, review: 0 },
+    coverage: { state: "complete" }, complete: true, entries: [] };
+  const dispatched = deferred<void>();
+  const replacement = deferred<NavigationQueryPage>();
+  const read = vi.fn(async () => before);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["project", request]]));
+    await queries.refresh();
+    read.mockClear();
+    read.mockImplementationOnce(() => {
+      dispatched.resolve();
+      return replacement.promise;
+    });
+    queries.invalidate(undefined, owners, { backend: "codex", notification: {
+      method: "navigation/remoteThreadPins/changed",
+      params: { instanceId: "peer", threadId: "mount", pinned: true, publicationId: "mount-1" },
+    } });
+    const fromBroadcast = queries.refresh(undefined, owners, true);
+    await dispatched.promise;
+
+    let pinCompleted = false;
+    const fromReply = queries.refresh(undefined, owners, true, undefined, "action/remote-pin-add")
+      .then(() => { pinCompleted = true; });
+    await queries.refresh(undefined, owners, true);
+    expect(pinCompleted).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    replacement.resolve({ ...before, countsRevision: "new" });
+    await Promise.all([fromBroadcast, fromReply]);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.get("project")?.state.page?.countsRevision).toBe("new");
+  } finally {
+    replacement.resolve(before);
+    queries.dispose();
+  }
+});
+
+it("lets the pin reply recover a failed broadcast read, including a failure while it waits", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (replyBeforeFailure) => {
+    const owners = [{ scope: "local" }] as const;
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "directory", directoryKey: "project", roots: "unpinned" } };
+    const initial: NavigationQueryPage = { protocol: 2, queryKey: "project", generation: "old", ownerEpoch: "viewer",
+      countsRevision: "old", counts: { total: 0, active: 0, unread: 0, review: 0 },
+      coverage: { state: "complete" }, complete: true, entries: [] };
+    const dispatched = deferred<void>();
+    const fail = deferred<void>();
+    const read = vi.fn(async () => initial);
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    const pin = { backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: {
+      instanceId: "peer", threadId: "mounted", pinned: true, publicationId: "mount-1",
+    } } } as const;
+    const reply = () => {
+      queries.invalidate(undefined, owners, pin);
+      return queries.refresh(undefined, owners, true, undefined, "action/remote-pin-add");
+    };
+    try {
+      queries.setDemand(new Map([["directory", request]]));
+      await queries.refresh();
+      read.mockClear().mockImplementationOnce(async () => {
+        dispatched.resolve();
+        await fail.promise;
+        throw new Error("[navigation_busy] Read admission is occupied");
+      }).mockResolvedValueOnce({ ...initial, generation: "new", countsRevision: "new" });
+
+      queries.invalidate(undefined, owners, pin);
+      const broadcast = queries.refresh(undefined, owners, true);
+      await dispatched.promise;
+      const earlyReply = replyBeforeFailure ? reply() : undefined;
+      fail.resolve();
+      await broadcast;
+      await (earlyReply ?? reply());
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(queries.getSnapshot().resources.get("directory")?.state).toMatchObject({
+        stale: false, error: undefined, page: { countsRevision: "new" },
+      });
+    } finally {
+      fail.resolve();
+      queries.dispose();
+    }
+  }), { numRuns: 2, examples: [[false], [true]] });
+});
+
+it("retires either root anchor named by one companion mount before the first request", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 4 }), async (childAnchor, survivors) => {
+    const parent = { backend: "codex", threadId: "parent", ownerInstanceId: "peer-parent" } as const;
+    const child = { backend: "codex", threadId: "child", ownerInstanceId: "peer-child" } as const;
+    const remaining = Array.from({ length: survivors }, (_, index) => ({ backend: "codex" as const, threadId: `survivor-${index}` }));
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "directory", directoryKey: "project", roots: "unpinned" } };
+    let mounted = false;
+    const read = vi.fn(async (sent: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+      const roots = mounted ? remaining : [child, parent, ...remaining];
+      const anchor = sent.anchor;
+      if (anchor?.kind === "thread" && !roots.some((ref) => navigationIdentityKey(ref) === navigationIdentityKey(anchor.ref))) {
+        throw new Error("[navigation_anchor_missing] The anchor has left the viewer's unpinned roots");
+      }
+      return { protocol: 2, queryKey: "project", generation: mounted ? "new" : "old", ownerEpoch: "viewer",
+        countsRevision: mounted ? "new" : "old", counts: { total: roots.length, active: 0, unread: 0, review: 0 },
+        coverage: { state: "complete" }, complete: true, entries: roots.map((ref) => ({
+          row: { ref, id: ref.threadId, source: ref.backend, title: ref.threadId, titleSource: "explicit", rowRevision: "r",
+            linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+            queueCount: 0, queueState: "unknown" }, placement: { kind: "root" }, orderKey: ref.threadId,
+        })) };
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    try {
+      queries.setDemand(new Map([["directory", request]]));
+      await queries.refresh();
+      queries.setVisibleAnchor("directory", { kind: "thread", ref: childAnchor ? child : parent });
+      read.mockClear();
+      mounted = true;
+      const publication = { instanceId: parent.ownerInstanceId, threadId: parent.threadId, pinned: true,
+        publicationId: "mount-1", anchorChanges: [parent, child] };
+      queries.invalidate(undefined, [{ scope: "local" }], { backend: parent.backend,
+        notification: { method: "navigation/remoteThreadPins/changed", params: publication } });
+      await queries.refresh(undefined, undefined, true);
+      expect(read.mock.calls.map(([sent]) => sent.anchor)).toEqual([remaining[0]
+        ? { kind: "thread", ref: remaining[0] } : undefined]);
+      expect(queries.getSnapshot().resources.get("directory")?.state.page?.entries.map(({ row }) => row.ref)).toEqual(remaining);
+    } finally { queries.dispose(); }
+  }), { numRuns: 12, examples: [[true, 1], [false, 1]] });
+});
 
 // The owner is a fixed ordered list. A metadata event can fence a read but
 // cannot revoke the operator's saved Load more demand for that list.

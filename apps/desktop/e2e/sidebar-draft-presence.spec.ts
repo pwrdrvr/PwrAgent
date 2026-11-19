@@ -33,9 +33,14 @@ test("draft presence keeps lens membership, metadata and tooltip behavior", asyn
     await page.getByRole("tab", { name: /^Drafts,/ }).click();
     await expect(rows).toHaveCount(1);
     await expect(rows.getByRole("button", { name: title, exact: true })).toBeVisible();
-    await reply.fill("Contrived unsent reply edited");
+    const editedDraft = "Contrived unsent reply edited";
+    await reply.fill(editedDraft);
+    // The existing chip only proves the first draft was saved. Wait for the
+    // composer to publish the edit before clearing through Tiptap's key path.
+    await expect(page.getByTestId("composer-tiptap-input")).toHaveAttribute("data-value", editedDraft);
     await expect(draft).toHaveCount(1);
-    await reply.fill("");
+    await reply.press("ControlOrMeta+A");
+    await reply.press("Backspace");
     await expect(draft).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Drafts, No threads with unsent drafts", exact: true })).toBeVisible();
     await expect(page.getByText("No unsent replies.", { exact: true })).toBeVisible();
