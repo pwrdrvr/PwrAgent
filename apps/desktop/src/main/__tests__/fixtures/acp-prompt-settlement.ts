@@ -1,7 +1,7 @@
 import type { AcpAgentClient, AcpAgentClientOptions } from "../../acp/acp-client";
 
-// Await the real terminal callbacks. A prompt can settle successfully or
-// through onPromptError, and the client clears the active turn before either.
+// Await the prompt reply or onPromptError. An agent can publish turn_finished
+// while the client's replay still has an active prompt awaiting its reply.
 export function createAcpPromptSettlement() {
   let sequence = 0;
   const pending = new Map<string, { sessionId: string; finish: () => void }>();
@@ -11,7 +11,7 @@ export function createAcpPromptSettlement() {
   };
   const callbacks: Pick<AcpAgentClientOptions, "onSessionUpdate" | "onPromptError"> = {
     onSessionUpdate(event) {
-      if (event.update.kind === "turn_finished") settle(event);
+      if (event.update.kind === "turn_finished" && event.replay.threadStatus !== "active") settle(event);
     },
     onPromptError: settle,
   };
