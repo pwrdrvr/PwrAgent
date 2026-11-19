@@ -111,18 +111,25 @@ export function registryRetryDelay(headers, now = Date.now()) {
   return Math.max(cacheDelay, retryDelay);
 }
 
-export async function readPublicRegistrySnapshot() {
-  const response = await fetch(`${registry}/pwragent`, { signal: AbortSignal.timeout(30000) });
-  assert.equal(response.status, 200, "npm ownership/version lookup failed; do not assume an absent package");
-  return { document: await response.json(), retryAfterMs: registryRetryDelay(response.headers) };
+export function registryCacheObservation(response, phase, observedAt) {
+  const cacheHeaders = Object.fromEntries(["age", "cache-control", "retry-after"].flatMap((name) => {
+    const value = response.headers.get(name);
+    return value === null ? [] : [[name, value.slice(0, 256)]];
+  }));
+  return { phase, observedAt, status: response.status, cacheHeaders, retryAfterMs: registryRetryDelay(response.headers, observedAt) };
 }
 
-export async function readPublicRegistry() {
-  return (await readPublicRegistrySnapshot()).document;
+export async function readPublicRegistrySnapshot(phase) {
+  const response = await fetch(`${registry}/pwragent`, { signal: AbortSignal.timeout(30000) });
+  const observation = registryCacheObservation(response, phase, Date.now());
+  console.log(`npm registry cache observation ${JSON.stringify(observation)}`);
+  assert.equal(response.status, 200, "npm ownership/version lookup failed; do not assume an absent package");
+  return { document: await response.json(), retryAfterMs: observation.retryAfterMs };
 }
 
 export async function checkPublicRegistry(metadata, expected) {
-  return checkRegistry(metadata, await readPublicRegistry(), expected);
+  const { document } = await readPublicRegistrySnapshot("package-validation");
+  return checkRegistry(metadata, document, expected);
 }
 
 export function checkEnvironment(environment, policies) {

@@ -7,10 +7,10 @@ const context = () => ({ repository: "pwrdrvr/PwrAgent", eventName: "push", ref:
   workflowRef: "pwrdrvr/PwrAgent/.github/workflows/release.yml@refs/tags/v1.3.7",
   refProtected: "true", sha, workflowSha: sha, head: sha, tagCommit: sha, version: "1.3.7" });
 
-test("only protected desktop tag pushes or dispatches on that exact tag can release", () => {
+test("only a protected desktop tag push can enter publication", () => {
   assert.deepEqual(releaseSource(context(), ["main"]), { tag: "v1.3.7", commit: sha, branch: "main" });
-  assert.deepEqual(releaseSource({ ...context(), eventName: "workflow_dispatch", tag: "v1.3.7" }, ["main"]),
-    { tag: "v1.3.7", commit: sha, branch: "main" });
+  assert.throws(() => releaseSource({ ...context(), eventName: "workflow_dispatch", tag: "v1.3.7" }, ["main"]),
+    /Resume verification on the original run/);
   for (const change of [{ repository: "fork/PwrAgent" }, { eventName: "pull_request" },
     { eventName: "pull_request_target" }, { eventName: "workflow_run" }, { ref: "refs/heads/main" },
     { refProtected: "false" }, { head: "b".repeat(40) }, { tagCommit: "b".repeat(40) },

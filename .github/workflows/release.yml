@@ -5,12 +5,6 @@ on:
     tags:
       - "v*.*.*"
       - "v*.*.*-*" # pre-release tags like v1.0.0-alpha.0
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing desktop tag. Select this same tag as the workflow ref; branch dispatches are rejected."
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -42,12 +36,12 @@ jobs:
           package-manager-cache: false
       - name: Verify source before inspecting operator prerequisites
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: node packages/pwragent/scripts/release-context.mjs
       - name: Check operator migration and existing environment protections
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           OUTPOST_NPM_RELEASE_READY: ${{ vars.OUTPOST_NPM_RELEASE_READY }}
         run: |
           set -euo pipefail
@@ -65,6 +59,10 @@ jobs:
     needs:
       - release-preflight
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: none
     outputs:
       integrity: ${{ steps.package.outputs.integrity }}
     strategy:
@@ -81,36 +79,60 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      - name: Locate retained tested package evidence on the original run
+        id: retained
+        if: github.run_attempt > 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packages/pwragent/scripts/tested-package.mjs --locate
+      - name: Restore the independent tested integrity
+        if: steps.retained.outputs.integrity != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.retained.outputs.integrity }}
+          path: .local/headless-integrity
+      - name: Restore the original tested package
+        if: steps.retained.outputs.package != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.retained.outputs.package }}
+          path: .local/headless-package
       - name: Install pinned build dependencies without lifecycle scripts
+        if: steps.retained.outputs.package == ''
         run: |
           corepack enable
           pnpm --filter pwragent... install --frozen-lockfile --ignore-scripts
       - name: Outpost and release tests
+        if: steps.retained.outputs.package == ''
         run: pnpm --filter pwragent test
       - name: Pack, validate and smoke-test a clean installation
+        if: steps.retained.outputs.package == ''
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression
         run: |
           mkdir -p "$TMPDIR"
           node packages/pwragent/scripts/pack-check.mjs .local/headless-package
       - name: Record tested tarball integrity
         id: package
-        if: matrix.node == '24'
-        run: |
-          node --input-type=module <<'JS'
-          import fs from "node:fs";
-          const p = JSON.parse(fs.readFileSync(".local/headless-package/pack.json"));
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `integrity=${p.integrity}\n`);
-          JS
+        env:
+          RETAINED_INTEGRITY_ID: ${{ steps.retained.outputs.integrity }}
+        run: node packages/pwragent/scripts/tested-package.mjs
+      - name: Retain the independent tested integrity
+        if: steps.retained.outputs.integrity == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: headless-npm-integrity
+          path: .local/headless-integrity/integrity.txt
+          if-no-files-found: error
+          retention-days: 90
       - name: Retain tested tarball and notices
-        if: matrix.node == '24'
+        if: steps.retained.outputs.package == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: headless-npm-package
           path: .local/headless-package/
           if-no-files-found: error
-          overwrite: true
           retention-days: 90
 
   install-deps:
@@ -167,7 +189,7 @@ jobs:
 
       - name: Check release metadata
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: pnpm release:check
 
       - name: Compare authoritative Homebrew and Winget channels
@@ -281,7 +303,7 @@ jobs:
 
       - name: Prepare release stage
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only
 
@@ -304,7 +326,7 @@ jobs:
 
       - name: Prepare Apple Silicon release stage
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only --mac-arch=arm64
 
@@ -469,7 +491,7 @@ jobs:
 
       - name: Check release metadata
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: pnpm release:check
 
       - name: Stage pinned Grok ACP runtime
@@ -482,7 +504,7 @@ jobs:
 
       - name: Package Linux
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --linux --no-publish
@@ -550,7 +572,7 @@ jobs:
 
       - name: Prepare Windows release stage
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --win --prepare-only
 
@@ -755,7 +777,7 @@ jobs:
       - name: Verify debug artifact targets, identities, and checksums
         timeout-minutes: 2
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           node apps/desktop/scripts/desktop-debug-artifacts.mjs verify-release \
@@ -764,7 +786,7 @@ jobs:
       - name: Verify Linux packages and generate checksums
         timeout-minutes: 3
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           node apps/desktop/scripts/linux-release-artifacts.mjs linux-dist "${RELEASE_TAG#v}"
@@ -784,7 +806,7 @@ jobs:
       - name: Verify updater channel files
         timeout-minutes: 2
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${RELEASE_TAG:?}"
@@ -801,7 +823,7 @@ jobs:
         timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${RELEASE_TAG:?}"
@@ -828,16 +850,29 @@ jobs:
             --notes-file "$notes"
           )
 
-          gh release create "${release_args[@]}" \
-            mac-dist/* \
-            windows-dist/* \
-            linux-dist/*.deb \
-            linux-dist/*.rpm \
-            linux-dist/*.pacman \
-            linux-dist/*.tar.gz \
-            linux-dist/latest-linux*.yml \
-            linux-dist/SHA256SUMS \
+          assets=(
+            mac-dist/*
+            windows-dist/*
+            linux-dist/*.deb
+            linux-dist/*.rpm
+            linux-dist/*.pacman
+            linux-dist/*.tar.gz
+            linux-dist/latest-linux*.yml
+            linux-dist/SHA256SUMS
             debug-dist/*
+          )
+
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+            if node apps/desktop/scripts/verify-existing-release.mjs "$RELEASE_TAG" "$notes" "${assets[@]}"; then
+              exit 0
+            else
+              existing_status=$?
+              if [ "$existing_status" -ne 4 ]; then exit "$existing_status"; fi
+            fi
+          fi
+          gh release create "${release_args[@]}" "${assets[@]}"
 
           is_prerelease="$(gh release view "$RELEASE_TAG" \
             --repo pwrdrvr/PwrAgent \
@@ -909,7 +944,7 @@ jobs:
       - name: Publish changelog notes to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${RELEASE_TAG:?}"
@@ -922,6 +957,13 @@ jobs:
 
           if [ ! -s "$notes" ]; then
             echo "::error::No CHANGELOG.md notes found for $RELEASE_TAG ($VERSION)" >&2
+            exit 1
+          fi
+
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            current_notes="$(gh release view "$RELEASE_TAG" --repo pwrdrvr/PwrAgent --json body --jq '.body')"
+            if [ "$current_notes" = "$(cat "$notes")" ]; then exit 0; fi
+            echo "::error::Published release notes differ from the tagged changelog." >&2
             exit 1
           fi
 
@@ -940,7 +982,7 @@ jobs:
     needs:
       - outpost-validate
       - publish-release-notes
-    if: github.repository == 'pwrdrvr/PwrAgent' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'pwrdrvr/PwrAgent' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: npm-pwragent
@@ -967,15 +1009,19 @@ jobs:
           name: headless-npm-package
           path: .local/headless-package
       - name: Restore any prior npm publication attempt before retrying
+        id: restore-submission
         if: github.run_attempt > 1
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node packages/pwragent/scripts/restore-publication-receipt.mjs outpost-publication-attempt
+          if test -f .local/outpost-publication-attempt.json; then
+            echo 'restored=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Submit exact tested bytes with npm OIDC and provenance, or resume verification
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
@@ -985,7 +1031,7 @@ jobs:
           test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
           node packages/pwragent/scripts/publish.mjs
       - name: Retain npm acceptance or uncertain attempt for read-only recovery
-        if: ${{ !cancelled() && hashFiles('.local/outpost-publication-attempt.json') != '' }}
+        if: ${{ !cancelled() && steps.restore-submission.outputs.restored != 'true' && hashFiles('.local/outpost-publication-attempt.json') != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: outpost-publication-attempt
@@ -998,11 +1044,14 @@ jobs:
           echo '### Outpost npm submission (verification still required)' >> "$GITHUB_STEP_SUMMARY"
           cat .local/outpost-publication-attempt.json >> "$GITHUB_STEP_SUMMARY"
 
-  outpost-verify:
-    name: Verify Outpost npm publication after processing
+  release-complete:
+    name: Verify desktop and Outpost release completion
     needs:
+      - release-preflight
       - outpost-validate
+      - publish-release-notes
       - outpost-publish
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -1010,6 +1059,17 @@ jobs:
       actions: read
       id-token: none
     steps:
+      - name: Require successful desktop publication and npm submission or recovery
+        env:
+          PREFLIGHT: ${{ needs.release-preflight.result }}
+          PACKAGE: ${{ needs.outpost-validate.result }}
+          DESKTOP: ${{ needs.publish-release-notes.result }}
+          SUBMISSION: ${{ needs.outpost-publish.result }}
+        run: |
+          if [ "$PREFLIGHT" != success ] || [ "$PACKAGE" != success ] || [ "$DESKTOP" != success ] || [ "$SUBMISSION" != success ]; then
+            echo "::error::Shared release incomplete: preflight=$PREFLIGHT package=$PACKAGE desktop=$DESKTOP npm-submission=$SUBMISSION. See docs/headless-npm-release.md for recovery."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.sha }}
@@ -1033,8 +1093,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node packages/pwragent/scripts/restore-publication-receipt.mjs outpost-release-receipt
       - name: Verify immutable npm bytes, source, owner, provenance and channel without publishing
+        id: verify
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
@@ -1043,8 +1104,8 @@ jobs:
           git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
           node packages/pwragent/scripts/publish.mjs --verify
-      - name: Retain verified or pending npm verification receipt
-        if: ${{ !cancelled() && hashFiles('.local/outpost-release-receipt.json') != '' }}
+      - name: Retain verified npm receipt
+        if: steps.verify.outputs.status == 'verified-existing'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: outpost-release-receipt
@@ -1052,33 +1113,32 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 90
-      - name: Report verified npm postconditions
-        run: |
-          echo '### Outpost npm publication verified' >> "$GITHUB_STEP_SUMMARY"
-          cat .local/outpost-release-receipt.json >> "$GITHUB_STEP_SUMMARY"
-
-  release-complete:
-    name: Verify desktop and Outpost release completion
-    needs:
-      - release-preflight
-      - outpost-validate
-      - publish-release-notes
-      - outpost-publish
-      - outpost-verify
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    steps:
-      - name: Require both services to have succeeded
+      - name: Retain pending npm receipt for this attempt
+        if: steps.verify.outputs.status == 'verification-pending'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: outpost-release-pending-${{ github.run_attempt }}
+          path: .local/outpost-release-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record shared release status
         env:
-          PREFLIGHT: ${{ needs.release-preflight.result }}
-          PACKAGE: ${{ needs.outpost-validate.result }}
-          DESKTOP: ${{ needs.publish-release-notes.result }}
-          SUBMISSION: ${{ needs.outpost-publish.result }}
-          OUTPOST: ${{ needs.outpost-verify.result }}
+          OUTPOST_STATUS: ${{ steps.verify.outputs.status }}
         run: |
-          if [ "$PREFLIGHT" != success ] || [ "$PACKAGE" != success ] || [ "$DESKTOP" != success ] || [ "$SUBMISSION" != success ] || [ "$OUTPOST" != success ]; then
-            echo "::error::Shared release incomplete: preflight=$PREFLIGHT package=$PACKAGE desktop=$DESKTOP npm-submission=$SUBMISSION npm-verification=$OUTPOST. See docs/headless-npm-release.md for migration and retry recovery."
-            exit 1
-          fi
-          echo 'Desktop assets/notes and matching Outpost npm bytes are verified.' >> "$GITHUB_STEP_SUMMARY"
+          case "$OUTPOST_STATUS" in
+            verified-existing)
+              echo '### Desktop assets/notes and Outpost npm publication verified' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            verification-pending)
+              echo '### Shared release incomplete · npm verification pending' >> "$GITHUB_STEP_SUMMARY"
+              echo 'Resume failed jobs of this run after nextCheckAt in the retained receipt.' >> "$GITHUB_STEP_SUMMARY"
+              cat .local/outpost-release-receipt.json >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::npm verification pending. Resume this completion job after nextCheckAt using the retained receipt."
+              exit 1
+              ;;
+            *)
+              echo "::error::Missing verified npm postconditions"
+              exit 1
+              ;;
+          esac
+          cat .local/outpost-release-receipt.json >> "$GITHUB_STEP_SUMMARY"

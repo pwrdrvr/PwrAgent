@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPublicRegistry, releaseMetadata } from "./release.mjs";
-import { currentReleaseSource } from "./release-context.mjs";
+import { currentReleaseSource, requiresReadOnlyRecovery } from "./release-context.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 // macOS TMPDIR can leave too few bytes for the daemon's Unix socket path.
@@ -85,7 +85,11 @@ try {
   copyFileSync(tarball, path.join(output, packed.filename));
   if (source) {
     packed.release = source;
-    await checkPublicRegistry(metadata, { integrity: packed.integrity, source, branch: context.branch });
+    // Recovery must defer public package reads to the completion job, even if
+    // a full rerun reaches this pre-submission step after an earlier PUT.
+    if (!requiresReadOnlyRecovery(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_RUN_ATTEMPT)) {
+      await checkPublicRegistry(metadata, { integrity: packed.integrity, source, branch: context.branch });
+    }
   }
   writeFileSync(path.join(output, "pack.json"), JSON.stringify(packed, null, 2) + "\n");
   console.log(`Validated ${packed.filename}: ${packed.files.length} files, ${packed.size} bytes, ${packed.integrity}`);

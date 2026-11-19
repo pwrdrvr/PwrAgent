@@ -353,16 +353,16 @@ retained for the protected npm job; failure prevents desktop packaging.
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
-11. `Publish matching Outpost to npm`, requiring successful Outpost validation
-    and desktop assets/notes, waits for the existing `npm-pwragent` environment
-    review. It publishes the retained tarball using npm OIDC/provenance, or
-    verifies identical already-published bytes/source on a retry. Only this job
-    has `id-token: write`; Apple/Windows signing boundaries are unchanged.
+11. `Submit matching Outpost to npm` requires successful Outpost validation and
+    desktop assets/notes, then waits for the existing `npm-pwragent` review.
+    The first protected tag push can submit the retained tarball using npm
+    OIDC/provenance. Workflow retries are read-only for npm.
 12. `Verify desktop and Outpost release completion` runs even when a dependency
-    fails or skips, and requires successful desktop publication and npm
-    publication/verification. Missing trust, denied approval, or publish failure
-    is an incomplete release. Follow the [partial-failure recovery](headless-npm-release.md#partial-failures-and-retries),
-    preferring failed-job reruns of the original release run and its tested bytes.
+    fails or skips. It requires successful desktop publication and a verified
+    npm receipt. The first post-submission read waits at least 30 minutes under
+    project policy. A pending receipt gives the earliest continuation time.
+    Follow the [partial-failure recovery](headless-npm-release.md#partial-failures-and-retries)
+    to resume verification on the original run with its tested bytes.
 
 Windows signing and both publication jobs explicitly select the same Node.js
 runtime with `actions/setup-node`, with package-manager caching disabled. They
@@ -402,11 +402,17 @@ artifact remains a fallback, not a prerequisite for successful publication.
 
 ### Recovery proposal when assets were published before a job timeout
 
-This is a separate operator-authorized procedure to design and review, not a
-reason to rerun or retag an existing release. Workflow edits on `main` do not
-change the workflow stored at an existing tag. A failed-job rerun can encounter
-an already-created release, and dispatching the tagged workflow still uses its
-old time budget. Neither is a safe general recovery for this case.
+For tags carrying the current workflow, retry the failed asset-publication job
+on the original run when its producer jobs succeeded. It reloads the retained
+platform and debug outputs, checks the remote tag commit, then compares the
+published prerelease's notes and exact asset names, sizes, and SHA-256 digests.
+A complete match continues without creating, editing, or uploading release
+assets. Missing or mismatched evidence stops recovery. Reuse the original
+producer jobs by rerunning failed jobs only.
+
+Older tags run the workflow stored at the tag. Recovery for those tags needs
+a separate operator-authorized procedure. Changes on `main` cannot recover
+a historical release or justify moving its tag.
 
 For v1.4.9, preserve source `fef2605487bcdc1c10cf031f81eaee15901deb92`,
 run `44021090875`, all published assets, and the original retained platform,
