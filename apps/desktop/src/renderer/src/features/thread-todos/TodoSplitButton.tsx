@@ -69,9 +69,14 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
   const close = (): void => {
     setOpen(false);
     setSubmenuId(undefined);
+    // The next open measures again before it shows.
+    setPosition(undefined);
   };
 
-  useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
+  // The menu measures itself hidden before it is placed; it can take focus
+  // only once it is visible.
+  const placed = open && position !== undefined;
+  useMenuNavigation({ open: placed, menuRef, triggerRef, onClose: close });
 
   // The keyboard hook leaves the pointer to the menu: any press outside
   // the pill closes it.
@@ -119,11 +124,11 @@ export function TodoSplitButton(props: TodoSplitButtonProps) {
 
   // A swapped list starts on its first row, as a freshly opened menu does.
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!placed) return;
     menuRef.current
       ?.querySelector<HTMLElement>('[role="menuitem"],[role="menuitemradio"]')
       ?.focus();
-  }, [open, submenuId]);
+  }, [placed, submenuId]);
 
   const submenu = submenuId
     ? props.entries.find(

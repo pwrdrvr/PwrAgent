@@ -19,10 +19,12 @@ const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<unknown>>>();
 /**
  * The transcript entry a review was imported from. Native, managed, and
  * Claude Code reviews are keyed by their review entry; one an agent recorded
- * with `record_review` is keyed by an outside artifact and has no entry.
+ * with `record_review` is keyed by an outside artifact and has no entry. A
+ * record from before origins were kept could be either, so it has none: a
+ * key that names no entry would page the transcript's whole history.
  */
 export function reviewTranscriptEntryId(review: Pick<ThreadReview, "origin" | "sourceKey">): string | undefined {
-  return review.origin === "explicit" ? undefined : review.sourceKey;
+  return review.origin === "automatic" ? review.sourceKey : undefined;
 }
 
 /** The review entry a review to-do card stands for, read from its owner. */

@@ -8,6 +8,7 @@ import {
   type ThreadTodoProject,
 } from "@pwragent/shared";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
+import { reviewTranscriptEntryId } from "../review-tracking";
 import type { ThreadTodosView } from "../thread-todos-view";
 
 afterEach(cleanup);
@@ -170,5 +171,29 @@ describe("To-do thread provenance", () => {
     expect(screen.getAllByRole("heading", { level: 4 }).map((heading) =>
       heading.querySelector(".thread-todos-panel__group-name")?.textContent))
       .toEqual(["PwrAgent · M2 Max", "PwrAgent · M5 Max"]);
+  });
+
+  it("names the directory when two same-named projects share a machine", () => {
+    const checkout: ThreadTodo = {
+      id: "checkout", backend: "codex", threadId: "thread-b", kind: "reminder", status: "open",
+      title: "Here", createdAt: 1, updatedAt: 1,
+      sourceProject: { key: "directory:/src/github/PwrAgnt", label: "PwrAgnt", path: "/src/github/PwrAgnt" },
+    };
+    const worktree: ThreadTodo = {
+      ...checkout, id: "worktree", threadId: "thread-c", title: "There",
+      sourceProject: { key: "directory:/wt/abc/PwrAgnt", label: "PwrAgnt", path: "/wt/abc/PwrAgnt" },
+    };
+    render(<ThreadTodosPanel view={createView([checkout, worktree])} threadKey={CURRENT} onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^All/ }));
+    expect(screen.getAllByRole("heading", { level: 4 }).map((heading) =>
+      heading.querySelector(".thread-todos-panel__group-name")?.textContent))
+      .toEqual(["PwrAgnt · github/PwrAgnt", "PwrAgnt · abc/PwrAgnt"]);
+  });
+
+  it("anchors only reviews imported from the transcript", () => {
+    // A key that names no entry would page the whole history looking for it.
+    expect(reviewTranscriptEntryId({ origin: "automatic", sourceKey: "item-1" })).toBe("item-1");
+    expect(reviewTranscriptEntryId({ origin: "explicit", sourceKey: "https://example.test/r/1" })).toBeUndefined();
+    expect(reviewTranscriptEntryId({ sourceKey: "https://example.test/r/1" })).toBeUndefined();
   });
 });

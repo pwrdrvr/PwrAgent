@@ -91,6 +91,8 @@ type TodoGroup = {
   title: string;
   /** The project's owner, in All; absent for this instance. */
   ownerInstanceId?: string;
+  /** The project's directory, when a card in the group names it. */
+  path?: string;
   items: PanelItem[];
   /** A wait in the group pauses a turn. */
   paused: boolean;
@@ -827,8 +829,12 @@ function groupItems(
     if (group) {
       group.items.push(item);
       group.paused ||= paused;
+      group.path ??= item.type === "todo" ? item.todo.sourceProject?.path : undefined;
     } else {
-      groups.set(key, { key, title, ...(ownerInstanceId ? { ownerInstanceId } : {}), items: [item], paused });
+      const path = item.type === "todo" ? item.todo.sourceProject?.path : undefined;
+      groups.set(key, {
+        key, title, ...(ownerInstanceId ? { ownerInstanceId } : {}), ...(path ? { path } : {}), items: [item], paused,
+      });
     }
   }
   const first = scope === "all"
@@ -845,18 +851,35 @@ function groupItems(
 
 /**
  * Two projects can share a label, such as one repository on this machine and
- * on a peer. Their headings name the machine, so neither reads as the other.
+ * on a peer, or a checkout and its worktree. Their headings name the machine
+ * when the machines differ, and the directory when the machine alone cannot
+ * tell them apart.
  */
 function nameMachinesOnSharedTitles(groups: TodoGroup[], view: ThreadTodosView): void {
-  const counts = new Map<string, number>();
-  for (const group of groups) counts.set(group.title, (counts.get(group.title) ?? 0) + 1);
-  for (const group of groups) {
-    if ((counts.get(group.title) ?? 0) < 2) continue;
-    const machine = group.ownerInstanceId
-      ? view.instances.find((instance) => instance.instanceId === group.ownerInstanceId)?.label
-      : view.localMachine?.label;
-    if (machine) group.title = `${group.title} · ${machine}`;
+  const byTitle = new Map<string, TodoGroup[]>();
+  for (const group of groups) byTitle.set(group.title, [...(byTitle.get(group.title) ?? []), group]);
+  for (const shared of byTitle.values()) {
+    if (shared.length < 2) continue;
+    for (const group of shared) {
+      const others = shared.filter((other) => other !== group);
+      const machine = others.some((other) => other.ownerInstanceId !== group.ownerInstanceId)
+        ? group.ownerInstanceId
+          ? view.instances.find((instance) => instance.instanceId === group.ownerInstanceId)?.label
+          : view.localMachine?.label
+        : undefined;
+      const directory = others.some((other) => other.ownerInstanceId === group.ownerInstanceId)
+        ? directoryTail(group.path)
+        : undefined;
+      const suffix = [machine, directory].filter(Boolean).join(" · ");
+      if (suffix) group.title = `${group.title} · ${suffix}`;
+    }
   }
+}
+
+/** A directory's last two segments: enough to tell a checkout from a worktree. */
+function directoryTail(path: string | undefined): string | undefined {
+  const segments = path?.split(/[\\/]/).filter(Boolean);
+  return segments?.length ? segments.slice(-2).join("/") : undefined;
 }
 
 /**

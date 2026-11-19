@@ -23,6 +23,8 @@ it("floats its menu on the body, outside the rail's scroller and sticky headings
   // scroller clips it.
   expect(menu.parentElement).toBe(document.body);
   expect(menu.closest(".thread-todos-panel__body")).toBeNull();
+  // Placed before it takes focus, so the arrows start on its first row.
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Do it here" }));
 
   // A press in the floating menu is not a press outside the pill.
   fireEvent.pointerDown(menu);

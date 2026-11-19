@@ -2662,12 +2662,18 @@ function DesktopAppShell(props: {
   const openTodoReview = useCallback((todo: ThreadTodo) => {
     const threadKey = threadTodoThreadKey(todo);
     const instanceId = todo.federationTarget?.instanceId;
+    const selectedAtClick = selectedThreadKeyRef.current;
     void readReviewTranscriptEntryId(desktopApi, todo)
       .catch(() => undefined)
       .then((messageId) => {
-        // On screen already: scroll only, as a question's chip does.
-        if (messageId && threadKey === selectedThreadKeyRef.current) {
-          queueMessageLinkRequest({ backend: todo.backend, threadId: todo.threadId, messageId, instanceId });
+        // The operator went elsewhere while the owner answered.
+        if (selectedThreadKeyRef.current !== selectedAtClick) return;
+        // On screen already: never select it again, which would refresh its
+        // git status and clear its errors. Scroll when there is an entry.
+        if (threadKey === selectedThreadKeyRef.current) {
+          if (messageId) {
+            queueMessageLinkRequest({ backend: todo.backend, threadId: todo.threadId, messageId, instanceId });
+          }
           setMainView("thread");
           return;
         }
