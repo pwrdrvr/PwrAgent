@@ -536,14 +536,16 @@ it("checks archived owners concurrently with bounded work, ordered results and b
   }));
   await Promise.all(threads.map((thread) => mkdir(thread.linkedDirectories[0]!.worktreePath!)));
   type Ownership = { users: AppServerThreadSummary[]; external: boolean };
-  const boundary = registryModules(registry).threadArchiveCoordinator as unknown as {
-    readPacedArchiveCleanupInventory: () => Promise<{ activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] }>;
+  const coordinator = registryModules(registry).threadArchiveCoordinator;
+  const boundary = coordinator as unknown as {
     maintenanceThreadWorkspace: (thread: AppServerThreadSummary) => Promise<AppServerThreadSummary>;
     readCanonicalArchiveOwnership: (_inventory: unknown, target: string) => Promise<Ownership>;
     describeMaintenanceCheckoutInventory: () => Promise<void>;
     archiveCleanupQueue: { enqueue: (_key: string, work: (context: ArchiveCleanupContext) => Promise<unknown>) => Promise<unknown> };
   };
-  vi.spyOn(boundary, "readPacedArchiveCleanupInventory").mockResolvedValue({ activeThreads: [], archivedThreads: threads });
+  vi.spyOn(coordinator.cleanupInventory, "readPacedArchiveCleanupInventory").mockResolvedValue({
+    activeThreads: [], archivedThreads: threads, targetIsActive: false,
+  });
   vi.spyOn(boundary, "maintenanceThreadWorkspace").mockImplementation(async (thread) => thread);
   vi.spyOn(boundary, "describeMaintenanceCheckoutInventory").mockResolvedValue();
   const checkpoint = vi.fn(async () => {});
