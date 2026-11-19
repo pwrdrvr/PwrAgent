@@ -852,11 +852,12 @@ export function resolveModelSettingsFromOptions(
       ]
     : undefined;
   const reasoningEffort = supportsReasoning
-    ? reasoningEfforts.includes(settings.reasoningEffort ?? "")
-      ? settings.reasoningEffort
-      : reasoningEfforts.includes(rememberedReasoningEffort ?? "")
-        ? rememberedReasoningEffort
-      : getDefaultReasoningEffort(options, selectedModel)
+    ? [
+        settings.reasoningEffort,
+        rememberedReasoningEffort,
+        ...(settings.fallbackReasoningEfforts ?? []),
+      ].find((effort) => effort !== undefined && reasoningEfforts.includes(effort))
+      ?? getDefaultReasoningEffort(options, selectedModel)
     : undefined;
   const supportsFast = backend === "codex" && Boolean(selectedModel?.supportsFast);
   const shouldClearCodexFastTier =
