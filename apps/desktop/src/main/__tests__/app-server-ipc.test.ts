@@ -10385,14 +10385,13 @@ describe("app server ipc", () => {
     const store = new SqliteOverlayStore(db);
     const service = appServerService as unknown as {
       getOverlayStore: () => typeof store;
-      pendingPrLookupRefreshes: Map<string, { promise: Promise<void> }>;
     };
     const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
     // A user refresh answers from what is stored and runs the lookup in the
     // background. Wait for that lookup, so each call is one whole refresh.
     const refresh = async (request: RefreshThreadPullRequestsRequest) => {
       const response = await appServerService.refreshThreadPullRequests(request);
-      await service.pendingPrLookupRefreshes.get(buildPrLookupKey(request))?.promise;
+      await appServerService.threadPullRequestLookup.pendingRefresh(request);
       return response.prs;
     };
     try {
