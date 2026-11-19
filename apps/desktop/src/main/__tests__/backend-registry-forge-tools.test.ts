@@ -1,3 +1,4 @@
+import { headlessAutomationRecords } from "./helpers/headless-automation-records";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -445,7 +446,7 @@ describe("backend forge tool dispatch", () => {
 
   it("refuses Auto writes from an Auto-mode automation, which no one can review", async () => {
     registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "auto");
-    (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("codex:thread-1:turn-1", {
+    headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
       agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
     });
     const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-automation-pr"));
@@ -734,7 +735,7 @@ describe("backend forge tool dispatch", () => {
 
     it("refuses Auto writes from an Auto-mode automation, which no one can review", async () => {
       live = "auto";
-      (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("claude:thread-1:turn-1", {
+      headlessAutomationRecords(registry).set("claude:thread-1:turn-1", {
         agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
       });
       await expect(createPr()).rejects.toMatchObject({ code: "approval_required" });
