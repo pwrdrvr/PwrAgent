@@ -26,6 +26,15 @@ describe("worktree folder configuration", () => {
     expect(parseDesktopSettingsToml(cleared, "test.toml").worktrees?.baseDirectory).toBeUndefined();
   });
 
+  it("writes and reads the Codex opt-in", () => {
+    const saved = applyTomlEdits(
+      "[worktrees]\n",
+      desktopSettingsPatchToEdits({ worktrees: { baseDirectoryIncludesCodex: true } }, parseTomlTables("[worktrees]\n", "test.toml")),
+    );
+    expect(saved).toContain("base_directory_includes_codex = true");
+    expect(parseDesktopSettingsToml(saved, "test.toml").worktrees?.baseDirectoryIncludesCodex).toBe(true);
+  });
+
   it("ignores a relative or non-string folder", () => {
     expect(parseDesktopSettingsToml('[worktrees]\nbase_directory = "Dev"\n', "test.toml").worktrees?.baseDirectory)
       .toBeUndefined();

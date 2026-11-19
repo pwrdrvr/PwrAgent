@@ -455,6 +455,8 @@ export type DesktopSettingsConfig = {
     storage?: DesktopWorktreeStorageLocation;
     /** `base_directory`: replaces the home folder for `user-home` worktrees. */
     baseDirectory?: string;
+    /** `base_directory_includes_codex`: Codex threads use the folder too. */
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 
@@ -2417,6 +2419,9 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["worktrees", "base_directory"] });
     }
   }
+  if (patch.worktrees?.baseDirectoryIncludesCodex !== undefined) {
+    set(["worktrees", "base_directory_includes_codex"], patch.worktrees.baseDirectoryIncludesCodex);
+  }
 
   return edits;
 }
@@ -2989,6 +2994,7 @@ function normalizeDesktopConfig(
       } : undefined,
       storage: readWorktreeStorage(worktrees?.storage),
       baseDirectory: readWorktreeBaseDirectory(worktrees?.base_directory),
+      baseDirectoryIncludesCodex: readBoolean(worktrees?.base_directory_includes_codex),
     },
   });
 }

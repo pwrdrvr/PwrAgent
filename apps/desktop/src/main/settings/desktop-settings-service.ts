@@ -74,6 +74,7 @@ import type {
   DesktopUpdateSelectionSource,
   DesktopUpdateSettingsSnapshot,
   DesktopUpdateTrain,
+  DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
   ThreadTodoMergeMethod,
@@ -1864,6 +1865,9 @@ export class DesktopSettingsService {
       },
       worktrees: {
         ...this.resolveWorktrees(config.worktrees?.storage, config.worktrees?.baseDirectory),
+        ...(config.worktrees?.baseDirectory && config.worktrees.baseDirectoryIncludesCodex
+          ? { baseDirectoryIncludesCodex: true }
+          : {}),
         archive: normalizeThreadArchivePolicy(config.worktrees?.archive),
         hibernate: normalizeCheckoutHibernationPolicy(config.worktrees?.hibernate),
       },
@@ -2169,8 +2173,12 @@ export class DesktopSettingsService {
   }
 
   /** The operator's worktree folder, replacing the home folder for `user-home`. */
-  resolveWorktreeBaseDirectory(): string | undefined {
-    return this.configStore.read("worktrees").baseDirectory?.trim() || undefined;
+  resolveWorktreeFolder(): DesktopWorktreeFolder | undefined {
+    const worktrees = this.configStore.read("worktrees");
+    const directory = worktrees.baseDirectory?.trim();
+    return directory
+      ? { directory, includeCodex: worktrees.baseDirectoryIncludesCodex === true }
+      : undefined;
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {

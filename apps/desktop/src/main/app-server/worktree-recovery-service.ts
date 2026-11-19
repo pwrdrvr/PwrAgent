@@ -10,11 +10,13 @@ import type {
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
 import { worktreeArchiveInternals } from "./worktree-archive-service";
+import { isPwrAgentWorktreeLock, lockWorktreeOnSeparateVolume } from "./worktree-volume-lock";
 
 type RecordedWorktree = {
   path: string;
   branch?: string;
   locked: boolean;
+  lockReason?: string;
 };
 
 export type RecreateWorktreeParams = {
@@ -97,6 +99,7 @@ function parseRecords(output: string): RecordedWorktree[] {
       current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
     } else if (current && (line === "locked" || line.startsWith("locked "))) {
       current.locked = true;
+      if (line.startsWith("locked ")) current.lockReason = line.slice("locked ".length);
     }
   }
   return records;
@@ -149,6 +152,14 @@ export class WorktreeRecoveryService {
       const ownRecord = (await Promise.all(recorded.map(async (record) => ({
         record, same: (await comparablePath(record.path)) === ownPath,
       })))).find((candidate) => candidate.same)?.record;
+      if (ownRecord) await this.clearOwnLockWhileAttached(repositoryPath, ownRecord, worktreePath);
+      if (ownRecord?.locked && isPwrAgentWorktreeLock(ownRecord)) {
+        throw new RecoveryRefusal(
+          "record-locked",
+          "clear-record",
+          `The drive that holds ${worktreePath} is not connected. Connect it and try again.`,
+        );
+      }
       if (ownRecord?.locked) {
         throw new RecoveryRefusal(
           "record-locked",
@@ -203,6 +214,9 @@ export class WorktreeRecoveryService {
       await this.git(repositoryPath, detached
         ? ["worktree", "add", "--detach", worktreePath, startPoint]
         : ["worktree", "add", worktreePath, startPoint]);
+      await lockWorktreeOnSeparateVolume({
+        repoRoot: repositoryPath, worktreePath, git: (args) => this.git(repositoryPath, args),
+      });
       mark("add-worktree", "done");
 
       const warnings: string[] = [];
@@ -264,6 +278,7 @@ export class WorktreeRecoveryService {
     const ownPath = await comparablePath(params.worktreePath);
     for (const record of await this.listRecords(params.repositoryPath)) {
       if ((await comparablePath(record.path)) !== ownPath) continue;
+      await this.clearOwnLockWhileAttached(params.repositoryPath, record, params.worktreePath);
       if (record.locked) {
         throw new Error(`Git has a lock on the record of ${params.worktreePath}.`);
       }
@@ -323,6 +338,24 @@ export class WorktreeRecoveryService {
     await this.git(worktreePath, ["reset", "-q"]);
     const status = (await this.git(worktreePath, ["status", "--porcelain", "--untracked-files=all"])).stdout;
     return { restored: true, changedFileCount: status.split("\n").filter(Boolean).length };
+  }
+
+  /**
+   * A missing folder under a lock PwrAgent set is usually an unplugged drive.
+   * The lock is cleared only when the folder's `<hash>` container still
+   * exists, which shows the drive is attached and the checkout itself is gone.
+   */
+  private async clearOwnLockWhileAttached(
+    repositoryPath: string,
+    record: RecordedWorktree,
+    worktreePath: string,
+  ): Promise<boolean> {
+    if (!isPwrAgentWorktreeLock(record)) return false;
+    if (await pathKind(path.dirname(worktreePath)) === "missing") return false;
+    await this.git(repositoryPath, ["worktree", "unlock", record.path]);
+    record.locked = false;
+    record.lockReason = undefined;
+    return true;
   }
 
   private async listRecords(repositoryPath: string): Promise<RecordedWorktree[]> {

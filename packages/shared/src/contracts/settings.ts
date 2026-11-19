@@ -45,6 +45,16 @@ export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
 /**
+ * The operator's worktree folder for `user-home` worktrees: PwrAgent's go to
+ * `<directory>/.pwragent/worktrees`, and Codex threads' to
+ * `<directory>/.codex/worktrees` only when `includeCodex` is on.
+ */
+export type DesktopWorktreeFolder = {
+  directory: string;
+  includeCodex: boolean;
+};
+
+/**
  * Background PR status polling is enabled by default. An explicit false value
  * remains a kill switch for operators who need to disable the poller.
  */
@@ -1806,6 +1816,8 @@ export type DesktopSettingsSnapshot = {
     baseDirectory?: string;
     /** False when `baseDirectory` is missing, such as an unplugged drive. */
     baseDirectoryAvailable?: boolean;
+    /** Codex threads use the folder too; Codex Desktop then does not list them. */
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 
@@ -2122,6 +2134,7 @@ export type DesktopSettingsConfigPatch = {
     storage?: DesktopWorktreeStorageLocation;
     /** An absolute folder for `user-home` worktrees; null returns to the home folder. */
     baseDirectory?: string | null;
+    baseDirectoryIncludesCodex?: boolean;
   };
 };
 

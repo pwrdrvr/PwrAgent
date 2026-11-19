@@ -6,6 +6,7 @@ import type {
   AppServerThreadSummary,
   AppServerBackendKind,
   ArchiveThreadCleanupResult,
+  DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
   LaunchpadWorkMode,
   LaunchpadWorktreeBase,
@@ -21,6 +22,7 @@ import {
   readStatusWithoutNestedWorktrees,
 } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
+import { lockWorktreeOnSeparateVolume, unlockPwrAgentWorktreeLock } from "./worktree-volume-lock";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
@@ -270,12 +272,16 @@ function worktreesRootFor(
   storage: DesktopWorktreeStorageLocation,
   options?: {
     backend?: AppServerBackendKind;
-    baseDirectory?: string;
     codexHome?: string;
     homeDir?: string;
+    worktreeFolder?: DesktopWorktreeFolder;
   },
 ): string {
+  const folder = options?.worktreeFolder;
   if (storage === "user-home" && options?.backend === "codex") {
+    // Codex Desktop lists only worktrees under $CODEX_HOME/worktrees, so
+    // Codex threads leave it only when the operator opts them in.
+    if (folder?.includeCodex) return path.join(folder.directory, ".codex", "worktrees");
     return codexHomeWorktreesRoot({
       codexHome: options.codexHome,
       homeDir: options.homeDir,
@@ -283,7 +289,7 @@ function worktreesRootFor(
   }
 
   return storage === "user-home"
-    ? userHomeWorktreesRoot(options?.baseDirectory ?? options?.homeDir)
+    ? userHomeWorktreesRoot(folder?.directory ?? options?.homeDir)
     : path.join(repoRoot, ".worktrees");
 }
 
@@ -343,6 +349,10 @@ async function removeWorktreeAndPrune(params: {
   runGit: GitCommandRunner;
   worktreePath: string;
 }): Promise<void> {
+  await unlockPwrAgentWorktreeLock({
+    worktreePath: params.worktreePath,
+    git: (args) => params.runGit(params.repoRoot, args, params.gitEnv),
+  });
   await params.runGit(
     params.repoRoot,
     ["worktree", "remove", "--force", params.worktreePath],
@@ -353,25 +363,26 @@ async function removeWorktreeAndPrune(params: {
 
 export async function computeWorktreePath(params: {
   backend?: AppServerBackendKind;
-  /** Operator-chosen folder that replaces the home folder for `user-home`. */
-  baseDirectory?: string;
   codexHome?: string;
   repoRoot: string;
   storage: DesktopWorktreeStorageLocation;
   homeDir?: string;
   timestamp?: number;
+  /** Operator-chosen folder that replaces the home folder for `user-home`. */
+  worktreeFolder?: DesktopWorktreeFolder;
 }): Promise<string> {
-  const baseDirectory = params.baseDirectory?.trim() || undefined;
+  const directory = params.worktreeFolder?.directory.trim();
+  const worktreeFolder = directory ? { ...params.worktreeFolder!, directory } : undefined;
   const root = worktreesRootFor(params.repoRoot, params.storage, {
     backend: params.backend,
-    baseDirectory,
     codexHome: params.codexHome,
     homeDir: params.homeDir,
+    worktreeFolder,
   });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
   const baseTimestamp = params.timestamp ?? Date.now();
-  if (baseDirectory && root === userHomeWorktreesRoot(baseDirectory)) {
-    await assertWorktreeBaseDirectoryAvailable(baseDirectory);
+  if (worktreeFolder && path.dirname(path.dirname(root)) === worktreeFolder.directory) {
+    await assertWorktreeBaseDirectoryAvailable(worktreeFolder.directory);
   }
   await mkdir(root, { recursive: true });
 
@@ -474,6 +485,9 @@ async function addExclusiveAttachedWorktree(params: {
     if (occupied) {
       throw new WorktreeBranchAlreadyCheckedOutError(branch, occupied.path);
     }
+    await lockWorktreeOnSeparateVolume({
+      repoRoot, worktreePath, git: (args) => runGit(repoRoot, args, params.gitEnv),
+    });
   } catch (error) {
     entries ??= await readWorktreeEntries(params).catch(() => undefined);
     const checkoutPath = await normalizeFilesystemPath(worktreePath);
@@ -903,7 +917,10 @@ type GitDirectoryServiceOptions = {
     | DesktopWorktreeStorageLocation
     | Promise<DesktopWorktreeStorageLocation>;
   /** Folder that replaces the home folder for `user-home` worktrees. */
-  resolveWorktreeBaseDirectory?: () => string | undefined | Promise<string | undefined>;
+  resolveWorktreeFolder?: () =>
+    | DesktopWorktreeFolder
+    | undefined
+    | Promise<DesktopWorktreeFolder | undefined>;
   homeDir?: string;
 };
 
@@ -923,7 +940,7 @@ export class GitDirectoryService {
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly runGitCommand: GitCommandRunner;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
-  private readonly resolveBaseDirectory: () => Promise<string | undefined>;
+  private readonly resolveWorktreeFolder: () => Promise<DesktopWorktreeFolder | undefined>;
   private readonly homeDir: string;
 
   constructor(options: GitDirectoryServiceOptions | number = {}) {
@@ -943,8 +960,8 @@ export class GitDirectoryService {
     const resolveStorage = normalized.resolveWorktreeStorage;
     this.resolveStorage = async () =>
       (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
-    const resolveBaseDirectory = normalized.resolveWorktreeBaseDirectory;
-    this.resolveBaseDirectory = async () => await resolveBaseDirectory?.();
+    const resolveWorktreeFolder = normalized.resolveWorktreeFolder;
+    this.resolveWorktreeFolder = async () => await resolveWorktreeFolder?.();
   }
 
   async inspectWorkspaceGit(cwd: string): Promise<GitWorkspaceInspection> {
@@ -1336,7 +1353,7 @@ export class GitDirectoryService {
       codexHome: this.codexHome,
       repoRoot,
       storage: await this.resolveStorage(),
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
     });
   }
@@ -1566,7 +1583,7 @@ export class GitDirectoryService {
           codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
           repoRoot,
           storage,
-          baseDirectory: await this.resolveBaseDirectory(),
+          worktreeFolder: await this.resolveWorktreeFolder(),
           homeDir: this.homeDir,
         });
         if (strictBranchCheckout) {
@@ -1581,6 +1598,9 @@ export class GitDirectoryService {
               ["worktree", "add", "--", worktreePath, baseBranch],
               this.gitEnv,
             );
+            await lockWorktreeOnSeparateVolume({
+              repoRoot, worktreePath, git: (args) => this.runGitCommand(repoRoot, args, this.gitEnv),
+            });
           } catch (error) {
             await pruneEmptyWorktreeParents(worktreePath);
             throw error;
@@ -1627,7 +1647,7 @@ export class GitDirectoryService {
       codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
       repoRoot,
       storage,
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
     });
     await mkdir(path.dirname(worktreePath), { recursive: true });
@@ -1637,6 +1657,9 @@ export class GitDirectoryService {
         ["worktree", "add", "--detach", worktreePath, baseBranch],
         this.gitEnv,
       );
+      await lockWorktreeOnSeparateVolume({
+        repoRoot, worktreePath, git: (args) => this.runGitCommand(repoRoot, args, this.gitEnv),
+      });
     } catch (error) {
       await pruneEmptyWorktreeParents(worktreePath);
       throw error;
@@ -1760,6 +1783,7 @@ export class GitDirectoryService {
       }
 
       const branch = entry.branch ?? thread.observedGitBranch ?? thread.gitBranch;
+      await unlockPwrAgentWorktreeLock({ worktreePath, git: (args) => runGit(repoRoot, args, gitEnv) });
       await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath], gitEnv);
       await pruneEmptyWorktreeParents(worktreePath);
 

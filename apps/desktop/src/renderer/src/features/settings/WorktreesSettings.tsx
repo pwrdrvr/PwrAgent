@@ -12,6 +12,7 @@ import {
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
 
@@ -89,6 +90,18 @@ export function WorktreesSettings(props: {
             />
           ) : null}
 
+          {storage.value === "user-home" && props.snapshot.worktrees.baseDirectory ? (
+            <ToggleField
+              label="Use for Codex threads too"
+              sub="Codex threads' worktrees go to .codex/worktrees in this folder. Codex Desktop lists only worktrees in its own folder, so it won't show these."
+              checked={props.snapshot.worktrees.baseDirectoryIncludesCodex === true}
+              disabled={props.saving || !props.onWriteConfig}
+              onChange={async (baseDirectoryIncludesCodex) => {
+                await props.onWriteConfig?.({ worktrees: { baseDirectoryIncludesCodex } });
+              }}
+            />
+          ) : null}
+
           <SettingsField
             label="Effective path"
             sub="Computed from your strategy and the active project."
@@ -136,7 +149,6 @@ function WorktreeFolderField(props: {
     <SettingsField
       label="Worktree folder"
       sub="Put worktrees on a drive with more room. Existing worktrees stay where they are."
-      help="Codex threads keep using Codex's own worktree folder."
       error={error ?? (unavailable
         ? `${props.baseDirectory} is not available. Connect the drive or choose another folder; new worktrees cannot be created until then.`
         : undefined)}

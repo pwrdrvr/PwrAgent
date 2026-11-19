@@ -2,6 +2,7 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   AppServerBackendKind,
+  DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
@@ -15,6 +16,7 @@ import {
   readStatusWithoutNestedWorktrees,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { lockWorktreeOnSeparateVolume } from "./worktree-volume-lock";
 import {
   computeWorktreePath,
   inspectGitWorkspace,
@@ -132,7 +134,10 @@ type WorkspaceHandoffServiceOptions = {
     | DesktopWorktreeStorageLocation
     | Promise<DesktopWorktreeStorageLocation>;
   /** Folder that replaces the home folder for `user-home` worktrees. */
-  resolveWorktreeBaseDirectory?: () => string | undefined | Promise<string | undefined>;
+  resolveWorktreeFolder?: () =>
+    | DesktopWorktreeFolder
+    | undefined
+    | Promise<DesktopWorktreeFolder | undefined>;
   homeDir?: string;
 };
 
@@ -352,7 +357,7 @@ async function applyVerifyAndDropStash(
 export class GitWorkspaceHandoffService {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
-  private readonly resolveBaseDirectory: () => Promise<string | undefined>;
+  private readonly resolveWorktreeFolder: () => Promise<DesktopWorktreeFolder | undefined>;
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly homeDir: string | undefined;
 
@@ -362,10 +367,18 @@ export class GitWorkspaceHandoffService {
     const resolveStorage = options.resolveWorktreeStorage;
     this.resolveStorage = async () =>
       (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
-    const resolveBaseDirectory = options.resolveWorktreeBaseDirectory;
-    this.resolveBaseDirectory = async () => await resolveBaseDirectory?.();
+    const resolveWorktreeFolder = options.resolveWorktreeFolder;
+    this.resolveWorktreeFolder = async () => await resolveWorktreeFolder?.();
     this.gitEnv = options.gitEnv;
     this.homeDir = options.homeDir;
+  }
+
+  private async lockOnSeparateVolume(repositoryPath: string, worktreePath: string): Promise<void> {
+    await lockWorktreeOnSeparateVolume({
+      repoRoot: repositoryPath,
+      worktreePath,
+      git: (args) => runGit(repositoryPath, args, this.gitEnv),
+    });
   }
 
   async handoff(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
@@ -425,11 +438,12 @@ export class GitWorkspaceHandoffService {
       } else if (params.sourceWorkMode === "worktree") {
         targetPath = await computeWorktreePath({
           backend: params.backend, repoRoot: repositoryPath,
-          storage: await this.resolveStorage(), baseDirectory: await this.resolveBaseDirectory(),
+          storage: await this.resolveStorage(), worktreeFolder: await this.resolveWorktreeFolder(),
           homeDir: this.homeDir, timestamp: params.now,
         });
         try {
           await runGit(repositoryPath, ["worktree", "add", "--detach", targetPath, "HEAD"], this.gitEnv);
+          await this.lockOnSeparateVolume(repositoryPath, targetPath);
         } catch (error) {
           await releaseReservationAndRethrow(targetPath, error);
         }
@@ -582,7 +596,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -610,6 +624,7 @@ export class GitWorkspaceHandoffService {
         ["worktree", "add", targetPath, context.branch],
         this.gitEnv,
       );
+      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -664,7 +679,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -689,6 +704,7 @@ export class GitWorkspaceHandoffService {
         ["worktree", "add", "-b", newBranchName, targetPath, baseSha],
         this.gitEnv,
       );
+      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -732,7 +748,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -757,6 +773,7 @@ export class GitWorkspaceHandoffService {
         ["worktree", "add", "--detach", targetPath, baseSha],
         this.gitEnv,
       );
+      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -881,7 +898,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage: await this.resolveStorage(),
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -896,6 +913,7 @@ export class GitWorkspaceHandoffService {
           : ["worktree", "add", "--detach", targetPath, baseSha],
         this.gitEnv,
       );
+      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;
@@ -943,7 +961,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       repoRoot: context.repositoryPath,
       storage: await this.resolveStorage(),
-      baseDirectory: await this.resolveBaseDirectory(),
+      worktreeFolder: await this.resolveWorktreeFolder(),
       homeDir: this.homeDir,
       timestamp: context.now,
     });
@@ -962,6 +980,7 @@ export class GitWorkspaceHandoffService {
         ["worktree", "add", targetPath, context.branch],
         this.gitEnv,
       );
+      await this.lockOnSeparateVolume(context.repositoryPath, targetPath);
     } catch (error) {
       await releaseWorktreePathReservation(targetPath);
       throw error;

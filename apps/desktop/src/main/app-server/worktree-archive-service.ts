@@ -12,6 +12,7 @@ import { runGitCommand } from "./git-executable";
 import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { sameRegisteredWorktree, worktreeDirectoryIdentity, type CheckoutIdentity } from "./worktree-maintenance-registration";
+import { lockWorktreeOnSeparateVolume, unlockPwrAgentWorktreeLock } from "./worktree-volume-lock";
 
 type GitResult = {
   stdout: string;
@@ -549,6 +550,10 @@ export class WorktreeArchiveService {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
       }
       assertRemoval?.();
+      await unlockPwrAgentWorktreeLock({
+        worktreePath,
+        git: async (args) => (await this.runGit(repositoryPath, args)).stdout,
+      });
       await this.runGit(
         repositoryPath,
         ["worktree", "remove", "--force", worktreePath],
@@ -617,6 +622,9 @@ export class WorktreeArchiveService {
       ? ["worktree", "add", worktreePath, sourceBranch]
       : ["worktree", "add", "--detach", worktreePath, sourceHead ?? restoreCommit],
     { ownProcessTree: params.restoreSourceCheckout });
+    await lockWorktreeOnSeparateVolume({
+      repoRoot: repositoryPath, worktreePath, git: (args) => this.runGit(repositoryPath, args),
+    });
     if (sourceHead && sourceHead !== restoreCommit) {
       // Populate the saved file tree, then return the index to the original
       // HEAD. Dirty and non-ignored untracked files remain working-tree edits;

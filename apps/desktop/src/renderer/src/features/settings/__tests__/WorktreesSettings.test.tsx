@@ -55,8 +55,21 @@ describe("WorktreesSettings worktree folder", () => {
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith({ worktrees: { baseDirectory: null } }));
   });
 
+  it("offers Codex threads the folder only once a folder is chosen", async () => {
+    renderSettings({});
+    expect(screen.queryByRole("switch", { name: /Use for Codex threads too/ })).toBeNull();
+    cleanup();
+    const { onWriteConfig } = renderSettings({ baseDirectory: "/Volumes/Dev", baseDirectoryAvailable: true });
+    const codex = screen.getByRole("switch", { name: /Use for Codex threads too/ });
+    expect(codex).not.toBeChecked();
+    expect(screen.getByText(/Codex Desktop lists only worktrees in its own folder/)).toBeInTheDocument();
+    fireEvent.click(codex);
+    await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith({ worktrees: { baseDirectoryIncludesCodex: true } }));
+  });
+
   it("hides the folder for in-repository worktrees", () => {
     renderSettings({ storage: { value: "in-repo", source: "config" }, effectivePath: ".worktrees" });
     expect(screen.queryByLabelText("Worktree folder")).toBeNull();
+    expect(screen.queryByRole("switch", { name: /Use for Codex threads too/ })).toBeNull();
   });
 });

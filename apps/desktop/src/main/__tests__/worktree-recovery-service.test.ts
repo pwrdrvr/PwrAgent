@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { WorktreeRecoveryService } from "../app-server/worktree-recovery-service";
+import { PWRAGENT_WORKTREE_LOCK_REASON } from "../app-server/worktree-volume-lock";
 
 const execFileAsync = promisify(execFile);
 
@@ -170,6 +171,36 @@ describe("WorktreeRecoveryService", () => {
 
     expect(result).toMatchObject({ status: "failed", reason: "record-locked" });
     expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toContain("locked fixture");
+  });
+
+  it("keeps PwrAgent's drive lock and writes nothing while the drive is unplugged", async () => {
+    await git(repoPath, ["worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, worktreePath]);
+    // An unplugged drive takes the whole <hash> container with it.
+    await rm(path.dirname(worktreePath), { recursive: true, force: true });
+
+    const recreated = await service.recreate({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+      branch: "fix/retry-backoff",
+    });
+    await expect(service.releaseMissingWorktree({ repositoryPath: repoPath, worktreePath })).rejects.toThrow(/lock/);
+
+    expect(recreated).toMatchObject({ status: "failed", reason: "record-locked" });
+    expect(recreated.status === "failed" && recreated.message).toMatch(/drive .* is not connected/);
+    expect(await exists(path.dirname(worktreePath))).toBe(false);
+    expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toContain(`locked ${PWRAGENT_WORKTREE_LOCK_REASON}`);
+  });
+
+  it("clears PwrAgent's drive lock and recreates once the drive is back", async () => {
+    await git(repoPath, ["worktree", "lock", "--reason", PWRAGENT_WORKTREE_LOCK_REASON, worktreePath]);
+    await deleteOutsideGit();
+
+    const result = await service.recreate({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+      branch: "fix/retry-backoff",
+    });
+
+    expect(result.status).toBe("recreated");
+    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("fix/retry-backoff");
   });
 
   it("names where the branch is checked out, and can recreate detached at its tip", async () => {

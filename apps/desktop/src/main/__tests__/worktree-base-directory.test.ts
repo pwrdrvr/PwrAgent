@@ -16,7 +16,8 @@ afterEach(async () => {
  * Rule: an operator-chosen worktree folder is used, never created. With an
  * external drive unplugged, creating `/Volumes/<drive>/...` would put
  * worktrees on the startup disk unnoticed, so allocation must fail instead.
- * Codex worktrees and in-repository worktrees ignore the folder.
+ * In-repository worktrees ignore the folder; Codex worktrees use it only when
+ * opted in, and then under `.codex/worktrees` so they stay recognizable.
  */
 describe("computeWorktreePath worktree folder", () => {
   it("places user-home worktrees under an existing folder and never creates a missing one", async () => {
@@ -25,7 +26,8 @@ describe("computeWorktreePath worktree folder", () => {
         fc.constantFrom("user-home", "in-repo") as fc.Arbitrary<"user-home" | "in-repo">,
         fc.constantFrom("claude", "codex", undefined) as fc.Arbitrary<"claude" | "codex" | undefined>,
         fc.boolean(),
-        async (storage, backend, baseExists) => {
+        fc.boolean(),
+        async (storage, backend, baseExists, includeCodex) => {
           const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-base-"));
           cleanupPaths.push(sandbox);
           const homeDir = path.join(sandbox, "home");
@@ -35,14 +37,14 @@ describe("computeWorktreePath worktree folder", () => {
           await mkdir(repoRoot, { recursive: true });
           if (baseExists) await mkdir(baseDirectory, { recursive: true });
 
-          const usesFolder = storage === "user-home" && backend !== "codex";
+          const usesFolder = storage === "user-home" && (backend !== "codex" || includeCodex);
           const allocation = computeWorktreePath({
             backend,
-            baseDirectory,
             codexHome: path.join(homeDir, ".codex"),
             homeDir,
             repoRoot,
             storage,
+            worktreeFolder: { directory: baseDirectory, includeCodex },
           });
 
           if (usesFolder && !baseExists) {
@@ -55,13 +57,13 @@ describe("computeWorktreePath worktree folder", () => {
             ? storage === "in-repo"
               ? path.join(repoRoot, ".worktrees")
               : path.join(homeDir, ".codex", "worktrees")
-            : path.join(baseDirectory, ".pwragent", "worktrees");
+            : path.join(baseDirectory, backend === "codex" ? ".codex" : ".pwragent", "worktrees");
           expect(path.dirname(path.dirname(worktreePath))).toBe(expectedRoot);
           expect(path.basename(worktreePath)).toBe("Orbit");
           expect(existsSync(baseDirectory)).toBe(baseExists);
         },
       ),
-      { numRuns: 24 },
+      { numRuns: 48 },
     );
   });
 
@@ -69,8 +71,8 @@ describe("computeWorktreePath worktree folder", () => {
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-home-"));
     cleanupPaths.push(homeDir);
     const worktreePath = await computeWorktreePath({
-      baseDirectory: "  ",
       homeDir,
+      worktreeFolder: { directory: "  ", includeCodex: true },
       repoRoot: path.join(homeDir, "Orbit"),
       storage: "user-home",
     });

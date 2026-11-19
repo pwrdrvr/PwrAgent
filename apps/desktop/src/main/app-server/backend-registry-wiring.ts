@@ -196,10 +196,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ?? (async () => {
       // A worktree folder adds its root; the home root stays managed so
       // worktrees created before the folder was chosen still age out.
-      const baseDirectory = getDesktopSettingsService().resolveWorktreeBaseDirectory();
+      const folder = getDesktopSettingsService().resolveWorktreeFolder();
       return [
         userHomeWorktreesRoot(),
-        ...(baseDirectory ? [userHomeWorktreesRoot(baseDirectory)] : []),
+        ...(folder ? [userHomeWorktreesRoot(folder.directory)] : []),
         resolveActiveProfilePath("worktrees"),
       ];
     });
@@ -919,8 +919,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       gitEnv: codexEnv,
       resolveWorktreeStorage: () =>
         getDesktopSettingsService().resolveWorktreeStorage(),
-      resolveWorktreeBaseDirectory: () =>
-        getDesktopSettingsService().resolveWorktreeBaseDirectory(),
+      resolveWorktreeFolder: () =>
+        getDesktopSettingsService().resolveWorktreeFolder(),
     });
   const gitWorkingStateService =
     options?.gitWorkingStateService ??
@@ -1155,8 +1155,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       worktreeArchiveService: worktreeArchiveService,
       resolveWorktreeStorage: () =>
         getDesktopSettingsService().resolveWorktreeStorage(),
-      resolveWorktreeBaseDirectory: () =>
-        getDesktopSettingsService().resolveWorktreeBaseDirectory(),
+      resolveWorktreeFolder: () =>
+        getDesktopSettingsService().resolveWorktreeFolder(),
     });
   const resolveAcpHelperWorkspace =
     options?.resolveAcpHelperWorkspace ?? ensureAcpHelperWorkspace;

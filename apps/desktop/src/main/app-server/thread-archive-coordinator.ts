@@ -5,6 +5,7 @@ import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start
 import type { ThreadWorktreeRegistration } from "@pwragent/shared";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
+import { unlockPwrAgentWorktreeLock } from "./worktree-volume-lock";
 import { ArchiveWorktreeReferences, canonicalWorktreePaths } from "./archive-worktree-references";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { resolveOwnedMaintenanceCheckouts } from "./thread-owned-checkouts";
@@ -1493,6 +1494,10 @@ export class ThreadArchiveCoordinator {
     if (result.checkpoint && !result.checkpoint.restored) {
       // The checkout came back without its changes. Remove it again so the
       // snapshot stays the only copy and the next attempt starts clean.
+      await unlockPwrAgentWorktreeLock({
+        worktreePath: snapshot.worktreePath,
+        git: async (args) => (await runGitCommand(snapshot.repositoryPath, args)).stdout,
+      });
       await runGitCommand(snapshot.repositoryPath, ["worktree", "remove", "--force", snapshot.worktreePath]).catch(() => {});
       return await fail("The saved changes did not apply to the restored checkout. They are kept in its snapshot.");
     }
