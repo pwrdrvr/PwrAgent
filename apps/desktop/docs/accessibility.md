@@ -34,10 +34,10 @@ Things to know when extending the audit:
   sub-agents strip only renders when a thread has a non-terminal sub-agent or
   an undismissed failure, and no replay fixture produces one — every producer
   persists a `ThreadSubAgentSummary` through `upsertThreadSubAgent` into the
-  `thread_sub_agents` table. Seed those cards with the overlay store in
-  `preLaunchHook` so the first renderer reads them. The audit checks the
-  collapsed header, bulk-dismiss control, and each row state before passing
-  those surfaces to axe.
+  `thread_sub_agents` table. Seed those cards with the overlay store after
+  `listThreads` has waited for startup reconciliation. Then reload the window
+  so the renderer reads the cards. The audit checks the collapsed header,
+  bulk-dismiss control, and each row state before passing those surfaces to axe.
 - **Every surface is audited in every color theme.** The file wraps its
   `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
   light pair plus each other dark theme in the dark scheme and each light

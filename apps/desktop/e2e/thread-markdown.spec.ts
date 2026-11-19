@@ -1,9 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator } from "./fixtures/electron-test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, resolveSeedConfigPath } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
 const threadMarkdownSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,8 +15,8 @@ test("renders transcript Markdown in both modes through one Electron launch", as
       "fixtures/thread-markdown/replay.fixture.json"
     ),
     preLaunchHook: (homeRoot) => {
-      applyDesktopSettingsPatch(path.join(homeRoot, ".pwragent/profiles/default/config.toml"), {
-        general: { markdown: { incrementalRendering: true } },
+      applyDesktopSettingsPatch(resolveSeedConfigPath({ HOME: homeRoot }), {
+        general: { markdown: { incrementalRendering: false } },
       });
     },
   });
@@ -27,6 +28,8 @@ test("renders transcript Markdown in both modes through one Electron launch", as
     // Resource Timing omits file:// modules. Debugger.enable also reports
     // scripts parsed before attachment, including an already-loaded renderer.
     await cdp.send("Debugger.enable");
+    const hasIncrementalChunk = () => [...parsedScripts].some((url) =>
+      url.includes("/IncrementalMarkdown-"));
 
     const assertMode = async (mode: "incremental" | "standard") => {
       // Leave the thread first. Settled documents keep their renderer until
@@ -43,25 +46,30 @@ test("renders transcript Markdown in both modes through one Electron launch", as
       await assertTranscript(app.window.getByRole("region", { name: "Transcript" }));
     };
 
-    await test.step("incremental mode loads the packaged chunk", async () => {
-      await assertMode("incremental");
-      await expect.poll(() => [...parsedScripts].some((url) =>
-        url.includes("/IncrementalMarkdown-")
-      )).toBe(true);
+    await test.step("saved opt-out keeps the packaged chunk unloaded at cold start", async () => {
+      const bootstrapMarkdown = await app.window.evaluate(async () => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        return (await api.readConfigBootstrap!()).snapshot?.markdown;
+      });
+      expect(bootstrapMarkdown?.incrementalRendering).toBe(false);
+      await assertMode("standard");
+      expect(hasIncrementalChunk()).toBe(false);
     });
 
-    await test.step("saved opt-out selects the standard renderer for fresh transcripts", async () => {
+    await test.step("enabling incremental mode loads the packaged chunk", async () => {
       await app.window.getByRole("button", { name: "Open settings", exact: true }).click();
       const nav = app.window.getByRole("navigation", { name: "Settings sections" });
       await nav.getByRole("button", { name: "General", exact: true }).click();
       const toggle = app.window.getByRole("region", { name: "Markdown rendering", exact: true })
         .getByRole("switch", { name: "Incremental rendering", exact: true });
-      await expect(toggle).toBeChecked();
-      await toggle.click();
       await expect(toggle).not.toBeChecked();
+      expect(hasIncrementalChunk()).toBe(false);
+      await toggle.click();
+      await expect(toggle).toBeChecked();
       await nav.getByRole("button", { name: /Exit Settings/i }).click();
       await expect(nav).toBeHidden();
-      await assertMode("standard");
+      await assertMode("incremental");
+      await expect.poll(hasIncrementalChunk).toBe(true);
     });
   } finally {
     await app.close();
