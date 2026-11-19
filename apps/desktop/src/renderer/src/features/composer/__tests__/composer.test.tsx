@@ -19445,6 +19445,45 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeEnabled();
   });
 
+  it.each(["held", "paused", "queued", "submitting"] as const)(
+    "allows workspace recovery only when an existing reply cannot dispatch (%s)",
+    (status) => {
+      const draftStore = createComposerDraftStore();
+      const scope = buildThreadComposerScopeKey("codex", "thread-1");
+      const mayMove = status === "held" || status === "paused";
+      draftStore.setQueuedTurns(scope, [{
+        id: "reply-1",
+        ...(status === "submitting" ? { backendQueuePending: true } : { queueEntryId: "owner-entry" }),
+        manualReleaseRequired: status === "held",
+        paused: status === "paused",
+        text: "Finish the release notes",
+        imageAttachments: [],
+        fileAttachments: [],
+      }]);
+      render(<Composer
+        backends={[backendSummary("codex")]}
+        draftStore={draftStore}
+        onHandoffThreadWorkspace={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Release", titleSource: "explicit", source: "codex", gitBranch: "main",
+          linkedDirectories: [{ id: "repo", kind: "local", label: "Repo", path: "/repo" }],
+          inbox: { inInbox: false },
+        }}
+      />);
+
+      const workspaceMode = screen.getByRole("button", { name: "Workspace mode: Local" });
+      if (mayMove) {
+        expect(workspaceMode).toBeEnabled();
+        fireEvent.click(workspaceMode);
+        expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeEnabled();
+      } else {
+        expect(workspaceMode).toBeDisabled();
+      }
+      expect(draftStore.getQueuedTurns(scope)).toHaveLength(1);
+    },
+  );
+
   it("disables existing thread workspace handoff when the backend marks it unavailable", () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 

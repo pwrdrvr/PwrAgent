@@ -332,6 +332,7 @@ export class ThreadWorkspaceService {
   >();
 
   private readonly threadHandoffReservations = new Set<string>();
+  private readonly workspaceMutations = new Set<string>();
 
   private readonly pendingCodexWorkspaceCwdSyncs = new Map<
     string,
@@ -412,7 +413,28 @@ export class ThreadWorkspaceService {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    return await this.threadArchiveCoordinator.withThreadLifecycleMutation(request, async () => await this.handoffThreadWorkspaceWithoutArchiveLock(request));
+    return await this.withWorkspaceMutation(request, async () => await this.handoffThreadWorkspaceWithoutArchiveLock(request));
+  }
+
+  private async withWorkspaceMutation<T>(
+    request: { backend: AppServerBackendKind; threadId: string; sourcePath?: string; targetPath?: string; repositoryPath?: string; worktreePath?: string },
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const key = buildThreadIdentityKey(request.backend, request.threadId);
+    if (this.workspaceMutations.has(key)) throw new Error("This thread is already moving workspaces.");
+    const { threadStarts, threadTurnQueue } = this.host();
+    if (threadStarts.hasPending(request) || threadTurnQueue.hasDispatchInFlight(request)) {
+      throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
+    }
+    // Reserve before the first await so a concurrent Resume or Retry can't
+    // start a turn between the idle check and Git's workspace update.
+    this.workspaceMutations.add(key);
+    try {
+      return await this.threadArchiveCoordinator.withThreadLifecycleMutation(request, work);
+    } finally {
+      this.workspaceMutations.delete(key);
+      threadTurnQueue.scheduleThreadDrain(request);
+    }
   }
 
   private async handoffThreadWorkspaceWithoutArchiveLock(request: HandoffThreadWorkspaceRequest): Promise<HandoffThreadWorkspaceResponse> {
@@ -619,7 +641,7 @@ export class ThreadWorkspaceService {
   async recreateThreadWorktree(
     request: RecreateThreadWorktreeRequest,
   ): Promise<RecreateThreadWorktreeResponse> {
-    return await this.threadArchiveCoordinator.withThreadLifecycleMutation(request, async () => {
+    return await this.withWorkspaceMutation(request, async () => {
       await this.assertWorkspaceRecoveryAllowed(request);
       const { missing } = await this.resolveRecoveryWorktree(request);
       if (!missing) {
@@ -679,7 +701,7 @@ export class ThreadWorkspaceService {
   async moveThreadToMainCheckout(
     request: MoveThreadToMainCheckoutRequest,
   ): Promise<MoveThreadToMainCheckoutResponse> {
-    return await this.threadArchiveCoordinator.withThreadLifecycleMutation(request, async () => {
+    return await this.withWorkspaceMutation(request, async () => {
       await this.assertWorkspaceRecoveryAllowed(request);
       if (request.backend === "claude") this.context.providers.claude.assertWorkspaceMovable(request.threadId);
       if (isAcpBackendId(request.backend)) {
@@ -1862,12 +1884,13 @@ export class ThreadWorkspaceService {
     backend: AppServerBackendKind;
     threadId: string;
   }): boolean {
-    return [...this.pendingThreadWorkspaceMoves.values()].some(
-      (move) =>
-        move.backend === params.backend &&
-        move.threadId === params.threadId &&
-        (move.status === "queued" || move.status === "running"),
-    );
+    return this.workspaceMutations.has(buildThreadIdentityKey(params.backend, params.threadId))
+      || [...this.pendingThreadWorkspaceMoves.values()].some(
+        (move) =>
+          move.backend === params.backend &&
+          move.threadId === params.threadId &&
+          (move.status === "queued" || move.status === "running"),
+      );
   }
 
   private async runPendingThreadWorkspaceMove(
