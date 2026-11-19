@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +8,10 @@ import { expect, it, vi } from "vitest";
 import * as gitBoundary from "../app-server/git-executable";
 import { inspectMaintenanceWorkspace } from "../app-server/thread-maintenance-workspace";
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "../app-server/checkout-hibernation-workspace";
+import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { WorktreeRecoveryService } from "../app-server/worktree-recovery-service";
+import type { WorktreeSnapshotSummary } from "@pwragent/shared";
+import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 
 const execute = promisify(execFile);
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -35,6 +39,66 @@ async function fixture(linebreak = false) {
 
 const options = () => ({ signal: new AbortController().signal, limitBytes: 1024 * 1024, rebuildableOutputIsClean: true });
 const probe = async (cwd: string) => await inspectHibernationWorkspace(cwd, { ...options(), removeRebuildableOutput: true });
+
+it.each(["nested cwd", "aliased cwd", "aliased nested cwd", "unrelated cwd", "explicit archived restore"] as const)(
+  "restores the correct worktree on its saved branch and HEAD with %s (Git oracle)", async (scenario) => {
+    const f = await fixture();
+    try {
+      const identity = { backend: "codex" as const, threadId: "hibernated" };
+      const archive = new WorktreeArchiveService();
+      const originalHead = await git(f.checkout, "rev-parse", "HEAD");
+      const edit = "uncommitted\n";
+      await mkdir(path.join(f.checkout, "src"));
+      await writeFile(path.join(f.checkout, "src", "untracked.txt"), edit);
+      await writeFile(path.join(f.checkout, "file.txt"), edit);
+      const alias = `${f.root}-alias`;
+      const cwd = scenario.startsWith("aliased")
+        ? path.join(alias, "checkout", ...(scenario.includes("nested") ? ["src"] : []))
+        : scenario === "nested cwd" ? path.join(f.checkout, "src") : f.repo;
+      try {
+        if (scenario.startsWith("aliased")) await symlink(f.root, alias, "junction");
+        if (scenario !== "explicit archived restore") {
+          expect(await realpath(await git(cwd, "rev-parse", "--show-toplevel")))
+            .toBe(scenario === "unrelated cwd" ? f.repo : f.checkout);
+        }
+        let snapshot = await archive.hibernate({ ...identity, repositoryPath: f.repo, worktreePath: f.checkout,
+          capSnapshotBytes: 1024 * 1024, beforeRemove: async () => () => {} });
+        await expect(stat(f.checkout)).rejects.toMatchObject({ code: "ENOENT" });
+        const coordinator = archiveCoordinatorStandIn({
+          registry: () => ({
+            getCachedThreadSummary: () => undefined,
+            resolveThreadEnvironmentCwd: async () => scenario === "explicit archived restore" ? undefined : cwd,
+            worktreeArchiveService: archive,
+            worktreeRecoveryService: new WorktreeRecoveryService(),
+            invalidateThreadListCache: () => {},
+            publishLocalEvent: async () => {},
+            threadInfoStore: { invalidateSummaries: () => {} },
+            threadTurnQueue: { scheduleThreadDrain: () => {} },
+          }),
+          overlayStore: {
+            getThreadOverlayState: async () => ({ ...identity, extraLinkedDirectories: [], worktreeSnapshots: [snapshot] }),
+            upsertWorktreeSnapshot: async (record: { snapshot: WorktreeSnapshotSummary }) => { snapshot = record.snapshot; },
+          },
+        });
+        if (scenario === "explicit archived restore") {
+          await coordinator.restoreWorktree({ ...identity, worktreePath: snapshot.worktreePath, snapshotRef: snapshot.snapshotRef });
+        } else {
+          await coordinator.ensureCheckoutAwake(identity);
+        }
+        if (scenario === "unrelated cwd") {
+          expect(snapshot.state).toBe("hibernated");
+          await expect(stat(f.checkout)).rejects.toMatchObject({ code: "ENOENT" });
+          return;
+        }
+        expect(snapshot.state).toBe("restored");
+        expect(await git(f.checkout, "branch", "--show-current")).toBe("owned");
+        expect(await git(f.checkout, "rev-parse", "HEAD")).toBe(originalHead);
+        expect(await git(f.checkout, "status", "--porcelain", "--untracked-files=all")).toBe("M file.txt\n?? src/untracked.txt");
+        expect(await readFile(path.join(f.checkout, "src", "untracked.txt"), "utf8")).toMatch(/^uncommitted\r?\n$/);
+      } finally { await rm(alias, { force: true }); }
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  },
+);
 
 it("uses one metadata launch per observation, with Git as the layout oracle after branch and cwd changes", async () => {
   const f = await fixture();

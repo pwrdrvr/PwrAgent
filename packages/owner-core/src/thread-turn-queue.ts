@@ -866,6 +866,11 @@ export class ThreadTurnQueue {
     );
   }
 
+  /** A delivery has been claimed and is still awaiting the backend. */
+  hasDispatchInFlight(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean {
+    return this.admissions.has(this.keyFor(params));
+  }
+
   /**
    * Puts back the continuations of turns a quiet restart stopped, at
    * startup and before any window reads the queue, so it emits nothing.

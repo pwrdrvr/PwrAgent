@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import {
   buildThreadIdentityKey,
   type AppServerBackendKind,
@@ -160,6 +161,74 @@ const moveArbitrary = fc.record({
 });
 
 describe("pending workspace moves", () => {
+  // The owner dispatches only outside the workspace mutation. Exercise both
+  // controls available in another window and both ways for the move to settle.
+  it.each([false, true])("fences paused and retry-held replies through a workspace handoff (failure: %s)", async (fails) => {
+    for (const paused of [false, true]) {
+      const identity = { backend: "codex" as const, threadId: "worker" };
+      const entry = { ...identity, id: "reply", origin: "manual" as const, input: [{ type: "text" as const, text: "reply" }] };
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      let cwd = "/contrived/source";
+      const targetPath = "/contrived/destination";
+      const observedCwds: string[] = [];
+      const queue = new ThreadTurnQueue({
+        isThreadActive: (thread) => service.threadHasBlockingWorkspaceMove(thread),
+        startTurn: async () => {
+          observedCwds.push(cwd);
+          return { ...identity, turnId: "turn" };
+        },
+      });
+      const service = workspaceService({
+        host: {
+          threadTurnQueue: queue,
+          threadStarts: { hasPending: () => false },
+          assertThreadNotLocked: async () => {},
+          assertThreadNotHandingOff: () => {},
+          threadHasActiveTurn: () => false,
+          findThreadForWorkspaceHandoff: async () => undefined,
+          replaceWorkspaceLinkedDirectory: async () => {},
+          withCodexThreadClient: async (_id: string, update: (client: object) => Promise<unknown>) =>
+            await update({ updateThreadWorkspace: async ({ cwd: next }: { cwd: string }) => { cwd = next; } }),
+          clearMissingCodexThread: () => {},
+          invalidateThreadListCache: () => {},
+          updateThreadGitBranchMetadata: async () => {},
+          recordCodexWorktreeOwnerThread: async () => {},
+          publishLocalEvent: async () => {},
+        },
+        dependencies: { gitWorkspaceHandoffService: { handoff: async () => {
+          entered.resolve();
+          await finish.promise;
+          if (fails) throw new Error("Move failed");
+          return { targetPath, workMode: "worktree", warnings: [], linkedDirectory: { worktreePath: targetPath } };
+        } } as never },
+      });
+      try {
+        if (paused) queue.restoreQueued([{ ...entry, paused: true, createdAt: 1 }]);
+        else await queue.submitHeld(entry, "Retry required");
+        const moving = service.handoffThreadWorkspace({ ...identity, direction: "local-to-worktree", repositoryPath: cwd, sourcePath: cwd });
+        const settled = moving.then(() => undefined, (error: Error) => error.message);
+        try {
+          await entered.promise;
+          if (paused) {
+            expect(await queue.setEntryPaused(entry.id, false)).toMatchObject({ disposition: "updated" });
+            await queue.releaseThread(identity);
+          } else {
+            expect(await queue.releaseEntryWithDisposition(entry.id)).toMatchObject({ disposition: "busy" });
+          }
+          expect(observedCwds).toEqual([]);
+        } finally {
+          finish.resolve();
+          await settled;
+        }
+        expect(await settled).toBe(fails ? "Move failed" : undefined);
+        if (!paused) expect(await queue.releaseEntryWithDisposition(entry.id)).toMatchObject({ disposition: "started" });
+        else await queue.releaseThread(identity);
+        expect(observedCwds).toEqual([fails ? "/contrived/source" : targetPath]);
+      } finally { queue.close(); }
+    }
+  });
+
   // Rule: a thread's turn submission waits exactly while one of its own moves
   // is queued or running. Another thread's move, a move on another backend,
   // and a finished move never hold it.
