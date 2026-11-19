@@ -206,8 +206,13 @@ describe("turn end read budget", () => {
     });
   }
 
-  async function measureTurnEnd(historicalTurns: number): Promise<TurnEndCounts> {
-    const stateDb = openInMemoryStateDb();
+  async function measureTurnEnd(historicalTurns: number, measureWrites = false): Promise<TurnEndCounts> {
+    const temp = measureWrites ? createTempStateDb("pwragent-turn-end-writes-") : undefined;
+    if (temp) {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      cleanups.push(() => removeTempStateDbDir(temp.tempDir));
+    }
+    const stateDb = temp ? StateDb.open(temp.dbPath) : openInMemoryStateDb();
     cleanups.push(() => stateDb.close());
     const { internals, ledgerSize, registry, store } = await setupThread({
       historicalTurns,
@@ -247,7 +252,23 @@ describe("turn end read budget", () => {
       }
     });
 
-    await endTurn(internals);
+    if (measureWrites) {
+      // Setup fills the WAL past auto-checkpoint; the turn end would then reuse
+      // its pages without growing the file, and measure no bytes at all.
+      stateDb.raw.pragma("wal_checkpoint(TRUNCATE)");
+
+      const { writes } = await measureSqliteWrites(async () => {
+        await endTurn(internals);
+      });
+
+      expectSqliteWriteBudget({
+        note: "one Codex turn end on a 2,000-turn thread with 2,000 persisted gate cards and 5 new gates: final usage line, 5 keyed gate-card rows (the overlay row is not rewritten), gate usage lines",
+        scenario: "codex-turn-end-with-token-miser-gates",
+        writes,
+      });
+    } else {
+      await endTurn(internals);
+    }
     const turnEnd = {
       ledgerReads: ledger.reads,
       ledgerRows: ledger.rows,
@@ -302,7 +323,7 @@ describe("turn end read budget", () => {
 
   it("does the same whole-thread work for a small and a large thread", async () => {
     const small = await measureTurnEnd(20);
-    const large = await measureTurnEnd(2_000);
+    const large = await measureTurnEnd(2_000, true);
     // One ledger read serves the turn end's one pricing publish, and the
     // renderer's follow-up reads reuse it. The Token Miser persist looks up
     // only its own gates' lines.
@@ -458,27 +479,6 @@ describe("turn end read budget", () => {
     expect(other.lines.map((line) => line.turnId)).toEqual(["turn-other"]);
   });
 
-  it("holds one turn end with new gates to its write budget", async () => {
-    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-    const temp = createTempStateDb("pwragent-turn-end-writes-");
-    const stateDb = StateDb.open(temp.dbPath);
-    cleanups.push(() => removeTempStateDbDir(temp.tempDir));
-    cleanups.push(() => stateDb.close());
-    const { internals } = await setupThread({ historicalTurns: 2_000, stateDb });
-    // Setup fills the WAL past auto-checkpoint; the turn end would then reuse
-    // its pages without growing the file, and measure no bytes at all.
-    stateDb.raw.pragma("wal_checkpoint(TRUNCATE)");
-
-    const { writes } = await measureSqliteWrites(async () => {
-      await endTurn(internals);
-    });
-
-    expectSqliteWriteBudget({
-      note: "one Codex turn end on a 2,000-turn thread with 2,000 persisted gate cards and 5 new gates: final usage line, 5 keyed gate-card rows (the overlay row is not rewritten), gate usage lines",
-      scenario: "codex-turn-end-with-token-miser-gates",
-      writes,
-    });
-  }, 60_000);
 });
 
 function parentLine(turnId: string, index: number): ThreadUsageLineRecord {

@@ -52,12 +52,10 @@ import {
   seedPrWatchAuditState,
 } from "./fixtures/pr-watch-state-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
-import {
-  buildAuditSubAgents,
-  seedThreadSubAgents,
-} from "./fixtures/sub-agent-state-seeding";
+import { buildAuditSubAgents } from "./fixtures/sub-agent-state-seeding";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { seedResearchState, enableResearchFixture, readResearchOwnerIdentity, seedLiveResearchRun, seedLongResearchRun, LONG_RESEARCH_OBJECTIVE } from "./fixtures/research-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -704,12 +702,23 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     test("active sub-agents strip has no violations", async () => {
       const app = await launchAuditApp(appearance);
       try {
-        seedThreadSubAgents({
-          stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
-          subAgents: buildAuditSubAgents(),
-          threadId: "thread-smoke",
+        // The backend's listThreads waits for startup reconciliation. Seed
+        // live fixture cards after it finishes so it cannot mark them orphaned.
+        await app.window.evaluate(async () => {
+          const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+          await api.listThreads!({ backend: "codex" });
         });
-        // The renderer does not re-poll on a direct sqlite mutation.
+        const stateDb = StateDb.open(stateDbPathForHomeRoot(app.homeRoot), { profileName: "default" });
+        try {
+          await new SqliteOverlayStore(stateDb).upsertThreadSubAgents({
+            backend: "codex",
+            subAgents: buildAuditSubAgents(),
+            threadId: "thread-smoke",
+          });
+        } finally {
+          stateDb.close();
+        }
+        // The renderer does not re-poll after a direct database write.
         await app.window.reload();
 
         const smokeThread = app.window
