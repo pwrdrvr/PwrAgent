@@ -95,6 +95,14 @@ estimates are scheduling hints, never runtime deadlines or permission to skip.
 The renderer table uses the same threshold and fallback, with its own source
 run and commit.
 
+The registry split refreshed the remaining registry suite and four outliers
+using passing file measurements from [run 44546599956](https://github.com/pwrdrvr/PwrAgent/actions/runs/44546599956)
+and [run 44594264644](https://github.com/pwrdrvr/PwrAgent/actions/runs/44594264644).
+The replacement PR's lane 3 reported 612s of main-process file work while
+the other lanes reported 319s to 331s. Replaying its full main-process
+inventory with the five updated weights distributes the same observed work
+across the four lanes with a 508s peak. This replay holds file times fixed.
+
 For each of desktop-main and desktop-renderer, assign the largest estimate
 first to the lane with the least estimated work. Break file ties by
 repository-relative path and lane ties by lane index. This makes ownership
