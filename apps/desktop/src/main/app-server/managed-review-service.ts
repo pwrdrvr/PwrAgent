@@ -101,7 +101,7 @@ type ReviewSubAgentCardPatch = Partial<
  * registry. Activity and review admission belong to context.turnState.
  */
 export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
-  "assertThreadNotLocked" | "getActiveTurnForThread" | "getClient"
+  "assertNotBootstrap" | "assertThreadNotLocked" | "assertThreadOwnership" | "getActiveTurnForThread" | "getClient"
   | "invalidateThreadListCache" | "isLiveDynamicToolCall" | "readCodexDefaultModelsOnce"
   | "readDelegatedTurnAncestry" | "readThread" | "resolveCodexThreadExecutionModeForActiveTurn"
   | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "startAcpSession"
@@ -116,8 +116,6 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly tokenMiserService: TokenMiserService | undefined;
   readonly tokenMiserStore: TokenMiserStore | undefined;
-  assertNotBootstrap(method: string): void;
-  assertThreadOwnership(): void;
   buildSupportedCodexDynamicToolsRefresh(params: {
     client: BackendClient;
     threadId: string;

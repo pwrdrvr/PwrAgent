@@ -7,6 +7,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { ArchiveCleanupInventoryHost } from "../app-server/archive-cleanup-inventory";
 import type { RegistryHandlers } from "../app-server/backend-registry-handlers";
 import type { ForgeToolBridgeHost } from "../app-server/forge-tool-bridge";
+import type { HeadlessAutomationTurnsHost } from "../app-server/headless-automation-turns";
 import type { ManagedReviewServiceHost } from "../app-server/managed-review-service";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "../app-server/registry-host-ports";
 import type { SubAgentMonitorServiceHost } from "../app-server/subagent-monitor-service";
@@ -21,6 +22,7 @@ type Hosts = {
   ArchiveCleanupInventoryHost: ArchiveCleanupInventoryHost;
   CodexRuntimeSupervisorHost: CodexRuntimeSupervisorHost;
   ForgeToolBridgeHost: ForgeToolBridgeHost;
+  HeadlessAutomationTurnsHost: HeadlessAutomationTurnsHost;
   ManagedReviewServiceHost: ManagedReviewServiceHost;
   SubAgentMonitorServiceHost: SubAgentMonitorServiceHost;
   ThreadArchiveCoordinatorHost: ThreadArchiveCoordinatorHost;
@@ -88,6 +90,12 @@ it("declares no operation separately in multiple module hosts", () => {
     const url = new URL(name, directory);
     const file = ts.createSourceFile(fileURLToPath(url), readFileSync(url, "utf8"), ts.ScriptTarget.Latest, true);
     for (const node of file.statements) {
+      if (ts.isTypeAliasDeclaration(node) && node.name.text.endsWith("Host")
+        && ts.isTypeReferenceNode(node.type)
+        && node.type.typeName.getText(file) === "Pick"
+        && node.type.typeArguments?.[0]?.getText(file) === "RegistryHostPorts") {
+        hosts.push(node.name.text);
+      }
       if (!ts.isInterfaceDeclaration(node) || !node.name.text.endsWith("Host")) continue;
       hosts.push(node.name.text);
       for (const member of node.members) {
@@ -104,6 +112,7 @@ it("declares no operation separately in multiple module hosts", () => {
     ArchiveCleanupInventoryHost: true,
     CodexRuntimeSupervisorHost: true,
     ForgeToolBridgeHost: true,
+    HeadlessAutomationTurnsHost: true,
     ManagedReviewServiceHost: true,
     SubAgentMonitorServiceHost: true,
     ThreadArchiveCoordinatorHost: true,

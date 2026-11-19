@@ -1,3 +1,4 @@
+import { headlessAutomationRecords } from "./helpers/headless-automation-records";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
@@ -46,17 +47,6 @@ describe("backend MCP gateway dispatch", () => {
   let internals: {
     claudeAgentToolMcpServer: AgentToolMcpServerLike;
     acpBackend: AcpBackendAdapter;
-    headlessAutomationTurns: Map<string, {
-      agentThreadId: string;
-      backend: "codex";
-      automationRunId: string;
-      executionMode: ThreadExecutionMode;
-      executionThreadId: string;
-      queueEntryId: string;
-      startedAt: number;
-      mcpConnectionIds?: string[];
-      toolAllowlist?: string[];
-    }>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<{ success: boolean; contentItems: unknown[] }>;
     pendingServerRequests: Map<string, unknown>;
   };
@@ -476,7 +466,7 @@ describe("backend MCP gateway dispatch", () => {
 
   it.each(["lookup", "other"])("preserves automation tool limits in a Full Access monitor: %s", async (allowedTool) => {
     registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
-    internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+    headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
       agentThreadId: "agent-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
       executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
       mcpConnectionIds: ["one"], toolAllowlist: [`mcp__Fixture__${allowedTool}`],
@@ -484,7 +474,7 @@ describe("backend MCP gateway dispatch", () => {
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "agent-1", connectionIds: ["one"] });
     const call = await createMonitor();
     // The delegated policy survives the automation parent ending.
-    internals.headlessAutomationTurns.clear();
+    headlessAutomationRecords(registry).clear();
     expect((await call("search_mcp_tools", { query: "lookup", connectionId: "one" })).success).toBe(true);
     expect((await call("call_mcp_tool", args)).success).toBe(allowedTool === "lookup");
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(allowedTool === "lookup" ? 1 : 0);
@@ -526,7 +516,7 @@ describe("backend MCP gateway dispatch", () => {
       } as unknown as McpConnectionGatewayService);
     }
     if (authority === "automation") {
-      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
         agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
         executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
         mcpConnectionIds: ["builtin:sandboxer"], toolAllowlist: ["exec"],
@@ -801,7 +791,7 @@ select_for_new_threads = true
     if (mode === "full-access") {
       registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "full-access");
     } else {
-      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
         agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "default",
         executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
         mcpConnectionIds: ["pwrsnap"], toolAllowlist: ["lookup"],
@@ -809,7 +799,7 @@ select_for_new_threads = true
     }
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", await f.readArgs(), "call-2"))).success).toBe(true);
     f.changeSchema("string");
-    internals.headlessAutomationTurns.delete("codex:thread-1:turn-1");
+    headlessAutomationRecords(registry).delete("codex:thread-1:turn-1");
     registryModules(registry).turnState.acceptExecution("thread-1:turn-1", "default");
     expect((await f.readArgs()).schemaRevision).toBe(first.schemaRevision);
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first, "call-3"))).success).toBe(false);
@@ -1003,7 +993,7 @@ select_for_new_threads = true
     });
 
     it("fails closed without a card for a headless automation run", async () => {
-      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
         agentThreadId: "automation-1", backend: "codex", automationRunId: "run-1",
         executionMode: "full-access", executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
       });
@@ -1122,7 +1112,7 @@ select_for_new_threads = true
   });
 
   it.each(["full-access", "default", "auto"] as const)("honors %s for a headless automation's gateway call", async (mode) => {
-    internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+    headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
       agentThreadId: "automation-1", backend: "codex", automationRunId: "run-1",
       executionMode: mode, executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
     });
@@ -1155,7 +1145,7 @@ select_for_new_threads = true
   });
 
   it("rejects an automation tool outside its allowlist even in Full Access", async () => {
-    internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+    headlessAutomationRecords(registry).set("codex:thread-1:turn-1", {
       agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "full-access",
       executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1, mcpConnectionIds: ["one"], toolAllowlist: ["other_tool"],
     });
@@ -1230,7 +1220,7 @@ select_for_new_threads = true
     })).rejects.toThrow("fixture start failure");
     const bridge = await registerBridge.mock.results[0].value;
     expect(bridge.revoke).toHaveBeenCalledOnce();
-    expect(internals.headlessAutomationTurns.size).toBe(0);
+    expect(headlessAutomationRecords(registry).size).toBe(0);
   });
 
   const appConsent = (meta: Record<string, unknown> = {}): AppServerPendingRequestNotification => ({
@@ -1276,7 +1266,7 @@ select_for_new_threads = true
       const readSelection = registry.readThreadMcpConnections.bind(registry);
       vi.spyOn(registryModules(registry).threadMcpConnections, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
         const selected = await readSelection(request);
-        internals.headlessAutomationTurns.clear();
+        headlessAutomationRecords(registry).clear();
         return selected;
       });
     }
@@ -1338,7 +1328,7 @@ select_for_new_threads = true
     const readSelection = registry.readThreadMcpConnections.bind(registry);
     vi.spyOn(registryModules(registry).threadMcpConnections, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
       const selected = await readSelection(request);
-      internals.headlessAutomationTurns.clear();
+      headlessAutomationRecords(registry).clear();
       return selected;
     });
     expect(await internals.handleServerRequest("codex", appConsent())).toEqual({ action: "cancel", content: null, _meta: null });
@@ -1569,7 +1559,7 @@ select_for_new_threads = true
         await expect(approve()).rejects.toThrow(refusal);
         live = "full-access";
         await expect(approve()).rejects.toThrow(refusal);
-        (internals.headlessAutomationTurns as Map<string, unknown>).set("claude:thread-1:turn-1", {
+        headlessAutomationRecords(registry).set("claude:thread-1:turn-1", {
           agentThreadId: "automation-1", backend: "claude", automationRunId: "run-1",
           executionMode: "full-access", executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
         });
@@ -1591,7 +1581,7 @@ select_for_new_threads = true
     });
 
     it.each(["full-access", "default", "auto"] as const)("honors %s for a headless Claude automation", async (mode) => {
-      (internals.headlessAutomationTurns as Map<string, unknown>).set("claude:thread-1:turn-1", {
+      headlessAutomationRecords(registry).set("claude:thread-1:turn-1", {
         agentThreadId: "automation-1", backend: "claude", automationRunId: "run-1",
         executionMode: mode, executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
       });

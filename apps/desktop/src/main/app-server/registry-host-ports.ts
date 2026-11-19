@@ -66,7 +66,9 @@ export interface RegistryHostPorts {
     settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
   ): Promise<ModelSettings>;
   archiveThread(request: ArchiveThreadRequest & { preserveWorktrees?: boolean }): Promise<ArchiveThreadResponse>;
+  assertNotBootstrap(method: string): void;
   assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void>;
+  assertThreadOwnership(): void;
   dynamicToolPermissionDenied(
     backend: AppServerBackendKind,
     category: MessagingDynamicToolCategory,

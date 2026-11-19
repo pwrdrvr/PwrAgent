@@ -1,3 +1,4 @@
+import type { HeadlessAutomationTurns } from "./headless-automation-turns";
 import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
 import { providerPickerValue } from "@pwragent/shared";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
@@ -166,9 +167,6 @@ import type {
 import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-images";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
-import {
-  type McpConnectionBridgeRegistration,
-} from "../mcp-connections/mcp-connection-gateway-service";
 import {
   buildManagedReviewContextInput,
 } from "./managed-review";
@@ -651,13 +649,11 @@ import {
   completedAtFromTerminalNotification,
   errorMessageFromTerminalNotification,
   fileChangeApprovalContextKey,
-  finalTextFromTerminalNotification,
   formatExecutionModeForError,
   isAcpPermissionRequest,
   isAppServerThreadStatus,
   messagingDynamicToolCategoryForCatalog,
   pendingRequestDecisionFromMessagingApproval,
-  prependAutomationRuntimeContext,
   questionnaireAnswerHasValue,
   queuedTurnDisplayText,
   queuedTurnPauseParams,
@@ -747,7 +743,6 @@ import { executionModeSettings } from "./execution-mode-settings";
 import {
   buildActiveTurnKey,
   buildActiveTurnModeKey,
-  buildHeadlessAutomationTurnKey,
   buildPendingRequestKey,
   buildTerminalNotificationKey,
   buildTurnStartReservationKey,
@@ -952,6 +947,7 @@ export class DesktopBackendRegistry {
   private readonly threadInspectionTools: ThreadInspectionTools;
   /** Thread MCP connections, the MCP gateway's approvals and Codex MCP servers. Importers use the facade below. */
   private readonly threadMcpConnections: ThreadMcpConnections;
+  private readonly headlessAutomation: HeadlessAutomationTurns;
   /** Review starts, review sub-agents and managed review output. Importers use the facade below. */
   private readonly managedReviewService: ManagedReviewService;
   private readonly subAgentMonitorService: SubAgentMonitorService;
@@ -1562,28 +1558,6 @@ export class DesktopBackendRegistry {
     | ThreadGitWorkingStateRefreshHandler
     | undefined;
   private ownerThreadSearchService: ThreadSearchService | undefined;
-  private readonly headlessAutomationTurns = new Map<
-    string,
-    {
-      agentThreadId: string;
-      backend: AppServerBackendKind;
-      automationName?: string;
-      automationRunId: string;
-      executionMode: ThreadExecutionMode;
-      executionThreadId: string;
-      queueEntryId: string;
-      startedAt: number;
-      suppressBindingBroadcast?: boolean;
-      mcpConnectionIds?: string[];
-      /** Connections the automation's own allowlist granted, not the Agent's selection. */
-      mcpGrantedConnectionIds?: string[];
-      mcpServerAliases?: Record<string, string[]>;
-      mcpAllowedServerNames?: string[];
-      toolAllowlist?: string[];
-      mcpRegistrations?: McpConnectionBridgeRegistration[];
-      pendingTerminalNotification?: AppServerNotification;
-    }
-  >();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -1813,6 +1787,7 @@ export class DesktopBackendRegistry {
     this.threadTitleGenerationService = dependencies.threadTitleGenerationService;
     this.threadInspectionTools = dependencies.threadInspectionTools;
     this.threadMcpConnections = dependencies.threadMcpConnections;
+    this.headlessAutomation = dependencies.headlessAutomation;
     this.managedReviewService = dependencies.managedReviewService;
     this.subAgentMonitorService = dependencies.subAgentMonitorService;
     this.threadUsageLedger = dependencies.threadUsageLedger;
@@ -1976,8 +1951,8 @@ export class DesktopBackendRegistry {
       ensureDirectoryLaunchpad: (...args: Parameters<ThreadDirectoryService["ensureDirectoryLaunchpad"]>) => this.threadDirectoryService.ensureDirectoryLaunchpad(...args),
       get federatedThreadInspectionHandler() { return current().federatedThreadInspectionHandler; },
       get federationHandler() { return current().federationHandler; },
-      findHeadlessAutomationForThread: (...args: Parameters<typeof this.findHeadlessAutomationForThread>) => this.findHeadlessAutomationForThread(...args),
-      findHeadlessAutomationTurnForRequest: (...args: Parameters<typeof this.findHeadlessAutomationTurnForRequest>) => this.findHeadlessAutomationTurnForRequest(...args),
+      findHeadlessAutomationForThread: (...args: Parameters<typeof this.headlessAutomation.findHeadlessAutomationForThread>) => this.headlessAutomation.findHeadlessAutomationForThread(...args),
+      findHeadlessAutomationTurnForRequest: (...args: Parameters<typeof this.headlessAutomation.findHeadlessAutomationTurnForRequest>) => this.headlessAutomation.findHeadlessAutomationTurnForRequest(...args),
       findReviewForParentTurn: (...args: Parameters<ManagedReviewService["findReviewForParentTurn"]>) => this.managedReviewService.findReviewForParentTurn(...args),
       findThreadForWorkspaceHandoff: (...args: Parameters<typeof this.findThreadForWorkspaceHandoff>) => this.findThreadForWorkspaceHandoff(...args),
       flushQueuedAgentChange: (...args: Parameters<typeof this.flushQueuedAgentChange>) => this.flushQueuedAgentChange(...args),
@@ -3217,195 +3192,10 @@ export class DesktopBackendRegistry {
     await this.emit(event);
   }
 
-  async startAutomationHeadlessTurn(params: {
-    backend: AppServerBackendKind;
-    agentThreadId: string;
-    automationName?: string;
-    automationRunId: string;
-    cwd?: string;
-    executionMode?: ThreadExecutionMode;
-    fastMode?: boolean;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-    serviceTier?: string;
-    mcpAllowlist?: string[];
-    toolAllowlist?: string[];
-    suppressBindingBroadcast?: boolean;
-  }): Promise<{
-    backend: AppServerBackendKind;
-    headlessThreadId: string;
-    queueEntryId: string;
-    threadId: string;
-    turnId: string;
-  }> {
-    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    this.assertNotBootstrap("startAutomationHeadlessTurn");
-    this.assertThreadOwnership();
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.agentThreadId,
-    });
-    const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
-    const modeSettings = executionModeSettings(executionMode);
-    // An automation turn has nobody watching it, so only Auto asks, and only
-    // while the operator lets anything ask.
-    const approvalPolicy = getOwnerHostServices().runtimePolicy?.approvals === "never" || executionMode !== "auto"
-      ? "never"
-      : "on-request";
-    const sandbox = modeSettings.sandbox;
-    const modelSettings = await this.admitNewThreadModelSettings(params.backend, {
-      model: params.model ?? overlay?.model,
-      serviceTier: params.serviceTier ?? overlay?.serviceTier,
-      reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
-      fastMode:
-        params.backend === "codex"
-          ? params.fastMode ?? overlay?.fastMode
-          : undefined,
-    });
-    const cwd =
-      params.cwd ??
-      (params.backend === "codex"
-        ? await this.resolveThreadEnvironmentCwd(
-            params.backend,
-            params.agentThreadId,
-            overlay,
-          )
-        : undefined);
-    const input = prependAutomationRuntimeContext({
-      approvalPolicy,
-      executionMode,
-      input: params.input,
-      label: modeSettings.label,
-      sandbox,
-    });
-    const client = this.getClient(params.backend, executionMode);
-    const mcp = params.backend === "codex"
-      ? await this.threadMcpConnections.prepareAutomationMcp({ client, agentThreadId: params.agentThreadId, cwd, overlay, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist })
-      : undefined;
-    if (params.backend !== "codex" && (params.mcpAllowlist?.length || params.toolAllowlist?.length)) {
-      throw new Error("Automation MCP allowlists currently require the Codex backend.");
-    }
-    const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
-    backendRegistryLog.info("starting automation headless thread", {
-      agentThreadId: params.agentThreadId,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      approvalPolicy,
-      backend: params.backend,
-      cwd,
-      executionMode,
-      ephemeral: params.backend === "codex",
-      inputItemCount: input.length,
-      promptLength: submittedPrompt?.length ?? 0,
-      sandbox,
-    });
-    let headlessThread: { threadId: string };
-    try {
-      headlessThread = await this.withArchiveWorkspaceWrite(cwd ? [cwd] : [], async () => await client.startThread({
-        ...(cwd ? { cwd } : {}),
-        ...modelSettings,
-        approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        ephemeral: params.backend === "codex" ? true : undefined,
-        sandbox,
-        ...(mcp?.config ? { config: mcp.config } : {}),
-        ...(mcp?.connectionIds.length ? { dynamicTools: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)).buildDynamicToolSpecs() } : {}),
-      }));
-    } catch (error) {
-      for (const registration of mcp?.registrations ?? []) registration.revoke();
-      throw error;
-    }
-    backendRegistryLog.info("automation headless thread created", {
-      agentThreadId: params.agentThreadId,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      backend: params.backend,
-      executionMode,
-      headlessThreadId: headlessThread.threadId,
-    });
-    const queueEntryId = `headless:${params.automationRunId}`;
-    const pendingKey = buildHeadlessAutomationTurnKey(params.backend, headlessThread.threadId, "");
-    const record = {
-      agentThreadId: params.agentThreadId,
-      backend: params.backend,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      executionMode,
-      executionThreadId: headlessThread.threadId,
-      queueEntryId,
-      startedAt: Date.now(),
-      suppressBindingBroadcast: params.suppressBindingBroadcast,
-      mcpConnectionIds: mcp?.connectionIds,
-      mcpGrantedConnectionIds: mcp?.grantedConnectionIds,
-      mcpServerAliases: mcp?.serverAliases,
-      mcpAllowedServerNames: mcp?.allowedServerNames,
-      toolAllowlist: params.toolAllowlist,
-      mcpRegistrations: mcp?.registrations,
-      pendingTerminalNotification: undefined as AppServerNotification | undefined,
-    };
-    // Tool calls can arrive before turn/start returns. Install the scoped
-    // authorization before allowing the runtime to execute any tools.
-    this.headlessAutomationTurns.set(pendingKey, record);
-    for (const registration of mcp?.registrations ?? []) registration.bindThread(headlessThread.threadId);
-    let turn: Awaited<ReturnType<BackendClient["startTurn"]>>;
-    try {
-      turn = await client.startTurn({
-        threadId: headlessThread.threadId,
-        input,
-        ...(cwd ? { cwd } : {}),
-        ...modelSettings,
-        approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox,
-      });
-    } catch (error) {
-      this.headlessAutomationTurns.delete(pendingKey);
-      for (const registration of mcp?.registrations ?? []) registration.revoke();
-      throw error;
-    }
-    backendRegistryLog.info("automation headless turn started", {
-      agentThreadId: params.agentThreadId,
-      automationName: params.automationName,
-      automationRunId: params.automationRunId,
-      approvalPolicy,
-      backend: params.backend,
-      executionMode,
-      headlessThreadId: turn.threadId,
-      queueEntryId,
-      sandbox,
-      turnId: turn.turnId,
-    });
-    if (this.headlessAutomationTurns.delete(pendingKey)) {
-      this.headlessAutomationTurns.set(buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId), record);
-    }
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/turnQueue/updated",
-        params: {
-          threadId: params.agentThreadId,
-          queueEntryId,
-          origin: "automation",
-          automationRunId: params.automationRunId,
-          automationName: params.automationName,
-          status: "started",
-          backendThreadId: turn.threadId,
-          turnId: turn.turnId,
-          suppressBindingBroadcast: params.suppressBindingBroadcast,
-        },
-      },
-    });
-    if (record.pendingTerminalNotification) {
-      await this.emitHeadlessAutomationLifecycle(params.backend, record.pendingTerminalNotification);
-    }
-    return {
-      backend: params.backend,
-      headlessThreadId: turn.threadId,
-      queueEntryId,
-      threadId: params.agentThreadId,
-      turnId: turn.turnId,
-    };
+  startAutomationHeadlessTurn(
+    ...args: Parameters<HeadlessAutomationTurns["startAutomationHeadlessTurn"]>
+  ): ReturnType<HeadlessAutomationTurns["startAutomationHeadlessTurn"]> {
+    return this.headlessAutomation.startAutomationHeadlessTurn(...args);
   }
 
   private publishCorrespondenceMessage(
@@ -9777,7 +9567,7 @@ export class DesktopBackendRegistry {
    * automation run's (the automation owns that run).
    */
   private listQuietRestartTargets(): QuietRestartTarget[] {
-    const automationThreadKeys = new Set([...this.headlessAutomationTurns.values()]
+    const automationThreadKeys = new Set([...this.headlessAutomation.runningTurns()]
       .map((run) => buildThreadIdentityKey(run.backend, run.executionThreadId)));
     const targets = new Map<string, QuietRestartTarget>();
     for (const key of this.context.turnState.registeredTurnKeys()) {
@@ -10921,7 +10711,7 @@ export class DesktopBackendRegistry {
         startedAt: number;
       }
     >();
-    for (const run of this.headlessAutomationTurns.values()) {
+    for (const run of this.headlessAutomation.runningTurns()) {
       automationExecutionThreadKeys.add(
         formatQuitThreadKey(run.backend, run.executionThreadId),
       );
@@ -15547,9 +15337,7 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.threadMcpConnections.clearSessionApprovals();
-    for (const run of this.headlessAutomationTurns.values()) {
-      for (const registration of run.mcpRegistrations ?? []) registration.revoke();
-    }
+    this.headlessAutomation.revokeRegistrations();
     this.closed = true;
     await Promise.all(this.transcriptRepairs.values());
     this.threadDirectoryService.flushCodexEnvironmentActionLiveOutputsForShutdown();
@@ -16642,7 +16430,7 @@ export class DesktopBackendRegistry {
             || notification.method === "turn/failed"
             || (notification.method === "thread/status/changed"
               && readStatusType(notification.params.status) === "systemError"))
-              ? this.headlessAutomationErrorNoticeContext(
+              ? this.headlessAutomation.headlessAutomationErrorNoticeContext(
                   backend,
                   noticeThreadId,
                 )
@@ -16656,7 +16444,7 @@ export class DesktopBackendRegistry {
               );
             }
           }
-          await this.emitHeadlessAutomationLifecycle(backend, notification);
+          await this.headlessAutomation.emitHeadlessAutomationLifecycle(backend, notification);
           await this.emit({
             backend,
             notification,
@@ -16761,163 +16549,6 @@ export class DesktopBackendRegistry {
       serviceTier: observed.serviceTier ?? null,
       rawServiceTier: observed.rawServiceTier ?? null,
     });
-  }
-
-  private async emitHeadlessAutomationLifecycle(
-    backend: AppServerBackendKind,
-    notification: AppServerNotification,
-  ): Promise<void> {
-    if (
-      notification.method !== "turn/completed" &&
-      notification.method !== "turn/failed" &&
-      notification.method !== "turn/cancelled"
-    ) {
-      return;
-    }
-
-    const turnId = turnIdFromTerminalNotification(notification);
-    if (!turnId) {
-      return;
-    }
-    const pendingKey = buildHeadlessAutomationTurnKey(backend, notification.params.threadId, "");
-    const run = this.headlessAutomationTurns.get(
-      buildHeadlessAutomationTurnKey(
-        backend,
-        notification.params.threadId,
-        turnId,
-      ),
-    );
-    if (!run) {
-      const pending = this.headlessAutomationTurns.get(pendingKey);
-      if (pending) {
-        // The Agent must observe its run starting before it finishes. Keep
-        // authorization live during startup and publish this after "started".
-        pending.pendingTerminalNotification = notification;
-        return;
-      }
-    }
-    if (!run) {
-      backendRegistryLog.debug("terminal turn did not match a headless automation", {
-        backend,
-        method: notification.method,
-        threadId: notification.params.threadId,
-        turnId,
-      });
-      return;
-    }
-    this.headlessAutomationTurns.delete(
-      buildHeadlessAutomationTurnKey(
-        backend,
-        notification.params.threadId,
-        turnId,
-      ),
-    );
-    this.headlessAutomationTurns.delete(pendingKey);
-    for (const registration of run.mcpRegistrations ?? []) registration.revoke();
-    backendRegistryLog.info("automation headless turn reached terminal status", {
-      agentThreadId: run.agentThreadId,
-      automationName: run.automationName,
-      automationRunId: run.automationRunId,
-      backend,
-      finalTextLength: finalTextFromTerminalNotification(notification)?.length ?? 0,
-      method: notification.method,
-      queueEntryId: run.queueEntryId,
-      threadId: notification.params.threadId,
-      turnId,
-    });
-
-    await this.emit({
-      backend,
-      notification: {
-        method: "thread/turnQueue/updated",
-        params: {
-          threadId: run.agentThreadId,
-          queueEntryId: run.queueEntryId,
-          origin: "automation",
-          automationRunId: run.automationRunId,
-          automationName: run.automationName,
-          status: "terminal",
-          turnId,
-          errorMessage: errorMessageFromTerminalNotification(notification),
-          finalText: finalTextFromTerminalNotification(notification),
-          terminalStatus: notification.method,
-          suppressBindingBroadcast: run.suppressBindingBroadcast,
-        },
-      },
-    });
-  }
-
-  private headlessAutomationErrorNoticeContext(
-    backend: AppServerBackendKind,
-    executionThreadId: string,
-  ): AgentEvent["errorNoticeContext"] | undefined {
-    for (const run of this.headlessAutomationTurns.values()) {
-      if (run.backend !== backend || run.executionThreadId !== executionThreadId) {
-        continue;
-      }
-      const title = this.getCachedThreadSummary({
-        backend,
-        threadId: run.agentThreadId,
-      })?.title ?? run.automationName;
-      return {
-        backend,
-        threadId: run.agentThreadId,
-        ...(title ? { title } : {}),
-        ...(run.automationName ? { automationName: run.automationName } : {}),
-      };
-    }
-    return undefined;
-  }
-
-  private findHeadlessAutomationTurnForRequest(
-    backend: AppServerBackendKind,
-    request: AppServerPendingRequestNotification,
-  ):
-    | {
-        agentThreadId: string;
-        automationName?: string;
-        automationRunId: string;
-        executionMode: ThreadExecutionMode;
-        queueEntryId: string;
-        mcpConnectionIds?: string[];
-        mcpGrantedConnectionIds?: string[];
-        mcpServerAliases?: Record<string, string[]>;
-        mcpAllowedServerNames?: string[];
-        toolAllowlist?: string[];
-      }
-    | undefined {
-    const turnId = request.params.turnId?.trim();
-    if (turnId) {
-      return this.headlessAutomationTurns.get(
-        buildHeadlessAutomationTurnKey(backend, request.params.threadId, turnId),
-      ) ?? this.headlessAutomationTurns.get(buildHeadlessAutomationTurnKey(backend, request.params.threadId, ""));
-    }
-
-    const keyPrefix = `${backend}:${request.params.threadId}:`;
-    let match:
-      | {
-          agentThreadId: string;
-          automationName?: string;
-          automationRunId: string;
-          executionMode: ThreadExecutionMode;
-          queueEntryId: string;
-        }
-      | undefined;
-    for (const [key, run] of this.headlessAutomationTurns.entries()) {
-      if (!key.startsWith(keyPrefix)) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = run;
-    }
-    return match;
-  }
-
-  private findHeadlessAutomationForThread(backend: AppServerBackendKind, threadId: string) {
-    const matches = [...this.headlessAutomationTurns.values()].filter((run) => run.backend === backend && run.executionThreadId === threadId);
-    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private getClient(
@@ -19326,7 +18957,7 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const headlessAutomation = this.findHeadlessAutomationTurnForRequest(
+    const headlessAutomation = this.headlessAutomation.findHeadlessAutomationTurnForRequest(
       backend,
       request,
     );
@@ -19345,7 +18976,7 @@ export class DesktopBackendRegistry {
         : selected.providerServersEnabled;
       const consent = headlessAutomation.mcpAllowedServerNames?.includes(serverName)
         && stillSelected
-        && this.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
+        && this.headlessAutomation.findHeadlessAutomationTurnForRequest(backend, request)?.automationRunId === headlessAutomation.automationRunId
         ? buildAutomationMcpConsent({ request, serverNames: [serverName, ...aliases], toolAllowlist: headlessAutomation.toolAllowlist })
         : undefined;
       return consent ?? { action: "cancel", content: null, _meta: null };
@@ -21556,7 +21187,7 @@ export class DesktopBackendRegistry {
           backend: event.errorNoticeContext?.backend ?? event.backend,
           threadId: event.errorNoticeContext?.threadId ?? threadId,
         });
-        const automation = this.headlessAutomationErrorNoticeContext(owner.backend, owner.threadId);
+        const automation = this.headlessAutomation.headlessAutomationErrorNoticeContext(owner.backend, owner.threadId);
         const backend = automation?.backend ?? owner.backend;
         const ownerThreadId = automation?.threadId ?? owner.threadId;
         const title = automation?.title ?? event.errorNoticeContext?.title

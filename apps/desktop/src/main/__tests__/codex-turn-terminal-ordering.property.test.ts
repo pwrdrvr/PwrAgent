@@ -180,9 +180,9 @@ async function exerciseTerminalBeforeStartRegistration(method: TerminalMethod, t
       if (event.notification.method === "turn/started") { entered.resolve(); await release.promise; }
     });
   } else {
-    // This hook still belongs to the registry. It precedes emit() and the
-    // event hub; capturing a receipt only in emit() would already be too late.
-    const early = f.registry as unknown as { emitHeadlessAutomationLifecycle(backend: string, notification: AppServerNotification): Promise<void> };
+    // Automation mirroring precedes emit() and the event observers.
+    // Capturing a receipt only in emit() would already be too late.
+    const early = registryModules(f.registry).headlessAutomation;
     const original = early.emitHeadlessAutomationLifecycle.bind(early);
     vi.spyOn(early, "emitHeadlessAutomationLifecycle").mockImplementation(async (backend, notification) => {
       await original(backend, notification);
