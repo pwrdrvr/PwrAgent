@@ -2269,7 +2269,11 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSelectedDetailResponse> {
     return await this.rpc.request<NavigationSelectedDetailResponse>({
-      method: FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
+      // Older peers must report an unsupported method instead of interpreting
+      // a hover-card request as an ordinary selected-thread read.
+      method: request.lookup === "thread-link"
+        ? FEDERATION_BACKEND_METHODS.getNavigationThreadLinkDetail
+        : FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
       params: request,
       ...rpcOptions,
     });

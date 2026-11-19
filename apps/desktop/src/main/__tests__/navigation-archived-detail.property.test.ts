@@ -95,3 +95,65 @@ it("opens existing thread details independently of archive membership, timestamp
     reads: fc.array(fc.boolean(), { maxLength: 5 }),
   }), checkDetail), { numRuns: 25 });
 });
+
+it("leaves selected identity unresolved and unready when the archive provider fails", async () => {
+  const db = openInMemoryStateDb();
+  const registry = createDesktopBackendRegistry({
+    codexClient: {
+      close: async () => {}, onNotification: () => () => {}, onPendingRequest: () => () => {},
+      listThreads: async (params: { archived?: boolean }) => {
+        if (params.archived) throw new Error("Archive provider unavailable");
+        return [];
+      },
+    } as never,
+    resolveCodexRuntimeCommand: async () => ({ command: "/managed/codex", version: "0.160.0" }),
+    overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
+  });
+  try {
+    const ref = { backend: "codex" as const, threadId: "unknown-archive-membership" };
+    const service = new NavigationDetailService(registry);
+    expect(await service.readSelectedDetail({ protocol: 2, ref })).toMatchObject({
+      identity: "unresolved", readiness: "failed",
+    });
+  } finally {
+    await registry.close();
+    db.close();
+  }
+});
+
+it("bounds hover discovery to one read-only archive page and requires coverage for a miss", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("found", "complete", "partial", "failed"), fc.uuid(), async (result, threadId) => {
+    const db = openInMemoryStateDb();
+    const ref = { backend: "codex" as const, threadId };
+    const listThreads = vi.fn(async () => { throw new Error("Unexpected provider inventory scan"); });
+    const listArchiveCleanupThreadsPage = vi.fn(async () => {
+      if (result === "failed") throw new Error("Archive provider unavailable");
+      const thread: AppServerThreadSummary = {
+        id: threadId, source: "codex", title: "Archived match", titleSource: "explicit", linkedDirectories: [],
+      };
+      return { threads: result === "found" ? [thread] : [],
+        nextCursor: result === "found" || result === "partial" ? "next-page" : undefined };
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient: {
+        close: async () => {}, onNotification: () => () => {}, onPendingRequest: () => () => {},
+        listThreads, listArchiveCleanupThreadsPage,
+      } as never,
+      overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
+    });
+    try {
+      const service = new NavigationDetailService(registry);
+      const detail = await service.readSelectedDetail({ protocol: 2, lookup: "thread-link", ref });
+      expect(detail).toMatchObject({ lookup: "thread-link", identity: result === "found" ? "archived" : "unresolved",
+        readiness: result === "partial" || result === "failed" ? "failed" : "ready" });
+      expect(detail.thread?.id).toBe(result === "found" ? threadId : undefined);
+      expect(listArchiveCleanupThreadsPage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        archived: true, limit: 100, sortKey: "updated_at", directoryFilter: expect.any(Function),
+      }));
+      expect(listThreads).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+      db.close();
+    }
+  }), { numRuns: 12, examples: [["found", "target"], ["complete", "target"], ["partial", "target"], ["failed", "target"]] });
+});
