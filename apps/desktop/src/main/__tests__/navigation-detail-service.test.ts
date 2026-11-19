@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
   NavigationThreadSummary,
+  PrSummary,
   ThreadQueuedTurnSummary,
   ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
@@ -149,6 +150,35 @@ describe("NavigationDetailService", () => {
   afterEach(() => {
     navigationDetail.setNavigationDetailPendingWakesProjector(undefined);
     vi.restoreAllMocks();
+  });
+
+  it("pages every attachment from the owner overlay with canonical PR status", async () => {
+    const prs: PrSummary[] = Array.from({ length: 119 }, (_, index) => ({
+      provider: "github.com", org: "fixture", repo: "repo", number: index + 1,
+      url: `https://github.com/fixture/repo/pull/${index + 1}`, state: "passing",
+    }));
+    mocks.getThreadOverlayState.mockResolvedValue({ prs });
+    const current = prs.at(-1)!;
+    const canonical: PrSummary = { ...current, state: "closed", lifecycleState: "closed" };
+    const service = new NavigationDetailService({
+      getThreadInfo: () => undefined,
+      getCachedThreadSummary: () => ({ ...thread("selected"), prs: prs.slice(0, 16) }),
+      canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) =>
+        threads.map((entry) => ({
+          ...entry, prs: entry.prs?.map((pr) => pr.url === canonical.url ? canonical : pr),
+        })),
+    } as unknown as DesktopBackendRegistry);
+    const request = { ...selectedCollectionRequest, collection: { name: "prs" as const } };
+    const first = await service.readSelectedDetail(request);
+    expect(first.collectionPage?.values.prs).toEqual(prs.slice(0, 100));
+    expect(first.collectionPage?.complete).toBe(false);
+    const nextRequest = { ...request, collection: { ...request.collection, cursor: first.collectionPage?.nextCursor } };
+    const second = await service.readSelectedDetail(nextRequest);
+    expect(second.collectionPage?.values.prs).toEqual([...prs.slice(100, -1), canonical]);
+    expect(second.collectionPage?.complete).toBe(true);
+    expect(mocks.projectNavigationThreadDetail).not.toHaveBeenCalled();
+    mocks.getThreadOverlayState.mockResolvedValue({ prs: prs.slice(1) });
+    await expect(service.readSelectedDetail(nextRequest)).rejects.toMatchObject({ code: "navigation_cursor_expired" });
   });
 
   it.each([false, true])("bounds selected Git reads and keeps directory order and revision after out-of-order completion (peer wakes: %s)", async (includePendingWakes) => {

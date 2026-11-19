@@ -1,5 +1,6 @@
 import { threadSummaryIdentityKey } from "../lib/federated-thread-events";
 import { navigationThreadSelectionKey } from "../lib/navigation-query-state";
+import type { NavigationPresentedThread } from "../lib/navigation-loaded-rows";
 import {
   classifyDirectory,
   buildThreadIdentityKey,
@@ -191,13 +192,14 @@ export function navigationQueryFixture(
     ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
     ...(scopedDirectory ? { selectionDirectory: descriptors.find((directory) => directory.key === scopedDirectory.key) } : {}),
     directories: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.slice(offset, offset + size) : [],
-    entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread, index) => {
+    entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread: NavigationPresentedThread, index) => {
       const owner = thread.federation?.ref.target;
       const row: NavigationRow = {
         ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: owner?.scope === "remote" ? owner.instanceId : undefined },
         rowRevision: "fixture", id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
         createdAt: thread.createdAt, updatedAt: thread.updatedAt, threadStatus: thread.threadStatus,
         linkedDirectories: thread.linkedDirectories, inbox: thread.inbox, prs: thread.prs, gitBranch: thread.gitBranch,
+        prsTruncated: thread.prsTruncated, prCount: thread.prCount,
         gitWorkingState: thread.gitWorkingState, gitWorkingStateFetchedAt: thread.gitWorkingStateFetchedAt,
         federation: thread.federation, pinnedRank: thread.pinnedRank, parentThreadId: thread.parentThreadId,
         parentThreadBackend: thread.parentThreadBackend, parentThreadInstanceId: thread.parentThreadInstanceId,

@@ -2284,6 +2284,8 @@ export type NavigationRow = {
   keepCheckoutAwake?: boolean;
   prs?: PrSummary[];
   prsTruncated?: boolean;
+  /** Total attachments when the compact PR preview omits some of them. */
+  prCount?: number;
   messagingBindings?: MessagingThreadBindingSummary[];
   messagingBindingsTruncated?: boolean;
   automationSummary?: AutomationThreadSummary;
@@ -2655,8 +2657,8 @@ export type NavigationSelectedDetailRequest = {
   ref: NavigationIdentity;
   federationTarget?: FederationTarget;
   knownRevision?: string;
-  /** Historical collections have independent paging and never gate composer configuration. */
-  collection?: { name: NavigationDetailCollectionName; cursor?: string };
+  /** Collections have independent paging and never gate composer configuration. */
+  collection?: { name: NavigationDetailCollectionName | "prs"; cursor?: string };
 };
 
 export const NAVIGATION_DETAIL_COLLECTION_NAMES = [
@@ -2677,9 +2679,9 @@ export type NavigationSelectedDetailResponse = {
   thread?: NavigationThreadSummary;
   collections?: Array<{ name: NavigationDetailCollectionName; revision: string; count: number }>;
   collectionPage?: {
-    name: NavigationDetailCollectionName;
+    name: NavigationDetailCollectionName | "prs";
     revision: string;
-    values: NavigationDetailCollections;
+    values: NavigationDetailCollections & Pick<NavigationThreadSummary, "prs">;
     complete: boolean;
     nextCursor?: string;
   };
