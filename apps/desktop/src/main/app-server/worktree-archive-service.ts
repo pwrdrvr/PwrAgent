@@ -105,6 +105,13 @@ export class MissingArchiveWorktreeError extends Error {
   }
 }
 
+export class MissingArchiveGitEntryError extends Error {
+  constructor() {
+    super("The worktree folder still exists, but its .git entry is missing. The folder was kept.");
+    this.name = "MissingArchiveGitEntryError";
+  }
+}
+
 /** The checkout exists but its repository does not, so it cannot be
  * snapshotted. Archive cleanup keeps it; this is a skip, not a failure. */
 export class MissingArchiveRepositoryError extends Error {
@@ -170,6 +177,12 @@ async function pathExists(target: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+async function requireArchiveGitEntry(worktreePath: string): Promise<void> {
+  if (await pathExists(path.join(worktreePath, ".git"))) return;
+  if (!(await pathExists(worktreePath))) throw new MissingArchiveWorktreeError(worktreePath);
+  throw new MissingArchiveGitEntryError();
 }
 
 function trimGitOutput(value: string): string {
@@ -404,12 +417,21 @@ export class WorktreeArchiveService {
         throw error;
       }
     }
-    const commonDirectory = await realpath(trimGitOutput((await this.runGit(repositoryAnchor, [
-      "rev-parse", "--path-format=absolute", "--git-common-dir",
-    ])).stdout));
-    const gitDirectory = await realpath(trimGitOutput((await this.runGit(worktreePath, [
-      "rev-parse", "--absolute-git-dir",
-    ])).stdout));
+    let commonDirectory: string;
+    let gitDirectory: string;
+    try {
+      commonDirectory = await realpath(trimGitOutput((await this.runGit(repositoryAnchor, [
+        "rev-parse", "--path-format=absolute", "--git-common-dir",
+      ])).stdout));
+      gitDirectory = await realpath(trimGitOutput((await this.runGit(worktreePath, [
+        "rev-parse", "--absolute-git-dir",
+      ])).stdout));
+    } catch (error) {
+      // A leftover folder and a checkout that vanished during the probe
+      // have different outcomes. Keep unexpected Git errors for inspection.
+      await requireArchiveGitEntry(worktreePath);
+      throw error;
+    }
     if (gitDirectory === commonDirectory) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }

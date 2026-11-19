@@ -77,7 +77,7 @@ import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   ThreadInfoStore,
 } from "./thread-info-store";
-import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotLimitExceededError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
+import { MissingArchiveGitEntryError, MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotLimitExceededError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
 import { inspectRegisterableWorktree, sameRegisteredWorktree, type CheckoutIdentity } from "./worktree-maintenance-registration";
@@ -3712,9 +3712,8 @@ export class ThreadArchiveCoordinator {
         };
       } catch (caughtError) {
         let error = caughtError;
-        if (error instanceof MissingArchiveRepositoryError) {
-          // The folder may have disappeared while the repository was being
-          // probed. Confirm it remains before reporting a retained checkout.
+        if (error instanceof MissingArchiveRepositoryError || error instanceof MissingArchiveGitEntryError) {
+          // The folder may have disappeared during the Git checks.
           try {
             if (!(await pathExists(candidate.worktreePath))) error = new MissingArchiveWorktreeError(candidate.worktreePath);
           } catch (verificationError) {
@@ -3755,6 +3754,19 @@ export class ThreadArchiveCoordinator {
             worktreeState: "present",
             repositoryPath: error.repositoryPath,
             skippedReason: MISSING_REPOSITORY_SKIP_REASON,
+          };
+        }
+        if (error instanceof MissingArchiveGitEntryError) {
+          if (!prior) {
+            await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
+          }
+          return {
+            worktreePath: candidate.worktreePath,
+            branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+            removedWorktree: false,
+            deletedBranch: false,
+            worktreeState: "present",
+            skippedReason: error.message,
           };
         }
         if (error instanceof SnapshotLimitExceededError && !removedSnapshot) {
