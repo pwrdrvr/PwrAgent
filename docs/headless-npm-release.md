@@ -131,9 +131,9 @@ suffix-free tag. Use `-prerelease.N` when stable npm consumers must not advance.
    and channel state. npm **>=11.5.1**, OIDC and `--provenance --ignore-scripts
    --access public --registry https://registry.npmjs.org` are required. The
    npm publish command disables its automatic fetch retries because a retryable
-   response can follow a PUT that was already received. An
-   npm PUT is eligible only on the first attempt of a protected tag push.
-   Workflow retries are read-only for npm.
+   response can follow a PUT that was already received. A protected tag push
+   can submit on its first attempt, or on a rerun when GitHub Actions history
+   confirms the npm job was skipped on every prior attempt of that run.
 5. Submission and verification are separate jobs. Before invoking npm, the
    submission job writes `outpost-publication-attempt` with version, tag, source
    commit, tested integrity, channel and `publish-uncertain`. npm exit zero changes
@@ -194,16 +194,22 @@ not automatically unpublish/delete either service's artifacts.
   shared release stays incomplete. Wait until the receipt's `nextCheckAt`, then
   rerun the **failed jobs of the original release run**. Only the read-only
   completion job runs again, using the retained attempt receipt and tarball.
+- When an upstream job fails and GitHub skips npm submission, rerun the failed
+  jobs of the original release. After the upstream jobs succeed, the npm job
+  checks each prior attempt's job history before making its first submission.
+  The usual `npm-pwragent` approval still applies.
 - When submission itself failed, a retry restores its attempt receipt from the
-  same run. Every workflow retry is read-only recovery, including a retry with a
-  missing/expired attempt receipt, and never calls npm publish. The verifier must
+  same run and continues with read-only recovery. A prior npm job that was not
+  skipped or an incomplete job history cannot authorize a publish, even if an
+  attempt receipt is missing or expired. The verifier must
   find the exact tested version before completion can pass. This also covers an
   occupied version whose original response was lost. Original successful desktop
   jobs, tested tarball and independent integrity output are preserved. Any
   applicable submission environment approval still applies.
-- If the original tag push never submitted and read-only recovery cannot find
-  the version, investigate the original run and plan a new paired version. A missing receipt or absent
-  package snapshot cannot establish that submission never occurred.
+- If a rerun cannot prove that every earlier submission job was skipped and
+  read-only recovery cannot find the version, investigate the original run
+  and plan a new paired version. A missing receipt or absent package snapshot
+  cannot establish that submission never occurred.
 - An occupied version is accepted only if registry **SHA-512 integrity**, packed
   source tag/commit metadata and npm's **SLSA provenance marker** match the tested
   release, with a valid channel at or ahead of it. This is an authenticated public

@@ -52,8 +52,8 @@ export async function publishRelease(input, { readRegistry, publish, recordRecei
     await recordReceipt(previousReceipt);
     return previousReceipt;
   }
-  // A workflow retry may have lost its attempt artifact (e.g. runner death).
-  // Absence of that artifact or registry metadata never authorizes another PUT.
+  // A retry without proof that earlier submission jobs were skipped may
+  // have lost its receipt after a PUT. Continue with read-only verification.
   if (resume) {
     const receipt = { ...base, distTag: null, status: "verification-required", attemptedAt: now() };
     await recordReceipt(receipt);
@@ -143,7 +143,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const receipt = await publishRelease(input, {
       readRegistry: () => readPublicRegistrySnapshot("submission-preflight"),
       previousReceipt: existsSync(attemptPath) ? JSON.parse(readFileSync(attemptPath, "utf8")) : undefined,
-      resume: requiresReadOnlyRecovery(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_RUN_ATTEMPT),
+      resume: requiresReadOnlyRecovery(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_RUN_ATTEMPT,
+        process.env.PRIOR_NPM_SUBMISSIONS_SKIPPED === "true"),
       recordReceipt: (receipt) => writeFileSync(attemptPath, JSON.stringify(receipt, null, 2) + "\n"),
       publish: async (filename, distTag) => {
         // A retryable HTTP response may arrive after the registry consumes the PUT.

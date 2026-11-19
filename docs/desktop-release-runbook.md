@@ -355,8 +355,9 @@ retained for the protected npm job; failure prevents desktop packaging.
 
 11. `Submit matching Outpost to npm` requires successful Outpost validation and
     desktop assets/notes, then waits for the existing `npm-pwragent` review.
-    The first protected tag push can submit the retained tarball using npm
-    OIDC/provenance. Workflow retries are read-only for npm.
+    A protected tag push can submit the retained tarball using npm
+    OIDC/provenance on its first attempt or on a rerun if GitHub confirms that
+    every prior attempt skipped the submission job.
 12. `Verify desktop and Outpost release completion` runs even when a dependency
     fails or skips. It requires successful desktop publication and a verified
     npm receipt. The first post-submission read waits at least 30 minutes under

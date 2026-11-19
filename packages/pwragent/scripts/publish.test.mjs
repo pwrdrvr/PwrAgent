@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { priorNpmSubmissionsSkipped } from "./check-npm-submission-history.mjs";
 import { publishRelease, verifyRelease } from "./publish.mjs";
 import { requiresReadOnlyRecovery } from "./release-context.mjs";
 import { registryCacheObservation, registryRetryDelay } from "./release.mjs";
@@ -238,7 +239,7 @@ test("uncertain or authentication failure records intent and fails, while recove
   }
 });
 
-test("only the first tag push attempt can PUT, even when retries and dispatches lose the receipt", async () => {
+test("unproven tag retries and dispatches stay read-only even when they lose the receipt", async () => {
   let writes = 0;
   let reads = 0;
   let saved;
@@ -254,7 +255,8 @@ test("only the first tag push attempt can PUT, even when retries and dispatches 
     for (const attempt of [undefined, "1", "2", "3"]) {
       if (event === "push" && attempt === "1") continue;
       for (const previousReceipt of [original, undefined]) {
-        const recovered = await publishRelease(input(), { ...deps, previousReceipt, resume: requiresReadOnlyRecovery(event, attempt) });
+        const recovered = await publishRelease(input(), { ...deps, previousReceipt,
+          resume: requiresReadOnlyRecovery(event, attempt, event !== "push" || attempt === undefined) });
         assert.equal(saved.status, previousReceipt ? "accepted" : "verification-required");
         const harness = verifier([published()]);
         assert.equal((await verifyRelease(input(), recovered, harness.deps)).status, "verified-existing");
@@ -263,6 +265,56 @@ test("only the first tag push attempt can PUT, even when retries and dispatches 
   }
   assert.equal(writes, 1);
   assert.equal(reads, 1);
+});
+
+const npmJob = (id, conclusion = "skipped") => ({
+  id, name: "Submit matching Outpost to npm", status: "completed", conclusion, steps: [],
+});
+const jobPages = (...jobs) => jobs.map((job) => ({ total_count: jobs.length, jobs: [job] }));
+
+test("a protected tag push can submit on the first eligible attempt regardless of upstream skips", async () => {
+  // Model a release that gets through desktop publication after zero or more
+  // skipped submission jobs. Once npm is called, a missing receipt cannot
+  // turn the next run into a first submission.
+  for (let skips = 0; skips <= 6; skips++) {
+    let writes = 0;
+    const deps = {
+      now: () => 0,
+      readRegistry: async () => ({ document: registry() }),
+      publish: async () => { writes++; },
+    };
+    const attempt = skips + 1;
+    const skipped = (number) => jobPages({ id: number * 2, name: "Build desktop" }, npmJob(number * 2 + 1));
+    const proof = skips > 0 && priorNpmSubmissionsSkipped(String(attempt), skipped);
+    const result = await publishRelease(input(), { ...deps,
+      resume: requiresReadOnlyRecovery("push", String(attempt), proof) });
+    assert.equal(result.status, "accepted", `first eligible attempt ${attempt}`);
+    const afterSubmission = priorNpmSubmissionsSkipped(String(attempt + 1), (number) =>
+      number < attempt ? skipped(number) : jobPages(npmJob(number * 2 + 1, "success")));
+    for (const previousReceipt of [undefined, result]) {
+      const recovered = await publishRelease(input(), { ...deps, previousReceipt,
+        resume: requiresReadOnlyRecovery("push", String(attempt + 1), afterSubmission) });
+      assert.equal(recovered.status, previousReceipt ? "accepted" : "verification-required");
+    }
+    assert.equal(writes, 1);
+  }
+});
+
+test("missing, incomplete, or ambiguous history cannot prove that all submission jobs were skipped", () => {
+  const skipped = npmJob(1);
+  const incompleteHistories = [
+    [], jobPages({ id: 1, name: "Build desktop" }), jobPages(skipped, npmJob(2)),
+    jobPages(skipped, { ...skipped, name: "Build desktop" }),
+    [{ total_count: 2, jobs: [skipped] }], jobPages({ ...skipped, status: "queued" }),
+    jobPages({ ...skipped, steps: undefined }), jobPages({ ...skipped, steps: [{ conclusion: "success" }] }),
+    ...["failure", "cancelled", "timed_out", "success", null].map((conclusion) => jobPages(npmJob(1, conclusion))),
+  ];
+  for (const pages of incompleteHistories) {
+    // A later skipped attempt does not erase an earlier possible publication.
+    assert.equal(priorNpmSubmissionsSkipped("3", (attempt) => attempt === 1 ? pages : jobPages(npmJob(3))), false);
+  }
+  assert.throws(() => priorNpmSubmissionsSkipped("2", () => { throw new Error("Actions API unavailable"); }),
+    /Actions API unavailable/);
 });
 
 test("receipt identity and channel must match the protected source and tested bytes", async () => {

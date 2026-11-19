@@ -49,6 +49,8 @@ test("desktop packaging requires Outpost validation and final success requires n
   assert.match(job("release-complete"), /permissions:\n      contents: read\n      actions: read\n      id-token: none/);
   assert.match(job("release-complete"), /node packages\/pwragent\/scripts\/publish.mjs --verify/);
   assert.match(job("outpost-publish"), /EXPECTED_INTEGRITY: \$\{\{ needs.outpost-validate.outputs.integrity \}\}/);
+  assert.match(job("outpost-publish"), /else\n\s+node packages\/pwragent\/scripts\/check-npm-submission-history.mjs/);
+  assert.match(job("outpost-publish"), /PRIOR_NPM_SUBMISSIONS_SKIPPED: \$\{\{ steps.restore-submission.outputs.prior-submissions-skipped \}\}/);
   assert.match(job("release-complete"), /EXPECTED_INTEGRITY: \$\{\{ needs.outpost-validate.outputs.integrity \}\}/);
   assert.match(job("release-preflight"), /OUTPOST_NPM_RELEASE_READY/);
   assert.match(workflow, /cancel-in-progress: false/);

@@ -1018,11 +1018,14 @@ jobs:
           node packages/pwragent/scripts/restore-publication-receipt.mjs outpost-publication-attempt
           if test -f .local/outpost-publication-attempt.json; then
             echo 'restored=true' >> "$GITHUB_OUTPUT"
+          else
+            node packages/pwragent/scripts/check-npm-submission-history.mjs
           fi
       - name: Submit exact tested bytes with npm OIDC and provenance, or resume verification
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_INTEGRITY: ${{ needs.outpost-validate.outputs.integrity }}
+          PRIOR_NPM_SUBMISSIONS_SKIPPED: ${{ steps.restore-submission.outputs.prior-submissions-skipped }}
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
         run: |
