@@ -281,6 +281,35 @@ describe("AgentToolMcpServer", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects a forged session or a session issued to another bearer credential", async () => {
+    const server = new AgentToolMcpServer({ resolveCatalogs: () => [], resolveCallContext: () => undefined });
+    openServers.push(server);
+    const first = await server.registerClient({ backend: "claude", threadId: "first" });
+    const second = await server.registerClient({ backend: "claude", threadId: "second" });
+    const transport = new StreamableHTTPClientTransport(new URL(first.server.url), {
+      requestInit: { headers: registrationHeaders(first) },
+    });
+    const client = new Client({ name: "session-fixture", version: "1" });
+    await client.connect(transport);
+    try {
+      const sessionId = transport.sessionId!;
+      expect(sessionId).toBeTruthy();
+      const forged = `${sessionId.slice(0, -1)}${sessionId.endsWith("A") ? "B" : "A"}`;
+      for (const [registration, id] of [[first, forged], [second, sessionId]] as const) {
+        const response = await fetch(registration.server.url, {
+          method: "POST",
+          headers: { ...registrationHeaders(registration), "Mcp-Session-Id": id,
+            "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        });
+        expect(response.status, await response.text()).toBe(404);
+      }
+      expect(await client.listTools()).toMatchObject({ tools: [] });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("keeps PDF rendering conservative on the separate advertised PDF MCP surface", async () => {
     const server = new AgentToolMcpServer({
       resolveCatalogs: () => [{ id: "messaging_context", router: buildPwrAgentMessagingPdfToolRouter(undefined) }],
