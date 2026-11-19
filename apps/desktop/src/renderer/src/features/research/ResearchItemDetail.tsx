@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, researchDeadlinePassed, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
+import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, researchApproachResumable, researchDeadlinePassed, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
@@ -89,6 +89,8 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
   const record = item?.record;
   const workActive = writable && (run.status === "running" || (coordinator && run.status === "exhausted"));
   const assignable = writable && coordinator && ["running", "exhausted"].includes(run.status) && !researchDeadlinePassed(run, Date.now()) && api.submitThreadReply;
+  // Resuming goes to the owner directly; it needs no reply to the coordinating thread.
+  const resumable = writable && coordinator && run.status === "running" && !researchDeadlinePassed(run, Date.now()) && Boolean(api.updateResearch);
   const related = record && "relatesTo" in record && record.relatesTo ? run.items.get(record.relatesTo) : undefined;
   const source = record && "itemId" in record && record.itemId ? run.items.get(record.itemId) : undefined;
   const transitions = item ? RESEARCH_WORK_TRANSITIONS[item.work.state].filter((value) => coordinator || !["open", "cancelled"].includes(value)) as ResearchWorkCommand["state"][] : [];
@@ -114,7 +116,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
       {item.type === "approach" && item.record.worker && <ResearchThreadButton thread={item.record.worker} title="Open worker thread" />}
       {"author" in record && record.author && <ResearchThreadButton thread={record.author} title="Open source thread" />}
-      {item.type === "approach" && item.record.interrupted && assignable && run.status === "running" && api.updateResearch && <div className="research-actions">
+      {item.type === "approach" && researchApproachResumable(item.record, (itemId) => run.items.get(itemId)) && resumable && <div className="research-actions">
         <button type="button" className="research-button" disabled={busy} onClick={() => { void resume(); }}>Resume worker</button>
       </div>}
       {context.assignment && <div className="research-node research-node--static">

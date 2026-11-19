@@ -1,5 +1,5 @@
 {
-  "research-resume-workers": {"commits": 1, "note": "One operator resume of eight cut-off workers: one commit gives each its slot back. Each worker's turn start is the existing per-turn observation.", "observedWalBytes": 32960, "rowsChanged": 9, "statements": 9},
+  "research-resume-workers": {"commits": 9, "note": "One operator resume of eight cut-off workers: one commit gives each its slot back, then one per worker records the turn its message started.", "observedWalBytes": 206000, "rowsChanged": 25, "statements": 33},
   "research-retained-review-and-finish": {"commits": 2, "note": "After a restart: one accepted decision and one completion on a retained run. No worker, bridge or model effect.", "observedWalBytes": 41200, "rowsChanged": 4, "statements": 4},
   "research-harness-check": {"commits": 0, "note": "A bridge capability check sends hello only and records nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "research-harness-reconcile": {"commits": 3, "note": "Reconcile intent, one seven-record source page with its cursor, and the settled outcome. Read-only; no execute or cancel.", "observedWalBytes": 131840, "rowsChanged": 20, "statements": 20},

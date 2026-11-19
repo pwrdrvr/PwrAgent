@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, RESEARCH_MAX_TIMER_MS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, researchHarnessEffectiveState, sameResearchThread, type ResearchActor, type ResearchEvent,
+import { RESEARCH_HARNESS_RECONCILABLE, RESEARCH_HARNESS_REVISION, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, researchHarnessEffectiveState, sameResearchThread, type ResearchActor, type ResearchEvent,
   type ResearchEventData, type ResearchHarnessCapabilities, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessState, type ResearchRunHeader } from "@pwragent/shared";
 import type { ResearchStorage } from "./research-storage";
 import type { ResearchPorts } from "./research-service";
 import { normalizeHarnessRecords, object, text } from "./research-harness-records";
 import { normalizeHarnessDiscovery } from "./research-harness-discovery";
 import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy } from "./research-ownership";
+import { armResearchDeadline } from "./research-deadline";
 
 export interface ResearchHarnessConnection {
   model?: { model: string; endpointOrigin: string };
@@ -354,12 +355,9 @@ export class ResearchHarnessService {
     const deadlineAt = this.run(id).deadlineAt;
     // An import has no deadline of its own: it reads what the source has and stops.
     if (deadlineAt === undefined) return;
-    const arm = (): void => {
-      const remaining = deadlineAt - this.now();
-      this.timers.set(`${id}:deadline`, remaining > RESEARCH_MAX_TIMER_MS ? this.schedule(arm, RESEARCH_MAX_TIMER_MS)
-        : this.schedule(() => { void this.stop(id, this.actor(this.run(id)), "deadline", "Research deadline reached").catch(this.ports.onError); }, Math.max(0, remaining)));
-    };
-    arm();
+    armResearchDeadline(deadlineAt, () => this.now(), (callback, delay) => this.schedule(callback, delay),
+      () => { void this.stop(id, this.actor(this.run(id)), "deadline", "Research deadline reached").catch(this.ports.onError); },
+      (cancel) => this.timers.set(`${id}:deadline`, cancel));
   }
   private schedulePoll(id: string, delay: number): void {
     this.timers.set(`${id}:poll`, this.schedule(() => { this.timers.delete(`${id}:poll`); void this.poll(id); }, delay));

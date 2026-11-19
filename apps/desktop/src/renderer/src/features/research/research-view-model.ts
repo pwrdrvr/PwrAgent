@@ -1,4 +1,4 @@
-import { researchApproachOccupiesSlot, researchHarnessEffectiveState, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
+import { researchApproachOccupiesSlot, researchApproachResumable, researchHarnessEffectiveState, researchRunStoreSynced, sameResearchThread, type ResearchApproach, type ResearchEvent, type ResearchEventPage, type ResearchFinding, type ResearchItem, type ResearchRun, type ResearchRunHeader, type ResearchRunState, type ResearchRunStore, type ResearchRunSummary, type ResearchHarnessState, type ResearchSearchHit, type ResearchSearchPage, type ResearchSearchQuery, type ResearchSubmission } from "@pwragent/shared";
 
 /**
  * One run as the panel draws it: its header, its current state and counts,
@@ -436,9 +436,12 @@ export function researchApproachStateLabel(approach: Pick<ResearchApproach, "sta
   return approach.interrupted ? "Cut off" : researchLabel(approach.state);
 }
 
-/** The workers whose turn ended with the PwrAgent process that held the run. Each can be resumed in its own thread. */
+/**
+ * The workers whose turn ended with the PwrAgent process that held the run and that can still be resumed in
+ * their own thread. One whose work closed since is not offered; the owner skips it too.
+ */
 export function researchCutOffWorkers(run: Pick<ResearchRunView, "items">): ResearchApproach[] {
-  return [...run.items.values()].flatMap((item) => item.type === "approach" && item.record.interrupted ? [item.record] : []);
+  return [...run.items.values()].flatMap((item) => item.type === "approach" && researchApproachResumable(item.record, (id) => run.items.get(id)) ? [item.record] : []);
 }
 
 /** What the Map puts before the title of a branch nested under the item it investigates. */

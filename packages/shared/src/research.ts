@@ -356,6 +356,20 @@ function applyResearchWorkerState(approach: ResearchApproach, data: Pick<Extract
   else delete approach.interrupted;
 }
 
+/**
+ * Whether a cut-off worker can be resumed: it has a thread to continue in, its direction was not abandoned,
+ * and its work is still open. A focused child also needs the item it investigates to still be assigned to it,
+ * the rule the owner applies when it admits a worker.
+ */
+export function researchApproachResumable(approach: ResearchApproach, read: (itemId: string) => Pick<ResearchItem, "work"> | undefined): boolean {
+  if (!approach.interrupted || !approach.worker || approach.directionState === "abandoned") return false;
+  const closed = (item: Pick<ResearchItem, "work"> | undefined) => !item || ["completed", "cancel_requested", "cancelled"].includes(item.work.state);
+  if (closed(read(approach.id))) return false;
+  if (!approach.itemId) return true;
+  const source = read(approach.itemId);
+  return !closed(source) && source!.work.assignmentId === approach.id && source!.work.state !== "open";
+}
+
 /** The process holding the run ended mid-flight. A worker with a thread can be resumed in it; one that never started cannot. */
 function applyResearchCutOff(approach: ResearchApproach): void {
   approach.state = "stopped";

@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy, researchRunNeedsAdoption } from "../../research-ownership";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, RESEARCH_MAX_TIMER_MS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, searchResearchItems,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, RESEARCH_MAX_TIMER_MS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchApproachResumable, searchResearchItems,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEvent, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
@@ -107,6 +107,7 @@ export class ReplayResearchService {
   private readonly pendingDeliveries = new Set<string>();
   private readonly pendingQueueEvents = new Map<string, Map<string, { status: string; turnId?: string }>>();
   private readonly stops = new Map<string, Promise<ResearchRun>>();
+  private readonly queuedResumes = new Map<string, string>();
   private readonly workerStops = new Map<string, Promise<void>>();
   private readonly intents = new Map<string, { id: string; request: PrepareResearchRequest; preparedAt: number; expiresAt: number }>();
   private closed = false;
@@ -126,9 +127,14 @@ export class ReplayResearchService {
   }
 
   private adopt(run: ResearchRun): ResearchRun {
-    const cutOff = run.approaches.filter((approach) => researchApproachOccupiesSlot(approach) && !["ended", "stopped", "failed"].includes(approach.state));
+    const started = run.deliveries.filter((delivery) => delivery.state === "started");
+    const cutOff = run.approaches.filter((approach) => researchApproachOccupiesSlot(approach)
+      && (!["ended", "stopped", "failed"].includes(approach.state) || started.some((delivery) => delivery.approachId === approach.id)));
     this.append(run, `adopted:${this.ports.ownerId}:${run.revision}`, this.operator(run), { type: "adopted", ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
       ...(this.ports.ownerStartedAt !== undefined ? { ownerStartedAt: this.ports.ownerStartedAt } : {}), approachIds: cutOff.map((approach) => approach.id) });
+    for (const delivery of started) {
+      this.append(this.requireRun(run.id), `adopted-delivery:${delivery.id}:${this.ports.ownerId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: "ended" } });
+    }
     const current = this.requireRun(run.id);
     if (current.status === "running") this.scheduleDeadline(current);
     else if (current.status === "stopping" && !this.stops.has(run.id)) {
@@ -537,7 +543,9 @@ export class ReplayResearchService {
     for (const delivery of run.deliveries) {
       if (["queued", "started"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
     }
+    for (const key of [...this.queuedResumes.keys()]) if (key.startsWith(`${id}:`)) await this.withdrawResume(id, key.slice(id.length + 1), actor);
     for (const approach of this.requireRun(id).approaches) {
+      if (this.pendingStarts.has(`${id}:${approach.id}`)) continue;
       if (approach.worker && !["ended", "stopped", "failed"].includes(approach.state)) await this.stopWorker(id, approach.id, actor);
       else if (approach.state === "pending") this.append(this.requireRun(id), `unstarted:${approach.id}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
     }
@@ -610,6 +618,16 @@ export class ReplayResearchService {
     if (this.closed || turnId?.startsWith("pending:") || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
     for (const run of this.storage.list(thread)) {
       if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
+      const resumed = [...this.queuedResumes].find(([key, entry]) => key.startsWith(`${run.id}:`) && entry === queueEntryId)?.[0].slice(run.id.length + 1);
+      if (resumed !== undefined) {
+        if (["cancelled", "failed", "blocked"].includes(status)) {
+          this.queuedResumes.delete(`${run.id}:${resumed}`);
+          if (run.approaches.find((approach) => approach.id === resumed)?.state === "starting") this.append(run, `resume-withdrawn:${resumed}:${queueEntryId}`, this.operator(run),
+            { type: "worker", approachId: resumed, state: "stopped", interrupted: true, note: "The resume message did not start. Resume the worker again to continue." });
+          this.finishStopping(this.requireRun(run.id));
+        }
+        continue;
+      }
       const delivery = run.deliveries.find((d) => d.queueEntryId === queueEntryId && sameResearchThread(d.target, thread));
       if (!delivery) {
         // The queue may admit and finish before notify returns its queue ID.
@@ -657,6 +675,7 @@ export class ReplayResearchService {
       this.append(run, `observed-start:${approach.id}:${turnId}`, this.operator(run), {
         type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId },
       });
+      this.queuedResumes.delete(`${run.id}:${approach.id}`);
       if (!this.canAdmitApproach(this.requireRun(run.id), approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
         if (!this.closed) this.finishStopping(this.requireRun(run.id));
       }));
@@ -692,6 +711,7 @@ export class ReplayResearchService {
     this.closed = true;
     this.intents.clear();
     this.pendingQueueEvents.clear();
+    this.queuedResumes.clear();
     for (const cancel of this.deadlines.values()) cancel();
     this.deadlines.clear();
   }
@@ -702,17 +722,15 @@ export class ReplayResearchService {
     if (approachIds !== undefined && (!Array.isArray(approachIds) || !approachIds.length || approachIds.length > RESEARCH_MAX_WORKERS || approachIds.some((value) => typeof value !== "string")
       || new Set(approachIds).size !== approachIds.length)) throw new Error("Name each worker to resume once");
     const cutOff = held.approaches.filter((approach) => approach.interrupted);
-    const targets = approachIds === undefined ? cutOff : approachIds.map((approachId) => {
+    const resumable = (approach: ResearchApproach) => researchApproachResumable(approach, (itemId) => held.items.find((candidate) => candidate.id === itemId));
+    const targets = approachIds === undefined ? cutOff.filter(resumable) : approachIds.map((approachId) => {
       const approach = cutOff.find((candidate) => candidate.id === approachId);
       if (!approach) throw new Error("That worker is not waiting to be resumed");
+      if (!resumable(approach)) throw new Error(`"${approach.title}" is closed and cannot be resumed`);
       return approach;
     });
     if (!targets.length) throw new Error("No worker is waiting to be resumed");
-    for (const approach of targets) {
-      const item = held.items.find((candidate) => candidate.id === (approach.itemId ?? approach.id));
-      if (!approach.worker || !item || ["completed", "cancel_requested", "cancelled"].includes(item.work.state)) throw new Error(`"${approach.title}" is closed and cannot be resumed`);
-    }
-    if (held.activeWorkers + targets.length > held.workerLimit) throw new Error("Research worker limit reached; resume fewer workers or wait for one to end");
+    if (held.activeWorkers + targets.filter((approach) => !researchApproachOccupiesSlot(approach)).length > held.workerLimit) throw new Error("Research worker limit reached; resume fewer workers or wait for one to end");
     this.append(held, requestId, actor, { type: "resumed", approachIds: targets.map((approach) => approach.id) }, signature);
     for (const approach of targets) this.pendingStarts.add(`${id}:${approach.id}`);
     await Promise.all(targets.map(async (approach) => {
@@ -724,7 +742,8 @@ export class ReplayResearchService {
         const current = now();
         if (receipt.turnId && current.state === "starting" && current.worker?.turnId === worker.turnId) {
           this.append(this.requireRun(id), `resume-started:${approach.id}:${receipt.turnId}`, actor, { type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId: receipt.turnId } });
-        }
+        } else if (!receipt.turnId && receipt.queueEntryId && current.state === "starting") this.queuedResumes.set(`${id}:${approach.id}`, receipt.queueEntryId);
+        if (!this.canAdmitApproach(this.requireRun(id), approach)) await this.withdrawResume(id, approach.id, actor);
       } catch (error) {
         const current = now();
         if (current.state === "starting" && current.worker?.turnId === worker.turnId) {
@@ -738,6 +757,28 @@ export class ReplayResearchService {
     const settled = this.requireRun(id);
     if (settled.status === "stopping") this.finishStopping(settled);
     return this.requireRun(id);
+  }
+
+  private async withdrawResume(id: string, approachId: string, actor: ResearchActor): Promise<void> {
+    const now = () => this.requireRun(id).approaches.find((candidate) => candidate.id === approachId)!;
+    const entry = this.queuedResumes.get(`${id}:${approachId}`);
+    if (entry !== undefined) {
+      this.queuedResumes.delete(`${id}:${approachId}`);
+      try {
+        const receipt = await this.ports.cancelQueued(entry);
+        const current = now();
+        if (!receipt.turnId) {
+          if (current.state === "starting") this.append(this.requireRun(id), `resume-withdrawn:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "stopped", note: "The resume message was withdrawn before it started." });
+          return;
+        }
+        if (current.worker?.turnId !== receipt.turnId) this.append(this.requireRun(id), `resume-started:${approachId}:${receipt.turnId}`, actor,
+          { type: "worker", approachId, state: "running", worker: { backend: current.worker!.backend, threadId: current.worker!.threadId, turnId: receipt.turnId } });
+      } catch (error) {
+        if (now().state === "starting") this.append(this.requireRun(id), `resume-unknown:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "unknown", note: message(error) });
+        return;
+      }
+    }
+    if (now().state === "running") await this.stopWorker(id, approachId, actor);
   }
 
   async stopOwnedRuns(reason: string): Promise<void> {
@@ -754,7 +795,8 @@ export class ReplayResearchService {
   }
 
   private finishExploration(run: ResearchRun): void {
-    if (run.status !== "running" || run.submissions.length || run.approaches.some((a) => this.pendingStarts.has(`${run.id}:${a.id}`) || researchApproachOccupiesSlot(a) || a.interrupted)) return;
+    if (run.status !== "running" || run.submissions.length || run.approaches.some((a) => this.pendingStarts.has(`${run.id}:${a.id}`) || researchApproachOccupiesSlot(a)
+      || researchApproachResumable(a, (itemId) => run.items.find((item) => item.id === itemId)))) return;
     this.append(run, `exhausted:${run.revision}`, this.operator(run), { type: "status", status: "exhausted", reason: "All workers ended without submitting a candidate. Findings are retained; this does not establish that the problem is unsolvable." });
     this.deadlines.get(run.id)?.();
     this.deadlines.delete(run.id);

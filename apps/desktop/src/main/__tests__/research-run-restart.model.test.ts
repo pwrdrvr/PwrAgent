@@ -23,7 +23,7 @@ type World = { now: number; generation: number; spawned: number; notified: Resea
 const world = (): World => ({ now: 1_000_000, generation: 0, spawned: 0, notified: [], timers: [], errors: [] });
 
 /** One PwrAgent process. Only the current generation is alive; every earlier one has quit or crashed. */
-function launch(store: ResearchStore, shared: World): ResearchService {
+function launch(store: ResearchStore, shared: World, overrides: Partial<ResearchPorts> = {}): ResearchService {
   const generation = ++shared.generation;
   const ports: ResearchPorts = {
     ownerId: `process-${generation}`, ownerPid: 100 + generation, ownerStartedAt: shared.now,
@@ -39,6 +39,7 @@ function launch(store: ResearchStore, shared: World): ResearchService {
     // The message is queued in the worker's thread; its turn is seen to start later.
     notify: async (_actor, target) => { shared.notified.push(target); return {}; },
     cancelQueued: async () => ({}), changed: () => {}, onError: (error) => { shared.errors.push(error); },
+    ...overrides,
   };
   const service = new ResearchService(store, ports);
   service.initialize();
@@ -187,6 +188,77 @@ it("ends a run at its time limit across a restart, and never one with no limit",
   } finally { db.close(); }
 });
 
+/**
+ * A revision turn the gone process had started ended with it. Its delivery stayed open, so the worker held
+ * its slot forever: resuming it was refused at the worker limit, and the run could never run out of work.
+ */
+it("frees the slot of a revision turn a restart cut off, so its worker can be resumed", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new ResearchStore(db);
+    const shared = world();
+    const first = launch(store, shared, { notify: async (_actor, target) => { shared.notified.push(target); return { turnId: "revision-turn" }; } });
+    const id = (await first.start(request(1), agent)).id;
+    await first.update(id, "submit", { action: "submit", approachId: "a1", text: "Invented candidate", paths: [] }, { ...workerThread(1), kind: "agent", turnId: "turn-1-0", callId: "submit" });
+    const submissionId = first.read(id, operator).submissions[0]!.id;
+    await first.update(id, "revise", { action: "review", submissionId, decision: "revision_requested", reason: "Check the evidence" }, operator);
+    await first.observeStart(workerThread(1), "revision-turn");
+    expect(first.read(id, operator).deliveries[0]?.state).toBe("started");
+    const second = launch(store, shared);
+    const adopted = second.read(id, operator);
+    expect(adopted.approaches[0]).toMatchObject({ state: "stopped", interrupted: true });
+    expect(adopted.deliveries[0]?.state).toBe("ended");
+    expect(adopted.activeWorkers).toBe(0);
+    await second.update(id, "resume", { action: "resume" }, operator);
+    expect(second.read(id, operator).activeWorkers).toBe(1);
+    expect(shared.errors).toEqual([]);
+  } finally { db.close(); }
+});
+
+/** Resuming every cut-off worker failed outright when one of them had its work cancelled since. */
+it("resumes every cut-off worker whose work is still open, and skips the rest", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new ResearchStore(db);
+    const shared = world();
+    const id = (await launch(store, shared).start(request(2), agent)).id;
+    const service = launch(store, shared);
+    const cancelled = store.readItem(id, "a2")!;
+    await service.work(id, "cancel-a2", { action: "work", itemId: "a2", expectedVersion: cancelled.version, state: "cancelled", reason: "No longer needed" }, operator);
+    await service.update(id, "resume-all", { action: "resume" }, operator);
+    expect(shared.notified).toEqual([workerThread(1)]);
+    expect(service.read(id, operator).approaches.map((approach) => approach.state)).toEqual(["starting", "stopped"]);
+    await expect(service.update(id, "resume-a2", { action: "resume", approachIds: ["a2"] }, operator)).rejects.toThrow("is closed and cannot be resumed");
+    expect(shared.errors).toEqual([]);
+  } finally { db.close(); }
+});
+
+/**
+ * A resume message the worker's queue holds belongs to the run. A stop withdrew nothing: it stopped the
+ * worker's turn from before the restart instead, and left the message to start a turn after the run ended.
+ */
+it("lets a stop withdraw a resume message still waiting in the worker's queue", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new ResearchStore(db);
+    const shared = world();
+    const id = (await launch(store, shared).start(request(1), agent)).id;
+    const withdrawn: string[] = [], stopped: string[] = [];
+    const service = launch(store, shared, {
+      notify: async (_actor, target) => { shared.notified.push(target); return { queueEntryId: `queue-${target.threadId}` }; },
+      cancelQueued: async (entry) => { withdrawn.push(entry); return {}; },
+      stop: async (target) => { stopped.push(`${target.threadId}:${target.turnId}`); },
+    });
+    await service.update(id, "resume", { action: "resume" }, operator);
+    expect(service.read(id, operator).approaches[0]?.state).toBe("starting");
+    const settled = await service.update(id, "stop", { action: "stop", reason: "Stopped by the operator" }, operator);
+    expect(withdrawn).toEqual([`queue-${workerThread(1).threadId}`]);
+    expect(stopped).toEqual([]);
+    expect(settled.status).toBe("stopped");
+    expect(shared.errors).toEqual([]);
+  } finally { db.close(); }
+});
+
 it("budgets resuming a run's cut-off workers", async () => {
   // File-backed, so the recorded WAL size is what each commit costs on disk.
   const fixture = createTempStateDb("pwragent-research-restart-");
@@ -198,14 +270,15 @@ it("budgets resuming a run's cut-off workers", async () => {
     const id = (await first.start(request(8), agent)).id;
     first.close();
 
-    // Taking the run over at launch is budgeted as "research-recovery", beside the other owner writes.
-    const service = launch(store, shared);
+    // Taking the run over at launch is budgeted as "research-recovery", beside the other owner writes. An idle
+    // worker thread starts the message at once, so each worker's turn is recorded as the resume settles.
+    const service = launch(store, shared, { notify: async (_actor, target) => { shared.notified.push(target); return { turnId: `resumed-${target.threadId}` }; } });
     expect(store.header(id)).toMatchObject({ status: "running", ownerId: "process-2", activeWorkers: 0 });
 
     const resumed = await measureSqliteWrites(async () => await service.update(id, "request:resume", { action: "resume" }, operator));
     expect(resumed.result.activeWorkers).toBe(8);
     expect(shared.notified).toHaveLength(8);
-    expectSqliteWriteBudget({ scenario: "research-resume-workers", note: "One operator resume of eight cut-off workers: one commit gives each its slot back. Each worker's turn start is the existing per-turn observation.", writes: resumed.writes });
+    expectSqliteWriteBudget({ scenario: "research-resume-workers", note: "One operator resume of eight cut-off workers: one commit gives each its slot back, then one per worker records the turn its message started.", writes: resumed.writes });
     service.close();
   } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
 });

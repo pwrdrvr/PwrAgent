@@ -175,11 +175,16 @@ ends it at launch. `resume` is an operator or coordinator command: one
 `resumed` event returns each named worker's slot, then each is messaged in its
 own thread and is running again when its turn is seen to start. A turn the
 operator starts in a worker's thread resumes it the same way. A run with
-workers waiting to be resumed is not exhausted. Taking a run over is one commit
-per live run per launch (32,960 observed WAL bytes) and a resume is one commit
-per operator action (32,960 bytes): about 0.66 MB/day at ten of each. A Harness
-run still becomes interrupted when its process ends, because its bridge ended
-with it.
+workers waiting to be resumed is not exhausted, unless their work has closed:
+`researchApproachResumable` is the one rule, and resuming all workers skips the
+closed ones. Taking a run over also ends any revision delivery whose turn the
+gone process had started, so that worker's slot is free to resume. A resume
+message the worker's queue still holds is withdrawn when the run stops. Taking
+a run over is one commit per live run per launch (32,960 observed WAL bytes). A
+resume of eight workers is nine commits (206,000 bytes): one that returns their
+slots and one per worker for the turn its message started. That is about 2.4
+MB/day at ten of each, on launch and operator action only. A Harness run still
+becomes interrupted when its process ends, because its bridge ended with it.
 
 Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. The
 process holding a run always may. A restart is a new process, so a later one
