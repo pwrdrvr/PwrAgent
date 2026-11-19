@@ -1,0 +1,85 @@
+[
+  {
+    "base": "d36f92e5a1d8da41a54dfcf4c234a9c6a6cca431",
+    "head": "c1436e7f22f698fb7f0c38e817c0bdf6ea92a045",
+    "runId": "44553042565",
+    "files": [
+      {"status": "M", "file": "ARCHITECTURE.md"},
+      {"status": "M", "file": "apps/desktop/e2e/fixtures/research-state-seeding.ts"},
+      {"status": "A", "file": "apps/desktop/e2e/research-bounds.spec.ts"},
+      {"status": "M", "file": "apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json"},
+      {"status": "A", "file": "apps/desktop/src/main/__tests__/research-run-bounds-restart.model.test.ts"},
+      {"status": "M", "file": "apps/desktop/src/main/__tests__/research-service-sqlite.differential.property.test.ts"},
+      {"status": "M", "file": "apps/desktop/src/main/agent-tools/pwragent-research-agent-tools.ts"},
+      {"status": "A", "file": "apps/desktop/src/renderer/src/features/research/ResearchBoundsEditor.tsx"},
+      {"status": "A", "file": "apps/desktop/src/renderer/src/features/research/ResearchLimitField.tsx"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/ResearchPanel.tsx"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/ResearchRunCard.tsx"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/ResearchStartForm.tsx"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/ResearchWindow.tsx"},
+      {"status": "A", "file": "apps/desktop/src/renderer/src/features/research/__tests__/ResearchBounds.test.tsx"},
+      {"status": "A", "file": "apps/desktop/src/renderer/src/features/research/__tests__/research-bounds-change.property.test.ts"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/research-view-model.ts"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/research.css"},
+      {"status": "M", "file": "apps/desktop/src/renderer/src/features/research/useResearchRunActions.ts"},
+      {"status": "M", "file": "packages/owner-core/src/__tests__/fixtures/research-differential.ts"},
+      {"status": "M", "file": "packages/owner-core/src/__tests__/fixtures/research-memory-storage.ts"},
+      {"status": "M", "file": "packages/owner-core/src/__tests__/fixtures/research-service-replay-reference.ts"},
+      {"status": "M", "file": "packages/owner-core/src/__tests__/research-run-bounds.property.test.ts"},
+      {"status": "M", "file": "packages/owner-core/src/__tests__/research-service.differential.property.test.ts"},
+      {"status": "M", "file": "packages/owner-core/src/research-service.ts"},
+      {"status": "M", "file": "packages/owner-core/src/research-storage.ts"},
+      {"status": "M", "file": "packages/shared/src/research.ts"},
+      {"status": "M", "file": "packages/sqlite-storage/src/research-store.ts"}
+    ],
+    "report": {
+      "missingSlices": [],
+      "slices": [
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-1-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-2-sample-1", "first": {"complete": true, "errors": 0}, "failures": [{"id": "1987612645_11", "name": "budgets archive lifecycle, daily bookkeeping and row-sliced deletion separately", "project": "desktop-main", "file": "apps/desktop/src/main/__tests__/storage-maintenance.test.ts", "retry": "failed"}]},
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-3-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-4-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-1-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-2-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-3-sample-1", "first": {"complete": true, "errors": 0}, "failures": [{"id": "928260438f6bd84b7793-f5a12f2ef048cebb79a2", "name": "research-bounds.spec.ts > a running run's card shows the worker limits set and changes its bounds in dark mode", "retry": "failed", "file": "apps/desktop/e2e/research-bounds.spec.ts", "fileEvidence": "unique spec path matching the reporter's suite title"}, {"id": "928260438f6bd84b7793-b88f7c16571107b9e69d", "name": "research-bounds.spec.ts > a running run's card shows the worker limits set and changes its bounds in light mode", "retry": "failed", "file": "apps/desktop/e2e/research-bounds.spec.ts", "fileEvidence": "unique spec path matching the reporter's suite title"}]},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-4-sample-1", "first": {"complete": true, "errors": 0}, "failures": []}
+      ]
+    }
+  },
+  {
+    "base": "a5789f0ca4cb78460b783109d9f7ca1b1acb22a7",
+    "head": "6e60679ea4fab57b68f77b6cb49f6066e85ea1c7",
+    "runId": "44423477690",
+    "files": [
+      {"status": "M", "file": ".agents/skills/release/SKILL.md"},
+      {"status": "M", "file": ".github/workflows/release.yml"},
+      {"status": "A", "file": "apps/desktop/scripts/verify-existing-release.mjs"},
+      {"status": "A", "file": "apps/desktop/scripts/verify-existing-release.test.mjs"},
+      {"status": "M", "file": "docs/desktop-release-runbook.md"},
+      {"status": "M", "file": "docs/headless-npm-release.md"},
+      {"status": "M", "file": "packages/pwragent/scripts/pack-check.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/publish.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/publish.test.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/release-context.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/release-context.test.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/release-workflow.test.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/release.mjs"},
+      {"status": "M", "file": "packages/pwragent/scripts/restore-publication-receipt.mjs"},
+      {"status": "A", "file": "packages/pwragent/scripts/tested-package.mjs"},
+      {"status": "M", "file": "scripts/check-desktop-release-metadata.mjs"}
+    ],
+    "report": {
+      "missingSlices": [],
+      "slices": [
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-1-sample-1", "first": {"complete": true, "errors": 0}, "failures": [{"id": "-127182636_34", "name": "rejects a package omitted from publication even when debug retention still includes it", "project": "desktop-main", "file": "scripts/check-desktop-release-metadata.test.mjs", "retry": "failed"}]},
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-2-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-3-sample-1", "first": {"complete": true, "errors": 0}, "failures": [{"id": "1473811543_8", "name": "invalidates linked input identity even when library size and mtime are restored", "project": "desktop-main", "file": "apps/desktop/scripts/build-mcp-ipc-relay.oracle.test.mjs", "retry": "recovered"}]},
+        {"kind": "unit", "platform": "linux", "key": "unit-linux-lane-4-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-1-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-2-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-3-sample-1", "first": {"complete": true, "errors": 0}, "failures": []},
+        {"kind": "e2e", "platform": "linux", "key": "e2e-linux-lane-4-sample-1", "first": {"complete": true, "errors": 0}, "failures": []}
+      ]
+    }
+  }
+]

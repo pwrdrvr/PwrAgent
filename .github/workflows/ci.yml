@@ -1396,3 +1396,60 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
+
+  pr-test-impact:
+    name: PR test impact shadow
+    # Prototype only. The report consumes full-CI results and has no dependents.
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'prototype/pr-test-impact') && needs.flake-report.result != 'skipped' }}
+    needs: [flake-report]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Checkout the tested merge revision
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read PR changed files
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("node:fs");
+            let files = null;
+            try {
+              files = (await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+              })).map(({ filename, previous_filename, status }) => ({ filename, previous_filename, status }));
+            } catch {
+              core.warning("Could not retrieve the complete PR file list.");
+            }
+            fs.mkdirSync(".local/ci", { recursive: true });
+            fs.writeFileSync(".local/ci/pr-test-impact-files.json", JSON.stringify(files));
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "^24.22.1"
+
+      - name: Download full suite evidence
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: ci-flake-report-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact-observed
+
+      - name: Generate impact report
+        run: node scripts/ci/write-pr-test-impact.mjs
+
+      - name: Upload impact report
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-test-impact-${{ github.run_attempt }}
+          path: .local/ci/pr-test-impact/
+          include-hidden-files: true
+          retention-days: 7

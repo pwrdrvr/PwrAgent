@@ -23,10 +23,15 @@ test("missing, skipped, interrupted, and ambiguous retry results cannot count as
 });
 
 test("E2E identifies first unexpected outcomes and matches retry results by ID", () => {
-  const first = { status: "failed", complete: true, errors: 0, tests: [{ id: "x", name: "one", outcome: "unexpected", completed: true }, { id: "y", name: "two", outcome: "unexpected", completed: true }] };
+  const first = { status: "failed", complete: true, errors: 0, tests: [
+    { id: "x", name: "one", file: "/checkout/apps/desktop/e2e/one.spec.ts", outcome: "unexpected", completed: true },
+    { id: "y", name: "two", outcome: "unexpected", completed: true },
+  ] };
   const retry = { status: "failed", complete: true, errors: 0, tests: [{ id: "y", outcome: "unexpected", completed: true }, { id: "x", outcome: "expected", completed: true }] };
-  const slice = createSlice({ kind: "e2e", platform: "macos", lane: 2, sample: 1, first, retries: [retry] });
+  const slice = createSlice({ kind: "e2e", platform: "macos", lane: 2, sample: 1, workspace: "/checkout", first, retries: [retry] });
   assert.deepEqual(slice.failures.map(({ retry }) => retry), ["recovered", "failed"]);
+  assert.equal(slice.failures[0].file, "apps/desktop/e2e/one.spec.ts");
+  assert.equal(slice.failures[1].file, undefined);
 });
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
@@ -73,7 +78,7 @@ test("the expected slice inventory follows every configured workflow matrix", as
     ["desktop-e2e", "e2e", "linux"], ["desktop-e2e-macos", "e2e", "macos"], ["windows-e2e", "e2e", "windows"],
   ];
   for (const [job, kind, platform] of jobs) {
-    const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+    const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
     assert.ok(section, `missing job ${job}`);
     const lanes = section.match(/lane: \[([\d, ]+)\]/)?.[1].split(",").map(Number);
     assert.ok(lanes, `missing matrix in ${job}`);

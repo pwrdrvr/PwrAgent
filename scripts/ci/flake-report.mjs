@@ -1,5 +1,3 @@
-import path from "node:path";
-
 const keyOf = ({ kind, platform, lane, sample }) => `${kind}-${platform}-lane-${lane}-sample-${sample}`;
 
 export function expectedSlices(samples = 1) {
@@ -45,7 +43,12 @@ export function createSlice({ kind, platform, lane, sample = 1, workspace, first
       if (state === (kind === "unit" ? "passed" : "expected")) retry = "recovered";
       else if (state === (kind === "unit" ? "failed" : "unexpected")) retry = "failed";
     }
-    return { id: test.id, name: test.name, ...(kind === "unit" ? { project: test.project, file: test.file } : {}), retry };
+    return {
+      id: test.id, name: test.name,
+      ...(kind === "unit" ? { project: test.project } : {}),
+      ...(test.file ? { file: relativeFile(test.file, workspace) } : {}),
+      retry,
+    };
   });
   return {
     ...slice, key: keyOf(slice), jobStatus, firstOutcome, retryOutcome,

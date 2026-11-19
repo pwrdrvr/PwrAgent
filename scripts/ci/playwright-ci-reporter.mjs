@@ -21,6 +21,7 @@ export default class CiRetryReporter {
     const tests = this.suite?.allTests().map((test) => ({
       id: test.id,
       name: test.titlePath().filter(Boolean).join(" > "),
+      file: test.location.file,
       outcome: test.outcome(),
       completed: test.results.length > 0
         && test.results.every((attempt) => attempt.status !== "interrupted")
