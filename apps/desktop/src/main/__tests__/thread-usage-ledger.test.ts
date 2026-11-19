@@ -7,7 +7,7 @@ import type {
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import { registryModules } from "../app-server/backend-registry-wiring";
 import type { PendingLiveThreadUsageLine } from "../app-server/backend-registry-types";
 import type { RegistryContext } from "../app-server/registry-context";
 import { buildActiveTurnKey } from "../app-server/thread-turn-keys";
@@ -18,9 +18,9 @@ import {
   type ThreadUsageLedgerDependencies,
   type ThreadUsageLedgerHost,
 } from "../app-server/thread-usage-ledger";
-import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import type { StateDb } from "../state/state-db";
+import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
 
 /** The ledger's own state and steps, which only its tests reach. */
 type LedgerInternals = {
@@ -35,6 +35,7 @@ type LedgerInternals = {
   };
   persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<void>;
   publishLiveTokenMiserLedgerEntry(entry: TokenMiserObjectMetadata): Promise<void>;
+  stopTokenMiserReplayTrackingAtCompaction(event: AgentEvent): Promise<void>;
 };
 
 /** A ledger over a fixture context and host; nothing here touches SQLite. */
@@ -122,16 +123,9 @@ function turnEvent(
 }
 
 function createRegistry() {
-  const db = openInMemoryStateDb();
-  const registry = createDesktopBackendRegistry({
-    codexClient: {
-      close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
-      listThreads: async () => [], onNotification: () => () => {},
-      onPendingRequest: () => () => {},
-    } as never,
-    overlayStore: new SqliteOverlayStore(db),
-  });
-  return { registry, db };
+  const databases: StateDb[] = [];
+  const registry = registryWithInMemoryStore(databases);
+  return { registry, db: databases[0]! };
 }
 
 afterEach(() => {
@@ -410,6 +404,26 @@ describe("ThreadUsageLedger", () => {
         expect(persisted).toEqual([entries]);
       },
     ), { numRuns: 300 });
+  });
+
+  it("does not stop newer Token Miser replay gates for a duplicate compaction", async () => {
+    const recordThreadCompaction = vi.fn().mockResolvedValueOnce(true);
+    const { ledger, internals } = createLedger({ stores: { usage: { recordThreadCompaction } } });
+    const stopReplayTracking = vi.spyOn(internals, "stopTokenMiserReplayTrackingAtCompaction")
+      .mockResolvedValue(undefined);
+    const event: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "thread/compacted",
+        params: { itemId: "compaction-1", threadId: "thread-1" },
+      },
+    };
+
+    await ledger.handleThreadCompactionReplayBoundary(event);
+    await ledger.handleThreadCompactionReplayBoundary(event);
+
+    expect(recordThreadCompaction).toHaveBeenCalledOnce();
+    expect(stopReplayTracking).toHaveBeenCalledOnce();
   });
 
   /**

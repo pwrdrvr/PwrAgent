@@ -11,9 +11,8 @@ import {
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statSync } from "node:fs";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
-import { NavigationDetailService } from "../app-server/navigation-detail-service";
+import { NavigationDetailService, type NavigationDetailRegistry } from "../app-server/navigation-detail-service";
 import { usageLedgerStandIn } from "./helpers/usage-ledger-stand-in";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -607,26 +606,27 @@ describe("thread sub-agent table", () => {
 
     /**
      * The owner's view of one Codex thread: its live gates and live native
-     * usage, merged by the registry's own methods.
+     * usage, merged by the usage ledger.
      */
     function ownerService(threadId: string, live: {
       gates?: ThreadSubAgentSummary[];
       usage?: Array<[string, { monitorUsage: { summary: string }; updatedAt: number; lines: ReadonlyMap<string, unknown> }]>;
     } = {}) {
-      const registry = {
-        getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
-        getThreadInfo: () => undefined,
-        // The registry merges live gates through its usage ledger, which reads
-        // live native usage through the sub-agent monitor service.
-        threadUsageLedger: usageLedgerStandIn({
-          subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map([[threadId, new Map(live.usage ?? [])]]) },
-          subAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
+      const ledger = usageLedgerStandIn({
+        subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map([[threadId, new Map(live.usage ?? [])]]) },
+        subAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
+      });
+      const registry: Partial<NavigationDetailRegistry> = {
+        getCachedThreadSummary: () => ({
+          id: threadId, source: "codex", title: "Fixture thread", titleSource: "explicit",
+          linkedDirectories: [], updatedAt: 0,
         }),
-        mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.mergeLiveTokenMiserSubAgents,
-        listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
-        readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
-      } as unknown as DesktopBackendRegistry;
-      return { registry, service: new NavigationDetailService(registry) };
+        getThreadInfo: () => undefined,
+        mergeLiveTokenMiserSubAgents: ledger.mergeLiveTokenMiserSubAgents.bind(ledger),
+        listLiveTokenMiserSubAgents: ledger.listLiveTokenMiserSubAgents.bind(ledger),
+        readLiveSubAgentRevisionSource: ledger.readLiveSubAgentRevisionSource.bind(ledger),
+      };
+      return { ledger, service: new NavigationDetailService(registry as NavigationDetailRegistry) };
     }
 
     /** Every page of the `subAgents` collection, as an older viewer pages it. */
@@ -705,7 +705,7 @@ describe("thread sub-agent table", () => {
       const at = (index: number) => 1_800_000_000_000 + 2 * index;
       const stored = Array.from({ length: 250 }, (_, index) => card(index, { createdAt: at(index), updatedAt: at(index) }));
       await store.upsertThreadSubAgents({ backend: "codex", threadId, subAgents: stored });
-      const { registry, service } = ownerService(threadId, {
+      const { ledger, service } = ownerService(threadId, {
         gates: [
           // A gate this turn rewrote, one newer than every stored card, and
           // one that sorts between two stored cards on the second page.
@@ -718,7 +718,7 @@ describe("thread sub-agent table", () => {
 
       const pages = await pageCollection(service, threadId);
 
-      const expected = registry.mergeLiveTokenMiserSubAgents(threadId, stored).sort((left, right) =>
+      const expected = ledger.mergeLiveTokenMiserSubAgents(threadId, stored).sort((left, right) =>
         right.createdAt - left.createdAt || (left.monitorId < right.monitorId ? -1 : 1));
       expect(pages.map((page) => page.length)).toEqual([100, 100, 52]);
       expect(pages.flat()).toEqual(expected);
