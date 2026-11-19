@@ -76,12 +76,11 @@ import {
 } from "@pwragent/messaging-provider-telegram";
 import {
   MessagingController,
-  messagingDeliveryPriority,
   rememberWorkingCardState,
-  shouldConsumeDeliveryBudget,
   updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import { messagingDeliveryPriority, shouldConsumeDeliveryBudget } from "../messaging/core/messaging-outbound-delivery";
 import {
   buildReviewStartConfirmationIntent,
   messagingReviewStartTarget,

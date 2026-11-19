@@ -1,3 +1,4 @@
+import { MessagingOutboundDelivery, type MessagingControllerDeliveryBudgetEvent } from "./messaging-outbound-delivery";
 import { MessagingAssistantStreams } from "./messaging-assistant-streams";
 import { MessagingPendingRequestWorkflow } from "./messaging-pending-request-workflow";
 import type { MessagingPendingRequestHost } from "./messaging-pending-request-context";
@@ -33,11 +34,11 @@ import { readMessagingLaunchpadContext, type MessagingLaunchpadContext, type Mes
 import { rememberBoundedMap } from "../../bounded-map";
 import { transitionQueueNotice, type QueueNoticeState, type QueueNoticeEvent } from "@pwragent/owner-core/queue-notice-lifecycle";
 import { createHash, randomUUID } from "node:crypto";
-import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, isAcpBackendId, isAppServerBackendKind, readProviderResponseBlockNotification, describeProviderResponseBlock, stripCodexGitActionDirectives } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, federatedThreadIdentityKey, isAcpBackendId, isAppServerBackendKind, readProviderResponseBlockNotification, describeProviderResponseBlock } from "@pwragent/shared";
 import type { AgentEvent, ThreadIncomingWorkSummary, AppServerBackendKind, AutomationMessagingConversationSnapshot, AutomationRunSourceMetadata, AutomationRunOutputDecision, BackendAcpSessionRuntimeState, AppServerPendingRequestNotification, AppServerThreadMessageOrigin, FederationTarget, HandoffThreadWorkspaceRequest, HandoffThreadWorkspaceResponse, MessagingDynamicToolCategory, MessagingToolUpdateMode, PwrAgentMessagingBoundThreadSummary, PwrAgentMessagingRequest, PwrAgentMessagingResponse, NavigationSelectedDetailRequest, NavigationThreadSummary, ThreadExecutionMode, ThreadIdentifier } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryScope, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize, MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
@@ -46,7 +47,6 @@ import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type { MessagingAdapter, MessagingBackendBridge, MessagingLastAssistantReply } from "./messaging-adapter.js";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
 import { buildActivityIntent, buildConfirmationIntent, buildErrorIntent, buildStatusIntent, buildToolUpdateBatchMessageIntent, buildToolUpdateMessageIntent, buildWorkingCardIntent } from "./messaging-renderer.js";
-import { buildArtifactDeliveryIntent, buildArtifactInlineFallbackIntent, type MessagingArtifact, type MessagingArtifactMessageIntent } from "./messaging-artifact-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
@@ -59,8 +59,8 @@ import { resolveMessagingThreadState, type MessagingNavigationContext, type Mess
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
 import type { MessagingToolActivity } from "./messaging-tool-activity.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
-import { isDeferrableDeliveryPriority, MessagingDeliveryBudget, type MessagingDeliveryPriority } from "./messaging-delivery-budget.js";
-import { MessagingDeliveryLane, type MessagingDeliveryLaneTicket } from "./messaging-delivery-lane.js";
+import type { MessagingDeliveryBudget } from "./messaging-delivery-budget.js";
+import type { MessagingDeliveryLane } from "./messaging-delivery-lane.js";
 import { type MessagingAttachmentPolicy } from "./messaging-attachment-processor.js";
 import { MessagingOriginalAttachmentStore, type OriginalAttachmentConsumer } from "./messaging-original-attachment-store.js";
 import { PdfAttachmentStore } from "../../pdf/pdf-attachment-store.js";
@@ -74,9 +74,9 @@ import { DEFAULT_INPUT_DEBOUNCE_MS, requestsExplicitPrivateResponse, agentMessag
 import { MessagingInboundTurns } from "./messaging-inbound-turns";
 import type { MessagingInboundHost } from "./messaging-inbound-context";
 import { assistantImageDeliverySignature, isMessagingToolOriginBinding, summarizeNavigationThreadForMessaging, responseAttributionLabel, isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
-import { formatTimeOfDay, isPermanentMessagingTargetFailure } from "./messaging-monitor-helpers";
+import { formatTimeOfDay } from "./messaging-monitor-helpers";
 
-
+export type { MessagingControllerDeliveryBudgetEvent } from "./messaging-outbound-delivery";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -116,29 +116,6 @@ function executionModeForBinding(
 ): ThreadExecutionMode | undefined {
   return resolveExecutionModeForBinding(binding, navigation).mode;
 }
-
-export type MessagingControllerDeliveryBudgetEvent = {
-  at: number;
-  backend?: AppServerBackendKind;
-  bindingId?: string;
-  federationTarget?: FederationTarget;
-  channel: MessagingChannelKind;
-  conversation?: MessagingChannelRef["conversation"];
-  intentId: string;
-  intentKind: MessagingSurfaceIntent["kind"];
-  outcome: "deferred" | "dropped";
-  priority: MessagingDeliveryPriority;
-  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "missing-scope";
-  retryAt?: number;
-  scope?: MessagingDeliveryScope;
-  slowMode: boolean;
-  threadId?: ThreadIdentifier;
-};
-
-type DeliveryLaneState = {
-  lane?: MessagingDeliveryLane;
-  ticket?: MessagingDeliveryLaneTicket;
-};
 
 export type MessagingControllerOptions = {
   requestStore?: MessagingRequestStore;
@@ -316,7 +293,6 @@ export class MessagingController {
   // handle open, which blocks the test harness from deleting the temp profile
   // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
   private disposed = false;
-  private stoppedAdapterStub: MessagingAdapter | undefined;
   private readonly browseRenderGenerations = new Map<string, symbol>();
   private readonly browseQueryPool = new MessagingBrowseQueryPool((request) => {
     const backend = this.options.backend;
@@ -324,7 +300,7 @@ export class MessagingController {
     return backend.getNavigationQueryPage(request);
   }, () => this.now());
   private readonly progressiveBrowseByConversation = new Map<string, symbol>();
-  private readonly deliveryBudget?: MessagingDeliveryBudget;
+  private readonly outboundDelivery: MessagingOutboundDelivery;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
    * we posted to each bound conversation. Cleared when the queue resolves
@@ -503,7 +479,18 @@ export class MessagingController {
     this.pendingIntentTtlMs =
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
-    this.deliveryBudget = options.deliveryBudget;
+    this.outboundDelivery = new MessagingOutboundDelivery(options, {
+      get disposed() { return readDisposed(); },
+      get capabilityProfile() { return readCapabilityProfile(); },
+      get logger() { return readLogger(); },
+      get clock() { return readNow(); },
+      now: () => this.now(),
+      flushToolUpdatesForBinding: (...args) => this.flushToolUpdatesForBinding(...args),
+      markWorkingCardWaiting: (...args) => this.markWorkingCardWaiting(...args),
+      desktopActivityLog: () => this.desktopActivityLog(),
+      recordBindingTransition: (...args) => this.bindingService.recordBindingTransition(...args),
+      notifyBindingChanged: (...args) => this.bindingService.notifyBindingChanged(...args),
+    });
     this.logger = options.logger ?? messagingControllerLog;
     this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
     this.showStreamingOptionConfig = options.showStreamingOption ?? false;
@@ -1193,7 +1180,7 @@ export class MessagingController {
       flushBufferedAssistantStreamsForTerminalEvent: (...args) => this.assistantStreams.flushBufferedAssistantStreamsForTerminalEvent(...args),
       deliverTurnFailureMessage: (...args) => this.deliverTurnFailureMessage(...args),
       deliverResponseBlockedNotice: (...args) => this.deliverResponseBlockedNotice(...args),
-      deliverArtifactForBinding: (...args) => this.deliverArtifactForBinding(...args),
+      deliverArtifactForBinding: (...args) => this.outboundDelivery.deliverArtifactForBinding(...args),
       renderAutomaticBindingStatus: (...args) => this.bindingService.renderAutomaticBindingStatus(...args),
       threadContextWithNameFromEvent: (...args) => this.bindingService.threadContextWithNameFromEvent(...args),
       signalTurnActivity: (...args) => this.signalTurnActivity(...args),
@@ -5256,377 +5243,21 @@ export class MessagingController {
     });
   }
 
-  private recordOutboundActivity(
-    intent: MessagingSurfaceIntent,
-    binding: MessagingBindingRecord | undefined,
-    result: MessagingDeliveryResult,
-  ): void {
-    // Ordinary replies only update provider-visible freshness. Typing activity,
-    // dismissals, and partial stream edits are control/noisy signals; the
-    // Activity window stays focused on operator-facing rows. Deliberate
-    // agent-initiated sends write their own `outbound` row — see
-    // recordOutboundFileActivity.
-    if (!shouldRecordOutboundActivity(intent, result)) {
-      return;
-    }
-    const channel = binding?.channel.channel ?? result.channel;
-    if (!channel) return;
-    try {
-      const log = this.desktopActivityLog();
-      if (!log) return;
-      log.recordPlatformResponseActivity({
-        platform: channel,
-        createdAt: result.deliveredAt,
-      });
-    } catch {
-      // Activity log is best-effort observability; never break delivery
-      // because the summary write threw.
-    }
-  }
-
   private desktopActivityLog(): MessagingActivityStorage | undefined {
     return this.options.activityLog?.();
   }
 
-  /**
-   * The adapter this controller talks to. Once the controller is disposed its
-   * own adapter has been stopped and must never be called again: work still
-   * in progress goes to the adapter now running for the channel, or to a
-   * stub that does nothing when none is running.
-   */
   private get adapter(): MessagingAdapter {
-    if (!this.disposed) return this.options.adapter;
-    const replacement = this.options.replacementAdapter?.now();
-    if (replacement && replacement !== this.options.adapter) return replacement;
-    return this.stoppedAdapter();
+    return this.outboundDelivery.adapter;
   }
 
-  private stoppedAdapter(): MessagingAdapter {
-    this.stoppedAdapterStub ??= {
-      capabilityProfile: this.options.adapter.capabilityProfile,
-      deliver: async () => ({
-        channel: this.options.channel ?? "telegram",
-        deliveredAt: this.now(),
-        outcome: "discarded",
-      }),
-    };
-    return this.stoppedAdapterStub;
-  }
-
-  /**
-   * The adapter for a send. A disposed controller waits for a restart in
-   * progress, then sends through the replacement, or gets undefined when
-   * nothing replaced its adapter.
-   */
-  private async adapterForSend(): Promise<MessagingAdapter | undefined> {
-    if (!this.disposed) return this.options.adapter;
-    const replacement = this.options.replacementAdapter?.now()
-      ?? await this.options.replacementAdapter?.settled();
-    return replacement && replacement !== this.options.adapter
-      ? replacement
-      : undefined;
-  }
-
-  private async deliver(
+  private deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
     guard?: MessagingDeliveryGuard,
   ): Promise<MessagingDeliveryResult> {
-    if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
-      await this.flushToolUpdatesForBinding(binding, { clear: false });
-      // A question asked without pausing the turn leaves the agent working.
-      if (
-        intent.kind === "approval"
-        || (intent.kind === "questionnaire" && !intent.asyncReply)
-      ) {
-        await this.markWorkingCardWaiting(binding);
-      }
-    }
-    const displayIntent = binding?.backend === "codex"
-      ? stripCodexGitActionDirectivesFromMessagingIntent(intent)
-      : intent;
-    if (!displayIntent) {
-      return {
-        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
-        deliveredAt: this.now(),
-        outcome: "discarded",
-      };
-    }
-    const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
-    const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
-    // A disposed controller budgets against the adapter that will send, not
-    // the stopped-adapter stub, which has no scope and would skip cool-off.
-    const scopeAdapter = this.disposed
-      ? await this.adapterForSend()
-      : this.options.adapter;
-    if (!scopeAdapter) {
-      return {
-        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
-        deliveredAt: this.now(),
-        outcome: "discarded",
-      };
-    }
-    const scope = scopeAdapter.resolveDeliveryScope?.(routedIntent);
-    const priority = messagingDeliveryPriority(routedIntent, {
-      userInitiated: isUserInitiatedDeliveryEvent(event),
-    });
-    const channel = binding?.channel.channel ??
-      routedIntent.audit?.channel.channel ??
-      this.options.channel;
-    const cancelledResult = (): MessagingDeliveryResult => ({
-      channel: channel ?? "telegram",
-      deliveredAt: this.now(),
-      outcome: "discarded",
-    });
-    // Deferrable deliveries the budget holds back wait in one line per scope,
-    // so they reach the provider in the order they were requested, across
-    // cool-off extensions and adapter restarts alike. The ticket is held
-    // until the provider call returns, and released on every exit.
-    const lane: DeliveryLaneState = {
-      lane: this.deliveryBudget && isDeferrableDeliveryPriority(priority)
-        ? this.options.deliveryLane
-        : undefined,
-    };
-    try {
-      return await this.deliverThroughBudget({
-        binding,
-        cancelledResult,
-        channel,
-        consumeDeliveryBudget,
-        guard,
-        intent,
-        lane,
-        priority,
-        routedIntent,
-        scope,
-      });
-    } finally {
-      lane.ticket?.release();
-    }
-  }
-
-  private async deliverThroughBudget(params: {
-    binding: MessagingBindingRecord | undefined;
-    cancelledResult: () => MessagingDeliveryResult;
-    channel: MessagingChannelKind | undefined;
-    consumeDeliveryBudget: boolean;
-    guard: MessagingDeliveryGuard | undefined;
-    intent: MessagingSurfaceIntent;
-    lane: DeliveryLaneState;
-    priority: MessagingDeliveryPriority;
-    routedIntent: MessagingSurfaceIntent;
-    scope: MessagingDeliveryScope | undefined;
-  }): Promise<MessagingDeliveryResult> {
-    const {
-      binding,
-      cancelledResult,
-      channel,
-      consumeDeliveryBudget,
-      guard,
-      intent,
-      lane,
-      priority,
-      routedIntent,
-    } = params;
-    let { scope } = params;
-    const waitForTurn = async (): Promise<boolean> => {
-      if (lane.ticket || !lane.lane || !scope) return true;
-      lane.ticket = lane.lane.enter(scope.id);
-      if (guard?.whenCancelled) {
-        await Promise.race([lane.ticket.ready, guard.whenCancelled]);
-      } else {
-        await lane.ticket.ready;
-      }
-      return !guard?.isCancelled();
-    };
-    while (true) {
-      if (guard?.isCancelled()) {
-        return cancelledResult();
-      }
-      if (this.deliveryBudget) {
-        const budgetChannel = channel ?? scope?.platform ?? "telegram";
-        if (scope && lane.lane?.isOccupied(scope.id) && !(await waitForTurn())) {
-          return cancelledResult();
-        }
-        let admission = this.deliveryBudget.admit({
-          consumeCapacity: consumeDeliveryBudget,
-          priority,
-          scope,
-        });
-        while (admission.outcome === "deferred") {
-          const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
-            at: this.now(),
-            backend: binding?.backend,
-            federationTarget: binding?.federatedThread?.target,
-            bindingId: binding?.id ?? intent.bindingId,
-            channel: budgetChannel,
-            conversation: binding?.channel.conversation,
-            intentId: routedIntent.id,
-            intentKind: routedIntent.kind,
-            outcome: "deferred",
-            priority,
-            reason: admission.reason,
-            retryAt: admission.retryAt,
-            scope,
-            slowMode: admission.slowMode,
-            threadId: binding?.threadId,
-          };
-          this.logger.info?.("messaging delivery budget deferred intent", {
-            bindingId: binding?.id ?? intent.bindingId,
-            delayMs: Math.max(0, admission.retryAt - this.now()),
-            intentId: routedIntent.id,
-            intentKind: routedIntent.kind,
-            priority,
-            retryAt: admission.retryAt,
-            scopeId: scope?.id,
-            slowMode: admission.slowMode,
-          });
-          this.notifyDeliveryBudgetEvent(budgetEvent);
-          if (!lane.ticket && lane.lane && scope) {
-            // Take a place in line, then ask again: time may have passed.
-            if (!(await waitForTurn())) {
-              return cancelledResult();
-            }
-            admission = this.deliveryBudget.admit({
-              consumeCapacity: consumeDeliveryBudget,
-              priority,
-              scope,
-            });
-            continue;
-          }
-          const delay = (this.options.sleepUntil ?? sleepUntil)(
-            admission.retryAt,
-            this.now,
-          );
-          if (guard?.whenCancelled) {
-            await Promise.race([delay, guard.whenCancelled]);
-          } else {
-            await delay;
-          }
-          if (guard?.isCancelled()) {
-            return cancelledResult();
-          }
-          admission = this.deliveryBudget.admit({
-            consumeCapacity: consumeDeliveryBudget,
-            priority,
-            scope,
-          });
-        }
-        if (admission.outcome !== "admitted") {
-          const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
-            at: this.now(),
-            backend: binding?.backend,
-            federationTarget: binding?.federatedThread?.target,
-            bindingId: binding?.id ?? intent.bindingId,
-            channel: budgetChannel,
-            conversation: binding?.channel.conversation,
-            intentId: routedIntent.id,
-            intentKind: routedIntent.kind,
-            outcome: "dropped",
-            priority,
-            reason: admission.reason,
-            scope,
-            slowMode: admission.slowMode,
-            threadId: binding?.threadId,
-          };
-          this.logger.debug?.("messaging delivery budget skipped intent", {
-            bindingId: binding?.id ?? intent.bindingId,
-            intentId: routedIntent.id,
-            intentKind: routedIntent.kind,
-            outcome: admission.outcome,
-            priority,
-            reason: admission.outcome === "dropped" ? admission.reason : undefined,
-            scopeId: scope?.id,
-            slowMode: admission.slowMode,
-          });
-          this.notifyDeliveryBudgetEvent(budgetEvent);
-          return {
-            channel: channel ?? "telegram",
-            deliveredAt: this.now(),
-            outcome: "discarded",
-          };
-        }
-      }
-      if (guard?.isCancelled()) {
-        return cancelledResult();
-      }
-      const adapter = await this.adapterForSend();
-      if (!adapter) {
-        this.logger.info?.("messaging delivery discarded: adapter stopped and nothing replaced it", {
-          bindingId: binding?.id ?? intent.bindingId,
-          intentId: routedIntent.id,
-          intentKind: routedIntent.kind,
-        });
-        return cancelledResult();
-      }
-      if (guard?.isCancelled()) {
-        return cancelledResult();
-      }
-      const result = await adapter.deliver(routedIntent);
-      if (guard?.isCancelled()) {
-        await guard.onCancelledDelivery?.(result);
-        return cancelledResult();
-      }
-      this.logDeliveryResult(routedIntent, binding, result);
-      if (this.deliveryBudget && result.rateLimit) {
-        if (lane.ticket && result.rateLimit.scope.id !== scope?.id) {
-          // The retry belongs in the new scope's line, not the old one's.
-          lane.ticket.release();
-          lane.ticket = undefined;
-        }
-        scope = result.rateLimit.scope;
-        this.deliveryBudget.recordRateLimit(result.rateLimit);
-        if (result.rateLimit.retryable === true) {
-          this.logger.debug?.("messaging delivery rate-limited; rechecking budget", {
-            bindingId: binding?.id ?? intent.bindingId,
-            intentId: routedIntent.id,
-            intentKind: routedIntent.kind,
-            priority,
-            retryAfterMs: result.rateLimit.retryAfterMs,
-            scopeId: result.rateLimit.scope.id,
-          });
-          continue;
-        }
-        this.logger.debug?.("messaging delivery rate-limited; not retrying non-replayable attempt", {
-          bindingId: binding?.id ?? intent.bindingId,
-          intentId: routedIntent.id,
-          intentKind: routedIntent.kind,
-          priority,
-          retryAfterMs: result.rateLimit.retryAfterMs,
-          scopeId: result.rateLimit.scope.id,
-        });
-      }
-      await this.options.store.recordDelivery({
-        ...result,
-        id: `delivery:${routedIntent.id}:${randomUUID()}`,
-        bindingId: binding?.id ?? intent.bindingId,
-        intentId: routedIntent.id,
-      });
-      this.recordOutboundActivity(routedIntent, binding, result);
-      if (
-        binding &&
-        result.channel === binding.channel.channel &&
-        !guard?.isCancelled() &&
-        isPermanentMessagingTargetFailure(result)
-      ) {
-        await this.options.store.revokeBinding({
-          bindingId: binding.id,
-          revokedAt: this.now(),
-        });
-        await this.bindingService.recordBindingTransition("unbound", binding);
-        this.bindingService.notifyBindingChanged("permanent-delivery-failure");
-        this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
-          bindingId: binding.id,
-          channel: binding.channel.channel,
-          conversationId: binding.channel.conversation.id,
-          errorMessage: result.errorMessage,
-          outcome: result.outcome,
-          threadId: binding.threadId,
-        });
-      }
-      return result;
-    }
+    return this.outboundDelivery.deliver(intent, binding, event, guard);
   }
 
   private async markWorkingCardWaiting(
@@ -5667,84 +5298,6 @@ export class MessagingController {
       id: this.newIntentId("working-card-waiting-idle"),
       state: "idle",
     }), binding);
-  }
-
-  private async deliverArtifactForBinding(params: {
-    artifact: MessagingArtifact;
-    binding: MessagingBindingRecord;
-    intentId: string;
-  }): Promise<void> {
-    const intent = buildArtifactDeliveryIntent({
-      artifact: params.artifact,
-      bindingId: params.binding.id,
-      capabilityProfile: this.capabilityProfile,
-      createdAt: this.now(),
-      id: params.intentId,
-    });
-    const result = await this.deliver(intent, params.binding);
-    if (!shouldRetryArtifactInline(intent, result)) {
-      return;
-    }
-    this.logger.debug?.("messaging artifact attachment delivery failed; retrying inline fallback", {
-      bindingId: params.binding.id,
-      errorMessage: result.errorMessage,
-      intentId: intent.id,
-      kind: params.artifact.kind,
-      outcome: result.outcome,
-      threadId: params.binding.threadId,
-    });
-    await this.deliver(
-      buildArtifactInlineFallbackIntent({
-        artifact: params.artifact,
-        bindingId: params.binding.id,
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        id: `${params.intentId}:inline-fallback`,
-      }),
-      params.binding,
-    );
-  }
-
-  private logDeliveryResult(
-    intent: MessagingSurfaceIntent,
-    binding: MessagingBindingRecord | undefined,
-    result: MessagingDeliveryResult,
-  ): void {
-    const logContext = {
-      bindingId: binding?.id ?? intent.bindingId,
-      channel: result.channel,
-      errorMessage: result.errorMessage,
-      intentId: intent.id,
-      intentKind: intent.kind,
-      outcome: result.outcome,
-      surfaceId: result.surface?.id,
-      threadId: binding?.threadId,
-    };
-    if (result.outcome === "failed") {
-      this.logger.warn?.("messaging delivery failed", logContext);
-    } else if (intent.kind === "stream_update" && !intent.stream.isFinal) {
-      // A streaming turn edits its message roughly once a second for its whole
-      // duration; logging every partial at info drowns the log. Keep the
-      // per-partial deliveries at debug — the final stream + message stay info.
-      this.logger.debug?.("messaging delivery completed", logContext);
-    } else {
-      this.logger.info?.("messaging delivery completed", logContext);
-    }
-  }
-
-  private notifyDeliveryBudgetEvent(
-    event: MessagingControllerDeliveryBudgetEvent,
-  ): void {
-    if (!this.options.onDeliveryBudgetEvent) return;
-    try {
-      this.options.onDeliveryBudgetEvent(event);
-    } catch (error) {
-      this.logger.debug?.("messaging delivery-budget listener threw", {
-        error: error instanceof Error ? error.message : String(error),
-        intentId: event.intentId,
-        outcome: event.outcome,
-      });
-    }
   }
 
   private async deliverToolActivityForBackendEvent(
@@ -6287,57 +5840,6 @@ export class MessagingController {
     return !this.options.channel || channel?.channel === this.options.channel;
   }
 
-  private withRoutingAudit(
-    intent: MessagingSurfaceIntent,
-    binding?: MessagingBindingRecord,
-    event?: MessagingInboundEvent,
-  ): MessagingSurfaceIntent {
-    const allowedActorIds = binding?.authorizedActorIds ?? (
-      event ? [event.actor.platformUserId] : undefined
-    );
-
-    if (intent.audit || (!binding && !event)) {
-      return allowedActorIds && !intent.allowedActorIds
-        ? { ...intent, allowedActorIds }
-        : intent;
-    }
-
-    const channel = binding?.channel ?? event?.channel;
-    if (!channel) {
-      return intent;
-    }
-    const targetRoutingState =
-      event?.routingState ??
-      (intent.kind === "activity" ? binding?.routingState : undefined);
-
-    return {
-      ...intent,
-      audit: buildMessagingAuditContext({
-        actor: event?.actor ?? {
-          platformUserId: binding?.authorizedActorIds[0] ?? "unknown",
-        },
-        action: "intent.deliver",
-        backend: binding?.backend,
-        bindingId: binding?.id ?? intent.bindingId,
-        channel,
-        now: this.now(),
-        threadId: binding?.threadId,
-      }),
-      ...(intent.targetSurface
-        ? { targetSurface: intent.targetSurface }
-        : targetRoutingState
-          ? {
-              targetSurface: {
-                channel: channel.channel,
-                id: event?.id ?? binding?.id ?? intent.id,
-                state: targetRoutingState,
-              },
-            }
-          : {}),
-      ...(allowedActorIds ? { allowedActorIds } : {}),
-    };
-  }
-
   /**
    * Authorize an agent dynamic-tool call against the RBAC actor who started the
    * turn. `owns: false` means this controller has no record of the turn (a
@@ -6676,63 +6178,6 @@ function proseActivityIdForBackendEvent(
   return `prose:${turnId}:${text.length}:${text.slice(0, 24)}`;
 }
 
-function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
-  if (intent.kind === "activity" || intent.kind === "dismiss") {
-    return false;
-  }
-  if (
-    intent.kind === "message" &&
-    intent.role === "system" &&
-    intent.id.startsWith("tool-update")
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function stripCodexGitActionDirectivesFromMessagingIntent(
-  intent: MessagingSurfaceIntent,
-): MessagingSurfaceIntent | undefined {
-  if (intent.kind === "message" && intent.role === "assistant") {
-    let changed = false;
-    const parts = intent.parts.map((part) => {
-      if (part.type !== "text") {
-        return part;
-      }
-      const text = stripCodexGitActionDirectives(part.text);
-      if (text === part.text) {
-        return part;
-      }
-      changed = true;
-      return { ...part, text };
-    });
-    if (!changed) {
-      return intent;
-    }
-    const hasDeliverablePart = parts.some(
-      (part) => part.type !== "text" || part.text.trim().length > 0,
-    );
-    return hasDeliverablePart ? { ...intent, parts } : undefined;
-  }
-
-  if (intent.kind === "stream_update" && intent.role === "assistant") {
-    const text = stripCodexGitActionDirectives(intent.text);
-    if (text === intent.text) {
-      return intent;
-    }
-    if (text.trim().length === 0) {
-      return undefined;
-    }
-    return {
-      ...intent,
-      delta: undefined,
-      text,
-    };
-  }
-
-  return intent;
-}
-
 function messagingEventFromAutomationSource(
   source: AutomationRunSourceMetadata,
 ): MessagingInboundTextEvent {
@@ -6761,66 +6206,6 @@ function messagingEventFromAutomationSource(
     routingState: source.routingState as MessagingAdapterState | undefined,
     text: source.message?.text ?? "",
   };
-}
-
-export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
-  if (intent.kind === "stream_update" && !intent.stream.isFinal) {
-    return false;
-  }
-  return intent.kind !== "activity";
-}
-
-export function messagingDeliveryPriority(
-  intent: MessagingSurfaceIntent,
-  context?: { userInitiated?: boolean },
-): MessagingDeliveryPriority {
-  switch (intent.kind) {
-    case "approval":
-      if (intent.decisions.length === 0) {
-        return "routine_status";
-      }
-      return "critical_interactive";
-    case "questionnaire":
-    case "review":
-      return "critical_interactive";
-    case "stream_update":
-      return intent.stream.isFinal ? "final_turn" : "stream_partial";
-    case "working_card":
-      return intent.card.isFinal ? "final_turn" : "tool_progress";
-    case "message":
-      if (intent.id.startsWith("assistant-resume-repost-important")) {
-        return "user_command";
-      }
-      if (intent.id.startsWith("assistant-resume-repost")) {
-        return "routine_status";
-      }
-      if (intent.role === "assistant") {
-        return "final_turn";
-      }
-      if (intent.role === "system" && intent.id.startsWith("tool-update")) {
-        return "tool_progress";
-      }
-      return "user_command";
-    case "status":
-      if (context?.userInitiated) {
-        return "user_command";
-      }
-      if (intent.delivery?.mode === "present" && intent.delivery.pin === true) {
-        return "user_command";
-      }
-      return "routine_status";
-    case "activity":
-    case "progress":
-    case "dismiss":
-      return "routine_status";
-    case "thread_picker":
-    case "project_picker":
-    case "single_select":
-    case "multi_select":
-    case "confirmation":
-    case "error":
-      return "user_command";
-  }
 }
 
 export function updateWorkingCardActivities(
@@ -6860,31 +6245,6 @@ export function rememberWorkingCardState(
   return evicted;
 }
 
-function isUserInitiatedDeliveryEvent(
-  event: MessagingInboundEvent | undefined,
-): boolean {
-  return Boolean(
-    event &&
-      (event.kind === "callback" ||
-        event.kind === "command" ||
-        event.kind === "media" ||
-        event.kind === "text"),
-  );
-}
-
-function sleepUntil(
-  retryAt: number,
-  now: () => number,
-): Promise<void> {
-  const delayMs = Math.max(0, retryAt - now());
-  if (delayMs === 0) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-}
-
 function isClaudeSessionGoneFailure(event: AgentEvent): boolean {
   if (event.backend !== "claude" || event.notification.method !== "turn/failed") {
     return false;
@@ -6910,34 +6270,6 @@ function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean, manualRet
     ? " To submit it as a steering message, click Steer."
     : "";
   return `${quotedPreview}\n\nI got your message, but there is a turn in progress. I've queued it to be sent when the turn completes.${steeringSentence} You can cancel if you don't want this queued.`;
-}
-
-function shouldRetryArtifactInline(
-  intent: MessagingArtifactMessageIntent,
-  result: MessagingDeliveryResult,
-): boolean {
-  return (
-    intent.artifactDelivery.mode === "attachment_summary" &&
-    (result.outcome === "failed" || result.outcome === "unsupported")
-  );
-}
-
-function shouldRecordOutboundActivity(
-  intent: MessagingSurfaceIntent,
-  result: MessagingDeliveryResult,
-): boolean {
-  if (
-    result.outcome === "discarded" ||
-    result.outcome === "failed" ||
-    result.outcome === "unsupported" ||
-    result.outcome === "dismissed"
-  ) {
-    return false;
-  }
-  if (intent.kind === "stream_update" && !intent.stream.isFinal) {
-    return false;
-  }
-  return intent.kind !== "activity" && intent.kind !== "dismiss";
 }
 
 function assistantMessageDeliveryKeys(
