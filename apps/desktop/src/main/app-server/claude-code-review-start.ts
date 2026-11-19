@@ -30,18 +30,14 @@ async function soleCheckoutRepository(
 }
 
 /**
- * The `/code-review` command a `claude-code-review` request sends, after the
- * owner's checks: a Claude thread, its own workspace, a target the command
- * takes, an effort level it knows, and only pull requests attached to the
- * thread. Claude Code reads each pull request when its turn starts, so no
- * snapshot is captured.
+ * Check the thread, workspace, and target at admission and again at start.
+ * Claude Code reads each pull request when its turn starts.
  */
-export async function prepareClaudeCodeReview(params: {
+export function validateClaudeCodeReview(params: {
   request: StartReviewRequest;
   threadCwd: string | undefined;
   prs: readonly PrSummary[];
-  resolveRepositories?: (cwd: string) => Promise<GitHubRepoRef[]>;
-}): Promise<string> {
+}): string[] {
   const { request } = params;
   if (request.backend !== "claude" || (request.reviewBackend && request.reviewBackend !== "claude")) {
     throw new Error("Claude Code's /code-review runs only in a Claude thread, as its own reviewer.");
@@ -71,6 +67,16 @@ export async function prepareClaudeCodeReview(params: {
   if (urls.some((url) => !attached.has(normalizePullRequestUrl(url)))) {
     throw new Error("Review not started: select pull requests attached to this thread.");
   }
+  return urls;
+}
+
+/** Resolve whether the command can refer to attached PRs by number. */
+export async function prepareClaudeCodeReview(params: Parameters<typeof validateClaudeCodeReview>[0] & {
+  resolveRepositories?: (cwd: string) => Promise<GitHubRepoRef[]>;
+}): Promise<string> {
+  const { request } = params;
+  const urls = validateClaudeCodeReview(params);
+  const threadCwd = params.threadCwd?.trim();
   const repository = urls.length > 0 && threadCwd
     ? await soleCheckoutRepository(threadCwd, params.resolveRepositories ?? resolveGitHubReposForDirectory)
     : undefined;

@@ -1,6 +1,6 @@
 import type { MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
-import type { ReviewAfterAction, ReviewRunMode } from "@pwragent/shared";
-import type { AppServerBackendKind, AppServerReviewTarget, MessagingPermissionId } from "@pwragent/shared";
+import type { MessagingPermissionId } from "@pwragent/shared";
+import type { MessagingReviewSubmission } from "./messaging-review-context";
 import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundCommandEvent, MessagingInboundEvent, MessagingInboundMediaEvent, MessagingInboundTextEvent, MessagingManagedTopicRecord, MessagingMonitorSubscriptionRecord, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
@@ -24,7 +24,7 @@ export interface MessagingCommandHost {
   readonly admitTurnInput: (params: { binding: MessagingBindingRecord; event: MessagingTurnInputEvent; }) => Promise<boolean>;
   readonly reviewSupportedForBinding: (binding: MessagingBindingRecord) => Promise<boolean>;
   readonly deliverReviewUnsupported: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => Promise<void>;
-  readonly submitMessagingReview: (params: { binding: MessagingBindingRecord; event: MessagingInboundEvent; target: AppServerReviewTarget; cwd?: string; runMode?: ReviewRunMode; afterReview?: ReviewAfterAction; reviewBackend?: AppServerBackendKind; reviewerLabel?: string; model?: string; reasoningEffort?: string; targetSurface?: MessagingSurfaceRef; pendingIntentId?: string; }) => Promise<void>;
+  readonly submitMessagingReview: (params: MessagingReviewSubmission) => Promise<void>;
   readonly presentReviewPicker: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => Promise<void>;
   readonly deliverDefaultAgentCommandError: (event: MessagingInboundEvent, body: string) => Promise<void>;
   readonly presentDefaultAgentAssignmentBrowser: (event: MessagingInboundEvent, scopeKind: MessagingDefaultAgentScopeKind) => Promise<void>;

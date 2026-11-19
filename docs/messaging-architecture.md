@@ -907,8 +907,15 @@ The help surface and unknown-command fallback automatically pick up the new verb
   implicitly.
 - The picker supports current changes, base branch, commit, and custom
   instruction targets.
-- A review request queues behind an active turn and starts only after successful
-  completion.
+- `/review --pr <url>` targets one attached pull request. `/review --pr 12 13`
+  starts one combined review of two attached PRs. Use PR numbers, GitHub.com
+  PR URLs, or a mix, separated by spaces or commas. A number must identify a
+  single attachment. A combined review takes two to eight distinct PRs from one
+  repository and uses the PwrAgent Sub Agent or Claude Code's `/code-review` on
+  a Claude thread with a compatible owner. See [review targeting](review-targeting.md#reviewing-several-pull-requests-together).
+- For a locally owned thread, a review request queues behind an active turn
+  and starts after that turn completes successfully. A federated PR review
+  submits to the bound thread's owner.
 - `start_review` uses the shared Agent-tool catalog and rejects duplicate
   requests by call identity.
 

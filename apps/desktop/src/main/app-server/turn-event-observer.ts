@@ -11,6 +11,8 @@ export interface TurnEventDelivery {
   readonly codexStartDelivery: CodexStartDeliveryReceipt | undefined;
   managedReview?: ReviewSubAgentRecord;
   lifecycleTurnId?: string;
+  /** Provider work that can wait for the consumer that emitted this event. */
+  afterDelivery?: () => Promise<void>;
   endedTurnIds?: Set<string>;
   withdrawnForgeApprovals?: AppServerPendingRequestNotification[];
 }
@@ -46,15 +48,20 @@ export class TurnEventObservers {
     const delivery: TurnEventDelivery = {
       event, liveThreadUsageWork, precedingLiveThreadUsageBarrier, codexStatusSequence, codexStartDelivery,
     };
-    for (const observer of this.observers) {
-      const method = delivery.event.notification.method;
-      const handler = observer.onEvent ?? (method === "turn/started" ? observer.onTurnStarted
-        : method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled" ? observer.onTurnTerminal
-          : method === "thread/status/changed" ? observer.onStatusChanged : undefined);
-      const result = handler?.(delivery);
-      // Synchronous stages stay synchronous. In particular, a false result is
-      // the old hub's early return, not merely a skip of this observer.
-      if ((result instanceof Promise ? await result : result) === false) return;
+    try {
+      for (const observer of this.observers) {
+        const method = delivery.event.notification.method;
+        const handler = observer.onEvent ?? (method === "turn/started" ? observer.onTurnStarted
+          : method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled" ? observer.onTurnTerminal
+            : method === "thread/status/changed" ? observer.onStatusChanged : undefined);
+        const result = handler?.(delivery);
+        // Synchronous stages stay synchronous. In particular, a false result is
+        // the old hub's early return, not merely a skip of this observer.
+        if ((result instanceof Promise ? await result : result) === false) return;
+      }
+    } finally {
+      const afterDelivery = delivery.afterDelivery;
+      if (afterDelivery) setImmediate(() => { void afterDelivery(); });
     }
   }
 }

@@ -1,11 +1,14 @@
 import {
+  EXPLICIT_REVIEW_PULL_REQUEST_URL,
   nativeReviewTarget,
   normalizePullRequestUrl,
+  PULL_REQUEST_SET_MAX,
   pullRequestRepositoryKey,
   pullRequestReviewPromptUrl,
+  pullRequestSetProblem,
   pullRequestSetReviewInstructions,
 } from "./pull-request-review";
-import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
+import type { AppServerBackendKind, AppServerReviewOutput, AppServerReviewTarget, BackendSummary, ReviewRunMode } from "@pwragent/shared";
 import { normalizeReviewConfidenceScore } from "./review-output";
 
 export type ParsedReviewCommand = {
@@ -203,6 +206,40 @@ export function parseReviewCommand(input: string): ParsedReviewCommand | undefin
   };
 }
 
+/** Parse the explicit messaging `--pr` arguments using the bound thread's attachments. */
+export function parseReviewPullRequestArguments(
+  input: string,
+  attached: readonly { url: string }[],
+): Extract<AppServerReviewTarget, { type: "pullRequest" | "pullRequests" }> {
+  const references = input.trim().split(/\s*,\s*|\s+/, PULL_REQUEST_SET_MAX + 1);
+  if (references.some(reference => !reference)) {
+    throw new Error("Use /review --pr followed by PR numbers or GitHub.com PR URLs, separated by spaces or commas.");
+  }
+  if (references.length > PULL_REQUEST_SET_MAX) {
+    throw new Error(`A combined review takes at most ${PULL_REQUEST_SET_MAX} pull requests.`);
+  }
+  const attachedUrls = new Set(attached.map(pr => normalizePullRequestUrl(pr.url)));
+  const urls = references.map(reference => {
+    if (EXPLICIT_REVIEW_PULL_REQUEST_URL.test(normalizePullRequestUrl(reference))) return reference;
+    const number = /^#?([1-9][0-9]*)$/.exec(reference)?.[1];
+    if (!number) throw new Error("Use an attached GitHub.com PR URL or PR number.");
+    const matches = [...attachedUrls].filter(url => EXPLICIT_REVIEW_PULL_REQUEST_URL.exec(url)?.[4] === number);
+    if (matches.length !== 1) {
+      throw new Error(`PR #${number} must identify one attached GitHub.com pull request. Use the full URL if the number is ambiguous.`);
+    }
+    return matches[0]!;
+  });
+  if (urls.length === 1) return { type: "pullRequest", url: urls[0]! };
+
+  const problem = pullRequestSetProblem(urls);
+  if (problem) throw new Error(problem);
+  const normalized = urls.map(normalizePullRequestUrl);
+  if (normalized.some(url => !attachedUrls.has(url))) {
+    throw new Error("Select pull requests attached to this thread.");
+  }
+  return { type: "pullRequests", pullRequests: normalized.map(url => ({ url })) };
+}
+
 function stripWrappingQuotes(value: string): string {
   const trimmed = value.trim();
   return trimmed.replace(/^(['"])(.*)\1$/, "$2").trim();
@@ -331,6 +368,20 @@ export function reviewTargetInstructions(target: AppServerReviewTarget): string 
  */
 export const CLAUDE_CODE_REVIEW_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ClaudeCodeReviewLevel = (typeof CLAUDE_CODE_REVIEW_LEVELS)[number];
+export const DEFAULT_CLAUDE_CODE_REVIEW_LEVEL: ClaudeCodeReviewLevel = "high";
+
+/** Claude Code is the default reviewer on a compatible Claude thread. */
+export function prefersClaudeCodeReview(params: {
+  ownerSummary?: BackendSummary;
+  requestedRunMode?: ReviewRunMode;
+  reviewerChosen?: boolean;
+  thread?: { source: AppServerBackendKind };
+}): boolean {
+  return params.thread?.source === "claude"
+    && params.ownerSummary?.capabilities.reviewClaudeCodeReview === true
+    && (params.requestedRunMode === "claude-code-review"
+      || (params.requestedRunMode === undefined && !params.reviewerChosen));
+}
 
 export function isClaudeCodeReviewLevel(value: unknown): value is ClaudeCodeReviewLevel {
   return typeof value === "string"

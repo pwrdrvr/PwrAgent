@@ -124,6 +124,7 @@
     "backend.setThreadTokenMiser",
     "backend.starMapIntake",
     "backend.startExtendedReview",
+    "backend.startMessagingClaudeReview",
     "backend.startPullRequestReview",
     "backend.startReview",
     "backend.startThread",

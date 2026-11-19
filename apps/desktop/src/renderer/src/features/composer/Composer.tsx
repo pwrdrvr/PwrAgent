@@ -270,6 +270,7 @@ import {
 import {
   claudeCodeReviewCommand,
   type ClaudeCodeReviewLevel,
+  DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
   formatReviewCommand,
   parseReviewCommand,
 } from "../../../../shared/review-command";
@@ -1186,8 +1187,6 @@ const CLAUDE_CODE_REVIEW_TARGET_OPTIONS: typeof REVIEW_TARGET_OPTIONS = [
     description: "Review one file or folder",
   },
 ];
-
-const DEFAULT_CLAUDE_CODE_REVIEW_LEVEL: ClaudeCodeReviewLevel = "high";
 
 /**
  * The `/code-review` commands a Claude Code review sends: one, or one per

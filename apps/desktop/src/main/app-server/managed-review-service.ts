@@ -29,7 +29,11 @@ import type {
   ThreadStartParams as CodexThreadStartParams,
   ThreadSource as CodexThreadSource,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
-import type { NamedReviewPullRequest } from "../../shared/review-command";
+import {
+  DEFAULT_CLAUDE_CODE_REVIEW_LEVEL,
+  prefersClaudeCodeReview,
+  type NamedReviewPullRequest,
+} from "../../shared/review-command";
 import { formatReviewOutputText, parseReviewOutputText } from "../../shared/review-output";
 import type { CodexPwrdrvrTokenMiserActivation } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
@@ -57,12 +61,12 @@ import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt } from "./managed-review";
-import { prepareClaudeCodeReview } from "./claude-code-review-start";
+import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
 import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import { refreshReviewBaseBranch } from "./review-base-branch";
 import { resolveReviewProvenance } from "./review-provenance";
-import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
+import { assertReviewWorkspaceMatchesAttachedPullRequest, normalizeWorkspacePath } from "./review-workspace-guard";
 import type { ThreadInfoStore } from "./thread-info-store";
 import { buildReviewStartFailurePrompt, reviewStartFailureFingerprint } from "./thread-orchestration-prompts";
 import {
@@ -106,6 +110,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   "assertNotBootstrap" | "assertThreadNotLocked" | "assertThreadOwnership" | "getActiveTurnForThread" | "getClient"
   | "invalidateThreadListCache" | "isLiveDynamicToolCall" | "readCodexDefaultModelsOnce"
   | "readDelegatedTurnAncestry" | "readThread" | "resolveCodexThreadExecutionModeForActiveTurn"
+  | "readTurnCausalMessagingOrigin"
   | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "startAcpSession"
   | "startAcpTurn" | "startTurn" | "submitTurn" | "threadHasActiveTurn"
   | "withArchiveWorkspaceWrite" | "withCodexThreadClient"
@@ -231,13 +236,25 @@ export class ManagedReviewService {
       && managedReview.reviewThreadId === managedReview.parentThreadId
       ? managedReview.turnId
       : turnId;
-    await this.drainPendingReviewStartsForTerminalTurn({
+    const terminal = {
       backend: event.backend,
       threadId: notification.params.threadId,
       turnId: lifecycleTurnId,
       method: event.notification.method,
-    });
+    };
     delivery.lifecycleTurnId = lifecycleTurnId;
+    if (terminal.backend === "claude" && terminal.method === "turn/completed"
+      && [...this.context.turnState.reviewAdmissions()].some(candidate =>
+        candidate.backend === terminal.backend && candidate.threadId === terminal.threadId
+        && candidate.invokingTurnId === terminal.turnId && candidate.status === "scheduled")) {
+      // A new Claude turn may relaunch the live query and join its consumer.
+      // That consumer is still awaiting this terminal delivery.
+      delivery.afterDelivery = () => this.drainPendingReviewStartsForTerminalTurn(terminal).catch(error => {
+        backendRegistryLog.warn("Could not release queued Claude reviews", { threadId: terminal.threadId, error: String(error) });
+      });
+      return;
+    }
+    await this.drainPendingReviewStartsForTerminalTurn(terminal);
   }
 
   /** Live review sub-agents by review turn, for the registry's usage reads. */
@@ -300,12 +317,15 @@ export class ManagedReviewService {
    */
   private async resolveAgentToolReviewBackend(
     threadBackend: AppServerBackendKind,
+    requiresManaged: boolean,
   ): Promise<AppServerBackendKind | undefined> {
-    try {
-      this.assertReviewBackendSupported(threadBackend);
-      return threadBackend;
-    } catch {
-      // A Claude thread reviews on another provider.
+    if (!requiresManaged || threadBackend !== "codex") {
+      try {
+        this.assertReviewBackendSupported(threadBackend);
+        return threadBackend;
+      } catch {
+        // Look for an installed managed reviewer.
+      }
     }
     try {
       const methods = (await this.host().getClient("codex").getInitializeResult()).methods ?? [];
@@ -336,8 +356,20 @@ export class ManagedReviewService {
     params: StartReviewRequest,
     trustedSnapshot = false,
   ): Promise<StartReviewRequest> {
-    // Claude Code reads each pull request when its turn starts; nothing is pinned.
-    if (params.runMode === "claude-code-review") return params;
+    if (params.runMode === "claude-code-review") {
+      const overlay = await this.context.stores.threads.getThreadOverlayState({
+        backend: params.backend, threadId: params.threadId,
+      });
+      validateClaudeCodeReview({
+        request: params,
+        threadCwd: params.cwd
+          ? await this.host().resolveThreadEnvironmentCwd(params.backend, params.threadId, overlay)
+          : undefined,
+        prs: overlay?.prs ?? [],
+      });
+      // Claude Code reads each pull request when its turn starts.
+      return params;
+    }
     if (params.target.type !== "pullRequest" && params.target.type !== "pullRequests") return params;
     const overlay = await this.context.stores.threads.getThreadOverlayState({
       backend: params.backend, threadId: params.threadId,
@@ -369,7 +401,7 @@ export class ManagedReviewService {
     // Armed before the start, so a review that lands at once still fixes.
     const autoFix = getReviewAutoFixArming().starting(
       { backend: params.backend, threadId: params.threadId },
-      params.afterReview,
+      params.messagingSource ? "wait" : params.afterReview,
     );
     try {
       const response = params.runMode === "claude-code-review"
@@ -405,6 +437,7 @@ export class ManagedReviewService {
       backend: params.backend,
       threadId: params.threadId,
       input: [{ type: "text", text: command }],
+      ...(params.messagingSource ? { messageOrigin: { kind: "pwragent", causalMessagingSource: params.messagingSource } } : {}),
     });
     backendRegistryLog.info("code review started", {
       mode: "claude-code-review", parentBackend: params.backend,
@@ -1330,7 +1363,9 @@ export class ManagedReviewService {
             },
           },
         });
-        failures.push({ error: message, target: candidate.request.target });
+        // Messaging already receives the failure event. A separate agent
+        // retry prompt would run outside the contact's turn.
+        if (!candidate.request.messagingSource) failures.push({ error: message, target: candidate.request.target });
       }
     }
     if (failures.length > 0) {
@@ -1998,38 +2033,67 @@ export class ManagedReviewService {
         "Selected backend does not support review/start.",
       );
     }
-    // The start runs after this turn ends, where a failure reaches only the
-    // log. Choose the reviewer now, so a review that cannot run fails here.
-    const reviewBackend = await this.resolveAgentToolReviewBackend(
-      request.context.backend,
-    );
-    if (!reviewBackend) {
-      return threadOrchestrationFailure(
-        "unsupported_backend",
-        `${request.context.backend} cannot run reviews, and no other installed provider can run one for this thread.`,
-      );
-    }
-    const reviewBackendDiffers = reviewBackend !== request.context.backend;
-    if (reviewBackendDiffers && request.args.runMode === "codex-sub-agent") {
-      return threadOrchestrationFailure(
-        "invalid_arguments",
-        `This thread's reviews run on ${reviewBackend}, which requires runMode pwragent-sub-agent.`,
-      );
-    }
-
     try {
+      const { backend, threadId } = request.context;
+      const { target, cwd, runMode: requestedRunMode } = request.args;
+      const combined = target.type === "pullRequests";
+      if (combined && requestedRunMode === "codex-sub-agent") {
+        return threadOrchestrationFailure("invalid_arguments", "A combined review requires PwrAgent Sub Agent or Claude Code.");
+      }
+      const claudeCodeReview = (combined || requestedRunMode === "claude-code-review") && prefersClaudeCodeReview({
+        ownerSummary: backend === "claude" ? this.context.providers.claude.summary() : undefined,
+        requestedRunMode,
+        thread: { source: backend },
+      });
+      if (requestedRunMode === "claude-code-review" && !claudeCodeReview) {
+        return threadOrchestrationFailure("unsupported_backend", "Claude Code's /code-review runs only in a compatible Claude thread.");
+      }
+      let runMode = requestedRunMode;
+      if (combined && runMode === undefined) {
+        const primaryCwd = claudeCodeReview && cwd
+          ? await this.host().resolveThreadEnvironmentCwd(
+              backend, threadId, await this.context.stores.threads.getThreadOverlayState({ backend, threadId }),
+            )
+          : undefined;
+        const anotherWorkspace = primaryCwd && cwd
+          && normalizeWorkspacePath(primaryCwd) !== normalizeWorkspacePath(cwd);
+        runMode = claudeCodeReview && !anotherWorkspace ? "claude-code-review" : "pwragent-sub-agent";
+      }
+
+      // Choose the reviewer before queuing, while the tool can report an unavailable engine.
+      const reviewBackend = runMode === "claude-code-review" ? backend
+        : await this.resolveAgentToolReviewBackend(backend, combined);
+      if (!reviewBackend) {
+        return threadOrchestrationFailure(
+          "unsupported_backend",
+          `${backend} cannot run reviews, and no other installed provider can run one for this thread.`,
+        );
+      }
+      const reviewBackendDiffers = reviewBackend !== backend;
+      if (reviewBackendDiffers && runMode === "codex-sub-agent") {
+        return threadOrchestrationFailure(
+          "invalid_arguments",
+          `This thread's reviews run on ${reviewBackend}, which requires runMode pwragent-sub-agent.`,
+        );
+      }
+      const origin = runMode === "claude-code-review" ? await this.host().readTurnCausalMessagingOrigin(request.context) : undefined;
+      if (origin?.causalMessagingAmbiguous || ((origin?.kind === "messaging" || origin?.messaging) && !origin.causalMessagingSource)) {
+        return threadOrchestrationFailure("forbidden", "Claude Code review could not preserve the requesting contact's permissions.");
+      }
       const pending = this.scheduleReviewStart({
         invokingTurnId,
         turnAttribution: await this.host().readDelegatedTurnAncestry(request.context),
         idempotencyKey: request.context.callId,
         request: await this.prepareReviewRequest({
-          backend: request.context.backend,
-          threadId: request.context.threadId,
-          target: request.args.target,
-          runMode: request.args.runMode,
+          backend,
+          threadId,
+          target,
+          runMode,
           delivery: "inline",
+          ...(runMode === "claude-code-review" ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL } : {}),
+          ...(origin?.causalMessagingSource ? { messagingSource: origin.causalMessagingSource } : {}),
           ...(reviewBackendDiffers ? { reviewBackend } : {}),
-          ...(request.args.cwd ? { cwd: request.args.cwd } : {}),
+          ...(cwd ? { cwd } : {}),
         }),
       });
       return {

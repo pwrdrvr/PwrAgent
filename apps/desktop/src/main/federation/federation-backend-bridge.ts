@@ -596,7 +596,8 @@ export function additionalFederationBackendCapabilities(
   const required: FederationCapability[] = [];
   const payload = envelope.params as { messageOrigin?: { kind?: string; causalMessagingSource?: unknown }; request?: { messageOrigin?: { kind?: string; causalMessagingSource?: unknown } } } | undefined;
   const origin = envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest ? payload?.request?.messageOrigin : payload?.messageOrigin;
-  if (origin?.kind === "messaging" || origin?.causalMessagingSource) required.push("messaging_route");
+  if (origin?.kind === "messaging" || origin?.causalMessagingSource
+    || envelope.method === FEDERATION_BACKEND_METHODS.startMessagingClaudeReview) required.push("messaging_route");
   if (envelope.method === FEDERATION_BACKEND_METHODS.updateSubthreadOrder
     && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) required.push("archive_subthread_promotion_v1");
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
@@ -1594,26 +1595,30 @@ export function registerFederationBackendHandlers(params: {
         ),
     );
   }
+  for (const method of [FEDERATION_BACKEND_METHODS.startReview, FEDERATION_BACKEND_METHODS.startPullRequestReview,
+    FEDERATION_BACKEND_METHODS.startExtendedReview]) {
+    params.router.registerHandler(method, async (envelope) => {
+      const request = envelope.params as StartReviewRequest;
+      if (request.messagingSource !== undefined) throw new Error("Use the messaging Claude review route to preserve the contact's permissions.");
+      return await params.backend.startReview(request);
+    });
+  }
   params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.startReview,
-    async (envelope) =>
-      await params.backend.startReview(
-        envelope.params as StartReviewRequest,
-      ),
-  );
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.startPullRequestReview,
-    async (envelope) =>
-      await params.backend.startReview(
-        envelope.params as StartReviewRequest,
-      ),
-  );
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.startExtendedReview,
-    async (envelope) =>
-      await params.backend.startReview(
-        envelope.params as StartReviewRequest,
-      ),
+    FEDERATION_BACKEND_METHODS.startMessagingClaudeReview,
+    async (envelope) => {
+      const request = envelope.params as StartReviewRequest;
+      const source = request.messagingSource;
+      if (request.backend !== "claude" || request.runMode !== "claude-code-review"
+        || typeof source?.ownerId !== "string" || !source.ownerId
+        || typeof source.requestId !== "string" || !source.requestId
+        || (source.instanceId !== undefined && source.instanceId !== envelope.sourceInstanceId)) {
+        throw new Error("The messaging contact's permissions could not be preserved for this review.");
+      }
+      return await params.backend.startReview({
+        ...request,
+        messagingSource: { ...source, instanceId: envelope.sourceInstanceId },
+      });
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
@@ -2868,6 +2873,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
     if (request.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
+    if (request.messagingSource) {
+      try {
+        return await this.rpc.request<StartReviewResponse>({ method: FEDERATION_BACKEND_METHODS.startMessagingClaudeReview, params: request });
+      } catch (error) {
+        if (hasFederationErrorCode(error, "method_not_found")) {
+          throw new Error("Update PwrAgent on the owning instance to preserve the messaging contact's permissions in Claude reviews.", { cause: error });
+        }
+        throw error;
+      }
+    }
     const route = federationReviewRoute(request);
     return await withExtendedReviewOwner(route, async () => await this.rpc.request<StartReviewResponse>({
       // A distinct route makes older owners fail closed instead of treating

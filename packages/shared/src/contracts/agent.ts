@@ -6,6 +6,7 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerThreadImagePart,
   LinkedDirectorySummary,
+  MessagingCausalSourceRef,
   ThreadExecutionMode,
   AppServerReviewDelivery,
   AppServerReviewTarget,
@@ -451,6 +452,8 @@ export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent" | "claude-c
 export type ReviewAfterAction = "auto-fix" | "wait";
 
 export type StartReviewRequest = {
+  /** Owner-generated messaging provenance for a Claude Code review turn. */
+  messagingSource?: MessagingCausalSourceRef;
   /**
    * Omitted means `wait`, so an owner never starts fixing for a viewer that
    * did not ask. Viewers send it only to an owner whose backend advertises

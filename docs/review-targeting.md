@@ -119,6 +119,23 @@ and Claude Code's run mode travel on separate extended-review Federation routes
 `backend.updateScheduledExtendedReview`), so an older owner answers
 `method_not_found` and the viewer says to update it, instead of reviewing one PR.
 
+From a bound messaging conversation, use `/review --pr 12 13` or pass full
+GitHub.com PR URLs after `--pr`. Separate entries with spaces or commas. A number
+must identify exactly one PR attached to the thread. `/review --pr <url>` still
+starts a single-PR review.
+
+For the `start_review` agent tool, pass a target such as
+`{"type":"pullRequests","pullRequests":[{"url":"https://github.com/org/repo/pull/12"},{"url":"https://github.com/org/repo/pull/13"}]}`.
+It schedules one review after the calling turn completes successfully. Both
+surfaces require two to eight distinct, attached PRs from one repository for
+a combined review. They default to the PwrAgent Sub Agent, or to Claude Code
+on a Claude thread when reviewing in its own workspace with an owner that
+supports `/code-review`. Claude Code uses the panel's default `high` effort.
+Messaging requires reply permission and also requires remote control for a
+peer's thread. Claude Code review turns retain the initiating contact's tool
+permissions, including when queued or sent to a peer. A messaging connection
+or peer must support retained contact provenance to run the review.
+
 ## Claude Code's `/code-review`
 
 On a Claude thread whose owner advertises `reviewClaudeCodeReview`, the panel's
