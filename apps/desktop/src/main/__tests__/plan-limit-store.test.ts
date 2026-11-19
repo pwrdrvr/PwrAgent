@@ -4,7 +4,8 @@ import type { SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk"
 import type { BackendRateLimitSummary } from "@pwragent/shared";
 import { PlanLimitStore } from "../app-server/plan-limit-store";
 import {
-  CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeRateLimits, claudeStreamRateLimits,
+  CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeCreditsRenewTogether, claudeRateLimits,
+  claudeStreamRateLimits,
 } from "../claude/claude-usage";
 
 const hour = 3_600_000;
@@ -19,7 +20,18 @@ function storeAt(start: number) {
 function claude(store: PlanLimitStore, limits: BackendRateLimitSummary[], precise = false): boolean {
   return store.record("claude", {
     limits: limits.map(canonicalClaudeRateLimit), precise, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+    creditsRenewTogether: claudeCreditsRenewTogether,
     ...(precise ? { dated: true } : {}),
+  });
+}
+
+/** A probe whose request was overtaken by another CLI's probe: precise but not the newest. */
+function overtakenProbe(store: PlanLimitStore, limits: BackendRateLimitSummary[]): boolean {
+  const since = store.mark("claude");
+  claude(store, [], true);
+  return store.record("claude", {
+    limits: limits.map(canonicalClaudeRateLimit), precise: true, since, dated: true,
+    resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS, creditsRenewTogether: claudeCreditsRenewTogether,
   });
 }
 
@@ -135,6 +147,137 @@ describe("PlanLimitStore", () => {
           expect(store.limits("claude")?.[0].usedPercent).toBe(probed);
         },
       ));
+    });
+
+    it("believes a consistent run of lower readings after a credit no newest probe saw", () => {
+      // The oracle: after a reset credit the account's usage restarts low and
+      // only rises. Readings that agree on that new line describe the account,
+      // even when every one is a stream reading or an overtaken probe. By the
+      // second such reading the shown value is the latest one.
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const reset = Date.parse("2026-11-24T11:00:00Z");
+      const fable = (usedPercent: number) => ({ name: "Weekly Fable limit",
+        limitId: "seven_day_overage_included", usedPercent, resetAt: reset, windowMinutes: 10_080 });
+      fc.assert(fc.property(
+        fc.integer({ min: 10, max: 100 }),
+        fc.integer({ min: 0, max: 20 }),
+        fc.array(fc.record({ rise: fc.integer({ min: 0, max: 3 }), probe: fc.boolean() }),
+          { minLength: 2, maxLength: 8 }),
+        (before, startRaw, steps) => {
+          const { store } = storeAt(now);
+          claude(store, [fable(before)], true);
+          let used = Math.min(startRaw, before - 10);
+          const seen: number[] = [];
+          for (const { rise, probe } of steps) {
+            if (used + rise <= before - 10) used += rise;
+            seen.push(used);
+            if (probe) overtakenProbe(store, [fable(used)]);
+            else claude(store, [fable(used)]);
+          }
+          expect(store.limits("claude")?.[0].usedPercent).toBe(seen.at(-1));
+        },
+      ));
+    });
+
+    it("still ignores lower readings that are late or alone", () => {
+      // The forward-only rule's purpose: readings a few points low are older
+      // ones arriving late, and one far-low reading alone proves nothing.
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const weekly = (usedPercent: number) => ({ name: "Weekly limit", limitId: "seven_day", usedPercent,
+        resetAt: Date.parse("2026-11-24T11:00:00Z"), windowMinutes: 10_080 });
+      fc.assert(fc.property(
+        fc.integer({ min: 5, max: 100 }),
+        fc.array(fc.record({ drop: fc.integer({ min: 0, max: 4 }), probe: fc.boolean() }), { maxLength: 8 }),
+        fc.integer({ min: 0, max: 100 }),
+        (before, late, alone) => {
+          const { store } = storeAt(now);
+          claude(store, [weekly(before)], true);
+          for (const { drop, probe } of late) {
+            if (probe) overtakenProbe(store, [weekly(before - drop)]);
+            else claude(store, [weekly(before - drop)]);
+          }
+          claude(store, [weekly(Math.min(alone, before))]);
+          expect(store.limits("claude")?.[0].usedPercent).toBe(before);
+        },
+      ));
+    });
+
+    it("drops a Fable window no reading names once a credit lowers the weekly window", () => {
+      // A Fable reset gives back what Fable used on the weekly limit. A CLI
+      // running another model never names Fable, so the held Fable value is
+      // stale from that credit on, until a Fable reading names it again.
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const reset = Date.parse("2026-11-24T11:00:00Z");
+      const weekly = { name: "Weekly limit", limitId: "seven_day", usedPercent: 73, resetAt: reset,
+        windowMinutes: 10_080 };
+      const fable = { name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 99,
+        resetAt: reset, windowMinutes: 10_080 };
+      const fiveHour = { name: "5-hour limit", limitId: "five_hour", usedPercent: 40, resetAt: now + 2 * hour,
+        windowMinutes: 300 };
+      // Renews with the weekly window, but a Fable reset does not credit it.
+      const sonnet = { name: "Weekly Sonnet limit", limitId: "seven_day_sonnet", usedPercent: 60, resetAt: reset,
+        windowMinutes: 10_080 };
+      for (const lower of [
+        (store: PlanLimitStore) => store.record("claude", { limits: [{ ...weekly, usedPercent: 25 }],
+          precise: true, since: store.mark("claude"), dated: true, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+          creditsRenewTogether: claudeCreditsRenewTogether }),
+        (store: PlanLimitStore) => {
+          overtakenProbe(store, [{ ...weekly, usedPercent: 25 }]);
+          claude(store, [{ ...weekly, usedPercent: 25 }]);
+        },
+      ]) {
+        const { store } = storeAt(now);
+        claude(store, [weekly, fable, fiveHour, sonnet], true);
+        lower(store);
+        expect(store.limits("claude")).toEqual([{ ...weekly, usedPercent: 25 }, fiveHour, sonnet]);
+        claude(store, [{ ...weekly, usedPercent: 25 }, { ...fable, usedPercent: 4 }]);
+        expect(store.limits("claude")).toEqual([
+          { ...weekly, usedPercent: 25 }, fiveHour, sonnet, { ...fable, usedPercent: 4 },
+        ]);
+      }
+    });
+
+    it("counts one reading of a window once, even when it names the window twice", () => {
+      // Fable's snapshot name and stream name are one window, so a probe that
+      // carries both is still one lower reading, and one proves nothing.
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const reset = Date.parse("2026-11-24T11:00:00Z");
+      const named = { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 4, resetAt: reset,
+        windowMinutes: 10_080 };
+      const streamed = { ...named, limitId: "seven_day_overage_included" };
+      const { store } = storeAt(now);
+      claude(store, [{ ...streamed, usedPercent: 99 }], true);
+      overtakenProbe(store, [named, streamed]);
+      expect(store.limits("claude")?.[0].usedPercent).toBe(99);
+      claude(store, [streamed]);
+      expect(store.limits("claude")?.[0].usedPercent).toBe(4);
+    });
+
+    it("keeps a run of lower readings when an older probe refines the window's reset", () => {
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const fable = (usedPercent: number, resetAt: number) => ({ name: "Weekly Fable limit",
+        limitId: "seven_day_overage_included", usedPercent, resetAt, windowMinutes: 10_080 });
+      const streamReset = Date.parse("2026-11-24T12:00:00Z");
+      const { store } = storeAt(now);
+      claude(store, [fable(99, streamReset)]);
+      claude(store, [fable(4, streamReset)]);
+      // A slower CLI's probe, close to the held value, refines the reset.
+      overtakenProbe(store, [fable(97, streamReset - hour)]);
+      claude(store, [fable(4, streamReset)]);
+      expect(store.limits("claude")).toEqual([fable(4, streamReset - hour)]);
+    });
+
+    it("keeps windows that renew apart, or a provider that does not share credits", () => {
+      const now = Date.parse("2026-11-18T14:00:00Z");
+      const reset = Date.parse("2026-11-24T11:00:00Z");
+      const weekly: BackendRateLimitSummary = { name: "Weekly limit", limitId: "codex", windowKey: "secondary",
+        usedPercent: 73, resetAt: reset };
+      const other: BackendRateLimitSummary = { name: "Weekly limit", limitId: "codex_other",
+        windowKey: "secondary", usedPercent: 99, resetAt: reset };
+      const { store } = storeAt(now);
+      store.record("codex", { limits: [weekly, other], since: store.mark("codex") });
+      store.record("codex", { limits: [{ ...weekly, usedPercent: 25 }], since: store.mark("codex") });
+      expect(store.limits("codex")).toEqual([{ ...weekly, usedPercent: 25 }, other]);
     });
 
     it("still lets another CLI's probe overtake one in flight", () => {

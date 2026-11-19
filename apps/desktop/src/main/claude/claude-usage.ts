@@ -30,6 +30,15 @@ export function canonicalClaudeRateLimit(limit: BackendRateLimitSummary): Backen
     : limit;
 }
 
+/** The windows one Claude credit refills: a Fable reset gives back Fable's share of the weekly limit. */
+const SHARED_CREDIT_WINDOWS = new Set(["seven_day", "seven_day_overage_included"]);
+
+/** Whether a credit on `credited` also refilled `sibling`; limits are canonical. */
+export function claudeCreditsRenewTogether(credited: BackendRateLimitSummary, sibling: BackendRateLimitSummary): boolean {
+  return credited.limitId !== sibling.limitId
+    && SHARED_CREDIT_WINDOWS.has(credited.limitId ?? "") && SHARED_CREDIT_WINDOWS.has(sibling.limitId ?? "");
+}
+
 function limitRow(key: string, usedPercent: number, resetAt: number | undefined): BackendRateLimitSummary {
   const label = LIMIT_LABELS[key];
   return {

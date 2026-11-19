@@ -34,7 +34,8 @@ import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
-  CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeRateLimits, claudeStreamRateLimits, claudeTelemetry,
+  CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeCreditsRenewTogether, claudeRateLimits,
+  claudeStreamRateLimits, claudeTelemetry,
   claudeTurnUsage,
 } from "./claude-usage";
 import { PlanLimitStore } from "../app-server/plan-limit-store";
@@ -2341,6 +2342,9 @@ export class ClaudeBackend {
   private mergeRateLimits(reading: BackendRateLimitSummary[], precise: boolean, since?: number): boolean {
     const changed = this.planLimits.record("claude", {
       limits: reading.map(canonicalClaudeRateLimit), precise, since, resetToleranceMs: CLAUDE_RESET_TOLERANCE_MS,
+      // A CLI names Fable only while its last request used Fable, so a Fable
+      // reset shows first as a lower weekly window in another model's reading.
+      creditsRenewTogether: claudeCreditsRenewTogether,
       // A probe is a reading of the account. A stream event names one or two
       // windows, and dates the rest as read now only when it names them all.
       ...(precise ? { dated: true } : {}),
