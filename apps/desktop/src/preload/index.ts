@@ -167,6 +167,8 @@ import type {
   ForkThreadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  DismissFailedSubAgentsRequest,
+  DismissFailedSubAgentsResponse,
   StopSubAgentRequest,
   StopSubAgentResponse,
   ListAutomationReplayCandidatesRequest,
@@ -779,6 +781,7 @@ import {
   CODEX_MCP_SERVER_LOGIN_CHANNEL,
   CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_LAUNCHPAD_CREATION_CHANNEL,
@@ -2742,6 +2745,10 @@ const desktopApi = Object.freeze({
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>
     await ipcRenderer.invoke(AGENT_INTERRUPT_TURN_CHANNEL, request),
+  dismissFailedSubAgents: async (
+    request: DismissFailedSubAgentsRequest,
+  ): Promise<DismissFailedSubAgentsResponse> =>
+    await ipcRenderer.invoke(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL, request),
   stopSubAgent: async (
     request: StopSubAgentRequest,
   ): Promise<StopSubAgentResponse> =>

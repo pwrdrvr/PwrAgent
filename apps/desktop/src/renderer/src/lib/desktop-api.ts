@@ -221,6 +221,8 @@ import type {
   RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  DismissFailedSubAgentsRequest,
+  DismissFailedSubAgentsResponse,
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
@@ -1317,6 +1319,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
+  dismissFailedSubAgents?: (
+    request: DismissFailedSubAgentsRequest,
+  ) => Promise<DismissFailedSubAgentsResponse>;
   stopSubAgent?: (
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;

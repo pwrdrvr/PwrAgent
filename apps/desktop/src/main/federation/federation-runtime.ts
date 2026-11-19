@@ -181,6 +181,7 @@ import type {
   StartThreadResponse,
   SteerTurnResponse,
   StopCodexEnvironmentActionResponse,
+  DismissFailedSubAgentsResponse,
   StopSubAgentResponse,
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
@@ -324,6 +325,7 @@ import {
   type StartTurnResponse,
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
+  type DismissFailedSubAgentsRequest,
   type StopSubAgentRequest,
   type TrustCodexProjectRequest,
   type UpdateSubthreadOrderRequest,
@@ -8381,6 +8383,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: InterruptTurnRequest,
     ): Promise<InterruptTurnResponse> {
       return await getDesktopBackendRegistry().interruptTurn(request);
+    },
+    async dismissFailedSubAgents(
+      request: DismissFailedSubAgentsRequest,
+    ): Promise<DismissFailedSubAgentsResponse> {
+      return await getDesktopBackendRegistry().dismissFailedSubAgents(request);
     },
     async stopSubAgent(
       request: StopSubAgentRequest,

@@ -2203,7 +2203,7 @@ export class StateDb {
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,
-      // then two table-info reads per open.
+      // then schema reads on each open.
       ensureThreadSubAgentPanelSchema(db);
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.

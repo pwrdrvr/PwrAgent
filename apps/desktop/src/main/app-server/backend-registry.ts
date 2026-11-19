@@ -369,6 +369,8 @@ import {
   type StartReviewResponse,
   type StartThreadRequest,
   type StartThreadResponse,
+  type DismissFailedSubAgentsRequest,
+  type DismissFailedSubAgentsResponse,
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type SubmitServerRequestRequest,
@@ -11986,6 +11988,22 @@ export class DesktopBackendRegistry {
     pollIntervalSeconds: number;
   }> {
     return this.subAgentMonitorService.listPendingTaskMonitorWakes(params);
+  }
+
+  async dismissFailedSubAgents(params: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse> {
+    if (!params || typeof params.backend !== "string" || !isAppServerBackendKind(params.backend)
+      || typeof params.threadId !== "string" || !params.threadId.trim()
+      || !Array.isArray(params.monitorIds) || !params.monitorIds.every((id) => typeof id === "string" && id.length > 0)) {
+      throw new Error("Invalid failed sub-agent dismissal request.");
+    }
+    const dismissedCount = await this.overlayStore.dismissFailedThreadSubAgents(params);
+    if (dismissedCount > 0) {
+      await this.emit({
+        backend: params.backend,
+        notification: { method: "thread/subAgents/updated", params: { threadId: params.threadId } },
+      });
+    }
+    return { dismissedCount };
   }
 
   stopSubAgent(params: StopSubAgentRequest): Promise<StopSubAgentResponse> {

@@ -240,6 +240,8 @@ import type {
   StartReviewResponse,
   StartThreadRequest,
   StartThreadResponse,
+  DismissFailedSubAgentsRequest,
+  DismissFailedSubAgentsResponse,
   StopSubAgentRequest,
   StopSubAgentResponse,
   StopCodexEnvironmentActionRequest,
@@ -837,6 +839,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
     request: ResolveActiveTurnRequest,
   ): Promise<ResolveActiveTurnResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
+  dismissFailedSubAgents(request: DismissFailedSubAgentsRequest): Promise<DismissFailedSubAgentsResponse>;
   stopSubAgent(request: StopSubAgentRequest): Promise<StopSubAgentResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
   setThreadExecutionMode(
@@ -1817,6 +1820,11 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.interruptTurn(
         envelope.params as InterruptTurnRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.dismissFailedSubAgents,
+    async (envelope) =>
+      await params.backend.dismissFailedSubAgents(envelope.params as DismissFailedSubAgentsRequest),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.stopSubAgent,
@@ -3146,6 +3154,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<InterruptTurnResponse> {
     return await this.rpc.request<InterruptTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.interruptTurn,
+      params: request,
+    });
+  }
+
+  async dismissFailedSubAgents(
+    request: DismissFailedSubAgentsRequest,
+  ): Promise<DismissFailedSubAgentsResponse> {
+    return await this.rpc.request<DismissFailedSubAgentsResponse>({
+      method: FEDERATION_BACKEND_METHODS.dismissFailedSubAgents,
       params: request,
     });
   }

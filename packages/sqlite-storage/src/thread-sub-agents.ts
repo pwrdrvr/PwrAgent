@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS thread_sub_agents (
   backend TEXT,
   monitor_thread_id TEXT,
   card TEXT NOT NULL,
+  dismissed_from_strip INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (thread_id, monitor_id)
 );
 CREATE INDEX IF NOT EXISTS thread_sub_agents_by_created
@@ -331,10 +332,10 @@ function columnNames(db: BetterSqlite3.Database, table: string): Set<string> {
 }
 
 /**
- * The lens index and the gate totals, added once. Later opens read the schema
- * and write nothing. The index is built from the card rows' leading columns,
- * which never touches a card body. Adding the totals marks every existing
- * thread's stale; `ThreadSubAgentTable.gateTotals` sums one thread's on its
+ * The lens index, gate totals, and composer dismissal flag are added once.
+ * Later opens read the schema and write nothing. The index is built from the
+ * card rows' leading columns, which never touches a card body. Adding the
+ * totals marks every existing thread's stale. `ThreadSubAgentTable.gateTotals` sums one thread's on its
  * first read. Rows created afterwards start fresh, and the triggers keep them
  * current whichever build writes the card.
  */
@@ -342,12 +343,16 @@ export function ensureThreadSubAgentPanelSchema(db: BetterSqlite3.Database): voi
   if (!tableExists(db, "thread_sub_agents") || !tableExists(db, "thread_sub_agent_revisions")) return;
   const isCurrent = () =>
     db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens_v2'").get() !== undefined
-    && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready");
+    && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready")
+    && columnNames(db, "thread_sub_agents").has("dismissed_from_strip");
   if (isCurrent()) return;
   db.transaction(() => {
     // Another opener may have added them while this connection waited.
     if (isCurrent()) return;
     db.exec(LENS_INDEX);
+    if (!columnNames(db, "thread_sub_agents").has("dismissed_from_strip")) {
+      db.exec("ALTER TABLE thread_sub_agents ADD COLUMN dismissed_from_strip INTEGER NOT NULL DEFAULT 0");
+    }
     if (columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready")) return;
     db.exec(GATE_TOTAL_COLUMNS);
     db.exec(GATE_SHARES_VIEW);
@@ -687,10 +692,19 @@ export class ThreadSubAgentTable {
     return result;
   }
 
-  /** Unfinished cards and failures: what the composer strip and stop controls need. */
+  /** Dismiss only the failed cards the viewer saw, in a single write. */
+  dismissFailures(storageKey: string, monitorIds: readonly string[]): number {
+    return this.db.prepare(`UPDATE thread_sub_agents SET dismissed_from_strip = 1
+      WHERE thread_id = ? AND monitor_id IN (SELECT value FROM json_each(?))
+        AND status IN ('failed', 'failure') AND dismissed_from_strip = 0`)
+      .run(storageKey, JSON.stringify(monitorIds)).changes;
+  }
+
+  /** Unfinished cards and undismissed failures for the composer strip. */
   listAttention(storageKey: string): ThreadSubAgentSummary[] {
     return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_attention
       WHERE thread_id = ? AND (completed_at IS NULL OR status IN ('failed', 'failure'))
+        AND (dismissed_from_strip = 0 OR status NOT IN ('failed', 'failure'))
       ORDER BY created_at DESC, monitor_id`).all(storageKey) as CardRow[]);
   }
 
