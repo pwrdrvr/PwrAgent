@@ -54,6 +54,8 @@ import {
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import {
+  buildPendingTurnId,
+  isPendingTurnId,
   findAcpPermissionModeConfigOption,
   lowerThreadExecutionMode,
   PWRAGENT_TOOL_NAMESPACE,
@@ -11915,7 +11917,7 @@ export class DesktopBackendRegistry {
       // An optimistic start owns admission, not a provider turn. Context is
       // staged before it now, and must stay unbound for provider user items
       // that can arrive before the start response or provider turn/started.
-      if (event.backend === "codex" && turnId === `pending:${notification.params.threadId}`) {
+      if (event.backend === "codex" && isPendingTurnId(notification.params.threadId, turnId)) {
         return event;
       }
       const pending = this.findPendingThreadMessageContext({
@@ -21487,7 +21489,7 @@ export class DesktopBackendRegistry {
         const threadId = readOptionalString(params, ["threadId"]);
         const turnId = readOptionalString(params, ["turnId"])
           ?? readOptionalString(readRecord(params?.turn), ["id"]);
-        if (threadId && turnId && turnId !== `pending:${threadId}`) {
+        if (threadId && turnId && !isPendingTurnId(threadId, turnId)) {
           let turns = this.codexMessageContextTurnObservations.get(threadId);
           if (!turns) {
             turns = new Map();
@@ -21792,7 +21794,7 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex" && commitCodexStart) {
-        const pendingTurnId = `pending:${notification.params.threadId}`;
+        const pendingTurnId = buildPendingTurnId(notification.params.threadId);
         const pendingActiveKey = buildActiveTurnKey("codex", notification.params.threadId, pendingTurnId);
         const pendingModeKey = buildActiveTurnModeKey(notification.params.threadId, pendingTurnId);
         const collaborationMode = this.context.turnState.collaborationMode(

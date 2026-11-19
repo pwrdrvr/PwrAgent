@@ -225,7 +225,9 @@ import {
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools/pwragent-tool-search";
 import { createResearchAgentHandler } from "../research/research-runtime";
-import type { ResearchService } from "@pwragent/owner-core/research-service";
+import { ResearchService } from "@pwragent/owner-core/research-service";
+import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
+import { bindResearchRegistry, createResearchRegistryPorts } from "../research/research-registry";
 import { THREAD_MAINTENANCE_TOOL_WAIT_MS } from "../agent-tools/thread-maintenance-tool-scans";
 
 const jeepStickerPageFixture = fileURLToPath(
@@ -6224,6 +6226,126 @@ describe("DesktopBackendRegistry", () => {
           await client.close();
           await registry.close();
         }
+      }
+    });
+
+    it.each(["acp:kimi", "claude"] as const)("runs a %s research worker through first prompt and slot release", async (backend) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-research-"));
+      const db = openInMemoryStateDb();
+      const storage = new ResearchStore(db);
+      const workerFinished = createDeferred<void>();
+      const atProviderPrompt = vi.fn((threadId: string, providerTurnId?: string) => {
+        const worker = { backend, threadId };
+        const [run] = storage.activeRuns(worker);
+        return { worker, providerTurnId, run, approach: run && storage.approaches(run.id, { worker })[0] };
+      });
+      const registry = backend === "claude" ? createDesktopBackendRegistry({
+        codexClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        createScratchProjectDirectory: async () => root,
+        pdfToolMcpServer: null,
+        claudeBackendOptions: {
+          store: new ClaudeSessionStore(path.join(root, "sessions")),
+          getSessionInfo: async () => undefined,
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [],
+          query: ({ options = {} }) => {
+            const threadId = options.sessionId!;
+            atProviderPrompt(threadId);
+            async function* messages(): AsyncGenerator<ClaudeMessage> {
+              yield { type: "system", subtype: "init", session_id: threadId } as ClaudeMessage;
+              await workerFinished.promise;
+              yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+            }
+            return Object.assign(messages(), { close: vi.fn(() => workerFinished.resolve()), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          },
+        },
+      }) : createAcpResearchRegistry();
+
+      function createAcpResearchRegistry() {
+        const sessions: AcpSessionMetadata[] = [];
+        return createKimiAcpRegistry({
+          sessions,
+          createScratchProjectDirectory: async () => root,
+          startSession: async (params) => {
+            const session: AcpSessionMetadata = {
+              backendId: "acp:kimi", sessionId: `research-session-${sessions.length + 1}`,
+              title: params.title ?? "Research coordinator", cwd: params.cwd,
+              createdAt: 1000, updatedAt: 1000, executionMode: params.executionMode, status: "idle",
+            };
+            sessions.push(session);
+            return session;
+          },
+          startPrompt: ({ sessionId, turnId }) => {
+            atProviderPrompt(sessionId, turnId);
+            return { sessionId, turnId: turnId! };
+          },
+        }).registry;
+      }
+
+      const enabled = () => true;
+      const onError = vi.fn();
+      const research = new ResearchService(storage, {
+        ...createResearchRegistryPorts(registry), enabled, ownerId: "test-owner", ownerPid: process.pid,
+        ownerStartedAt: 0, isOwnerAlive: () => true, onError, changed: () => {},
+      });
+      const unsubscribe = bindResearchRegistry(registry, research, enabled);
+      const client = new McpClient({ name: "research-worker-fixture", version: "1.0.0" });
+      try {
+        const { threadId } = await registry.startThread({ backend, cwd: root, executionMode: "default" });
+        const coordinator = { backend, threadId };
+        const parentTurn = await registry.startTurn({ ...coordinator, input: [{ type: "text", text: "Coordinate research" }] });
+        expect(registry.researchContextIsLive({ ...coordinator, turnId: parentTurn.turnId, callId: "start", transport: "mcp" })).toBe(true);
+        atProviderPrompt.mockClear();
+
+        const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+        const registration = await server.registerClient(coordinator);
+        await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+          requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+        }));
+        const started = await client.callTool({ name: "research_start", arguments: {
+          objective: "Explore event ordering", workspaceMode: "none",
+          approaches: [{ title: "Events", task: "Inspect the event sequence" }],
+        } });
+        expect(started.isError, JSON.stringify(started.content)).not.toBe(true);
+        expect(atProviderPrompt).toHaveBeenCalledOnce();
+
+        // Provider admission is the oracle: the child and its running turn
+        // must already be in the run when the provider receives its first prompt.
+        const { worker, run, approach, providerTurnId } = atProviderPrompt.mock.results[0]!.value;
+        expect(worker.threadId).not.toBe(threadId);
+        expect(run).toMatchObject({ coordinator, activeWorkers: 1 });
+        const turnId = registry.getActiveTurnForThread(worker)?.turnId;
+        expect(turnId).toEqual(expect.any(String));
+        if (backend === "acp:kimi") {
+          expect(turnId).toBe(providerTurnId);
+          expect(turnId).toMatch(/^pending:research-session-2:\d+$/);
+        }
+        expect(approach).toMatchObject({ state: "running", worker: { ...worker, turnId } });
+        expect(started).toMatchObject({ structuredContent: {
+          id: run!.id, coordinator, activeWorkers: 1,
+          approaches: [{ state: "running", worker: { ...worker, turnId } }],
+        } });
+
+        if (backend === "claude") {
+          workerFinished.resolve();
+          await vi.waitFor(() => expect(storage.header(run!.id)?.activeWorkers).toBe(0));
+        } else {
+          await registry.publishLocalEvent({ backend, notification: { method: "turn/completed", params: {
+            threadId: worker.threadId, turnId: turnId!, turn: { id: turnId!, status: "completed", output: [] },
+          } } });
+        }
+        expect(storage.header(run!.id)?.activeWorkers).toBe(0);
+        expect(storage.approaches(run!.id, { worker })).toMatchObject([{ state: "ended", worker: { ...worker, turnId } }]);
+        expect(onError).not.toHaveBeenCalled();
+      } finally {
+        await client.close();
+        unsubscribe();
+        research.close();
+        workerFinished.resolve();
+        await registry.close();
+        db.close();
+        await rm(root, { recursive: true, force: true });
       }
     });
 

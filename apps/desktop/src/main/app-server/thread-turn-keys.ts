@@ -1,6 +1,7 @@
 import {
   type AppServerTurnInputItem,
   type AppServerBackendKind,
+  buildPendingTurnId,
   buildThreadIdentityKey,
   isAcpBackendId,
 } from "@pwragent/shared";
@@ -69,12 +70,19 @@ export function reviewSubAgentId(turnId: string): string {
 export function parseThreadTurnKeyBody(
   body: string,
 ): { threadId: string; turnId: string } | undefined {
+  const placeholderSeparator = body.indexOf(`:${buildPendingTurnId("")}`);
+  if (placeholderSeparator > 0) {
+    const threadId = body.slice(0, placeholderSeparator);
+    const turnId = body.slice(placeholderSeparator + 1);
+    if (turnId === buildPendingTurnId(threadId)) return { threadId, turnId };
+  }
+
   const pendingSeparator = body.indexOf(":pending:");
   if (pendingSeparator > 0) {
     const beforePending = body.slice(0, pendingSeparator);
     const afterPending = body.slice(pendingSeparator + ":pending:".length);
-    if (beforePending === afterPending || afterPending.startsWith(`${beforePending}:`)) {
-      return { threadId: beforePending, turnId: `pending:${afterPending}` };
+    if (afterPending.startsWith(`${beforePending}:`)) {
+      return { threadId: beforePending, turnId: body.slice(pendingSeparator + 1) };
     }
   }
   const turnSeparator = body.lastIndexOf(":");

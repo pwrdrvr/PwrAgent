@@ -1,4 +1,4 @@
-import { buildThreadIdentityKey, isAcpBackendId, type AgentEvent, type AppServerBackendKind, type SetThreadModelSettingsRequest, type ThreadExecutionMode } from "@pwragent/shared";
+import { buildPendingTurnId, buildThreadIdentityKey, isAcpBackendId, type AgentEvent, type AppServerBackendKind, type SetThreadModelSettingsRequest, type ThreadExecutionMode } from "@pwragent/shared";
 
 export type TurnStartIdentity = { backend: AppServerBackendKind; threadId: string };
 
@@ -171,7 +171,7 @@ export class ThreadTurnStartLifecycle {
     pendingTurnId: string;
     context: Context;
   }> {
-    const pendingTurnId = `pending:${host.threadId}`;
+    const pendingTurnId = buildPendingTurnId(host.threadId);
     host.reserve(pendingTurnId);
     let announced = false;
     let registered: { context: Context } | undefined;
