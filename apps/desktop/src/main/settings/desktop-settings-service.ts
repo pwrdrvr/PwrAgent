@@ -3487,8 +3487,8 @@ export class DesktopSettingsService {
     return this.readModelsConfig().decisionModels ?? {};
   }
 
-  /** Dashboard ids for OpenAI Decisions requests. Not secrets. */
-  resolveOpenAIDecisionsSettings(): { organizationId?: string; projectId?: string } {
+  /** Whether OpenAI Decisions is on, and its dashboard ids. Not secrets. */
+  resolveOpenAIDecisionsSettings(): { enabled?: boolean; organizationId?: string; projectId?: string } {
     return this.readModelsConfig().openaiDecisions ?? {};
   }
 

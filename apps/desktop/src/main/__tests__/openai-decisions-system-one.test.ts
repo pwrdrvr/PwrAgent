@@ -224,6 +224,7 @@ describe("default provider and targets", () => {
       resolveDecisionApiKey: async (provider) => provider === "jev" ? params.jevKey : params.localKey,
       hasOpenAIDecisionsApiKey: async () => Boolean(params.openaiKey),
       hasDecisionApiKey: async (provider) => Boolean(provider === "jev" ? params.jevKey : params.localKey),
+      resolveOpenAIDecisionsSettings: () => ({}),
     };
   }
 

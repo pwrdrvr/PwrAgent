@@ -39,6 +39,8 @@ export type FederationRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
 export type FederationLeaseAcquireResult = MessagingLeaseAcquireResult;
 export type McpConnectionsRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
 export type McpConnectionsLeaseAcquireResult = MessagingLeaseAcquireResult;
+export type BackgroundRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
+export type BackgroundLeaseAcquireResult = MessagingLeaseAcquireResult;
 
 export type RuntimeLeaseAcquisition = {
   instanceId: string;
@@ -72,10 +74,13 @@ export interface RuntimeLeaseStorage {
   acquireMessagingLease(params: RuntimeLeaseAcquisition): MessagingLeaseAcquireResult;
   acquireFederationLease(params: RuntimeLeaseAcquisition): FederationLeaseAcquireResult;
   acquireMcpConnectionsLease(params: Omit<RuntimeLeaseAcquisition, "canReclaimOwnerImmediately">): McpConnectionsLeaseAcquireResult;
+  acquireBackgroundLease(params: RuntimeLeaseAcquisition): BackgroundLeaseAcquireResult;
   releaseMessagingLease(params: { instanceId: string; now: number }): boolean;
   releaseFederationLease(params: { instanceId: string; now: number }): boolean;
   releaseMcpConnectionsLease(params: { instanceId: string; now: number }): boolean;
+  releaseBackgroundLease(params: { instanceId: string; now: number }): boolean;
   getMessagingLease(): MessagingRuntimeLeaseRecord | undefined;
   getFederationLease(): FederationRuntimeLeaseRecord | undefined;
   getMcpConnectionsLease(): McpConnectionsRuntimeLeaseRecord | undefined;
+  getBackgroundLease(): BackgroundRuntimeLeaseRecord | undefined;
 }

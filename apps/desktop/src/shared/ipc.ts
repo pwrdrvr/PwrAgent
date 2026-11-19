@@ -241,6 +241,10 @@ export const RESEARCH_WINDOW_SELECT_EVENT_CHANNEL = "research:window-select";
 export const RESEARCH_WITHDRAW_CHANNEL = "research:withdraw";
 export const RESEARCH_EVENTS_CHANNEL = "research:events";
 export const RESEARCH_CHANGES_CHANNEL = "research:changes";
+export const DECISIONS_RAIL_SNAPSHOT_CHANNEL = "decisions-rail:snapshot";
+export const DECISIONS_RAIL_BATCH_CHANNEL = "decisions-rail:batch";
+export const DECISIONS_RAIL_BATCH_ACTION_CHANNEL = "decisions-rail:batch-action";
+export const DECISIONS_RAIL_OPEN_RESULTS_CHANNEL = "decisions-rail:open-results";
 /** A thread's armed reviews and Auto-fix runs, read from its owner. */
 export const THREAD_REVIEWS_READ_AUTO_FIX_CHANNEL = "thread-reviews:read-auto-fix";
 /** Don't auto-fix: turns Auto-fix off for one running review. */
@@ -565,6 +569,10 @@ export const AUTOMATION_RUN_WINDOW_OPEN_CHANNEL = "automation-run:open-window";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";
 export const AUTOMATIONS_LOAD_ISSUES_CHANNEL = "automations:load-issues";
+export const AUTOMATIONS_SCHEDULING_STATUS_READ_CHANNEL =
+  "automations:scheduling-status";
+export const AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL =
+  "automations:scheduling-status-changed";
 export const AUTOMATIONS_DRAFT_PROMPT_CHANNEL = "automations:draft-prompt";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window

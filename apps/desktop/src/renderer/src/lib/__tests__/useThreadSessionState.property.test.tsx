@@ -48,6 +48,76 @@ async function retireLedgerModels(): Promise<void> {
 }
 afterEach(retireLedgerModels);
 
+it("converges on the latest owner reading after a stream gap and keeps live readings racing recovery", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.scheduler(),
+    fc.uniqueArray(fc.nat(1_000_000), { minLength: 3, maxLength: 3 }),
+    fc.boolean(),
+    async (scheduler, [firstLive, missed, nextLive], raceRecovery) => {
+      const threadId = "claude-thread";
+      const target = { scope: "remote" as const, instanceId: "owner" };
+      const thread: NavigationThreadSummary = {
+        id: threadId, source: "claude", title: "Claude thread", titleSource: "explicit", summary: "Fixture",
+        linkedDirectories: [], inbox: { inInbox: false }, updatedAt: 1,
+        federation: { instanceLabel: "Owner", ref: { backend: "claude", threadId, target } },
+      };
+      let emit: (event: AgentEvent) => void = () => { throw new Error("missing subscription"); };
+      const pendingReads: Array<(ownerReading: number) => () => void> = [];
+      const modelContextWindow = 1_000_000;
+      const readThread: NonNullable<DesktopApi["readThread"]> = ({ knownRevision }) =>
+        new Promise<AppServerReadThreadResponse>((resolve) => {
+          pendingReads.push((ownerReading) => {
+            const replayRevision = `context:${ownerReading}`;
+            const unchanged = knownRevision === replayRevision;
+            return () => resolve({
+              backend: "claude", threadId, fetchedAt: NOW, replayRevision,
+              ...(unchanged ? { unchanged } : {}),
+              replay: {
+                entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+                ...(unchanged ? {} : { contextWindow: { usedTokens: ownerReading, modelContextWindow } }),
+              },
+            });
+          });
+        });
+      const desktopApi: DesktopApi = {
+        readThread,
+        onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      };
+      const hook = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+      const visibleReading = () => hook.result.current.contextWindow?.totalTokens;
+      const deliverReading = (usedTokens: number) => emit({ backend: "claude", federationTarget: target, notification: {
+        method: "thread/contextWindow/updated", params: { threadId, usedTokens, modelContextWindow },
+      } });
+      try {
+        await act(async () => { deliverReading(firstLive!); });
+        expect(visibleReading()).toBe(firstLive);
+
+        // The owner recorded a newer reading during the first read. The viewer
+        // misses its event, and learns of the gap before or after that reply.
+        const replyToInitialRead = pendingReads.shift()!(missed!);
+        void scheduler.schedule(Promise.resolve(), "initial owner reply").then(replyToInitialRead);
+        void scheduler.schedule(Promise.resolve(), "stream gap").then(() => emit({ backend: "claude", federationTarget: target, notification: {
+          method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "recovered" },
+        } }));
+        while (scheduler.count() > 0) {
+          await act(async () => { await scheduler.waitNext(1); });
+        }
+        expect(visibleReading()).toBe(firstLive);
+        expect(pendingReads).toHaveLength(1);
+
+        // Recovery revalidates the same owner page. A reading delivered after
+        // recovery starts is newer than the captured page and owns the meter.
+        const replyToRecovery = pendingReads.shift()!(missed!);
+        if (raceRecovery) await act(async () => { deliverReading(nextLive!); });
+        await act(async () => { replyToRecovery(); });
+        expect(visibleReading()).toBe(raceRecovery ? nextLive : missed);
+      } finally {
+        hook.unmount();
+      }
+    },
+  ), { numRuns: 30 });
+});
+
 type Item = {
   turn: number;
   sequence: number;

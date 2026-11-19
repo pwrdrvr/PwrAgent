@@ -941,6 +941,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-command-handlers.ts` | Command dispatch, schedule management, help, review entry, Claude continuation and monitor/default-agent command routing through lazy typed workflow ports |
 | `apps/desktop/src/main/messaging/core/messaging-command-context.ts` | Narrow command store/backend collaborators and exact workflow port signatures; reads remain late bound |
 | `apps/desktop/src/main/messaging/core/messaging-command-helpers.ts` | Pure command parsing and shared message-origin attribution used by command and inbound workflows |
+| `apps/desktop/src/main/messaging/core/messaging-browse-workflow.ts` | Presents and retires resume, Agent and default Agent browse sessions. Owns render cancellation and shares the bounded query pool with the handoff picker. |
 | `apps/desktop/src/main/messaging/core/messaging-review-workflow.ts` | Review picker, workspace/target/reviewer choices, capability checks, pending records and accepted-review confirmations; backend admission owns execution |
 | `apps/desktop/src/main/messaging/core/messaging-review-context.ts` | Narrow review store/backend collaborators and six lazy host ports with preserved receiver and error boundaries |
 | `apps/desktop/src/main/messaging/core/messaging-agent-tools.ts` | Agent tool dispatch, retained destinations, attachment/rename workflows, private responses and file/PDF tool orchestration; existing owners keep turn state, delivery and binding effects |
@@ -950,6 +951,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-monitor-context.ts` | Narrow store/backend/adapter ports, live turn-state and disposal reads, and seven lazy host ports |
 | `apps/desktop/src/main/messaging/core/messaging-monitor-helpers.ts` | Pure monitor preferences, topic identities/proposal formatting, navigation identities and permanent-target classification |
 | `apps/desktop/src/main/messaging/core/messaging-assistant-streams.ts` | Assistant stream buffering, serialized delivery per stream, terminal flush and private-response cancellation. The backend event router requests operations without accessing the stream collections. |
+| `apps/desktop/src/main/messaging/core/messaging-outbound-delivery.ts` | Routes outbound intents, admits them through the provider budget and lane, selects the live adapter, and records delivery and permanent-target failures. |
 | `apps/desktop/src/main/messaging/core/messaging-pending-request-workflow.ts` | Pending-request presentation reservations, approvals, questionnaires and async answer settlement; canonical turn and admission effects use their existing owners |
 | `apps/desktop/src/main/messaging/core/messaging-pending-request-context.ts` | Six store methods, three backend methods and 22 lazy host ports with original signatures, receivers and error boundaries |
 | `apps/desktop/src/main/messaging/core/messaging-pending-request-helpers.ts` | Approval response context and questionnaire answer encoding |

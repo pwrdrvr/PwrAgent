@@ -1,3 +1,4 @@
+import { isThreadLockRefusal } from "@pwragent/shared";
 import type {
   AgentFollowUpProtection,
   ListScheduledThreadActionsRequest,
@@ -10,6 +11,25 @@ import type {
   ScheduledThreadReviewPayload,
   ScheduledThreadTurnPayload,
 } from "@pwragent/shared";
+
+const SCHEDULED_TURN_QUEUE_PREFIX = "scheduled-turn:";
+
+export function scheduledTurnQueueEntryId(actionId: string): string {
+  return SCHEDULED_TURN_QUEUE_PREFIX + actionId;
+}
+
+export function scheduledActionIdFromTurnQueueEntry(queueEntryId: string): string | undefined {
+  return queueEntryId.startsWith(SCHEDULED_TURN_QUEUE_PREFIX)
+    ? queueEntryId.slice(SCHEDULED_TURN_QUEUE_PREFIX.length)
+    : undefined;
+}
+
+/** A lock hold written by an older scheduler may only have the refusal text. */
+export function isScheduledThreadLockHold(action: ScheduledThreadAction | undefined): boolean {
+  if (!action) return false;
+  if (action.holdCause !== undefined) return action.holdCause === "thread_lock";
+  return action.errorMessage !== undefined && isThreadLockRefusal(action.errorMessage);
+}
 
 export type CreateScheduledThreadActionRecord = {
   id: string;

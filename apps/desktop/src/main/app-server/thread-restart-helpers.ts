@@ -1,4 +1,5 @@
 import type { StoredRestartContinuation } from "../storage/desktop-runtime-storage";
+import { scheduledActionIdFromTurnQueueEntry } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import {
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueOrigin,
@@ -31,6 +32,9 @@ export function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry, position: 
     backend: entry.backend,
     threadId: entry.threadId,
     kind: "queued",
+    ...(scheduledActionIdFromTurnQueueEntry(entry.id) && (entry.paused || !entry.manualReleaseRequired)
+      ? { ownsScheduledTurn: true as const }
+      : {}),
     input: entry.input,
     ...(entry.messageOrigin ? { messageOrigin: entry.messageOrigin } : {}),
     createdAt: entry.createdAt,

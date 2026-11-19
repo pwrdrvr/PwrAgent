@@ -7,6 +7,7 @@ import {
   type DecisionBatchItem,
   type DecisionBatchRecord,
   type DecisionBatchState,
+  type DecisionItemRailFields,
 } from "./decision-batches";
 
 /**
@@ -14,9 +15,13 @@ import {
  * thread's storage: a `batch` header line, one `item` line per finished
  * input at full detail, and an `end` line. The agent can read the file
  * with its own tools, and decisions_batch_results reads it after a
- * restart. Inputs are not written; the caller has them, and they can be
- * 4 MB. Credentials never reach the file: items hold only what the
- * provider returned and redacted errors.
+ * restart. Whole inputs are not written: the caller has them, and a batch's
+ * can total 4 MB. Each item line keeps only a preview of its input, cut to
+ * about 2 KB (decisionInputPreview), for the thread's Decisions tab.
+ * Credentials never reach the file: validation refuses credential-named
+ * input properties, an input whose text looks like a key keeps no preview,
+ * and items otherwise hold only what the provider returned and redacted
+ * errors.
  */
 
 export const DECISION_BATCH_FILE_LIMITS = {
@@ -267,9 +272,21 @@ function parseItem(entry: Record<string, unknown>, count: number): DecisionBatch
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count) return undefined;
   if (item.ok === true) return item as DecisionBatchItem;
   if (item.ok === false && typeof item.code === "string" && typeof item.message === "string") {
-    return { index, ok: false, code: item.code, message: item.message };
+    return { index, ok: false, code: item.code, message: item.message, ...railFields(item) };
   }
   return undefined;
+}
+
+/** A failed item's preview and duration, when its line has well-formed ones. */
+function railFields(item: Record<string, unknown>): DecisionItemRailFields {
+  return {
+    ...(typeof item.inputPreview === "string" ? { inputPreview: item.inputPreview } : {}),
+    ...(item.inputTruncated === true ? { inputTruncated: true } : {}),
+    ...(item.inputRedacted === true ? { inputRedacted: true } : {}),
+    ...(typeof item.durationMs === "number" && Number.isFinite(item.durationMs) && item.durationMs >= 0
+      ? { durationMs: item.durationMs }
+      : {}),
+  };
 }
 
 function isFinishedState(value: unknown): value is Extract<DecisionBatchState, "completed" | "stopped" | "cancelled"> {

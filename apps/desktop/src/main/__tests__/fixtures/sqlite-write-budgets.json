@@ -83,7 +83,7 @@
     "statements": 1
   },
   "federation-directory-pin-actions": {"commits": 3, "note": "Pin, move and unpin use three owner commits; 100 actions/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 3},
-  "headless-owner-lifecycle-idle-hour": {"commits": 381, "note": "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Wait for provider/navigation startup and join the archive sweep before measuring its complete timer cost.", "observedWalBytes": 210152, "rowsChanged": 21, "statements": 413},
+  "headless-owner-lifecycle-idle-hour": {"commits": 383, "note": "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Wait for provider/navigation startup and join the archive sweep before measuring its complete timer cost.", "observedWalBytes": 230752, "rowsChanged": 23, "statements": 415},
   "hourly-sweep-idle-day": {
     "commits": 0,
     "note": "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.",
@@ -493,13 +493,7 @@
     "rowsChanged": 3,
     "statements": 3
   },
-  "idle-hour-runtime-leases": {
-    "commits": 0,
-    "note": "one idle hour: PID-owned messaging, federation, and MCP connection leases",
-    "observedWalBytes": 0,
-    "rowsChanged": 0,
-    "statements": 0
-  },
+  "idle-hour-runtime-leases": {"commits": 0, "note": "one idle hour: PID-owned messaging, federation, MCP connection, and background leases", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "inactive-thread-sweep-dirty": {
     "commits": 0,
     "note": "A stale dirty worktree is checked and kept, with no SQLite writes (0 MB/day).",
@@ -1157,20 +1151,8 @@
     "rowsChanged": 2,
     "statements": 2
   },
-  "runtime-lease-dead-owner-takeover": {
-    "commits": 7,
-    "note": "observe one dead owner, wait one minute, replace all profile runtime leases",
-    "observedWalBytes": 90640,
-    "rowsChanged": 10,
-    "statements": 10
-  },
-  "runtime-lease-lifecycle": {
-    "commits": 8,
-    "note": "register once, acquire and release all profile runtime leases, mark exited",
-    "observedWalBytes": 115360,
-    "rowsChanged": 10,
-    "statements": 10
-  },
+  "runtime-lease-dead-owner-takeover": {"commits": 9, "note": "observe one dead owner, wait one minute, replace all profile runtime leases", "observedWalBytes": 107120, "rowsChanged": 12, "statements": 12},
+  "runtime-lease-lifecycle": {"commits": 10, "note": "register once, acquire and release all profile runtime leases, mark exited", "observedWalBytes": 135992, "rowsChanged": 12, "statements": 12},
   "runtime-lease-recovery-live-hour": {
     "commits": 0,
     "note": "one hour of blocked messaging and federation recovery checks",

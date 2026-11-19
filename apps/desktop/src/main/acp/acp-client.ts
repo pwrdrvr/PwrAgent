@@ -179,6 +179,8 @@ type AcpRolloutStoreLike = {
 
 type AcpActiveTurn = {
   assistantText: string;
+  /** The agent compacted its history while this prompt ran. */
+  compacted?: boolean;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
@@ -292,6 +294,15 @@ export class AcpAgentClient {
    * until session/close, so `closeIdleSessions` releases quiet ones.
    */
   private readonly sessionLastActivityAt = new Map<string, number>();
+  /**
+   * The context fill each session last reported live in `usage_update`, with
+   * the agent session that reported it: a thread bound to a new agent session
+   * starts a new baseline.
+   */
+  private readonly sessionContextFill = new Map<
+    string,
+    { protocolSessionId: string; used: number }
+  >();
   /** Permission requests the agent is waiting on, by app session id. */
   private readonly pendingPermissionRequests = new Map<string, number>();
   /**
@@ -617,6 +628,7 @@ export class AcpAgentClient {
 
   private forgetSessionActivity(sessionId: string): void {
     this.sessionLastActivityAt.delete(sessionId);
+    this.sessionContextFill.delete(sessionId);
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
@@ -653,6 +665,7 @@ export class AcpAgentClient {
     this.loadedSessionCwds.clear();
     this.sessionConfigOptions.clear();
     this.sessionLastActivityAt.clear();
+    this.sessionContextFill.clear();
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
@@ -1655,6 +1668,20 @@ export class AcpAgentClient {
     ) {
       activeTurn.onTerminalUpdate?.();
     }
+    // A compaction may summarize the instruction block away, so the next
+    // prompt carries it again. Grok reports one; Kimi, Qwen and Gemini show
+    // it only as a fall in context fill. A compaction replayed by
+    // session/load happened before the block was last recorded.
+    if (
+      !fromSessionLoad
+      && (
+        updateKind === "auto_compact_completed"
+        || this.contextFillHalved(sessionId, protocolSessionId, update, updateKind)
+      )
+    ) {
+      if (activeTurn) activeTurn.compacted = true;
+      this.recordDeliveredAgentInstructions(sessionId, undefined);
+    }
     if (isProviderTranscriptReplayUpdate(update)) {
       if (loadState) {
         loadState.replayedTranscript = true;
@@ -2227,9 +2254,9 @@ export class AcpAgentClient {
         },
         ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
       );
-      // Recorded once the agent has answered the prompt. A prompt that fails
-      // leaves the session due the instructions again.
-      if (sendInstructions) {
+      // Recorded once the agent has answered the prompt. A prompt that fails,
+      // or that compacted the block away, leaves the session due it again.
+      if (sendInstructions && !activeTurn?.compacted) {
         this.recordDeliveredAgentInstructions(params.sessionId, digest);
       }
       return result;
@@ -2299,13 +2326,36 @@ export class AcpAgentClient {
     );
   }
 
-  /** One write per delivered block: the first delivery and each edit. */
+  /**
+   * Context only grows between compactions, so a live fill below half the
+   * last one the session reported means the agent compacted. Kimi, Qwen and
+   * Gemini each report the current fill as `used`.
+   */
+  private contextFillHalved(
+    sessionId: string,
+    protocolSessionId: string,
+    update: Record<string, unknown>,
+    updateKind: string | undefined,
+  ): boolean {
+    if (updateKind !== "usage_update") return false;
+    const used = update.used;
+    if (typeof used !== "number" || !Number.isFinite(used)) return false;
+    const previous = this.sessionContextFill.get(sessionId);
+    this.sessionContextFill.set(sessionId, { protocolSessionId, used });
+    return previous?.protocolSessionId === protocolSessionId
+      && used < previous.used / 2;
+  }
+
+  /**
+   * One write per delivered block (the first delivery and each edit) and per
+   * compaction that clears the record. An unchanged record is not written.
+   */
   private recordDeliveredAgentInstructions(
     sessionId: string,
     digest: string | undefined,
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata) {
+    if (!metadata || metadata.agentInstructionsDigest === digest) {
       return;
     }
     const { agentInstructionsDigest: _previous, ...rest } = metadata;

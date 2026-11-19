@@ -5,12 +5,15 @@ import type { StateDb } from "./state-db.js";
 const MESSAGING_LEASE_KEY = "profile-messaging";
 const FEDERATION_LEASE_KEY = "profile-federation";
 const MCP_CONNECTIONS_LEASE_KEY = "profile-mcp-connections";
+const BACKGROUND_LEASE_KEY = "profile-background";
 const PID_OWNED_LEASE_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
 export { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import type {
   AppRuntimeInstanceRecord,
   AppRuntimeMessagingDisabledReason,
+  BackgroundLeaseAcquireResult,
+  BackgroundRuntimeLeaseRecord,
   FederationLeaseAcquireResult,
   FederationRuntimeLeaseRecord,
   McpConnectionsLeaseAcquireResult,
@@ -22,6 +25,8 @@ import type {
 export type {
   AppRuntimeInstanceRecord,
   AppRuntimeMessagingDisabledReason,
+  BackgroundLeaseAcquireResult,
+  BackgroundRuntimeLeaseRecord,
   FederationLeaseAcquireResult,
   FederationRuntimeLeaseRecord,
   McpConnectionsLeaseAcquireResult,
@@ -181,6 +186,15 @@ export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
     return this.acquireLease({ leaseKey: MCP_CONNECTIONS_LEASE_KEY, ...params });
   }
 
+  acquireBackgroundLease(params: {
+    instanceId: string;
+    isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+    canReclaimOwnerImmediately?: (owner: AppRuntimeInstanceRecord) => boolean;
+    now: number;
+  }): BackgroundLeaseAcquireResult {
+    return this.acquireLease({ leaseKey: BACKGROUND_LEASE_KEY, ...params });
+  }
+
   releaseMessagingLease(params: { instanceId: string; now: number }): boolean {
     return this.releaseLease({
       leaseKey: MESSAGING_LEASE_KEY,
@@ -207,6 +221,10 @@ export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
     return this.releaseLease({ leaseKey: MCP_CONNECTIONS_LEASE_KEY, ...params });
   }
 
+  releaseBackgroundLease(params: { instanceId: string; now: number }): boolean {
+    return this.releaseLease({ leaseKey: BACKGROUND_LEASE_KEY, ...params });
+  }
+
   getMessagingLease(): MessagingRuntimeLeaseRecord | undefined {
     return this.readLease(MESSAGING_LEASE_KEY);
   }
@@ -217,6 +235,10 @@ export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
 
   getMcpConnectionsLease(): McpConnectionsRuntimeLeaseRecord | undefined {
     return this.readLease(MCP_CONNECTIONS_LEASE_KEY);
+  }
+
+  getBackgroundLease(): BackgroundRuntimeLeaseRecord | undefined {
+    return this.readLease(BACKGROUND_LEASE_KEY);
   }
 
   private acquireLease(params: {

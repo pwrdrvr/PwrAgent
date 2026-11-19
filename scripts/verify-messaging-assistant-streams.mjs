@@ -1,18 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { strict as assert } from "node:assert";
 import ts from "typescript";
 
+// Verify the assistant-stream extraction independently of later controller changes.
 const baseline = "fec40d7d78e6746c6283345b87fbfb63ab29c6ee";
+const extraction = "d0000337463c9f8a643496d1301d8a5e9fc24891";
 const core = "apps/desktop/src/main/messaging/core/";
 const controller = "messaging-controller.ts";
 const streamFile = "messaging-assistant-streams.ts";
 const router = "messaging-backend-event-router.ts";
 const helpers = "messaging-backend-event-helpers.ts";
 
-function source(file, original = false) {
+function source(revision, file) {
   const path = core + file;
-  const text = original ? execFileSync("git", ["show", baseline + ":" + path], { encoding: "utf8" }) : readFileSync(path, "utf8");
+  const text = execFileSync("git", ["show", revision + ":" + path], { encoding: "utf8" });
   return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
 }
 
@@ -28,11 +29,11 @@ function declaration(file, name) {
   return node.getText(file);
 }
 
-const current = source(controller);
-const original = source(controller, true);
+const current = source(extraction, controller);
+const original = source(baseline, controller);
 const oldMembers = members(original, "MessagingController");
 const facade = members(current, "MessagingController");
-const ownerFile = source(streamFile);
+const ownerFile = source(extraction, streamFile);
 const owner = members(ownerFile, "MessagingAssistantStreams");
 const additional = new Set(["dispose", "discardAssistantStreamItemForEvent"]);
 const restoreHost = text => text.replaceAll("this.context.host.", "this.").replaceAll("this.context.", "this.");
@@ -49,8 +50,8 @@ const beforeDispose = oldMembers.get("dispose").getText(original);
 const disposal = owner.get("dispose").body.getText(ownerFile).slice(2, -4);
 assert.equal(facade.get("dispose").getText(current).replace("    this.assistantStreams.dispose();", disposal),
   beforeDispose, "disposal order");
-const oldRouter = source(router, true);
-const newRouter = source(router);
+const oldRouter = source(baseline, router);
+const newRouter = source(extraction, router);
 const discard = restoreHost(owner.get("discardAssistantStreamItemForEvent").body.getText(ownerFile))
   .slice(2, -4).split("\n").map(line => "    " + line).join("\n")
   .replace(/this\.(assistantStreamBufferKeysForEvent|assistantStreamBuffers|assistantStreamDeliveryQueues|assistantStreamCancellationSignals|turnProseKey)/g, "this.context.host().$1");
@@ -61,8 +62,8 @@ oldRouter.text, "router control flow and awaits");
 for (const name of ["assistantStreamKeysForBackendEvent", "assistantStreamFilterForBackendEvent"]) {
   assert.equal(declaration(ownerFile, name), declaration(original, name), name);
 }
-assert.equal(declaration(source(helpers), "messagingSurfaceKey"), "export " + declaration(original, "messagingSurfaceKey"));
-assert.equal(declaration(ownerFile, "AssistantStreamBuffer"), declaration(source(helpers, true), "AssistantStreamBuffer").replace(/^export /, ""));
+assert.equal(declaration(source(extraction, helpers), "messagingSurfaceKey"), "export " + declaration(original, "messagingSurfaceKey"));
+assert.equal(declaration(ownerFile, "AssistantStreamBuffer"), declaration(source(baseline, helpers), "AssistantStreamBuffer").replace(/^export /, ""));
 
 const adjusted = new Set(["dispose", "agentToolHost", "backendEventHost"]);
 for (const [name, node] of oldMembers) {
@@ -71,7 +72,7 @@ for (const [name, node] of oldMembers) {
 }
 
 console.log(JSON.stringify({
-  baseline, moved, checkedRouter: true, checkedDisposal: true,
+  baseline, extraction, moved, checkedRouter: true, checkedDisposal: true,
   originalControllerLines: original.text.trimEnd().split("\n").length,
   controllerLines: current.text.trimEnd().split("\n").length,
 }));

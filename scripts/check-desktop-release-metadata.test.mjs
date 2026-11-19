@@ -222,7 +222,7 @@ test.each([
 
 test("rejects a package omitted from publication even when debug retention still includes it", () => {
   const root = fixture();
-  replace(root, ".github/workflows/release.yml", "            linux-dist/*.rpm \\\n", "");
+  replace(root, ".github/workflows/release.yml", "            linux-dist/*.rpm\n", "");
   const result = check(root);
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("Create release and publish all platform assets must contain \"linux-dist/*.rpm\"");

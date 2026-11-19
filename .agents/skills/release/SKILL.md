@@ -301,16 +301,9 @@ pass `Check release metadata` in the no-secret `Test and prepare signing input`
 job before the environment-gated `Sign, notarize, publish` job can request
 approval and access Apple signing secrets.
 
-For a manual dispatch, verify the tag already exists on GitHub:
-
-```bash
-git ls-remote --tags origin v<version>
-gh workflow run release.yml --ref v<version> -f tag=v<version>
-```
-
-The workflow ref must be that same protected desktop tag. Branch dispatches
-are rejected so event SHA, desktop source, tested npm bytes and provenance all
-identify one commit. An advancing release branch does not invalidate a retry.
+Only a protected tag push starts the release workflow. Recover by rerunning
+failed jobs on the original tag-push run and preserve its tested artifacts.
+An advancing release branch does not invalidate a retry.
 
 ## Monitor And Verify
 

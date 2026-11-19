@@ -1,12 +1,14 @@
 import type Database from "better-sqlite3";
 import {
   isAppServerBackendKind,
+  isThreadLockRefusal,
   isPwrAgentUpdateVersion,
   type AppServerBackendKind,
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
 } from "@pwragent/shared";
 import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
+import { scheduledActionIdFromTurnQueueEntry } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { storageProcessAlive } from "./storage-maintenance";
 
 /**
@@ -43,6 +45,8 @@ export type StoredRestartContinuation = {
   createdAt: number;
   /** Absent: the thread's continuation. `queued`: a message from its queue. */
   kind?: "queued";
+  /** This checkpoint owns a released scheduled turn or an explicit pause. */
+  ownsScheduledTurn?: true;
   queued?: StoredRestartQueuedFields;
   upgradeVerification?: { operationId: string; expectedVersion: string; previousRuntimeId: string; cancelled?: true };
 };
@@ -184,7 +188,7 @@ export class RestartContinuationStore {
       const drop = this.db.prepare("DELETE FROM restart_continuations WHERE entry_id = ?");
       for (const row of candidates()) {
         const continuation = parseContinuation(row);
-        if (!continuation) {
+        if (!continuation || this.isObsoleteScheduledReceipt(continuation)) {
           drop.run(row.entry_id);
           continue;
         }
@@ -193,5 +197,22 @@ export class RestartContinuationStore {
       }
       return claimed;
     }).immediate();
+  }
+
+  private isObsoleteScheduledReceipt(continuation: StoredRestartContinuation): boolean {
+    if (continuation.kind !== "queued") return false;
+    const id = scheduledActionIdFromTurnQueueEntry(continuation.id);
+    if (!id) return false;
+    // Read only SQLite metadata. A damaged scheduled payload should not
+    // stop another thread's continuation from being claimed.
+    const action = this.db.prepare(
+      "SELECT status, error_message FROM scheduled_thread_actions WHERE action_id = ? AND backend = ? AND thread_id = ? AND kind = 'turn'",
+    ).get(id, continuation.backend, continuation.threadId) as { status: string; error_message: string | null } | undefined;
+    if (action?.status === "queued") return false;
+    if (action?.status !== "held") return true;
+    // Older checkpoints collapsed explicit pause and lock hold into one
+    // flag. Recover those lock holds from the scheduled action as before.
+    return continuation.ownsScheduledTurn !== true
+      && action.error_message !== null && isThreadLockRefusal(action.error_message);
   }
 }

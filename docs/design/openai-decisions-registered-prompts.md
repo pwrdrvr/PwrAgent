@@ -620,6 +620,7 @@ Tool failures use `agentToolFailure`. Codes:
 | `invalid_definition` | register/update failed local validation | no |
 | `invalid_input` | invoke input failed the stored schema | no |
 | `credential_missing` | secret absent | no |
+| `provider_disabled` | register, update or invoke names a provider turned off in Settings | no |
 | `credential_rejected` | HTTP 401 or 403 | yes |
 | `model_unavailable` | `model_not_found` or HTTP 404 | yes |
 | `rate_limited` | 429 after the retry rule | yes |
