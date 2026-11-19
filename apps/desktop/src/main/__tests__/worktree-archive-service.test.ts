@@ -261,6 +261,7 @@ describe("WorktreeArchiveService", () => {
         await git(repo, ["init", "-b", "main"]);
         await git(repo, ["config", "user.name", "Fixture"]);
         await git(repo, ["config", "user.email", "fixture@example.invalid"]);
+        await git(repo, ["config", "core.autocrlf", "false"]);
         await writeFile(path.join(repo, "file.txt"), "committed\n");
         await git(repo, ["add", "."]);
         await git(repo, ["commit", "-m", "fixture"]);
