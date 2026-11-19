@@ -74,12 +74,11 @@ it("the ACP stdio bridge forwards MCP frames with its bound credential", async (
     name: "pwragent", type: "http", url: "http://127.0.0.1:1234/mcp",
     headers: [{ name: "Authorization", value: "Bearer fixture-token" }],
   });
-  if (!("command" in config)) throw new Error("Expected a stdio configuration");
   const call = { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "agent_memory", arguments: { action: "read_index" } } };
   const response = { jsonrpc: "2.0", id: 7, result: { content: [] } };
   const written: string[] = [];
   const fetched: unknown[][] = [];
-  await runInNewContext(config.args![1]!, {
+  await runInNewContext(config.args[1]!, {
     AbortSignal,
     process: { env: config.env, stdin: {}, stdout: { write: (line: string) => written.push(line) } },
     require: () => ({ createInterface: () => [JSON.stringify(call)] }),
@@ -88,7 +87,7 @@ it("the ACP stdio bridge forwards MCP frames with its bound credential", async (
       return { ok: true, status: 200, json: async () => response };
     },
   });
-  expect(fetched).toEqual([[config.env?.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
+  expect(fetched).toEqual([[config.env.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
     body: JSON.stringify(call), headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
   })]]);
   expect(written).toEqual([JSON.stringify(response) + "\n"]);

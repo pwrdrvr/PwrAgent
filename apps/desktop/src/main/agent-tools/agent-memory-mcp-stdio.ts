@@ -34,7 +34,7 @@ const input = readline.createInterface({ input: process.stdin, crlfDelay: Infini
 })().catch(() => { process.exitCode = 1; });
 `;
 
-export function buildAgentMemoryStdioServer(server: AgentToolHttpMcpServerConfig): AcpMcpServerConfig {
+export function buildAgentMemoryStdioServer(server: AgentToolHttpMcpServerConfig) {
   const authorization = server.headers.find(({ name }) => name.toLowerCase() === "authorization")?.value;
   if (!authorization) throw new Error("The Agent memory MCP registration has no credential.");
   return {
@@ -46,5 +46,5 @@ export function buildAgentMemoryStdioServer(server: AgentToolHttpMcpServerConfig
       PWRAGENT_MEMORY_MCP_URL: server.url,
       PWRAGENT_MEMORY_MCP_AUTH: authorization,
     },
-  };
+  } satisfies AcpMcpServerConfig;
 }
