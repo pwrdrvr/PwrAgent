@@ -36,10 +36,13 @@ async function fixture(): Promise<{ repo: string; worktree: string; container: s
 }
 
 function record(repo: string, worktree: string): { locked: boolean; lockReason?: string } | undefined {
-  const block = git(repo, ["worktree", "list", "--porcelain"]).split(/\n\n/)
-    .find((candidate) => candidate.startsWith(`worktree ${worktree}\n`));
+  // Git prints forward-slash paths on Windows; compare resolved paths.
+  const block = git(repo, ["worktree", "list", "--porcelain"]).split(/\r?\n\r?\n/)
+    .map((candidate) => candidate.split(/\r?\n/))
+    .find((lines) => lines[0]?.startsWith("worktree ")
+      && path.resolve(lines[0].slice("worktree ".length)) === path.resolve(worktree));
   if (!block) return undefined;
-  const lock = block.split("\n").find((line) => line === "locked" || line.startsWith("locked "));
+  const lock = block.find((line) => line === "locked" || line.startsWith("locked "));
   return { locked: lock !== undefined, lockReason: lock?.slice("locked ".length) || undefined };
 }
 
