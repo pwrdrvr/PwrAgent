@@ -1,3 +1,4 @@
+import { stripAgentMemoryChunk } from "@pwragent/shared";
 import type {
   CodexClientHost,
   CodexClientLogger,
@@ -2726,7 +2727,7 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
     normalizedType === "input_text" ||
     normalizedType === "output_text"
   ) {
-    const text = pickString(record, ["text", "value", "content"]);
+    const text = stripAgentMemoryText(pickString(record, ["text", "value", "content"]) ?? "");
     if (text && isCodexImageBoundaryText(text)) {
       return [];
     }
@@ -2793,6 +2794,10 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
   return [];
 }
 
+function stripAgentMemoryText(text: string): string {
+  return stripAgentMemoryChunk(text, false).text;
+}
+
 /** The text and parts a replay message gets from one raw message item. */
 export function buildMessageContent(record: Record<string, unknown>): {
   parts?: AppServerThreadMessagePart[];
@@ -2808,7 +2813,7 @@ export function buildMessageContent(record: Record<string, unknown>): {
     const text =
       dedupeJoinedText(
         structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
-      ) ?? collectLegacyMessageText(record);
+      ) ?? stripAgentMemoryText(collectLegacyMessageText(record));
     const parts =
       structuredParts.some((part) => part.type === "text") || !text
         ? structuredParts
@@ -2820,7 +2825,7 @@ export function buildMessageContent(record: Record<string, unknown>): {
     };
   }
 
-  const text = collectLegacyMessageText(record);
+  const text = stripAgentMemoryText(collectLegacyMessageText(record));
   return { text };
 }
 
@@ -11524,6 +11529,7 @@ export class CodexAppServerClient {
       threadId: string;
       turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message: string } };
     }) => void;
+    agentMemoryContext?: string;
     /** Delegation attribution only. */
     parentTurnId?: string;
     rootTurnId?: string;
@@ -11680,7 +11686,9 @@ export class CodexAppServerClient {
         buildTurnStartPayload(
           {
             threadId: params.threadId,
-            input: codexInput,
+            input: params.agentMemoryContext
+              ? [{ type: "text", text: params.agentMemoryContext, text_elements: [] }, ...codexInput]
+              : codexInput,
             parentTurnId: params.parentTurnId,
             rootTurnId: params.rootTurnId,
             cwd: params.cwd,

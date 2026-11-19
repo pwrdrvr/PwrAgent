@@ -181,6 +181,7 @@ type AcpActiveTurn = {
   assistantText: string;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
+  sentAgentMemory?: boolean;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
@@ -1136,6 +1137,7 @@ export class AcpAgentClient {
      * text. Undefined leaves the prompt alone.
      */
     agentInstructions?: string;
+    readAgentMemory?: () => Promise<string | undefined>;
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
@@ -1163,6 +1165,7 @@ export class AcpAgentClient {
       sessionId: params.sessionId,
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
+      readAgentMemory: params.readAgentMemory,
     });
     void promptRequest
       .then((result) => {
@@ -1755,7 +1758,9 @@ export class AcpAgentClient {
         touchActivity: !fromSessionLoad,
       });
     }
-    if (!fromSessionLoad) {
+    // PwrAgent already saved the original prompt before sending it. The
+    // provider echo can contain the index and belongs only in the live filter.
+    if (!fromSessionLoad && !(activeTurn?.sentAgentMemory && updateKind === "user_message_chunk")) {
       this.appendHistoryUpdate(sessionId, receivedAt, update);
     }
     const normalizer = this.normalizerFor(sessionId);
@@ -2214,6 +2219,7 @@ export class AcpAgentClient {
     sessionId: string;
     turnId: string;
     agentInstructions?: string;
+    readAgentMemory?: () => Promise<string | undefined>;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
     const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
@@ -2244,13 +2250,17 @@ export class AcpAgentClient {
           this.options.backendId,
           params.sessionId,
         )?.agentInstructionsDigest;
+      const memory = await params.readAgentMemory?.();
+      if (activeTurn && memory) activeTurn.sentAgentMemory = true;
       const result = await this.options.transport.request(
         "session/prompt",
         {
           sessionId: params.protocolSessionId,
-          prompt: sendInstructions
-            ? [...textPrompt(buildAcpAgentInstructionBlock(instructions)), ...params.prompt]
-            : params.prompt,
+          prompt: [
+            ...(sendInstructions ? textPrompt(buildAcpAgentInstructionBlock(instructions)) : []),
+            ...(memory ? textPrompt(memory) : []),
+            ...params.prompt,
+          ],
         },
         ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
       );

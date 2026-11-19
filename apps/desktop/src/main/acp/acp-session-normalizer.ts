@@ -11,6 +11,7 @@ import type {
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
 import { buildPendingTurnId, formatWebSearchLabel } from "@pwragent/shared";
+import { stripAgentMemoryChunk } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
@@ -522,6 +523,7 @@ export class AcpSessionReplayNormalizer {
 
     if (isAssistantTextUpdate) {
       this.insideAgentInstructionBlock = false;
+      this.insideAgentMemoryBlock = false;
       // Consecutive ACP text chunks form one live bubble, but text after a tool
       // call should become a new bubble instead of overwriting earlier text.
       const text =
@@ -711,6 +713,7 @@ export class AcpSessionReplayNormalizer {
 
   /** An echoed Agent instruction block opened in an earlier user chunk. */
   private insideAgentInstructionBlock = false;
+  private insideAgentMemoryBlock = false;
 
   private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
     // PwrAgent prepends the finished managed-review artifact to the next
@@ -726,7 +729,9 @@ export class AcpSessionReplayNormalizer {
         "",
     ), this.insideAgentInstructionBlock);
     this.insideAgentInstructionBlock = stripped.insideBlock;
-    const text = stripped.text;
+    const memory = stripAgentMemoryChunk(stripped.text, this.insideAgentMemoryBlock);
+    this.insideAgentMemoryBlock = memory.insideBlock;
+    const text = memory.text;
     if (!text) {
       return;
     }

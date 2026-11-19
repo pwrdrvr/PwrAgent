@@ -1,3 +1,4 @@
+import { buildAgentMemoryStdioServer } from "../agent-tools/agent-memory-mcp-stdio";
 import { applicationHost as app } from "../owner-host";
 import { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory, projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
 import {
@@ -3512,17 +3513,16 @@ export class AcpBackendAdapter {
         sessionId,
       }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
-        if (
-          this.agentToolMcpServer
-          && acpRuntimeSupportsHttpMcp(runtimeCapabilities)
-        ) {
+        if (this.agentToolMcpServer) {
+          const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
           try {
             const registration = await this.agentToolMcpServer.registerClient({
               backend: backendId,
               threadId: sessionId,
+              ...(!http ? { memoryOnly: true } : {}),
             });
             baseRegistration = {
-              servers: [registration.server],
+              servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
               bindThread: registration.bindThread,
             };
           } catch (error) {

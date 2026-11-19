@@ -627,6 +627,8 @@ import {
   type QueuedMessageTitleSettlement,
 } from "./queued-message-title";
 import { deleteThreadAssets, type ThreadAssetOwner } from "./thread-assets";
+import { AgentMemoryError, AgentMemoryStore } from "./agent-memory-store";
+import { buildAgentMemoryContext, isAgentMemoryRead, type AgentMemoryArgs, type AgentMemoryRequest, type AgentMemoryResult } from "@pwragent/shared";
 import { enrichLocalFileInputs } from "./local-file-input";
 import {
   portableTurnInputAttachments,
@@ -1518,8 +1520,21 @@ export class DesktopBackendRegistry {
     return this.threadInspectionTools.mutateThreadParentV1(request);
   }
 
-  private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
-    (request) => this.threadInspectionTools.handleThreadInspectionRequest(request);
+  private readonly agentMemory = new AgentMemoryStore();
+
+  private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler = async (request) => {
+    if (request.operation !== "agent_memory") {
+      return await this.threadInspectionTools.handleThreadInspectionRequest(request);
+    }
+    try {
+      return { ok: true, data: { memory: await this.accessAgentMemory(request.context, request.args) } };
+    } catch (error) {
+      if (error instanceof AgentMemoryError) {
+        return { ok: false, error: { code: error.code === "conflict" ? "invalid_arguments" : error.code, message: error.message } };
+      }
+      return { ok: false, error: { code: "internal_error", message: "Agent memory could not be accessed." } };
+    }
+  };
   private federatedThreadInspectionHandler:
     | PwrAgentFederatedThreadInspectionHandler
     | undefined;
@@ -4238,6 +4253,48 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private async readAgentMemoryContext(owner: { backend: AppServerBackendKind; threadId: string }): Promise<string | undefined> {
+    try {
+      const result = await this.accessAgentMemory(owner, { action: "read_index" });
+      return "content" in result ? buildAgentMemoryContext(result.content) : undefined;
+    } catch (error) {
+      if (!(error instanceof AgentMemoryError)) backendRegistryLog.warn("Agent memory index unavailable", owner);
+      return undefined;
+    }
+  }
+
+  async accessAgentMemorySettings(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
+    const { operation } = request;
+    if (!isAgentMemoryRead(operation) && !(operation && typeof operation === "object" && "revision" in operation && operation.revision)) {
+      throw new AgentMemoryError("invalid_arguments", "Read the file before saving Agent memory.");
+    }
+    return await this.agentMemory.access(request, operation, async () => {
+      await this.requireMemoryAgent(request);
+      const { backend, threadId } = request;
+      const exists = isAcpBackendId(backend)
+        ? Boolean(this.acpBackend.getSession(backend, threadId))
+        : backend === "claude"
+          ? Boolean(await this.claudeBackend.readThreadSummary(threadId))
+          : await this.withCodexThreadClient(threadId, async (client) =>
+            Boolean(await client.readThreadSummary?.(threadId)), undefined, false);
+      if (!exists) throw new AgentMemoryError("forbidden", "The owner could not find this Agent thread.");
+    });
+  }
+
+  async accessAgentMemory(
+    owner: { backend: AppServerBackendKind; threadId: string },
+    operation: AgentMemoryArgs,
+  ): Promise<AgentMemoryResult> {
+    this.assertNotBootstrap("accessAgentMemory");
+    return await this.agentMemory.access(owner, operation, () => this.requireMemoryAgent(owner));
+  }
+
+  private async requireMemoryAgent(owner: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
+    if (!await this.getThreadAgentMetadata(owner)) {
+      throw new AgentMemoryError("forbidden", "Memory is available only for a designated Agent thread.");
+    }
+  }
+
   async getThreadAgentMetadata(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -5733,6 +5790,7 @@ export class DesktopBackendRegistry {
         // ACP has no instruction field. The client sends these ahead of the
         // prompt when the agent session has not been sent this text.
         agentInstructions: providerDeliveredAgentInstructions(overlay?.agent) ?? "",
+        readAgentMemory: () => this.readAgentMemoryContext(params),
       });
       this.invalidateThreadListCache(params.backend);
       return {
@@ -10670,6 +10728,7 @@ export class DesktopBackendRegistry {
             messageOrigin,
             executionMode: params.executionMode ?? overlay?.executionMode,
             instructions,
+            readAgentMemory: () => this.readAgentMemoryContext(params),
             mcpServers,
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
             // PwrAgent's server lists tools by this member's containment.
@@ -11029,11 +11088,13 @@ export class DesktopBackendRegistry {
             codexThreadConfig,
             tokenMiserConfig,
           );
+          const agentMemoryContext = await this.readAgentMemoryContext(params);
           const started = await listingDiagnostics.trace("workflow", { query: "provider-turn-start" }, () => client.startTurn({
             threadId: params.threadId,
             ...delegatedTurnAttribution(params.messageOrigin,
               params.agentMessages?.map((message) => message.origin) ?? params.agentMessageOrigins),
             input,
+            agentMemoryContext,
             ...(pendingMessageContextId ? {
               onInputTextPrepared: (text: string | undefined) => {
                 this.updatePendingThreadMessageText(pendingMessageContextId, text);

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildAgentMemoryContext,
   buildThreadIdentityKey,
   STAR_MAP_MANAGER_AGENT_INSTRUCTIONS,
   type AppServerBackendKind,
@@ -91,18 +92,28 @@ class HeldPromptTransport extends FakeAcpAgentTransport {
   }
 }
 
-type ClaudeLaunch = { systemPrompt: unknown; prompts: number };
+type ClaudeLaunch = { systemPrompt: unknown; prompts: number; resume?: string; memory: unknown[] };
 
 /** A Claude Code process that records the options it was launched with. */
 function recordingClaudeQuery(launches: ClaudeLaunch[]) {
   return vi.fn((args: Parameters<typeof query>[0]) => {
-    const launch: ClaudeLaunch = { systemPrompt: args.options?.systemPrompt, prompts: 0 };
+    const launch: ClaudeLaunch = { systemPrompt: args.options?.systemPrompt, prompts: 0, resume: args.options?.resume, memory: [] };
     launches.push(launch);
     const prompt = args.prompt as AsyncIterable<SDKUserMessage>;
     async function* run(): AsyncGenerator<SDKMessage> {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       for await (const message of prompt) {
         launch.prompts += 1;
+        for (const matcher of args.options?.hooks?.UserPromptSubmit ?? []) {
+          for (const hook of matcher.hooks) {
+            const result = await hook({
+              hook_event_name: "UserPromptSubmit", session_id: "fixture", transcript_path: "", cwd: "/", prompt: "fixture",
+            }, undefined, { signal: AbortSignal.abort() });
+            if ("hookSpecificOutput" in result && result.hookSpecificOutput?.hookEventName === "UserPromptSubmit") {
+              launch.memory.push(result.hookSpecificOutput.additionalContext);
+            }
+          }
+        }
         yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${launch.prompts}`, content: [{ type: "text", text: "OK" }] } } as SDKMessage;
         yield { type: "result", subtype: "success", is_error: false, result: "OK",
           ...(message.uuid ? { user_message_uuids: [message.uuid] } : {}) } as unknown as SDKMessage;
@@ -119,6 +130,7 @@ function recordingClaudeQuery(launches: ClaudeLaunch[]) {
 async function createFixture() {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-agent-instructions-")));
   roots.push(root);
+  vi.stubEnv("PWRAGENT_HOME", path.join(root, "profile-root"));
   const { dbPath, tempDir } = createTempStateDb("pwragent-agent-instructions-db-");
   roots.push(tempDir);
   const acpTransport = new HeldPromptTransport();
@@ -219,6 +231,7 @@ describe("a turn on a designated Agent carries its instructions to the provider"
     const prompt = acpTransport.requests.find((request) => request.method === "session/prompt")!.params!.prompt as Array<{ type: string; text: string }>;
     expect(prompt).toEqual([
       { type: "text", text: buildAcpAgentInstructionBlock(FIRST) },
+      { type: "text", text: buildAgentMemoryContext("") },
       { type: "text", text: "hello" },
     ]);
     expect(prompt[0]!.text).toContain(FIRST);
@@ -749,5 +762,67 @@ describe("the ACP instruction block", () => {
       await client.dispose();
       db.close();
     }
+  });
+});
+
+describe("Agent memory at the provider boundary", () => {
+  it.each(["codex", "claude", ACP] as const)("%s sends the current index on start and resume", async (backend) => {
+    const { root, open, acpTransport, claudeLaunches } = await createFixture();
+    const first = open();
+    const started = await first.registry.startThread({ backend, cwd: root, agent: agent(FIRST) });
+    const identity = { backend, threadId: started.threadId };
+    const input = text("next work");
+    const observe = () => backend === "codex"
+      ? JSON.stringify(codexFrames("turn/start").at(-1))
+      : backend === "claude"
+        ? JSON.stringify(claudeLaunches.at(-1)?.memory.at(-1)
+          ? { memory: claudeLaunches.at(-1)?.memory.at(-1) }
+          : {})
+        : acpTransport.prompts().at(-1) ?? "";
+    await first.registry.accessAgentMemory(identity, { action: "write_index", content: "first-memory-fixture" });
+    const turn = await first.registry.startTurn({ ...identity, input });
+    await vi.waitFor(() => expect(observe()).toContain("first-memory-fixture"));
+    if (backend === "codex") completeCodexTurn(turn.threadId, turn.turnId);
+    await first.registry.accessAgentMemory(identity, { action: "write_index", content: "resumed-memory-fixture" });
+    if (backend === ACP) {
+      await vi.waitFor(() => expect(acpTransport.prompts()).toHaveLength(1));
+    }
+    await first.registry.close();
+    registries.splice(registries.indexOf(first.registry), 1);
+    const second = open();
+    await second.registry.startTurn({ ...identity, input });
+    await vi.waitFor(() => expect(observe()).toContain("resumed-memory-fixture"));
+    expect(observe()).not.toContain("first-memory-fixture");
+    if (backend === "codex") expect(codexFrames("thread/resume").at(-1)?.threadId).toBe(started.threadId);
+    if (backend === "claude") expect(claudeLaunches.at(-1)?.resume).toBeDefined();
+    if (backend === ACP) expect(acpTransport.requests.some((request) => request.method === "session/load")).toBe(true);
+  });
+
+  it("reads a note written before compaction after restarting the owner", async () => {
+    const { root, open } = await createFixture();
+    const first = open();
+    const started = await first.registry.startThread({ backend: "codex", cwd: root, agent: agent(FIRST) });
+    const identity = { backend: "codex" as const, threadId: started.threadId };
+    const turn = await first.registry.startTurn({ ...identity, input: text("record progress") });
+    await first.registry.accessAgentMemory(identity, { action: "write_note", noteId: "progress", content: "Already reported the review." });
+    const completed = new Promise<void>((resolve) => {
+      const unsubscribe = first.registry.onEvent((event) => {
+        if (event.backend === "codex" && event.notification.method === "turn/completed"
+          && event.notification.params.turnId === turn.turnId) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+    completeCodexTurn(turn.threadId, turn.turnId);
+    await completed;
+    await first.registry.compactThread(identity);
+    expect(codexFrames("thread/compact/start")).toHaveLength(1);
+    AgentInstructionCodexTransport.notify("thread/compacted", { threadId: turn.threadId, turnId: `compact:${turn.threadId}` });
+    await first.registry.close();
+    registries.splice(registries.indexOf(first.registry), 1);
+    const second = open();
+    expect(await second.registry.accessAgentMemory(identity, { action: "read_note", noteId: "progress" }))
+      .toMatchObject({ exists: true, content: "Already reported the review." });
   });
 });

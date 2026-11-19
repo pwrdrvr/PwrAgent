@@ -1,3 +1,5 @@
+import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared";
+import { isAgentMemoryRead } from "@pwragent/shared";
 import { registerNavigationBackendHandlers, type NavigationBackendOperations } from "./federation-navigation-handlers";
 import { startTurnInputOutcome, steerInputOutcome, type TurnInputOutcome } from "./turn-input-viewers";
 import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse } from "@pwragent/shared";
@@ -854,6 +856,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   setAcpSessionRuntimeOption(
     request: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse>;
+  accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult>;
   setThreadAgent(
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse>;
@@ -1872,6 +1875,15 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SetAcpSessionRuntimeOptionRequest,
       ),
   );
+  for (const method of [FEDERATION_BACKEND_METHODS.readAgentMemory, FEDERATION_BACKEND_METHODS.writeAgentMemory]) {
+    params.router.registerHandler(method, async (envelope) => {
+      const request = envelope.params as AgentMemoryRequest;
+      if (!request || isAgentMemoryRead(request.operation) !== (method === FEDERATION_BACKEND_METHODS.readAgentMemory)) {
+        throw new Error("Agent memory action does not match this request.");
+      }
+      return await params.backend.accessAgentMemory(request);
+    });
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadAgent,
     async (envelope) =>
@@ -3217,6 +3229,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
     return await this.rpc.request<SetAcpSessionRuntimeOptionResponse>({
       method: FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption,
+      params: request,
+    });
+  }
+
+  async accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
+    return await this.rpc.request<AgentMemoryResult>({
+      method: isAgentMemoryRead(request.operation)
+        ? FEDERATION_BACKEND_METHODS.readAgentMemory
+        : FEDERATION_BACKEND_METHODS.writeAgentMemory,
       params: request,
     });
   }

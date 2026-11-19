@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { copyFile, link, lstat, mkdir, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { AgentMemoryStore } from "./agent-memory-store";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "../profile";
 
 export type ThreadAssetOwner = { backend: AppServerBackendKind; threadId: string };
@@ -133,6 +134,7 @@ export async function existingThreadAssetAlias(owner: ThreadAssetOwner, sourcePa
 
 /** Called only after permanent provider deletion; archiving keeps ownership. */
 export async function deleteThreadAssets(owner: ThreadAssetOwner): Promise<void> {
+  await new AgentMemoryStore().purge(owner);
   await withAssetOwner(owner, async () => {
     await rm(threadAssetRoot(owner), { recursive: true, force: true });
     // Match the existing preview cache's encoding, while refusing traversal

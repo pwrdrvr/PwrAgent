@@ -561,7 +561,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.codexEnvironmentHydrationStore ??
     createDefaultCodexEnvironmentHydrationStore();
   const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
-  const localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
+  const localFilePrivateStorageRoots = [resolveActiveProfilePath("state/agent-memory"), ...(codexHome ? [codexHome] : [])];
   const clientVersion =
     typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
   const createCodexClient = (provider?: CodexModelProviderSettings): CodexAppServerClient => {

@@ -108,6 +108,7 @@ const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
+  memoryOnly?: boolean;
 };
 
 export type ResolvedAgentToolMcpCallContext = {
@@ -234,7 +235,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           previousThreadId: current.threadId ?? null,
           threadId: normalizedThreadId,
         });
-        const key = boundThreadKey(bound.backend, normalizedThreadId);
+        const key = boundThreadKey(bound, normalizedThreadId);
         if (!this.tokensByBoundThread.has(key)) {
           this.tokensByBoundThread.set(key, token);
         }
@@ -274,7 +275,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private tokenForContext(context: AgentToolMcpClientContext): string {
     const normalizedThreadId = context.threadId?.trim();
     if (normalizedThreadId) {
-      const key = boundThreadKey(context.backend, normalizedThreadId);
+      const key = boundThreadKey(context, normalizedThreadId);
       const existing = this.tokensByBoundThread.get(key);
       if (existing) {
         return existing;
@@ -283,12 +284,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const token = randomBytes(32).toString("base64url");
     const normalizedContext = {
       backend: context.backend,
+      ...(context.memoryOnly ? { memoryOnly: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
     this.contextsByToken.set(token, normalizedContext);
     if (normalizedThreadId) {
       this.tokensByBoundThread.set(
-        boundThreadKey(context.backend, normalizedThreadId),
+        boundThreadKey(context, normalizedThreadId),
         token,
       );
     }
@@ -397,7 +399,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     ] = await Promise.all([mcpServerSdk.load(), mcpServerStreamableHttp.load(), mcpTypes.load(), skillRequestSchemas.load()]);
     const body = await readMcpRequestBody(params.request);
     const messages = Array.isArray(body) ? body : [body];
-    const streamed = messages.some((message) =>
+    const streamed = !params.clientContext.memoryOnly && messages.some((message) =>
       !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
     const initializing = messages.some(isInitializeRequest);
     if (initializing && sessionNonce) {
@@ -572,6 +574,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
       );
     }
+    if (clientContext.memoryOnly && request.params.name !== "agent_memory") {
+      return forbiddenMcpResponse("This client may call Agent memory only.");
+    }
     const catalog = this.options
       .resolveCatalogs(clientContext)
       .find((candidate) =>
@@ -657,6 +662,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const toolsByName = new Map<string, AgentMcpTool>();
     for (const catalog of this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
+        if (context.memoryOnly && tool.name !== "agent_memory") continue;
         if (this.options.isToolAdvertised && !await this.options.isToolAdvertised(tool.name, context)) continue;
         if (toolsByName.has(tool.name)) {
           throw new Error(`Duplicate PwrAgent MCP tool name: ${tool.name}`);
@@ -824,10 +830,10 @@ function forbiddenMcpResponse(message: string): AgentMcpToolCallResponse {
 }
 
 function boundThreadKey(
-  backend: AppServerBackendKind,
+  context: AgentToolMcpClientContext,
   threadId: string,
 ): string {
-  return JSON.stringify([backend, threadId]);
+  return JSON.stringify([context.backend, threadId, context.memoryOnly === true]);
 }
 
 function readBearerToken(value: string | undefined): string | undefined {
