@@ -3,6 +3,27 @@ import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
+function preview(prs: PrSummary[]) {
+  const thread: NavigationThreadSummary = {
+    id: "thread", source: "codex", title: "Thread", titleSource: "derived",
+    linkedDirectories: [], inbox: { inInbox: false }, prs,
+  };
+  return projectNavigationQuery({
+    index: { threads: [thread], directories: [] },
+    request: {
+      protocol: 2, consumer: "main-sidebar",
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: thread.id }] },
+    },
+  }).entries[0]?.row;
+}
+
+function pullRequest(index: number, state: PrSummary["state"]): PrSummary {
+  return {
+    provider: "github.com", org: "fixture", repo: "repo", number: index + 1,
+    url: `https://github.com/fixture/repo/pull/${index + 1}`, state,
+  };
+}
+
 describe("navigation PR attachment previews", () => {
   it("keeps a compact preview, reports the full count, and surfaces the only open PR", () => {
     fc.assert(fc.property(
@@ -10,31 +31,33 @@ describe("navigation PR attachment previews", () => {
       fc.nat(),
       (count, position) => {
         const openIndex = 16 + position % (count - 16);
-        const prs: PrSummary[] = Array.from({ length: count }, (_, index) => ({
-          provider: "github.com",
-          org: "fixture",
-          repo: "repo",
-          number: index + 1,
-          url: `https://github.com/fixture/repo/pull/${index + 1}`,
-          state: index === openIndex ? "passing" : "closed",
-        }));
-        const thread: NavigationThreadSummary = {
-          id: "thread", source: "codex", title: "Thread", titleSource: "derived",
-          linkedDirectories: [], inbox: { inInbox: false }, prs,
-        };
-        const result = projectNavigationQuery({
-          index: { threads: [thread], directories: [] },
-          request: {
-            protocol: 2, consumer: "main-sidebar",
-            query: { kind: "exact", identities: [{ backend: "codex", threadId: thread.id }] },
-          },
-        });
-        const row = result.entries[0]?.row;
+        const prs = Array.from({ length: count }, (_, index) =>
+          pullRequest(index, index === openIndex ? "passing" : "closed"));
+        const row = preview(prs);
         expect(row?.prs).toContain(prs[openIndex]);
         expect(row?.prs).toHaveLength(16);
         expect(row?.prsTruncated).toBe(true);
         expect(row?.prCount).toBe(count);
       },
     ));
+  });
+
+  it("retains the lead, the least-ready PR, and the least-ready PR behind the lead", () => {
+    fc.assert(fc.property(fc.integer({ min: 18, max: 128 }), fc.boolean(), (count, leadHasConflict) => {
+      const prs = Array.from({ length: count }, (_, index) => pullRequest(index, "passing"));
+      // Provider time determines the lead, independently of attachment order.
+      const lead: PrSummary = {
+        ...prs[0]!, createdAt: 300, mergeState: leadHasConflict ? "conflicting" : "mergeable",
+      };
+      const blocked: PrSummary = {
+        ...prs[1]!, state: "failing", mergeState: leadHasConflict ? "mergeable" : "conflicting", createdAt: 100,
+      };
+      prs[0] = lead;
+      prs[1] = blocked;
+      for (let index = 2; index < count; index += 1) prs[index] = { ...prs[index]!, createdAt: 200 };
+      const compact = preview(prs)?.prs;
+      expect(compact).toEqual(expect.arrayContaining([lead, blocked]));
+      expect(compact).toHaveLength(16);
+    }));
   });
 });

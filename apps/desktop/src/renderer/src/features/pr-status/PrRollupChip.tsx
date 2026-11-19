@@ -144,13 +144,17 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const overflowLabel = countUnknown ? "More PRs" : prOverflowLabel(moreCount);
   // The PRs the chip itself speaks for: all of them, or the ones the lead
   // chip beside it leaves out. The list always holds every PR.
-  const chipRollup = overflow?.restRollup ?? rollup;
+  const chipRollup = overflow
+    ? (attachments.prs && resolvePrRollup(ordered.filter((pr) => pr.url !== overflow.lead.url)))
+      || overflow.restRollup
+    : listRollup ?? rollup;
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
   const summaryText = incomplete ? (attachments.failed ? "Couldn’t load all PRs" : "Loading PRs…")
     : listRollup?.summary;
   const presentation = resolvePrChipPresentation(chipRollup.representative);
-  const leadLabel = rollup.lead && !overflow
-    ? prNumberLabel(rollup.lead, repoPrefixed.has(rollup.lead.url))
+  const lead = listRollup?.lead;
+  const leadLabel = lead && !overflow
+    ? prNumberLabel(lead, repoPrefixed.has(lead.url) || props.needsRepoPrefix?.(lead, listPrs) === true)
     : undefined;
   const triggerRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);

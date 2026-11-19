@@ -5,6 +5,7 @@ import { getDesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { readRendererFederationTarget } from "./federation-window";
 import type { NavigationPresentedThread } from "./navigation-loaded-rows";
+import { isNavigationCursorExpired } from "./navigation-query-state";
 
 export type PullRequestAttachmentThread = Pick<NavigationPresentedThread,
   "id" | "source" | "federation" | "prs" | "prsTruncated" | "prCount"
@@ -18,7 +19,9 @@ let nextConsumer = 0;
 
 /** Read the complete owner attachment list only while its disclosure is open. */
 export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThread | undefined) {
-  const target = thread?.federation?.ref.target ?? readRendererFederationTarget();
+  const windowTarget = readRendererFederationTarget();
+  const target = thread?.federation?.ref.target ?? windowTarget;
+  const allowLocalStatus = !windowTarget;
   const owner = target?.scope === "remote" ? target.instanceId : undefined;
   const backend = thread?.source;
   const threadId = thread?.id;
@@ -27,7 +30,7 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
   // already carries every attachment, before collection paging was added.
   const paged = thread?.prCount !== undefined;
   const key = thread?.prsTruncated ? JSON.stringify([owner, backend, threadId, thread.prCount]) : undefined;
-  const [result, setResult] = useState<{ key: string; preview?: PrSummary[]; prs?: PrSummary[] }>();
+  const [result, setResult] = useState<{ key: string; prs?: PrSummary[] }>();
 
   useEffect(() => {
     if (!key || !backend || !threadId) {
@@ -38,6 +41,8 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
     const consumer = `pr-attachments:${++nextConsumer}`;
     let cancelled = false;
     let currentPrs: PrSummary[] | undefined;
+    let baselinePending = true;
+    const pendingStatuses = new Map<string, PrSummary>();
     const request: NavigationSelectedDetailRequest = {
       protocol: 2,
       ref: { backend, threadId, ownerInstanceId: owner },
@@ -62,10 +67,12 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
         }, consumer);
         if (cancelled) return [];
         if (page?.name !== "prs" || !page.values.prs
-          || (revision !== undefined && page.revision !== revision)
-          || page.complete === Boolean(page.nextCursor)
+          || page.complete !== !page.nextCursor
           || (page.nextCursor && cursors.has(page.nextCursor))) {
-          throw new Error("Pull request attachments changed while loading.");
+          throw new Error("Invalid pull request attachments page.");
+        }
+        if (revision !== undefined && page.revision !== revision) {
+          throw new Error("[navigation_cursor_expired] Pull request attachments changed while loading.");
         }
         bytes += encoder.encode(JSON.stringify(page.values.prs)).byteLength;
         if (bytes > 8 * 1024 * 1024) throw new Error("Pull request attachments exceed the retained budget.");
@@ -75,19 +82,43 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
       } while (cursor);
       return prs;
     };
+    const readWithRestart = async (): Promise<PrSummary[]> => {
+      try {
+        return await read();
+      } catch (error) {
+        if (!paged || cancelled || !baselinePending || !isNavigationCursorExpired(error)) throw error;
+        return await read();
+      }
+    };
     const publish = (prs?: PrSummary[]) => {
       if (cancelled) return;
       currentPrs = prs;
-      setResult({ key, preview, prs });
+      setResult({ key, prs });
+    };
+    const publishBaseline = (prs?: PrSummary[]) => {
+      baselinePending = false;
+      if (prs && pendingStatuses.size > 0) {
+        prs = prs.map((attachment) => {
+          const status = pendingStatuses.get(buildPullRequestStatusKey(attachment));
+          return status ? { ...status, explicitlyAttached: attachment.explicitlyAttached } : attachment;
+        });
+      }
+      pendingStatuses.clear();
+      publish(prs);
     };
     const unsubscribe = api?.onAgentEvent?.((event) => {
-      if (!federationTargetsEqual(event.federationTarget, request.federationTarget)) return;
+      const matchesOwner = federationTargetsEqual(event.federationTarget, request.federationTarget);
       const notification = event.notification as AttachmentNotification;
       if (notification.method === "thread/pullRequests/updated"
-        && event.backend === backend && notification.params.threadId === threadId) {
-        publish(notification.params.prs);
-      } else if (notification.method === "pullRequest/status/updated" && currentPrs) {
+        && matchesOwner && event.backend === backend && notification.params.threadId === threadId) {
+        publishBaseline(notification.params.prs);
+      } else if (notification.method === "pullRequest/status/updated"
+        && (matchesOwner || (allowLocalStatus && event.federationTarget?.scope !== "remote"))) {
+        // Main already suppresses peer observations when it monitors this PR.
+        // Its local observation still applies to a pinned peer's attachment.
         const { prKey, pr } = notification.params;
+        if (baselinePending) pendingStatuses.set(prKey, pr);
+        if (!currentPrs) return;
         const index = currentPrs.findIndex((attachment) => buildPullRequestStatusKey(attachment) === prKey);
         if (index < 0) return;
         const updated = { ...pr, explicitlyAttached: currentPrs[index]!.explicitlyAttached };
@@ -95,18 +126,18 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
       }
     });
     const release = () => { void api?.releaseNavigationQuery?.(consumer).catch(() => undefined); };
-    void read().then(
-      (prs) => { if (!currentPrs) publish(prs); },
-      () => { if (!currentPrs) publish(); },
+    void readWithRestart().then(
+      (prs) => { if (baselinePending) publishBaseline(prs); },
+      () => { if (baselinePending) publishBaseline(); },
     ).finally(release);
     return () => {
       cancelled = true;
       unsubscribe?.();
       release();
     };
-  }, [backend, key, owner, paged, preview, threadId]);
+  }, [allowLocalStatus, backend, key, owner, paged, threadId]);
 
   if (!key) return { prs: preview };
-  if (result?.key !== key || result.preview !== preview) return { loading: true };
+  if (result?.key !== key) return { loading: true };
   return result.prs ? { prs: result.prs } : { failed: true };
 }

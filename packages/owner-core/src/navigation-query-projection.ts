@@ -26,6 +26,7 @@ import {
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   comparePinnedThreads,
+  comparePullRequestStack,
   classifyDirectory,
   countNavigationStarMapFacets,
   passesNavigationStarMapFilters,
@@ -36,6 +37,8 @@ import {
   buildPullRequestStatusKey,
   navigationWorkingStatePath,
   readNavigationMetadataDependencies,
+  pullRequestRollupPriority,
+  resolveLifecycleState,
 } from "@pwragent/shared";
 import {
   navigationAttentionIdentity,
@@ -393,20 +396,38 @@ function limitRecords<T>(items: readonly T[] | undefined): {
 
 function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefined {
   if (!prs || prs.length <= MAX_ROW_NESTED_RECORDS) return prs;
-  // Active work belongs ahead of completed history. Within each group, keep
-  // the newest attachments and preserve their original attachment order.
-  const active: number[] = [];
-  const finished: number[] = [];
-  for (let index = prs.length - 1; index >= 0 && active.length < MAX_ROW_NESTED_RECORDS; index -= 1) {
+  // The newest PR in stack order leads. Readiness ties use attachment order
+  // for Minimal and stack order for the overflow after removing the lead.
+  let lead = 0;
+  let representative = 0;
+  for (let index = 1; index < prs.length; index += 1) {
     const pr = prs[index]!;
-    const lifecycle = pr.lifecycleState ?? pr.state;
-    if (lifecycle === "merged" || lifecycle === "closed") {
-      if (finished.length < MAX_ROW_NESTED_RECORDS) finished.push(index);
-    } else {
-      active.push(index);
+    if (comparePullRequestStack(pr, prs[lead]!) <= 0) lead = index;
+    if (pullRequestRollupPriority(pr) < pullRequestRollupPriority(prs[representative]!)) {
+      representative = index;
     }
   }
-  return [...active, ...finished.slice(0, MAX_ROW_NESTED_RECORDS - active.length)]
+  let overflowRepresentative = lead === prs.length - 1 ? prs.length - 2 : prs.length - 1;
+  const active: number[] = [];
+  const finished: number[] = [];
+  for (let index = prs.length - 1; index >= 0; index -= 1) {
+    if (index === lead) continue;
+    const pr = prs[index]!;
+    const best = prs[overflowRepresentative]!;
+    const priority = pullRequestRollupPriority(pr) - pullRequestRollupPriority(best);
+    if (priority < 0 || (priority === 0 && comparePullRequestStack(pr, best) < 0)) {
+      overflowRepresentative = index;
+    }
+    const candidates = resolveLifecycleState(pr) === "open" ? active : finished;
+    if (candidates.length < MAX_ROW_NESTED_RECORDS) candidates.push(index);
+  }
+  // Fill the remaining slots with recent active work, then completed history.
+  const retained = new Set([lead, representative, overflowRepresentative]);
+  for (const index of [...active, ...finished]) {
+    if (retained.size === MAX_ROW_NESTED_RECORDS) break;
+    retained.add(index);
+  }
+  return [...retained]
     .sort((a, b) => a - b)
     .map((index) => prs[index]!);
 }

@@ -1771,35 +1771,6 @@ function SidebarContent(props: SidebarProps) {
   });
 
   useLayoutEffect(() => {
-    if (!contextMenu) {
-      return;
-    }
-
-    const menu = contextMenuRef.current;
-    if (!menu) {
-      return;
-    }
-
-    const menuRect = menu.getBoundingClientRect();
-    const nextPosition = placeThreadContextMenu(
-      contextMenu.requestedPosition,
-      menuRect
-    );
-
-    if (
-      contextMenu.position?.x === nextPosition.x &&
-      contextMenu.position.y === nextPosition.y
-    ) {
-      return;
-    }
-
-    setContextMenu({
-      ...contextMenu,
-      position: nextPosition,
-    });
-  }, [contextMenu]);
-
-  useLayoutEffect(() => {
     if (!directoryContextMenu) {
       return;
     }
@@ -2974,12 +2945,24 @@ function SidebarContent(props: SidebarProps) {
   const contextMenuPullRequest = contextMenu?.pullRequest;
   // Opened from the row, not a chip: one item detaches the thread's PRs.
   // Minimal's single chip draws no ✕, so this is its visible way.
-  const contextMenuAttachments = useThreadPullRequestAttachments(
-    contextMenu && !contextMenuIsBulk && !contextMenuPullRequest
-      ? contextMenuPinThread
-      : undefined,
-  );
+  const contextMenuPrThread = contextMenu && !contextMenuIsBulk && !contextMenuPullRequest
+    ? contextMenuPinThread : undefined;
+  const contextMenuAttachments = useThreadPullRequestAttachments(contextMenuPrThread);
   const contextMenuRowPullRequests = contextMenuAttachments.prs ?? [];
+  const contextMenuCopyPullRequests = contextMenuAttachments.prs ?? contextMenuPrThread?.prs ?? [];
+  const contextMenuCopyCount = contextMenuCopyPullRequests.length;
+  const contextMenuDetachCount = props.onDetachPullRequest ? contextMenuRowPullRequests.length : 0;
+  const contextMenuPrStatus = contextMenuAttachments.loading ? "Loading pull requests…"
+    : contextMenuAttachments.failed ? "Couldn’t load all pull requests" : undefined;
+
+  useLayoutEffect(() => {
+    const menu = contextMenuRef.current;
+    if (!contextMenu || !menu) return;
+    const position = placeThreadContextMenu(contextMenu.requestedPosition, menu.getBoundingClientRect());
+    if (contextMenu.position?.x === position.x && contextMenu.position.y === position.y) return;
+    setContextMenu({ ...contextMenu, position });
+  }, [contextMenu, contextMenuCopyCount, contextMenuDetachCount, contextMenuPrStatus]);
+
   const contextMenuIsSubthread = Boolean(
     !contextMenuIsBulk && contextMenu?.thread.parentThreadId,
   );
@@ -4464,19 +4447,16 @@ function SidebarContent(props: SidebarProps) {
                           ) : null}
                         </>
                       ) : null}
-                      {contextMenuRowPullRequests.length > 0 ? (
+                      {contextMenuCopyCount > 0 ? (
                         <PullRequestCopyMenuItems
                           thread={contextMenu.thread}
-                          prs={contextMenuRowPullRequests}
+                          prs={contextMenuCopyPullRequests}
+                          preview={!contextMenuAttachments.prs}
                           onCopy={copyFromContextMenu}
                         />
                       ) : null}
-                      {contextMenuAttachments.loading || contextMenuAttachments.failed ? (
-                        <span role="status">
-                          {contextMenuAttachments.failed ? "Couldn’t load pull requests" : "Loading pull requests…"}
-                        </span>
-                      ) : null}
-                      {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
+                      {contextMenuPrStatus ? <span role="status">{contextMenuPrStatus}</span> : null}
+                      {contextMenuDetachCount > 0 ? (
                         <button
                           role="menuitem"
                           type="button"
