@@ -1058,7 +1058,7 @@ export class MessagingReviewWorkflow {
         && owner?.capabilities.reviewRunner !== true) {
         throw new Error("PwrAgent Sub Agent is unavailable for this thread's provider.");
       }
-      const afterReview = combined
+      const afterReview = combined || federationTarget
         ? (owner?.capabilities.reviewAutoFix === true ? "wait" : undefined)
         : params.afterReview ?? (owner?.capabilities.reviewAutoFix === true ? "auto-fix" : undefined);
       if (afterReview === "auto-fix" && owner?.capabilities.reviewAutoFix !== true) {
@@ -1066,6 +1066,12 @@ export class MessagingReviewWorkflow {
       }
       const settings = turnSettingsForBinding(params.binding, navigation);
       const claudeCodeReview = runMode === "claude-code-review";
+      const messagingSource = claudeCodeReview
+        ? this.context.host().rememberHumanMessagingSource(params.binding, params.event)?.ref
+        : undefined;
+      if (claudeCodeReview && !messagingSource) {
+        throw new Error("Claude Code review needs a messaging connection that can preserve the requesting contact's permissions.");
+      }
       const reviewer = {
         backend: params.reviewBackend ?? params.binding.backend,
         ...(params.reviewerLabel ? { label: params.reviewerLabel } : {}),
@@ -1091,6 +1097,7 @@ export class MessagingReviewWorkflow {
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         ...(federationTarget ? { federationTarget } : {}),
+        ...(messagingSource ? { messagingSource } : {}),
         target,
         delivery: "inline",
         ...(runMode ? { runMode } : {}),

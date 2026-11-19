@@ -131,6 +131,10 @@ surfaces require two to eight distinct, attached PRs from one repository for
 a combined review. They default to the PwrAgent Sub Agent, or to Claude Code
 on a Claude thread when reviewing in its own workspace with an owner that
 supports `/code-review`. Claude Code uses the panel's default `high` effort.
+Messaging requires reply permission and also requires remote control for a
+peer's thread. Claude Code review turns retain the initiating contact's tool
+permissions, including when queued or sent to a peer. A messaging connection
+or peer must support retained contact provenance to run the review.
 
 ## Claude Code's `/code-review`
 

@@ -2,7 +2,7 @@ import type { AppServerBackendKind, AppServerReviewTarget, BackendSummary, Feder
 import type { MessagingBindingRecord, MessagingCapabilityProfile, MessagingDeliveryResult, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import type { MessagingControllerLogger, MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
-import type { MessagingStoreLike } from "./messaging-storage";
+import type { MessagingRequestSource, MessagingStoreLike } from "./messaging-storage";
 import type { MessagingThreadContext } from "./messaging-thread-state";
 
 export type MessagingReviewSubmission = {
@@ -20,6 +20,7 @@ export type MessagingReviewSubmission = {
 } & ({ target: AppServerReviewTarget } | { pullRequestArgs: string });
 
 export interface MessagingReviewHost {
+  readonly rememberHumanMessagingSource: (binding: MessagingBindingRecord, event: MessagingInboundEvent) => MessagingRequestSource | undefined;
   readonly readBoundWorkspaceContext: (binding: MessagingBindingRecord) => Promise<MessagingThreadContext>;
   readonly readBoundThreadConfiguration: (binding: MessagingBindingRecord) => Promise<{ kind: "thread"; thread: NavigationThreadSummary; defaults: NavigationLaunchpadDefaults }>;
   readonly storePendingIntent: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, options?: { expiresAt?: number }) => Promise<MessagingPendingIntentRecord>;

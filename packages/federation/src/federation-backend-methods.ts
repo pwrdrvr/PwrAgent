@@ -91,6 +91,7 @@ export const FEDERATION_BACKEND_METHODS = {
   // run mode. Separate routes make an owner that predates them answer
   // method_not_found instead of reviewing something else.
   startExtendedReview: "backend.startExtendedReview",
+  startMessagingClaudeReview: "backend.startMessagingClaudeReview",
   createScheduledExtendedReview: "backend.createScheduledExtendedReview",
   updateScheduledExtendedReview: "backend.updateScheduledExtendedReview",
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
@@ -258,6 +259,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.updateScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.startExtendedReview]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.startMessagingClaudeReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.createScheduledExtendedReview]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
@@ -423,6 +425,7 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
   [FEDERATION_BACKEND_METHODS.updateScheduledThreadAction]: "deny",
   [FEDERATION_BACKEND_METHODS.updateScheduledPullRequestReview]: "deny",
   [FEDERATION_BACKEND_METHODS.startExtendedReview]: "deny",
+  [FEDERATION_BACKEND_METHODS.startMessagingClaudeReview]: "deny",
   [FEDERATION_BACKEND_METHODS.createScheduledExtendedReview]: "deny",
   [FEDERATION_BACKEND_METHODS.updateScheduledExtendedReview]: "deny",
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "deny",

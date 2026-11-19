@@ -5,8 +5,8 @@ import { MessagingCommandHandlers } from "../messaging/core/messaging-command-ha
 import { commandBinding, commandEvent, commandHarness } from "./fixtures/messaging-command-harness";
 
 // Independent policy table: permission before scope before effect; only local
-// detach and the two pickers bypass the remote scope check. Review/unknown are
-// thread input, not catalog control verbs. Do not derive this from dispatch.
+// detach and the two pickers bypass the remote scope check. Review also needs
+// reply permission. Do not derive this table from dispatch.
 const cases = [
   { command: "status", args: [], permission: true, scope: true, tail: ["status"] },
   { command: "status", args: ["handoff"], permission: true, scope: true, tail: ["handoff"] },
@@ -18,8 +18,9 @@ const cases = [
   { command: "agent", args: ["default", "set"], permission: true, scope: false, tail: ["default-set"] },
   { command: "agent", args: ["default", "clear"], permission: true, scope: false, tail: ["default-clear"] },
   { command: "agent", args: ["default"], permission: true, scope: false, tail: ["default-status"] },
-  { command: "review", args: [], permission: false, scope: false, tail: ["binding", "review-picker"] },
-  { command: "review", args: ["--custom", "Fixture"], permission: false, scope: false, tail: ["binding", "review"] },
+  { command: "review", args: [], permission: true, scope: false, tail: ["binding", "review-picker"] },
+  { command: "review", args: ["--custom", "Fixture"], permission: true, scope: false, tail: ["binding", "review"] },
+  { command: "review", args: ["--pr", "1", "2"], permission: true, scope: false, tail: ["binding", "review"] },
   { command: "unknown", args: ["fixture"], permission: false, scope: false, tail: ["binding", "input:/unknown fixture"] },
   { command: "help", args: [], permission: false, scope: true, tail: ["binding", "deliver"] },
   { command: "schedule", args: [], permission: true, scope: true, tail: ["binding", "deliver"] },
@@ -66,6 +67,30 @@ describe("messaging command owner protocol", () => {
       };
       await fc.asyncModelRun(() => ({ model: { permission: true, scope: true }, real }), commands);
     }), { numRuns: 70, seed: 1493805 });
+  });
+
+  it("requires reply permission before checking peer scope or submitting a PR review", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (remote, canReply, canControlPeer) => {
+      const binding = remote ? { ...commandBinding, federatedThread: {
+        backend: commandBinding.backend, threadId: commandBinding.threadId,
+        target: { scope: "remote" as const, instanceId: "peer" },
+      } } : commandBinding;
+      const f = commandHarness({
+        requirePermission: async (_event, permission) => { f.trace.push(permission); return canReply; },
+        requireRemoteScopeForBinding: async () => { f.trace.push("peer scope"); return canControlPeer; },
+      });
+      const owner = new MessagingCommandHandlers({ ...f.context, store: {
+        findActiveBindingForChannel: async () => { f.trace.push("binding"); return binding; },
+      } });
+      await owner.handleCommand(commandEvent("review", ["--pr", "1,2"]));
+      const expected = ["message.reply"];
+      if (canReply) {
+        expected.push("binding");
+        if (remote) expected.push("peer scope");
+        if (!remote || canControlPeer) expected.push("review");
+      }
+      expect(f.trace).toEqual(expected);
+    }));
   });
 
   it("reads optional mutation getters inside their existing catch boundary and binds list to its backend", async () => {

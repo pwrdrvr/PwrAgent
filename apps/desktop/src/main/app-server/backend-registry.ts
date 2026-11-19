@@ -2026,6 +2026,7 @@ export class DesktopBackendRegistry {
       publishLiveTokenMiserLedgerEntryInOrder: (...args: Parameters<ThreadUsageLedger["publishLiveTokenMiserLedgerEntryInOrder"]>) => this.threadUsageLedger.publishLiveTokenMiserLedgerEntryInOrder(...args),
       publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
       readCausalMessagingContext: (...args: Parameters<typeof this.readCausalMessagingContext>) => this.readCausalMessagingContext(...args),
+      readTurnCausalMessagingOrigin: (...args: Parameters<typeof this.readTurnCausalMessagingOrigin>) => this.readTurnCausalMessagingOrigin(...args),
       readCodexDefaultModelsOnce: (...args: Parameters<typeof this.readCodexDefaultModelsOnce>) => this.readCodexDefaultModelsOnce(...args),
       readDelegatedTurnAncestry: (...args: Parameters<typeof this.readDelegatedTurnAncestry>) => this.readDelegatedTurnAncestry(...args),
       readMcpGatewaySelection: (...args: Parameters<ThreadMcpConnections["readMcpGatewaySelection"]>) => this.threadMcpConnections.readMcpGatewaySelection(...args),
@@ -20856,7 +20857,7 @@ export class DesktopBackendRegistry {
     const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
     const notification = event.notification;
     const { lifecycleTurnId } = delivery;
-    void this.threadTurnQueue.releaseThread({
+    const release = () => this.threadTurnQueue.releaseThread({
       backend: event.backend,
       threadId: notification.params.threadId,
       turnId: lifecycleTurnId,
@@ -20869,6 +20870,15 @@ export class DesktopBackendRegistry {
           }
         : {}),
     });
+    const afterDelivery = delivery.afterDelivery;
+    if (afterDelivery) {
+      delivery.afterDelivery = async () => {
+        await afterDelivery();
+        void release();
+      };
+    } else {
+      void release();
+    }
   }
 
   private async observeTurnFailure(delivery: TurnEventDelivery): Promise<void> {

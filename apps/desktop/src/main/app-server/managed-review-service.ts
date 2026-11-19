@@ -110,6 +110,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   "assertNotBootstrap" | "assertThreadNotLocked" | "assertThreadOwnership" | "getActiveTurnForThread" | "getClient"
   | "invalidateThreadListCache" | "isLiveDynamicToolCall" | "readCodexDefaultModelsOnce"
   | "readDelegatedTurnAncestry" | "readThread" | "resolveCodexThreadExecutionModeForActiveTurn"
+  | "readTurnCausalMessagingOrigin"
   | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "startAcpSession"
   | "startAcpTurn" | "startTurn" | "submitTurn" | "threadHasActiveTurn"
   | "withArchiveWorkspaceWrite" | "withCodexThreadClient"
@@ -235,13 +236,25 @@ export class ManagedReviewService {
       && managedReview.reviewThreadId === managedReview.parentThreadId
       ? managedReview.turnId
       : turnId;
-    await this.drainPendingReviewStartsForTerminalTurn({
+    const terminal = {
       backend: event.backend,
       threadId: notification.params.threadId,
       turnId: lifecycleTurnId,
       method: event.notification.method,
-    });
+    };
     delivery.lifecycleTurnId = lifecycleTurnId;
+    if (terminal.backend === "claude" && terminal.method === "turn/completed"
+      && [...this.context.turnState.reviewAdmissions()].some(candidate =>
+        candidate.backend === terminal.backend && candidate.threadId === terminal.threadId
+        && candidate.invokingTurnId === terminal.turnId && candidate.status === "scheduled")) {
+      // A new Claude turn may relaunch the live query and join its consumer.
+      // That consumer is still awaiting this terminal delivery.
+      delivery.afterDelivery = () => this.drainPendingReviewStartsForTerminalTurn(terminal).catch(error => {
+        backendRegistryLog.warn("Could not release queued Claude reviews", { threadId: terminal.threadId, error: String(error) });
+      });
+      return;
+    }
+    await this.drainPendingReviewStartsForTerminalTurn(terminal);
   }
 
   /** Live review sub-agents by review turn, for the registry's usage reads. */
@@ -388,7 +401,7 @@ export class ManagedReviewService {
     // Armed before the start, so a review that lands at once still fixes.
     const autoFix = getReviewAutoFixArming().starting(
       { backend: params.backend, threadId: params.threadId },
-      params.afterReview,
+      params.messagingSource ? "wait" : params.afterReview,
     );
     try {
       const response = params.runMode === "claude-code-review"
@@ -424,6 +437,7 @@ export class ManagedReviewService {
       backend: params.backend,
       threadId: params.threadId,
       input: [{ type: "text", text: command }],
+      ...(params.messagingSource ? { messageOrigin: { kind: "pwragent", causalMessagingSource: params.messagingSource } } : {}),
     });
     backendRegistryLog.info("code review started", {
       mode: "claude-code-review", parentBackend: params.backend,
@@ -1349,7 +1363,9 @@ export class ManagedReviewService {
             },
           },
         });
-        failures.push({ error: message, target: candidate.request.target });
+        // Messaging already receives the failure event. A separate agent
+        // retry prompt would run outside the contact's turn.
+        if (!candidate.request.messagingSource) failures.push({ error: message, target: candidate.request.target });
       }
     }
     if (failures.length > 0) {
@@ -2060,6 +2076,10 @@ export class ManagedReviewService {
           `This thread's reviews run on ${reviewBackend}, which requires runMode pwragent-sub-agent.`,
         );
       }
+      const origin = runMode === "claude-code-review" ? await this.host().readTurnCausalMessagingOrigin(request.context) : undefined;
+      if (origin?.causalMessagingAmbiguous || ((origin?.kind === "messaging" || origin?.messaging) && !origin.causalMessagingSource)) {
+        return threadOrchestrationFailure("forbidden", "Claude Code review could not preserve the requesting contact's permissions.");
+      }
       const pending = this.scheduleReviewStart({
         invokingTurnId,
         turnAttribution: await this.host().readDelegatedTurnAncestry(request.context),
@@ -2071,6 +2091,7 @@ export class ManagedReviewService {
           runMode,
           delivery: "inline",
           ...(runMode === "claude-code-review" ? { reasoningEffort: DEFAULT_CLAUDE_CODE_REVIEW_LEVEL } : {}),
+          ...(origin?.causalMessagingSource ? { messagingSource: origin.causalMessagingSource } : {}),
           ...(reviewBackendDiffers ? { reviewBackend } : {}),
           ...(cwd ? { cwd } : {}),
         }),

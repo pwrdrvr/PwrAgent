@@ -2,6 +2,11 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { buildPwrAgentThreadOrchestrationToolDefinitions } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import { messagingReviewHarness } from "./fixtures/messaging-review-harness";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { SqliteMessagingRequestStore } from "../storage/messaging-request-store";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 
 const url = (number: number, repo = "project") => `https://github.com/fixture/${repo}/pull/${number}`;
 const member = fc.record({
@@ -110,6 +115,14 @@ describe("combined review arguments", () => {
 
   it("routes a Claude thread's combined review as /code-review even without a managed reviewer", async () => {
     const fixture = await messagingReviewHarness("telegram", 1, undefined, "claude");
+    const { tempDir, dbPath } = createTempStateDb("pwragent-claude-review-contact-");
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const db = StateDb.open(dbPath);
+    const requests = new SqliteMessagingRequestStore(db.raw);
+    fixture.controllerOptions.requestStore = requests;
+    fixture.controllerOptions.adapter.retainedSourceConnectionId = () => "fixture-connection";
+    fixture.controllerOptions.adapter.authorizeRetainedSource = () => true;
     fixture.controls.startReview = false;
     fixture.controls.runner = false;
     fixture.controls.outcome = "scheduled";
@@ -119,18 +132,30 @@ describe("combined review arguments", () => {
       url: url(number), state: "passing", lifecycleState: "open",
     }));
     try {
-      await fixture.command(["--pr", "1,2"]);
+      const { writes } = await measureSqliteWrites(() => fixture.command(["--pr", "1,2"]));
       expect(fixture.requests).toEqual([{
         backend: "claude", threadId: fixture.thread.id, delivery: "inline",
         runMode: "claude-code-review", afterReview: "wait", reasoningEffort: "high",
+        messagingSource: expect.objectContaining({ requestId: expect.any(String), ownerId: expect.any(String) }),
         target: { type: "pullRequests", pullRequests: [{ url: url(1) }, { url: url(2) }] },
       }]);
+      expect(requests.get(fixture.requests[0]!.messagingSource!)?.event.actor.platformUserId).toBe("fixture-actor");
+      expectSqliteWriteBudget({ scenario: "messaging-claude-review-source", writes,
+        note: "One messaging Claude review retains the requesting contact at admission in one commit. ~2.06 MB/day at 100 reviews/day. No idle writes." });
+      fixture.controllerOptions.adapter.authorizeRetainedSource = undefined;
+      await fixture.command(["--pr", "1,2"]);
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.deliveries.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("preserve") });
       fixture.controls.combined = false;
       await fixture.command(["--pr", "1,2"]);
       expect(fixture.requests).toHaveLength(1);
       expect(fixture.deliveries.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("Update") });
     } finally {
       await fixture.close();
+      db.close();
+      await removeTempStateDbDir(tempDir);
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
     }
   });
 
@@ -152,6 +177,10 @@ describe("combined review arguments", () => {
       expect(fixture.requests).toEqual([expect.objectContaining({
         federationTarget: target, runMode: "pwragent-sub-agent", target: { type: "pullRequests", pullRequests: [{ url: url(1) }, { url: url(2) }] },
       })]);
+      await fixture.command(["--pr", url(1)]);
+      expect(fixture.requests[1]).toMatchObject({
+        federationTarget: target, target: { type: "pullRequest", url: url(1) }, afterReview: "wait",
+      });
     } finally {
       await fixture.close();
     }

@@ -17,7 +17,8 @@ export class MessagingCommandHandlers {
       targetSurface?: MessagingSurfaceRef;
     },
   ): Promise<void> {
-    const verb = matchMessagingCommandVerb(event.command);
+    const verb = matchMessagingCommandVerb(event.command)
+      ?? (event.command.trim().replace(/^\/+/, "").toLowerCase() === "review" ? "review" : undefined);
     // RBAC: gate the verb before dispatching. `help` and unknown commands are
     // ungated (they only surface the command list). `permissionForCommandVerb`
     // is the same lookup the render-time button filter uses, so they can't drift.
@@ -35,11 +36,13 @@ export class MessagingCommandHandlers {
       // thread drives that peer. Exempt: `resume`/`agent` only open the picker
       // (which filters, and the bind is gated at bind time), and `detach` is a
       // local unbind that must stay available or a scope-revoked actor is
-      // stranded in a conversation they can neither use nor leave.
+      // stranded in a conversation they can neither use nor leave. Review
+      // checks peer scope in the PR path, which routes to the bound owner.
       if (
         verb !== "resume" &&
         verb !== "agent" &&
         verb !== "detach" &&
+        verb !== "review" &&
         !(await this.context.host().requireRemoteScopeForBinding(
           event,
           await this.context.store.findActiveBindingForChannel(event.channel),
@@ -120,10 +123,7 @@ export class MessagingCommandHandlers {
       });
       return;
     }
-    if (
-      event.command.trim().replace(/^\/+/, "").toLowerCase()
-        === "review"
-    ) {
+    if (verb === "review") {
       await this.handleReviewCommand(event);
       return;
     }
