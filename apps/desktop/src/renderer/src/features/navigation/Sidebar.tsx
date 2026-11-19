@@ -248,6 +248,8 @@ function useRevealListChange<Args extends unknown[], Result>(
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
+import { ProjectCheckoutsDialog } from "./ProjectCheckoutsDialog";
+import type { SetProjectCheckoutGroupRequest } from "@pwragent/shared";
 import { readThreadDependencyIndicator, useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 
 type SidebarProps = {
@@ -522,6 +524,8 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     pinned: boolean,
   ) => Promise<void>;
+  onSetProjectCheckoutGroup?: (request: SetProjectCheckoutGroupRequest) => Promise<void>;
+  onPickProjectCheckout?: () => Promise<string | undefined>;
   onReorderDirectoryPins?: (directoryKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetDirectoryThreadsCollapsed?: (
     directory: NavigationDirectorySummary,
@@ -686,6 +690,7 @@ function federationProjectDirectory(
     kind: directory.kind,
     label: directory.label,
     ...(directory.path !== undefined ? { path: directory.path } : {}),
+    ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
     ...(directory.repositoryKey !== undefined
       ? { repositoryKey: directory.repositoryKey }
       : {}),
@@ -856,6 +861,7 @@ function SidebarContent(props: SidebarProps) {
       }
     | undefined
   >();
+  const [projectCheckoutsDirectory, setProjectCheckoutsDirectory] = useState<NavigationDirectorySummary>();
   /** The project whose Forge Automation dialog is open. */
   const [forgeAutomationDialog, setForgeAutomationDialog] = useState<
     { directory: NavigationDirectorySummary } | undefined
@@ -3353,6 +3359,7 @@ function SidebarContent(props: SidebarProps) {
       && !directoryMenuIsPlaceholder
       && props.onRemoveDirectory
       && directoryContextMenu?.directory.kind === "directory"
+      && !directoryContextMenu.directory.checkoutPaths
       && directoryContextMenu.directory.counts?.total === 0,
   );
 
@@ -4769,6 +4776,13 @@ function SidebarContent(props: SidebarProps) {
                 >
                   Copy Path
                 </button>
+                {props.onSetProjectCheckoutGroup && props.onPickProjectCheckout && !federationViewer
+                  && directoryContextMenu.directory.kind === "directory" ? (
+                    <button role="menuitem" type="button" onClick={() => {
+                      setProjectCheckoutsDirectory(directoryContextMenu.directory);
+                      setDirectoryContextMenu(undefined);
+                    }}>Project Checkouts…</button>
+                  ) : null}
               </div>
             ) : null}
             {directoryMenuHasForgeSection
@@ -4845,7 +4859,9 @@ function SidebarContent(props: SidebarProps) {
                       void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
                     }}
                   >
-                    {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
+                    {directoryContextMenuDirectories.some((directory) => directory.checkoutPaths)
+                      ? "Archive Project Threads"
+                      : directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
                       ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
                       : "Archive Threads"}
                   </button>
@@ -4883,6 +4899,22 @@ function SidebarContent(props: SidebarProps) {
               await props.onSetThreadLock?.(lockDialog.thread, true, note);
               setLockDialog(undefined);
             }}
+          />
+        ) : null}
+
+        {projectCheckoutsDirectory?.path && props.onSetProjectCheckoutGroup && props.onPickProjectCheckout ? (
+          <ProjectCheckoutsDialog
+            projectPath={projectCheckoutsDirectory.path}
+            checkoutPaths={projectCheckoutsDirectory.checkoutPaths}
+            suggestions={props.directories.flatMap((directory) =>
+              projectCheckoutsDirectory.repositoryKey && directory.repositoryKey === projectCheckoutsDirectory.repositoryKey
+                && directory.path && !directory.checkoutPaths && !directory.localAvailability ? [directory.path] : [])}
+            returnFocus={directoryContextMenuOpenerRef}
+            pickCheckout={props.onPickProjectCheckout}
+            copyPath={(path) => { void copyText(path); }}
+            revealPath={canRevealPath ? (path) => revealProjectPath(path, projectCheckoutsDirectory.label) : undefined}
+            onSave={props.onSetProjectCheckoutGroup}
+            onClose={() => setProjectCheckoutsDirectory(undefined)}
           />
         ) : null}
 

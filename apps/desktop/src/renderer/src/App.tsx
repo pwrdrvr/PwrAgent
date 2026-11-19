@@ -14,7 +14,7 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
-import { classifyDirectory, detectProviderResponseBlock, operatorTodoItemKey } from "@pwragent/shared";
+import { classifyDirectory, detectProviderResponseBlock, directoryIncludesCheckout, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -1427,10 +1427,10 @@ function DesktopAppShell(props: {
               backendErrorDirectoriesRef.current.find(
                 (directory) =>
                   directory.kind === "directory"
-                  && matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
+                  && matchingThread?.linkedDirectories.some((linked) => directoryIncludesCheckout(directory, classifyDirectory(linked).key)),
               )
               ?? backendErrorDirectoriesRef.current.find((directory) =>
-                matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)
+                matchingThread?.linkedDirectories.some((linked) => directoryIncludesCheckout(directory, classifyDirectory(linked).key))
               );
             const projectLabel =
               matchingDirectory?.label
@@ -2490,6 +2490,10 @@ function DesktopAppShell(props: {
   const localThreadProjects = useMemo(() => {
     const projects = new Map<string, { key: string; label: string }>();
     for (const thread of navigation.threads) {
+      if (thread.checkoutProject) {
+        projects.set(threadSummaryIdentityKey(thread), thread.checkoutProject);
+        continue;
+      }
       const linked = thread.linkedDirectories[0];
       if (!linked) continue;
       const descriptor = classifyDirectory(linked);
@@ -3408,7 +3412,7 @@ function DesktopAppShell(props: {
     const linked = live.linkedDirectories[0];
     const descriptor = linked ? classifyDirectory(linked) : undefined;
     const directoryRow = descriptor
-      ? navigation.directories.find((directory) => directory.key === descriptor.key)
+      ? navigation.directories.find((directory) => directoryIncludesCheckout(directory, descriptor.key))
       : undefined;
     const repositoryKey = directoryRow?.repositoryKey ?? live.primaryGitRepository;
     // Only a Git checkout needs a receiving repository. A directory with no
@@ -4750,6 +4754,11 @@ function DesktopAppShell(props: {
             onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
             onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
             onSetDirectoryPin={navigation.setDirectoryPin}
+            onSetProjectCheckoutGroup={desktopApi?.setProjectCheckoutGroup}
+            onPickProjectCheckout={desktopApi?.pickDirectoryFromDisk ? async () => {
+              const picked = await desktopApi.pickDirectoryFromDisk!();
+              return picked.canceled ? undefined : picked.path;
+            } : undefined}
             onReorderDirectoryPins={navigation.reorderDirectoryPins}
             onSetDirectoryThreadsCollapsed={
               navigation.setDirectoryThreadsCollapsed

@@ -10935,6 +10935,43 @@ a.button {
 
 /* Forge Automation and its Resume step: the lock dialog's frame. The
    eyebrow labels, hints and status row copy `.thread-lock-dialog`'s. */
+.project-checkouts-dialog {
+  width: min(42rem, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.project-checkouts-dialog__paths {
+  min-width: 0;
+  margin: 12px 0;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.project-checkouts-dialog__row,
+.project-checkouts-dialog__row > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-checkouts-dialog__row + .project-checkouts-dialog__row {
+  margin-top: 6px;
+}
+
+.project-checkouts-dialog__row > label,
+.project-checkouts-dialog__row > span {
+  flex: 1;
+}
+
+.project-checkouts-dialog__row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .forge-automation-dialog {
   width: min(480px, 100%);
 }

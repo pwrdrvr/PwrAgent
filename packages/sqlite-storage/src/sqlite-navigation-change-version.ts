@@ -3,6 +3,7 @@ import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 
 const versions = new WeakMap<Database.Database, { value: number }>();
+export const PROJECT_CHECKOUT_GROUPS_META_KEY = "project-checkout-groups";
 const NAVIGATION_TABLES = [
   "directory_launchpads", "directory_overlay", "remote_directory_overlay", "remote_thread_pins",
   "directory_git_status", "thread_git_working_state", "pr_status_cache",
@@ -29,10 +30,11 @@ export function sqliteNavigationChangeVersion(db: Database.Database): string {
           AFTER ${operation} ON main.${table} BEGIN SELECT pwragent_navigation_changed(); END`);
       }
     }
-    // The initial unread baseline is the only meta row read by navigation.
+    // Only metadata that enters the owner navigation index.
     for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
       const references = operation === "INSERT" ? ["NEW"] : operation === "DELETE" ? ["OLD"] : ["OLD", "NEW"];
-      const predicate = references.map((row) => `${row}.key = 'navigation-unread-baseline-v2'`).join(" OR ");
+      const predicate = references.map((row) =>
+        `${row}.key IN ('navigation-unread-baseline-v2', '${PROJECT_CHECKOUT_GROUPS_META_KEY}')`).join(" OR ");
       db.exec(`CREATE TEMP TRIGGER pwragent_navigation_meta_${operation.toLowerCase()}
         AFTER ${operation} ON main.meta WHEN ${predicate}
         BEGIN SELECT pwragent_navigation_changed(); END`);

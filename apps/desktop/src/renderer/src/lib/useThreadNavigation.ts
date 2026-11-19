@@ -80,6 +80,7 @@ import {
   buildThreadIdentityKey,
   canonicalizeNavigationPath,
   classifyDirectory,
+  directoryIncludesCheckout,
   isDefaultProjectForgeAutomation,
   parseOwnedComposerScopeKey,
   compareThreadsByCreatedAtDesc,
@@ -653,9 +654,11 @@ function resolveCreateThreadTargetDirectory(args: {
   }
 
   if (!forceWorkspace && selectedThread) {
-    const threadDirectories = directories.filter(
+    const groupedDirectory = directories.find((directory) => directory.key === selectedThread.checkoutProject?.key);
+    const checkoutKeys = directoryKeysForThread(selectedThread);
+    const threadDirectories = groupedDirectory ? [groupedDirectory] : directories.filter(
       (directory) =>
-        directory.kind === "directory" && directoryKeysForThread(selectedThread).includes(directory.key)
+        directory.kind === "directory" && checkoutKeys.some((key) => directoryIncludesCheckout(directory, key))
     );
     if (threadDirectories.length === 1) {
       const [threadDirectory] = threadDirectories;
@@ -963,6 +966,9 @@ function threadSummariesEqual(
     left.titleSource === right.titleSource &&
     left.summary === right.summary &&
     left.projectKey === right.projectKey &&
+    left.checkoutProject?.key === right.checkoutProject?.key &&
+    left.checkoutProject?.label === right.checkoutProject?.label &&
+    left.checkoutProject?.repositoryKey === right.checkoutProject?.repositoryKey &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
@@ -2641,7 +2647,7 @@ function projectOptimisticThreadIntoDirectories(
   const nextDirectories = [...directories];
   for (const linkedDirectory of optimisticThread.linkedDirectories) {
     const descriptor = classifyDirectory(linkedDirectory);
-    if (nextDirectories.some((directory) => directory.key === descriptor.key)) continue;
+    if (nextDirectories.some((directory) => directoryIncludesCheckout(directory, descriptor.key))) continue;
     // A newly accepted thread can reveal a project before its descriptor arrives.
     // Its population remains unknown until the owner query returns.
     nextDirectories.push({
@@ -5480,13 +5486,16 @@ export function useThreadNavigation(
 
   const directories = useMemo(
     () => {
-      const launchpads = Object.values(localLaunchpads);
+      const ownerDirectories = loadedDirectoryRows(state.rows);
+      const launchpads = Object.values(localLaunchpads).filter((launchpad) =>
+        !ownerDirectories.some((directory) => directory.key !== launchpad.directoryKey
+          && directoryIncludesCheckout(directory, launchpad.directoryKey)));
       const currentDirectories = launchpads.reduce(
         (nextDirectories, launchpad) =>
           upsertLaunchpadDirectory(nextDirectories, launchpad, {
             preserveExistingDirectoryAuthority: Boolean(rendererFederationTarget),
           }),
-        loadedDirectoryRows(state.rows).map((directory) => {
+        ownerDirectories.map((directory) => {
           const expanded = directoryDisclosure.unpinnedExpandedByKey[directory.key];
           return expanded === undefined ? directory : { ...directory, directoryThreadsCollapsed: !expanded };
         }),
@@ -5785,7 +5794,8 @@ export function useThreadNavigation(
     // Match the primary workspace, as project grouping does. Directory-list
     // ordering must not let a secondary link become the selected project.
     const primaryDirectoryKey = directoryKeysForThread(selectedDetail.state?.detail?.thread)[0];
-    const directory = directories.find((directory) => directory.key === primaryDirectoryKey);
+    const directory = directories.find((directory) => primaryDirectoryKey !== undefined
+      && directoryIncludesCheckout(directory, primaryDirectoryKey));
     // Workspace detail retains native paths; navigation rows canonicalize
     // separators. Compare them in the same form before applying branch data.
     const workspace = selectedDetail.state?.detail?.workspaceDirectories?.find((candidate) =>
@@ -8069,7 +8079,7 @@ export function useThreadNavigation(
         });
         const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
         if (notice) setArchiveThreadNotice(notice);
-        if (!directoryKey.startsWith("directory:")) continue;
+        if (!directoryKey.startsWith("directory:") || response.registrationRetained) continue;
         updateRemovedDirectoryKey(directoryKey, true);
         setLocalLaunchpads((current) => {
           const next = { ...current };
