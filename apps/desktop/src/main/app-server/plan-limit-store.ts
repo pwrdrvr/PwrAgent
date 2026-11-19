@@ -28,8 +28,9 @@ import type { BackendRateLimitSummary } from "@pwragent/shared";
  * - A balance (`windowKey: "credits"`) has no window to order by, so the last
  *   reading replaces it.
  * - With `creditsRenewTogether`, a credit that lowers a window also refilled
- *   the windows that renew with it. Those the reading leaves out are stale
- *   and hidden until a reading names them.
+ *   the windows the provider pairs with it that renew at the same time.
+ *   Those the reading leaves out are stale and hidden until a reading names
+ *   them.
  *
  * A window past its reset no longer describes the account and is hidden until
  * the provider reports it again; subscribers hear when that happens. An
@@ -81,12 +82,11 @@ export type PlanLimitReading = {
   /** The opaque account key the reading was taken for, recorded as is. */
   account?: string;
   /**
-   * A credit on one window also refills the windows as long as it whose
-   * reset is within the tolerance of its own: Claude's Fable reset gives
-   * back what Fable used on the weekly limit. A credited reading's omitted
-   * siblings are dropped.
+   * Whether a credit on `credited` also refills `sibling`: Claude's Fable
+   * reset gives back what Fable used on the weekly limit. A credited
+   * reading's omitted siblings that reset with it are dropped.
    */
-  creditsRenewTogether?: boolean;
+  creditsRenewTogether?: (credited: BackendRateLimitSummary, sibling: BackendRateLimitSummary) => boolean;
   /** Relabels a merged row from its fields, after the merge. */
   describe?: (limit: BackendRateLimitSummary) => BackendRateLimitSummary;
 };
@@ -372,19 +372,24 @@ function mergePlanLimits(
     const limit = definedFields(raw);
     if (limit.resetAt !== undefined && limit.resetAt <= now) continue;
     const key = planLimitKey(limit);
+    // Aliases of one window in one reading are still one reading of it.
+    const counts = !named.has(key);
     named.add(key);
     const known = limits.get(key);
-    const merged = mergeWindow(known, { limit, toleranceMs, precise }, newest);
+    const merged = mergeWindow(known, { limit, toleranceMs, precise }, newest, counts);
     if (!merged) continue;
     if (known && credit(known, merged)) credited.push(known);
     limits.set(key, reading.describe
       ? { ...merged, limit: reading.describe(merged.limit) }
       : merged);
   }
-  if (reading.creditsRenewTogether) {
+  const pairs = reading.creditsRenewTogether;
+  if (pairs) {
     for (const [key, sibling] of limits) {
       if (named.has(key)) continue;
-      if (credited.some((window) => renewTogether(window, sibling))) limits.delete(key);
+      if (credited.some((window) => pairs(window.limit, sibling.limit) && renewTogether(window, sibling))) {
+        limits.delete(key);
+      }
     }
   }
   if (!newest) return [...limits.values()];
@@ -404,6 +409,7 @@ function mergeWindow(
   known: HeldLimit | undefined,
   reading: HeldLimit,
   newest: boolean,
+  counts = true,
 ): HeldLimit | undefined {
   const { limit } = reading;
   // A balance has no window to order by; the last reading is the balance.
@@ -415,7 +421,7 @@ function mergeWindow(
   // recorded while it was in flight may have started the next one.
   if (order < 0) return undefined;
   if (newest) return refined(known, reading, { ...known.limit, ...limit });
-  const lower = lowerRun(known, limit);
+  const lower = lowerRun(known, limit, counts);
   if (compareUsage(known.limit, limit) > 0 || (lower && lower.readings >= CREDIT_RUN_READINGS)) {
     // The reading is the newer one: a precise reading takes over the window,
     // a coarse one only moves its use. A run of agreeing readings far below
@@ -429,21 +435,23 @@ function mergeWindow(
   const older = reading.precise && !known.precise
     ? refined(known, reading, { ...known.limit, ...withoutUsage(limit) })
     : known;
-  return lower ? { ...older, lower } : older;
+  const run = lower ?? known.lower;
+  return run ? { ...older, lower: run } : older;
 }
 
 /**
  * The window's run of lower readings with this one added, or undefined when
  * the reading is not well below the window. A reading that dips further
- * than the run allows starts a new run.
+ * than the run allows starts a new run. `counts` is false for a second row
+ * of the same window in one reading, which moves the run but does not lengthen it.
  */
-function lowerRun(known: HeldLimit, limit: BackendRateLimitSummary): LowerRun | undefined {
+function lowerRun(known: HeldLimit, limit: BackendRateLimitSummary, counts: boolean): LowerRun | undefined {
   const held = known.limit.usedPercent;
   const used = limit.usedPercent;
   if (held === undefined || used === undefined || used > held - CREDIT_MIN_DROP_PERCENT) return undefined;
   const run = known.lower;
   return run && used >= run.usedPercent - CREDIT_RUN_DIP_PERCENT
-    ? { usedPercent: used, readings: run.readings + 1 }
+    ? { usedPercent: used, readings: run.readings + (counts ? 1 : 0) }
     : { usedPercent: used, readings: 1 };
 }
 

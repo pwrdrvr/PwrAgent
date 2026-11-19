@@ -1261,6 +1261,37 @@ describe("Claude SDK backend", () => {
     expect(backend.summary().rateLimits?.[0].usedPercent).toBe(8);
   });
 
+  it("hides a stale Fable limit once another model's probe shows a Fable reset on the weekly limit", async () => {
+    // A CLI names Fable only while its last request used Fable, so after a
+    // Fable reset an Opus thread's probe reports the lower weekly limit alone.
+    const resetsAt = new Date(Date.now() + 86_400_000).toISOString();
+    const before = { rate_limits_available: true, session: { model_usage: {} }, rate_limits: {
+      seven_day: { utilization: 73, resets_at: resetsAt },
+      model_scoped: [{ display_name: "Fable", utilization: 99, resets_at: resetsAt }],
+    } };
+    const after = { rate_limits_available: true, session: { model_usage: {} }, rate_limits: {
+      seven_day: { utilization: 25, resets_at: resetsAt },
+    } };
+    const usage = vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(before).mockResolvedValue(after);
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "6b2f0d1e-3c4a-4f5b-9e8d-7a6b5c4d3e2f" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual([
+      expect.objectContaining({ limitId: "seven_day", usedPercent: 73 }),
+      expect.objectContaining({ limitId: "seven_day_overage_included", usedPercent: 99 }),
+    ]);
+    f.events.length = 0;
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual([
+      expect.objectContaining({ limitId: "seven_day", usedPercent: 25 }),
+    ]);
+  });
+
   it("keeps the full limit snapshot across turns, coarse stream events, and a restart", async () => {
     const resetsAt = Date.now() + 86_400_000;
     const snapshot = { rate_limits_available: true, rate_limits: {
