@@ -35,6 +35,8 @@ type Faults = {
 const STEP_WEIGHTS = {
   start: 5, finding: 14, submit: 8, review: 10, direction: 3, abandon: 2, stop: 1, finish: 2, work: 10, assign: 8,
   observe_start: 4, observe_end: 9, observe_queue: 8, advance: 3, toggle: 1, stop_owned: 1, restart: 1, repeat: 3, resend: 4, reuse: 2, read: 3, bounds: 4,
+  // Resuming needs workers a restart cut off, which this mix rarely leaves; the bounds mix sends it.
+  resume: 0,
 } as const;
 type StepKind = keyof typeof STEP_WEIGHTS;
 const stepKinds = (weights: Partial<Record<StepKind, number>>) => (Object.entries(weights) as [StepKind, number][]).flatMap(([kind, weight]) => Array.from({ length: weight }, () => kind));
@@ -43,7 +45,7 @@ const stepKinds = (weights: Partial<Record<StepKind, number>>) => (Object.entrie
  * turns that start and run on, the operator changing them, restarts, and time passing for their timers to fire.
  */
 const BOUNDS_STEP_WEIGHTS: Partial<Record<StepKind, number>> = {
-  start: 5, finding: 3, submit: 3, review: 2, work: 2, assign: 3, observe_start: 6, observe_end: 4, advance: 12, bounds: 8, restart: 2, stop: 1, repeat: 2, resend: 2, read: 1,
+  start: 5, finding: 3, submit: 3, review: 2, work: 2, assign: 3, observe_start: 6, observe_end: 4, advance: 12, bounds: 8, restart: 3, resume: 4, stop: 1, repeat: 2, resend: 2, read: 1,
 };
 
 const stepArb = (weights: Partial<Record<StepKind, number>>, other: fc.Arbitrary<number> = fc.nat()) => fc.record({
@@ -211,7 +213,8 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
   }
   for (const events of reference.records.values()) for (const event of events) {
     // The bounds' own outcomes, which only their timers produce, are tallied apart so a test can require them.
-    const key = event.data.type === "worker" && event.data.note?.startsWith("Stopped at the per-worker time limit") ? "worker:turn-limit"
+    const key = event.data.type === "worker" && event.data.note?.startsWith("Stopped at the per-worker time limit") && event.commandId.startsWith("resume-withdrawn:") ? "worker:resume-limit-withdrawn"
+      : event.data.type === "worker" && event.data.note?.startsWith("Stopped at the per-worker time limit") ? "worker:turn-limit"
       : event.data.type === "status" && event.data.reason.endsWith("Total worker time reached") ? "status:worker-time" : event.data.type;
     coverage.events[key] = (coverage.events[key] ?? 0) + 1;
   }
@@ -256,7 +259,9 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
         const request: StartResearchRequest = { objective: `Objective ${text}`, minutes: 1 + step.other % 20, workspaceMode: step.flag ? "none" : "new_worktree",
           // Short, so a few waits reach them: a limit the sequence never reaches compares nothing. Never both at once,
           // because a per-worker limit that stops every worker first leaves the total unreached.
-          ...(step.variant % 4 === 1 ? { turnMinutes: 1 + step.item % 4 } : step.variant % 4 === 2 ? { totalWorkerMinutes: 1 + step.approach % 12 } : {}),
+          // A longer limit outlasts a restart, so a later change can lower it past a resumed worker's turn.
+          ...(step.variant % 4 === 1 ? { turnMinutes: 1 + step.item % 4 } : step.variant % 4 === 2 ? { totalWorkerMinutes: 1 + step.approach % 12 }
+            : step.variant % 8 === 3 ? { turnMinutes: 60 + step.item % 60 } : {}),
           approaches: Array.from({ length: count }, (_, n) => ({ title: step.variant % 7 === 6 ? "Same title" : `Approach ${n + 1}`, task: `Task ${n + 1}` })) };
         // Mostly a new call; sometimes an earlier call ID, which repeats that start or reuses its key with other arguments.
         const context: ResearchExecutionContext = { ...(step.actor % 8 >= 4 && actor.kind === "agent" ? actor as ResearchExecutionContext : coordinator), callId: step.other % 4 === 3 ? `start-${step.item % 2}` : `start-${call}` };
@@ -353,6 +358,11 @@ export async function expectResearchServicesAgree(uuid: UuidSource, steps: Resea
         const action = resend(sender);
         Object.assign(previous, { action, resend, requestId, runId, actor: sender });
         return action;
+      }
+      // Message cut-off workers to continue: all of them, or one by name.
+      case "resume": {
+        const cutOff = approaches.filter((candidate) => candidate.interrupted);
+        return update({ action: "resume", ...(step.flag && cutOff.length ? { approachIds: [cutOff[step.approach % cutOff.length]!.id] } : {}) });
       }
       // The last command again, exactly: a redelivery, which must not append twice.
       case "repeat": return previous.action ?? (() => undefined);

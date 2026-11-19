@@ -128,11 +128,14 @@ A turn cut off by a quit or crash counts until the next process takes the run
 over, because nobody saw it end, and a resumed worker continues that turn. The
 per-worker limit stops one worker with a note on its approach and the run goes
 on; a cut-off worker already past it at takeover is stopped for that reason,
-not offered for resume. Total worker time ends the run as a deadline does, with
-the reason `Total worker time reached`. Only the operator changes a running
-run's bounds, from its card: one `bounds` event holds all four as they now
-stand, and the header reads the latest one through a partial index. The time
-limit counts from the run's start; a limit or total already passed is refused.
+not offered for resume. Lowering the limit stops every worker already past it,
+including one whose resume message is still queued or being sent: the message
+is withdrawn, so the worker starts no further model turn. Total worker time
+ends the run as a deadline does, with the reason `Total worker time reached`.
+Only the operator changes a running run's bounds, from its card: one `bounds`
+event holds all four as they now stand, and the header reads the latest one
+through a partial index. The time limit counts from the run's start; a limit or
+total already passed is refused.
 Lowering the worker count stops nobody holding a slot and starts nobody new
 until fewer than the new count hold one. A change is one commit (16,480 observed
 WAL bytes); a worker stopped at its limit writes its own stop instead of its

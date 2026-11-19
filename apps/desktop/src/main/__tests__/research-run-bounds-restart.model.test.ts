@@ -211,6 +211,118 @@ it("answers a command that takes a run over on the run as the takeover left it",
   } finally { db.close(); }
 });
 
+/**
+ * A worker whose turn has reached the per-worker limit never starts another model turn of that turn. When the
+ * operator lowers the limit while a cut-off worker's resume message waits in its queue, or is still being sent,
+ * that message is withdrawn and the worker is recorded stopped at its limit. If the message had already started
+ * a turn, that turn is stopped. A worker still under the new limit keeps its resume. When the queue cannot
+ * confirm the withdrawal, the worker is unaccounted for, not stopped: recording it stopped would let a late turn
+ * start with a fresh clock. If that turn does start, the limit stops it at once.
+ */
+it("withdraws a resume the lowered per-worker limit has already passed, and keeps the rest", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const scenario = fc.integer({ min: 1, max: 3 }).chain((workers) => fc.record({
+      // When each worker's current turn began, in minutes after the run started: a turn that ended and another that began.
+      restarts: fc.array(fc.integer({ min: 0, max: 100 }), { minLength: workers, maxLength: workers }),
+      quitAt: fc.integer({ min: 101, max: 200 }), closed: fc.integer({ min: 0, max: 200 }), limit: fc.integer({ min: 1, max: 500 }),
+      // The limit is lowered while the resume message waits in the queue, or while it is still being sent.
+      inFlight: fc.boolean(),
+      // Withdrawing a queued message succeeds, finds it already started a turn, or cannot be confirmed.
+      cancel: fc.constantFrom("plain" as const, "started" as const, "error" as const),
+    }));
+    await fc.assert(fc.asyncProperty(scenario, async ({ restarts, quitAt, closed, limit, inFlight, cancel }) => {
+      const store = reset(db);
+      const shared = world();
+      const started = shared.now;
+      let service = launch(store, shared);
+      const id = (await service.start(request(restarts.length, { turnMinutes: 10_000 }), agent)).id;
+      await service.update(id, "candidate", { action: "submit", approachId: "a1", text: "Invented candidate", paths: [] }, agent);
+      // Each worker's turn ends and a new one begins at its own time, so the workers carry different turn times.
+      for (const [index, at] of restarts.map((minutes, index) => [index, minutes] as const).sort((a, b) => a[1] - b[1])) {
+        await advance(shared, started + at * MINUTE);
+        service.observeEnd(workerThread(index + 1), `turn-${index + 1}-0`);
+        await service.observeStart(workerThread(index + 1), `second-${index + 1}`);
+      }
+      await advance(shared, started + quitAt * MINUTE);
+      end(service, shared, false);
+      shared.now += closed * MINUTE;
+
+      const cancelled: string[] = [];
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      service = launch(store, shared, {
+        notify: async (_actor, target) => { if (inFlight) await gate; return { queueEntryId: `queue-${target.threadId}` }; },
+        cancelQueued: async (entry) => {
+          cancelled.push(entry);
+          if (cancel === "error") throw new Error("The queue did not answer");
+          return cancel === "started" ? { turnId: `late-${entry}` } : {};
+        },
+      });
+      await advance(shared, shared.now);
+      const resuming = service.update(id, "resume", { action: "resume" }, operator);
+      if (!inFlight) await resuming;
+      else await new Promise((resolve) => setImmediate(resolve));
+      await service.update(id, "lower", { action: "bounds", turnMinutes: limit }, operator);
+      release!();
+      await resuming;
+      await advance(shared, shared.now);
+
+      // Each worker's turn ran from its restart until the takeover, which ended it.
+      const counted = restarts.map((at) => quitAt - at + closed);
+      const past = counted.map((minutes) => minutes >= limit);
+      const approaches = service.read(id, operator).approaches;
+      expect(cancelled.sort()).toEqual(restarts.flatMap((_, index) => past[index] ? [`queue-worker-${index + 1}`] : []).sort());
+      for (const [index, approach] of approaches.entries()) {
+        if (!past[index]) expect(approach.state).toBe("starting");
+        else if (cancel === "error") expect({ state: approach.state, interrupted: Boolean(approach.interrupted) }).toEqual({ state: "unknown", interrupted: false });
+        else {
+          expect({ state: approach.state, interrupted: Boolean(approach.interrupted) }).toEqual({ state: "stopped", interrupted: false });
+          expect(approach.note).toMatch(/per-worker time limit/);
+        }
+      }
+      // A message that had started a turn is stopped; nothing else is.
+      expect(shared.stopped.sort()).toEqual(cancel === "started" ? restarts.flatMap((_, index) => past[index] ? [`worker-${index + 1}:late-queue-worker-${index + 1}`] : []).sort() : []);
+      // No withdrawn worker is offered for resume again.
+      if (past.every(Boolean)) await expect(service.update(id, "resume-again", { action: "resume" }, operator)).rejects.toThrow("No worker is waiting to be resumed");
+      if (cancel === "error") {
+        // An unconfirmed message that starts a turn after all is stopped at once, still at its limit.
+        for (const [index] of restarts.entries()) if (past[index]) await service.observeStart(workerThread(index + 1), `unconfirmed-${index + 1}`);
+        await advance(shared, shared.now);
+        for (const [index, approach] of service.read(id, operator).approaches.entries()) {
+          if (past[index]) expect({ state: approach.state, limited: /per-worker time limit/.test(approach.note ?? "") }).toEqual({ state: "stopped", limited: true });
+        }
+        expect(shared.stopped.sort()).toEqual(restarts.flatMap((_, index) => past[index] ? [`worker-${index + 1}:unconfirmed-${index + 1}`] : []).sort());
+      }
+      expect(shared.errors).toEqual([]);
+      service.close();
+    }), { numRuns: 60 });
+  } finally { db.close(); }
+});
+
+it("budgets lowering the per-worker limit past a worker whose resume is queued", async () => {
+  // File-backed, so the recorded WAL size is what each commit costs on disk.
+  const fixture = createTempStateDb("pwragent-research-withdraw-");
+  const db = StateDb.open(fixture.dbPath);
+  try {
+    const store = new ResearchStore(db);
+    const shared = world();
+    const first = launch(store, shared);
+    const id = (await first.start(request(2, { turnMinutes: 600 }), agent)).id;
+    await first.update(id, "candidate", { action: "submit", approachId: "a1", text: "Invented candidate", paths: [] }, agent);
+    await advance(shared, shared.now + 90 * MINUTE);
+    end(first, shared, false);
+    const service = launch(store, shared, { notify: async (_actor, target) => ({ queueEntryId: `queue-${target.threadId}` }) });
+    await service.update(id, "resume", { action: "resume" }, operator);
+
+    const lowered = await measureSqliteWrites(async () => await service.update(id, "operator:lower", { action: "bounds", turnMinutes: 60 }, operator));
+    expect(store.readItem(id, "a1")).toMatchObject({ record: { state: "stopped", note: expect.stringMatching(/per-worker time limit/) } });
+    expectSqliteWriteBudget({ scenario: "research-bounds-withdraw-resumes", note: "One operator change lowers the per-worker limit past two workers whose resume messages are queued: one commit records the bounds, then one per worker records its message withdrawn and why it stopped.", writes: lowered.writes });
+    expect(shared.errors).toEqual([]);
+    service.close();
+  } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
+});
+
 it("budgets changing a live run's bounds and stopping a worker at its limit", async () => {
   // File-backed, so the recorded WAL size is what each commit costs on disk.
   const fixture = createTempStateDb("pwragent-research-bounds-");

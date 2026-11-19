@@ -157,16 +157,24 @@ export class ReplayResearchService {
     return this.requireRun(run.id);
   }
 
+  /** The per-worker limit note when the worker's turn, counting time before a restart, has reached the run's limit. */
+  private turnLimitReachedNote(run: ResearchRun, approachId: string): string | undefined {
+    const minutes = run.turnMinutes;
+    const approach = run.approaches.find((candidate) => candidate.id === approachId);
+    if (minutes === undefined || !approach) return undefined;
+    const elapsed = (approach.turnMs ?? 0) + (approach.turnSince === undefined ? 0 : Math.max(0, this.now() - approach.turnSince));
+    return elapsed >= minutes * MINUTE ? `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.` : undefined;
+  }
+
   /** A worker waiting to be resumed whose turn already ran the per-worker limit is stopped for that reason. */
   private stopCutOffPastTurnLimit(id: string): boolean {
     let run = this.requireRun(id);
-    const minutes = run.turnMinutes;
-    if (minutes === undefined || run.status !== "running") return false;
+    if (run.turnMinutes === undefined || run.status !== "running") return false;
     let stopped = false;
     for (const approach of run.approaches.filter((candidate) => candidate.interrupted)) {
-      if ((approach.turnMs ?? 0) + (approach.turnSince === undefined ? 0 : Math.max(0, this.now() - approach.turnSince)) < minutes * MINUTE) continue;
-      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped",
-        note: `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.` });
+      const note = this.turnLimitReachedNote(run, approach.id);
+      if (!note) continue;
+      this.append(run, `turn-limit:${approach.id}:${run.revision}`, this.operator(run), { type: "worker", approachId: approach.id, state: "stopped", note });
       run = this.requireRun(id);
       stopped = true;
     }
@@ -450,7 +458,7 @@ export class ReplayResearchService {
     }
     if (command.action === "bounds") {
       if (actor.kind !== "operator") throw new Error("Only the operator can change a run's bounds");
-      return this.changeBounds(run, requestId, signature, command, actor);
+      return await this.changeBounds(run, requestId, signature, command, actor);
     }
     const coordinator = actor.kind === "operator" || sameResearchThread(actor, run.coordinator);
     if ((command.action === "review" || command.action === "stop" || command.action === "finish") && !coordinator) throw new Error("Only the coordinator or operator may review or stop a run");
@@ -552,7 +560,7 @@ export class ReplayResearchService {
     return this.requireRun(id);
   }
 
-  private changeBounds(run: ResearchRun, requestId: string, signature: string, command: ResearchBoundsCommand, actor: ResearchActor): ResearchRun {
+  private async changeBounds(run: ResearchRun, requestId: string, signature: string, command: ResearchBoundsCommand, actor: ResearchActor): Promise<ResearchRun> {
     if (!this.canDispatch(run)) throw new Error("Only a running run's bounds can be changed");
     const keys = ["workers", "minutes", "turnMinutes", "totalWorkerMinutes"] as const;
     if (keys.every((key) => command[key] === undefined)) throw new Error("Choose a bound to change");
@@ -577,7 +585,19 @@ export class ReplayResearchService {
       this.deadlines.delete(run.id);
       this.scheduleDeadline(this.requireRun(run.id));
     }
-    if (turnMinutes !== run.turnMinutes && this.stopCutOffPastTurnLimit(run.id)) this.finishExploration(this.requireRun(run.id));
+    if (turnMinutes !== run.turnMinutes) {
+      const stopped = this.stopCutOffPastTurnLimit(run.id);
+      // A worker whose resume waits in its queue never starts it once its turn has reached the limit.
+      let withdrawn = false;
+      for (const key of [...this.queuedResumes.keys()].filter((candidate) => candidate.startsWith(`${run.id}:`))) {
+        const approachId = key.slice(run.id.length + 1);
+        const note = this.turnLimitReachedNote(this.requireRun(run.id), approachId);
+        if (!note) continue;
+        await this.withdrawResume(run.id, approachId, actor, note);
+        withdrawn = true;
+      }
+      if (stopped || withdrawn) this.finishExploration(this.requireRun(run.id));
+    }
     return this.requireRun(run.id);
   }
 
@@ -822,7 +842,8 @@ export class ReplayResearchService {
         if (receipt.turnId && current.state === "starting" && current.worker?.turnId === worker.turnId) {
           this.append(this.requireRun(id), `resume-started:${approach.id}:${receipt.turnId}`, actor, { type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId: receipt.turnId } });
         } else if (!receipt.turnId && receipt.queueEntryId && current.state === "starting") this.queuedResumes.set(`${id}:${approach.id}`, receipt.queueEntryId);
-        if (!this.canAdmitApproach(this.requireRun(id), approach)) await this.withdrawResume(id, approach.id, actor);
+        const limitNote = this.turnLimitReachedNote(this.requireRun(id), approach.id);
+        if (limitNote || !this.canAdmitApproach(this.requireRun(id), approach)) await this.withdrawResume(id, approach.id, actor, limitNote);
       } catch (error) {
         const current = now();
         if (current.state === "starting" && current.worker?.turnId === worker.turnId) {
@@ -838,7 +859,7 @@ export class ReplayResearchService {
     return this.requireRun(id);
   }
 
-  private async withdrawResume(id: string, approachId: string, actor: ResearchActor): Promise<void> {
+  private async withdrawResume(id: string, approachId: string, actor: ResearchActor, note?: string): Promise<void> {
     const now = () => this.requireRun(id).approaches.find((candidate) => candidate.id === approachId)!;
     const entry = this.queuedResumes.get(`${id}:${approachId}`);
     if (entry !== undefined) {
@@ -847,7 +868,7 @@ export class ReplayResearchService {
         const receipt = await this.ports.cancelQueued(entry);
         const current = now();
         if (!receipt.turnId) {
-          if (current.state === "starting") this.append(this.requireRun(id), `resume-withdrawn:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "stopped", note: "The resume message was withdrawn before it started." });
+          if (current.state === "starting") this.append(this.requireRun(id), `resume-withdrawn:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "stopped", note: note ?? "The resume message was withdrawn before it started." });
           return;
         }
         if (current.worker?.turnId !== receipt.turnId) this.append(this.requireRun(id), `resume-started:${approachId}:${receipt.turnId}`, actor,
@@ -857,7 +878,7 @@ export class ReplayResearchService {
         return;
       }
     }
-    if (now().state === "running") await this.stopWorker(id, approachId, actor);
+    if (now().state === "running") await this.stopWorker(id, approachId, actor, note);
   }
 
   async stopOwnedRuns(reason: string, include: (run: ResearchRunHeader) => boolean = () => true): Promise<void> {
@@ -948,10 +969,9 @@ export class ReplayResearchService {
     if (this.closed) return;
     const run = this.storage.get(id);
     if (!run || run.status !== "running" || run.ownerId !== this.ports.ownerId || run.turnMinutes === undefined) return;
-    const minutes = run.turnMinutes;
-    const approach = run.approaches.find((candidate) => candidate.id === approachId);
-    if (!approach || approach.state !== "running" || (approach.turnMs ?? 0) + (approach.turnSince === undefined ? 0 : Math.max(0, this.now() - approach.turnSince)) < minutes * MINUTE) return;
-    void this.stopWorker(id, approachId, this.operator(run), `Stopped at the per-worker time limit of ${minutes === 1 ? "1 minute" : `${minutes} minutes`}. Its findings are kept; the run continues.`).then(() => {
+    const note = run.approaches.find((candidate) => candidate.id === approachId)?.state === "running" ? this.turnLimitReachedNote(run, approachId) : undefined;
+    if (!note) return;
+    void this.stopWorker(id, approachId, this.operator(run), note).then(() => {
       if (this.closed) return;
       const current = this.requireRun(id);
       if (current.status === "running") this.finishExploration(current);
