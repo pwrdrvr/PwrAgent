@@ -214,7 +214,7 @@ export class NavigationDetailService {
     const identity = this.registry.getThreadInfo(request.ref)?.archived === true ? "archived" : "present";
     if (request.collection) {
       const name = request.collection.name;
-      if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
+      if (name !== "prs" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
       const store = getDesktopOverlayStore();
       let all: unknown[] | undefined;
       let count: number;
@@ -228,8 +228,17 @@ export class NavigationDetailService {
         manifestRevision = manifest.revision;
       } else {
         const overlay = await store.getThreadOverlayState({ backend: summary.source, threadId: summary.id });
-        all = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
-          : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
+        if (name === "prs") {
+          // Membership comes from the owner's overlay. Resolve status from
+          // the registry just as for a compact row or exact configuration.
+          const [thread] = await this.registry.canonicalizeNavigationThreadPullRequests([
+            { ...summary, inbox: { inInbox: false }, prs: overlay?.prs },
+          ]);
+          all = thread?.prs ?? [];
+        } else {
+          all = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
+            : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
+        }
         count = all.length;
         manifestRevision = revision({ ref: request.ref, name, values: all });
       }

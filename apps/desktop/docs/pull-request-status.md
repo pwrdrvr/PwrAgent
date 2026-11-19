@@ -44,6 +44,12 @@ Canonicalization failures degrade rather than propagate:
 overlay rows, because possibly-stale chips beat a failed snapshot (which
 for a viewer means a disconnected window).
 
+Compact navigation rows carry a preview of up to 16 PRs and the full count
+when attachments exceed that preview. The sidebar's PR disclosure and row
+menu request the owner's complete list through the paged selected-detail
+collection. The owner canonicalizes the overlay attachments before serving
+those pages. Bulk actions wait for the complete list.
+
 ### Which PRs a thread attaches automatically
 
 A thread gets a PR without the operator asking from two sources only:

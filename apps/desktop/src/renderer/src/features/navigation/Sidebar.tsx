@@ -10,6 +10,7 @@ import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationW
 import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useThreadPullRequestAttachments } from "../../lib/useThreadPullRequestAttachments";
 import {
   revealInFileManagerLabel,
   thisMachineLabel,
@@ -2973,10 +2974,12 @@ function SidebarContent(props: SidebarProps) {
   const contextMenuPullRequest = contextMenu?.pullRequest;
   // Opened from the row, not a chip: one item detaches the thread's PRs.
   // Minimal's single chip draws no ✕, so this is its visible way.
-  const contextMenuRowPullRequests =
+  const contextMenuAttachments = useThreadPullRequestAttachments(
     contextMenu && !contextMenuIsBulk && !contextMenuPullRequest
-      ? contextMenu.thread.prs ?? []
-      : [];
+      ? contextMenuPinThread
+      : undefined,
+  );
+  const contextMenuRowPullRequests = contextMenuAttachments.prs ?? [];
   const contextMenuIsSubthread = Boolean(
     !contextMenuIsBulk && contextMenu?.thread.parentThreadId,
   );
@@ -4467,6 +4470,11 @@ function SidebarContent(props: SidebarProps) {
                           prs={contextMenuRowPullRequests}
                           onCopy={copyFromContextMenu}
                         />
+                      ) : null}
+                      {contextMenuAttachments.loading || contextMenuAttachments.failed ? (
+                        <span role="status">
+                          {contextMenuAttachments.failed ? "Couldn’t load pull requests" : "Loading pull requests…"}
+                        </span>
                       ) : null}
                       {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
                         <button
