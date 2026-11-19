@@ -10729,7 +10729,7 @@ export class DesktopBackendRegistry {
             messageOrigin,
             executionMode: params.executionMode ?? overlay?.executionMode,
             instructions,
-            readAgentMemory: () => this.readAgentMemoryContext(params),
+            readAgentMemory: this.readAgentMemoryContext.bind(this, { backend: params.backend, threadId: params.threadId }),
             mcpServers,
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
             // PwrAgent's server lists tools by this member's containment.

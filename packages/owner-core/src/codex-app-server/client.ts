@@ -5782,8 +5782,9 @@ function extractThreadNameRecordFromValue(
       pickString(record, ["threadName", "thread_name", "name", "title"]) ??
         pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"])
     );
-  const indexName =
-    rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+  const cleanPreview = stripAgentMemoryText(preview ?? "");
+  const cleanName = stripAgentMemoryText(rawName ?? "");
+  const indexName = cleanName || (cleanPreview ? shortenDerivedThreadTitle(cleanPreview) ?? cleanPreview : undefined);
   return {
     id: threadId,
     threadName: indexName?.trim() || "Untitled thread",
@@ -6597,12 +6598,13 @@ function* threadSummariesFromValue(value: unknown, textCache: ThreadListTextCach
           "first_user_message",
         ]);
     const text = textCache.read(threadId, [rawExplicitTitle, rawDerivedTitle, rawSummary], () => {
-      const titleInfo = getThreadTitleInfo(rawExplicitTitle, rawDerivedTitle);
-      const summary = normalizeThreadSummary(rawSummary);
+      const derivedTitle = stripAgentMemoryText(rawDerivedTitle ?? "") || undefined;
+      const titleInfo = getThreadTitleInfo(stripAgentMemoryText(rawExplicitTitle ?? "") || undefined, derivedTitle);
+      const summary = normalizeThreadSummary(stripAgentMemoryText(rawSummary ?? "") || undefined);
       return {
         ...titleInfo,
         summary: summary === titleInfo.title
-          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(rawDerivedTitle))
+          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(derivedTitle))
           ? undefined : summary,
       };
     });
@@ -11687,7 +11689,7 @@ export class CodexAppServerClient {
           {
             threadId: params.threadId,
             input: params.agentMemoryContext
-              ? [{ type: "text", text: params.agentMemoryContext, text_elements: [] }, ...codexInput]
+              ? [...codexInput, { type: "text", text: params.agentMemoryContext, text_elements: [] }]
               : codexInput,
             parentTurnId: params.parentTurnId,
             rootTurnId: params.rootTurnId,

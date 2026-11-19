@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildAgentMemoryContext,
   buildProviderResponseBlockEntry,
   buildThreadPricingSnapshotEstimate,
   readProviderResponseBlockNotification,
@@ -522,6 +523,18 @@ class MockTransport implements JsonRpcTransport {
             },
           }),
         );
+        return;
+      }
+
+      if (searchTerm === "memory-preview") {
+        const snapshot = buildAgentMemoryContext("PRIVATE-THREAD-INDEX");
+        this.messageHandler(JSON.stringify({
+          jsonrpc: "2.0", id: payload.id,
+          result: { data: [
+            { id: "thread-memory-mirror", name: "Untitled thread", preview: `Run the integration suite\n${snapshot}` },
+            { id: "thread-truncated-memory-mirror", name: "Untitled thread", preview: snapshot.slice(0, -10) },
+          ] },
+        }));
         return;
       }
 
@@ -3685,6 +3698,18 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it("excludes raw and truncated Agent memory from provider-derived navigation text", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const threads = await client.listThreads({ filter: "memory-preview" });
+      expect(threads.map(({ title }) => title)).toEqual(["Run the integration suite", "Untitled thread"]);
+      expect(JSON.stringify(threads)).not.toContain("PRIVATE-THREAD-INDEX");
+    } finally {
+      await client.close();
+    }
   });
 
   it("derives a title from preview when Codex returns the placeholder name", async () => {

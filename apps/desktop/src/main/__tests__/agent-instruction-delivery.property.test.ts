@@ -231,8 +231,8 @@ describe("a turn on a designated Agent carries its instructions to the provider"
     const prompt = acpTransport.requests.find((request) => request.method === "session/prompt")!.params!.prompt as Array<{ type: string; text: string }>;
     expect(prompt).toEqual([
       { type: "text", text: buildAcpAgentInstructionBlock(FIRST) },
-      { type: "text", text: buildAgentMemoryContext("") },
       { type: "text", text: "hello" },
+      { type: "text", text: buildAgentMemoryContext("") },
     ]);
     expect(prompt[0]!.text).toContain(FIRST);
 

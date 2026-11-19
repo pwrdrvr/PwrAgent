@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption, stripAgentMemoryChunk } from "@pwragent/shared";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
@@ -2258,8 +2258,8 @@ export class AcpAgentClient {
           sessionId: params.protocolSessionId,
           prompt: [
             ...(sendInstructions ? textPrompt(buildAcpAgentInstructionBlock(instructions)) : []),
-            ...(memory ? textPrompt(memory) : []),
             ...params.prompt,
+            ...(memory ? textPrompt(memory) : []),
           ],
         },
         ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
@@ -2453,7 +2453,7 @@ export class AcpAgentClient {
     receivedAt: number,
     options: AcpSessionMetadataUpdateOptions = {},
   ): string | undefined {
-    const title = readAcpTopicTitle(update);
+    const title = stripAgentMemoryChunk(readAcpTopicTitle(update) ?? "", false).text;
     if (!title) {
       return undefined;
     }
