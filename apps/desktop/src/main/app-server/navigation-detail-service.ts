@@ -40,6 +40,17 @@ function revision(value: unknown): string {
     .digest("base64url");
 }
 
+function unresolvedDetail(
+  request: NavigationSelectedDetailRequest,
+  readiness: NavigationSelectedDetailResponse["readiness"] = "ready",
+): NavigationSelectedDetailResponse {
+  return {
+    protocol: NAVIGATION_QUERY_PROTOCOL_VERSION, ref: request.ref, lookup: request.lookup,
+    revision: revision({ identity: "unresolved", ref: request.ref, readiness, lookup: request.lookup }),
+    readiness, identity: "unresolved",
+  };
+}
+
 function responseBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
@@ -84,12 +95,14 @@ export type NavigationDetailRegistry = Pick<
   | "getThreadInfo"
   | "getQueuedExecutionModeForThread"
   | "hydrateThreadGitWorkingStates"
+  | "isIncompleteThreadList"
   | "iterateQueuedTurnSummaries"
   | "listThreads"
   | "listLiveTokenMiserSubAgents"
   | "mergeLiveTokenMiserSubAgents"
   | "readCheckoutHibernation"
   | "readLiveSubAgentRevisionSource"
+  | "readNavigationThreadLink"
   | "readSelectedWorkspaceGitStatus"
   | "resolveThread"
 >;
@@ -173,6 +186,23 @@ export class NavigationDetailService {
     return await listingDiagnostics.trace("workflow", { query: "selected-detail" }, () => this.readSelectedDetailData(request, options));
   }
 
+  private async readThreadLinkDetail(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> {
+    const match = await this.registry.readNavigationThreadLink(request.ref).catch(() => null);
+    if (!match) return unresolvedDetail(request, match === null ? "failed" : "ready");
+    const { id, source, title, titleSource, createdAt, updatedAt, threadStatus, gitBranch, executionMode, model, reasoningEffort } = match.thread;
+    const thread = { id, source, title, titleSource, createdAt, updatedAt, threadStatus, gitBranch, executionMode,
+      model, reasoningEffort, linkedDirectories: [], inbox: { inInbox: false } };
+    const identity = match.archived ? "archived" : "present";
+    const response: NavigationSelectedDetailResponse = {
+      protocol: NAVIGATION_QUERY_PROTOCOL_VERSION, ref: request.ref, lookup: request.lookup,
+      revision: revision({ identity, thread }), readiness: "ready", identity, thread,
+    };
+    if (responseBytes(response) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+      throw new NavigationQueryError("navigation_item_too_large", "Thread link facts exceed the bounded detail budget.");
+    }
+    return response;
+  }
+
   private async readSelectedDetailData(
     request: NavigationSelectedDetailRequest,
     options: { includePendingWakes?: boolean },
@@ -183,6 +213,7 @@ export class NavigationDetailService {
         `Navigation query protocol ${NAVIGATION_QUERY_PROTOCOL_VERSION} is required.`,
       );
     }
+    if (request.lookup === "thread-link") return await this.readThreadLinkDetail(request);
     let summary = this.registry.getCachedThreadSummary({
       backend: request.ref.backend,
       threadId: request.ref.threadId,
@@ -194,27 +225,21 @@ export class NavigationDetailService {
     // has never loaded. Keep this fallback on the read-only detail path:
     // resolveThread also admits message destinations and must stay active-only.
     if (!summary) {
-      summary = (await this.registry.listThreads({
+      const archived = await this.registry.listThreads({
         backend: request.ref.backend, archived: true, enrichDirectories: false,
         callerReason: "thread-id-lookup",
-      })).find((thread) => thread.id === request.ref.threadId);
+      });
+      summary = archived.find((thread) => thread.id === request.ref.threadId);
+      if (!summary && this.registry.isIncompleteThreadList(archived)) return unresolvedDetail(request, "failed");
     }
-    if (!summary) {
-      return {
-        protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
-        ref: request.ref,
-        revision: revision({ identity: "unresolved", ref: request.ref }),
-        readiness: "ready",
-        identity: "unresolved",
-      };
-    }
+    if (!summary) return unresolvedDetail(request);
     // Membership comes from the owner's archive observations, not archivedAt:
     // Codex can omit that timestamp or retain one after an unarchive. Keep the
     // history available without authorizing the archived thread's composer.
     const identity = this.registry.getThreadInfo(request.ref)?.archived === true ? "archived" : "present";
     if (request.collection) {
       const name = request.collection.name;
-      if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
+      if (name !== "prs" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
       const store = getDesktopOverlayStore();
       let all: unknown[] | undefined;
       let count: number;
@@ -228,8 +253,17 @@ export class NavigationDetailService {
         manifestRevision = manifest.revision;
       } else {
         const overlay = await store.getThreadOverlayState({ backend: summary.source, threadId: summary.id });
-        all = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
-          : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
+        if (name === "prs") {
+          // Membership comes from the owner's overlay. Resolve status from
+          // the registry just as for a compact row or exact configuration.
+          const [thread] = await this.registry.canonicalizeNavigationThreadPullRequests([
+            { ...summary, inbox: { inInbox: false }, prs: overlay?.prs },
+          ]);
+          all = thread?.prs ?? [];
+        } else {
+          all = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
+            : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
+        }
         count = all.length;
         manifestRevision = revision({ ref: request.ref, name, values: all });
       }

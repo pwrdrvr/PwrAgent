@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type NavigationSelectedDetailRequest, type NavigationSelectedDetailResponse, type PrSummary } from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { PrRollupChip } from "../PrRollupChip";
@@ -11,6 +12,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function pr(number: number, overrides: Partial<PrSummary> = {}): PrSummary {
@@ -118,6 +120,60 @@ describe("PrRollupChip", () => {
     fireEvent.click(rows[1]!);
     expect(onOpen).toHaveBeenCalledWith(passing.url);
     expect(screen.queryByRole("group")).toBeNull();
+  });
+
+  it("opens the 19th attachment and only offers Detach all with the complete list", async () => {
+    const closed = Array.from({ length: 18 }, (_, index) =>
+      pr(3969 + index, { lifecycleState: "closed", state: "closed" }));
+    const attached = pr(4004);
+    const getNavigationSelectedDetail = vi.fn(async (request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> => ({
+      protocol: 2,
+      ref: request.ref,
+      revision: "attached",
+      readiness: "ready",
+      identity: "present",
+      collectionPage: request.collection?.cursor
+        ? { name: "prs", revision: "attached", complete: true, values: { prs: [...closed.slice(16), attached] } }
+        : { name: "prs", revision: "attached", complete: false, nextCursor: "next", values: { prs: closed.slice(0, 16) } },
+    }));
+    const onAgentEvent = vi.fn<NonNullable<DesktopApi["onAgentEvent"]>>();
+    vi.stubGlobal("pwragent", { getNavigationSelectedDetail, onAgentEvent });
+    const onOpen = vi.fn();
+    const onDetachAll = vi.fn();
+    const { container } = render(
+      <PrRollupChip
+        variant="overflow"
+        prs={closed.slice(0, 16)}
+        attachmentThread={{ id: "thread", source: "codex", prsTruncated: true, prCount: 19 }}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        onOpen={onOpen}
+        onDetachAll={onDetachAll}
+      />,
+    );
+    const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    expect(getNavigationSelectedDetail).not.toHaveBeenCalled();
+    fireEvent.click(chip);
+    expect(screen.queryByRole("button", { name: "Detach all" })).toBeNull();
+    const extra = await screen.findByRole("button", { name: /^Open acme\/orbit#4004/ });
+    expect(getNavigationSelectedDetail.mock.calls.map(([request]) => request.collection?.cursor)).toEqual([undefined, "next"]);
+    expect(chip).toHaveTextContent("+18 PRs");
+    expect(screen.getByText("19 pull requests")).toBeInTheDocument();
+    act(() => onAgentEvent.mock.lastCall?.[0]({
+      backend: "codex",
+      notification: {
+        method: "pullRequest/status/updated",
+        params: { prKey: buildPullRequestStatusKey(attached), pr: { ...attached, state: "failing", checkState: "failing" } },
+      },
+    }));
+    expect(extra).toHaveAccessibleName(/checks failing/);
+    fireEvent.click(extra);
+    expect(onOpen).toHaveBeenCalledWith(attached.url);
+    fireEvent.click(chip);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Detach all" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Detach all" }));
+    expect(onDetachAll).toHaveBeenCalledWith(expect.arrayContaining([...closed, attached]));
+    expect(onDetachAll.mock.calls[0]?.[0]).toHaveLength(19);
   });
 
   /**

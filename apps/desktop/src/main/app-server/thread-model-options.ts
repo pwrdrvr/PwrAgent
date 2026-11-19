@@ -371,6 +371,7 @@ export function buildCapabilities(
     startReview: reviewCodexSubAgent || reviewRunner,
     reviewRunMode: true,
     reviewAutoFix: true,
+    reviewPullRequestSet: true,
     reviewCodexSubAgent,
     reviewRunner,
     interruptTurn: supported.has("turn/interrupt"),

@@ -22,6 +22,7 @@ export type NavigationDirectoryView = Pick<NavigationDirectoryRow,
 
 export type NavigationPresentedThread = NavigationThreadSummary & Partial<Pick<NavigationRow,
   "ref" | "rowRevision" | "ordinaryChildCount" | "viewerChildCount" | "nativeSubAgentGroupPresent" | "nativeSubAgentCount"
+  | "prsTruncated" | "prCount"
 >> & {
   ownerOrdinaryChildCount?: number;
   /** Last accepted owner order; null withdraws it, undefined has not observed it. Never membership. */

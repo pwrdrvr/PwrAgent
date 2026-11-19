@@ -20,11 +20,13 @@ import type {
   NavigationRowHomeProject,
   NavigationThreadSummary,
   NavigationMetadataDependencies,
+  PrSummary,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   comparePinnedThreads,
+  comparePullRequestStack,
   classifyDirectory,
   directoryIncludesCheckout,
   countNavigationStarMapFacets,
@@ -36,6 +38,8 @@ import {
   buildPullRequestStatusKey,
   navigationWorkingStatePath,
   readNavigationMetadataDependencies,
+  pullRequestRollupPriority,
+  resolveLifecycleState,
 } from "@pwragent/shared";
 import {
   navigationAttentionIdentity,
@@ -392,6 +396,44 @@ function limitRecords<T>(items: readonly T[] | undefined): {
   };
 }
 
+function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefined {
+  if (!prs || prs.length <= MAX_ROW_NESTED_RECORDS) return prs;
+  // The newest PR in stack order leads. Readiness ties use attachment order
+  // for Minimal and stack order for the overflow after removing the lead.
+  let lead = 0;
+  let representative = 0;
+  for (let index = 1; index < prs.length; index += 1) {
+    const pr = prs[index]!;
+    if (comparePullRequestStack(pr, prs[lead]!) <= 0) lead = index;
+    if (pullRequestRollupPriority(pr) < pullRequestRollupPriority(prs[representative]!)) {
+      representative = index;
+    }
+  }
+  let overflowRepresentative = lead === prs.length - 1 ? prs.length - 2 : prs.length - 1;
+  const active: number[] = [];
+  const finished: number[] = [];
+  for (let index = prs.length - 1; index >= 0; index -= 1) {
+    if (index === lead) continue;
+    const pr = prs[index]!;
+    const best = prs[overflowRepresentative]!;
+    const priority = pullRequestRollupPriority(pr) - pullRequestRollupPriority(best);
+    if (priority < 0 || (priority === 0 && comparePullRequestStack(pr, best) < 0)) {
+      overflowRepresentative = index;
+    }
+    const candidates = resolveLifecycleState(pr) === "open" ? active : finished;
+    if (candidates.length < MAX_ROW_NESTED_RECORDS) candidates.push(index);
+  }
+  // Fill the remaining slots with recent active work, then completed history.
+  const retained = new Set([lead, representative, overflowRepresentative]);
+  for (const index of [...active, ...finished]) {
+    if (retained.size === MAX_ROW_NESTED_RECORDS) break;
+    retained.add(index);
+  }
+  return [...retained]
+    .sort((a, b) => a - b)
+    .map((index) => prs[index]!);
+}
+
 function projectNavigationRow(params: {
   childCount: number;
   viewerChildCount?: number;
@@ -408,7 +450,8 @@ function projectNavigationRow(params: {
     ? thread.linkedDirectories
     : withRepositoryIdentities(thread.linkedDirectories, params.repositories));
   const reactions = limitRecords(thread.reactions);
-  const prs = limitRecords(thread.prs);
+  const prs = previewPullRequests(thread.prs);
+  const prsTruncated = (thread.prs?.length ?? 0) > MAX_ROW_NESTED_RECORDS;
   const messagingBindings = limitRecords(thread.messagingBindings);
   const prCiWatches = limitRecords(thread.prCiWatches);
   const nativeSubAgentCount = thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0;
@@ -490,8 +533,8 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(prs.items ? { prs: prs.items } : {}),
-    ...(prs.truncated ? { prsTruncated: true } : {}),
+    ...(prs?.length ? { prs } : {}),
+    ...(prsTruncated ? { prsTruncated: true, prCount: thread.prs!.length } : {}),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }
       : {}),

@@ -51,6 +51,10 @@ export function registerNavigationBackendHandlers(params: {
   if (params.backend.getNavigationSelectedDetail) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail, (envelope) =>
       params.backend.getNavigationSelectedDetail!(envelope.params as NavigationSelectedDetailRequest, options(envelope)));
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationThreadLinkDetail, (envelope) =>
+      params.backend.getNavigationSelectedDetail!({
+        ...envelope.params as NavigationSelectedDetailRequest, lookup: "thread-link",
+      }, options(envelope)));
   }
   if (params.backend.getNavigationQueueProjection) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationQueueProjection, (envelope) =>

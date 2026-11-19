@@ -8545,6 +8545,114 @@ describe("Composer", () => {
   });
 
   /**
+   * Rule: a stack reviewed Together is one review of a `pullRequests` target,
+   * bottom of the stack first, on the PwrAgent Sub Agent (Codex's own
+   * reviewer takes one target), and it never auto-fixes. Going back to
+   * Separately restores one review per pull request.
+   */
+  const stackReviewFixture = (source: "codex" | "claude") => {
+    const scheduledApi = createScheduledActionApi();
+    const startReview = vi.fn(async () => ({ backend: source, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const codex = backendSummary("codex");
+    codex.capabilities = { ...codex.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
+      reviewCodexSubAgent: true, reviewAutoFix: true, reviewPullRequestSet: true };
+    const claude = backendSummary("claude");
+    claude.capabilities = { ...claude.capabilities, reviewRunMode: true, reviewAutoFix: true,
+      reviewPullRequestSet: true, reviewClaudeCodeReview: true };
+    const now = Date.now();
+    const stackPr = (number: number, base: string, head: string, ageHours: number): PrSummary => ({
+      provider: "github.com", org: "fixture", repo: "project", number,
+      title: `Stack ${number}`, url: `https://github.com/fixture/project/pull/${number}`,
+      state: "passing", checkState: "passing", lifecycleState: "open",
+      headRefName: head, baseRefName: base, createdAt: now - ageHours * 3_600_000,
+      linkedDirectoryPaths: ["/repo/project"],
+    });
+    // The list shows the top of the stack first (newest).
+    const prs = [stackPr(20, "main", "stack/1", 3), stackPr(21, "stack/1", "stack/2", 2), stackPr(22, "stack/2", "stack/3", 1)];
+    const element = (
+      <Composer
+        backends={source === "claude" ? [claude, codex] : [codex]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startReview, ...scheduledApi }}
+        disabled={false} skills={[]}
+        thread={{
+          id: "thread-1", title: "Stack review", titleSource: "explicit",
+          source, executionMode: "default", inbox: { inInbox: false },
+          projectKey: "/repo/project",
+          linkedDirectories: [{ id: "one", kind: "local", label: "Project", path: "/repo/project" }],
+          prs,
+        }}
+      />
+    );
+    return { element, prs, scheduledApi, startReview };
+  };
+
+  it("reviews a checked stack together, bottom first, on the PwrAgent Sub Agent", async () => {
+    const { element, prs, scheduledApi, startReview } = stackReviewFixture("codex");
+    render(element);
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    for (const pr of prs) choosePullRequest(pr.url);
+    expect(screen.getByRole("button", { name: "Start 3 reviews" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /Together/ }));
+    expect(screen.getByText(/One reviewer reads #20, #21 and #22 together, bottom of the stack first/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Auto-fix findings" })).toBeDisabled();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start combined review" })); });
+    expect(scheduledApi.createScheduledThreadAction).not.toHaveBeenCalled();
+    expect(startReview).toHaveBeenCalledTimes(1);
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      runMode: "pwragent-sub-agent",
+      afterReview: "wait",
+      target: { type: "pullRequests", pullRequests: prs.map((pr) => ({ url: pr.url })) },
+    }));
+  });
+
+  it("returns to one review per pull request when Separately is chosen again", async () => {
+    const { element, prs, scheduledApi, startReview } = stackReviewFixture("codex");
+    render(element);
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    choosePullRequest(prs[0].url);
+    choosePullRequest(prs[1].url);
+    fireEvent.click(screen.getByRole("radio", { name: /Together/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Separately/ }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start 2 reviews" })); });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction.mock.calls.map(([request]) => request.review?.target))
+      .toEqual([{ type: "pullRequest", url: prs[1].url }, { type: "pullRequest", url: prs[0].url }]);
+  });
+
+  /**
+   * Rule: a Claude thread reviews as Claude Code's /code-review by default,
+   * offers only the targets that command takes, shows the exact command, and
+   * sends no reviewer: Claude Code reviews its own thread at the chosen effort.
+   */
+  it("runs Claude Code's /code-review on a Claude thread with the targets and effort it takes", async () => {
+    const { element, prs, startReview } = stackReviewFixture("claude");
+    render(element);
+    await openReviewComposer();
+    expect(screen.getByRole("button", { name: /^Branch/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Path/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Commit/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Base branch/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    choosePullRequest(prs[2].url);
+    choosePullRequest(prs[1].url);
+    fireEvent.click(screen.getByRole("radio", { name: /Together/ }));
+    fireEvent.click(screen.getByRole("button", { name: "medium" }));
+    expect(screen.getByText(`/code-review medium ${prs[1].url},${prs[2].url}`)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start combined review" })); });
+    const request = (startReview.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(request).toMatchObject({
+      backend: "claude",
+      runMode: "claude-code-review",
+      reasoningEffort: "medium",
+      afterReview: "wait",
+      target: { type: "pullRequests", pullRequests: [{ url: prs[1].url }, { url: prs[2].url }] },
+    });
+    expect(request).not.toHaveProperty("reviewBackend");
+  });
+
+  /**
    * Rule: a checked PR that leaves the list while the panel is open (it was
    * detached) is dropped from the submission instead of failing it, since
    * the list no longer offers a way to uncheck it.

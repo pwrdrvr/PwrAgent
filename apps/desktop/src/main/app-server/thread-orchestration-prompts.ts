@@ -76,6 +76,12 @@ export function describeReviewTarget(target: AppServerReviewTarget): string {
   switch (target.type) {
     case "pullRequest":
       return `pull request ${target.url}`;
+    case "pullRequests":
+      return `pull requests ${target.pullRequests.map((member) => member.url).join(", ")}`;
+    case "branch":
+      return `branch ${target.branch}`;
+    case "path":
+      return target.path;
     case "uncommittedChanges":
       return "uncommitted changes";
     case "baseBranch":

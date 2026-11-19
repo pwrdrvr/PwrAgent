@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createResponseFlush } from "../util/response-flush";
 import {
   createServer as createHttpServer,
@@ -76,6 +76,16 @@ type CallToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 const LOOPBACK_HOST = "127.0.0.1";
 const MCP_PATH = "/mcp";
+const MCP_SESSION_HEADER = "Mcp-Session-Id";
+// These tools key mutation admission or receipts by the internal call ID.
+const MCP_TOOLS_REQUIRING_SESSION = new Set([
+  "handoff_task",
+  "move_thread_workspace",
+  "research_assign",
+  "research_start",
+  "research_update",
+  "start_review",
+]);
 
 /**
  * How often a running tool call reports progress.
@@ -173,6 +183,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     AgentToolMcpClientContext
   >();
   private readonly tokensByBoundThread = new Map<string, string>();
+  private readonly sessionSigningKey = randomBytes(32);
   private readonly connectionsWithoutRequests = new Set<Socket>();
   /** Ends each open standalone event stream (a client's GET). */
   private readonly standaloneStreams = new Set<() => void>();
@@ -357,6 +368,15 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     clientContext: AgentToolMcpClientContext;
     responseFlushed?: Promise<void>;
   }): Promise<Response> {
+    const sessionId = params.request.headers.get(MCP_SESSION_HEADER);
+    const sessionNonce = sessionId === null ? undefined : this.verifySession(sessionId, params.token);
+    if (sessionId !== null && !sessionNonce) {
+      return Response.json({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null }, { status: 404 });
+    }
+    if (sessionNonce && params.request.method === "DELETE") {
+      // Signed sessions carry identity only and expire with the server.
+      return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
+    }
     // A tool call can wait for the operator, a renderer or long work, so it
     // is answered as a stream whose headers go out at once. Every other
     // request answers at once and stays a single JSON response.
@@ -366,6 +386,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       {
         CallToolRequestSchema,
         ErrorCode,
+        isInitializeRequest,
         ListResourcesRequestSchema,
         ListResourceTemplatesRequestSchema,
         ListToolsRequestSchema,
@@ -374,10 +395,19 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       },
       { ListSkillsRequestSchema, GetSkillRequestSchema },
     ] = await Promise.all([mcpServerSdk.load(), mcpServerStreamableHttp.load(), mcpTypes.load(), skillRequestSchemas.load()]);
-    const streamed = await isToolCallRequest(params.request);
+    const body = await readMcpRequestBody(params.request);
+    const messages = Array.isArray(body) ? body : [body];
+    const streamed = messages.some((message) =>
+      !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
+    const initializing = messages.some(isInitializeRequest);
+    if (initializing && sessionNonce) {
+      return Response.json({ jsonrpc: "2.0", error: { code: -32600, message: "Session already initialized" }, id: null }, { status: 400 });
+    }
+    // Let the SDK issue the session header on initialize. Later requests
+    // verify the signed identity here and keep their isolated transports.
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: !streamed,
-      sessionIdGenerator: undefined,
+      sessionIdGenerator: initializing ? () => this.createSession(params.token) : undefined,
     });
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
@@ -471,7 +501,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
               message = line;
               if (Date.now() - lastSentAt >= AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS) sendProgress();
             };
-        const call = this.callTool(request, extra, params.responseFlushed, reportProgress);
+        const call = this.callTool(request, extra, sessionNonce, params.responseFlushed, reportProgress);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
@@ -515,6 +545,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private async callTool(
     request: CallToolRequest,
     extra: CallToolExtra,
+    sessionNonce: string | undefined,
     responseFlushed?: Promise<void>,
     reportProgress?: (message: string) => void,
   ): Promise<AgentMcpToolCallResponse> {
@@ -573,11 +604,20 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         }),
       );
     }
+    if (!sessionNonce && MCP_TOOLS_REQUIRING_SESSION.has(request.params.name)) {
+      return forbiddenMcpResponse(
+        "This tool requires an MCP session to prevent duplicate mutations. Initialize the connection and send the returned Mcp-Session-Id header.",
+      );
+    }
     const result = await catalog.router.handleMcpToolCall({
       backend: callContext.backend,
       threadId: callContext.threadId,
       turnId: callContext.turnId,
-      callId: String(extra.requestId),
+      // A retry carries the original session and typed wire ID. A sessionless
+      // request has no way to establish that it is retrying an earlier call.
+      callId: sessionNonce
+        ? createHash("sha256").update(JSON.stringify([sessionNonce, callContext.turnId, extra.requestId])).digest("base64url")
+        : randomUUID(),
       tool: request.params.name,
       args: request.params.arguments,
       signal: extra.signal,
@@ -595,6 +635,22 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       agentToolMcpLog.warn("MCP tool result reminder failed open", { error: String(error) });
     }
     return result;
+  }
+
+  private signSession(nonce: string, token: string): string {
+    return createHmac("sha256", this.sessionSigningKey).update(`${nonce}.${token}`).digest("base64url");
+  }
+
+  private createSession(token: string): string {
+    const nonce = randomUUID();
+    return `${nonce}.${this.signSession(nonce, token)}`;
+  }
+
+  private verifySession(sessionId: string, token: string): string | undefined {
+    const match = /^([a-f0-9-]{36})\.([A-Za-z0-9_-]{43})$/u.exec(sessionId);
+    if (!match) return undefined;
+    const [, nonce, signature] = match;
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(this.signSession(nonce, token))) ? nonce : undefined;
   }
 
   private async resolveMcpTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
@@ -703,16 +759,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   }
 }
 
-/** True when the request is a tools/call, or a batch holding one. */
-async function isToolCallRequest(request: Request): Promise<boolean> {
-  if (request.method !== "POST") return false;
+/** Inspect POSTs before selecting transport options. The SDK validates the wire body. */
+async function readMcpRequestBody(request: Request): Promise<unknown> {
+  if (request.method !== "POST") return undefined;
   try {
-    const body: unknown = await request.clone().json();
-    const messages = Array.isArray(body) ? body : [body];
-    return messages.some((message) =>
-      !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
+    return await request.clone().json();
   } catch {
-    return false;
+    return undefined;
   }
 }
 

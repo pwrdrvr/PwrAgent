@@ -17,7 +17,8 @@ export class MessagingCommandHandlers {
       targetSurface?: MessagingSurfaceRef;
     },
   ): Promise<void> {
-    const verb = matchMessagingCommandVerb(event.command);
+    const verb = matchMessagingCommandVerb(event.command)
+      ?? (event.command.trim().replace(/^\/+/, "").toLowerCase() === "review" ? "review" : undefined);
     // RBAC: gate the verb before dispatching. `help` and unknown commands are
     // ungated (they only surface the command list). `permissionForCommandVerb`
     // is the same lookup the render-time button filter uses, so they can't drift.
@@ -35,11 +36,13 @@ export class MessagingCommandHandlers {
       // thread drives that peer. Exempt: `resume`/`agent` only open the picker
       // (which filters, and the bind is gated at bind time), and `detach` is a
       // local unbind that must stay available or a scope-revoked actor is
-      // stranded in a conversation they can neither use nor leave.
+      // stranded in a conversation they can neither use nor leave. Review
+      // checks peer scope in the PR path, which routes to the bound owner.
       if (
         verb !== "resume" &&
         verb !== "agent" &&
         verb !== "detach" &&
+        verb !== "review" &&
         !(await this.context.host().requireRemoteScopeForBinding(
           event,
           await this.context.store.findActiveBindingForChannel(event.channel),
@@ -120,10 +123,7 @@ export class MessagingCommandHandlers {
       });
       return;
     }
-    if (
-      event.command.trim().replace(/^\/+/, "").toLowerCase()
-        === "review"
-    ) {
+    if (verb === "review") {
       await this.handleReviewCommand(event);
       return;
     }
@@ -400,6 +400,21 @@ export class MessagingCommandHandlers {
       await this.presentThreadCommandNeedsBinding(event);
       return;
     }
+    const argument = event.args.join(" ").trim();
+    const pullRequestFlag = /^--pr(?:\s+|$)/.exec(argument);
+    if (pullRequestFlag) {
+      if (federationTargetForBinding(binding) && !await this.context.host().requireRemoteScopeForBinding(
+        event, binding, "review:remote-instance",
+      )) {
+        return;
+      }
+      await this.context.host().submitMessagingReview({
+        binding,
+        event,
+        pullRequestArgs: argument.slice(pullRequestFlag[0].length),
+      });
+      return;
+    }
     if (!await this.context.host().reviewSupportedForBinding(binding)) {
       await this.context.host().deliverReviewUnsupported(binding, event);
       return;
@@ -416,7 +431,7 @@ export class MessagingCommandHandlers {
             createdAt: this.context.now(),
             title: "Invalid review command",
             body:
-              "Use /review, /review <base branch>, /review --pr <attached GitHub.com PR URL>, /review --commit <sha>, or /review --custom <instructions>.",
+              "Use /review, /review <base branch>, /review --pr <attached PR numbers or URLs>, /review --commit <sha>, or /review --custom <instructions>.",
             recoverable: true,
           }),
           binding,

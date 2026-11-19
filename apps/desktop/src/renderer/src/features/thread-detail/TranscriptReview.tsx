@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerReviewContext,
   AppServerReviewFinding,
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
@@ -9,7 +10,10 @@ import type {
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
-import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
+import {
+  pullRequestReviewPromptUrl,
+  reviewFindingPullRequests,
+} from "../../../../shared/pull-request-review";
 import {
   parsePlainReview,
   reviewEntryFailure,
@@ -127,6 +131,26 @@ function FindingTag(props: { finding: AppServerReviewFinding; tag: string }) {
 function findingLabel(title: string): string {
   const normalized = title.trim().replace(/\s+/gu, " ");
   return normalized.length > 60 ? `${normalized.slice(0, 59)}…` : normalized;
+}
+
+/**
+ * Which reviewed pull requests changed a combined review's finding's file.
+ * A fact about the captured diffs, not the reviewer's guess, so a file two
+ * pull requests changed names both.
+ */
+function FindingPullRequests(props: {
+  context: AppServerReviewContext | undefined;
+  filePath: string;
+}) {
+  const pullRequests = reviewFindingPullRequests(props.filePath, props.context);
+  if (!pullRequests) return null;
+  return (
+    <span className="transcript-review__finding-prs">
+      {pullRequests.length > 0
+        ? `In ${pullRequests.map((pr) => `#${pr.number}`).join(", ")}`
+        : "No reviewed pull request changed this file"}
+    </span>
+  );
 }
 
 function shouldHideReviewBody(summary: string, review: string): boolean {
@@ -456,6 +480,10 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                         ? `Line ${range.start}`
                         : `Lines ${range.start}-${range.end}`}
                     </span>
+                    <FindingPullRequests
+                      context={props.entry.context}
+                      filePath={finding.code_location.absolute_file_path}
+                    />
                   </div>
                   {tracking.review && item ? (
                     <ReviewFindingActions

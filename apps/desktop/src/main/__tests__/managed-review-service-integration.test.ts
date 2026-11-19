@@ -20,6 +20,7 @@ import { createDesktopBackendRegistry, registryModules } from "../app-server/bac
 import fc from "fast-check";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
+import type { ClaudeBackendOptions } from "../claude/claude-backend";
 import {
   mkdir,
   mkdtemp,
@@ -51,6 +52,8 @@ import type {
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { reviewStartFailureFingerprint } from "../app-server/thread-orchestration-prompts";
+import { buildTurnUserMessageOriginId } from "../app-server/thread-transcript-helpers";
+import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -667,6 +670,79 @@ describe("DesktopBackendRegistry", () => {
       await registry.close();
     }
   });
+
+  it("runs a Claude Code review as the thread's own /code-review turn and arms Auto-fix on that turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-code-review-"));
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        getSessionInfo: vi.fn().mockResolvedValue(undefined),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
+        query: ({ options = {} }) => {
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            await finished;
+            yield { type: "result", subtype: "success", is_error: false, result: "Reviewed" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    try {
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      // A Codex-only target and an unknown effort are refused before anything starts.
+      await expect(registry.startReview({ backend: "claude", threadId, runMode: "claude-code-review",
+        target: { type: "commit", sha: "a".repeat(40), title: null } })).rejects.toThrow(/no form/);
+      await expect(registry.startReview({ backend: "claude", threadId, runMode: "claude-code-review",
+        target: { type: "uncommittedChanges" }, reasoningEffort: "ultra" })).rejects.toThrow(/effort/);
+
+      const response = await registry.startReview({
+        backend: "claude", threadId, runMode: "claude-code-review", afterReview: "auto-fix",
+        target: { type: "uncommittedChanges" }, reasoningEffort: "high",
+      });
+      expect(response).toMatchObject({ backend: "claude", threadId, reviewThreadId: threadId });
+      expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: response.turnId });
+      // Auto-fix waits on the turn that sent the command, where ReportFindings lands.
+      expect(getReviewAutoFixArming().armedTurnIds({ backend: "claude", threadId })).toEqual([response.turnId]);
+      expect(JSON.stringify((await registry.readThread({ backend: "claude", threadId })).replay))
+        .toContain("/code-review high");
+      finish();
+    } finally {
+      finish();
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a combined review on Codex's own reviewer, and a branch target off Claude Code, before fetching", async () => {
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start", "review/start"] } }),
+      overlayStore: createOverlayStoreMock(),
+      resolveManagedReviewEnabled: () => false,
+    });
+    try {
+      await expect(registry.startReview({ backend: "codex", threadId: "thread-parent", runMode: "codex-sub-agent",
+        target: { type: "pullRequests", pullRequests: [
+          { url: "https://github.com/fixture/project/pull/1" },
+          { url: "https://github.com/fixture/project/pull/2" },
+        ] },
+      })).rejects.toThrow("PwrAgent Sub Agent is required for a review of several pull requests.");
+      await expect(registry.startReview({ backend: "codex", threadId: "thread-parent",
+        target: { type: "branch", branch: "feature" } })).rejects.toThrow(/only as Claude Code/);
+    } finally {
+      await registry.close();
+    }
+  });
+
 
   it("advertises codex as a reviewer override target", async () => {
     const codexClient = new MockBackendClient({
@@ -3970,7 +4046,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   describe("Claude code-review findings", () => {
-    async function fixture() {
+    async function fixture(combined = false, claudeOptions?: Partial<ClaudeBackendOptions>, origins?: SqliteOverlayStore) {
       const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-review-"));
       const repo = path.join(root, "repo");
       const cwd = path.join(root, ".pwragent", "worktrees", "fixture", "repo");
@@ -3984,11 +4060,17 @@ describe("DesktopBackendRegistry", () => {
         provider: "github.com", org: "example", repo: "repo", number: 41, state: "passing",
         lifecycleState: "open", headRefName: "feature/review", url: "https://github.com/example/repo/pull/41",
       } as const;
+      const secondPr = { ...pr, number: 42, url: "https://github.com/example/repo/pull/42" };
       const overlayStore = createOverlayStoreMock({ overlays: {
         [`claude:${threadId}`]: {
-          backend: "claude", threadId, executionMode: "default", extraLinkedDirectories: [directory], prs: [pr],
+          backend: "claude", threadId, executionMode: "default", extraLinkedDirectories: [directory],
+          prs: combined ? [pr, secondPr] : [pr],
         },
       } });
+      if (origins) {
+        overlayStore.upsertThreadMessageOrigin = (...args) => origins.upsertThreadMessageOrigin(...args);
+        overlayStore.readThreadMessageOrigins = (...args) => origins.readThreadMessageOrigins(...args);
+      }
       const store = new ClaudeSessionStore(path.join(root, "sessions"));
       await store.save({ cwd, thread: {
         id: threadId, source: "claude", title: "Review fixture", titleSource: "explicit", projectKey: cwd,
@@ -4017,14 +4099,128 @@ describe("DesktopBackendRegistry", () => {
             }
             return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
           },
+          ...claudeOptions,
         },
       });
       onTestFinished(async () => {
         await registry.close();
         await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       });
-      return { registry, threadId, cwd, repo, pr, store };
+      return { registry, threadId, cwd, repo, pr, secondPr, store, overlayStore };
     }
+
+    it("runs the agent tool's combined review as one Claude Code command after the parent turn completes", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-agent-review-contact-");
+      const db = StateDb.open(temp.dbPath);
+      onTestFinished(async () => { db.close(); await removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs(); });
+      const origins = new SqliteOverlayStore(db);
+      const { registry, threadId, repo, pr, secondPr } = await fixture(true, undefined, origins);
+      await git(repo, ["remote", "add", "origin", "https://github.com/example/repo.git"]);
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      const turnId = "invoking-turn";
+      const causalMessagingSource = { ownerId: "contact-owner", requestId: "request", instanceId: "messaging-peer" };
+      await origins.upsertThreadMessageOrigin({ backend: "claude", threadId,
+        messageId: buildTurnUserMessageOriginId(turnId), origin: { kind: "messaging", causalMessagingSource } });
+      await registry.publishLocalEvent({ backend: "claude", notification: {
+        method: "turn/started", params: { threadId, turnId, turn: { id: turnId } },
+      } });
+      const call = (urls: string[]) => callRegistryMcpTool({
+        registry, backend: "claude", threadId, turnId, tool: "start_review",
+        args: { target: { type: "pullRequests", pullRequests: urls.map(url => ({ url })) } },
+      });
+      const unattached = await call([pr.url, "https://github.com/example/repo/pull/43"]);
+      expect(unattached).toMatchObject({ isError: true });
+      expect(JSON.stringify(unattached)).toContain("attached to this thread");
+
+      const target = { type: "pullRequests", pullRequests: [{ url: pr.url }, { url: secondPr.url }] };
+      expect(await call([pr.url, secondPr.url])).toMatchObject({
+        structuredContent: { status: "scheduled", target },
+      });
+      const reviewMessages = async () => (await registry.readThread({ backend: "claude", threadId })).replay.entries
+        .filter(entry => entry.type === "message" && entry.text.startsWith("/code-review"));
+      expect(await reviewMessages()).toEqual([]);
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.publishLocalEvent({ backend: "claude", notification: {
+          method: "turn/completed", params: { threadId, turnId, turn: { id: turnId, status: "completed", output: [] } },
+        } });
+        await vi.waitFor(async () => {
+          const [review, ...extra] = await reviewMessages();
+          expect(extra).toEqual([]);
+          expect(review).toMatchObject({ text: "/code-review high 41,42" });
+          const originId = buildTurnUserMessageOriginId(review!.turn!.id);
+          expect(await origins.readThreadMessageOrigins({ backend: "claude", threadId, messageIds: [originId] }))
+            .toMatchObject({ [originId]: { causalMessagingSource } });
+        });
+      });
+      expectSqliteWriteBudget({ scenario: "claude-review-contact-origin", writes,
+        note: "One queued Claude review stores the originating contact in one commit at turn start. ~1.24 MB/day at 100 reviews/day. No idle writes." });
+    });
+
+    it("releases live Claude terminal delivery before a queued review relaunches the provider", async () => {
+      const ready = Promise.withResolvers<void>();
+      const sessions: unknown[] = [];
+      const { registry, threadId, cwd, overlayStore } = await fixture(false, {
+        taskFollowUpGraceMs: 60_000,
+        query: ({ options }) => {
+          sessions.push(options?.additionalDirectories);
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as ClaudeMessage;
+            if (sessions.length === 1) {
+              yield { type: "system", subtype: "task_started", task_id: "task-1", description: "fixture", task_type: "local_bash", is_backgrounded: true } as ClaudeMessage;
+              await ready.promise;
+              yield { type: "system", subtype: "session_state_changed", state: "running" } as ClaudeMessage;
+              yield { type: "assistant", parent_tool_use_id: null, message: { id: "waiting", content: [{ type: "text", text: "Waiting for the task." }] } } as ClaudeMessage;
+              yield { type: "result", subtype: "success", is_error: false, result: "Waiting for the task." } as ClaudeMessage;
+              yield { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed", output_file: "", summary: "done" } as ClaudeMessage;
+              yield { type: "system", subtype: "session_state_changed", state: "idle" } as ClaudeMessage;
+            } else {
+              yield { type: "assistant", parent_tool_use_id: null, message: { id: "review-result", content: [{ type: "text", text: "Reviewed." }] } } as ClaudeMessage;
+              yield { type: "result", subtype: "success", is_error: false, result: "Reviewed." } as ClaudeMessage;
+            }
+            if (sessions.length === 1 && !options?.abortController?.signal.aborted) {
+              await new Promise<void>(resolve => options?.abortController?.signal.addEventListener("abort", () => resolve(), { once: true }));
+            }
+          }
+          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      });
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true }, issueProviderDiscoveryPermit("settings-user-action"));
+      const parent = await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Finish the task" }] });
+      const reviewUpdates: unknown[] = [];
+      let parentTerminal: AgentEvent["notification"] | undefined;
+      registry.onEvent(event => {
+        if (["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method)
+          && "turnId" in event.notification.params && event.notification.params.turnId === parent.turnId) {
+          parentTerminal = event.notification;
+        }
+        if (event.notification.method === "thread/reviewStart/updated") reviewUpdates.push(event.notification.params);
+      });
+      const reviews = registryModules(registry).managedReviewService;
+      const start = reviews.startReview.bind(reviews);
+      vi.spyOn(reviews, "startReview").mockImplementation(async (...args) => {
+        // Fail on the forbidden ordering before joining the live consumer in the old implementation.
+        if (parentTerminal?.method !== "turn/completed") throw new Error("Review started inside terminal delivery");
+        return await start(...args);
+      });
+      try {
+        expect(await callRegistryMcpTool({ registry, backend: "claude", threadId, turnId: parent.turnId,
+          tool: "start_review", args: { runMode: "claude-code-review", target: { type: "uncommittedChanges" } } }))
+          .toMatchObject({ structuredContent: { status: "scheduled" } });
+        const attached = path.join(cwd, "attached");
+        await mkdir(attached);
+        const overlay = await overlayStore.getThreadOverlayState({ backend: "claude", threadId });
+        overlay!.extraLinkedDirectories!.push({ id: attached, path: attached, kind: "local", label: "attached" });
+        ready.resolve();
+        await vi.waitFor(() => expect(parentTerminal).toBeDefined());
+        expect(parentTerminal, JSON.stringify(parentTerminal)).toMatchObject({ method: "turn/completed" });
+        await vi.waitFor(() => expect(reviewUpdates).toEqual([expect.objectContaining({ status: "started" })]));
+        expect(sessions).toEqual([undefined, [attached]]);
+      } finally {
+        ready.resolve();
+      }
+    });
 
     it("publishes a review card naming the workspace, branch, and attached pull request", async () => {
       const { registry, threadId, cwd, repo, pr } = await fixture();

@@ -1,8 +1,8 @@
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryRequest, NavigationSelectedDetailRequest, NavigationSelectedDetailResponse } from "@pwragent/shared";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
-import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
+import type { NavigationDirectoryView, NavigationPresentedThread } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -11569,6 +11569,7 @@ describe("Sidebar menus from the keyboard", () => {
   function renderRowMenu(
     thread: NavigationThreadSummary,
     onDetachPullRequest: (thread: NavigationThreadSummary, pr: PrSummary) => Promise<void>,
+    clickY?: number,
   ) {
     try {
       window.localStorage.removeItem("pwragent.detachPrWarning.dismissed");
@@ -11592,8 +11593,66 @@ describe("Sidebar menus from the keyboard", () => {
         onSelectThread={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    if (clickY === undefined) {
+      fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    } else {
+      fireEvent.contextMenu(screen.getByText(thread.title), { clientX: 48, clientY: clickY });
+    }
   }
+
+  const longPrList = Array.from({ length: 19 }, (_, index) => {
+    const number = 202 + index;
+    return { ...pullRequestThread.prs![0]!, number, url: `https://github.com/ExampleOrg/ExampleApp/pull/${number}` };
+  });
+  const compactPrThread: NavigationPresentedThread = {
+    ...pullRequestThread, prs: longPrList.slice(0, 16), prsTruncated: true, prCount: 19,
+  };
+
+  it("moves a row menu above the pointer when loaded PR actions increase its height", async () => {
+    const response = Promise.withResolvers<NavigationSelectedDetailResponse>();
+    const read = vi.fn((_request: NavigationSelectedDetailRequest) => response.promise);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true, value: { getNavigationSelectedDetail: read },
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const hasBulkAction = this.textContent?.includes("Detach All Pull Requests");
+      return new DOMRect(0, 0, 168, hasBulkAction ? 180 : 50);
+    });
+
+    const clickY = window.innerHeight - 90;
+    renderRowMenu(compactPrThread, vi.fn(async () => undefined), clickY);
+    const menu = screen.getByRole("menu");
+    expect(menu).toHaveStyle({ top: `${clickY}px` });
+    const ref = read.mock.lastCall![0].ref;
+    await act(async () => response.resolve({
+      protocol: 2, ref, revision: "complete", readiness: "ready", identity: "present",
+      collectionPage: { name: "prs", values: { prs: longPrList }, revision: "complete", complete: true },
+    }));
+    expect(within(menu).getByRole("menuitem", { name: "Detach All Pull Requests" })).toBeVisible();
+    expect(menu).toHaveStyle({ top: `${clickY - 184}px` });
+  });
+
+  it("lets a navigation-only peer copy a preview URL without offering bulk actions", async () => {
+    const remote: NavigationPresentedThread = {
+      ...compactPrThread,
+      federation: {
+        instanceLabel: "peer", peerStatus: "connected", capabilities: ["thread_navigation"],
+        ref: { backend: "codex", threadId: compactPrThread.id, target: { scope: "remote", instanceId: "peer" } },
+      },
+    };
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragent", { configurable: true, value: {
+      copyText, getNavigationSelectedDetail: vi.fn().mockRejectedValue(new Error("Missing thread_detail grant.")),
+    } });
+    renderRowMenu(remote, vi.fn(async () => undefined));
+    const copy = await screen.findByRole("menuitem", { name: "Copy Pull Request URL" });
+    await clickElement(copy);
+    const individual = screen.getByRole("menuitem", { name: /#217.*copy URL/ });
+    expect(screen.queryByRole("menuitem", { name: /^Copy All/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Detach All Pull Requests" })).toBeNull();
+    await clickElement(individual);
+    expect(copyText).toHaveBeenCalledExactlyOnceWith(longPrList[15]!.url);
+  });
 
   it("offers the row menu's Detach Pull Request for a thread with one PR", () => {
     const detach = vi.fn(async () => undefined);
