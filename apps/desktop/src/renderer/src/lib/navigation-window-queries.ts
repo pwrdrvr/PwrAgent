@@ -72,6 +72,8 @@ type Resource = {
 /** One opening restores saved depth within one Load more click's bounds. Lists
  * opened together share it; the clock starts at the first read. */
 type ResumeBudget = { reads: number; until?: number };
+type OwnerPageProof = { dependencies: NavigationMetadataDependencies; bytes: number };
+type RetainableState = { state: NavigationPageState; ownerProof?: OwnerPageProof };
 
 function loadedRows(page: NavigationQueryPage | undefined): number {
   return page?.modelGroups?.length || page?.directories?.length || page?.entries.length || 0;
@@ -122,6 +124,10 @@ export class NavigationWindowQueries {
   private disposed = false;
   private activeReads = 0;
   private activePageBytes = 0;
+  private ownerProofBytes = 0;
+  // Optional proofs are only held for active pages and can be evicted without
+  // replacing a published page or invalidating its rows.
+  private readonly ownerPageProofs = new Map<NavigationQueryPage, OwnerPageProof>();
   private readonly pageSizes = new WeakMap<NavigationQueryPage, number>();
   private readonly pageDependencies = new WeakMap<NavigationQueryPage, NavigationMetadataDependencies | undefined>();
   private readonly recentPinPublications = new Set<string>();
@@ -254,21 +260,55 @@ export class NavigationWindowQueries {
     return bytes;
   }
 
-  private acceptState(resource: Resource, state: NavigationPageState): void {
-    const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(resource.value.state.page);
-    this.trimRetained(bytes);
+  private retainableState(state: NavigationPageState): RetainableState {
+    const page = state.page;
+    if (state.request.federationTarget?.scope !== "remote" || page?.metadataDependencies?.workingStatePaths === undefined) return { state };
+    const { metadataDependencies, ...rows } = page;
+    // Removing a JSON field saves its name, value, and one separating comma.
+    const proofBytes = new TextEncoder().encode(JSON.stringify({ metadataDependencies })).byteLength - 1;
+    const rowBytes = this.pageBytes(page) - proofBytes;
+    if (rows.remoteOwner?.ownerContentBytes !== undefined) {
+      rows.remoteOwner = { ...rows.remoteOwner, ownerContentBytes: rowBytes };
+    }
+    this.pageSizes.set(rows, rowBytes);
+    const dependencies = readNavigationMetadataDependencies(metadataDependencies);
+    return { state: { ...state, page: rows }, ...(dependencies ? { ownerProof: { dependencies, bytes: proofBytes } } : {}) };
+  }
+
+  private deleteOwnerProof(page: NavigationQueryPage | undefined): void {
+    if (!page) return;
+    const proof = this.ownerPageProofs.get(page);
+    if (!proof) return;
+    this.ownerPageProofs.delete(page);
+    this.ownerProofBytes -= proof.bytes;
+  }
+
+  private acceptState(resource: Resource, { state, ownerProof }: RetainableState): void {
+    const previous = resource.value.state.page;
+    const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(previous);
     if (bytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
+    if (state.page !== previous) this.deleteOwnerProof(previous);
+    const spare = this.trimRetained(bytes);
+    if (state.page && ownerProof && ownerProof.bytes <= spare && !this.ownerPageProofs.has(state.page)) {
+      this.ownerPageProofs.set(state.page, ownerProof);
+      this.ownerProofBytes += ownerProof.bytes;
+    }
     this.activePageBytes = bytes;
     resource.value = { ...resource.value, state, restoredFromCache: false };
   }
 
-  private trimRetained(activeBytes: number): void {
+  private trimRetained(activeBytes: number): number {
     let bytes = activeBytes + [...this.retained.values()].reduce((total, entry) => total + entry.bytes, 0);
     for (const [key, entry] of this.retained) {
       if (bytes <= MAX_RETAINED_BYTES && this.retained.size <= 64) break;
       this.retained.delete(key);
       bytes -= entry.bytes;
     }
+    for (const page of this.ownerPageProofs.keys()) {
+      if (bytes + this.ownerProofBytes <= MAX_RETAINED_BYTES) break;
+      this.deleteOwnerProof(page);
+    }
+    return MAX_RETAINED_BYTES - bytes - this.ownerProofBytes;
   }
 
   setDemand(demand: ReadonlyMap<string, NavigationQueryRequest>): void {
@@ -291,6 +331,7 @@ export class NavigationWindowQueries {
             bytes: this.pageBytes(resource.value.state.page) });
         }
         this.activePageBytes -= this.pageBytes(resource.value.state.page);
+        this.deleteOwnerProof(resource.value.state.page);
         this.release(resource);
         this.resources.delete(id);
         changed = true;
@@ -514,7 +555,7 @@ export class NavigationWindowQueries {
       if (workingState && request.query.kind === "directory-index") return false;
       if (!resource.membershipUncertain && page?.coverage.state === "complete"
         && (workingState || method === "navigation/thread/seen")) {
-        const dependencies = this.metadataDependencies(page);
+        const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
         if (workingState && typeof params?.worktreePath === "string" && dependencies?.workingStatePaths) {
           return dependencies.workingStatePaths.includes(params.worktreePath);
         }
@@ -783,7 +824,6 @@ export class NavigationWindowQueries {
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
         const assertRetained = (next: NavigationPageState) => {
           const retainedBytes = this.activePageBytes - this.pageBytes(resource.value.state.page) + this.pageBytes(next.page);
-          this.trimRetained(retainedBytes);
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
         // Rows already on screen are restored outside the saved-depth budget.
@@ -902,10 +942,10 @@ export class NavigationWindowQueries {
           page = await readAround({ ...started.request, anchor: recoveryAnchor });
         }
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
-        let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
-        assertRetained(next);
-        if (resuming && next.page?.nextCursor && loadedRows(next.page) >= restoring
-          && loadedRows(next.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
+        let next = this.retainableState(applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor }));
+        assertRetained(next.state);
+        if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
+          && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
           // Saved expansion must not withhold the ordinary first page, nor
           // replace a longer cached range with it.
           this.acceptState(resource, next);
@@ -915,17 +955,17 @@ export class NavigationWindowQueries {
         // Restore displayed rows before applying continuation budgets. Spare
         // capacity from an earlier Load more admits new rows under those same
         // budgets; a short final page does not revoke the operator's demand.
-        while (next.page?.nextCursor && loadedRows(next.page) < wanted
-          && (loadedRows(next.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
+        while (next.state.page?.nextCursor && loadedRows(next.state.page) < wanted
+          && (loadedRows(next.state.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
             && extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
-          const nextCursor = next.page.nextCursor;
-          const before = loadedRows(next.page);
+          const nextCursor = next.state.page.nextCursor;
+          const before = loadedRows(next.state.page);
           try {
             const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, before < restoring);
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
-            const extended = applyNavigationPage({ state: next, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor });
-            if (loadedRows(extended.page) <= before) throw new Error("Navigation range refresh did not advance.");
-            assertRetained(extended);
+            const extended = this.retainableState(applyNavigationPage({ state: next.state, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor }));
+            if (loadedRows(extended.state.page) <= before) throw new Error("Navigation range refresh did not advance.");
+            assertRetained(extended.state);
             next = extended;
           } catch (error) {
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
@@ -934,7 +974,7 @@ export class NavigationWindowQueries {
             // Once restored, commit refreshed membership and metadata plus
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
-            if (!pageCursor && loadedRows(next.page) < restoring) throw error;
+            if (!pageCursor && loadedRows(next.state.page) < restoring) throw error;
             this.acceptState(resource, next);
             throw error;
           }
@@ -983,6 +1023,8 @@ export class NavigationWindowQueries {
     for (const resource of this.resources.values()) this.release(resource);
     this.resources.clear();
     this.activePageBytes = 0;
+    this.ownerPageProofs.clear();
+    this.ownerProofBytes = 0;
     this.retained.clear();
     this.publish();
     this.listeners.clear();

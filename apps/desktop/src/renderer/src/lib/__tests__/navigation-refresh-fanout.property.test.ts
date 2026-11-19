@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AgentEvent, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import { expandNavigationRemoteOwner } from "@pwragent/shared";
 import { NavigationWindowQueries } from "../navigation-window-queries";
 
 function page(request: NavigationQueryRequest, revision = "0"): NavigationQueryPage {
@@ -24,10 +25,10 @@ const event = (index: number, method = "thread/backgroundTasks/updated"): AgentE
     ? { worktreePath: `/parent-${index}`, state: "clean" } : { threadId: `parent-${index}-child` },
 } } as AgentEvent);
 
-async function until(predicate: () => boolean) {
+async function until(predicate: () => boolean, steps = 500) {
   // The owner and controller use promises only. Advance microtasks, never a
   // wall clock; an unexpected extra read fails with the unsatisfied invariant.
-  for (let step = 0; step < 500 && !predicate(); step++) await Promise.resolve();
+  for (let step = 0; step < steps && !predicate(); step++) await Promise.resolve();
   expect(predicate()).toBe(true);
 }
 const idle = (queries: NavigationWindowQueries) => [...queries.getSnapshot().resources.values()].every((resource) => !resource.loading);
@@ -131,6 +132,71 @@ it("admits exactly the pages allowed by an independent UTF-8 retained-byte oracl
       const resources = [...queries.getSnapshot().resources.values()];
       expect(resources.flatMap((resource) => resource.state.page ? [resource.state.page] : [])).toEqual(accepted);
       expect(resources.filter((resource) => resource.state.error?.includes("retained-page budget"))).toHaveLength(38 - accepted.length);
+    } finally { queries.dispose(); }
+  }), { numRuns: 5 });
+});
+
+it("admits remote rows independently of optional proof volume and still refreshes off-page counts", async () => {
+  // Each tray carries a complete dependency set for the same directory-wide
+  // descriptor. Those optional bytes must yield to visible rows in the view.
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 150, max: 162 }), fc.boolean(), async (trays, reverse) => {
+    const target = { scope: "remote" as const, instanceId: "remote" };
+    const members = (group: number) => Array.from({ length: 500 }, (_, index) =>
+      `00000000-0000-4000-800${group}-${String(index).padStart(12, "0")}`);
+    const ownerMembers = [members(0), members(1)];
+    const demand = new Map(Array.from({ length: trays * 2 }, (_, index) => {
+      const group = index % 2;
+      const query = { kind: "children" as const, directoryKey: `directory:${group}`,
+        parent: { backend: "codex" as const, threadId: ownerMembers[group]![index >> 1]!, ownerInstanceId: target.instanceId } };
+      return [`tray-${index}`, { ...request(index), inventory: "owner" as const, federationTarget: target, query }] as const;
+    }));
+    const ordered = new Map(reverse ? [...demand].reverse() : demand);
+    let seen = false;
+    let rowBytes = 0;
+    let fullBytes = 0;
+    const read = async (sent: NavigationQueryRequest) => {
+      const response = page(sent);
+      if (sent.query.kind !== "children" || !sent.query.directoryKey) {
+        response.entries[0]!.row.title = "x".repeat(180_000);
+        return expandNavigationRemoteOwner({ ...response, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+      }
+      const group = sent.query.directoryKey === "directory:0" ? 0 : 1;
+      const childId = ownerMembers[group]![trays + Number(sent.query.parent.threadId.slice(-12))]!;
+      const child = response.entries[0]!.row;
+      child.id = childId;
+      child.ref = { backend: "codex", threadId: childId };
+      response.selectionDirectory = { key: sent.query.directoryKey, kind: "directory", label: `Project ${group}`,
+        counts: { total: 500, active: 0, unread: seen && group === 0 ? 0 : 1, review: 0 },
+        pinnedRootCount: 0, unpinnedRootCount: trays, launchpadPresent: false };
+      rowBytes += Buffer.byteLength(JSON.stringify(response));
+      response.metadataDependencies = { version: 1, prKeys: [], threadKeys: ownerMembers[group]!.map((id) =>
+        JSON.stringify([null, "codex", id])), workingStatePaths: [`/${response.entries[0]!.row.id}`] };
+      fullBytes += Buffer.byteLength(JSON.stringify(response));
+      return expandNavigationRemoteOwner({ ...response, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+    };
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    try {
+      queries.setDemand(ordered);
+      await until(() => idle(queries), 4_000);
+      expect(rowBytes + 200_000).toBeLessThan(8 * 1024 * 1024);
+      expect(fullBytes).toBeGreaterThan(8 * 1024 * 1024);
+      const settled = queries.getSnapshot().resources;
+      expect([...settled.values()].filter((resource) => resource.state.page)).toHaveLength(trays * 2);
+      queries.setDemand(new Map([...ordered, ["large-row", { ...request(0), inventory: "owner", federationTarget: target }]]));
+      await until(() => idle(queries));
+      expect(queries.getSnapshot().resources.get("large-row")?.state.page?.entries).toHaveLength(1);
+      for (const [id, resource] of settled) expect(queries.getSnapshot().resources.get(id)).toBe(resource);
+
+      seen = true;
+      queries.invalidate(undefined, [target], { backend: "codex", federationTarget: target, notification: {
+        method: "navigation/thread/seen", params: { threadId: ownerMembers[0]!.at(-1)!, seenUpdatedAt: 1 },
+      } });
+      await queries.refresh(undefined, [target], true);
+      for (const [id, resource] of queries.getSnapshot().resources) {
+        expect(resource.state.error).toBeUndefined();
+        const directory = resource.state.page?.selectionDirectory;
+        if (id !== "large-row") expect(directory?.counts.unread).toBe(directory?.key === "directory:0" ? 0 : 1);
+      }
     } finally { queries.dispose(); }
   }), { numRuns: 5 });
 });
