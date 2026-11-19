@@ -10966,6 +10966,10 @@ a.button {
   flex: 1;
 }
 
+.project-checkouts-dialog__row input {
+  accent-color: var(--accent);
+}
+
 .project-checkouts-dialog__row span {
   overflow: hidden;
   text-overflow: ellipsis;
