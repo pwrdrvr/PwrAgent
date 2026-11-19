@@ -152,10 +152,14 @@ type AutomationRunPayload = {
   // rewrite of a run drops them, which reads as a run with no owner.
   failureReason?: AutomationRunFailureReason;
   owner?: AutomationRunOwner;
+  recoverOnRestart?: boolean;
+  resumedAt?: number;
   coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
   usage?: AutomationRunUsage;
 };
+
+type StoredAutomationRun = AutomationRunSummary & { recoverOnRestart?: boolean };
 
 type AutomationRunArtifactPayload = {
   finalText?: string;
@@ -438,7 +442,7 @@ export class AutomationStore implements AutomationStorage {
     const scheduledWindows = input.scheduledWindows ?? (
       input.scheduledFor === undefined ? [] : [{ scheduledFor: input.scheduledFor }]
     );
-    const run: AutomationRunSummary = {
+    const run: StoredAutomationRun = {
       id: input.id ?? `automation-run:${randomUUID()}`,
       automationId: automation.id,
       trigger: input.trigger,
@@ -449,6 +453,7 @@ export class AutomationStore implements AutomationStorage {
       queuedAt: input.queuedAt,
       queueEntryId: input.queueEntryId,
       owner: this.options.runOwner,
+      recoverOnRestart: input.recoverOnRestart === true ? true : undefined,
     };
     const terminal = (TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status);
     if (terminal) {
@@ -477,6 +482,20 @@ export class AutomationStore implements AutomationStorage {
     return run;
   }
 
+  commitScheduledEvaluation(
+    params: { automationId: string; dueAt?: number; nextRunAt: number | null; now: number },
+    recordWindow: () => AutomationRunSummary | undefined,
+  ): AutomationRunSummary | undefined {
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getAutomation(params.automationId);
+      // Another evaluation or a schedule edit may have consumed this snapshot.
+      if (current?.status !== "enabled" || current.nextRunAt !== params.dueAt) return undefined;
+      const run = recordWindow();
+      this.updateAutomation(current.id, { nextRunAt: params.nextRunAt, now: params.now });
+      return run;
+    }).immediate();
+  }
+
   coalescePendingScheduledRun(params: {
     automationId: string;
     scheduledWindows: AutomationRunWindow[];
@@ -491,7 +510,7 @@ export class AutomationStore implements AutomationStorage {
     for (const window of params.scheduledWindows) {
       byScheduledFor.set(window.scheduledFor, window);
     }
-    const nextRun: AutomationRunSummary = {
+    const nextRun: StoredAutomationRun = {
       ...existing,
       scheduledWindows: [...byScheduledFor.values()].sort(
         (left, right) => left.scheduledFor - right.scheduledFor,
@@ -532,7 +551,7 @@ export class AutomationStore implements AutomationStorage {
   findActiveRunForAutomation(automationId: string): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
-        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued', 'running') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued', 'running') ORDER BY (status = 'running') DESC, updated_at DESC, rowid DESC LIMIT 1",
       )
       .get(automationId) as AutomationRunRow | undefined;
     return row ? this.runFromRow(row) : undefined;
@@ -579,6 +598,44 @@ export class AutomationStore implements AutomationStorage {
       )
       .get(automationId) as AutomationRunRow | undefined;
     return row ? this.runFromRow(row) : undefined;
+  }
+
+  claimRunForDispatch(runId: string, now: number): AutomationRunSummary | undefined {
+    return this.stateDb.raw.transaction(() => {
+      const row = this.getRunRow(runId);
+      const run = row ? this.runFromRow(row) : undefined;
+      if (!row || !run || (run.status !== "pending" && run.status !== "queued")) return undefined;
+      const running = this.stateDb.raw.prepare(
+        "SELECT 1 FROM automation_runs WHERE automation_id = ? AND status = 'running' LIMIT 1",
+      ).get(run.automationId);
+      if (running) return undefined;
+      const claimed: StoredAutomationRun = {
+        ...run,
+        status: "running",
+        startedAt: now,
+        owner: this.options.runOwner ?? run.owner,
+        recoverOnRestart: undefined,
+      };
+      this.upsertRun(claimed, {
+        backend: row.backend,
+        threadId: row.thread_id,
+        queueEntryId: run.queueEntryId,
+        createdAt: row.created_at,
+        updatedAt: now,
+      });
+      return claimed;
+    }).immediate();
+  }
+
+  disarmRunRestartRecovery(runId: string, now: number): void {
+    // The gate can execute a shell command before the provider is called.
+    // Once the gate begins, a restart must not repeat its side effects.
+    this.stateDb.raw.prepare(
+      `UPDATE automation_runs
+          SET payload = json_remove(payload, '$.recoverOnRestart'), updated_at = ?
+        WHERE run_id = ? AND status IN ('pending', 'queued')
+          AND json_valid(payload) AND json_extract(payload, '$.recoverOnRestart') = 1`,
+    ).run(now, runId);
   }
 
   markRunQueued(params: {
@@ -852,10 +909,8 @@ export class AutomationStore implements AutomationStorage {
   }
 
   /**
-   * Reports what the previous process lost. A run is changed only when its
-   * owner is proved dead; a live owner's run and every terminal run are left
-   * exactly as they are. One transaction, and none when nothing needs
-   * reconciling. Nothing is resumed or replayed.
+   * Adopts proven unstarted runs once and interrupts the rest, after checking
+   * their owners. One transaction, and none when nothing needs reconciling.
    */
   reconcileStartup(input: StartupReconciliationInput = {}): StartupReconciliationResult {
     const now = input.now ?? Date.now();
@@ -864,13 +919,13 @@ export class AutomationStore implements AutomationStorage {
         "SELECT * FROM automation_runs WHERE status IN ('pending', 'queued', 'running') ORDER BY created_at, rowid",
       )
       .all() as AutomationRunRow[];
-    const deadOwnerRunIds: string[] = [];
+    const deadOwnerRuns: Array<{ id: string; ownerKey: string | undefined }> = [];
     let liveOwnerRunCount = 0;
     // Liveness reads the profile's runtime markers, so decide it before the
     // write lock is taken, and once per owner.
     const aliveByOwner = new Map<string, boolean>();
     const isOwnerAlive = (owner: AutomationRunOwner): boolean => {
-      const key = `${owner.instanceId}\0${owner.processId}\0${owner.startedAt ?? ""}`;
+      const key = runOwnerKey(owner);
       let alive = aliveByOwner.get(key);
       if (alive === undefined) {
         alive = input.isOwnerAlive?.(owner) === true;
@@ -881,7 +936,7 @@ export class AutomationStore implements AutomationStorage {
     for (const row of unfinished) {
       const owner = readRunOwner(parseJson<AutomationRunPayload>(row.payload)?.owner);
       if (owner && isOwnerAlive(owner)) liveOwnerRunCount += 1;
-      else deadOwnerRunIds.push(row.run_id);
+      else deadOwnerRuns.push({ id: row.run_id, ownerKey: owner && runOwnerKey(owner) });
     }
     const dueNextRunAt: Array<[string, number | null]> = [];
     for (const [automationId, nextRunAt] of Object.entries(
@@ -902,17 +957,43 @@ export class AutomationStore implements AutomationStorage {
       dueNextRunAt.push([automationId, nextRunAt ?? null]);
     }
     const interruptedRuns: AutomationRunSummary[] = [];
-    if (deadOwnerRunIds.length === 0 && dueNextRunAt.length === 0) {
-      return { interruptedRuns, liveOwnerRunCount, rescheduledAutomationCount: 0 };
+    const resumedRuns: AutomationRunSummary[] = [];
+    if (deadOwnerRuns.length === 0 && dueNextRunAt.length === 0) {
+      return { interruptedRuns, resumedRuns, liveOwnerRunCount, rescheduledAutomationCount: 0 };
     }
 
     const transaction = this.stateDb.raw.transaction(() => {
-      for (const runId of deadOwnerRunIds) {
+      for (const candidate of deadOwnerRuns) {
         // Re-read under the write lock: the run may have reached an outcome,
         // or another launch may have reported it, since the scan.
-        const row = this.getRunRow(runId);
+        const row = this.getRunRow(candidate.id);
         const run = row ? this.runFromRow(row) : undefined;
         if (!row || !run || RUN_STATUS_TRANSITIONS[run.status].length === 0) continue;
+        if ((run.owner && runOwnerKey(run.owner)) !== candidate.ownerKey) continue;
+        if (
+          input.resumeUnstartedRuns && this.options.runOwner && run.recoverOnRestart
+          && run.resumedAt === undefined && (run.status === "pending" || run.status === "queued")
+          && run.startedAt === undefined && run.backendTurnId === undefined
+          && this.getAutomation(run.automationId)
+        ) {
+          const resumed: StoredAutomationRun = {
+            ...run,
+            status: "queued",
+            queuedAt: run.queuedAt ?? now,
+            owner: this.options.runOwner,
+            resumedAt: now,
+            recoverOnRestart: undefined,
+          };
+          this.upsertRun(resumed, {
+            backend: row.backend,
+            threadId: row.thread_id,
+            queueEntryId: run.queueEntryId,
+            createdAt: row.created_at,
+            updatedAt: now,
+          });
+          resumedRuns.push(resumed);
+          continue;
+        }
         const interrupted: AutomationRunSummary = {
           ...run,
           status: "failed",
@@ -942,6 +1023,7 @@ export class AutomationStore implements AutomationStorage {
     transaction.immediate();
     return {
       interruptedRuns,
+      resumedRuns,
       liveOwnerRunCount,
       rescheduledAutomationCount: dueNextRunAt.length,
     };
@@ -1036,7 +1118,7 @@ export class AutomationStore implements AutomationStorage {
       || (transitions.length > 0 && input.status === current.status);
     // Lifecycle events may beat submission acknowledgements. Stale updates
     // can fill missing identities, but cannot rewind status, timestamps or outcome.
-    const nextRun: AutomationRunSummary = {
+    const nextRun: StoredAutomationRun = {
       ...current,
       status: acceptsLifecycle ? input.status : current.status,
       queuedAt: current.queuedAt ?? (acceptsLifecycle ? input.queuedAt : undefined),
@@ -1168,7 +1250,7 @@ export class AutomationStore implements AutomationStorage {
   }
 
   private upsertRun(
-    run: AutomationRunSummary,
+    run: StoredAutomationRun,
     metadata: {
       backend: AppServerBackendKind;
       threadId: ThreadIdentifier;
@@ -1184,6 +1266,8 @@ export class AutomationStore implements AutomationStorage {
       skipReason: run.skipReason,
       failureReason: run.failureReason,
       owner: run.owner,
+      recoverOnRestart: run.recoverOnRestart,
+      resumedAt: run.resumedAt,
       coalescedCount: run.coalescedCount,
       source: run.source,
       usage: run.usage,
@@ -1343,7 +1427,7 @@ export class AutomationStore implements AutomationStorage {
     };
   }
 
-  private runFromRow(row: AutomationRunRow): AutomationRunSummary | undefined {
+  private runFromRow(row: AutomationRunRow): StoredAutomationRun | undefined {
     const payload = parseJson<AutomationRunPayload>(row.payload);
     if (!payload) return undefined;
     return {
@@ -1365,6 +1449,8 @@ export class AutomationStore implements AutomationStorage {
       skipReason: payload.skipReason,
       failureReason: payload.failureReason === "interrupted" ? "interrupted" : undefined,
       owner: readRunOwner(payload.owner),
+      recoverOnRestart: payload.recoverOnRestart === true ? true : undefined,
+      resumedAt: typeof payload.resumedAt === "number" ? payload.resumedAt : undefined,
       coalescedCount: payload.coalescedCount,
       usage: payload.usage,
     };
@@ -1505,6 +1591,10 @@ export class AutomationStore implements AutomationStorage {
 }
 
 /** Stored JSON is untrusted: an owner that is not well formed is no owner. */
+function runOwnerKey(owner: AutomationRunOwner): string {
+  return `${owner.instanceId}\0${owner.processId}\0${owner.startedAt ?? ""}`;
+}
+
 function readRunOwner(value: unknown): AutomationRunOwner | undefined {
   if (!value || typeof value !== "object") return undefined;
   const owner = value as Partial<Record<keyof AutomationRunOwner, unknown>>;

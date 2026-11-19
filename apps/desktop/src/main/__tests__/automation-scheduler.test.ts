@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HeadlessAutomationRunner,
   type HeadlessAutomationLauncher,
@@ -13,6 +14,8 @@ import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 type HeadlessLaunch = Parameters<HeadlessAutomationLauncher["startAutomationHeadlessTurn"]>[0];
+const scheduleLanes = ["idle", "busy", "queued", "drop"] as const;
+type ScheduleLane = (typeof scheduleLanes)[number];
 
 /**
  * Stands in for the registry behind the production runner. Each call is one
@@ -93,6 +96,90 @@ function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationSch
 }
 
 describe("AutomationScheduler", () => {
+  it("persists running before invoking the provider, even before it acknowledges the turn", async () => {
+    const automation = createIntervalAutomation();
+    const provider = vi.spyOn(launcher, "startAutomationHeadlessTurn")
+      .mockImplementation(async ({ automationRunId }) => {
+        expect(store.getRun(automationRunId)?.status).toBe("running");
+        return {
+          headlessThreadId: "headless-1",
+          queueEntryId: "queue-1",
+          threadId: automation.threadId,
+          turnId: "turn-1",
+        };
+      });
+
+    expect((await buildScheduler().runNow(automation.id))?.status).toBe("started");
+    expect(provider).toHaveBeenCalledOnce();
+  });
+
+  async function expectSingleScheduledWindow(
+    priorLane: ScheduleLane,
+    crashAfterWrite: number,
+  ): Promise<void> {
+    const scheduler = buildScheduler();
+    const automation = createIntervalAutomation();
+    const window = 5 * 60 * 1000;
+    if (priorLane !== "idle") await scheduler.runNow(automation.id);
+    if (priorLane === "drop") {
+      store.updateAutomation(automation.id, { backlogPolicy: "drop_missed", now });
+    }
+    if (priorLane === "queued") {
+      now = window;
+      await scheduler.evaluateDueAutomations();
+    }
+    now += window;
+    const scheduledFor = now;
+    let writes = 0;
+    // Inject before the next SQL write. A thrown fault rolls back an open
+    // transaction while any earlier commits remain visible to recovery.
+    const prepare = stateDb.raw.prepare.bind(stateDb.raw);
+    const fault = vi.spyOn(stateDb.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      const run = statement.run.bind(statement);
+      statement.run = (...args: unknown[]) => {
+        if (++writes > crashAfterWrite) throw new Error("simulated crash");
+        return run(...args);
+      };
+      return statement;
+    });
+    try {
+      await scheduler.evaluateDueAutomations();
+    } finally {
+      fault.mockRestore();
+    }
+
+    // Another instance can reconcile runs without advancing schedule
+    // windows, as startup without the scheduling lease does.
+    store.reconcileStartup({ now });
+    const restarted = buildScheduler();
+    now = scheduledFor;
+    await restarted.evaluateDueAutomations();
+    const matchingRuns = store.listRunsForAutomation(automation.id).filter((run) =>
+      run.scheduledWindows.some((candidate) => candidate.scheduledFor === scheduledFor));
+    expect(matchingRuns.map((run) => run.status)).toHaveLength(1);
+  }
+
+  it("a crash after inserting a scheduled run cannot create a second run for that window", async () => {
+    await expectSingleScheduledWindow("idle", 1);
+  });
+
+  it("consumes each schedule window once across the writes of every backlog path", async () => {
+    const writeBoundaries = Array.from({ length: 10 }, (_, index) => index + 1);
+    const examples = scheduleLanes.flatMap((lane) =>
+      writeBoundaries.map((boundary): [ScheduleLane, number] => [lane, boundary]));
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(...scheduleLanes),
+      fc.integer({ min: 1, max: 10 }),
+      async (priorLane, crashAfterWrite) => {
+        stateDb.raw.exec("DELETE FROM automation_runs; DELETE FROM automations;");
+        launcher.started.length = 0;
+        now = 0;
+        await expectSingleScheduledWindow(priorLane, crashAfterWrite);
+      },
+    ), { examples });
+  });
+
   it.each(["started", "failed"] as const)(
     "preserves completion when a %s submission result arrives after lifecycle events",
     async (submissionStatus) => {
@@ -136,7 +223,7 @@ describe("AutomationScheduler", () => {
       const [run] = store.listRunsForAutomation(automation.id);
       expect(run).toMatchObject({
         status: "completed",
-        startedAt: 500,
+        startedAt: 0,
         completedAt: 1_000,
         backendTurnId: "turn-1",
       });

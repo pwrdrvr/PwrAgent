@@ -99,6 +99,8 @@ export type CreateAutomationRunInput = {
   source?: AutomationRunSourceMetadata;
   queuedAt?: number;
   queueEntryId?: string;
+  /** The dispatch path persists running before beginning execution. */
+  recoverOnRestart?: boolean;
   /**
    * With a terminal `status`, the run is recorded finished in one insert. A
    * skipped marker never passes through `pending`, so it cannot collide with
@@ -112,6 +114,7 @@ export type CreateAutomationRunInput = {
 
 export type StartupReconciliationInput = {
   now?: number;
+  resumeUnstartedRuns?: boolean;
   /**
    * Next run for each enabled schedule, computed from now. Written only where
    * the stored time is missing, already due, or later than this value, so a
@@ -128,6 +131,8 @@ export type StartupReconciliationInput = {
 };
 
 export type StartupReconciliationResult = {
+  /** Runs adopted and queued by this call. */
+  resumedRuns: AutomationRunSummary[];
   /** Runs this call moved from pending, queued or running to interrupted. */
   interruptedRuns: AutomationRunSummary[];
   /** Unfinished runs left alone because their owner is alive. */
@@ -177,6 +182,10 @@ export interface AutomationStorage {
   }): AutomationRecord[];
   listEnabledDueAutomations(now: number): AutomationRecord[];
   createRun(input: CreateAutomationRunInput): AutomationRunSummary | undefined;
+  commitScheduledEvaluation(
+    params: { automationId: string; dueAt?: number; nextRunAt: number | null; now: number },
+    recordWindow: () => AutomationRunSummary | undefined,
+  ): AutomationRunSummary | undefined;
   coalescePendingScheduledRun(params: {
     automationId: string;
     scheduledWindows: AutomationRunWindow[];
@@ -194,6 +203,8 @@ export interface AutomationStorage {
     sinceMs: number;
   }): number;
   findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined;
+  claimRunForDispatch(runId: string, now: number): AutomationRunSummary | undefined;
+  disarmRunRestartRecovery(runId: string, now: number): void;
   markRunQueued(params: {
     runId: string;
     queueEntryId: string;

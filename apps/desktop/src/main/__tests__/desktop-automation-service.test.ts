@@ -2003,6 +2003,52 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
     return publishedEvents.filter((event) => event.notification.method === "automation/run/updated");
   }
 
+  it("dispatches the adopted run under the new owner and reports the ambiguous run", async () => {
+    seedPreviousProcessRuns();
+    const previous = new AutomationStore(stateDb, { runOwner: deadOwner });
+    previous.createRun({
+      id: "run-unstarted",
+      automationId: "automation-0",
+      trigger: "manual",
+      recoverOnRestart: true,
+      now: 2_110,
+    });
+    const owner = { instanceId: "runtime-v2-current", processId: 4_243, startedAt: 3_000 };
+    const current = new AutomationStore(stateDb, { runOwner: owner });
+    const provider = vi.fn(async ({ run }: { run: { id: string } }) => {
+      expect(current.getRun(run.id)).toMatchObject({ status: "running", owner, resumedAt: 3_000 });
+      return {
+        status: "started" as const, queueEntryId: "queue-resumed", turnId: "turn-resumed",
+      };
+    });
+    const service = new DesktopAutomationService({
+      registry, store: current, now: () => 3_000,
+      runOwnerLiveness: (candidate) => candidate.instanceId === owner.instanceId ? "alive" : "dead",
+      scheduler: { runner: { submitRun: provider } },
+    });
+    automationLoggerMock.info.mockClear();
+    try {
+      service.start();
+      await vi.waitFor(() => {
+        expect(current.getRun("run-unstarted")).toMatchObject({
+          status: "running", backendTurnId: "turn-resumed", resumedAt: 3_000,
+        });
+        expect(runUpdates()).toHaveLength(2);
+      });
+      expect(provider).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        run: expect.objectContaining({ id: "run-unstarted" }),
+      }));
+      expect(current.getRun("run-running")).toMatchObject({ status: "failed", failureReason: "interrupted" });
+      expect(automationLoggerMock.info.mock.calls).toEqual([
+        ["automation startup reconcile finished", expect.objectContaining({
+          resumedRunCount: 1, interruptedRunCount: 2,
+        })],
+      ]);
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("reports each run the previous process left unfinished as a failed run on its Agent thread", async () => {
     seedPreviousProcessRuns();
     const done = store.getRun("run-done");
@@ -2068,6 +2114,7 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
       expect(automationLoggerMock.info.mock.calls).toEqual([
         ["automation startup reconcile finished", {
           interruptedRunCount: 2,
+          resumedRunCount: 0,
           liveOwnerRunCount: 0,
           rescheduledAutomationCount: 0,
           unconfirmedOwner: false,
@@ -2094,6 +2141,7 @@ describe("DesktopAutomationService startup reconcile (PWR-201)", () => {
       expect(automationLoggerMock.info.mock.calls).toEqual([
         ["automation startup reconcile finished", {
           interruptedRunCount: 0,
+          resumedRunCount: 0,
           liveOwnerRunCount: 2,
           rescheduledAutomationCount: 0,
           unconfirmedOwner: false,

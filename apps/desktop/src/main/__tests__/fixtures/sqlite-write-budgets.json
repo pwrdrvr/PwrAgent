@@ -1,4 +1,9 @@
 {
+  "automation-startup-resume-dispatch": {"commits": 2, "note": "One adopted run claims its lane and stores the provider acknowledgement.", "observedWalBytes": 49440, "rowsChanged": 2, "statements": 2},
+  "automation-scheduled-gated-dispatch": {"commits": 4, "note": "Schedule advance and run creation, disarm recovery before shell gate, claim dispatch, and provider acknowledgement.", "observedWalBytes": 123600, "rowsChanged": 5, "statements": 5},
+  "automation-scheduled-dispatch": {"commits": 3, "note": "Schedule advance and run creation in one commit, followed by dispatch claim and provider acknowledgement.", "observedWalBytes": 103000, "rowsChanged": 4, "statements": 4},
+  "automation-startup-resume-nothing-lost": {"commits": 0, "note": "No unstarted run eligible for startup recovery and no schedule to adjust. Zero recurring writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "automation-startup-resume-unstarted-runs": {"commits": 1, "note": "Three unstarted runs adopted and queued in one startup transaction.", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 3},
   "research-bounds-withdraw-resumes": {"commits": 3, "note": "One operator change lowers the per-worker limit past two workers whose resume messages are queued: one commit records the bounds, then one per worker records its message withdrawn and why it stopped.", "observedWalBytes": 65920, "rowsChanged": 5, "statements": 5},
   "research-turn-limit-stop": {"commits": 2, "note": "A worker's per-worker time limit passes: one commit records it stopped and why, then one marks the run exhausted because no worker is left and nothing was submitted.", "observedWalBytes": 45320, "rowsChanged": 4, "statements": 4},
   "research-bounds-change": {"commits": 1, "note": "One operator change of a live run's bounds, all four at once: one commit records the bounds event.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},

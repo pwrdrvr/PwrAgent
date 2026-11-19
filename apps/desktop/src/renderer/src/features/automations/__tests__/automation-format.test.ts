@@ -3,8 +3,15 @@ import {
   formatAutomationRunRuntime,
   formatAutomationRunUsage,
   formatCostTodayMicros,
+  formatRunStatus,
   formatWorkspacePathLabel,
 } from "../automation-format";
+
+it("keeps the resume label alongside the run outcome", () => {
+  expect(formatRunStatus("completed", undefined, 100)).toBe("completed · resumed");
+  expect(formatRunStatus("failed", "interrupted", 100)).toBe("interrupted · resumed");
+  expect(formatRunStatus("failed", "interrupted")).toBe("interrupted");
+});
 
 describe("formatWorkspacePathLabel", () => {
   it("keeps the last two segments of a POSIX path", () => {
