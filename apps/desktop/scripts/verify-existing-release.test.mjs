@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { verifyPublishedRelease } from "./verify-existing-release.mjs";
+import { findExistingRelease, verifyPublishedRelease } from "./verify-existing-release.mjs";
 
 it("accepts a previously completed release only with the original byte inventory and notes", () => {
   const tag = "v1.4.21";
@@ -29,4 +29,26 @@ it("checks existing release evidence on retries before reaching release creation
     .split("      - name: Upload assembled release artifacts")[0];
   expect(script).toMatch(/GITHUB_RUN_ATTEMPT" -gt 1[\s\S]*?FETCH_HEAD\^\{commit\}[\s\S]*?verify-existing-release\.mjs/);
   expect(script).toMatch(/verify-existing-release\.mjs[^\n]+; then\n\s+exit 0[\s\S]*?existing_status" -ne 4[\s\S]*?gh release create/);
+});
+
+it("allows creation after a 404 only if the authenticated listing proves the tag is absent", async () => {
+  const tag = "v1.4.21";
+  const readByTag = async () => ({ status: 404 });
+  for (const tags of [[], ["v1.4.20"], ["v1.4.20", tag], [tag]]) {
+    const lookup = findExistingRelease(tag, { readByTag, listReleaseTags: async () => tags });
+    if (tags.includes(tag)) {
+      await expect(lookup).rejects.toThrow(/already exists/);
+    } else {
+      await expect(lookup).resolves.toBeNull();
+    }
+  }
+  const unavailable = async () => { throw new Error("Release listing failed"); };
+  await expect(findExistingRelease(tag, { readByTag, listReleaseTags: unavailable })).rejects.toThrow(/listing failed/);
+  await expect(findExistingRelease(tag, {
+    readByTag: async () => ({ status: 503 }), listReleaseTags: async () => [],
+  })).rejects.toThrow(/Could not look up/);
+  const published = { tag_name: tag, draft: false };
+  await expect(findExistingRelease(tag, {
+    readByTag: async () => ({ status: 200, json: async () => published }), listReleaseTags: unavailable,
+  })).resolves.toBe(published);
 });

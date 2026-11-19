@@ -5,6 +5,18 @@ import { createReadStream, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+export async function findExistingRelease(tag, { readByTag, listReleaseTags }) {
+  const response = await readByTag(tag);
+  if (response.status === 404) {
+    // The by-tag endpoint can hide a draft left by an interrupted create.
+    const tags = await listReleaseTags();
+    assert.ok(!tags.includes(tag), `Release ${tag} already exists but is unavailable by tag. Inspect the original run and release before retrying.`);
+    return null;
+  }
+  assert.equal(response.status, 200, "Could not look up the existing GitHub Release");
+  return response.json();
+}
+
 export function verifyPublishedRelease(release, assets, { tag, notes, expected }) {
   assert.equal(release.tag_name, tag);
   assert.equal(release.name, tag);
@@ -28,11 +40,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.match(tag, /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z]+\.[0-9]+)?$/);
   assert.ok(files.length, "Retained release assets are required");
   const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${process.env.GH_TOKEN}` };
-  const endpoint = `repos/pwrdrvr/PwrAgent/releases/tags/${tag}`;
-  const response = await fetch(`https://api.github.com/${endpoint}`, { headers, redirect: "error", signal: AbortSignal.timeout(30_000) });
-  if (response.status === 404) process.exit(4);
-  assert.equal(response.status, 200, "Could not look up the existing GitHub Release");
-  const release = await response.json();
+  const release = await findExistingRelease(tag, {
+    readByTag: (name) => fetch(`https://api.github.com/repos/pwrdrvr/PwrAgent/releases/tags/${name}`,
+      { headers, redirect: "error", signal: AbortSignal.timeout(30_000) }),
+    // GH_TOKEN is the same publication credential, so this listing can see drafts.
+    listReleaseTags: () => execFileSync("gh", ["api", "--paginate",
+      "repos/pwrdrvr/PwrAgent/releases?per_page=100", "--jq", ".[].tag_name"], { encoding: "utf8" }).trim().split(/\r?\n/),
+  });
+  if (release === null) process.exit(4);
   assert.ok(Number.isSafeInteger(release.id) && release.id > 0, "Invalid GitHub release ID");
   const assetPages = JSON.parse(execFileSync("gh", ["api", "--paginate", "--slurp",
     `repos/pwrdrvr/PwrAgent/releases/${release.id}/assets?per_page=100`], { encoding: "utf8" }));
