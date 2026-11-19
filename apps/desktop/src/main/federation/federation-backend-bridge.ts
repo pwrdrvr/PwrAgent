@@ -545,7 +545,7 @@ export type FederationListProjectHeldWakeupsRequest =
 export type FederationResolveProjectHeldWakeupsRequest =
   Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">;
 
-/** What a viewer hears when the owning instance cannot pause its queue. */
+/** What a viewer hears when the owning instance predates the extended review routes. */
 export const EXTENDED_REVIEW_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to review several pull requests together or run Claude Code's /code-review.";
 
@@ -564,6 +564,7 @@ async function withExtendedReviewOwner<T>(
   }
 }
 
+/** What a viewer hears when the owning instance cannot pause its queue. */
 export const QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to pause its queued messages.";
 

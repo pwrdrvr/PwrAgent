@@ -79,6 +79,14 @@ describe("claudeCodeReviewCommand", () => {
     expect(claudeCodeReviewCommand({ target: { type: "path", path: "1" } })).toBe("/code-review ./1");
     expect(() => claudeCodeReviewCommand({ target: { type: "branch", branch: "#12" } })).toThrow(/pull request number/);
   });
+
+  it("refuses a branch or path whose comma would split it into several targets", () => {
+    const withComma = fc.tuple(branch, branch).map(([left, right]) => `${left},${right}`);
+    fc.assert(fc.property(withComma, (value) => {
+      expect(() => claudeCodeReviewCommand({ target: { type: "branch", branch: value } })).toThrow(/several/);
+      expect(() => claudeCodeReviewCommand({ target: { type: "path", path: value } })).toThrow(/several/);
+    }));
+  });
 });
 
 describe("prepareClaudeCodeReview", () => {

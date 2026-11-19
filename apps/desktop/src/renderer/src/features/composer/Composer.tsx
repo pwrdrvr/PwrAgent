@@ -6369,11 +6369,24 @@ function useComposerController(props: ComposerProps) {
     reviewThreadOwnerSummary?.capabilities.reviewPullRequestSet === true;
   const reviewPullRequestsTogether = reviewPullRequestBatch
     && reviewPullRequestSetSupported
+    && selectedReviewPullRequests.length <= PULL_REQUEST_SET_MAX
     && reviewConfig?.pullRequestsTogether === true;
+  /**
+   * Together runs on the PwrAgent Sub Agent, or as Claude Code's command. A
+   * reviewer that runs neither reviews the checked pull requests separately,
+   * as the disabled choice shows, rather than refusing to start.
+   */
+  const reviewPullRequestsTogetherRuns = (reviewerRunsSubAgent: boolean): boolean =>
+    claudeCodeReviewMode || reviewerRunsSubAgent;
   const claudeCodeReviewLevel =
     reviewConfig?.codeReviewLevel ?? DEFAULT_CLAUDE_CODE_REVIEW_LEVEL;
-  // A bare pull request number names the checkout's own repository's.
-  const reviewCodeReviewRepository = reviewDirectory?.gitStatus?.originRepository;
+  // A bare pull request number names the checkout's own repository's, and
+  // only when it has exactly one remote repository, as the owner decides.
+  const reviewCodeReviewRemotes = new Set(reviewDirectory?.gitStatus?.remoteRepositories
+    ?.map((repository) => repository.trim().toLowerCase()) ?? []);
+  const reviewCodeReviewRepository = reviewCodeReviewRemotes.size === 1
+    ? [...reviewCodeReviewRemotes][0]
+    : undefined;
   /**
    * Checked pull requests in the order they are reviewed: list order, or a
    * stack bottom first when they are reviewed together, which is the order
@@ -6406,6 +6419,10 @@ function useComposerController(props: ComposerProps) {
     : REVIEW_TARGET_OPTIONS).filter(
     (option) =>
       option.target !== "pullRequest" || reviewPullRequestOptions.length > 0,
+  );
+  // The option refs follow the drawn options, so focus finds the target there.
+  const selectedReviewOptionIndex = reviewTargetOptions.findIndex(
+    (option) => option.target === (reviewConfig?.target ?? "baseBranch"),
   );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
@@ -6444,14 +6461,8 @@ function useComposerController(props: ComposerProps) {
     if (!isReviewComposerOpen) {
       return;
     }
-    const target = reviewConfig?.target ?? "baseBranch";
-    const optionIndex = (claudeCodeReviewMode
-      ? CLAUDE_CODE_REVIEW_TARGET_OPTIONS
-      : REVIEW_TARGET_OPTIONS).findIndex(
-      (option) => option.target === target,
-    );
-    reviewOptionRefs.current[optionIndex === -1 ? 0 : optionIndex]?.focus();
-  }, [claudeCodeReviewMode, isReviewComposerOpen, reviewConfig?.target]);
+    reviewOptionRefs.current[selectedReviewOptionIndex === -1 ? 0 : selectedReviewOptionIndex]?.focus();
+  }, [isReviewComposerOpen, selectedReviewOptionIndex]);
 
   // Each mode offers its own targets. A target the other mode offered moves
   // to Current changes, which both take, rather than a hidden selection.
@@ -7952,7 +7963,9 @@ function useComposerController(props: ComposerProps) {
     }
     const pullRequestBatch = availableUrls.length > 1;
     const pullRequestsTogether = pullRequestBatch && config?.pullRequestsTogether === true
-      && reviewPullRequestSetSupported;
+      && reviewPullRequestSetSupported
+      && availableUrls.length <= PULL_REQUEST_SET_MAX
+      && reviewPullRequestsTogetherRuns(reviewerSelection.summary?.capabilities.reviewRunner === true);
     const pullRequestUrls = orderSelectedReviewPullRequestUrls(availableUrls, pullRequestsTogether);
     const configuredReviewCommand = buildConfiguredReviewCommand(
       config?.target === "pullRequest"
@@ -12043,16 +12056,15 @@ function useComposerController(props: ComposerProps) {
       reviewerSelection.model,
     );
     const reviewerOverridden = Boolean(reviewConfig?.reviewer);
-    const reviewOwnerSummary = props.backends?.find(
-      (candidate) => candidate.kind === props.thread?.source,
-    );
+    const reviewOwnerSummary = reviewThreadOwnerSummary;
     const reviewAutoFixSupported =
       reviewOwnerSummary?.capabilities.reviewAutoFix === true;
     const reviewAutoFixChecked = !reviewWaitsAfter(reviewConfig);
     const reviewRunModeDecision = props.thread
       ? resolveReviewRunMode({
           ownerSummary: reviewOwnerSummary,
-          pullRequestSet: reviewPullRequestsTogether,
+          pullRequestSet: reviewPullRequestsTogether
+            && reviewPullRequestsTogetherRuns(reviewerSelection.summary?.capabilities.reviewRunner === true),
           requestedRunMode: reviewConfig?.runModeChosen ? reviewConfig.runMode : undefined,
           reviewerChosen: Boolean(reviewConfig?.reviewer),
           reviewerBackend: reviewerSelection.backend,

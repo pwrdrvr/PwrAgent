@@ -38,7 +38,9 @@ export function ReviewPullRequestModeChoice(props: {
       <span id={legendId} className="composer__review-mode-legend">Review them</span>
       <div className="composer__review-mode-options">
         {options.map((option) => {
-          const checked = props.together === option.together && !option.disabled;
+          // An unavailable Together reviews them separately, as submission does.
+          const together = props.together && !props.togetherUnavailableReason;
+          const checked = together === option.together && !option.disabled;
           return (
             <label
               key={String(option.together)}

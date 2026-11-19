@@ -401,6 +401,10 @@ export function claudeCodeReviewCommand(params: {
       if (/^#?[0-9]+$/.test(branch)) {
         throw new Error("This branch name reads as a pull request number.");
       }
+      // A comma separates several targets.
+      if (branch.includes(",")) {
+        throw new Error("This branch name reads as several review targets.");
+      }
       argument = branch;
       break;
     }
@@ -408,6 +412,10 @@ export function claudeCodeReviewCommand(params: {
       const path = target.path.trim();
       if (!path || /[\r\n"]/.test(path) || path.startsWith("-")) {
         throw new Error("Enter a path on one line, without quotes or a leading dash.");
+      }
+      // A comma separates several targets.
+      if (path.includes(",")) {
+        throw new Error("This path reads as several review targets.");
       }
       // "./" keeps a relative path from reading as a pull request or branch.
       const explicit = /^(?:\/|\.{1,2}\/|[a-zA-Z]:[\\/])/.test(path) ? path : `./${path}`;
