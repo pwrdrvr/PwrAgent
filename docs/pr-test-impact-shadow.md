@@ -58,3 +58,13 @@ unweighted. These sums exclude startup and parallel execution effects and
 cannot establish elapsed time or runner-hour savings.
 [OpenClaw's reported figures](https://vincent.build/openclaw-ci-cost-reduction/)
 come from a different workload.
+
+The same artifact contains `benchmark.json`. The advisory job executes the
+exact Vitest project/file pairs from a narrowed PR plan. On the prototype PR,
+changes to CI force its own plan to full. In that case the benchmark replays
+the one shared test file observed on #4006 and labels it as a replay.
+The benchmark compares the measured selected command with the same workflow
+attempt's four full Linux Vitest Test steps. It reports both their elapsed
+span and their summed runner-minutes. These timings exclude dependency
+installation, planning and retries. Required jobs still run in full, so the
+benchmark measures Linux unit execution only.

@@ -1403,6 +1403,10 @@ jobs:
     if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'prototype/pr-test-impact') && needs.flake-report.result != 'skipped' }}
     needs: [flake-report]
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     timeout-minutes: 10
     continue-on-error: true
     steps:
@@ -1445,6 +1449,27 @@ jobs:
 
       - name: Generate impact report
         run: node scripts/ci/write-pr-test-impact.mjs
+
+      - name: Read full Linux unit step timings
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("node:fs");
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT),
+              per_page: 100,
+            });
+            const lanes = jobs.filter(({ name }) => /^Test \(lane [1-4] of 4\)$/.test(name));
+            fs.writeFileSync(".local/ci/pr-test-impact-baseline.json", JSON.stringify(lanes));
+
+      - name: Execute and time selected Linux Vitest files
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node scripts/ci/benchmark-pr-test-impact.mjs
 
       - name: Upload impact report
         uses: actions/upload-artifact@v7
