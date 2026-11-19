@@ -52,6 +52,7 @@ import {
   memoizeElectronClose,
   observedOverallShutdownDuration,
   recordElectronShutdownCircuit,
+  waitForBootstrapClose,
   type ElectronCloseExecution,
   type ElectronShutdownSummary,
 } from "./electron-shutdown-policy";
@@ -128,6 +129,7 @@ const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
  * treating an incomplete close as a warning.
  */
 const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
+const DETACHED_PROFILE_SWEEP_MS = 4_000;
 /**
  * How long teardown waits for a leftover profile process to exit after
  * SIGTERM before giving up and letting the rm report the leak. Sits inside
@@ -220,6 +222,7 @@ type ElectronCloseOptions = {
   circuitStateFile?: string;
   diagnosticsFile?: string;
   launchId?: string;
+  reapDetachedProfiles?: () => Promise<void>;
 };
 
 type LaunchElectronAppParams = {
@@ -240,6 +243,8 @@ type LaunchElectronAppParams = {
   };
   /** Additional Chromium arguments appended after the shared E2E switches. */
   extraArgs?: readonly string[];
+  /** Reap fixture-owned detached processes that may have failed before writing a runtime marker. */
+  cleanupDetachedProcesses?: (deadline: number) => Promise<void>;
   /**
    * Runs after the tmp `homeRoot` is created but before Electron
    * launches. Use this to seed
@@ -497,6 +502,7 @@ export async function launchElectronApp(
       diagnosticsFile,
       launchId,
     }).catch(() => undefined);
+    await params.cleanupDetachedProcesses?.(performance.now() + DETACHED_PROFILE_SWEEP_MS).catch(() => undefined);
     await killSpawnedProfileProcessesUnder(homeRoot).catch(() => undefined);
     // Deliberately NOT removing `homeRoot`: on a launch failure the
     // seeded config.toml and whatever profile state exists are the
@@ -531,6 +537,16 @@ async function finishElectronLaunch(args: {
     seedConfigPath,
     suppressOnboarding,
   } = args;
+  let teardownDeadline = Infinity;
+  let detachedCleanup: Promise<void> | undefined;
+  const reapDetachedProfiles = (): Promise<void> => {
+    // Reserve time for the launcher drain, runtime-marker sweep, and root removal.
+    const deadline = Math.min(
+      performance.now() + DETACHED_PROFILE_SWEEP_MS,
+      teardownDeadline - PROFILE_PROCESS_EXIT_TIMEOUT_MS - 3_000,
+    );
+    return detachedCleanup ??= params.cleanupDetachedProcesses?.(deadline) ?? Promise.resolve();
+  };
   const closeApplicationOnce = memoizeElectronClose(async () => {
     // Specs usually close in finally, before Playwright records a hard failure.
     // Retain this bounded copy until the shared fixture knows the outcome.
@@ -540,6 +556,7 @@ async function finishElectronLaunch(args: {
       circuitStateFile,
       diagnosticsFile,
       launchId,
+      reapDetachedProfiles: params.cleanupDetachedProcesses ? reapDetachedProfiles : undefined,
     });
   });
   // Bound every action on every window this app opens.
@@ -658,12 +675,11 @@ async function finishElectronLaunch(args: {
   };
 
   async function teardown(): Promise<void> {
+    teardownDeadline = performance.now() + ELECTRON_TEARDOWN_TIMEOUT_MS;
     await finalizeElectronFixtureTeardown({
       closeApplication: closeApplicationOnce,
-      // The wizard's graduation path can spawn a detached child Electron
-      // process for the operator's chosen profile. Sweep it only after the
-      // Playwright-owned tree has completed its bounded graceful/forced close.
       cleanupProfileProcesses: async () => {
+        await reapDetachedProfiles();
         await killSpawnedProfileProcessesUnder(homeRoot);
       },
       removeHomeRoot: async () => {
@@ -1301,10 +1317,17 @@ export async function closeElectronApplication(
       closePromise.catch(() => undefined);
       return closePromise;
     },
-    waitForGracefulClose: async (closePromise) => await waitForClose(
-      closePromise,
-      ELECTRON_CLOSE_TIMEOUT_MS,
-    ),
+    waitForGracefulClose: async (closePromise) => {
+      if (!mainProcess || !options.reapDetachedProfiles) {
+        return await waitForClose(closePromise, ELECTRON_CLOSE_TIMEOUT_MS);
+      }
+      return await waitForBootstrapClose({
+        bootstrapExited: () => !isPidAlive(mainProcess.pid),
+        waitForHandshake: () => waitForClose(closePromise, ELECTRON_CLOSE_TIMEOUT_MS),
+        reapDetachedProfiles: options.reapDetachedProfiles,
+        drainLauncher: () => waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS),
+      });
+    },
     forceKillTree: async () => {
       await killProcessTree(child, mainProcess, quitStartedAt);
     },
@@ -1410,7 +1433,14 @@ export async function closeElectronWithSessionDrain(
         app.removeListener("before-quit", holdNativeQuit);
         record("quit");
       });
-    }, errorPrefix);
+    }, errorPrefix).catch((error: unknown) => {
+      const mainProcess = electronMainProcesses.get(electronApp);
+      // A self-quitting bootstrap can disappear during session preparation.
+      // Still start the launcher close so the detached sweep can drain it.
+      if (!options.reapDetachedProfiles || !mainProcess || isPidAlive(mainProcess.pid)) {
+        throw error;
+      }
+    });
     // Session preparation and application disposal share the close deadline.
     await Promise.race([electronApp.close(), drainFailed]);
   } finally {

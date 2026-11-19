@@ -1,5 +1,10 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { ELECTRON_E2E_ENTRY } from "./electron-app";
+
+export function graduatedProfileOwnerArg(homeRoot: string): string {
+  return `--pwragent-e2e-wizard-owner=${path.basename(homeRoot)}`;
+}
 
 /**
  * Terminate PwrAgent instances the wizard's profile graduation spawned.
@@ -8,8 +13,7 @@ import { ELECTRON_E2E_ENTRY } from "./electron-app";
  * with `spawn(..., { detached: true })` and `child.unref()`. Detached is the
  * point — the bootstrap window quits and the new instance outlives it — but it
  * also puts that instance outside the process tree `launchElectronApp` reaps,
- * so nothing in the suite has ever shut one down. Every run of these two specs
- * leaves a real PwrAgent running against a temp home.
+ * so fixture teardown must explicitly reap it before deleting its home.
  *
  * On macOS and Linux that leak is invisible: the harness unlinks the home tree
  * out from under the still-open sqlite handles and the test passes. Windows
@@ -17,11 +21,9 @@ import { ELECTRON_E2E_ENTRY } from "./electron-app";
  * `EBUSY: resource busy or locked, unlink '...\state\state.db'` after every
  * assertion has already passed — a cleanup failure reported as a test failure.
  *
- * Matching is on the command line, which carries both this checkout's E2E bootstrap
- * entry and the `--profile <name>` pair the relaunch appends, so it cannot
- * reach another checkout's instance or the operator's own app. It cannot reach
- * the Playwright-owned window either: that one is launched without `--profile`
- * (the harness selects a profile through the environment).
+ * Match this checkout's E2E entry, the isolated home token, and the profile
+ * appended by relaunch. The token excludes other Playwright attempts using
+ * the same profile name. The bootstrap has the token but no `--profile`.
  *
  * Best-effort by construction. A process that already exited, a shell that is
  * unavailable, and a kill that is refused are all fine — the caller is on its
@@ -30,12 +32,14 @@ import { ELECTRON_E2E_ENTRY } from "./electron-app";
  */
 export async function killGraduatedProfileInstances(
   profile: string,
+  homeRoot: string,
+  deadline: number,
 ): Promise<void> {
-  const pids = await listGraduatedProfilePids(profile);
+  const pids = selectGraduatedProfilePids(await readProcessTable(deadline) ?? [], profile, homeRoot);
   for (const pid of pids) {
     try {
       if (process.platform === "win32") {
-        await run("taskkill", ["/pid", String(pid), "/T", "/F"]);
+        await run("taskkill", ["/pid", String(pid), "/T", "/F"], deadline);
       } else {
         process.kill(pid, "SIGKILL");
       }
@@ -44,7 +48,7 @@ export async function killGraduatedProfileInstances(
     }
   }
   if (pids.length > 0) {
-    await waitForProfileInstancesToExit(profile);
+    await waitForProfileInstancesToExit(profile, homeRoot, deadline);
   }
 }
 
@@ -64,36 +68,41 @@ export async function killGraduatedProfileInstances(
  * best-effort — the caller deletes either way, and throwing here would swap one
  * cleanup-shaped failure for another.
  */
-async function waitForProfileInstancesToExit(profile: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+async function waitForProfileInstancesToExit(
+  profile: string,
+  homeRoot: string,
+  deadline: number,
+): Promise<void> {
+  while (performance.now() < deadline) {
     // A read that FAILED must not end the wait. `readProcessTable` answers
     // `undefined` for "I could not look", which is the one state that is
     // otherwise indistinguishable from "nothing is running" — and taking the
     // empty list at face value would return straight into the `EBUSY: unlink`
     // this wait exists to prevent, now with the wait hiding it.
-    const rows = await readProcessTable();
-    if (rows && selectGraduatedProfilePids(rows, profile).length === 0) {
+    const rows = await readProcessTable(deadline);
+    if (rows && selectGraduatedProfilePids(rows, profile, homeRoot).length === 0) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - performance.now()))));
   }
-}
-
-async function listGraduatedProfilePids(profile: string): Promise<number[]> {
-  // Best-effort for the kill path: a failed read there costs one skipped
-  // signal, which the caller already tolerates. The WAIT uses
-  // `selectGraduatedProfilePids` directly so it can tell a failed read apart.
-  return selectGraduatedProfilePids(await readProcessTable() ?? [], profile);
 }
 
 export function selectGraduatedProfilePids(
   rows: ReadonlyArray<{ pid: number; commandLine: string }>,
   profile: string,
+  homeRoot: string,
 ): number[] {
   const pids: number[] = [];
+  const owner = new RegExp(
+    `(^|[\\s"'])${escapeRegExp(graduatedProfileOwnerArg(homeRoot))}([\\s"']|$)`,
+  );
+  const name = new RegExp(`(^|[\\s"'=])${escapeRegExp(profile)}([\\s"']|$)`);
   for (const { pid, commandLine } of rows) {
-    if (pid === process.pid || !commandLine.includes(ELECTRON_E2E_ENTRY)) {
+    if (
+      pid === process.pid
+      || !commandLine.includes(ELECTRON_E2E_ENTRY)
+      || !owner.test(commandLine)
+    ) {
       continue;
     }
     // `replaceProfileLaunchArgs` appends the flag and its value as two argv
@@ -103,10 +112,9 @@ export function selectGraduatedProfilePids(
     // `--profile <entry> personal`. Match the bare switch and the profile
     // name as separate whole arguments. The Playwright-owned window has no
     // `--profile` at all.
-    const name = escapeRegExp(profile);
     if (
       !/(^|[\s"'])--profile([\s"'=]|$)/.test(commandLine)
-      || !new RegExp(`(^|[\\s"'=])${name}([\\s"']|$)`).test(commandLine)
+      || !name.test(commandLine)
     ) {
       continue;
     }
@@ -116,7 +124,7 @@ export function selectGraduatedProfilePids(
 }
 
 /** `undefined` means the table could not be read, never "nothing is running". */
-async function readProcessTable(): Promise<
+async function readProcessTable(deadline: number): Promise<
   Array<{ pid: number; commandLine: string }> | undefined
 > {
   try {
@@ -130,10 +138,10 @@ async function readProcessTable(): Promise<
         "Get-CimInstance Win32_Process"
           + " | Where-Object { $_.CommandLine }"
           + " | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
-      ]);
+      ], deadline);
       return parseProcessTable(stdout, "\t");
     }
-    const stdout = await run("ps", ["-axo", "pid=,command="]);
+    const stdout = await run("ps", ["-axo", "pid=,command="], deadline);
     return parseProcessTable(stdout, " ");
   } catch {
     return undefined;
@@ -167,14 +175,16 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function run(command: string, args: string[]): Promise<string> {
+async function run(command: string, args: string[], deadline: number): Promise<string> {
+  const timeout = Math.floor(deadline - performance.now());
+  if (timeout <= 0) throw new Error("Detached profile cleanup budget exhausted");
   return await new Promise<string>((resolve, reject) => {
     execFile(
       command,
       args,
-      { timeout: 15_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true },
+      { timeout, maxBuffer: 32 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
-        if (error && !stdout) {
+        if (error) {
           reject(error);
           return;
         }

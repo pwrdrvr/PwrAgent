@@ -110,6 +110,32 @@ type ElectronCloseActions = {
   ): Promise<ElectronCloseHandshakeOutcome>;
 };
 
+/** Race native exit against the launcher handshake, which can depend on the detached child. */
+export async function waitForBootstrapClose(options: {
+  bootstrapExited(): boolean;
+  waitForHandshake(): Promise<ElectronCloseHandshakeOutcome>;
+  reapDetachedProfiles(): Promise<void>;
+  drainLauncher(): Promise<ElectronCloseHandshakeOutcome>;
+}): Promise<ElectronCloseHandshakeOutcome> {
+  if (!options.bootstrapExited()) {
+    let poll: ReturnType<typeof setInterval> | undefined;
+    const nativeExit = new Promise<"native-exit">((resolve) => {
+      poll = setInterval(() => {
+        if (options.bootstrapExited()) resolve("native-exit");
+      }, 50);
+    });
+    try {
+      const outcome = await Promise.race([nativeExit, options.waitForHandshake()]);
+      if (outcome !== "native-exit" && !options.bootstrapExited()) return outcome;
+    } finally {
+      clearInterval(poll);
+    }
+  }
+
+  await options.reapDetachedProfiles();
+  return await options.drainLauncher();
+}
+
 export async function executeElectronClose(
   actions: ElectronCloseActions,
 ): Promise<ElectronCloseExecution> {

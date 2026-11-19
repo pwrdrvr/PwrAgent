@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { findLiveProfileRuntimeMarkers, isProcessAlive } from "../src/main/profile";
+import { APP_QUIT_CHANNEL, PROFILES_OPEN_CHANNEL } from "../src/shared/ipc";
 import { expect, test } from "./fixtures/electron-test";
-import { killGraduatedProfileInstances } from "./fixtures/detached-profile-instances";
+import {
+  graduatedProfileOwnerArg,
+  killGraduatedProfileInstances,
+} from "./fixtures/detached-profile-instances";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 /**
@@ -78,6 +83,7 @@ if (name === "qwen") {
 
 async function launchWizard(
   env: Record<string, string | undefined> = {},
+  graduatedProfile?: string,
 ) {
   const homeRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "pwragent-onboarding-wizard-e2e-"),
@@ -107,6 +113,13 @@ async function launchWizard(
     // No `fixturePath`: thread replay isn't relevant for wizard-only specs.
     suppressOnboarding: false,
     requiresReplayDriver: false,
+    ...(graduatedProfile
+      ? {
+          extraArgs: [graduatedProfileOwnerArg(homeRoot)],
+          cleanupDetachedProcesses: (deadline) =>
+            killGraduatedProfileInstances(graduatedProfile, homeRoot, deadline),
+        }
+      : {}),
     env: {
       PWRAGENT_CODEX_COMMAND: codexCommand,
       ...env,
@@ -219,6 +232,75 @@ async function expectFakeProvidersFound(
     ).toBeVisible();
     await expect(panel.getByText(commands[name], { exact: true })).toBeVisible();
   }
+}
+
+type WizardApp = Awaited<ReturnType<typeof launchWizard>>;
+
+async function reachMultipleFinish(app: WizardApp): Promise<void> {
+  // Walk the full wizard: Welcome → Thread → Models →
+  // Codex profile (Multiple) → Name profiles (personal, work) →
+  // Messaging warning (Skip).
+  await app.window.getByRole("button", { name: /Get started/i }).click();
+  await app.window.getByRole("button", { name: /^Continue/i }).click();
+  await app.window.getByRole("button", { name: /^Continue/i }).click();
+  await app.window
+    .getByText(/Set up several profiles at once/i)
+    .click();
+  await app.window.getByRole("button", { name: /^Continue/i }).click();
+  // Defaults are "personal" + "work" — accept as-is.
+  // Each row's Codex login is gated; defer via "I'll log in later".
+  await app.window
+    .getByRole("button", { name: /I.ll log in later/i })
+    .click();
+  await app.window.getByRole("button", { name: /^Continue/i }).click();
+  await app.window
+    .getByRole("button", { name: /Skip messaging for now/i })
+    .click();
+
+  await expect(
+    app.window.getByRole("heading", { name: /You.re operating/i }),
+  ).toBeVisible();
+  await expect(app.window.getByText("Multiple — personal, work")).toBeVisible();
+}
+
+function expectMultipleProfilesPersisted(app: WizardApp): void {
+  const root = path.join(app.homeRoot, ".pwragent");
+  expect(fs.readdirSync(path.join(root, "profiles")).sort()).toEqual(["personal", "work"]);
+  expect(fs.readFileSync(path.join(root, "profiles.toml"), "utf8"))
+    .toContain('default_profile = "personal"');
+}
+
+async function observeBootstrap(app: WizardApp) {
+  return {
+    // On Windows the Playwright child can be a launcher. Capture Electron's
+    // own PID before the finish action can dispose its inspector connection.
+    pid: await app.electronApp.evaluate(() => process.pid),
+    child: app.electronApp.process(),
+  };
+}
+
+async function expectGraduationHandoff(
+  app: WizardApp,
+  bootstrap: Awaited<ReturnType<typeof observeBootstrap>>,
+  profile: string,
+  timeout: number,
+): Promise<void> {
+  await expect.poll(
+    () => ({
+      bootstrapAlive: isProcessAlive(bootstrap.pid),
+      launcherExitCode: bootstrap.child.exitCode,
+      launcherSignal: bootstrap.child.signalCode,
+    }),
+    { message: `Bootstrap should exit cleanly after handing off to "${profile}"`, timeout },
+  ).toEqual({ bootstrapAlive: false, launcherExitCode: 0, launcherSignal: null });
+
+  // The marker belongs to the isolated home. A detached runtime must still
+  // be alive after bootstrap exits, with its own PID and chosen profile.
+  const markers = findLiveProfileRuntimeMarkers(profile, {
+    env: { PWRAGENT_HOME: path.join(app.homeRoot, ".pwragent") },
+  });
+  expect(markers, `Expected a live replacement for "${profile}" after bootstrap exit`).toHaveLength(1);
+  expect(markers[0]?.processId).not.toBe(bootstrap.pid);
 }
 
 test.describe("Onboarding wizard", () => {
@@ -542,10 +624,10 @@ test.describe("Onboarding wizard", () => {
   test("requested-profile bootstrap relaunches that profile after Skip", async () => {
     test.skip(
       process.platform === "linux",
-      "Detached profile relaunch is not reliable under headless Xvfb; the IPC regression covers Linux.",
+      "Detached Linux handoff requires a sandbox-enabled CI launch.",
     );
     test.setTimeout(60_000);
-    const app = await launchWizard({ PWRAGENT_PROFILE: "test2" });
+    const app = await launchWizard({ PWRAGENT_PROFILE: "test2" }, "test2");
     try {
       await expect(
         app.window.getByRole("heading", { name: /Set up.+test2/i }),
@@ -557,153 +639,86 @@ test.describe("Onboarding wizard", () => {
         .getByRole("button", { name: /Skip setup/i })
         .click();
 
-      const proc = app.electronApp.process();
-      const exitPromise = new Promise<boolean>((resolve) => {
-        if (proc.exitCode !== null) return resolve(true);
-        const timer = setTimeout(() => resolve(false), 30_000);
-        proc.once("exit", () => {
-          clearTimeout(timer);
-          resolve(true);
-        });
-      });
-
+      const bootstrap = await observeBootstrap(app);
       await app.window
         .getByRole("button", { name: /Skip and use default/i })
         .click();
 
-      expect(await exitPromise).toBe(true);
+      await expectGraduationHandoff(app, bootstrap, "test2", 30_000);
       const profileConfig = fs.readFileSync(
-        path.join(
-          app.homeRoot,
-          ".pwragent",
-          "profiles",
-          "test2",
-          "config.toml",
-        ),
+        path.join(app.homeRoot, ".pwragent", "profiles", "test2", "config.toml"),
         "utf8",
       );
       expect(profileConfig).toContain("completed = true");
     } finally {
-      // The relaunched instance is detached, so `close()` — which reaps only
-      // this app's own process tree — never sees it. Left running it holds
-      // `state.db` open, and Windows then refuses to unlink the home tree.
-      await killGraduatedProfileInstances("test2");
       await app.close();
     }
   });
 
-  test("Multiple-mode finish quits the bootstrap window AND doesn't materialize a phantom 'default' profile", async () => {
-    // The wizard's spawn + wait-for-alive (10s timeout) + 2s grace
-    // can chew through most of the default 30s. CI Linux runners
-    // are slower than dev machines; give this specific test enough
-    // headroom to fully exercise the graduation path even when the
-    // spawned process is slow to write its first heartbeat.
+  test("Multiple-mode finish hands off from bootstrap to the first profile", async () => {
+    test.skip(
+      process.platform === "linux",
+      "Detached Linux handoff requires a sandbox-enabled CI launch.",
+    );
     test.setTimeout(60_000);
-    // Reproduces the user's report: walk Multiple with personal +
-    // work. After Finish, the bootstrap Electron instance should
-    // QUIT (operator isn't left with two windows; the original
-    // window doesn't surface real Codex Desktop threads from the
-    // bootstrap-profile's empty codex.profile pairing), AND there
-    // should be NO `default/` dir under `<HOME>/.pwragent/profiles/`
-    // (only `personal/` and `work/`).
+    const app = await launchWizard({}, "personal");
+    try {
+      // The detached process inherits this harness setting from bootstrap.
+      expect(
+        await app.electronApp.evaluate(() => process.env.PWRAGENT_DEV_DISABLE_SECRET_STORAGE),
+      ).toBe("1");
+      await reachMultipleFinish(app);
+      const bootstrap = await observeBootstrap(app);
+      await app.window.getByRole("button", { name: /Open my workspace/i }).click();
+
+      await expectGraduationHandoff(app, bootstrap, "personal", 20_000);
+      expectMultipleProfilesPersisted(app);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("Multiple-mode finish preserves bootstrap and both profiles when the replacement never reports ready", async () => {
+    test.setTimeout(60_000);
     const app = await launchWizard();
     try {
-      // Unsigned Electron must never reach macOS safeStorage during E2E.
-      // This value is inherited by the detached `personal` process below;
-      // profiles-ipc.test.ts locks that spawn contract independently.
-      expect(
-        await app.electronApp.evaluate(() =>
-          process.env.PWRAGENT_DEV_DISABLE_SECRET_STORAGE
-        ),
-      ).toBe("1");
-
-      // Walk the full wizard: Welcome → Thread → Models →
-      // Codex profile (Multiple) → Name profiles (personal, work) →
-      // Messaging warning (Skip).
-      await app.window.getByRole("button", { name: /Get started/i }).click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .getByText(/Set up several profiles at once/i)
-        .click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      // Defaults are "personal" + "work" — accept as-is.
-      // Each row's Codex login is gated; defer via "I'll log in later".
-      await app.window
-        .getByRole("button", { name: /I.ll log in later/i })
-        .click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .getByRole("button", { name: /Skip messaging for now/i })
-        .click();
-
-      // Done step → click "Open my workspace" to fire
-      // persistAndComplete (this is what actually does the
-      // provisioning + graduation + quit).
-      await expect(
-        app.window.getByRole("heading", { name: /You.re operating/i }),
-      ).toBeVisible();
-      await expect(app.window.getByText("Multiple — personal, work")).toBeVisible();
-      await app.window
-        .getByRole("button", { name: /Open my workspace/i })
-        .click();
-
-      // persistAndComplete fires:
-      //   - provisionPairedProfiles → personal + work
-      //   - writeSecretsToProfile per profile
-      //   - graduateBootstrapConfigToProfile(personal)
-      //   - openPwrAgentProfile(personal) — spawns new Electron
-      //   - waitForProfileAlive(personal) — polls for heartbeat
-      //   - quitApp() — closes THIS Electron
-      // The on-disk graduation (Codex pairing, profiles.toml,
-      // profiles/ layout) is the load-bearing assertion. The
-      // bootstrap process actually exiting is observable but
-      // environment-dependent — on a slow CI runner the spawned
-      // process's first heartbeat may arrive late or the spawn may
-      // fail to fully initialize without a display, in which case
-      // `waitForProfileAlive` times out and the wizard intentionally
-      // KEEPS the bootstrap window alive as a fallback (better than
-      // both windows gone). Wait up to 20s for the exit, but don't
-      // fail the test on it — the file-state assertions below catch
-      // the actual regression.
-      const proc = app.electronApp.process();
-      const exited = await new Promise<boolean>((resolve) => {
-        if (proc.exitCode !== null) return resolve(true);
-        const timer = setTimeout(() => resolve(false), 20_000);
-        proc.once("exit", () => {
-          clearTimeout(timer);
-          resolve(true);
+      await reachMultipleFinish(app);
+      const bootstrap = await observeBootstrap(app);
+      // Model an accepted launch whose process never publishes a heartbeat.
+      // Leave the real readiness IPC and wizard fallback in place.
+      await app.window.clock.install();
+      const requests = await app.electronApp.evaluateHandle(({ ipcMain }, { open, quit }) => {
+        const calls = { profiles: [] as string[], quit: 0 };
+        ipcMain.removeHandler(quit);
+        ipcMain.handle(quit, () => { calls.quit += 1; });
+        ipcMain.removeHandler(open);
+        ipcMain.handle(open, (_event, { profile }: { profile: string }) => {
+          calls.profiles.push(profile);
+          return { opened: true, profile };
         });
+        return calls;
+      }, { open: PROFILES_OPEN_CHANNEL, quit: APP_QUIT_CHANNEL });
+      await Promise.all([
+        app.window.waitForEvent("console", {
+          predicate: (message) =>
+            message.type() === "warning"
+            && message.text().includes("keeping bootstrap window open"),
+        }),
+        app.window.getByRole("button", { name: /Open my workspace/i }).click(),
+      ]);
+
+      // Flush the post-heartbeat grace timer and round-trip through main IPC
+      // before checking that the timeout branch never requested a quit.
+      await app.window.clock.runFor(2_500);
+      await app.window.evaluate(() => {
+        const api = Reflect.get(window, "pwragent") as { getBootInfo(): Promise<unknown> };
+        return api.getBootInfo();
       });
-      if (!exited) {
-        console.warn(
-          "[wizard-e2e] bootstrap process didn't exit within 20s; " +
-            "likely the spawned profile process never reported alive. " +
-            "Falling through to on-disk assertions — those are the load-bearing checks.",
-        );
-      }
-
-      // Inspect `HOME/.pwragent/` directly. Only `personal/` and
-      // `work/` should exist under `profiles/` — no `default/`
-      // materialized. This holds regardless of whether the
-      // bootstrap process exited.
-      const profilesDir = path.join(app.homeRoot, ".pwragent/profiles");
-      const dirs = fs.readdirSync(profilesDir).sort();
-      expect(dirs).toEqual(["personal", "work"]);
-
-      // profiles.toml::default_profile should point at "personal".
-      const profilesToml = fs.readFileSync(
-        path.join(app.homeRoot, ".pwragent/profiles.toml"),
-        "utf8",
-      );
-      expect(profilesToml).toContain('default_profile = "personal"');
+      expect(await requests.jsonValue()).toEqual({ profiles: ["personal"], quit: 0 });
+      expect(await app.electronApp.evaluate(() => process.pid)).toBe(bootstrap.pid);
+      await expect(app.window.getByRole("dialog", { name: "First-run setup" })).toBeHidden();
+      expectMultipleProfilesPersisted(app);
     } finally {
-      // Graduation spawned a detached `personal` instance that outlives the
-      // bootstrap window by design. Nothing else reaps it, and on Windows its
-      // open `state.db` blocks the home tree's removal.
-      await killGraduatedProfileInstances("personal");
-      // Even if the bootstrap process already exited, close() is
-      // safe — it just tears down handles.
       await app.close();
     }
   });

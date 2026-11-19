@@ -1,19 +1,26 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseProcessTable, selectGraduatedProfilePids } from "../../../e2e/fixtures/detached-profile-instances";
+import {
+  graduatedProfileOwnerArg,
+  parseProcessTable,
+  selectGraduatedProfilePids,
+} from "../../../e2e/fixtures/detached-profile-instances";
 import { DESKTOP_MAIN_ENTRY, ELECTRON_E2E_ENTRY } from "../../../e2e/fixtures/electron-app";
+
+const homeRoot = path.join("tmp", "fixture-a");
+const ownerArg = graduatedProfileOwnerArg(homeRoot);
 
 describe("detached E2E profile ownership", () => {
   it("selects graduated profiles launched through the release-isolation bootstrap", () => {
     // Windows CIM renders quoted argv and tab-separated PIDs. The old match
     // against out/main/index.js left this process (and launcher pipe) alive.
     const rows = parseProcessTable([
-      `81001\t"C:\\Program Files\\Electron\\electron.exe" "${ELECTRON_E2E_ENTRY}" --profile "test2"`,
-      `81002\t"C:\\Program Files\\Electron\\electron.exe" "${ELECTRON_E2E_ENTRY}" --profile personal`,
+      `81001\t"C:\\Program Files\\Electron\\electron.exe" "${ELECTRON_E2E_ENTRY}" "${ownerArg}" --profile "test2"`,
+      `81002\t"C:\\Program Files\\Electron\\electron.exe" "${ELECTRON_E2E_ENTRY}" "${ownerArg}" --profile personal`,
     ].join("\r\n"), "\t");
 
-    expect(selectGraduatedProfilePids(rows, "test2")).toEqual([81001]);
-    expect(selectGraduatedProfilePids(rows, "personal")).toEqual([81002]);
+    expect(selectGraduatedProfilePids(rows, "test2", homeRoot)).toEqual([81001]);
+    expect(selectGraduatedProfilePids(rows, "personal", homeRoot)).toEqual([81002]);
   });
 
   it("selects a Linux instance whose title Chromium rewrote with switches first", () => {
@@ -21,23 +28,36 @@ describe("detached E2E profile ownership", () => {
     // the bare `--profile` switch ahead of the entry and the profile name.
     const rows = parseProcessTable([
       ` 2407 /opt/electron/electron --disable-accelerated-video-decode`
-        + ` --disable-accelerated-video-encode --profile ${ELECTRON_E2E_ENTRY} personal`,
-      ` 2408 /opt/electron/electron --profile ${ELECTRON_E2E_ENTRY} personal-two`,
+        + ` --disable-accelerated-video-encode ${ownerArg} --profile ${ELECTRON_E2E_ENTRY} personal`,
+      ` 2408 /opt/electron/electron ${ownerArg} --profile ${ELECTRON_E2E_ENTRY} personal-two`,
     ].join("\n"), " ");
 
-    expect(selectGraduatedProfilePids(rows, "personal")).toEqual([2407]);
+    expect(selectGraduatedProfilePids(rows, "personal", homeRoot)).toEqual([2407]);
+  });
+
+  it("selects only the matching attempt among launches of the same profile", () => {
+    const homes = [homeRoot, path.join("tmp", "fixture-a-other"), path.join("tmp", "fixture-b")];
+    const rows = homes.map((home, index) => ({
+      pid: 82000 + index,
+      commandLine: `electron "${ELECTRON_E2E_ENTRY}" ${graduatedProfileOwnerArg(home)} --profile personal`,
+    }));
+    rows.push({ pid: 82003, commandLine: `electron "${ELECTRON_E2E_ENTRY}" --profile personal` });
+
+    for (const [index, home] of homes.entries()) {
+      expect(selectGraduatedProfilePids(rows, "personal", home)).toEqual([82000 + index]);
+    }
   });
 
   it("leaves the parent, other checkouts, other profiles, and ordinary app launches alone", () => {
     const otherEntry = path.join(path.dirname(ELECTRON_E2E_ENTRY), "other-checkout", "electron-bootstrap.mjs");
     const rows = [
-      { pid: process.pid, commandLine: `electron "${ELECTRON_E2E_ENTRY}" --profile test2` },
-      { pid: 81003, commandLine: `electron "${ELECTRON_E2E_ENTRY}"` },
-      { pid: 81004, commandLine: `electron "${otherEntry}" --profile test2` },
-      { pid: 81005, commandLine: `electron "${ELECTRON_E2E_ENTRY}" --profile test2-other` },
-      { pid: 81006, commandLine: `electron "${DESKTOP_MAIN_ENTRY}" --profile test2` },
+      { pid: process.pid, commandLine: `electron "${ELECTRON_E2E_ENTRY}" "${ownerArg}" --profile test2` },
+      { pid: 81003, commandLine: `electron "${ELECTRON_E2E_ENTRY}" "${ownerArg}"` },
+      { pid: 81004, commandLine: `electron "${otherEntry}" "${ownerArg}" --profile test2` },
+      { pid: 81005, commandLine: `electron "${ELECTRON_E2E_ENTRY}" "${ownerArg}" --profile test2-other` },
+      { pid: 81006, commandLine: `electron "${DESKTOP_MAIN_ENTRY}" "${ownerArg}" --profile test2` },
     ];
 
-    expect(selectGraduatedProfilePids(rows, "test2")).toEqual([]);
+    expect(selectGraduatedProfilePids(rows, "test2", homeRoot)).toEqual([]);
   });
 });

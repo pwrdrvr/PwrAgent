@@ -130,14 +130,16 @@ jobs:
               path.startsWith("docs/")
               || path.toLowerCase().endsWith(".md")
               || path.startsWith(".agents/skills/");
-            // Code that only a macOS or Windows runner exercises: the
-            // dependency lockfile (Electron and native-module bumps), the
-            // platform-specific specs and their visual baselines, the macOS
-            // native plug-ins, app icon and the scripts that build them (their
+            // Changes that require native platform coverage: the lockfile
+            // (Electron and native modules), platform-specific specs and
+            // baselines, detached onboarding handoffs, the macOS native
+            // plug-ins, app icon and the scripts that build them (their
             // tests self-skip off darwin or need actool), and the macOS lane
             // scripts.
             const isPlatformPath = (path) =>
               path === "pnpm-lock.yaml"
+              || path === "apps/desktop/e2e/onboarding-wizard.spec.ts"
+              || path === "apps/desktop/e2e/fixtures/detached-profile-instances.ts"
               || path.startsWith("apps/desktop/e2e/visual-regression.spec.ts")
               || path.startsWith("apps/desktop/e2e/macos-")
               || path.startsWith("apps/desktop/e2e/windows-")
@@ -153,7 +155,7 @@ jobs:
             const platformFile = files.find((file) =>
               pathsOf(file).some((path) => !isNonProductPath(path) && isPlatformPath(path)));
             if (platformFile) {
-              fullCi(`\`${platformFile.filename}\` is exercised only on macOS or Windows runners`);
+              fullCi(`\`${platformFile.filename}\` requires macOS and Windows coverage`);
               return;
             }
             core.setOutput("full_platforms", "false");

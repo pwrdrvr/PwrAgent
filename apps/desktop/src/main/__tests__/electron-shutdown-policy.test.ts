@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { describe, expect, it, vi } from "vitest";
 import {
   advanceElectronShutdownCircuit,
   assertElectronShutdownCircuitClosed,
@@ -13,6 +14,7 @@ import {
   memoizeElectronClose,
   recordElectronShutdownCircuit,
   SLOW_ELECTRON_CLOSE_THRESHOLD_MS,
+  waitForBootstrapClose,
   type ElectronShutdownCircuitState,
   type ElectronShutdownSummary,
 } from "../../../e2e/fixtures/electron-shutdown-policy";
@@ -24,6 +26,34 @@ const CLOSED_STATE: ElectronShutdownCircuitState = {
 };
 
 describe("Electron shutdown policy", () => {
+  it("reaps the detached child after native exit while the launcher handshake is still pending", async () => {
+    vi.useFakeTimers();
+    try {
+      await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 400 }), async (exitAt) => {
+        const startedAt = Date.now();
+        const events: string[] = [];
+        const result = waitForBootstrapClose({
+          bootstrapExited: () => Date.now() - startedAt >= exitAt,
+          waitForHandshake: () => new Promise((resolve) => {
+            setTimeout(() => resolve("timeout"), 500);
+          }),
+          reapDetachedProfiles: async () => {
+            expect(Date.now() - startedAt).toBeGreaterThanOrEqual(exitAt);
+            events.push("reaped");
+          },
+          drainLauncher: async () => events.length === 1 ? "closed" : "timeout",
+        });
+        // Model a launcher whose pipes stay open until its detached child dies.
+        // The probe begins while the native main process is still alive.
+        await vi.advanceTimersByTimeAsync(500);
+        expect(await result).toBe("closed");
+        expect(events).toEqual(["reaped"]);
+      }), { numRuns: 25 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("classifies slow and force-killed closes at measured boundaries", () => {
     expect(classifyElectronClose({
       elapsedMs: SLOW_ELECTRON_CLOSE_THRESHOLD_MS - 1,
