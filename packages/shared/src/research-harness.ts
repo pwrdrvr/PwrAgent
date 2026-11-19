@@ -2,6 +2,12 @@ import type { ResearchThread } from "./research";
 
 export const RESEARCH_HARNESS_VERSION = 1;
 export const RESEARCH_HARNESS_REVISION = "687f2a20dc6ff552d3c881e10910b46c13e84e2a";
+/**
+ * How many source members a read-only import makes room for. An import declares its slots before it has
+ * read the source, and each unused slot is a placeholder item, so this stays small until imports can size
+ * themselves from the source's own member list.
+ */
+export const RESEARCH_HARNESS_IMPORT_MEMBERS = 8;
 /** Harness states an explicit read-only reconcile may resolve. The owner and the window share this rule. */
 export const RESEARCH_HARNESS_RECONCILABLE: readonly ResearchHarnessState["state"][] = ["unknown", "stopping", "imported", "reconciling"];
 
@@ -72,7 +78,8 @@ export type ResearchHarnessRequest = ResearchThread & {
   swarm: string;
   objective: string;
   workers: number;
-  minutes: number;
+  /** Required for execution, whose bridge binds a deadline before admission. An import has none. */
+  minutes?: number;
   /** Required for execution, which spends model budget. Imports make no model call. */
   budgetAcknowledged: boolean;
   source?: "swarm" | "discovery";

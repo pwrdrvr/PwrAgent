@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
+import { RESEARCH_WORK_TRANSITIONS, researchApproachOccupiesSlot, researchApproachResumable, researchDeadlinePassed, type ResearchItemContext, type ResearchThread, type ResearchWorkCommand } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
@@ -54,6 +54,16 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Progress could not be saved"); }
     finally { setBusy(false); }
   }
+  async function resume() {
+    if (!context || !api.updateResearch) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await api.updateResearch({ backend, threadId, runId, requestId: crypto.randomUUID(), command: { action: "resume", approachIds: [context.item.id] } });
+      setRefresh((value) => value + 1);
+      setNotice("Resume sent. The worker takes its slot back when its turn starts.");
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "The worker could not be resumed"); }
+    finally { setBusy(false); }
+  }
   async function assign() {
     if (!context || !task.trim() || !api.submitThreadReply) return;
     setBusy(true); setError(""); setNotice("");
@@ -78,7 +88,9 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
   const item = context?.item;
   const record = item?.record;
   const workActive = writable && (run.status === "running" || (coordinator && run.status === "exhausted"));
-  const assignable = writable && coordinator && ["running", "exhausted"].includes(run.status) && Date.now() < run.deadlineAt && api.submitThreadReply;
+  const assignable = writable && coordinator && ["running", "exhausted"].includes(run.status) && !researchDeadlinePassed(run, Date.now()) && api.submitThreadReply;
+  // Resuming goes to the owner directly; it needs no reply to the coordinating thread.
+  const resumable = writable && coordinator && run.status === "running" && !researchDeadlinePassed(run, Date.now()) && Boolean(api.updateResearch);
   const related = record && "relatesTo" in record && record.relatesTo ? run.items.get(record.relatesTo) : undefined;
   const source = record && "itemId" in record && record.itemId ? run.items.get(record.itemId) : undefined;
   const transitions = item ? RESEARCH_WORK_TRANSITIONS[item.work.state].filter((value) => coordinator || !["open", "cancelled"].includes(value)) as ResearchWorkCommand["state"][] : [];
@@ -104,6 +116,9 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
       {item.type === "approach" && item.record.worker && <ResearchThreadButton thread={item.record.worker} title="Open worker thread" />}
       {"author" in record && record.author && <ResearchThreadButton thread={record.author} title="Open source thread" />}
+      {item.type === "approach" && researchApproachResumable(item.record, (itemId) => run.items.get(itemId)) && resumable && <div className="research-actions">
+        <button type="button" className="research-button" disabled={busy} onClick={() => { void resume(); }}>Resume worker</button>
+      </div>}
       {context.assignment && <div className="research-node research-node--static">
         <span className="research-node__meta">{RESEARCH_FOCUSED_CHILD_PREFIX}{researchLabel(context.assignment.state)}</span>
         {" "}{context.assignment.task}
@@ -124,7 +139,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {assignable && ["open", "blocked"].includes(item.work.state) && !item.work.assignee && !(item.type === "approach" && researchApproachOccupiesSlot(item.record)) && <div className="research-review-form">
         <label htmlFor={`${id}-task`}>Task for a focused child</label>
         <textarea id={`${id}-task`} rows={2} maxLength={2000} value={task} onChange={(event) => setTask(event.target.value)} aria-describedby={`${id}-task-hint`} />
-        <p id={`${id}-task-hint`} className="research-muted">Uses a free slot within this run’s {run.workerLimit}-worker limit and its original deadline.</p>
+        <p id={`${id}-task-hint`} className="research-muted">Uses a free slot within this run’s {run.workerLimit}-worker limit{run.deadlineAt === undefined ? "" : " and its time limit"}.</p>
         <div className="research-actions"><button type="button" className="research-button" disabled={busy || !task.trim()} onClick={() => { void assign(); }}>Request focused child</button></div>
       </div>}
       <p className="research-detail__footer">Updated {formatClock(item.updatedAt)} · <code>{item.id}</code></p>

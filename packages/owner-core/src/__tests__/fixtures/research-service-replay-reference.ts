@@ -10,9 +10,9 @@
  * imports it.
  */
 import { randomUUID } from "node:crypto";
-import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy } from "../../research-ownership";
+import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy, researchRunNeedsAdoption } from "../../research-ownership";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, searchResearchItems,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, RESEARCH_MAX_TIMER_MS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchApproachResumable, searchResearchItems,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEvent, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
@@ -107,6 +107,7 @@ export class ReplayResearchService {
   private readonly pendingDeliveries = new Set<string>();
   private readonly pendingQueueEvents = new Map<string, Map<string, { status: string; turnId?: string }>>();
   private readonly stops = new Map<string, Promise<ResearchRun>>();
+  private readonly queuedResumes = new Map<string, string>();
   private readonly workerStops = new Map<string, Promise<void>>();
   private readonly intents = new Map<string, { id: string; request: PrepareResearchRequest; preparedAt: number; expiresAt: number }>();
   private closed = false;
@@ -120,12 +121,33 @@ export class ReplayResearchService {
     for (const run of this.storage.list()) {
       if (!["running", "stopping"].includes(run.status)) continue;
       if (run.ownerId === this.ports.ownerId) this.scheduleDeadline(run);
-      else if (!this.ports.isOwnerAlive(run)) {
-        this.append(run, `recovery:${this.ports.ownerId}`, this.operator(run), {
-          type: "status", status: "interrupted", reason: "The owning process ended. Inspect the retained worker threads before starting a new run.",
-        });
-      }
+      else if (this.ports.isOwnerAlive(run)) continue;
+      else try { this.adopt(run); } catch (error) { this.ports.onError(error); }
     }
+  }
+
+  private adopt(run: ResearchRun): ResearchRun {
+    const started = run.deliveries.filter((delivery) => delivery.state === "started");
+    const cutOff = run.approaches.filter((approach) => researchApproachOccupiesSlot(approach)
+      && (!["ended", "stopped", "failed"].includes(approach.state) || started.some((delivery) => delivery.approachId === approach.id)));
+    this.append(run, `adopted:${this.ports.ownerId}:${run.revision}`, this.operator(run), { type: "adopted", ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
+      ...(this.ports.ownerStartedAt !== undefined ? { ownerStartedAt: this.ports.ownerStartedAt } : {}), approachIds: cutOff.map((approach) => approach.id) });
+    for (const delivery of started) {
+      this.append(this.requireRun(run.id), `adopted-delivery:${delivery.id}:${this.ports.ownerId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: "ended" } });
+    }
+    const current = this.requireRun(run.id);
+    if (current.status === "running") this.scheduleDeadline(current);
+    else if (current.status === "stopping" && !this.stops.has(run.id)) {
+      const stopping = this.performStop(run.id, this.operator(run));
+      this.stops.set(run.id, stopping);
+      void stopping.finally(() => { if (this.stops.get(run.id) === stopping) this.stops.delete(run.id); }).catch(this.ports.onError);
+    }
+    return current;
+  }
+
+  private hold(run: ResearchRun): ResearchRun {
+    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
+    return researchRunNeedsAdoption(run, this.ports.ownerId) ? this.adopt(run) : run;
   }
 
   /** Withdraw the thread's waiting request so a later research_start for it is refused. No writes. */
@@ -179,15 +201,15 @@ export class ReplayResearchService {
 
   private async performAssignment(request: ResearchAssignRequest, context: ResearchExecutionContext, key: string, signature: string): Promise<ResearchAssignmentReceipt> {
     this.requireOpen();
-    const run = this.read(request.runId, context);
-    if (!sameResearchThread(run.coordinator, context)) throw new Error("Only the coordinating thread can assign research items");
-    if (run.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
+    const member = this.read(request.runId, context);
+    if (!sameResearchThread(member.coordinator, context)) throw new Error("Only the coordinating thread can assign research items");
+    const run = this.hold(member);
     const duplicate = this.storage.findCommand(run.id, key);
     if (duplicate) {
       if (duplicate.signature !== signature || duplicate.data.type !== "assignment") throw new Error("Assignment command key was reused");
       return this.assignmentReceipt(run.id, duplicate.data.approach.id, request.itemId);
     }
-    if (!["running", "exhausted"].includes(run.status) || this.now() >= run.deadlineAt) throw new Error("Research run is no longer accepting assignments");
+    if (!["running", "exhausted"].includes(run.status) || researchDeadlinePassed(run, this.now())) throw new Error("Research run is no longer accepting assignments");
     if (run.revision + (run.status === "exhausted" ? 1 : 0) >= RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; finish this run before starting another");
     boundedText(request.task, "assignment task", 2000);
     const item = this.requireItemVersion(run.id, request.itemId, request.expectedVersion);
@@ -216,8 +238,8 @@ export class ReplayResearchService {
 
   async work(id: string, requestId: string, command: ResearchWorkCommand, actor: ResearchActor): Promise<ResearchItem> {
     this.requireOpen();
-    const header = this.accessibleHeader(id, actor);
-    if (header.ownerId !== this.ports.ownerId) throw new Error("Research owner is unavailable");
+    this.accessibleHeader(id, actor);
+    const header = this.hold(this.requireRun(id));
     const signature = JSON.stringify(command);
     const duplicate = this.storage.findCommand(id, requestId);
     if (duplicate) {
@@ -225,7 +247,7 @@ export class ReplayResearchService {
       return this.storage.readItem(id, command.itemId)!;
     }
     const coordinator = actor.kind === "operator" || sameResearchThread(header.coordinator, actor);
-    if ((header.status !== "running" && !(coordinator && header.status === "exhausted")) || this.now() >= header.deadlineAt) throw new Error("Research run is no longer accepting work");
+    if ((header.status !== "running" && !(coordinator && header.status === "exhausted")) || researchDeadlinePassed(header, this.now())) throw new Error("Research run is no longer accepting work");
     boundedText(requestId, "requestId", 300);
     boundedText(command.reason, "reason", 2000);
     const item = this.requireItemVersion(id, command.itemId, command.expectedVersion);
@@ -285,7 +307,7 @@ export class ReplayResearchService {
   /** Bind the operator's form limits before asking the coordinator to propose directions. No writes or spend. */
   prepare(request: PrepareResearchRequest): { intentId: string } {
     this.requireOpen();
-    if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error("Choose 1–8 workers");
+    if (!Number.isInteger(request.workers) || request.workers < 1 || request.workers > RESEARCH_MAX_WORKERS) throw new Error(`Choose 1–${RESEARCH_MAX_WORKERS} workers`);
     validateStartResearch({ ...request, approaches: Array.from({ length: request.workers }, (_, i) => ({ title: `Approach ${i + 1}`, task: "Awaiting assignment" })) });
     const id = randomUUID();
     const preparedAt = this.now();
@@ -324,7 +346,7 @@ export class ReplayResearchService {
     const approaches: ResearchApproach[] = request.approaches.map((a, index) => ({ title: a.title, task: a.task, id: `a${index + 1}`, state: "pending" }));
     this.storage.create(id, key, { seq: 1, commandId: "start", signature: JSON.stringify(request), at: this.now(), actor: context,
       data: { type: "created", objective: request.objective, coordinator: { backend: context.backend, threadId: context.threadId }, approaches, ownerId: this.ports.ownerId,
-        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, deadlineAt: this.now() + request.minutes * 60_000, workspaceMode: request.workspaceMode } });
+        ownerPid: this.ports.ownerPid, ownerStartedAt: this.ports.ownerStartedAt, ...(request.minutes !== undefined ? { deadlineAt: this.now() + request.minutes * 60_000 } : {}), workspaceMode: request.workspaceMode } });
     if (intent) this.intents.delete(intentKey);
     this.ports.changed(context);
     this.scheduleDeadline(this.requireRun(id));
@@ -334,7 +356,7 @@ export class ReplayResearchService {
     }
     const current = this.requireRun(id);
     if (current.status === "stopping") this.finishStopping(current);
-    else if (current.status === "running" && this.now() >= current.deadlineAt) await this.stop(id, context, "deadline", "Research deadline reached");
+    else if (current.status === "running" && researchDeadlinePassed(current, this.now())) await this.stop(id, context, "deadline", "Research deadline reached");
     else this.finishExploration(current);
     return this.requireRun(id);
   }
@@ -382,10 +404,9 @@ export class ReplayResearchService {
   async update(id: string, requestId: string, command: ResearchCommand, actor: ResearchActor): Promise<ResearchRun> {
     this.requireOpen();
     if (command?.action === "work") { await this.work(id, requestId, command, actor); return this.requireRun(id); }
-    if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish"].includes(command.action)) throw new Error("Unknown research command");
+    if (!command || !["finding", "submit", "review", "abandon", "direction", "stop", "finish", "resume"].includes(command.action)) throw new Error("Unknown research command");
     boundedText(requestId, "requestId", 300);
-    let run = this.read(id, actor);
-    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
+    let run = this.hold(this.read(id, actor));
     const signature = JSON.stringify(command);
     const duplicate = run.events.find((e) => e.commandId === requestId);
     if (duplicate) {
@@ -394,6 +415,10 @@ export class ReplayResearchService {
     }
     const coordinator = actor.kind === "operator" || sameResearchThread(actor, run.coordinator);
     if ((command.action === "review" || command.action === "stop" || command.action === "finish") && !coordinator) throw new Error("Only the coordinator or operator may review or stop a run");
+    if (command.action === "resume") {
+      if (!coordinator) throw new Error("Only the coordinator or operator may resume workers");
+      return await this.resume(run, requestId, signature, command.approachIds, actor);
+    }
     if (command.action === "stop" || command.action === "finish") {
       boundedText(command.reason, "reason", 2000);
       if (command.action === "finish" && !run.submissions.some((s) => s.review?.decision === "accepted")) throw new Error("Accept a submission before completing the run");
@@ -489,9 +514,9 @@ export class ReplayResearchService {
   }
 
   async stop(id: string, actor: ResearchActor, outcome: "stopped" | "deadline" | "completed", reason: string, requestId: string = randomUUID(), signature: string = outcome): Promise<ResearchRun> {
-    const run = this.read(id, actor);
-    if (actor.kind !== "operator" && !sameResearchThread(actor, run.coordinator)) throw new Error("Only the coordinator or operator may stop a run");
-    if (!researchRunHeldBy(run, this.ports.ownerId, this.ports.isOwnerAlive)) throw new Error(RESEARCH_RUN_HELD_ELSEWHERE);
+    const member = this.read(id, actor);
+    if (actor.kind !== "operator" && !sameResearchThread(actor, member.coordinator)) throw new Error("Only the coordinator or operator may stop a run");
+    const run = this.hold(member);
     const pending = this.stops.get(id);
     if (pending) return pending;
     if (!["running", "stopping"].includes(run.status)) {
@@ -518,7 +543,9 @@ export class ReplayResearchService {
     for (const delivery of run.deliveries) {
       if (["queued", "started"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
     }
+    for (const key of [...this.queuedResumes.keys()]) if (key.startsWith(`${id}:`)) await this.withdrawResume(id, key.slice(id.length + 1), actor);
     for (const approach of this.requireRun(id).approaches) {
+      if (this.pendingStarts.has(`${id}:${approach.id}`)) continue;
       if (approach.worker && !["ended", "stopped", "failed"].includes(approach.state)) await this.stopWorker(id, approach.id, actor);
       else if (approach.state === "pending") this.append(this.requireRun(id), `unstarted:${approach.id}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
     }
@@ -591,6 +618,16 @@ export class ReplayResearchService {
     if (this.closed || turnId?.startsWith("pending:") || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
     for (const run of this.storage.list(thread)) {
       if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
+      const resumed = [...this.queuedResumes].find(([key, entry]) => key.startsWith(`${run.id}:`) && entry === queueEntryId)?.[0].slice(run.id.length + 1);
+      if (resumed !== undefined) {
+        if (["cancelled", "failed", "blocked"].includes(status)) {
+          this.queuedResumes.delete(`${run.id}:${resumed}`);
+          if (run.approaches.find((approach) => approach.id === resumed)?.state === "starting") this.append(run, `resume-withdrawn:${resumed}:${queueEntryId}`, this.operator(run),
+            { type: "worker", approachId: resumed, state: "stopped", interrupted: true, note: "The resume message did not start. Resume the worker again to continue." });
+          this.finishStopping(this.requireRun(run.id));
+        }
+        continue;
+      }
       const delivery = run.deliveries.find((d) => d.queueEntryId === queueEntryId && sameResearchThread(d.target, thread));
       if (!delivery) {
         // The queue may admit and finish before notify returns its queue ID.
@@ -638,6 +675,7 @@ export class ReplayResearchService {
       this.append(run, `observed-start:${approach.id}:${turnId}`, this.operator(run), {
         type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId },
       });
+      this.queuedResumes.delete(`${run.id}:${approach.id}`);
       if (!this.canAdmitApproach(this.requireRun(run.id), approach)) cancellations.push(this.stopWorker(run.id, approach.id, this.operator(run)).then(() => {
         if (!this.closed) this.finishStopping(this.requireRun(run.id));
       }));
@@ -673,13 +711,74 @@ export class ReplayResearchService {
     this.closed = true;
     this.intents.clear();
     this.pendingQueueEvents.clear();
+    this.queuedResumes.clear();
     for (const cancel of this.deadlines.values()) cancel();
     this.deadlines.clear();
-    for (const run of this.storage.list()) {
-      if (run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status)) this.append(run, `shutdown:${this.ports.ownerId}`, this.operator(run), {
-        type: "status", status: "interrupted", reason: "PwrAgent closed. Research evidence is retained; execution was not automatically resumed.",
-      });
+  }
+
+  private async resume(held: ResearchRun, requestId: string, signature: string, approachIds: string[] | undefined, actor: ResearchActor): Promise<ResearchRun> {
+    const id = held.id;
+    if (!this.canDispatch(held)) throw new Error("Research run is no longer accepting work");
+    if (approachIds !== undefined && (!Array.isArray(approachIds) || !approachIds.length || approachIds.length > RESEARCH_MAX_WORKERS || approachIds.some((value) => typeof value !== "string")
+      || new Set(approachIds).size !== approachIds.length)) throw new Error("Name each worker to resume once");
+    const cutOff = held.approaches.filter((approach) => approach.interrupted);
+    const resumable = (approach: ResearchApproach) => researchApproachResumable(approach, (itemId) => held.items.find((candidate) => candidate.id === itemId));
+    const targets = approachIds === undefined ? cutOff.filter(resumable) : approachIds.map((approachId) => {
+      const approach = cutOff.find((candidate) => candidate.id === approachId);
+      if (!approach) throw new Error("That worker is not waiting to be resumed");
+      if (!resumable(approach)) throw new Error(`"${approach.title}" is closed and cannot be resumed`);
+      return approach;
+    });
+    if (!targets.length) throw new Error("No worker is waiting to be resumed");
+    if (held.activeWorkers + targets.filter((approach) => !researchApproachOccupiesSlot(approach)).length > held.workerLimit) throw new Error("Research worker limit reached; resume fewer workers or wait for one to end");
+    this.append(held, requestId, actor, { type: "resumed", approachIds: targets.map((approach) => approach.id) }, signature);
+    for (const approach of targets) this.pendingStarts.add(`${id}:${approach.id}`);
+    await Promise.all(targets.map(async (approach) => {
+      const worker = approach.worker!;
+      const thread = { backend: worker.backend, threadId: worker.threadId };
+      const now = () => this.requireRun(id).approaches.find((candidate) => candidate.id === approach.id)!;
+      try {
+        const receipt = await this.ports.notify(actor, thread, researchResumePrompt(id, approach));
+        const current = now();
+        if (receipt.turnId && current.state === "starting" && current.worker?.turnId === worker.turnId) {
+          this.append(this.requireRun(id), `resume-started:${approach.id}:${receipt.turnId}`, actor, { type: "worker", approachId: approach.id, state: "running", worker: { ...thread, turnId: receipt.turnId } });
+        } else if (!receipt.turnId && receipt.queueEntryId && current.state === "starting") this.queuedResumes.set(`${id}:${approach.id}`, receipt.queueEntryId);
+        if (!this.canAdmitApproach(this.requireRun(id), approach)) await this.withdrawResume(id, approach.id, actor);
+      } catch (error) {
+        const current = now();
+        if (current.state === "starting" && current.worker?.turnId === worker.turnId) {
+          this.append(this.requireRun(id), `resume-failed:${approach.id}:${requestId}`, actor, { type: "worker", approachId: approach.id, state: "stopped", interrupted: true,
+            note: `The resume message was not delivered: ${message(error)}` });
+        }
+      } finally {
+        this.pendingStarts.delete(`${id}:${approach.id}`);
+      }
+    }));
+    const settled = this.requireRun(id);
+    if (settled.status === "stopping") this.finishStopping(settled);
+    return this.requireRun(id);
+  }
+
+  private async withdrawResume(id: string, approachId: string, actor: ResearchActor): Promise<void> {
+    const now = () => this.requireRun(id).approaches.find((candidate) => candidate.id === approachId)!;
+    const entry = this.queuedResumes.get(`${id}:${approachId}`);
+    if (entry !== undefined) {
+      this.queuedResumes.delete(`${id}:${approachId}`);
+      try {
+        const receipt = await this.ports.cancelQueued(entry);
+        const current = now();
+        if (!receipt.turnId) {
+          if (current.state === "starting") this.append(this.requireRun(id), `resume-withdrawn:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "stopped", note: "The resume message was withdrawn before it started." });
+          return;
+        }
+        if (current.worker?.turnId !== receipt.turnId) this.append(this.requireRun(id), `resume-started:${approachId}:${receipt.turnId}`, actor,
+          { type: "worker", approachId, state: "running", worker: { backend: current.worker!.backend, threadId: current.worker!.threadId, turnId: receipt.turnId } });
+      } catch (error) {
+        if (now().state === "starting") this.append(this.requireRun(id), `resume-unknown:${approachId}:${entry}`, actor, { type: "worker", approachId, state: "unknown", note: message(error) });
+        return;
+      }
     }
+    if (now().state === "running") await this.stopWorker(id, approachId, actor);
   }
 
   async stopOwnedRuns(reason: string): Promise<void> {
@@ -696,7 +795,8 @@ export class ReplayResearchService {
   }
 
   private finishExploration(run: ResearchRun): void {
-    if (run.status !== "running" || run.submissions.length || run.approaches.some((a) => this.pendingStarts.has(`${run.id}:${a.id}`) || researchApproachOccupiesSlot(a))) return;
+    if (run.status !== "running" || run.submissions.length || run.approaches.some((a) => this.pendingStarts.has(`${run.id}:${a.id}`) || researchApproachOccupiesSlot(a)
+      || researchApproachResumable(a, (itemId) => run.items.find((item) => item.id === itemId)))) return;
     this.append(run, `exhausted:${run.revision}`, this.operator(run), { type: "status", status: "exhausted", reason: "All workers ended without submitting a candidate. Findings are retained; this does not establish that the problem is unsolvable." });
     this.deadlines.get(run.id)?.();
     this.deadlines.delete(run.id);
@@ -705,12 +805,20 @@ export class ReplayResearchService {
   private scheduleDeadline(run: ResearchRun): void {
     const callback = () => { void this.stop(run.id, this.operator(run), "deadline", "Research deadline reached").catch(this.ports.onError); };
     const schedule = this.ports.schedule ?? ((fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return () => clearTimeout(timer); });
-    this.deadlines.set(run.id, schedule(callback, Math.max(0, run.deadlineAt - this.now())));
+    const deadlineAt = run.deadlineAt;
+    // No time limit, no timer: the run ends when the operator stops or finishes it.
+    if (deadlineAt === undefined) return;
+    // One timer cannot wait longer than about 24 days, and a longer delay fires at once. Wait in steps.
+    const arm = (): void => {
+      const remaining = deadlineAt - this.now();
+      this.deadlines.set(run.id, remaining > RESEARCH_MAX_TIMER_MS ? schedule(arm, RESEARCH_MAX_TIMER_MS) : schedule(callback, Math.max(0, remaining)));
+    };
+    arm();
   }
 
   private append(run: ResearchRun, commandId: string, actor: ResearchActor, data: ResearchEventData, signature = JSON.stringify(data)): void {
     // Contribution limits cannot block receipts or cancellation settlement.
-    if (run.revision >= RESEARCH_MAX_EVENTS && !["status", "worker", "delivery", "delivery_failed"].includes(data.type)
+    if (run.revision >= RESEARCH_MAX_EVENTS && !["status", "worker", "delivery", "delivery_failed", "adopted"].includes(data.type)
       && !(data.type === "item_work" && ["cancel_requested", "cancelled"].includes(data.work.state))) throw new Error("Research event limit reached; finish this run before starting another");
     this.storage.append(run.id, run.revision, { seq: run.revision + 1, commandId, signature, at: this.now(), actor, data });
     this.publish(run.id);
@@ -720,7 +828,7 @@ export class ReplayResearchService {
     if (this.closed) throw new Error("Research service is closed");
     if (this.ports.enabled?.() === false) throw new Error("Research runs are disabled");
   }
-  private canDispatch(run: ResearchRun): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && this.now() < run.deadlineAt; }
+  private canDispatch(run: ResearchRun): boolean { return !this.closed && this.ports.enabled?.() !== false && run.status === "running" && !researchDeadlinePassed(run, this.now()); }
   private canAdmitApproach(run: ResearchRun, approach: ResearchApproach): boolean {
     if (!this.canDispatch(run)) return false;
     if (run.activeWorkers > run.workerLimit) return false;
@@ -744,7 +852,7 @@ export class ReplayResearchService {
 
 function validateStartResearch(request: StartResearchRequest): void {
   boundedText(request.objective, "objective", 8000);
-  if (!Number.isInteger(request.minutes) || request.minutes < 1 || request.minutes > 120) throw new Error("Research deadline must be 1–120 minutes");
+  if (!validResearchMinutes(request.minutes)) throw new Error("A research time limit is a whole number of minutes, at least 1. Leave it out for no limit.");
   if (!["new_worktree", "none"].includes(request.workspaceMode)) throw new Error("Choose isolated worktrees or scratch workspaces");
   if (!Array.isArray(request.approaches) || request.approaches.length < 1 || request.approaches.length > RESEARCH_MAX_WORKERS) throw new Error(`Research needs 1–${RESEARCH_MAX_WORKERS} workers`);
   const titles = new Set<string>();
@@ -766,6 +874,9 @@ function validatePaths(paths: string[]): void {
 function message(error: unknown): string { return (error instanceof Error ? error.message : String(error)).slice(0, 2000); }
 function researchWorkerPrompt(id: string, objective: string, approach: ResearchApproach): string {
   return `Participate in research run ${id}, approach ${approach.id}: ${approach.title}.\nObjective: ${objective}\nAssignment: ${approach.task}\nUse research_read to inspect the shared board. Use research_update to post typed findings under approachId=${approach.id}, cite evidence paths relative to your workspace, and link other findings explicitly. Record counterexamples and dead ends. Submit a concise candidate with action=submit. Findings are proposals, not verified facts. The coordinator reviews submissions and may request revision. Do not start additional workers, change the objective, or claim formal verification. Stop when the run stops or its deadline is reached.`;
+}
+function researchResumePrompt(id: string, approach: ResearchApproach): string {
+  return `PwrAgent was closed while you were working on research run ${id}, approach ${approach.id}: ${approach.title}. The run is still open and you are being asked to continue. Call research_read with runId=${id}${approach.itemId ? `, itemId=${approach.itemId}` : ""} to see what is already recorded, then carry on from where you stopped. Do not repeat findings you already posted. The run's worker limit, any time limit and cancellation still apply to you.`;
 }
 function researchItemWorkerPrompt(id: string, approach: ResearchApproach): string {
   return `Handle one research item. Run ID: ${id}. Item ID: ${approach.itemId}. Your approach/assignment ID: ${approach.id}.\nTask: ${approach.task}\nCall research_read with runId=${id}, itemId=${approach.itemId} to load this item's context and current version. Claim it using research_update action=work, itemId, expectedVersion, state=claimed and a reason. Update to in_progress, blocked or completed as appropriate, reading the latest version before each change. Post evidence or a candidate under approachId=${approach.id}; link the source finding when applicable. Use research_search only for additional evidence you need. Do not load the entire board or start other workers. A work item marked completed is not formally verified. The run's original deadline and cancellation apply to you.`;

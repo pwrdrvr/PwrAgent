@@ -196,9 +196,10 @@ describe.skipIf(!LABEL)("research cost", () => {
 
   it("measures one worker command, one turn-end observation and one refresh", async () => {
     const results = [
-      await measureScenario("one 4,096-event run", 1, RESEARCH_MAX_EVENTS),
+      await measureScenario("one 4,096-event run", 1, 4096),
+      await measureScenario("one run at the event limit", 1, RESEARCH_MAX_EVENTS),
       await measureScenario("a thread in 50 runs of 256 events", 50, 256),
-      await measureScenario("a thread in 50 runs of 4,096 events", 50, RESEARCH_MAX_EVENTS),
+      await measureScenario("a thread in 50 runs of 4,096 events", 50, 4096),
     ];
     const file = path.resolve(__dirname, "../../../../../.local", `research-cost-${LABEL}.json`);
     mkdirSync(path.dirname(file), { recursive: true });

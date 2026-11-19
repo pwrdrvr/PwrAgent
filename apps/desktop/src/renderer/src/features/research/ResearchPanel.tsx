@@ -89,7 +89,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
     try {
       const { intentId } = await api.prepareResearch({ ...identity, ...values });
       prepared = true;
-      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, a ${values.minutes}-minute deadline, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently increase the worker count or deadline.`);
+      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, ${values.minutes === undefined ? "no time limit (omit minutes)" : `minutes=${values.minutes}`}, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not silently change the worker count, or add or change a time limit.`);
       setCreating(false);
       return true;
     } catch (failure) {
@@ -145,6 +145,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
       <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
+        onResume={() => { void update({ action: "resume" }); }}
         onReconcile={api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
       <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount} onChoose={chooseView} />
       <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">

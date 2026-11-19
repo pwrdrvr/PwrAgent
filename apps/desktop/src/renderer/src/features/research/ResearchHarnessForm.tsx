@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import type { ResearchHarnessCheck, ResearchHarnessRequest, ResearchHarnessStatus, ResearchThread } from "@pwragent/shared";
+import { RESEARCH_HARNESS_IMPORT_MEMBERS, RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS, type ResearchHarnessCheck, type ResearchHarnessRequest, type ResearchHarnessStatus, type ResearchThread } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type Operation = "import" | "discovery" | "execute";
@@ -85,8 +85,8 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel }: {
     const request: Omit<ResearchHarnessRequest, "requestId"> = { ...thread, mode: execute ? "execute" : "import", source: discovery ? "discovery" : "swarm",
       objective: execute ? objective.trim() : title, project: project.trim(), session: discovery ? "" : session.trim(), swarm: swarm.trim(),
       ...(discovery && problem.trim() ? { problem: problem.trim() } : {}),
-      // An import accepts up to the largest member set; its deadline only bounds the read.
-      workers: execute ? workers : 8, minutes: execute ? minutes : 120, budgetAcknowledged: execute && acknowledged };
+      // An import has no deadline: it reads what the source has. Only execution binds one, as the bridge requires.
+      workers: execute ? workers : RESEARCH_HARNESS_IMPORT_MEMBERS, ...(execute ? { minutes } : {}), budgetAcknowledged: execute && acknowledged };
     identity.current = harnessRequestIdentity(identity.current, request, () => crypto.randomUUID());
     setBusy(true); setError("");
     try {
@@ -151,8 +151,8 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel }: {
       </div>
       {!execute && <label>Title (optional)<input maxLength={200} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder={project && swarm ? `Import ${project} / ${swarm}` : "Names this run here"} /></label>}
       {execute && <div className="research-form__row">
-        <label>Members (1–8)<input type="number" min={1} max={8} required value={workers} onChange={(e) => setWorkers(Number(e.target.value))} /></label>
-        <label>Deadline (minutes)<input type="number" min={1} max={120} required value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} /></label>
+        <label>Members<input type="number" min={1} max={RESEARCH_MAX_WORKERS} required value={workers} onChange={(e) => setWorkers(Number(e.target.value))} /></label>
+        <label>Deadline (minutes)<input type="number" min={1} max={RESEARCH_MAX_MINUTES} required value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} /></label>
       </div>}
       <dl className="research-dl">
         <dt>Evidence opens from</dt>

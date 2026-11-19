@@ -52,8 +52,9 @@ describe("research run phase", () => {
 
   it("does not call a fully reviewed run, or one with a revision in flight, awaiting review", () => {
     // Both were "Awaiting review" on main: it checked only that every worker had ended and any candidate existed.
+    // Nobody is working and nothing waits for review: the run is open, and says that no worker is running.
     const reviewed = phaseRun({ status: "running", approaches: [{ state: "ended", revisionPending: false }], decisions: ["rejected"] });
-    expect(researchRunPhase(researchPhaseInput(reviewed)).label).toBe("Running");
+    expect(researchRunPhase(researchPhaseInput(reviewed))).toEqual({ label: "No workers running", tone: "attention" });
     const revising = phaseRun({ status: "running", approaches: [{ state: "ended", revisionPending: true }], decisions: [undefined] });
     expect(researchRunPhase(researchPhaseInput(revising)).label).toBe("Running");
   });
@@ -65,6 +66,10 @@ describe("research run phase", () => {
     expect(researchTimeLeft({ status: "running", deadlineAt }, deadlineAt + 1)).toBe("Deadline passed");
     expect(researchTimeLeft({ status: "running", deadlineAt }, deadlineAt - 125 * 60_000)).toMatch(/^2 h 5 min left/);
     expect(researchTimeLeft({ status: "completed", deadlineAt }, deadlineAt - 60_000)).toMatch(/^Deadline /);
+    // The operator may set a limit of any length, or none.
+    expect(researchTimeLeft({ status: "running", deadlineAt }, deadlineAt - (3 * 1440 + 5 * 60 + 12) * 60_000)).toMatch(/^3 d 5 h left · ends \w+ \d+, /);
+    expect(researchTimeLeft({ status: "running" }, deadlineAt)).toBe("No time limit");
+    expect(researchTimeLeft({ status: "interrupted" }, deadlineAt)).toBe("No time limit");
   });
 });
 

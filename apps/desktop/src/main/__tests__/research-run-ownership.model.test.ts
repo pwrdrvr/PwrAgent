@@ -69,10 +69,12 @@ it("lets this process review and finish a retained run once its owner is gone, a
       seed(store, "run", given);
       const { service, close } = launch(store);
       try {
-        // Recovery retires a run whose owner is gone. A run nobody retired still belongs to a live process.
+        // A gone process's Harness run is retired: its bridge ended with it. Its native run is taken over, still
+        // running. A run nobody retired otherwise still belongs to a live process.
         const status = store.header("run")!.status;
-        expect(status).toBe(given.retired || given.owner === "dead" ? "interrupted" : "running");
-        const held = given.owner === "me" || (given.owner === "dead" && status !== "running");
+        expect(status).toBe(given.retired || (given.owner === "dead" && given.source !== "native") ? "interrupted" : "running");
+        if (given.owner === "dead" && given.source === "native" && !given.retired) expect(store.header("run")!.ownerId).toBe(ME);
+        const held = given.owner !== "live-other";
         // Every read that tells a window what it may do agrees with what the owner then allows.
         expect(service.snapshot(thread).writableRunIds).toEqual(held ? ["run"] : []);
         expect(service.changes("run", 0, undefined, operator).writable).toBe(held);

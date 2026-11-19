@@ -148,8 +148,8 @@ A service page is at most fifty records and 256,000 JSON characters, with a
 append of its normalized events and cursor. Gaps, conflicting duplicate records,
 foreign origins, unknown members and escaping paths are refused. Exact duplicate
 pages write nothing. A continuation cursor must match the observed prefix. The
-native 4,096-event limit bounds journal growth; receipts and cancellation remain
-available at that limit. Empty polling does not persist state.
+native 100,000-event guard stops a runaway journal; receipts and cancellation remain
+available at that guard. Empty polling does not persist state.
 
 Evidence remains relative to the canonical local workspace captured by the owner
 at admission. The main process rejects traversal, absolute paths, root replacement
@@ -175,8 +175,10 @@ cursor. It applies to `unknown`, `stopping`, `imported` and stale `reconciling`
 swarm runs; a discovery snapshot has no cursor and takes a new snapshot instead.
 It is refused for a non-coordinator, while this process still holds the run's
 connection, and for a run another process holds. Holding follows
-`researchRunHeldBy`: a run's own process, or any later process once the run is
-no longer live and the process that started it is gone. The same rule lets the
+`researchRunHeldBy`: a run's own process, or any later process once a Harness
+run is no longer live and the process that started it is gone. A native
+PwrAgent run is different: it outlives its process and is taken over, still
+running, by the next one. The same rule lets the
 operator review and finish a retained import or ended execution after a
 restart; cancelling still needs the process that holds the bridge. The
 `reconciling` intent commits before the bridge starts. The bridge must advertise

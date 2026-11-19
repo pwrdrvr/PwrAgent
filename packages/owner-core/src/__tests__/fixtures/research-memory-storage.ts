@@ -88,8 +88,9 @@ export class MemoryResearchStorage implements ResearchStorage {
     return this.all().some((run) => ["running", "stopping"].includes(run.status) && run.approaches.some((approach) => approach.worker && sameResearchThread(approach.worker, thread)));
   }
   readItem(id: string, itemId: string) { return this.get(id)?.items.find((item) => item.id === itemId); }
-  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true }): ResearchApproach[] {
+  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true } | { interrupted: true }): ResearchApproach[] {
     const approaches = this.get(id)?.approaches ?? [];
+    if ("interrupted" in filter) return approaches.filter((approach) => approach.interrupted);
     return "worker" in filter ? approaches.filter((approach) => approach.worker && sameResearchThread(approach.worker, filter.worker)) : approaches.filter(researchApproachOccupiesSlot);
   }
   underwayItems(id: string) { return (this.get(id)?.items ?? []).filter((item) => ["assigned", "claimed", "in_progress", "blocked"].includes(item.work.state)); }

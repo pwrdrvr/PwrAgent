@@ -26,6 +26,7 @@ export function useResearchRunActions(api: DesktopApi | undefined, thread: Resea
         const delivery = result.delivery;
         setNotice(delivery?.state === "queued" ? "Revision feedback is queued for the worker." : delivery?.state === "started" ? "The worker received the revision feedback." : "The revision is recorded, but delivery to the worker was not confirmed. Check Activity before you send it again.");
       } else if (command.action === "review") setNotice(`Decision recorded: ${command.decision === "accepted" ? "accepted" : "rejected"}.`);
+      else if (command.action === "resume") setNotice("Resume sent. Each worker takes its slot back when its turn starts.");
       return true;
     } catch (failure) { setError(researchErrorMessage(failure)); return false; }
     finally { setBusy(false); }

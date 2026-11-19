@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
-import { projectResearchRun, RESEARCH_MAX_EVENTS, type ResearchActor, type StartResearchRequest } from "@pwragent/shared/research";
+import { projectResearchRun, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, type ResearchActor, type StartResearchRequest } from "@pwragent/shared/research";
 import { ResearchService, validateStartResearch, type ResearchPorts } from "../research-service";
 import { MemoryResearchStorage } from "./fixtures/research-memory-storage";
 
@@ -475,12 +475,12 @@ describe("research lifecycle model", () => {
   });
 
   it("checks the worker cap across and beyond the boundary", () => {
-    fc.assert(fc.property(fc.integer({ min: 0, max: 12 }), (workers) => {
+    fc.assert(fc.property(fc.integer({ min: 0, max: RESEARCH_MAX_WORKERS + 8 }), (workers) => {
       const input = { ...request, approaches: Array.from({ length: workers }, (_, i) => ({ title: `Approach ${i}`, task: "Explore" })) };
-      if (workers >= 1 && workers <= 8) expect(() => validateStartResearch(input)).not.toThrow();
+      if (workers >= 1 && workers <= RESEARCH_MAX_WORKERS) expect(() => validateStartResearch(input)).not.toThrow();
       else expect(() => validateStartResearch(input)).toThrow();
     }));
-    expect(() => validateStartResearch({ ...request, approaches: Array.from({ length: 9 }, (_, i) => ({ title: `Direction ${i}`, task: "Explore" })) })).toThrow();
+    expect(() => validateStartResearch({ ...request, approaches: Array.from({ length: RESEARCH_MAX_WORKERS + 1 }, (_, i) => ({ title: `Direction ${i}`, task: "Explore" })) })).toThrow();
   });
 
   it("a duplicate start never starts additional model work, even after reconstruction", async () => {
@@ -491,8 +491,11 @@ describe("research lifecycle model", () => {
     const restarted = fixture({ ownerId: "replacement" }, storage);
     restarted.service.initialize();
     const retained = await restarted.service.start(request, context);
-    expect(retained.status).toBe("interrupted");
+    // The run outlives its process: the replacement holds it, and starts nothing by itself.
+    expect(retained.status).toBe("running");
+    expect(retained.ownerId).toBe("replacement");
     expect(restarted.ports.spawn).not.toHaveBeenCalled();
+    expect(restarted.ports.notify).not.toHaveBeenCalled();
     await expect(restarted.service.start({ ...request, objective: "different" }, context)).rejects.toThrow();
   });
 
@@ -578,7 +581,11 @@ describe("research lifecycle model", () => {
         return candidate.ownerId === marker.ownerId && candidate.ownerPid === marker.ownerPid && candidate.ownerStartedAt === marker.ownerStartedAt;
       } }, storage);
       viewer.service.initialize();
-      expect(viewer.service.read(run.id, context).status).toBe(changed === "none" ? "running" : "interrupted");
+      // A live holder keeps its run. A gone one's run is taken over, still running, with nothing restarted.
+      const seen = viewer.service.read(run.id, context);
+      expect(seen.status).toBe("running");
+      expect(seen.ownerId).toBe(changed === "none" ? owner.ownerId : "viewer");
+      expect(seen.approaches.every((approach) => changed === "none" ? approach.state === "running" : approach.state === "stopped" && approach.interrupted)).toBe(true);
       expect(viewer.ports.spawn).not.toHaveBeenCalled();
       service.close();
       viewer.service.close();
@@ -617,7 +624,7 @@ describe("research lifecycle model", () => {
     let now = 1000;
     const { service } = fixture({ now: () => now });
     const run = await started(service, request, context);
-    now = run.deadlineAt;
+    now = run.deadlineAt!;
     await expect(service.update(run.id, "late", { action: "finding", approachId: "a1", kind: "note", text: "Late work", paths: [] }, context)).rejects.toThrow();
     expect((await service.stop(run.id, context, "deadline", "Deadline")).status).toBe("deadline");
   });
@@ -676,7 +683,7 @@ describe("research lifecycle model", () => {
   it("binds the panel's exact limits to its coordinator and consumes that request once", async () => {
     const { service, ports } = fixture();
     const prepared = service.prepare({ backend: "codex", threadId: "coordinator", objective: request.objective, workers: 3, minutes: request.minutes, workspaceMode: request.workspaceMode });
-    await expect(service.start({ ...request, intentId: prepared.intentId, minutes: request.minutes + 1 }, context)).rejects.toThrow("exact objective");
+    await expect(service.start({ ...request, intentId: prepared.intentId, minutes: request.minutes! + 1 }, context)).rejects.toThrow("exact objective");
     await expect(service.start({ ...request, intentId: prepared.intentId }, { ...context, threadId: "foreign" })).rejects.toThrow();
     await expect(service.start(request, context)).rejects.toThrow();
     expect(ports.spawn).not.toHaveBeenCalled();

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ResearchHarnessConfig, ResearchHarnessRequest } from "@pwragent/shared";
+import { researchDeadlinePassed, type ResearchHarnessConfig, type ResearchHarnessRequest } from "@pwragent/shared";
 import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-service";
 import { probeResearchModel, researchModelRequest } from "@pwragent/owner-core/research-model-adapter";
 import { ResearchStore } from "@pwragent/sqlite-storage/research-store";
@@ -33,7 +33,7 @@ it.skipIf(!configPath)("accepts a deployed Harness through the installed adapter
       let modelBusy = false;
       const connection = openResearchHarnessProcess(config.bridge, cwd, async (method, params, signal) => {
         const run = store.header(id);
-        if (method !== "model_complete" || !selected || modelBusy || run?.status !== "running" || run.harness?.state !== "running" || Date.now() >= run.deadlineAt) throw new Error("Model admission unavailable");
+        if (method !== "model_complete" || !selected || modelBusy || run?.status !== "running" || run.harness?.state !== "running" || researchDeadlinePassed(run, Date.now())) throw new Error("Model admission unavailable");
         modelBusy = true;
         try { return await selected.complete(researchModelRequest(selected.model, params.messages), signal); }
         finally { modelBusy = false; }

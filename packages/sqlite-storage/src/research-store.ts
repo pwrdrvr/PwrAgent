@@ -92,6 +92,8 @@ CREATE INDEX IF NOT EXISTS idx_research_events_delivery_failed ON research_event
   WHERE json_extract(payload, '$.data.type') = 'delivery_failed';
 CREATE INDEX IF NOT EXISTS idx_research_events_harness ON research_events(run_id, seq DESC)
   WHERE json_extract(payload, '$.data.type') = 'harness';
+CREATE INDEX IF NOT EXISTS idx_research_events_adopted ON research_events(run_id, seq DESC)
+  WHERE json_extract(payload, '$.data.type') = 'adopted';
 CREATE INDEX IF NOT EXISTS idx_research_events_harness_record ON research_events(run_id, json_extract(payload, '$.provenance.seq'))
   WHERE json_extract(payload, '$.data.type') = 'harness_observation';
 `;
@@ -103,6 +105,8 @@ const HARNESS_STATE = `coalesce((SELECT json_extract(payload, '$.data.state') FR
 
 /** What every header read selects: the creation event, and the columns and counts that change after it. */
 const HEADER_COLUMNS = `r.run_id, r.status, r.reason, e.payload,
+  (SELECT json_extract(payload, '$.data') FROM research_events
+    WHERE run_id = r.run_id AND json_extract(payload, '$.data.type') = 'adopted' ORDER BY seq DESC LIMIT 1) AS owner,
   (SELECT MAX(seq) FROM research_events WHERE run_id = r.run_id) AS revision,
   (SELECT count(*) FROM research_items WHERE run_id = r.run_id AND occupies_slot = 1) AS active_workers`;
 /** A summary adds the review counts. Each is an index range, not a scan of item payloads. */
@@ -130,7 +134,7 @@ const ATTENTION_RANK = "CASE WHEN s.harness_phase IS NOT NULL THEN CASE"
   + " WHEN " + PHASE_STATE + " = 'running' THEN CASE WHEN json_extract(s.harness_phase, '$.mode') = 'execute' AND s.unreviewed > 0 THEN 0 ELSE 1 END"
   + " WHEN " + PHASE_STATE + " IN ('pending', 'reconciling') THEN 1"
   + " ELSE 2 END"
-  + " WHEN s.status = 'running' THEN CASE WHEN s.active_workers = 0 AND (s.unreviewed > 0 OR s.accepted > 0) THEN 0 ELSE 1 END"
+  + " WHEN s.status = 'running' THEN CASE WHEN s.active_workers = 0 THEN 0 ELSE 1 END"
   + " WHEN s.status = 'stopping' THEN 1 ELSE 2 END";
 /** Every run on the profile with its attention rank, under the list's source and objective filters. */
 const PROFILE_RUNS = "WITH s AS (SELECT " + SUMMARY_COLUMNS + ", " + HARNESS_PHASE + " AS harness_phase, r.created_at AS created_at " + HEADER_FROM + "),"
@@ -138,7 +142,7 @@ const PROFILE_RUNS = "WITH s AS (SELECT " + SUMMARY_COLUMNS + ", " + HARNESS_PHA
   + " WHERE (@source IS NULL OR (@source = 'harness') = (s.harness_phase IS NOT NULL))"
   + " AND (@text IS NULL OR instr(lower(json_extract(s.payload, '$.data.objective')), @text) > 0)) ";
 
-type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; revision: number; active_workers: number; harness?: string | null };
+type HeaderRow = { run_id: string; status: ResearchRun["status"]; reason: string | null; payload: string; owner: string | null; revision: number; active_workers: number; harness?: string | null };
 type SummaryRow = HeaderRow & { unreviewed: number; accepted: number; harness_phase: string | null };
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
@@ -235,11 +239,17 @@ export class ResearchStore implements ResearchStorage {
   readItem(id: string, itemId: string): ResearchItem | undefined {
     return readProjectedItem(this.stateDb.raw, id, itemId);
   }
-  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true }): ResearchApproach[] {
+  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true } | { interrupted: true }): ResearchApproach[] {
     const db = this.stateDb.raw;
-    const rows = "worker" in filter
+    const rows = "interrupted" in filter
+      // Only approaches can be cut off, and a run has few: the type index bounds the read without one of its own.
+      ? db.prepare(`SELECT payload FROM research_items WHERE run_id = ? AND item_type = 'approach' AND json_extract(payload, '$.record.interrupted') = 1
+          ORDER BY created_seq, item_id`).all(id)
+      : "worker" in filter
+      // The unary plus keeps the planner on the worker index: without it, it walks the whole run in creation
+      // order to avoid a sort of what is a handful of rows.
       ? db.prepare(`SELECT payload FROM research_items WHERE worker_backend = ? AND worker_thread_id = ? AND run_id = ?
-          ORDER BY created_seq, item_id`).all(filter.worker.backend, filter.worker.threadId, id)
+          ORDER BY +created_seq, +item_id`).all(filter.worker.backend, filter.worker.threadId, id)
       : db.prepare("SELECT payload FROM research_items WHERE run_id = ? AND occupies_slot = 1 ORDER BY created_seq, item_id").all(id);
     return (rows as { payload: string }[]).flatMap((row) => {
       const item = JSON.parse(row.payload) as ResearchItem;
@@ -455,8 +465,10 @@ function headerFromRow(row: HeaderRow): ResearchRunHeader {
   const event = JSON.parse(row.payload) as ResearchEvent;
   if (event.data.type !== "created") throw new Error("Invalid research header");
   const data = event.data;
-  return { id: row.run_id, revision: row.revision, objective: data.objective, coordinator: data.coordinator, ownerId: data.ownerId, ownerPid: data.ownerPid,
-    ownerStartedAt: data.ownerStartedAt, createdAt: event.at, deadlineAt: data.deadlineAt, workspaceMode: data.workspaceMode, status: row.status,
+  // The process holding the run: whoever took it over last, or the one that started it.
+  const owner = row.owner ? JSON.parse(row.owner) as Pick<ResearchRunHeader, "ownerId" | "ownerPid" | "ownerStartedAt"> : data;
+  return { id: row.run_id, revision: row.revision, objective: data.objective, coordinator: data.coordinator, ownerId: owner.ownerId, ownerPid: owner.ownerPid,
+    ownerStartedAt: owner.ownerStartedAt, createdAt: event.at, deadlineAt: data.deadlineAt, workspaceMode: data.workspaceMode, status: row.status,
     ...(row.reason !== null ? { reason: row.reason } : {}), workerLimit: data.approaches.length, activeWorkers: row.active_workers,
     ...(row.harness ? { harness: JSON.parse(row.harness) as NonNullable<ResearchRun["harness"]> } : {}) };
 }

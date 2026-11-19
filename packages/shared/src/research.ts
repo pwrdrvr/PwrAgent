@@ -12,6 +12,8 @@ export type ResearchApproach = {
   state: "pending" | "starting" | "running" | "ended" | "failed" | "stopped" | "unknown";
   worker?: ResearchThread & { turnId?: string };
   note?: string;
+  /** Its turn was cut off when the process holding the run ended. The worker thread is intact and can be resumed. */
+  interrupted?: true;
   directionState?: "active" | "abandoned";
   overlapsApproachId?: string;
   /** An item-focused child assignment; its source evidence remains immutable. */
@@ -42,7 +44,8 @@ export type StartResearchRequest = {
   intentId?: string;
   objective: string;
   approaches: Array<{ title: string; task: string }>;
-  minutes: number;
+  /** The operator's time limit for the run. Absent means none: the run goes on until it is stopped or finished. */
+  minutes?: number;
   workspaceMode: "new_worktree" | "none";
 };
 export type PrepareResearchRequest = ResearchThread & Omit<StartResearchRequest, "approaches" | "intentId"> & { workers: number };
@@ -85,14 +88,20 @@ export type ResearchCommand =
   | { action: "direction"; approachId: string; title: string; task: string; reason: string; overlapsApproachId?: string }
   | { action: "stop"; reason: string }
   | { action: "finish"; reason: string }
+  /** Message cut-off workers to continue in their own threads: the named ones, or all of them. */
+  | { action: "resume"; approachIds?: string[] }
   | ResearchWorkCommand;
 export type ResearchWorkCommand = { action: "work"; itemId: string; expectedVersion: number; state: Exclude<ResearchWorkState, "assigned" | "cancel_requested">; reason: string };
 
 export type ResearchEventData =
-  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
+  | { type: "created"; objective: string; coordinator: ResearchThread; ownerId: string; ownerPid: number; ownerStartedAt?: number; deadlineAt?: number; workspaceMode: StartResearchRequest["workspaceMode"]; approaches: ResearchApproach[]; harness?: ResearchHarnessState }
   | { type: "harness"; state: ResearchHarnessState }
   | { type: "harness_observation"; event: string; text: string }
-  | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string }
+  | { type: "worker"; approachId: string; state: ResearchApproach["state"]; worker?: ResearchApproach["worker"]; note?: string; interrupted?: true }
+  /** A later process took over a live run whose process ended. The approaches named were mid-flight and ended with it. */
+  | { type: "adopted"; ownerId: string; ownerPid: number; ownerStartedAt?: number; approachIds: string[] }
+  /** The operator or coordinator asked the named cut-off workers to continue. Each holds its slot again from here. */
+  | { type: "resumed"; approachIds: string[] }
   | { type: "finding"; finding: ResearchFinding }
   | { type: "submission"; submission: ResearchSubmission }
   | { type: "review"; submissionId: string; decision: "accepted" | "revision_requested" | "rejected"; reason: string }
@@ -124,7 +133,8 @@ export type ResearchRun = {
   /** Absent in older journals, whose process identity cannot be validated. */
   ownerStartedAt?: number;
   createdAt: number;
-  deadlineAt: number;
+  /** When the operator's time limit ends the run. Absent when the operator set none. */
+  deadlineAt?: number;
   workspaceMode: StartResearchRequest["workspaceMode"];
   status: ResearchStatus;
   reason?: string;
@@ -176,7 +186,8 @@ export function researchRunAttention(run: Pick<ResearchRunSummary, "status" | "a
       case "imported": case "stopped": return "retained";
     }
   }
-  if (run.status === "running") return run.activeWorkers === 0 && (run.unreviewed || run.accepted) ? "needs_you" : "live";
+  // A running run with nobody working waits on the operator: to review, to finish, or to resume cut-off workers.
+  if (run.status === "running") return run.activeWorkers === 0 ? "needs_you" : "live";
   return run.status === "stopping" ? "live" : "retained";
 }
 
@@ -280,7 +291,7 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   const initial = first.data;
   const run: ResearchRun = {
     id, revision: events.length, objective: initial.objective, coordinator: initial.coordinator,
-    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, deadlineAt: initial.deadlineAt,
+    ownerId: initial.ownerId, ownerPid: initial.ownerPid, ownerStartedAt: initial.ownerStartedAt, createdAt: first.at, ...(initial.deadlineAt !== undefined ? { deadlineAt: initial.deadlineAt } : {}),
     workspaceMode: initial.workspaceMode, status: "running", approaches: initial.approaches.map((a) => ({ ...a })),
     findings: [], submissions: [], events, deliveries: [], workerLimit: initial.approaches.length, activeWorkers: 0, items: [], harness: initial.harness,
   };
@@ -293,7 +304,12 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
     else if (data.type === "worker") {
       const approach = run.approaches.find((a) => a.id === data.approachId);
       if (!approach) throw new Error("Unknown research approach");
-      Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
+      applyResearchWorkerState(approach, data);
+    } else if (data.type === "adopted") {
+      Object.assign(run, { ownerId: data.ownerId, ownerPid: data.ownerPid, ownerStartedAt: data.ownerStartedAt });
+      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchCutOff(approach);
+    } else if (data.type === "resumed") {
+      for (const approach of run.approaches) if (data.approachIds.includes(approach.id)) applyResearchWorkerState(approach, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
     } else if (data.type === "assignment") run.approaches.push({ ...data.approach });
     else if (data.type === "finding") run.findings.push(data.finding);
     else if (data.type === "submission") run.submissions.push({ ...data.submission });
@@ -329,6 +345,38 @@ export function projectResearchRun(id: string, records: ResearchEvent[]): Resear
   return run;
 }
 
+export const RESEARCH_CUT_OFF_NOTE = "PwrAgent closed during this worker's turn. Resume it to continue in the same thread.";
+export const RESEARCH_NEVER_STARTED_NOTE = "PwrAgent closed before this worker started. Assign the approach again to start it.";
+export const RESEARCH_RESUME_REQUESTED_NOTE = "Resume requested. Waiting for the worker's turn to start.";
+
+/** A worker's recorded state. Any new state ends a cut-off, unless the event says the worker is still cut off. */
+function applyResearchWorkerState(approach: ResearchApproach, data: Pick<Extract<ResearchEventData, { type: "worker" }>, "state" | "worker" | "note" | "interrupted">): void {
+  Object.assign(approach, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
+  if (data.interrupted) approach.interrupted = true;
+  else delete approach.interrupted;
+}
+
+/**
+ * Whether a cut-off worker can be resumed: it has a thread to continue in, its direction was not abandoned,
+ * and its work is still open. A focused child also needs the item it investigates to still be assigned to it,
+ * the rule the owner applies when it admits a worker.
+ */
+export function researchApproachResumable(approach: ResearchApproach, read: (itemId: string) => Pick<ResearchItem, "work"> | undefined): boolean {
+  if (!approach.interrupted || !approach.worker || approach.directionState === "abandoned") return false;
+  const closed = (item: Pick<ResearchItem, "work"> | undefined) => !item || ["completed", "cancel_requested", "cancelled"].includes(item.work.state);
+  if (closed(read(approach.id))) return false;
+  if (!approach.itemId) return true;
+  const source = read(approach.itemId);
+  return !closed(source) && source!.work.assignmentId === approach.id && source!.work.state !== "open";
+}
+
+/** The process holding the run ended mid-flight. A worker with a thread can be resumed in it; one that never started cannot. */
+function applyResearchCutOff(approach: ResearchApproach): void {
+  approach.state = "stopped";
+  if (approach.worker) { approach.interrupted = true; approach.note = RESEARCH_CUT_OFF_NOTE; }
+  else approach.note = RESEARCH_NEVER_STARTED_NOTE;
+}
+
 /** The same deterministic projection is used by replay and atomic SQLite appends. */
 export function applyResearchItemEvent(read: (id: string) => ResearchItem | undefined, event: ResearchEvent): ResearchItem[] {
   const data = event.data;
@@ -361,11 +409,21 @@ export function applyResearchItemEvent(read: (id: string) => ResearchItem | unde
     if (item.type !== "submission") throw new Error("Research review must name a submission");
     return [touch({ ...item, record: { ...item.record, review: { decision: data.decision, reason: data.reason, actor: event.actor } } })];
   }
+  if (data.type === "adopted" || data.type === "resumed") {
+    return data.approachIds.map((id) => {
+      const item = require(id);
+      if (item.type !== "approach") throw new Error("Research direction must name an approach");
+      const record = { ...item.record };
+      if (data.type === "adopted") applyResearchCutOff(record);
+      else applyResearchWorkerState(record, { state: "starting", note: RESEARCH_RESUME_REQUESTED_NOTE });
+      return touch({ ...item, record });
+    });
+  }
   if (data.type === "worker" || data.type === "direction" || data.type === "abandoned") {
     const item = require(data.approachId);
     if (item.type !== "approach") throw new Error("Research direction must name an approach");
     const record = { ...item.record };
-    if (data.type === "worker") Object.assign(record, { state: data.state }, data.worker ? { worker: data.worker } : {}, data.note ? { note: data.note } : {});
+    if (data.type === "worker") applyResearchWorkerState(record, data);
     else if (data.type === "direction") Object.assign(record, { title: data.title, task: data.task, note: data.reason, directionState: "active", overlapsApproachId: data.overlapsApproachId });
     else Object.assign(record, { note: data.reason, directionState: "abandoned" });
     const changes = [touch({ ...item, record })];
@@ -590,7 +648,7 @@ export function researchBoardPage(run: ResearchRun, range: ResearchBoardRange): 
 /** The in-memory oracle for a stored run summary. */
 export function summarizeResearchRun(run: ResearchRun): ResearchRunSummary {
   return { id: run.id, revision: run.revision, objective: run.objective, coordinator: run.coordinator, ownerId: run.ownerId, ownerPid: run.ownerPid,
-    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, deadlineAt: run.deadlineAt, workspaceMode: run.workspaceMode, status: run.status,
+    ownerStartedAt: run.ownerStartedAt, createdAt: run.createdAt, ...(run.deadlineAt !== undefined ? { deadlineAt: run.deadlineAt } : {}), workspaceMode: run.workspaceMode, status: run.status,
     ...(run.reason !== undefined ? { reason: run.reason } : {}), workerLimit: run.workerLimit, activeWorkers: run.activeWorkers,
     unreviewed: run.submissions.filter((s) => !s.review).length, accepted: run.submissions.filter((s) => s.review?.decision === "accepted").length,
     ...(run.harness ? { harness: researchHarnessPhase(run.harness) } : {}) };
@@ -604,6 +662,27 @@ export function researchApproachOccupiesSlot(approach: ResearchApproach): boolea
   return !["ended", "failed", "stopped"].includes(approach.state) || Boolean(approach.revisionDeliveryIds?.length);
 }
 
-export const RESEARCH_MAX_WORKERS = 8;
-export const RESEARCH_MAX_EVENTS = 4096;
+/**
+ * How many workers one run may hold at once. The operator chooses the number;
+ * this only stops a mistyped or model-proposed count from starting hundreds of
+ * live agent threads. It is the one place the bound is written.
+ */
+export const RESEARCH_MAX_WORKERS = 64;
+/** Ten years. A time limit is the operator's to choose; this only keeps the deadline a valid time. */
+export const RESEARCH_MAX_MINUTES = 5_256_000;
+/** The longest one timer may wait (about 24 days). A longer delay overflows and fires at once, so long limits wait in steps. */
+export const RESEARCH_MAX_TIMER_MS = 2_147_483_647;
+/** The operator's time limit, when they set one: a whole number of minutes. */
+export function validResearchMinutes(minutes: unknown): minutes is number | undefined {
+  return minutes === undefined || (typeof minutes === "number" && Number.isSafeInteger(minutes) && minutes >= 1 && minutes <= RESEARCH_MAX_MINUTES);
+}
+/** Whether the run's time limit has passed. A run with no limit never passes one. */
+export function researchDeadlinePassed(run: { deadlineAt?: number }, now: number): boolean {
+  return run.deadlineAt !== undefined && now >= run.deadlineAt;
+}
+/**
+ * A guard against a runaway journal, not a budget for a run. Commands and views read stored projections,
+ * so their cost does not grow with the journal (`research-cost.bench.test.ts` measures it at this size).
+ */
+export const RESEARCH_MAX_EVENTS = 100_000;
 export const RESEARCH_FINDING_KINDS: ResearchFindingKind[] = ["lemma", "partial", "counterexample", "dead_end", "experiment", "file", "note"];

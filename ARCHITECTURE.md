@@ -106,13 +106,14 @@ to a coordinating thread. The owner composition root constructs
 `ResearchService` from `packages/owner-core` with desktop execution ports and a
 profile-scoped `ResearchStore`. Workers are ordinary managed Codex handoffs;
 their identities are journaled before their first model turn starts. The
-owner admits at most the operator's requested one to eight concurrent workers
-and enforces a deadline of one to 120 minutes. Completed workers free slots
-for explicit item assignments within the original deadline. A research worker
-cannot create another research run or delegate additional managed workers
-through `handoff_task`.
+operator chooses how many workers run at once and whether the run has a time
+limit; a run has none unless they set one. The owner admits no more than that
+worker count and stops the run when a limit they set is reached. Completed
+workers free slots for explicit item assignments while the run is open. A
+research worker cannot create another research run or delegate additional
+managed workers through `handoff_task`.
 
-The Research panel binds its exact objective, worker count, deadline and
+The Research panel binds its exact objective, worker count, time limit and
 workspace choice to an in-memory request before submitting it to the
 coordinator. That request is caller-scoped, single-use and expires after five
 minutes without admission. It is neither persisted nor federated. The owner's
@@ -161,25 +162,44 @@ and duplicate deliveries write nothing. Worker start/end events, explicit
 research operations and run boundaries write; streamed tokens do not. The
 checked-in SQLite budgets cover those boundaries. Recovery validates the
 owner's PID, runtime instance ID and start time against the existing profile
-marker. A dead owner becomes interrupted without replaying model work; a
-different live process retains authority.
+marker. A different live process retains authority.
 
-Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. A
-run's own process always may. A restart is a new process, so a later one may
-too once the run is no longer running or stopping and the process that started
-it is gone: the operator and coordinating thread are the same, and nobody else
-could record on it. That covers reviewing candidates, finishing the run and
-reconciling a Harness source. A run that ended as interrupted or exhausted,
-as every live run does when PwrAgent quits, can be completed once a candidate
-is accepted; that appends the outcome and stops nothing. Work that needs a
-live run (assigning, revision delivery, stopping workers or a bridge) stays
-with the process that holds it. A live run of a dead process is not held by
-anyone until recovery at the next launch retires it. Snapshots, change pages
-and the run list report `writable` by the same function, reading liveness once
-per distinct owner. A review plus a finish on a retained run is two commits
-(41,200 observed WAL bytes), on operator action only: about 0.82 MB/day at
-twenty a day. Older journals without a process
-start time cannot prove live ownership and become interrupted. Revision
+A native run outlives its process. Quitting or crashing ends the worker turns
+in flight and nothing else: `close` writes nothing for a native run, and the
+next process to launch, or to record on the run, takes it over with one
+`adopted` event. That event names the new holder and each worker that was
+mid-flight; a worker with a thread becomes stopped and `interrupted`, and no
+model work is replayed. The run stays running, and any time limit keeps
+counting on the wall clock, so a limit that passed while nobody held the run
+ends it at launch. `resume` is an operator or coordinator command: one
+`resumed` event returns each named worker's slot, then each is messaged in its
+own thread and is running again when its turn is seen to start. A turn the
+operator starts in a worker's thread resumes it the same way. A run with
+workers waiting to be resumed is not exhausted, unless their work has closed:
+`researchApproachResumable` is the one rule, and resuming all workers skips the
+closed ones. Taking a run over also ends any revision delivery whose turn the
+gone process had started, so that worker's slot is free to resume. A resume
+message the worker's queue still holds is withdrawn when the run stops. Taking
+a run over is one commit per live run per launch (32,960 observed WAL bytes). A
+resume of eight workers is nine commits (206,000 bytes): one that returns their
+slots and one per worker for the turn its message started. That is about 2.4
+MB/day at ten of each, on launch and operator action only. A Harness run still
+becomes interrupted when its process ends, because its bridge ended with it.
+
+Who may record on a run is `researchRunHeldBy` in `packages/owner-core`. The
+process holding a run always may. A restart is a new process, so a later one
+may once the holder is gone: the operator and coordinating thread are the
+same, and nobody else could record on it. That covers reviewing candidates,
+assigning, resuming, stopping and finishing a native run, and reviewing,
+finishing or reconciling a retained Harness one. A live Harness run of a dead
+process is not held by anyone until recovery at the next launch retires it. A
+run that ended as interrupted or exhausted can be completed once a candidate
+is accepted; that appends the outcome and stops nothing. Snapshots, change
+pages and the run list report `writable` by the same function, reading
+liveness once per distinct owner. A review plus a finish on a retained run is
+two commits (41,200 observed WAL bytes), on operator action only: about 0.82
+MB/day at twenty a day. Older journals without a process
+start time cannot prove live ownership and are treated as a gone holder. Revision
 queue receipts identify exactly which pending sends a
 run may cancel. An unknown cancellation outcome keeps the run stopping.
 Synthetic pending turn notifications do not establish worker identity. A
