@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind, AppServerNotification, AppServerThreadMessageOrigin, AppServerThreadTurnMetadata,
   ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, PrSummary,
-  ThreadDependency, ThreadDependencyCiRunObservation, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadTodo, ThreadTodoProject,
+  ThreadDependency, ThreadDependencyCiRunObservation, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadDependencyLocalFile, ThreadTodo, ThreadTodoProject,
 } from "@pwragent/shared";
 import {
   isRepairableDependencyFailure, isThreadDependencyLocalThreadCondition,
@@ -52,6 +52,8 @@ export type OperatorTodoDelivery = {
 
 type Options = {
   store: ThreadDependencyStorage;
+  authorizeLocalFile?(thread: Pick<ThreadDependency, "backend" | "threadId">, file: ThreadDependencyLocalFile): Promise<ThreadDependencyLocalFile>;
+  readLocalFile?: (file: ThreadDependencyLocalFile) => Promise<"result" | "exited" | undefined>;
   /** Without it, operator registrations are refused. */
   operatorTodos?: OperatorTodoDelivery;
   readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot>;
@@ -208,6 +210,14 @@ export class ThreadDependencyCoordinator {
       const turnOrder = new Map<string, string[]>();
       for (const original of request.conditions!) {
         const condition = { ...original };
+        if (condition.localFile) {
+          if (actor === "peer" || actor.startsWith("peer:") || !this.options.authorizeLocalFile || !this.options.readLocalFile) {
+            throw new Error("Local file prerequisites are available only on the thread's desktop owner.");
+          }
+          condition.localFile = await this.options.authorizeLocalFile(request, condition.localFile);
+          conditions.push(condition);
+          continue;
+        }
         if (condition.when === "ci_run") {
           conditions.push(await this.checkNewCiRun(condition));
           continue;
@@ -238,11 +248,16 @@ export class ThreadDependencyCoordinator {
         ...(request.steps?.length ? { steps: request.steps.map((step) => step.trim()) } : {}),
         ...(request.holdMerge ? { holdMerge: true } : {}),
         ...(request.repeat ? { repeat: true } : {}),
-        status: "waiting", evidence: [], createdAt: now, updatedAt: now,
+        status: "waiting",
+        evidence: conditions.flatMap((condition) => condition.localFile
+          ? [{ condition, state: "waiting" as const, reason: "Waiting for the watcher result", observedAt: now }]
+          : []),
+        createdAt: now, updatedAt: now,
       };
       const { dependency: item, superseded } = this.options.store.registerReplacing(
         candidate, (existing) => supersedesRegistration(existing, candidate, turnOrder));
       for (const replaced of superseded) await this.options.changed(replaced);
+      if (item.conditions[0]?.localFile && item.id !== candidate.id) return this.response(request);
       const registered = JSON.stringify(item);
       await this.evaluate(item);
       // Evaluation publishes whatever it saved; announce the registration only
@@ -389,6 +404,35 @@ export class ThreadDependencyCoordinator {
     return this.options.store.active().map(({ continuation: _continuation, ...item }) => item);
   }
 
+  hasPendingLocalFiles(): boolean {
+    return this.options.store.active().some((item) => item.status === "waiting" && item.conditions[0]?.localFile);
+  }
+
+  /** A single inspection per marker and attempt, even when multiple threads wait on it. */
+  async checkLocalFiles(): Promise<void> {
+    const readLocalFile = this.options.readLocalFile;
+    if (!readLocalFile) return;
+    const waiting = this.options.store.active().filter((item) => item.status === "waiting" && item.conditions[0]?.localFile);
+    const reads = new Map<string, Promise<string | undefined>>();
+    for (const item of waiting) {
+      const file = item.conditions[0]!.localFile!;
+      const key = JSON.stringify(file);
+      if (!reads.has(key)) reads.set(key, readLocalFile(file).then((result) => {
+        if (result === "result") return "Watcher result marker is ready";
+        if (result === "exited") return "Watch command exited before the result marker was seen";
+        return undefined;
+      }).catch(() => "The watcher marker could not be safely inspected. Check the local watcher once."));
+    }
+    await Promise.all(waiting.map(async (item) => {
+      const reason = await reads.get(JSON.stringify(item.conditions[0]!.localFile));
+      if (!reason) return;
+      await this.serialize(async () => {
+        const current = this.options.store.get(item.backend, item.threadId, item.id);
+        if (current?.status === "waiting") await this.evaluate(current, undefined, reason);
+      });
+    }));
+  }
+
   reconcile(): Promise<void> {
     return this.serialize(async () => {
       await this.recoverIdleConsumers();
@@ -533,7 +577,7 @@ export class ThreadDependencyCoordinator {
     });
   }
 
-  private async evaluate(item: ThreadDependency, signal?: { target: { backend: string; threadId: string }; turn: AppServerThreadTurnMetadata }): Promise<void> {
+  private async evaluate(item: ThreadDependency, signal?: { target: { backend: string; threadId: string }; turn: AppServerThreadTurnMetadata }, localFileResult?: string): Promise<void> {
     if (this.options.store.isConsumerArchived(item)) {
       for (const retired of this.options.store.retireForArchivedThread(item, this.now())) await this.options.changed(retired);
       return;
@@ -585,6 +629,15 @@ export class ThreadDependencyCoordinator {
     for (const [conditionIndex, stored] of item.conditions.entries()) {
       let condition = stored;
       const previous = evidenceFor(item, condition);
+      if (condition.localFile) {
+        evidence.push(previous?.state === "satisfied" ? previous : {
+          condition,
+          state: localFileResult ? "satisfied" : "waiting",
+          reason: localFileResult ?? "Waiting for the watcher result",
+          observedAt: this.now(),
+        });
+        continue;
+      }
       if (condition.when === "ci_run") {
         evidence.push(evaluateCiRunCondition(condition, condition.ciRun ? this.ciRuns.get(condition.ciRun.url) : undefined, previous, this.now()));
         continue;
@@ -862,7 +915,19 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (!condition || typeof condition.backend !== "string" || !condition.backend.trim()
       || typeof condition.threadId !== "string"
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
-    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title", "subject", "target", "ciRun", "localFile"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (condition.when === "local_file" || condition.localFile !== undefined) {
+      const file = condition.localFile;
+      if (condition.when !== "local_file" || request.conditions.length !== 1 || condition.threadId !== ""
+        || Object.keys(condition).some((field) => !["backend", "threadId", "when", "title", "localFile"].includes(field))
+        || (condition.title !== undefined && (typeof condition.title !== "string" || condition.title.length > 200))
+        || !file || Object.keys(file).some((field) => !["path", "since", "exitPath"].includes(field))
+        || !validMarkerPath(file.path) || (file.exitPath !== undefined && !validMarkerPath(file.exitPath))
+        || !Number.isSafeInteger(file.since) || file.since <= 0) {
+        throw new Error("A local_file prerequisite must be the only condition, with an empty threadId, a marker path and a positive watcher start time in milliseconds.");
+      }
+      continue;
+    }
     if (condition.when === "ci_run" || condition.ciRun !== undefined) {
       validateCiRunCondition(condition, ciRunUrls?.());
       continue;
@@ -889,6 +954,10 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (condition.when === "compaction_completed" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for compaction recovery.");
     if (condition.when !== "turn_completed" && condition.turnId) throw new Error("turnId is only valid for turn completion.");
   }
+}
+
+function validMarkerPath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 2_000 && !value.includes("\0");
 }
 
 function validateCiRunCondition(condition: ThreadDependencyCondition, urls?: CiRunUrlOptions): void {
@@ -1010,11 +1079,15 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       : ["Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
         ...item.continuation ? ["", THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD, item.continuation] : []],
     "Do not poll this dependency or start a Job Monitor for it.",
+    ...item.conditions.some((condition) => condition.localFile)
+      ? ["The marker is only a signal to inspect the watcher. Verify its actual result before reporting a conclusion."]
+      : [],
     ...item.conditions.some((condition) => condition.ciRun)
       ? ["A CI run wait is one-shot. To continue after the run's next milestone, register a new ci_run wait. PwrAgent never approves a deployment; the operator does."]
       : [],
     `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => condition.ciRun
       ? `${condition.ciRun.url} (${condition.when})`
+      : condition.localFile ? `${condition.localFile.path} (${condition.when})`
       : condition.subject !== undefined
       ? `"${condition.subject}" (${condition.when})`
       : `${condition.backend}:${condition.threadId}${condition.target ? ` on ${condition.target.instanceId}` : ""} (${condition.when})`).join(", ")}.`,
@@ -1029,6 +1102,7 @@ const MET_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
   marked_done: "done",
   compaction_completed: "finished compaction",
   ci_run: "reached its milestone",
+  local_file: "reported a result",
 };
 
 export function buildCompactionRecoveryPrompt(item: ThreadDependency): string {
