@@ -685,9 +685,10 @@ describe("ActiveSubAgentsStrip", () => {
       expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
-    // Decision batches stop from their own strip, through the decisions
-    // service; a card an earlier build wrote for one has nothing to stop.
-    it("offers no Stop on a card an earlier build wrote for a decision batch", () => {
+    // Decision batches have their own strip and stop through the decisions
+    // service; a card an earlier build wrote for one is never listed here,
+    // even from the thread's raw card history.
+    it("never lists a card an earlier build wrote for a decision batch", () => {
       render(
         <ActiveSubAgentsStrip
           desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
@@ -701,6 +702,7 @@ describe("ActiveSubAgentsStrip", () => {
           ])}
         />,
       );
+      expect(screen.queryByText(/Decision batch triage/)).toBeNull();
       expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
