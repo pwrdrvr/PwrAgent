@@ -71,4 +71,16 @@ describe("GPT-6.1 Terra API pricing", () => {
     expect(estimateOpenAiTokenUsageCost(usage)).toBeUndefined();
     expect(resolveTokenUsagePriceUnavailableReason(usage)).toBe("unsupported-service-tier");
   });
+
+  it("charges only the cache-hit rate for a fully cached standard request", () => {
+    expect(estimateOpenAiTokenUsageCost({
+      model,
+      at: releasedAt,
+      inputTokenScope: "request",
+      serviceTier: "standard",
+      uncachedInputTokens: 0,
+      cachedInputTokens: 100_000,
+      outputTokens: 0,
+    })).toMatchObject({ cachedInputCostMicros: 5_000, totalCostMicros: 5_000 });
+  });
 });
