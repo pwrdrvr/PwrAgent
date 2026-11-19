@@ -3384,6 +3384,20 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { researchEnabled: true } }));
   });
 
+  it("lets research be turned on without Codex Tool Discovery, which only Codex threads need", async () => {
+    for (const discovery of [true, false]) {
+      const snapshot = createSnapshot();
+      const settings = createSettingsState({ ...snapshot, experimental: { ...snapshot.experimental, codexToolDiscovery: { value: discovery, source: "config" } } });
+      const { unmount } = render(<SettingsScreen initialSection="experimental" settings={settings} />);
+      const toggle = screen.getByRole("switch", { name: "Enable research runs" });
+      expect(toggle).toBeEnabled();
+      expect(screen.getByText(discovery ? "Works in Codex, Claude and ACP threads." : "Works in Claude and ACP threads. Codex threads also need Codex Tool Discovery.")).toBeInTheDocument();
+      fireEvent.click(toggle);
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { researchEnabled: true } }));
+      unmount();
+    }
+  });
+
 
   it("refreshes Archived Threads after leaving and reopening the tab", async () => {
     const listThreads = vi.fn(async () => ({ backend: "all" as const, fetchedAt: Date.now(), threads: [] as AppServerThreadSummary[] }));

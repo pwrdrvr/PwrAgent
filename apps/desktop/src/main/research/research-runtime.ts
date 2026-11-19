@@ -89,8 +89,8 @@ export async function closeResearchRuntime(): Promise<void> {
 
 export function createResearchAgentHandler(current: ResearchService, isLive: (context: AgentToolCallContext) => boolean, enabled: () => boolean = () => false): ResearchAgentHandler {
   return async (name, args, context) => {
-    if (!enabled()) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental with Codex Tool Discovery.");
-    if (!isLive(context) || !context.turnId || !context.callId) throw new Error("Research tools require a live Codex turn on the owning instance");
+    if (!enabled()) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental.");
+    if (!isLive(context) || !context.turnId || !context.callId) throw new Error("Research tools require a live turn on the owning instance. In Codex threads they also require Codex Tool Discovery.");
     const actor: ResearchActor & { kind: "agent"; turnId: string; callId: string } = { backend: context.backend, threadId: context.threadId, kind: "agent", turnId: context.turnId, callId: context.callId };
     if (name === "research_start") return boardView(current.readBoard((await current.start(args as unknown as StartResearchRequest, actor)).id, { approachOffset: 0, findingOffset: 0, submissionOffset: 0 }, actor));
     if (name === "research_assign") return await current.assign(args as unknown as ResearchAssignRequest, actor);

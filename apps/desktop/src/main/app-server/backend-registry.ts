@@ -509,7 +509,7 @@ import {
   withPwrAgentToolDiscovery,
 } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
-import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
+import { researchToolsOffered, researchToolSurface, type ResearchAgentHandler, type ResearchToolSurface } from "../agent-tools/pwragent-research-agent-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import {
@@ -2166,7 +2166,7 @@ export class DesktopBackendRegistry {
       get threadStarts() { return current().threadStarts; },
       get threadTodoHandler() { return current().threadTodoHandler; },
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
-      get researchHandler() { return current().advertisedResearchHandler; },
+      get mcpResearchHandler() { return current().mcpResearchHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       set tokenMiserCodeModeGroupingVersion(value) { current().tokenMiserCodeModeGroupingVersion = value; },
@@ -2720,12 +2720,23 @@ export class DesktopBackendRegistry {
     this.researchEnabled = enabled;
   }
 
-  private get advertisedResearchHandler(): ResearchAgentHandler | undefined {
-    return this.researchEnabled() && this.resolveCodexToolDiscoveryFn() ? this.researchHandler : undefined;
+  private researchOffered(surface: ResearchToolSurface): boolean {
+    return researchToolsOffered(surface, { enabled: this.researchEnabled(), codexToolDiscovery: this.resolveCodexToolDiscoveryFn });
   }
 
+  /** The handler for Codex's own dynamic tools. */
+  private get advertisedResearchHandler(): ResearchAgentHandler | undefined {
+    return this.researchOffered("codex") ? this.researchHandler : undefined;
+  }
+
+  /** The handler for the PwrAgent MCP server that Claude and ACP threads use. */
+  private get mcpResearchHandler(): ResearchAgentHandler | undefined {
+    return this.researchOffered("mcp") ? this.researchHandler : undefined;
+  }
+
+  /** A live turn of any local backend whose tool surface offers research. */
   researchContextIsLive(context: AgentToolCallContext): boolean {
-    return this.researchEnabled() && context.backend === "codex" && this.isLiveDynamicToolCall(context.backend, context);
+    return this.researchOffered(researchToolSurface(context.backend)) && this.isLiveDynamicToolCall(context.backend, context);
   }
 
   async handoffResearchWorker(

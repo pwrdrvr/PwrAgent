@@ -4177,8 +4177,7 @@ function DesktopAppShell(props: {
         threadToolAccountingEnabled:
           settings.snapshot?.experimental.threadToolAccounting?.value === true,
         researchEnabled:
-          settings.snapshot?.experimental.researchEnabled?.value === true
-          && settings.snapshot?.experimental.codexToolDiscovery?.value !== false,
+          settings.snapshot?.experimental.researchEnabled?.value === true,
         threadPricingSummaryEnabled:
           settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
         pricingDisplayOptions: {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchApproachResumable, researchDeadlinePassed, validResearchMinutes, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchApproachResumable, researchDeadlinePassed, validResearchMinutes, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchTurnIsPlaceholder,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
@@ -702,7 +702,7 @@ export class ResearchService {
 
   /** Only the exact recorded worker turn can retire an assignment. No token events write. */
   async observeQueue(thread: ResearchThread, queueEntryId: string, status: string, turnId?: string): Promise<void> {
-    if (this.closed || turnId?.startsWith("pending:") || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
+    if (this.closed || (turnId !== undefined && researchTurnIsPlaceholder(thread, turnId)) || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
     for (const run of this.storage.activeRuns(thread)) {
       if (run.ownerId !== this.ports.ownerId) continue;
       const resumed = [...this.queuedResumes.get(run.id) ?? []].find(([, entry]) => entry === queueEntryId)?.[0];
@@ -754,7 +754,7 @@ export class ResearchService {
 
   observeStart(thread: ResearchThread, turnId: string): Promise<void> {
     // Registry placeholders describe local submission, not provider admission.
-    if (this.closed || turnId.startsWith("pending:")) return Promise.resolve();
+    if (this.closed || researchTurnIsPlaceholder(thread, turnId)) return Promise.resolve();
     const cancellations: Promise<void>[] = [];
     for (const run of this.storage.activeRuns(thread)) {
       if (run.ownerId !== this.ports.ownerId) continue;
@@ -772,7 +772,7 @@ export class ResearchService {
   }
 
   observeEnd(thread: ResearchThread, turnId: string, outcome: { failed?: boolean; note?: string } = {}): void {
-    if (this.closed || turnId.startsWith("pending:")) return;
+    if (this.closed || researchTurnIsPlaceholder(thread, turnId)) return;
     for (const run of this.storage.activeRuns(thread)) {
       if (run.ownerId !== this.ports.ownerId) continue;
       // The header just read stays current until this observation appends.
@@ -902,8 +902,9 @@ export class ResearchService {
     if (queued && !queued.size) this.queuedResumes.delete(id);
   }
 
-  async stopOwnedRuns(reason: string): Promise<void> {
-    await Promise.all(this.storage.activeRuns().filter((run) => run.ownerId === this.ports.ownerId)
+  /** Stops this process's live runs, or only those `include` selects. */
+  async stopOwnedRuns(reason: string, include: (run: ResearchRunHeader) => boolean = () => true): Promise<void> {
+    await Promise.all(this.storage.activeRuns().filter((run) => run.ownerId === this.ports.ownerId && include(run))
       .map(async (run) => await this.stop(run.id, this.operator(run), "stopped", reason)));
   }
 

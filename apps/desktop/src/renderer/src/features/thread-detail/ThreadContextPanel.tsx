@@ -327,7 +327,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
-  const researchEnabled = props.researchEnabled === true && props.thread?.source === "codex" && !props.thread?.federation?.ref.target;
+  // Research is for every local backend; a federated thread's runs live on its owning instance.
+  const researchEnabled = props.researchEnabled === true && Boolean(props.thread) && !props.thread?.federation?.ref.target;
   // The tab shows once the thread can see a decision or has run a batch.
   // While the first read is in flight, a thread that already had the tab
   // open keeps it, so switching threads does not flash Thread info.

@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { RESEARCH_RUN_HELD_ELSEWHERE, researchRunHeldBy, researchRunNeedsAdoption } from "../../research-ownership";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, RESEARCH_MAX_TIMER_MS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchApproachResumable, searchResearchItems,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchDeadlinePassed, validResearchMinutes, RESEARCH_MAX_TIMER_MS, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchApproachResumable, researchTurnIsPlaceholder, searchResearchItems,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEvent, type ResearchEventData, type ResearchDelivery,
   type ResearchRun, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
@@ -615,7 +615,7 @@ export class ReplayResearchService {
 
   /** Only the exact recorded worker turn can retire an assignment. No token events write. */
   async observeQueue(thread: ResearchThread, queueEntryId: string, status: string, turnId?: string): Promise<void> {
-    if (this.closed || turnId?.startsWith("pending:") || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
+    if (this.closed || (turnId !== undefined && researchTurnIsPlaceholder(thread, turnId)) || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
     for (const run of this.storage.list(thread)) {
       if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
       const resumed = [...this.queuedResumes].find(([key, entry]) => key.startsWith(`${run.id}:`) && entry === queueEntryId)?.[0].slice(run.id.length + 1);
@@ -666,7 +666,7 @@ export class ReplayResearchService {
 
   observeStart(thread: ResearchThread, turnId: string): Promise<void> {
     // Registry placeholders describe local submission, not provider admission.
-    if (this.closed || turnId.startsWith("pending:")) return Promise.resolve();
+    if (this.closed || researchTurnIsPlaceholder(thread, turnId)) return Promise.resolve();
     const cancellations: Promise<void>[] = [];
     for (const run of this.storage.list(thread)) {
       if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
@@ -684,7 +684,7 @@ export class ReplayResearchService {
   }
 
   observeEnd(thread: ResearchThread, turnId: string, outcome: { failed?: boolean; note?: string } = {}): void {
-    if (this.closed || turnId.startsWith("pending:")) return;
+    if (this.closed || researchTurnIsPlaceholder(thread, turnId)) return;
     for (const run of this.storage.list(thread)) {
       if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
       for (const delivery of run.deliveries) {
@@ -781,8 +781,8 @@ export class ReplayResearchService {
     if (now().state === "running") await this.stopWorker(id, approachId, actor);
   }
 
-  async stopOwnedRuns(reason: string): Promise<void> {
-    await Promise.all(this.storage.list().filter((run) => run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status))
+  async stopOwnedRuns(reason: string, include: (run: ResearchRunHeader) => boolean = () => true): Promise<void> {
+    await Promise.all(this.storage.list().filter((run) => run.ownerId === this.ports.ownerId && ["running", "stopping"].includes(run.status) && include(run))
       .map(async (run) => await this.stop(run.id, this.operator(run), "stopped", reason)));
   }
 
